@@ -70,7 +70,7 @@ automodel = [
   "transformer-engine[pytorch]==2.12.0",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480",
 ]
-vllm = ["cuda-python", "deep_gemm @ git+https://github.com/deepseek-ai/DeepGEMM.git@7b6b5563b9d4c1ae07ffbce7f78ad3ac9204827c", "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480", "num2words>=0.5.14", "vllm", "flashinfer-python @ git+https://github.com/TomerBN-Nvidia/flashinfer.git@ultra-rl", "mamba-ssm"]
+vllm = ["cuda-python", "deep_gemm @ git+https://github.com/deepseek-ai/DeepGEMM.git@7b6b5563b9d4c1ae07ffbce7f78ad3ac9204827c", "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480", "num2words>=0.5.14", "vllm", "flashinfer-python @ git+https://github.com/TomerBN-Nvidia/flashinfer.git@ultra-rl", "mamba-ssm", "flashinfer-cubin", "flashinfer-jit-cache"]
 sglang = [
   "sglang==0.5.7",
   "orjson",
@@ -175,6 +175,8 @@ triton = [
   { index = "pytorch-cu129", marker = "sys_platform != 'darwin'" },
   { index = "pypi", marker = "sys_platform == 'darwin'" },
 ]
+flashinfer-cubin = { git = "https://github.com/TomerBN-Nvidia/flashinfer.git", subdirectory="flashinfer-cubin", rev = "ultra-rl" }
+flashinfer-jit-cache = { git = "https://github.com/TomerBN-Nvidia/flashinfer.git", subdirectory="flashinfer-jit-cache", rev = "ultra-rl" }
 causal-conv1d = { git = "https://github.com/Dao-AILab/causal-conv1d", rev = "67e0a9dfe1518fc0036444e9ab5fe06ab78299e0" }
 mamba-ssm = { git = "https://github.com/state-spaces/mamba.git", rev = "d68d16ed7d5d5164eb5a57c0285f3b7eb8394ec1" }
 nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm", tag = "v1.1.4.post7" }
@@ -207,7 +209,7 @@ explicit = true
 
 [tool.uv]
 preview = true # Enable preview features like extra-build-dependencies
-extra-build-variables = { sgl-kernel = { CMAKE_BUILD_PARALLEL_LEVEL = "24", FLASHINFER_CUDA_ARCH_LIST = "9.0a 10.0a", CMAKE_ARGS = "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" } }
+extra-build-variables = { sgl-kernel = { CMAKE_BUILD_PARALLEL_LEVEL = "24", FLASHINFER_CUDA_ARCH_LIST = "9.0a 10.0a", CMAKE_ARGS = "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" }, flashinfer-jit-cache = { FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a" } }
 no-build-isolation-package = [
   "transformer-engine-torch",
   "transformer-engine",
@@ -396,3 +398,4 @@ convention = "google"
 "*_test.py" = ["D"]
 # Ignore F401 (import but unused) in __init__.py
 "__init__.py" = ["F401"]
+
