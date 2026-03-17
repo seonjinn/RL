@@ -85,7 +85,6 @@ def collect_trajectories(
 
     log_filename = "trajectory_collection.jsonl"
 
-    print("\n🔍 Running trajectory collection...", flush=True)
     generation_config = master_config["policy"]["generation"]
     for val_batch in val_dataloader:
         nemo_gym_rollout_result = run_async_nemo_gym_rollout(
