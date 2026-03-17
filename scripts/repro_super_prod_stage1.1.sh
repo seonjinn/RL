@@ -2,28 +2,27 @@
 set -euo pipefail
 
 # =============================================================================
-# launch_ultra_pipeclean.sh
+# scripts/repro_super_prod_stage1.1.sh
 #
-# GRPO Ultra V3 pipe-cleaning on GB200 NVL72 with NeMo Gym
+# GRPO Super V3 pipe-cleaning on GB200 NVL72 with NeMo Gym on the ultra-v3-posttraining branch
 #
 # By default, this runs from what's built into the container without overlay mounts applied. 
 # Set USE_WORKTREE=1 to overlay your local worktree submodules for development.
 # Set INTERACTIVE=1 to get a persistent allocation in slurm for iterative debugging.
 #
 # Usage:
-#   ./launch_ultra_pipeclean.sh                                   # batch, bare container (10 steps)
-#   NRL_MAX_STEPS=4 ./launch_ultra_pipeclean.sh                   # CI: fewer steps
-#   USE_WORKTREE=1 ./launch_ultra_pipeclean.sh                    # batch, overlay local code
-#   WALLTIME=4:00:00 ./launch_ultra_pipeclean.sh
+#   ./repro_super_prod_stage1.1.sh                                   # batch, bare container (10 steps)
+#   NRL_MAX_STEPS=4 ./repro_super_prod_stage1.1.sh                   # CI: fewer steps
+#   USE_WORKTREE=1 ./repro_super_prod_stage1.1.sh                    # batch, overlay local code
+#   WALLTIME=4:00:00 ./repro_super_prod_stage1.1.sh
 #
 # Extra positional arguments are forwarded as Hydra overrides:
-#   ./launch_ultra_pipeclean.sh grpo.max_num_steps=2 policy.precision=float32
+#   ./repro_super_prod_stage1.1.sh grpo.max_num_steps=2 policy.precision=float32
 #
 # Interactive debugging (reuse allocation across runs):
-#   INTERACTIVE=1 ./launch_ultra_pipeclean.sh                     # submits, auto-runs, waits
-#   INTERACTIVE=1 INTERACTIVE_WAIT=0 ./launch_ultra_pipeclean.sh  # submit only (no foreground wait)
-#   INTERACTIVE=1 INTERACTIVE_WALLTIME=2:0:0 SLURM_QOS=short ./launch_ultra_pipeclean.sh  # submit and wait in foreground
-#   INTERACTIVE=1 INTERACTIVE_WALLTIME=8:0:0 ./launch_ultra_pipeclean.sh  # longer allocation
+#   INTERACTIVE=1 ./repro_super_prod_stage1.1.sh                     # submits, auto-runs, waits
+#   INTERACTIVE=1 INTERACTIVE_WAIT=0 ./repro_super_prod_stage1.1.sh  # submit only (no foreground wait)
+#   INTERACTIVE=1 INTERACTIVE_WALLTIME=2:0:0 SLURM_QOS=short ./repro_super_prod_stage1.1.sh  # submit and wait in foreground
 #
 #   A background watcher auto-runs the training command as soon as Ray is ready,
 #   so GPUs are never idle waiting for you to type. After training finishes the
@@ -49,6 +48,8 @@ cd ${PROJECT_ROOT}
 USE_WORKTREE="${USE_WORKTREE:-0}"
 INTERACTIVE="${INTERACTIVE:-0}"
 INTERACTIVE_WAIT="${INTERACTIVE_WAIT:-1}"
+
+
 
 # ---------- Precision configuration ------
 get_precision_config() {
@@ -118,41 +119,93 @@ echo "PRECISION_EXTRA_ARGS: ${PRECISION_EXTRA_ARGS}"
 # ---------- SLURM configuration ----------
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-llmservice_nemotron_ultra}"
 PARTITION="${PARTITION:-batch}"
-SLURM_QOS="${SLURM_QOS:-}"
+SLURM_QOS="${SLURM_QOS:-normal}"
 WALLTIME="${WALLTIME:-4:00:00}"
 
 # ---------- Container & mounts ----------
-export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/pipe.46035436.sqsh}"
+export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/pipe.45898348.sqsh}"
 MOUNTS="/lustre:/lustre"
 
 # GB200 NVL72: fixed at 4 GPUs/node. Must match --gres=gpu:4 passed to sbatch.
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER="${CPUS_PER_WORKER:-144}"
 
+# ---------- Persistent cache directories ----------
+PERSISTENT_CACHE="${PERSISTENT_CACHE:-/lustre/fsw/portfolios/llmservice/users/${USER}/.cache/nemotron_ultra}"
+
 # ---------- HuggingFace Configuration ----------
-export HF_HOME="${HF_HOME:-}"
-export HF_HUB_CACHE="${HF_HUB_CACHE:-}"
-export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-}"
+export HF_HOME="${HF_HOME:-/lustre/fsw/portfolios/llmservice/users/${USER}/hf_home}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/hub}"
 
 # ---------- W&B Configuration ----------
-WANDB_PROJ="${WANDB_PROJ:-grpo-ultra-v3-pipeclean}"
-WANDB_NAME="${WANDB_NAME:-ultra-v3-grpo-$(date +%m%d-%H%M)}"
 export WANDB_API_KEY="${WANDB_API_KEY:-}"
 
+# ---------- Model Configuration ----------
+TP="${TP:-4}"
+CP="${CP:-4}"
+EP="${EP:-8}"
+PP="${PP:-1}"
+ETP="${ETP:-1}"
+VLLM_TP="${VLLM_TP:-4}"
+VLLM_GPU_UTIL="${VLLM_GPU_UTIL:-0.8}"
+MAX_LENGTH="${MAX_LENGTH:-49152}"
+
 # ---------- Training ----------
-NRL_MAX_STEPS="${NRL_MAX_STEPS:-}"
+NRL_MAX_STEPS="${NRL_MAX_STEPS:-1000000}"
+VAL_PERIOD="${VAL_PERIOD:-10000}"
+SAVE_PERIOD="${SAVE_PERIOD:-10}"
+LR="${LR:-3e-6}"
+MIN_LR="${MIN_LR:-3e-6}"
+LR_WARMUP_ITERS="${LR_WARMUP_ITERS:-10}"
+KL="${KL:-0}"
+
+# ---------- GRPO ----------
+PPS="${PPS:-256}"
+GPP="${GPP:-16}"
+GBS="${GBS:-4096}"
+FORCE_ON_POLICY_RATIO="${FORCE_ON_POLICY_RATIO:-True}"
+TIS_THRESHOLD="${TIS_THRESHOLD:-5}"
+SEQ_LOGPROB_ERROR_THRESHOLD="${SEQ_LOGPROB_ERROR_THRESHOLD:-2}"
+ADVANTAGE_CLIP_LOW="${ADVANTAGE_CLIP_LOW:--100}"
+ADVANTAGE_CLIP_HIGH="${ADVANTAGE_CLIP_HIGH:-100}"
+OVERLONG_FILTERING="${OVERLONG_FILTERING:-False}"
+
+# ---------- Async GRPO ----------
+ASYNC_GRPO=True
+MAX_TRAJECTORY_AGE_STEPS=1
+IN_FLIGHT_WEIGHT_UPDATES=True
+RECOMPUTE_KV_CACHE_AFTER_WEIGHT_UPDATES=False
+COLOCATED_INFERENCE=False
 
 # ---------- Job Shape ----------
-GENERATION_NUM_NODES="${GENERATION_NUM_NODES:-26}"
-NUM_ACTOR_NODES="${NUM_ACTOR_NODES:-58}"
+GENERATION_NUM_NODES="${GENERATION_NUM_NODES:-59}"
+NUM_ACTOR_NODES="${NUM_ACTOR_NODES:-123}"
 COLOCATED_INFERENCE="${COLOCATED_INFERENCE:-False}"
 
 NUM_GENRM_NODES="${NUM_GENRM_NODES:-2}"
 NUM_LLMJUDGE_NODES="${NUM_LLMJUDGE_NODES:-2}"
 NUM_SAFETY_NODES="${NUM_SAFETY_NODES:-1}"
-NUM_GYM_EXTRA_NODES="${NUM_GYM_EXTRA_NODES:-1}"
+NUM_GYM_EXTRA_NODES="${NUM_GYM_EXTRA_NODES:-0}"
 NUM_JUDGE_NODES=$((NUM_GENRM_NODES + NUM_LLMJUDGE_NODES + NUM_SAFETY_NODES + NUM_GYM_EXTRA_NODES))
 NUM_TOTAL_NODES=$((NUM_ACTOR_NODES + NUM_JUDGE_NODES))
+
+# ---------- DO NOT CHANGE ----------
+# ---------- Logging, W&B, and Job Prefix ----------
+export BASE_LOG_DIR="/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/logs"
+WANDB_PROJ="ultra-v3-pipeclean"
+JOB_PREFIX="${JOB_PREFIX:-pipeclean-ultra-rl}"
+# ---------- DO NOT CHANGE ----------
+
+# ---------- Ray log sync (copy actor logs from /tmp/ray to $LOG_DIR/ray/) ----------
+export RAY_LOG_SYNC_FREQUENCY="${RAY_LOG_SYNC_FREQUENCY:-60}"
+
+EXP_SUFFIX="${JOB_PREFIX}-super-v3-grpo_sft-quantum-apex_warping-muscox_tp${TP}_cp${CP}_ep${EP}_pp${PP}_gpp${GPP}_pps${PPS}_gbs${GBS}"
+export BASE_LOG_DIR="${BASE_LOG_DIR}/${EXP_SUFFIX}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-results/${EXP_SUFFIX}}"
+mkdir -p "${CHECKPOINT_DIR}"
+CHECKPOINT_DIR="$(cd "${CHECKPOINT_DIR}" && pwd)"
+
 
 # GB200 NVL72: each rack has 18 nodes sharing an NVLink domain.
 # --segment tells SLURM to allocate nodes in groups of this size from
@@ -160,21 +213,31 @@ NUM_TOTAL_NODES=$((NUM_ACTOR_NODES + NUM_JUDGE_NODES))
 # Inference and judges inherit the constraint but don't require it.
 # Must stay in sync with cluster.segment_size in the YAML config.
 #
-# When SEGMENT_SIZE is unset, default to 16 if NUM_TOTAL_NODES >= 16.
-# When NUM_TOTAL_NODES < segment size, skip --segment to avoid sbatch failures.
+# When SEGMENT_SIZE is unset, default to 16 if NUM_TOTAL_NODES is divisible by 16.
+# Slurm requires the node count to be evenly divisible by the segment size.
 SEGMENT_SIZE="${SEGMENT_SIZE:-}"
-if [ -z "${SEGMENT_SIZE}" ] && [ "${NUM_TOTAL_NODES}" -ge 16 ]; then
+if [ -z "${SEGMENT_SIZE}" ] && [ "$((NUM_TOTAL_NODES % 16))" -eq 0 ] && [ "${NUM_TOTAL_NODES}" -ge 16 ]; then
   SEGMENT_SIZE=16
 fi
-if [ -n "${SEGMENT_SIZE}" ] && [ "${NUM_TOTAL_NODES}" -lt "${SEGMENT_SIZE}" ]; then
-  echo "ERROR: NUM_TOTAL_NODES=${NUM_TOTAL_NODES} < SEGMENT_SIZE=${SEGMENT_SIZE}" >&2
-  exit 1
+if [ -n "${SEGMENT_SIZE}" ] && [ "${SEGMENT_SIZE}" -gt 1 ]; then
+  if [ "${NUM_TOTAL_NODES}" -lt "${SEGMENT_SIZE}" ]; then
+    echo "ERROR: NUM_TOTAL_NODES=${NUM_TOTAL_NODES} < SEGMENT_SIZE=${SEGMENT_SIZE}" >&2
+    exit 1
+  fi
+  if [ "$((NUM_TOTAL_NODES % SEGMENT_SIZE))" -ne 0 ]; then
+    echo "ERROR: NUM_TOTAL_NODES=${NUM_TOTAL_NODES} is not evenly divisible by SEGMENT_SIZE=${SEGMENT_SIZE}" >&2
+    echo "  Slurm requires --nodes to be a multiple of --segment." >&2
+    echo "  Adjust NUM_TOTAL_NODES (currently: actor=${NUM_ACTOR_NODES} + judge=${NUM_JUDGE_NODES})" >&2
+    echo "  or set SEGMENT_SIZE to a divisor of ${NUM_TOTAL_NODES}." >&2
+    exit 1
+  fi
 fi
 
 # ---------- Model and data paths ----------
-NRL_TRAIN_PATH="${NRL_TRAIN_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/data/gym/rl-data-tools/blends/curriculum_v29_warping-muskox.no-swerl.max16k.train.jsonl}"
-NRL_VAL_PATH="${NRL_VAL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/data/gym/rl-data-tools/blends/curriculum_v29_warping-muskox.no-swerl.max16k.val.jsonl}"
-NRL_MODEL_PATH="${NRL_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/adithyare/nemotron_ultra/sft-runs/ultra-v3-sft-hsg-mainfeb5merge-mxfp8_newbase/hf_converted}"
+NRL_TRAIN_PATH="${NRL_TRAIN_PATH:-/lustre/fsw/portfolios/llmservice/users/jiaqiz/data/gym/rl-data-tools/blends/curriculum_v29_warping-muskox.train.no_swerl.jsonl}"
+NRL_VAL_PATH="${NRL_VAL_PATH:-/lustre/fsw/portfolios/llmservice/users/jiaqiz/data/gym/rl-data-tools/blends/curriculum_v29_warping-muskox.val.no_swerl.jsonl}"
+#NRL_MODEL_PATH="${NRL_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/dmosallanezh/models/nemotronsuper_vQuantumApex}"
+NRL_MODEL_PATH="${NRL_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/soumyes/share/ckpts/super-v3/super-v3-sft-quantum-apex}"
 NRL_GENRM_MODEL_PATH="${NRL_GENRM_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/models/qwen235b_principle_comparison_genrm_step1230}"
 NRL_NL2BASH_JUDGE_MODEL_PATH="${NRL_NL2BASH_JUDGE_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/models/Qwen3-235B-A22B-Instruct-2507-FP8}"
 NRL_SAFETY_MODEL_PATH="${NRL_SAFETY_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/super_v3/model_checkpoints/Nemotron-Content-Safety-Reasoning-4B}"
@@ -184,13 +247,8 @@ export SANDBOX_CONTAINER="${SANDBOX_CONTAINER:-/lustre/fsw/portfolios/llmservice
 export SANDBOX_COMMAND="${SANDBOX_COMMAND:-/start-with-nginx.sh}"
 export NEMO_SKILLS_SANDBOX_PORT="${NEMO_SKILLS_SANDBOX_PORT:-6000}"
 
-# ---------- Ray log sync (copy actor logs from /tmp/ray to $LOG_DIR/ray/) ----------
-export RAY_LOG_SYNC_FREQUENCY="${RAY_LOG_SYNC_FREQUENCY:-60}"
-
-EXP_SUFFIX="${EXP_SUFFIX:-ultra-v3-grpo-pipeclean}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-results/${EXP_SUFFIX}}"
-mkdir -p "${CHECKPOINT_DIR}"
-CHECKPOINT_DIR="$(cd "${CHECKPOINT_DIR}" && pwd)"
+# ---------- W&B Name ----------
+WANDB_NAME="${EXP_SUFFIX}"
 
 # ---------- Code snapshot ----------
 # Batch mode: snapshot by default so code is frozen at submission time.
@@ -229,18 +287,19 @@ fi
 # Override with PERSISTENT_CACHE=/path/to/your/cache if needed.
 if [[ -z "${PERSISTENT_CACHE:-}" ]]; then
   _access_group="${SLURM_ACCOUNT%%_*}"
-  PERSISTENT_CACHE="/lustre/fsw/portfolios/${_access_group}/users/${USER}/.cache/nemotron_ultra"
+  PERSISTENT_CACHE="/lustre/fsw/portfolios/llmservice/users/${USER}/.cache/nemotron_ultra"
 fi
 VLLM_CACHE_DIR="${PERSISTENT_CACHE}/vllm_compile_cache"
-LUSTRE_FLASHINFER_CUBIN_CACHE="${PERSISTENT_CACHE}/flashinfer_cubins"
-FLASHINFER_CUBIN_CACHE="/tmp/nemo_rl_flashinfer_cubins"
+FLASHINFER_CUBIN_CACHE="${PERSISTENT_CACHE}/flashinfer_cubins"
 FLASHINFER_WS_BASE="${PERSISTENT_CACHE}/flashinfer_workspace"
+#FLASHINFER_CUBIN_CACHE="/lustre/fsw/portfolios/llmservice/users/ansubramania/.cache/nemotron_ultra/flashinfer_cubins/"
+#FLASHINFER_WS_BASE="/lustre/fsw/portfolios/llmservice/users/ansubramania/.cache/nemotron_ultra/flashinfer_workspace/"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 INDUCTOR_CACHE_DIR="/tmp/nemo_rl_inductor_cache"
 TRITON_CACHE_DIR="/tmp/nemo_rl_triton_cache"
 
-mkdir -p "${VLLM_CACHE_DIR}" "${LUSTRE_FLASHINFER_CUBIN_CACHE}" "${FLASHINFER_WS_BASE}" \
+mkdir -p "${VLLM_CACHE_DIR}" "${FLASHINFER_CUBIN_CACHE}" "${FLASHINFER_WS_BASE}" \
   "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
 
 VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_aarch64.whl}"
@@ -249,15 +308,20 @@ VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://gith
 # Validation
 # =============================================================================
 
-# Walltime cap: Slurm partitions typically enforce <=4h; fail early.
+# Walltime cap: fail early if walltime exceeds partition limit.
 _walltime_secs() {
   local t="$1" h m s
   IFS=: read -r h m s <<< "${t}"
   echo $(( 10#${h} * 3600 + 10#${m} * 60 + 10#${s} ))
 }
 
-if (( $(_walltime_secs "${WALLTIME}") > 4 * 3600 )); then
-  echo "ERROR: WALLTIME=${WALLTIME} exceeds the 4-hour maximum."
+case "${SLURM_QOS}" in
+  batch_large_long) _max_walltime=$(( 7 * 24 * 3600 )); _max_label="7-day" ;;
+  *)                _max_walltime=$(( 4 * 3600 ));       _max_label="4-hour" ;;
+esac
+
+if (( $(_walltime_secs "${WALLTIME}") > _max_walltime )); then
+  echo "ERROR: WALLTIME=${WALLTIME} exceeds the ${_max_label} maximum for QOS ${SLURM_QOS:-default}."
   exit 1
 fi
 
@@ -376,10 +440,31 @@ NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
---config examples/configs/grpo_ultra_64n4g_pipeclean.yaml \
+--config examples/configs/grpo_repro_super_stage1.1.yaml \
 policy.model_name=${NRL_MODEL_PATH} \
 cluster.gpus_per_node=4 \
 cluster.num_nodes=${NUM_TOTAL_NODES} \
+grpo.val_period=${VAL_PERIOD} \
+grpo.num_prompts_per_step=${PPS} \
+grpo.num_generations_per_prompt=${GPP} \
+grpo.advantage_clip_low=${ADVANTAGE_CLIP_LOW} \
+grpo.advantage_clip_high=${ADVANTAGE_CLIP_HIGH} \
+grpo.seq_logprob_error_threshold=${SEQ_LOGPROB_ERROR_THRESHOLD} \
+grpo.async_grpo.enabled=${ASYNC_GRPO} \
+grpo.async_grpo.max_trajectory_age_steps=${MAX_TRAJECTORY_AGE_STEPS} \
+grpo.async_grpo.in_flight_weight_updates=${IN_FLIGHT_WEIGHT_UPDATES} \
+grpo.async_grpo.recompute_kv_cache_after_weight_updates=${RECOMPUTE_KV_CACHE_AFTER_WEIGHT_UPDATES} \
+policy.train_global_batch_size=${GBS} \
+policy.max_total_sequence_length=${MAX_LENGTH} \
+policy.megatron_cfg.tensor_model_parallel_size=${TP} \
+policy.megatron_cfg.context_parallel_size=${CP} \
+policy.megatron_cfg.expert_model_parallel_size=${EP} \
+policy.megatron_cfg.pipeline_model_parallel_size=${PP} \
+policy.megatron_cfg.expert_tensor_parallel_size=${ETP} \
+policy.megatron_cfg.scheduler.lr_warmup_iters=${LR_WARMUP_ITERS} \
+policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP} \
+policy.generation.vllm_cfg.gpu_memory_utilization=${VLLM_GPU_UTIL} \
+policy.generation.vllm_cfg.max_model_len=${MAX_LENGTH} \
 policy.generation.colocated.enabled=${COLOCATED_INFERENCE} \
 policy.generation.colocated.resources.num_nodes=${GENERATION_NUM_NODES} \
 policy.generation.colocated.resources.gpus_per_node=4 \
@@ -387,9 +472,13 @@ env.nemo_gym.num_gpu_nodes=${NUM_JUDGE_NODES} \
 env.nemo_gym.genrm_model.responses_api_models.vllm_model.model=${NRL_GENRM_MODEL_PATH} \
 env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
 env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
+loss_fn.force_on_policy_ratio=${FORCE_ON_POLICY_RATIO} \
+loss_fn.truncated_importance_sampling_ratio=${TIS_THRESHOLD} \
+loss_fn.reference_policy_kl_penalty=${KL} \
 data.train.data_path=${NRL_TRAIN_PATH} \
 data.validation.data_path=${NRL_VAL_PATH} \
 checkpointing.checkpoint_dir=${CHECKPOINT_DIR} \
+checkpointing.save_period=${SAVE_PERIOD} \
 logger.log_dir=${CHECKPOINT_DIR}/logs \
 logger.wandb_enabled=True \
 logger.wandb.name=${WANDB_NAME} \
@@ -482,21 +571,18 @@ fi
 # =================================================================================================================
 # Per-node cache seeding
 # =================================================================================================================
-# Triton, Inductor, and FlashInfer cubins compile/download to node-local /tmp to avoid Lustre race conditions
-# and file lock contention during concurrent JIT compilation and cubin fetching.
+# Triton and Inductor compile to node-local /tmp to avoid Lustre race conditions during concurrent JIT compilation.
 # To avoid cold-start penalties, we seed /tmp from a warm Lustre cache before Ray starts (SETUP_COMMAND)
 # and sync new artifacts back afterwards (TEARDOWN_COMMAND).
 # Both commands run on every node via ray.sub.
 # =================================================================================================================
 read -r -d '' SETUP_COMMAND <<SETUPEOF || true
-echo "[CACHE SEED] Seeding Triton/Inductor/FlashInfer caches from Lustre..."
+echo "[CACHE SEED] Seeding Triton/Inductor caches from Lustre..."
 LOCAL_IND="${INDUCTOR_CACHE_DIR}"
 LOCAL_TRI="${TRITON_CACHE_DIR}"
-LOCAL_FI="${FLASHINFER_CUBIN_CACHE}"
 LUSTRE_IND="${LUSTRE_INDUCTOR_CACHE}"
 LUSTRE_TRI="${LUSTRE_TRITON_CACHE}"
-LUSTRE_FI="${LUSTRE_FLASHINFER_CUBIN_CACHE}"
-mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI" "\$LOCAL_FI"
+mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI"
 if [ -d "\$LUSTRE_IND" ] && [ "\$(ls -A "\$LUSTRE_IND" 2>/dev/null)" ]; then
   cp -a "\$LUSTRE_IND/." "\$LOCAL_IND/" && echo "[CACHE SEED] Inductor: seeded from Lustre" \
     || echo "[CACHE SEED] Inductor: seed failed (non-fatal)"
@@ -508,12 +594,6 @@ if [ -d "\$LUSTRE_TRI" ] && [ "\$(ls -A "\$LUSTRE_TRI" 2>/dev/null)" ]; then
     || echo "[CACHE SEED] Triton: seed failed (non-fatal)"
 else
   echo "[CACHE SEED] Triton: no warm cache on Lustre yet"
-fi
-if [ -d "\$LUSTRE_FI" ] && [ "\$(ls -A "\$LUSTRE_FI" 2>/dev/null)" ]; then
-  cp -a "\$LUSTRE_FI/." "\$LOCAL_FI/" && echo "[CACHE SEED] FlashInfer cubins: seeded from Lustre" \
-    || echo "[CACHE SEED] FlashInfer cubins: seed failed (non-fatal)"
-else
-  echo "[CACHE SEED] FlashInfer cubins: no warm cache on Lustre yet"
 fi
 echo "[CACHE SEED] Done."
 SETUPEOF
