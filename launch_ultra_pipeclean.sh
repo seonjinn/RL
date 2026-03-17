@@ -232,15 +232,12 @@ if [[ -z "${PERSISTENT_CACHE:-}" ]]; then
   PERSISTENT_CACHE="/lustre/fsw/portfolios/${_access_group}/users/${USER}/.cache/nemotron_ultra"
 fi
 VLLM_CACHE_DIR="${PERSISTENT_CACHE}/vllm_compile_cache"
-LUSTRE_FLASHINFER_CUBIN_CACHE="${PERSISTENT_CACHE}/flashinfer_cubins"
-FLASHINFER_CUBIN_CACHE="/tmp/nemo_rl_flashinfer_cubins"
-FLASHINFER_WS_BASE="${PERSISTENT_CACHE}/flashinfer_workspace"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 INDUCTOR_CACHE_DIR="/tmp/nemo_rl_inductor_cache"
 TRITON_CACHE_DIR="/tmp/nemo_rl_triton_cache"
 
-mkdir -p "${VLLM_CACHE_DIR}" "${LUSTRE_FLASHINFER_CUBIN_CACHE}" "${FLASHINFER_WS_BASE}" \
+mkdir -p "${VLLM_CACHE_DIR}" \
   "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
 
 VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_aarch64.whl}"
@@ -370,8 +367,6 @@ VLLM_USE_PRECOMPILED=1 \
 VLLM_PRECOMPILED_WHEEL_LOCATION=${VLLM_PRECOMPILED_WHEEL_LOCATION} \
 VLLM_USE_FLASHINFER_MOE_FP8=1 \
 VLLM_FLASHINFER_MOE_BACKEND=latency \
-FLASHINFER_CUBIN_DIR=${FLASHINFER_CUBIN_CACHE} \
-FLASHINFER_WORKSPACE_BASE=${FLASHINFER_WS_BASE} \
 NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
@@ -492,11 +487,9 @@ read -r -d '' SETUP_COMMAND <<SETUPEOF || true
 echo "[CACHE SEED] Seeding Triton/Inductor/FlashInfer caches from Lustre..."
 LOCAL_IND="${INDUCTOR_CACHE_DIR}"
 LOCAL_TRI="${TRITON_CACHE_DIR}"
-LOCAL_FI="${FLASHINFER_CUBIN_CACHE}"
 LUSTRE_IND="${LUSTRE_INDUCTOR_CACHE}"
-LUSTRE_TRI="${LUSTRE_TRITON_CACHE}"
-LUSTRE_FI="${LUSTRE_FLASHINFER_CUBIN_CACHE}"
-mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI" "\$LOCAL_FI"
+LUSTRE_TRI="${LUSTRE_TRITON_CACHE}"]
+mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI"
 if [ -d "\$LUSTRE_IND" ] && [ "\$(ls -A "\$LUSTRE_IND" 2>/dev/null)" ]; then
   cp -a "\$LUSTRE_IND/." "\$LOCAL_IND/" && echo "[CACHE SEED] Inductor: seeded from Lustre" \
     || echo "[CACHE SEED] Inductor: seed failed (non-fatal)"
