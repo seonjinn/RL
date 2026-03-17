@@ -185,7 +185,7 @@ def main() -> None:
     with rl_init_timer.time("data"):
         print("\n▶ Setting up data...")
         train_dataset, val_dataset = setup_response_data(
-            tokenizer, config["data"], env_configs=None
+            processor if is_vlm else tokenizer, config["data"], env_configs=None
         )
 
         if config["grpo"]["max_val_samples"] is not None:

@@ -1291,9 +1291,17 @@ def run_async_nemo_gym_rollout(
 
     with timer.time(f"{timer_prefix}/run_rollouts"):
         nemo_gym_environment = task_to_env["nemo_gym"]
+        # Pass the original DatumSpec message_logs (built by nemo_gym_data_processor)
+        # so the gym side can carry forward multimodal data (pixel_values, etc.) and the
+        # HF-processor token layout (<img>/<image>×N/</img>) onto the first-turn user
+        # message in each result. For text-only runs each message_log is a placeholder
+        # with no multimodal keys, so this is a no-op.
         results, rollout_loop_timing_metrics = ray.get(
             nemo_gym_environment.run_rollouts.remote(
-                nemo_gym_rows, tokenizer, timer_prefix
+                nemo_gym_rows,
+                tokenizer,
+                timer_prefix,
+                original_message_logs=input_batch.get("message_log"),
             )
         )
 

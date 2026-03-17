@@ -13,13 +13,23 @@
 # limitations under the License.
 import os
 import subprocess
+import base64
+import io
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
 import ray
+import requests
 import torch
+from PIL import Image
 from transformers import PreTrainedTokenizerBase
 
+from nemo_rl.data.interfaces import DatumSpec
+from nemo_rl.data.multimodal_utils import (
+    PackedTensor,
+    get_dim_to_pack_along,
+    get_multimodal_keys_from_processor,
+)
 from nemo_rl.distributed.virtual_cluster import (
     DEFAULT_PORT_RANGE_HIGH,
     DEFAULT_PORT_RANGE_LOW,
@@ -52,6 +62,50 @@ def get_nemo_gym_venv_dir() -> Optional[str]:
     to /opt).
     """
     return os.environ.get("NEMO_GYM_VENV_DIR")
+
+
+def resolve_to_image(image_path_or_image: "str | Image.Image") -> Image.Image:
+    """Resolve a local path / URL / data-URL to a PIL.Image."""
+    if isinstance(image_path_or_image, Image.Image):
+        return image_path_or_image
+
+    if image_path_or_image.startswith(("http://", "https://")):
+        response = requests.get(image_path_or_image)
+        response.raise_for_status()
+        return Image.open(io.BytesIO(response.content)).convert("RGB")
+    elif image_path_or_image.startswith("data:"):
+        _, encoded = image_path_or_image.split(",", 1)
+        return Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGB")
+    else:
+        return Image.open(image_path_or_image).convert("RGB")
+
+
+def image_to_data_url(image: Image.Image, fmt: str = "PNG") -> str:
+    """Encode a PIL Image as a base64 data URL."""
+    buf = io.BytesIO()
+    image.save(buf, format=fmt)
+    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/{fmt.lower()};base64,{encoded}"
+
+
+def encode_images_in_examples(nemo_gym_examples: list[dict]) -> list[dict]:
+    """Walk examples and replace local image paths with base64 data URLs.
+
+    Operates in-place on each example's responses_create_params.input[].content[]
+    items of type 'input_image'.
+    """
+    for example in nemo_gym_examples:
+        input_items = example.get("responses_create_params", {}).get("input", [])
+        for item in input_items:
+            for part in item.get("content", []):
+                if not isinstance(part, dict) or part.get("type") != "input_image":
+                    continue
+                url = part.get("image_url", "")
+                if url.startswith(("http://", "https://", "data:", "file://")):
+                    continue
+                # Local filesystem path — encode as data URL
+                part["image_url"] = image_to_data_url(resolve_to_image(url))
+    return nemo_gym_examples
 
 
 class NemoGymConfig(TypedDict):
@@ -174,6 +228,7 @@ Depending on your data shape, you may want to change these values."""
         nemo_gym_examples: list[dict],
         tokenizer: PreTrainedTokenizerBase,
         timer_prefix: str,
+        original_message_logs: Optional[list[list[dict]]] = None,
     ) -> list[dict]:
         from nemo_rl.utils.fastokens import maybe_patch_fastokens
 
@@ -181,6 +236,7 @@ Depending on your data shape, you may want to change these values."""
 
         timer = Timer(context={"worker": "nemo_gym"})
 
+        encode_images_in_examples(nemo_gym_examples)
 
         timer.start("_run_rollouts_total")
         max_attempts, trial = self.rollout_max_attempts_to_avoid_lp_nan, 0
@@ -198,11 +254,19 @@ Depending on your data shape, you may want to change these values."""
                     nemo_gym_row, nemo_gym_result = await task
 
                 with timer.time(label=f"{timer_prefix}/postprocess_results"):
+                    rowidx = nemo_gym_row["_rowidx"]
+                    original_message_log = (
+                        original_message_logs[rowidx]
+                        if original_message_logs is not None
+                        else None
+                    )
                     nemo_rl_result = self._postprocess_nemo_gym_to_nemo_rl_result(
-                        nemo_gym_result, tokenizer
+                        nemo_gym_result,
+                        tokenizer,
+                        original_message_log=original_message_log,
                     )
 
-                nemo_rl_rowidxs.append(nemo_gym_row["_rowidx"])
+                nemo_rl_rowidxs.append(rowidx)
                 nemo_rl_results.append(nemo_rl_result)
 
             # determine if generation_logprobs contain NaN; if not, break;
@@ -240,7 +304,10 @@ Depending on your data shape, you may want to change these values."""
         return nemo_rl_results, timing_metrics
 
     def _postprocess_nemo_gym_to_nemo_rl_result(
-        self, nemo_gym_result: dict, tokenizer: PreTrainedTokenizerBase
+        self,
+        nemo_gym_result: dict,
+        tokenizer: PreTrainedTokenizerBase,
+        original_message_log: Optional[list[dict]] = None,
     ) -> dict:
         assert isinstance(nemo_gym_result, dict), (
             f"Hit a non-successful response when querying NeMo Gym for rollouts: {nemo_gym_result}"
@@ -248,6 +315,17 @@ Depending on your data shape, you may want to change these values."""
 
         nemo_rl_message_log = []
         seen_token_ids = torch.tensor([], dtype=torch.int64)
+
+        # Extract multimodal data (pixel_values, imgs_sizes, etc.) from the original
+        # message_log. The original message_log was created by the HF processor and
+        # contains pixel_values that are not available in the vLLM nemo_gym response.
+        multimodal_data: Dict[str, Any] = {}
+        if original_message_log:
+            for msg in original_message_log:
+                if msg.get("role") == "user":
+                    for key in list(msg.keys()):
+                        if key not in ("role", "content", "token_ids"):
+                            multimodal_data[key] = msg[key]
 
         batch_decode_items = []  # Collect (output_item_dict, prompt_token_ids, generation_token_ids) for batch decode
         for output_item_dict in nemo_gym_result["response"]["output"]:
@@ -284,14 +362,30 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
                 output_item_dict["generation_log_probs"], dtype=torch.float32
             )
 
+            # On the first multimodal turn, override the user's token_ids with the HF
+            # processor's version (including <img>/<image>×N/</img> wrappers) so that
+            # Megatron's collapse_multimodal_tokens() can identify image regions and
+            # honor pixel_values. seen_token_ids continues to track the original vLLM
+            # ids (without wrappers) so the prefix assertion above stays valid across
+            # multi-turn rollouts.
+            if multimodal_data and not nemo_rl_message_log and original_message_log:
+                user_token_ids = torch.cat(
+                    [msg["token_ids"] for msg in original_message_log], dim=0
+                )
+            else:
+                user_token_ids = new_prompt_token_ids
 
-            nemo_rl_message_log.append(
-                {
-                    "role": "user",
-                    "content": "",
-                    "token_ids": new_prompt_token_ids,
-                }
-            )
+            user_message: Dict[str, Any] = {
+                "role": "user",
+                "content": "",
+                "token_ids": user_token_ids,
+            }
+            # Attach multimodal data only on the first turn (it represents the initial
+            # image input from the original DatumSpec).
+            if multimodal_data and len(nemo_rl_message_log) == 0:
+                user_message.update(multimodal_data)
+            nemo_rl_message_log.append(user_message)
+
             # Valid tool calls go through the structured API (tool_calls field) and get
             # executed by NeMo-Gym. If tool call patterns appear in the text content instead,
             # the call was invalid and never executed — flag it so training can penalize it.
@@ -404,3 +498,101 @@ def setup_nemo_gym_config(config, tokenizer) -> None:
     # Stop strings or token ids are not supported
     generation_config["stop_strings"] = None
     generation_config["stop_token_ids"] = None
+
+
+########################################
+# Data utils
+########################################
+
+
+# We do some light preprocessing here to make our data format compatible with nemo rl format
+def nemo_gym_example_to_nemo_rl_datum_spec(
+    nemo_gym_example: dict, idx: int, processor: Optional[Any] = None
+) -> DatumSpec:
+    if processor is None:
+        return DatumSpec(
+            message_log=[
+                {"role": "user", "content": "", "token_ids": torch.tensor([])}
+            ],  # Fake message
+            length=0,
+            extra_env_info=nemo_gym_example,
+            loss_multiplier=1.0,
+            idx=idx,
+            task_name="nemo_gym",
+            stop_strings=None,
+            token_ids=[],
+        )
+
+    # Extract messages from nemo_gym format
+    input_messages = nemo_gym_example.get("responses_create_params", {}).get("input", [])
+
+    # Build user message only (no system message — NeMo-Gym sends empty system to vLLM)
+    user_message = {"role": "user", "content": []}
+
+    for msg in input_messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "user":
+            if isinstance(content, str):
+                user_message["content"].append({"type": "text", "text": content})
+            elif isinstance(content, list):
+                user_message["content"] = content
+
+    # Build user_message with PIL.Image objects for the HF processor
+    user_message_with_images = {"role": "user", "content": []}
+    for item in user_message["content"]:
+        if item.get("type") in ("input_image", "image_url"):
+            url = item.get("image_url", "")
+            if isinstance(url, dict):
+                url = url.get("url", "")
+            if url:
+                pil_image = resolve_to_image(url)
+                user_message_with_images["content"].append({"type": "image", "image": pil_image})
+        elif item.get("type") == "input_text":
+            user_message_with_images["content"].append({"type": "text", "text": item.get("text", "")})
+        else:
+            user_message_with_images["content"].append(item)
+
+    # Process user message with images
+    message_both = processor.apply_chat_template(
+        [user_message_with_images],
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+
+    # Keep the full HF processor token layout (with <img>/<image>×N/</img>) so that
+    # collapse_multimodal_tokens() in Megatron can identify image regions and preserve
+    # pixel_values for proper image embedding. Stripping wrappers here causes Megatron
+    # to drop pixel_values and either crash or compute logprobs without image context.
+    user_message["token_ids"] = message_both["input_ids"][0]
+
+    # Extract multimodal keys (pixel_values, etc.)
+    multimodal_keys = get_multimodal_keys_from_processor(processor)
+    for key in multimodal_keys:
+        if key in message_both:
+            user_message[key] = PackedTensor(
+                message_both[key],
+                dim_to_pack=get_dim_to_pack_along(processor, key)
+            )
+
+    if "imgs_sizes" in message_both:
+        user_message["imgs_sizes"] = PackedTensor(message_both["imgs_sizes"], dim_to_pack=0)
+
+    if "token_type_ids" in message_both:
+        user_message["token_type_ids"] = message_both["token_type_ids"][0]
+
+    message_log = [user_message]
+    length = sum(len(m["token_ids"]) for m in message_log)
+
+    return DatumSpec(
+        message_log=message_log,
+        length=length,
+        extra_env_info=nemo_gym_example,
+        loss_multiplier=1.0,
+        idx=idx,
+        task_name="nemo_gym",
+        stop_strings=None,
+        token_ids=[],
+    )
