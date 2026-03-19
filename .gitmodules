@@ -15,6 +15,6 @@
 	shallow = true
 [submodule "3rdparty/Gym-workspace/Gym"]
 	path = 3rdparty/Gym-workspace/Gym
-	url = ssh://git@gitlab-master.nvidia.com:12051/bxyu/nemo-gym.git
-	branch = ultra-v3-posttraining
+	url = ssh://git@gitlab-master.nvidia.com:12051/guyueh/nemo-gym.git
+	branch = guyueh/flashinfer_precompiled
 	shallow = true
