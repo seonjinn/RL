@@ -176,6 +176,7 @@ policy:
     moe_token_dispatcher_type: "alltoall"
     moe_aux_loss_coeff: 0.0
     moe_shared_expert_overlap: false
+    use_gloo_process_groups: false
 
     # Compute
     apply_rope_fusion: true
@@ -242,6 +243,10 @@ policy:
       fp8: "e4m3"
       fp8_recipe: "mxfp8"
       fp8_param: false
+
+    first_last_layers_bf16: true
+    num_layers_at_start_in_bf16: 1
+    num_layers_at_end_in_bf16: 1
 
     env_vars: null
 

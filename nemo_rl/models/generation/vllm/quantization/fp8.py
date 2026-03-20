@@ -248,7 +248,7 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
             ]
             bf16_params.extend(_get_params_in_layers(param_names, layers))
 
-        fp8_block_quant_kwargs["ignored_layers"] = bf16_params
+        fp8_block_quant_kwargs["ignore"] = bf16_params
     quantization_ignored_layer_kws = vllm_cfg.get("quantization_ignored_layer_kws", [])
     if len(quantization_ignored_layer_kws):
         with init_empty_weights():
@@ -361,7 +361,8 @@ def _get_module_from_param_name(model, name: str):
             else:
                 current_module = getattr(current_module, part)
     except (AttributeError, IndexError, ValueError) as e:
-        print(f"Warning: Could not find module for parameter '{name}'. Error: {e}")
+        truncated_error_message = str(e)[:1000]
+        print(f"Warning: Could not find module for parameter '{name}'. Error: {truncated_error_message}")
     return current_module
 
 
