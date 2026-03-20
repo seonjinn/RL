@@ -210,7 +210,7 @@ explicit = true
 
 [[tool.uv.index]]
 name = "flashinfer-internal-pypi"
-url = "https://__token__:GITLAB_TOKEN_PLACEHOLDER@gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple"
+url = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple"
 explicit = true
 
 [tool.uv]
