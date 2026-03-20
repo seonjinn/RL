@@ -126,7 +126,7 @@ RUN git rev-parse --is-shallow-repository | grep -q true && git fetch --unshallo
 RUN --mount=type=ssh --mount=type=secret,id=CI_JOB_TOKEN <<"EOF" bash -exu
 # Authenticate with private GitLab PyPI index for flashinfer packages.
 if [[ -f /run/secrets/CI_JOB_TOKEN ]]; then
-    export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME=__token__
+    export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME=gitlab-ci-token
     export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD=$(cat /run/secrets/CI_JOB_TOKEN)
 fi
 uv venv --seed
