@@ -179,11 +179,6 @@ else
     UV_LINK_MODE=hardlink uv run nemo_rl/utils/prefetch_venvs.py
 fi
 
-source /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/activate && \
-uv pip install -e 3rdparty/Gym-workspace/Gym/responses_api_models/vllm_model && \
-/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/pip install git+https://github.com/TomerBN-Nvidia/flashinfer.git@ultra-rl && \
-deactivate
-
 # Prune unreachable cache entries
 uv cache clean
 EOF

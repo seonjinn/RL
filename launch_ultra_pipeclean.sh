@@ -237,8 +237,7 @@ LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 INDUCTOR_CACHE_DIR="/tmp/nemo_rl_inductor_cache"
 TRITON_CACHE_DIR="/tmp/nemo_rl_triton_cache"
 
-mkdir -p "${VLLM_CACHE_DIR}" \
-  "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
+mkdir -p "${VLLM_CACHE_DIR}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
 
 VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_aarch64.whl}"
 
@@ -488,7 +487,7 @@ echo "[CACHE SEED] Seeding Triton/Inductor/FlashInfer caches from Lustre..."
 LOCAL_IND="${INDUCTOR_CACHE_DIR}"
 LOCAL_TRI="${TRITON_CACHE_DIR}"
 LUSTRE_IND="${LUSTRE_INDUCTOR_CACHE}"
-LUSTRE_TRI="${LUSTRE_TRITON_CACHE}"]
+LUSTRE_TRI="${LUSTRE_TRITON_CACHE}"
 mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI"
 if [ -d "\$LUSTRE_IND" ] && [ "\$(ls -A "\$LUSTRE_IND" 2>/dev/null)" ]; then
   cp -a "\$LUSTRE_IND/." "\$LOCAL_IND/" && echo "[CACHE SEED] Inductor: seeded from Lustre" \
