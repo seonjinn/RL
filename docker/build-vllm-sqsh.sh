@@ -106,6 +106,10 @@ echo ""
 echo ">>> Installing FlashInfer cubin..."
 uv pip install --system -e "./flashinfer-cubin" 2>&1
 
+echo ""
+echo ">>> Installing FlashInfer jit cache..."
+uv pip install --system flashinfer-jit-cache --index-url https://__token__:GITLAB_TOKEN_PLACEHOLDER@gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple 2>&1
+
 ###############################################################################
 # Step 4: Additional dependencies
 ###############################################################################
