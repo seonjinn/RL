@@ -184,6 +184,11 @@ else
     UV_LINK_MODE=hardlink uv run nemo_rl/utils/prefetch_venvs.py
 fi
 
+# download flashinfer cubin
+uv run --extra vllm flashinfer download-cubin || true
+# show the flashinfer config
+uv run --extra vllm flashinfer show-config || true
+
 # Prune unreachable cache entries
 uv cache clean
 EOF
