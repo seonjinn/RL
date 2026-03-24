@@ -189,6 +189,10 @@ uv run --extra vllm flashinfer download-cubin || true
 # show the flashinfer config
 uv run --extra vllm flashinfer show-config || true
 
+# Gym environment download flashinfer cubin. TODO (guyueh): this relies on success of gym environment building, not guarantee to be successful.
+/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer download-cubin || true
+/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer show-config || true
+
 # Prune unreachable cache entries
 uv cache clean
 EOF
