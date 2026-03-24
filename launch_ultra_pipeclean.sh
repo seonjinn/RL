@@ -122,7 +122,7 @@ SLURM_QOS="${SLURM_QOS:-}"
 WALLTIME="${WALLTIME:-4:00:00}"
 
 # ---------- Container & mounts ----------
-export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/pipe.46035436.sqsh}"
+export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/rl.nightly.sqsh}"
 MOUNTS="/lustre:/lustre"
 
 # GB200 NVL72: fixed at 4 GPUs/node. Must match --gres=gpu:4 passed to sbatch.
@@ -222,6 +222,10 @@ fi
 # JIT, Triton, Inductor, uv).  Each user gets their own directory to avoid
 # shared-permission issues on Lustre.
 #
+# Lustre holds the warm persistent cache. At job start, SETUP_COMMAND clears
+# stale /tmp caches then seeds node-local /tmp from Lustre. JIT writes go to
+# /tmp to avoid Lustre metadata contention from parallel compilation.
+#
 # Default path: /lustre/fsw/portfolios/{access_group}/users/$USER/.cache
 # where {access_group} is the first segment of SLURM_ACCOUNT
 # (e.g. llmservice_nemotron_ultra → llmservice).
@@ -231,13 +235,32 @@ if [[ -z "${PERSISTENT_CACHE:-}" ]]; then
   _access_group="${SLURM_ACCOUNT%%_*}"
   PERSISTENT_CACHE="/lustre/fsw/portfolios/${_access_group}/users/${USER}/.cache/nemotron_ultra"
 fi
-VLLM_CACHE_DIR="${PERSISTENT_CACHE}/vllm_compile_cache"
+# Lustre (shared) — persistent across jobs, used for sync-back and warm-start seeding.
+# torch_compile_cache hash dirs are content-addressed and accumulate across runs. 
+# bf16 and mxfp8 produce different hashes that coexist in the same tree:
+# each run finds its own hash and ignores the others.
+LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
+# Node-local (fast) — each vLLM instance writes to ${NRL_VLLM_LOCAL_CACHE_DIR}_{seed}.
+# Set as VLLM_CACHE_ROOT so torch.compile hits local disk, not Lustre.
+NRL_VLLM_LOCAL_CACHE_DIR="/tmp/nemo_rl_vllm_cache"
+# Read-only warm seed — SETUP_COMMAND copies one Lustre seed dir here per-node.
+# The framework rsyncs this into each instance's cache before compilation.
+NRL_VLLM_CACHE_SEED_DIR="/tmp/nemo_rl_vllm_cache_warm"
 INDUCTOR_CACHE_DIR="/tmp/nemo_rl_inductor_cache"
 TRITON_CACHE_DIR="/tmp/nemo_rl_triton_cache"
+CACHE_SYNC_FREQUENCY="${CACHE_SYNC_FREQUENCY:-120}"
 
-mkdir -p "${VLLM_CACHE_DIR}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
+export LUSTRE_VLLM_CACHE
+export LUSTRE_INDUCTOR_CACHE
+export LUSTRE_TRITON_CACHE
+export NRL_VLLM_LOCAL_CACHE_DIR
+export INDUCTOR_CACHE_DIR
+export TRITON_CACHE_DIR
+export CACHE_SYNC_FREQUENCY
+
+mkdir -p "${LUSTRE_VLLM_CACHE}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
 
 VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_aarch64.whl}"
 
@@ -354,8 +377,9 @@ ${VLLM_ENV_SOURCE}\
 OMP_NUM_THREADS=16 \
 RAY_DEDUP_LOGS=1 \
 NRL_VLLM_USE_V1=1 \
-VLLM_CACHE_ROOT=${VLLM_CACHE_DIR} \
-DG_JIT_CACHE_DIR=${VLLM_CACHE_DIR}/deep_gemm \
+VLLM_CACHE_ROOT=${NRL_VLLM_LOCAL_CACHE_DIR} \
+NRL_VLLM_CACHE_SEED_DIR=${NRL_VLLM_CACHE_SEED_DIR} \
+DG_JIT_CACHE_DIR=${NRL_VLLM_LOCAL_CACHE_DIR}/deep_gemm \
 TORCHINDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR} \
 TRITON_CACHE_DIR=${TRITON_CACHE_DIR} \
 UV_CACHE_DIR=${PERSISTENT_CACHE}/uv \
@@ -478,34 +502,61 @@ fi
 # =================================================================================================================
 # Triton, Inductor, and FlashInfer cubins compile/download to node-local /tmp to avoid Lustre race conditions
 # and file lock contention during concurrent JIT compilation and cubin fetching.
-# To avoid cold-start penalties, we seed /tmp from a warm Lustre cache before Ray starts (SETUP_COMMAND)
-# and sync new artifacts back afterwards (TEARDOWN_COMMAND).
-# Both commands run on every node via ray.sub.
+# To avoid cold-start penalties, we seed /tmp from a warm Lustre cache before Ray starts (SETUP_COMMAND).
+#
+# IMPORTANT: Stale /tmp caches from previous jobs can cause hangs (e.g. triton_bundler
+# skipping non-empty temp dirs). We rm -rf /tmp caches first, then seed fresh from Lustre.
 # =================================================================================================================
 read -r -d '' SETUP_COMMAND <<SETUPEOF || true
-echo "[CACHE SEED] Seeding Triton/Inductor/FlashInfer caches from Lustre..."
+echo "[CACHE SEED] Clearing stale /tmp caches and seeding from Lustre..."
+LOCAL_VLLM="${NRL_VLLM_LOCAL_CACHE_DIR}"
+WARM_SEED="${NRL_VLLM_CACHE_SEED_DIR}"
 LOCAL_IND="${INDUCTOR_CACHE_DIR}"
 LOCAL_TRI="${TRITON_CACHE_DIR}"
-LUSTRE_IND="${LUSTRE_INDUCTOR_CACHE}"
-LUSTRE_TRI="${LUSTRE_TRITON_CACHE}"
+L_VLLM="${LUSTRE_VLLM_CACHE}"
+L_IND="${LUSTRE_INDUCTOR_CACHE}"
+L_TRI="${LUSTRE_TRITON_CACHE}"
+
+# vLLM caches are per-instance (VLLM_CACHE_ROOT_{seed}). Clear ALL from prior jobs.
+rm -rf /tmp/nemo_rl_vllm_cache /tmp/nemo_rl_vllm_cache_*
+rm -rf "\$LOCAL_IND" "\$LOCAL_TRI"
 mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI"
-if [ -d "\$LUSTRE_IND" ] && [ "\$(ls -A "\$LUSTRE_IND" 2>/dev/null)" ]; then
-  cp -a "\$LUSTRE_IND/." "\$LOCAL_IND/" && echo "[CACHE SEED] Inductor: seeded from Lustre" \
-    || echo "[CACHE SEED] Inductor: seed failed (non-fatal)"
-else
-  echo "[CACHE SEED] Inductor: no warm cache on Lustre yet"
+
+# Clean orphaned .tmp_* dirs left by crashed sync-back sidecars from prior jobs.
+find "\$L_IND" -maxdepth 1 -name '.tmp_*' -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+find "\$L_TRI" -maxdepth 1 -name '.tmp_*' -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+
+_seed_cache() {
+  local lustre="\$1" local_dir="\$2" name="\$3"
+  if [ -d "\$lustre" ] && [ "\$(ls -A "\$lustre" 2>/dev/null)" ]; then
+    rsync -a --exclude '.tmp_*' "\$lustre/" "\$local_dir/" 2>/dev/null \
+      && echo "[CACHE SEED] \$name: seeded from Lustre (\$(du -sh "\$local_dir" 2>/dev/null | cut -f1))" \
+      || echo "[CACHE SEED] \$name: seed failed (non-fatal)"
+  else
+    echo "[CACHE SEED] \$name: no warm cache on Lustre yet"
+  fi
+}
+
+# Seed vLLM compile cache: find the most recently modified seed dir on Lustre.
+# Compile hashes are seed-independent, so any prior seed dir is valid.
+# Picking the newest maximises the chance it matches the current container.
+_found_warm=""
+if [ -n "\$L_VLLM" ]; then
+  _base="\$(basename "\$L_VLLM")"
+  _parent="\$(dirname "\$L_VLLM")"
+  _found_warm="\$(
+    ls -1dt "\${_parent}/\${_base}_"* 2>/dev/null \
+      | while IFS= read -r d; do
+          [ -d "\$d" ] && [ "\$(ls -A "\$d" 2>/dev/null)" ] && echo "\$d" && break
+        done
+  )"
 fi
-if [ -d "\$LUSTRE_TRI" ] && [ "\$(ls -A "\$LUSTRE_TRI" 2>/dev/null)" ]; then
-  cp -a "\$LUSTRE_TRI/." "\$LOCAL_TRI/" && echo "[CACHE SEED] Triton: seeded from Lustre" \
-    || echo "[CACHE SEED] Triton: seed failed (non-fatal)"
+if [ -n "\$_found_warm" ]; then
+  rm -rf "\$WARM_SEED"
+  _seed_cache "\$_found_warm" "\$WARM_SEED" "vLLM (from \$(basename "\$_found_warm"))"
 else
-  echo "[CACHE SEED] Triton: no warm cache on Lustre yet"
-fi
-if [ -d "\$LUSTRE_FI" ] && [ "\$(ls -A "\$LUSTRE_FI" 2>/dev/null)" ]; then
-  cp -a "\$LUSTRE_FI/." "\$LOCAL_FI/" && echo "[CACHE SEED] FlashInfer cubins: seeded from Lustre" \
-    || echo "[CACHE SEED] FlashInfer cubins: seed failed (non-fatal)"
-else
-  echo "[CACHE SEED] FlashInfer cubins: no warm cache on Lustre yet"
+  echo "[CACHE SEED] vLLM: no warm cache on Lustre yet"
+  rm -rf "\$WARM_SEED"
 fi
 echo "[CACHE SEED] Done."
 SETUPEOF

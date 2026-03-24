@@ -31,6 +31,7 @@ from megatron.bridge.training.config import (
     CheckpointConfig,
     ConfigContainer,
     DistributedDataParallelConfig,
+    DistributedInitConfig,
     LoggerConfig,
     OptimizerConfig,
     SchedulerConfig,
@@ -229,9 +230,6 @@ def validate_and_set_config(
         config, rank, dtype, hf_model_name, pretrained_path, weights_path
     )
 
-    if "use_gloo_process_groups" in config["megatron_cfg"]:
-        megatron_cfg.dist.use_gloo_process_groups = config["megatron_cfg"]["use_gloo_process_groups"]
-
     final_padded_vocab_size = calculate_padded_vocab_size(
         megatron_cfg.model.vocab_size,
         megatron_cfg.model.make_vocab_size_divisible_by,
@@ -335,7 +333,11 @@ def setup_model_config(
     _validate_chunking_config(config)
 
     # Create checkpoint configs
-    checkpoint_config = _create_checkpoint_config(pretrained_path, weights_path)
+    checkpoint_config = _create_checkpoint_config(
+        pretrained_path,
+        weights_path,
+        ckpt_cfg=config["megatron_cfg"].get("checkpoint"),
+    )
 
     # Validate training configuration
     _validate_training_config(config, model_cfg)
@@ -521,19 +523,44 @@ def _validate_chunking_config(config: PolicyConfig) -> None:
 
 
 def _create_checkpoint_config(
-    pretrained_path: str, weights_path: Optional[str]
+    pretrained_path: str,
+    weights_path: Optional[str],
+    ckpt_cfg: Optional[dict[str, Any]] = None,
 ) -> CheckpointConfig:
-    """Create checkpoint configurations."""
-    return CheckpointConfig(
+    """Create checkpoint configurations.
+
+    Args:
+        pretrained_path: Path to the pretrained checkpoint.
+        weights_path: Path to save/load training weights.
+        ckpt_cfg: Optional MegatronCheckpointConfig dict from YAML.
+    """
+    cfg = ckpt_cfg or {}
+    async_save = cfg.get("async_save", False)
+    # Megatron-Bridge requires checkpoint.save != None when async_save is enabled.
+    # The actual path is overwritten by save_checkpoint() before each write.
+    save_path = weights_path
+    if async_save and save_path is None:
+        save_path = pretrained_path
+    kwargs: dict[str, Any] = dict(
         save_interval=100,
-        save=weights_path,
+        save=save_path,
         load=weights_path,
         pretrained_checkpoint=pretrained_path,
-        async_save=False,
+        async_save=async_save,
         fully_parallel_save=True,
         fully_parallel_load=True,
         load_rng=False,
+        ckpt_assume_constant_structure=cfg.get("ckpt_assume_constant_structure", False),
     )
+    _optional_ckpt_fields = (
+        "fully_parallel_save_process_group",
+        "fully_parallel_load_process_group",
+        "fully_parallel_load_exchange_algo",
+    )
+    for field in _optional_ckpt_fields:
+        if field in cfg:
+            kwargs[field] = cfg[field]
+    return CheckpointConfig(**kwargs)
 
 
 def _validate_training_config(config: PolicyConfig, model_cfg: Any) -> None:
@@ -602,10 +629,17 @@ def _create_megatron_config(
     dtype: torch.dtype,
 ) -> ConfigContainer:
     """Create the final Megatron configuration container."""
+    dist_cfg = DistributedInitConfig()
+    if "use_gloo_process_groups" in config["megatron_cfg"]:
+        dist_cfg.use_gloo_process_groups = config["megatron_cfg"][
+            "use_gloo_process_groups"
+        ]
+
     return ConfigContainer(
         model=model_cfg,
         checkpoint=checkpoint_config,
         logger=LoggerConfig(logging_level=0),
+        dist=dist_cfg,
         train=TrainingConfig(
             micro_batch_size=1,  # ignored
             global_batch_size=config["train_global_batch_size"],  # ignored
@@ -652,6 +686,17 @@ def setup_model_and_optimizer(
     state = GlobalState()
     state.cfg = megatron_cfg
     # TODO: Freeze state.cfg
+
+    # Must be called before initialize_megatron (before CUDA init) so the
+    # persistent worker subprocess is spawned in a clean process.
+    # Bridge hardcodes mp_mode='spawn' which is the only safe option in Ray actors.
+    # Guard: older megatron-core may lack AsyncCallsQueue.warmup_persistent_caller.
+    _init_fn = getattr(state, "initialize_async_checkpoint_worker", None)
+    if _init_fn is not None:
+        try:
+            _init_fn()
+        except AttributeError:
+            pass
 
     megatron_cfg.dist.external_gpu_device_mapping = True
     initialize_megatron(

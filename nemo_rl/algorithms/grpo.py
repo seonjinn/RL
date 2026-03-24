@@ -533,16 +533,18 @@ def setup(
             f"got train_nodes={train_nodes}, inference_nodes={inference_nodes}"
         )
 
-        # Build topology-aware domain constraints for training placement groups.
-        # Each training node's bundles are pinned to a specific NVLink domain so
+        # Build topology-aware domain constraints for placement groups.
+        # Each selected node's bundles are pinned to a specific NVLink domain so
         # that EP groups stay within high-bandwidth switch fabrics.
         #
         # NOTE: segment_size is also passed to RayVirtualCluster and used later
         # by _sort_bundle_indices_by_topology to trim incomplete domain segments
-        # when ordering ranks. When constraints successfully pin training to
+        # when ordering ranks. When constraints successfully pin nodes to
         # complete segments, that post-placement trimming is a no-op. It serves
         # as defense-in-depth for the fallback path where constraints are absent.
         node_resource_constraints = None
+        inference_node_resource_constraints = None
+        inference_segment_size = None
         if segment_size is not None:
             topology = get_ray_cluster_topology()
             num_alive_nodes = len(topology)
@@ -556,7 +558,7 @@ def setup(
                 domain != NVLINK_DOMAIN_UNKNOWN for domain, _ in topology.values()
             )
             if has_topology:
-                training_node_ids, _ = select_segment_nodes(
+                training_node_ids, remaining_node_ids = select_segment_nodes(
                     topology, segment_size, train_nodes
                 )
                 # Each node has 1.0 of its domain resource (per-node, not shared).
@@ -572,7 +574,7 @@ def setup(
                 ]
                 if nodes_missing_topo_rank:
                     print(
-                        f"  ⚠ {len(nodes_missing_topo_rank)} training nodes have NVLink domain "
+                        f"  ⚠ {len(nodes_missing_topo_rank)} selected training nodes have NVLink domain "
                         f"info but no topo_rank; intra-domain rank ordering may be suboptimal",
                         flush=True,
                     )
@@ -582,6 +584,49 @@ def setup(
                     f"(segment_size={segment_size})",
                     flush=True,
                 )
+
+                # Inference topology: each vLLM/SGLang instance spans
+                # nodes_per_instance nodes; keep those within one domain
+                # so cross-node all-reduce uses NVLink, not InfiniBand.
+                #
+                # For vLLM: total GPUs per instance = TP * PP (separate dimensions).
+                # For SGLang: gpus_per_server already includes all parallelism
+                #   dimensions (TP, DP-attention, PP are internal subdivisions),
+                #   so we use it directly without multiplying by pp_size.
+                vllm_cfg = generation_config.get("vllm_cfg", {})
+                sglang_cfg = generation_config.get("sglang_cfg", {})
+                if vllm_cfg.get("tensor_parallel_size", 0):
+                    gpus_per_instance = (
+                        vllm_cfg["tensor_parallel_size"]
+                        * vllm_cfg.get("pipeline_parallel_size", 1)
+                    )
+                else:
+                    gpus_per_instance = sglang_cfg.get("gpus_per_server", 1)
+                nodes_per_instance = (gpus_per_instance + inference_gpus_per_node - 1) // inference_gpus_per_node
+                if nodes_per_instance > 1 and inference_nodes % nodes_per_instance == 0:
+                    remaining_topology = {
+                        nid: topology[nid] for nid in remaining_node_ids
+                    }
+                    inference_node_ids, _ = select_segment_nodes(
+                        remaining_topology, nodes_per_instance, inference_nodes
+                    )
+                    inference_node_resource_constraints = [
+                        {topology[nid][0]: 0.001} for nid in inference_node_ids
+                    ]
+                    inference_segment_size = nodes_per_instance
+                    print(
+                        f"  ✓ Topology-aware allocation: {inference_nodes} inference nodes in "
+                        f"{len(set(topology[nid][0] for nid in inference_node_ids))} NVLink domains "
+                        f"(nodes_per_instance={nodes_per_instance}, gpus_per_instance={gpus_per_instance})",
+                        flush=True,
+                    )
+                elif nodes_per_instance > 1:
+                    print(
+                        f"  ⚠ inference_nodes={inference_nodes} is not divisible by "
+                        f"nodes_per_instance={nodes_per_instance} (gpus_per_instance={gpus_per_instance}); "
+                        f"skipping inference topology constraints",
+                        flush=True,
+                    )
             else:
                 print(
                     f"  ⚠ segment_size={segment_size} is set but no NVLink domain info "
@@ -609,9 +654,29 @@ def setup(
             flush=True,
         )
 
-    # Reserve nemo_gym judge nodes after training cluster is created (so
-    # domain-constrained training PGs claim topology-aligned nodes first)
-    # and before inference cluster (which gets whatever nodes remain).
+        # Create inference cluster with topology constraints so TP groups
+        # stay within NVLink domains. Must be created before nemo_gym so
+        # inference claims domain-aligned nodes first.
+        inference_cluster = RayVirtualCluster(
+            name="grpo_inference_cluster",
+            bundle_ct_per_node_list=[inference_gpus_per_node] * inference_nodes,
+            use_gpus=True,
+            num_gpus_per_node=inference_gpus_per_node,
+            max_colocated_worker_groups=1,
+            port_range_low=generation_config.get("port_range_low", DEFAULT_PORT_RANGE_LOW),
+            port_range_high=generation_config.get("port_range_high", DEFAULT_PORT_RANGE_HIGH),
+            segment_size=inference_segment_size,
+            node_resource_constraints=inference_node_resource_constraints,
+        )
+        if inference_node_resource_constraints is not None:
+            VllmGeneration.init_cluster_placement_groups(inference_cluster, generation_config)
+        print(
+            f"  ✓ Ray inference cluster initialized with {inference_nodes} nodes with {inference_gpus_per_node} GPUs per node",
+            flush=True,
+        )
+
+    # Reserve nemo_gym judge nodes after training and inference clusters are
+    # created (so topology-constrained PGs claim aligned nodes first).
     if nemo_gym_num_nodes:
         node_infos: dict[str, dict] = {}
         ray_nodes = ray.util.state.list_nodes(limit=10000)
@@ -675,22 +740,6 @@ def setup(
         print(f"DEBUG: grpo setup: nemo_gym_nodes     = {nemo_gym_nodes}", flush=True)
         assert len(nemo_gym_nodes) == nemo_gym_num_nodes, (
             f"expected {nemo_gym_num_nodes} nemo gym nodes, actual: {nemo_gym_nodes}"
-        )
-
-    if not colocated_inference:
-        # Initialize inference cluster (gets remaining nodes after training and gym have claimed theirs).
-        inference_cluster = RayVirtualCluster(
-            name="grpo_inference_cluster",
-            bundle_ct_per_node_list=[inference_gpus_per_node] * inference_nodes,
-            use_gpus=True,
-            num_gpus_per_node=inference_gpus_per_node,
-            max_colocated_worker_groups=1,
-            port_range_low=generation_config.get("port_range_low", DEFAULT_PORT_RANGE_LOW),
-            port_range_high=generation_config.get("port_range_high", DEFAULT_PORT_RANGE_HIGH),
-        )
-        print(
-            f"  ✓ Ray inference cluster initialized with {inference_nodes} nodes with {inference_gpus_per_node} GPUs per node",
-            flush=True,
         )
 
     # ==========================
@@ -1689,6 +1738,7 @@ def grpo_train(
     memory_tracker = MemoryTracker()
 
     kv_scales_cache = None  # Cache reused for computed kv scales
+    pending_checkpoint_path: Optional[str] = None  # deferred async checkpoint finalization
 
     NEED_REFIT = True
     # If policy_generation is None, use the policy as the generation interface (megatron framework backend)
@@ -2446,6 +2496,12 @@ def grpo_train(
                             ]
 
                     with timer.time("checkpointing"):
+                        # Finalize previous async checkpoint if pending
+                        if pending_checkpoint_path is not None:
+                            policy.finalize_async_save()
+                            checkpointer.finalize_checkpoint(pending_checkpoint_path)
+                            pending_checkpoint_path = None
+
                         print(
                             f"Saving checkpoint for step {total_steps + 1}...",
                             flush=True,
@@ -2469,7 +2525,9 @@ def grpo_train(
                             dataloader.state_dict(),
                             os.path.join(checkpoint_path, "train_dataloader.pt"),
                         )
-                        checkpointer.finalize_checkpoint(checkpoint_path)
+                        # Defer directory rename until next save or loop exit.
+                        # With sync save, finalize_async_save is a no-op.
+                        pending_checkpoint_path = checkpoint_path
 
             # Logging
             # Log training data
@@ -2621,10 +2679,16 @@ def grpo_train(
             current_step += 1
             total_steps += 1
             if should_save_by_timeout:
+                if pending_checkpoint_path is not None:
+                    policy.finalize_async_save()
+                    checkpointer.finalize_checkpoint(pending_checkpoint_path)
                 memory_tracker.snapshot_start_of_stage("", dir())
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
             if total_steps >= max_num_steps:
+                if pending_checkpoint_path is not None:
+                    policy.finalize_async_save()
+                    checkpointer.finalize_checkpoint(pending_checkpoint_path)
                 memory_tracker.snapshot_start_of_stage("", dir())
                 print(
                     "Max number of steps has been reached, stopping training early",
@@ -2892,6 +2956,7 @@ def async_grpo_train(
     total_valid_tokens = grpo_save_state.get(
         "total_valid_tokens", 0
     )  # Default to 0 for backward compatibility with older checkpoints
+    pending_checkpoint_path: Optional[str] = None  # deferred async checkpoint finalization
     val_period = master_config["grpo"]["val_period"]
     val_at_start = master_config["grpo"]["val_at_start"]
     val_at_end = master_config["grpo"]["val_at_end"]
@@ -3674,6 +3739,12 @@ def async_grpo_train(
                             ]
 
                     with timer.time("checkpointing"):
+                        # Finalize previous async checkpoint if pending
+                        if pending_checkpoint_path is not None:
+                            policy.finalize_async_save()
+                            checkpointer.finalize_checkpoint(pending_checkpoint_path)
+                            pending_checkpoint_path = None
+
                         print(f"Saving checkpoint for step {step + 1}...")
                         checkpoint_path = checkpointer.init_tmp_checkpoint(
                             step + 1, grpo_save_state, master_config
@@ -3710,7 +3781,8 @@ def async_grpo_train(
                         print(
                             f"✅ Saved replay buffer with {len(replay_buffer_state['trajectories'])} trajectories"
                         )
-                        checkpointer.finalize_checkpoint(checkpoint_path)
+                        # Defer directory rename until next save or training exit.
+                        pending_checkpoint_path = checkpoint_path
 
                         # Record checkpoint completion for crash-recovery analysis
                         cp_info_path = os.path.join(
@@ -3846,9 +3918,17 @@ def async_grpo_train(
             timer.reset()
             step += 1
             if should_save_by_timeout:
+                if pending_checkpoint_path is not None:
+                    policy.finalize_async_save()
+                    checkpointer.finalize_checkpoint(pending_checkpoint_path)
+                    pending_checkpoint_path = None
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
             if step >= master_config["grpo"]["max_num_steps"]:
+                if pending_checkpoint_path is not None:
+                    policy.finalize_async_save()
+                    checkpointer.finalize_checkpoint(pending_checkpoint_path)
+                    pending_checkpoint_path = None
                 print(
                     "Max number of steps has been reached, stopping training early",
                     flush=True,
@@ -3862,6 +3942,14 @@ def async_grpo_train(
         traceback.print_exc()
 
     finally:
+        # Finalize any pending async checkpoint before shutting down workers
+        if pending_checkpoint_path is not None:
+            try:
+                policy.finalize_async_save()
+                checkpointer.finalize_checkpoint(pending_checkpoint_path)
+            except Exception as e:
+                print(f"Error finalizing pending checkpoint: {e}")
+
         # Clean up
         print("🛑 Stopping trajectory collection...")
         try:

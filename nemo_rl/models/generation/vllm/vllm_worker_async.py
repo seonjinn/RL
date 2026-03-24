@@ -236,6 +236,65 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             f"for vLLM HTTP server"
         )
 
+    def _seed_vllm_cache(self):
+        """Seed local vLLM compile cache from a warm directory if available.
+
+        Reads NRL_VLLM_CACHE_SEED_DIR and rsyncs it into VLLM_CACHE_ROOT.
+        Both are env vars set by the launch script — keeping them in the
+        same system avoids the inconsistency of mixing env vars and config.
+
+        Retries up to 3 times on transient failures. Timeout is controlled
+        by NRL_VLLM_CACHE_SEED_TIMEOUT (default 300s).
+        """
+        import os
+        import shutil
+        import subprocess
+
+        seed_dir = os.environ.get("NRL_VLLM_CACHE_SEED_DIR", "")
+        local_dst = os.environ.get("VLLM_CACHE_ROOT", "")
+        if not seed_dir or not local_dst or not os.path.isdir(seed_dir):
+            return
+        if not os.listdir(seed_dir):
+            return
+        if not shutil.which("rsync"):
+            print("[CACHE SEED] rsync not found, skipping cache seed", flush=True)
+            return
+
+        timeout = int(os.environ.get("NRL_VLLM_CACHE_SEED_TIMEOUT", "300"))
+        os.makedirs(local_dst, exist_ok=True)
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            t0 = time.perf_counter()
+            try:
+                result = subprocess.run(
+                    ["rsync", "-a", "--ignore-existing", f"{seed_dir}/", f"{local_dst}/"],
+                    capture_output=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                elapsed = time.perf_counter() - t0
+                print(
+                    f"[CACHE SEED] rsync timed out after {elapsed:.0f}s "
+                    f"(attempt {attempt}/{max_attempts})",
+                    flush=True,
+                )
+                continue
+
+            elapsed = time.perf_counter() - t0
+            if result.returncode == 0:
+                print(f"[CACHE SEED] vLLM compile cache seeded in {elapsed:.1f}s", flush=True)
+                return
+
+            stderr = result.stderr.decode(errors="replace")[:200]
+            print(
+                f"[CACHE SEED] rsync failed (attempt {attempt}/{max_attempts}, "
+                f"{elapsed:.1f}s): {stderr}",
+                flush=True,
+            )
+
+        print("[CACHE SEED] all attempts failed, proceeding with cold compile", flush=True)
+
     def load_model(self):
         """Load the vLLM model and create the engine.
 
@@ -243,6 +302,8 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         """
         if not self.is_model_owner:
             return
+
+        self._seed_vllm_cache()
         self._load_model(self._deferred_bundle_indices, self._deferred_seed)
 
     def _create_engine(self, llm_kwargs: dict[str, Any]) -> None:
