@@ -70,7 +70,7 @@ automodel = [
   "transformer-engine[pytorch]==2.12.0",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480",
 ]
-vllm = ["cuda-python", "deep_gemm @ git+https://github.com/deepseek-ai/DeepGEMM.git@7b6b5563b9d4c1ae07ffbce7f78ad3ac9204827c", "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480", "num2words>=0.5.14", "vllm", "flashinfer-python", "mamba-ssm", "flashinfer-cubin", "flashinfer-jit-cache"]
+vllm = ["cuda-python", "deep_gemm @ git+https://github.com/deepseek-ai/DeepGEMM.git@7b6b5563b9d4c1ae07ffbce7f78ad3ac9204827c", "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480", "num2words>=0.5.14", "vllm", "flashinfer-python", "mamba-ssm", "flashinfer-cubin", "flashinfer-jit-cache==0.6.5+cu129"]
 sglang = [
   "sglang==0.5.7",
   "orjson",

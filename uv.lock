@@ -2212,15 +2212,16 @@ name = "flashinfer-cubin"
 version = "0.6.5"
 source = { registry = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple" }
 wheels = [
-    { url = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/files/82a351eb508d8a306d9c57980db24354364ca44ecc0e41cfb3badd18fefb82aa/flashinfer_cubin-0.6.5-py3-none-any.whl", hash = "sha256:82a351eb508d8a306d9c57980db24354364ca44ecc0e41cfb3badd18fefb82aa" },
+    { url = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/files/e8c1cd42c10155963818baf5519052eef31cd0ba57606e3c761ac28cd62f25f8/flashinfer_cubin-0.6.5-py3-none-any.whl", hash = "sha256:e8c1cd42c10155963818baf5519052eef31cd0ba57606e3c761ac28cd62f25f8" },
 ]
 
 [[package]]
 name = "flashinfer-jit-cache"
-version = "0.6.5"
+version = "0.6.5+cu129"
 source = { registry = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple" }
 wheels = [
-    { url = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/files/4fb4d1d55acf00c82d00c3bb92ce89492fe2a52036d05e98d2d07cb644d30bae/flashinfer_jit_cache-0.6.5-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:4fb4d1d55acf00c82d00c3bb92ce89492fe2a52036d05e98d2d07cb644d30bae" },
+    { url = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/files/53fd64affabaf4da8f1bc4e5976113fcf3d0ef1e6194fe8b130e84521eed7df6/flashinfer_jit_cache-0.6.5+cu129-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:53fd64affabaf4da8f1bc4e5976113fcf3d0ef1e6194fe8b130e84521eed7df6" },
+    { url = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/files/1fb18d76ae8d32b69375473fc3937147e4156261bcfb90c736dae774c2f774e3/flashinfer_jit_cache-0.6.5+cu129-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1fb18d76ae8d32b69375473fc3937147e4156261bcfb90c736dae774c2f774e3" },
 ]
 
 [[package]]
@@ -5303,7 +5304,7 @@ requires-dist = [
     { name = "flash-attn", marker = "extra == 'fsdp'", specifier = "==2.8.1" },
     { name = "flash-attn", marker = "extra == 'mcore'", specifier = "==2.8.1" },
     { name = "flashinfer-cubin", marker = "extra == 'vllm'", index = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple" },
-    { name = "flashinfer-jit-cache", marker = "extra == 'vllm'", index = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple" },
+    { name = "flashinfer-jit-cache", marker = "extra == 'vllm'", specifier = "==0.6.5+cu129", index = "https://gitlab-master.nvidia.com/api/v4/projects/65523/packages/pypi/simple" },
     { name = "flashinfer-python", marker = "extra == 'vllm'", git = "https://github.com/TomerBN-Nvidia/flashinfer.git?rev=ultra-rl" },
     { name = "hydra-core" },
     { name = "interegular", marker = "extra == 'sglang'" },
