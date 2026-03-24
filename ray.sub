@@ -107,9 +107,11 @@ fi
 # ---------------------------------------------------------------------------
 
 # --- GCS RPC thread pools ---
-# Default: max(1, hardware_concurrency / 4). On 144-core head node that's 36.
-# gcs_server_rpc_server_thread_num: threads that poll for incoming gRPC requests.
-# num_server_call_thread: threads that send gRPC replies.
+# gcs_server_rpc_server_thread_num (default max(1, num_cpus/4)): threads that
+#   poll for incoming gRPC requests. 64 ensures the GCS can drain large bursts
+#   of actor creation RPCs without excessive queueing.
+# num_server_call_thread (default max(1, num_cpus/4)): threads that send gRPC
+#   replies.
 # gcs_max_active_rpcs_per_handler auto-scales to rpc_thread_num * 100.
 export RAY_gcs_server_rpc_server_thread_num="${RAY_gcs_server_rpc_server_thread_num:-64}"
 export RAY_num_server_call_thread="${RAY_num_server_call_thread:-32}"
@@ -138,6 +140,24 @@ export RAY_gcs_server_request_timeout_seconds="${RAY_gcs_server_request_timeout_
 #   slightly stale task status during init — acceptable tradeoff.
 export RAY_raylet_report_resources_period_milliseconds="${RAY_raylet_report_resources_period_milliseconds:-500}"
 export RAY_task_events_report_interval_ms="${RAY_task_events_report_interval_ms:-5000}"
+
+# --- Resource broadcast batching ---
+# gcs_resource_broadcast_max_batch_size (default 1 = disabled): GCS broadcasts
+#   resource updates to all nodes via ray_syncer. With batch_size=1, every
+#   update is sent individually — at N nodes reporting every 500ms, the
+#   fan-out is O(N^2) messages/sec. Batching collapses these into fewer,
+#   larger messages, dramatically reducing GCS send-side overhead.
+# gcs_resource_broadcast_max_batch_delay_ms: max delay before flushing a
+#   partial batch. 100ms is imperceptible for scheduling decisions.
+export RAY_gcs_resource_broadcast_max_batch_size="${RAY_gcs_resource_broadcast_max_batch_size:-512}"
+export RAY_gcs_resource_broadcast_max_batch_delay_ms="${RAY_gcs_resource_broadcast_max_batch_delay_ms:-100}"
+
+# --- Subscriber cleanup ---
+# subscriber_timeout_ms (default 300,000 = 5 min): time before a dead
+#   subscriber is cleaned up from the GCS pub/sub publisher. At scale, dead
+#   subscribers accumulate stale long-poll connections. 60s is aggressive but
+#   safe — live subscribers reconnect well within this window.
+export RAY_subscriber_timeout_ms="${RAY_subscriber_timeout_ms:-60000}"
 
 # --- Cap idle task worker pool ---
 # num_workers_soft_limit (default -1 = number of CPUs): on high-core-count nodes
@@ -427,6 +447,19 @@ export NUM_ACTORS=$NUM_ACTORS
 export NRL_JOB_START_EPOCH=$NRL_JOB_START_EPOCH
 export SANDBOX_PORTS_DIR="$SANDBOX_PORTS_DIR"
 export TOTAL_NUM_NODES=$SLURM_JOB_NUM_NODES
+export RAY_ENABLE_UV_RUN_RUNTIME_ENV=$RAY_ENABLE_UV_RUN_RUNTIME_ENV
+export RAY_gcs_server_rpc_server_thread_num=$RAY_gcs_server_rpc_server_thread_num
+export RAY_num_server_call_thread=$RAY_num_server_call_thread
+export RAY_worker_register_timeout_seconds=$RAY_worker_register_timeout_seconds
+export RAY_gcs_rpc_server_connect_timeout_s=$RAY_gcs_rpc_server_connect_timeout_s
+export RAY_gcs_rpc_server_reconnect_timeout_s=$RAY_gcs_rpc_server_reconnect_timeout_s
+export RAY_gcs_server_request_timeout_seconds=$RAY_gcs_server_request_timeout_seconds
+export RAY_raylet_report_resources_period_milliseconds=$RAY_raylet_report_resources_period_milliseconds
+export RAY_task_events_report_interval_ms=$RAY_task_events_report_interval_ms
+export RAY_gcs_resource_broadcast_max_batch_size=$RAY_gcs_resource_broadcast_max_batch_size
+export RAY_gcs_resource_broadcast_max_batch_delay_ms=$RAY_gcs_resource_broadcast_max_batch_delay_ms
+export RAY_subscriber_timeout_ms=$RAY_subscriber_timeout_ms
+export RAY_num_workers_soft_limit=$RAY_num_workers_soft_limit
 ENVEOF
 )
 
@@ -702,8 +735,18 @@ while true; do
     echo "[ERROR] ENDED detected before head started, exiting."
     exit 1
   fi
-  sleep 5
+  sleep 2
 done
+
+# Stagger worker connections to avoid thundering-herd on the GCS server.
+# All workers detect STARTED_RAY_HEAD within the same ~2s polling window;
+# without jitter they all issue `ray start --address` simultaneously.
+# Target ~100 workers/sec connection rate
+_jitter_window=$(( TOTAL_NUM_NODES / 100 ))
+(( _jitter_window < 2 )) && _jitter_window=2
+_jitter=$(( RANDOM % _jitter_window ))
+echo "[INFO] Worker $SLURM_PROCID: sleeping ${_jitter}s (jitter window ${_jitter_window}s) before connecting"
+sleep "$_jitter"
 
 count=0
 while [[ $count -lt $WORKER_NUM_RETRIES ]]; do
@@ -737,8 +780,9 @@ ray start --address "$IP_HEAD" \
           --block
 EOFINNER
   count=$((count+1))
-  echo "[WARN] Worker $SLURM_PROCID failed $count/$WORKER_NUM_RETRIES times, restarting in 10 seconds..."
-  sleep 10
+  _retry_jitter=$(( 5 + RANDOM % 10 ))
+  echo "[WARN] Worker $SLURM_PROCID failed $count/$WORKER_NUM_RETRIES times, restarting in ${_retry_jitter}s..."
+  sleep "$_retry_jitter"
 done
 touch "$LOG_DIR/ENDED"
 exit 1
