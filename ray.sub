@@ -460,6 +460,14 @@ export RAY_gcs_resource_broadcast_max_batch_size=$RAY_gcs_resource_broadcast_max
 export RAY_gcs_resource_broadcast_max_batch_delay_ms=$RAY_gcs_resource_broadcast_max_batch_delay_ms
 export RAY_subscriber_timeout_ms=$RAY_subscriber_timeout_ms
 export RAY_num_workers_soft_limit=$RAY_num_workers_soft_limit
+export LUSTRE_VLLM_CACHE=${LUSTRE_VLLM_CACHE:-}
+export NRL_VLLM_LOCAL_CACHE_DIR=${NRL_VLLM_LOCAL_CACHE_DIR:-}
+export NRL_VLLM_CACHE_SEED_DIR=${NRL_VLLM_CACHE_SEED_DIR:-}
+export LUSTRE_INDUCTOR_CACHE=${LUSTRE_INDUCTOR_CACHE:-}
+export INDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR:-}
+export LUSTRE_TRITON_CACHE=${LUSTRE_TRITON_CACHE:-}
+export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-}
+export CACHE_SYNC_FREQUENCY=${CACHE_SYNC_FREQUENCY:-0}
 ENVEOF
 )
 
@@ -539,6 +547,55 @@ ray-status-sidecar() {
   done
 }
 ray-status-sidecar &
+
+# Sync locally-compiled caches back to Lustre so subsequent jobs start warm.
+# Content-addressed: --ignore-existing is safe (identical hashes = identical files).
+# Artifacts are written atomically (torch.save temp+rename), so partial files can't exist.
+# Uses trap EXIT instead of ENDED polling — ENDED only fires on failure, but we also
+# need to sync on successful completion (Slurm SIGTERM → container exit).
+cache-sync-sidecar() {
+  set +x
+  if [[ -z "${CACHE_SYNC_FREQUENCY:-}" ]] || [[ "${CACHE_SYNC_FREQUENCY}" == "0" ]]; then
+    return
+  fi
+
+  _sync_one() {
+    local src="$1" dst="$2" name="$3"
+    [[ -z "$src" || -z "$dst" ]] && return
+    [[ -d "$src" ]] || return
+    [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return
+    mkdir -p "$dst"
+    rsync -a --ignore-existing --exclude '.tmp_*' \
+      "$src/" "$dst/" 2>/dev/null \
+      && echo "[CACHE SYNC] ${name}: synced to Lustre" \
+      || echo "[CACHE SYNC] ${name}: sync failed (non-fatal)"
+  }
+
+  _sync_vllm_caches() {
+    local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
+    local lustre_base="${LUSTRE_VLLM_CACHE:-}"
+    [[ -z "$base" || -z "$lustre_base" ]] && return
+    for d in "${base}" "${base}"_*; do
+      [[ -d "$d" ]] || continue
+      local suffix="${d#"${base}"}"
+      _sync_one "$d" "${lustre_base}${suffix}" "vLLM${suffix}"
+    done
+  }
+
+  _sync_all() {
+    _sync_vllm_caches
+    _sync_one "${INDUCTOR_CACHE_DIR:-}"   "${LUSTRE_INDUCTOR_CACHE:-}" "Inductor"
+    _sync_one "${TRITON_CACHE_DIR:-}"     "${LUSTRE_TRITON_CACHE:-}" "Triton"
+  }
+
+  trap '_sync_all; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
+
+  while true; do
+    sleep "${CACHE_SYNC_FREQUENCY}"
+    _sync_all
+  done
+}
+cache-sync-sidecar &
 
 # Patch nsight.py before starting Ray head
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
@@ -720,10 +777,64 @@ log-sync-sidecar() {
 }
 log-sync-sidecar &
 
+cache-sync-sidecar() {
+  set +x
+  if [[ -z "${CACHE_SYNC_FREQUENCY:-}" ]] || [[ "${CACHE_SYNC_FREQUENCY}" == "0" ]]; then
+    return
+  fi
+
+  _sync_one() {
+    local src="$1" dst="$2" name="$3"
+    [[ -z "$src" || -z "$dst" ]] && return
+    [[ -d "$src" ]] || return
+    [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return
+    mkdir -p "$dst"
+    rsync -a --ignore-existing --exclude '.tmp_*' \
+      "$src/" "$dst/" 2>/dev/null \
+      && echo "[CACHE SYNC] ${name}: synced to Lustre" \
+      || echo "[CACHE SYNC] ${name}: sync failed (non-fatal)"
+  }
+
+  _sync_vllm_caches() {
+    local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
+    local lustre_base="${LUSTRE_VLLM_CACHE:-}"
+    [[ -z "$base" || -z "$lustre_base" ]] && return
+    for d in "${base}" "${base}"_*; do
+      [[ -d "$d" ]] || continue
+      local suffix="${d#"${base}"}"
+      _sync_one "$d" "${lustre_base}${suffix}" "vLLM${suffix}"
+    done
+  }
+
+  _sync_all() {
+    _sync_vllm_caches
+    _sync_one "${INDUCTOR_CACHE_DIR:-}"   "${LUSTRE_INDUCTOR_CACHE:-}" "Inductor"
+    _sync_one "${TRITON_CACHE_DIR:-}"     "${LUSTRE_TRITON_CACHE:-}" "Triton"
+  }
+
+  trap '_sync_all; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
+
+  while true; do
+    sleep "${CACHE_SYNC_FREQUENCY}"
+    _sync_all
+  done
+}
+cache-sync-sidecar &
+
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
 source "$LOG_DIR/topology_probe.sh"
+
+# Run SETUP_COMMAND early so node-local work (cache seeding, env prep)
+# overlaps with head startup instead of blocking on it sequentially.
+# Current launch scripts use this exclusively for Lustre→/tmp rsync
+# which is pure I/O and has no dependency on Ray being up.
+if [[ -n "$SETUP_COMMAND_FILE" ]] && [[ -f "$SETUP_COMMAND_FILE" ]]; then
+  echo "[INFO] Worker $SLURM_PROCID: running setup command (parallel with head startup)..."
+  bash "$SETUP_COMMAND_FILE"
+  echo "[INFO] Worker $SLURM_PROCID: setup command finished."
+fi
 
 echo "[INFO] Worker $SLURM_PROCID: waiting for Ray head GCS to be ready..."
 while true; do
@@ -755,10 +866,6 @@ while [[ $count -lt $WORKER_NUM_RETRIES ]]; do
   ray stop || true
   rm -rf /tmp/ray/session_* || true
 
-  if [[ -n "$SETUP_COMMAND_FILE" ]] && [[ -f "$SETUP_COMMAND_FILE" ]]; then
-    echo "[INFO] Running setup command from $SETUP_COMMAND_FILE..."
-    bash "$SETUP_COMMAND_FILE"
-  fi
   # Two-level evaluation: heredoc expands $RAY_RESOURCES (with \") into text,
   # then bash re-parses it so \" inside double quotes becomes clean ".
   echo "[INFO] Worker $SLURM_PROCID: starting Ray worker (attempt $((count+1))/$WORKER_NUM_RETRIES)..."
