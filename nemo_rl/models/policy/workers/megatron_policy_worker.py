@@ -297,6 +297,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             all_mb_metrics = []
             losses = []
             total_num_microbatches = 0
+            mtp_grad_norm = None
             for gb_idx in range(num_global_batches):
                 gb_result = process_global_batch(
                     data,
@@ -395,6 +396,10 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
                     num_zeros_in_grad, mp_group=pg_collection.mp
                 )
+                mtp_grad_norm = getattr(self.optimizer, 'mtp_grad_norm', None)
+                mtp_grad_norm = reduce_max_stat_across_model_parallel_group(
+                    mtp_grad_norm, mp_group=pg_collection.mp
+                )
 
                 if update_successful:
                     skipped_iter = 0
@@ -459,6 +464,8 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             "all_mb_metrics": mb_metrics,
             "grad_norm": torch.tensor([grad_norm]),
         }
+        if mtp_grad_norm is not None:
+            metrics["mtp_grad_norm"] = torch.tensor([mtp_grad_norm])
         # Collect MoE aux metrics averaged across microbatches
         num_moe_experts = getattr(self.model.config, "num_moe_experts", None)
         if num_moe_experts is not None and num_moe_experts > 1:
