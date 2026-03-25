@@ -192,9 +192,9 @@ policy:
     scale_loss_by_dp_cp_size: false
 
     # MTP — disabled
-    mtp_loss_scaling_factor: 0.0
+    mtp_loss_scaling_factor: 0.3
     mtp_use_repeated_layer: true
-    mtp_num_layers: 0
+    mtp_num_layers: 5
     mtp_detach_heads: true
 
     optimizer:
