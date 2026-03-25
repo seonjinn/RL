@@ -15,6 +15,8 @@
 import asyncio
 import logging
 import os
+import threading
+import time
 import warnings
 from collections import defaultdict
 from typing import (
@@ -500,21 +502,75 @@ class VllmGeneration(GenerationInterface):
 
         Called after deferred init to perform heavy model loading.
         Updates dp_openai_server_base_urls with actual server URLs.
+
+        When max_concurrent_model_loads is set in vllm_cfg, loading is
+        staggered with that concurrency limit. Otherwise all workers
+        load in parallel.
         """
-        # Call load_model() on all model-owner workers
-        futures = self.worker_group.run_all_workers_single_data(
-            "load_model",
-            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
-        )
-        ray.get(futures)
+        max_concurrent = self.cfg["vllm_cfg"].get("max_concurrent_model_loads")
+        load_timeout = self.cfg["vllm_cfg"].get("model_load_timeout", 1800)
 
-        # Post-init (device ID reporting, etc.)
+        if max_concurrent is None:
+            futures = self.worker_group.run_all_workers_single_data(
+                "load_model",
+                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+            )
+            print(f"  Loading {len(futures)} vLLM instances in parallel (timeout={load_timeout}s)", flush=True)
+            ray.get(futures, timeout=load_timeout)
+        else:
+            leaders = []
+            for worker_idx, worker in enumerate(self.worker_group.workers):
+                coords = self.worker_group.sharding_annotations.get_worker_coords(worker_idx)
+                if coords.get("tensor_parallel", 0) == 0 and coords.get("pipeline_parallel", 0) == 0:
+                    leaders.append(worker)
+
+            total = len(leaders)
+            lock = threading.Lock()
+            completed = 0
+            total_load_s = 0.0
+            start_time = time.perf_counter()
+            errors: list[Exception] = []
+
+            print(
+                f"  Loading {total} vLLM instances "
+                f"(max_concurrent={max_concurrent}, timeout={load_timeout}s)",
+                flush=True,
+            )
+
+            def _load_one(worker):
+                nonlocal completed, total_load_s
+                load_t0 = time.perf_counter()
+                future = worker.load_model.remote()
+                try:
+                    ray.get(future, timeout=load_timeout)
+                except Exception as e:
+                    with lock:
+                        errors.append(e)
+                    return
+                load_s = time.perf_counter() - load_t0
+                with lock:
+                    completed += 1
+                    total_load_s += load_s
+                    avg_load = total_load_s / completed
+                    log_every_n = max(1, total // 10)
+                    if completed == total or completed % log_every_n == 0:
+                        print(
+                            f"  vLLM model loaded on {completed}/{total} instances "
+                            f"({time.perf_counter() - start_time:.1f}s elapsed, "
+                            f"this={load_s:.1f}s, avg={avg_load:.1f}s)",
+                            flush=True,
+                        )
+
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+                list(pool.map(_load_one, leaders))
+
+            if errors:
+                raise errors[0]
+
         self._post_init()
-
-        # Refresh URLs from actual running servers
         self.dp_openai_server_base_urls = self._report_dp_openai_server_base_urls()
-
-        # Save device UUIDs
         self.device_uuids = self._report_device_id()
 
     def _post_init(self):
