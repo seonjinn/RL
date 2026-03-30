@@ -1101,7 +1101,7 @@ function anyWorkerVal(key) {
 // --- Stats bar ---
 function renderStats() {
   const bar = document.getElementById('stats-bar');
-  const initT = driverVal('total') || (driverVal('setup') + driverVal('init/total'));
+  const initT = driverVal('setup') + driverVal('init/total');
   const training = driverVal('policy_training');
   const logprobs = driverVal('policy_and_reference_logprobs');
 
@@ -1119,9 +1119,14 @@ function renderStats() {
   const stepTime = driverVal('total_step_time');
   const weightSync = driverVal('weight_sync');
 
-  // Efficiency = (step_time - driver_idle - driver_wasted) / step_time
+  // Step Efficiency = (step_time - driver_idle - driver_wasted) / step_time
   const productive = stepTime - driverIdle - driverWasted;
-  const pct = stepTime > 0 ? (productive / stepTime * 100) : 0;
+  const stepPct = stepTime > 0 ? (productive / stepTime * 100) : 0;
+
+  // Goodput = (wall_time - init - driver_idle - driver_wasted) / wall_time
+  // Accounts for ALL non-productive time: init/setup cost, in-step idle, and failed work
+  const totalWaste = initT + driverIdle + driverWasted;
+  const goodputPct = totalWallS > 0 ? ((totalWallS - totalWaste) / totalWallS * 100) : 0;
 
   const stats = [
     { label: 'Total Wall Time', value: fmtS(totalWallS), cls: '' },
@@ -1132,8 +1137,10 @@ function renderStats() {
     { label: 'Weight Sync', value: fmtS(weightSync), cls: weightSync > 10 ? 'warn' : '' },
     { label: 'Driver Idle', value: fmtS(driverIdle), cls: driverIdle > 0 ? 'warn' : 'good' },
     { label: 'Failed Work', value: fmtS(driverWasted), cls: driverWasted > 0 ? 'bad' : 'good' },
-    { label: 'Step Efficiency', value: pct.toFixed(1) + '%',
-      cls: pct > 70 ? 'good' : pct > 40 ? 'warn' : 'bad' },
+    { label: 'Step Efficiency', value: stepPct.toFixed(1) + '%',
+      cls: stepPct > 70 ? 'good' : stepPct > 40 ? 'warn' : 'bad' },
+    { label: 'Goodput', value: goodputPct.toFixed(1) + '%',
+      cls: goodputPct > 60 ? 'good' : goodputPct > 30 ? 'warn' : 'bad' },
     { label: 'Events', value: String(allSpans.length), cls: '' },
   ];
   bar.innerHTML = stats.map(s =>
@@ -1413,8 +1420,8 @@ function renderWasteBreakdown() {
   const panel = document.getElementById('waste-breakdown');
 
   // Driver-level waste (affects step efficiency)
-  const fullInitKey = SUMMARY['total'] ? 'total' : null;
-  const fullInitVal = SUMMARY['total'] || (driverVal('setup') + driverVal('init/total'));
+  const fullInitKey = null;
+  const fullInitVal = driverVal('setup') + driverVal('init/total');
   const driverCats = [
     { key: fullInitKey,                   label: 'initialization (setup + init)',  color: '#1f6feb', override: fullInitVal },
     { key: 'idle/buffer_starvation',      label: 'idle/buffer_starvation',      color: '#d29922' },
