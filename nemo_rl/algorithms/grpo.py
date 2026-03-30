@@ -3737,8 +3737,6 @@ def async_grpo_train(
                 if master_config["checkpointing"]["enabled"] and (
                     should_save_by_step or should_save_by_timeout
                 ):
-                    policy.prepare_for_training()
-
                     grpo_save_state["current_step"] = step + 1
                     grpo_save_state["total_valid_tokens"] = total_valid_tokens
                     if val_metrics is not None:
@@ -3835,8 +3833,6 @@ def async_grpo_train(
                         cp_info["last_checkpoint_step"] = step + 1
                         with open(cp_info_path, "w") as f:
                             json.dump(cp_info, f)
-
-                    policy.offload_after_refit()
 
             # Logging
             # Log training data (match sync GRPO logging payload for parity)
