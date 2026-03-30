@@ -1,18 +1,28 @@
 # =============================================================================
-# GRPO Ultra V3 — 64-node GB200 NVL72 Pipeclean Config
+# GRPO Ultra V3 — 256-node GB200 NVL72 Config (bf16)
 # =============================================================================
-# Pipeclean config for validating the end-to-end GRPO pipeline on
-# 64 nodes × 4 GPUs/node. Batch sizes and sequence lengths are
-# intentionally small to complete steps quickly.
+# Config for GRPO training on 256 nodes × 4 GPUs/node (1024 GPUs).
+# Full batch sizes and sequence lengths for convergence runs.
 #
-# Defaults to 10 training steps (~2h on 64 nodes). Override at launch
-# time with NRL_MAX_STEPS for shorter CI runs (e.g. NRL_MAX_STEPS=4).
+# Node allocation (256 total, set via launch script env vars):
+#   - Training:   64 nodes  (256 GPUs) — 4 segments of 16
+#   - vLLM:      182 nodes  (728 GPUs) — 91 instances at TP=8 EP=8 (2 nodes each)
+#   - Gym/Judge:  10 nodes  ( 40 GPUs) — judges scaled for production throughput
 #
-#   - gpus_per_node: 4
+# Generation-heavy split follows the SuperV3 production ratio (~25/71/4).
+#
+# Training parallelism (256 GPUs = 64 nodes):
 #   - TP: 8
-#   - EP: 32 (16 experts/rank)
-#   - vLLM TP: 8
-#   - Judge TP: 4
+#   - EP: 64
+#   - CP: 8
+#   - PP: 1
+#   - SP: true
+#
+# vLLM parallelism (bf16, TP=8, EP=8):
+#   NeMo Gym requires async_engine=true, but vLLM DP+EP (EP > TP) requires
+#   async_engine=false (see https://github.com/NVIDIA-NeMo/RL/issues/1101).
+#   This forces EP <= TP. With EP=8 (=TP), vllm_dp_size = 8/8 = 1 so
+#   async_engine=true works.
 # =============================================================================
 
 # =============================================================================
@@ -20,7 +30,7 @@
 # =============================================================================
 cluster:
   gpus_per_node: 4
-  num_nodes: 64
+  num_nodes: 256
   segment_size: 16
 
 # =============================================================================
@@ -41,12 +51,12 @@ checkpointing:
 # GRPO Algorithm
 # =============================================================================
 grpo:
-  num_prompts_per_step: 16        # Pipeclean: reduced from 128
-  num_generations_per_prompt: 4   # Pipeclean: reduced from 16
+  num_prompts_per_step: 128
+  num_generations_per_prompt: 16
   num_val_generations_per_prompt: 2
   max_rollout_turns: 1
   max_num_epochs: 1
-  max_num_steps: 10               # Pipeclean: reduced from 1000000; override via NRL_MAX_STEPS
+  max_num_steps: 1000000
   normalize_rewards: true
   use_leave_one_out_baseline: true
   advantage_clip_low: -50
@@ -114,7 +124,7 @@ loss_fn:
   use_on_policy_kl_approximation: true
   use_importance_sampling_correction: true
   truncated_importance_sampling_ratio: 5
-  truncated_importance_sampling_ratio_min: null
+  truncated_importance_sampling_ratio_min: 0.2
   truncated_importance_sampling_type: tis
   sequence_level_importance_ratios: false
   token_level_loss: true
@@ -125,17 +135,17 @@ loss_fn:
 # Policy
 # =============================================================================
 policy:
-  model_name: "/lustre/fsw/portfolios/llmservice/users/adithyare/nemotron_ultra/sft-runs/ultra-v3-sft-hsg-mainfeb5merge-mxfp8_newbase/hf_converted"
+  model_name: "/lustre/fsw/portfolios/llmservice/users/soumyes/sft-runs/eval_and_sleep/ultra-v3-sft-bf16-hybridep-ep64-cp32-bindpcie-recompute-offload-mar13-blend-512k-filt-1e-5/iter_0001900/hf"
   tokenizer:
     name: ${policy.model_name}
     chat_template_kwargs: null
   hf_config_overrides: {}
 
-  train_global_batch_size: 64    # Pipeclean: num_prompts × num_generations = 16 × 4
+  train_global_batch_size: 2048
   train_micro_batch_size: 1
   generation_batch_size: 64
   logprob_batch_size: 1
-  max_total_sequence_length: 32768   # Pipeclean: reduced from 65536
+  max_total_sequence_length: 49152
   precision: "bfloat16"
   logprob_chunk_size: 2048
   offload_optimizer_for_logprob: false
@@ -152,12 +162,15 @@ policy:
 
   megatron_cfg:
     enabled: true
-    empty_unused_memory_level: 1
+    empty_unused_memory_level: 2
     activation_checkpointing: true
 
+    # TP=8 spans 2 GB200 nodes (4 GPUs each) via intra-rack NVLink.
     tensor_model_parallel_size: 8
     expert_tensor_parallel_size: 1
-    expert_model_parallel_size: 32
+    # EP=64: 512 experts / 64 = 8 experts per EP rank
+    # All-to-all spans 64 GPUs (16 nodes), fits within one NVLink domain
+    expert_model_parallel_size: 64
     pipeline_model_parallel_size: 1
     num_layers_in_first_pipeline_stage: null
     num_layers_in_last_pipeline_stage: null
@@ -176,7 +189,6 @@ policy:
     moe_token_dispatcher_type: "alltoall"
     moe_aux_loss_coeff: 0.0
     moe_shared_expert_overlap: false
-    use_gloo_process_groups: false
 
     # Compute
     apply_rope_fusion: true
@@ -226,8 +238,9 @@ policy:
       weight_decay_incr_style: "constant"
       lr_decay_style: "constant"
       lr_decay_iters: null
-      lr_warmup_iters: 0
+      lr_warmup_iters: 10
       lr_warmup_init: 3e-7
+      override_opt_param_scheduler: true
 
     distributed_data_parallel_config:
       grad_reduce_in_fp32: false
@@ -237,7 +250,7 @@ policy:
       use_custom_fsdp: false
       data_parallel_sharding_strategy: "optim_grads_params"
 
-    # FP8 — overridden by precision recipe in launch script
+    # FP8 — disabled for bf16 runs. Enable for mxfp8 validation.
     fp8_cfg:
       enabled: false
       fp8: "e4m3"
@@ -247,6 +260,8 @@ policy:
     first_last_layers_bf16: true
     num_layers_at_start_in_bf16: 1
     num_layers_at_end_in_bf16: 1
+
+    use_gloo_process_groups: false
 
     checkpoint:
       async_save: true
@@ -285,21 +300,24 @@ policy:
     port_range_low: 3000
     port_range_high: 4999
     backend: "vllm"
-    max_new_tokens: 32768              # Pipeclean: reduced from 65536
+    max_new_tokens: 49152
     temperature: 1.0
     top_p: 1.0
     top_k: null
     stop_token_ids: null
     stop_strings: null
+    # TP=8 EP=8: EP=TP so vllm_dp_size=1, async_engine=true works with NeMo Gym.
+    # Same memory as EP=1 but uses all-to-all for expert routing.
+    # EP > TP blocked by https://github.com/NVIDIA-NeMo/RL/issues/1101.
     vllm_cfg:
       async_engine: true
       precision: ${policy.precision}
       kv_cache_dtype: "auto"
       tensor_parallel_size: 8
       pipeline_parallel_size: 1
-      expert_parallel_size: 1
+      expert_parallel_size: 8
       gpu_memory_utilization: 0.85
-      max_model_len: 32768              # Must be <= policy.max_total_sequence_length
+      max_model_len: 49152
       enforce_eager: false
       use_deep_gemm: false
       num_last_layers_in_bf16: 0
@@ -316,30 +334,24 @@ policy:
 
     vllm_kwargs:
       attention_backend: FLASH_ATTN
-      max_num_seqs: 16
+      max_num_seqs: 64
       mamba_ssm_cache_dtype: "float32"
       compilation_config:
         cudagraph_capture_sizes: [1,2,4,8,16,32,64]
         pass_config:
-          # Disable FlashInfer TRTLLM AllReduce fusion.  It requires
-          # SymmDeviceMemory (MNNVL IPC) to initialise successfully on every TP
-          # rank.  When TP spans multiple nodes some ranks succeed while others
-          # fail (CUDA_ERROR_INVALID_DEVICE), causing a split-brain: half the TP
-          # group uses the MNNVL-based TRTLLM allreduce path while the other half
-          # falls back to standard NCCL.  They never rendezvous → permanent hang.
           fuse_allreduce_rms: false
 
     colocated:
       enabled: false
       resources:
         gpus_per_node: 4
-        num_nodes: 26   # Overridden by launch script
+        num_nodes: 182   # Overridden by launch script
 
 # =============================================================================
 # Data
 # =============================================================================
 data:
-  max_input_seq_length: 16384   # NOTE: no-op for NemoGymDataset (processor ignores max_seq_length)
+  max_input_seq_length: null
   shuffle: false
   num_workers: 1
   train:
@@ -365,7 +377,7 @@ env:
   genrm_compare_server_name: "genrm_compare"
   nemo_gym:
     skip_venv_if_present: true
-    num_gpu_nodes: 6    # Overridden by launch script
+    num_gpu_nodes: 10    # Overridden by launch script
     port_range_low: 5000
     port_range_high: 5999
     invalid_tool_call_patterns:
@@ -402,6 +414,7 @@ env:
       - resources_servers/inverse_if/configs/inverse_if.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/search_pivot_single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
 
     # Safety Model: 4B, so TP=1, so fits single GPU
     jailbreak_detection:
@@ -417,11 +430,11 @@ env:
           entrypoint: app.py
           base_url: http://127.0.0.1:8001/v1
           api_key: dummy_key
-          model: null   # Set by launch script (or omit for no safety judge)
+          model: null   # Set by launch script
           return_token_id_information: false
           uses_reasoning_parser: false
           spinup_server: true
-          router_dp_size: 4
+          router_dp_size: 8
           server_args:
             attention_backend: TRITON_ATTN
             tensor_parallel_size: 1
@@ -451,7 +464,7 @@ env:
           return_token_id_information: false
           uses_reasoning_parser: false
           spinup_server: true
-          router_dp_size: 2
+          router_dp_size: 4
           server_args:
             attention_backend: FLASH_ATTN
             tensor_parallel_size: 4
@@ -461,7 +474,7 @@ env:
             tool_call_parser: hermes
             gpu_memory_utilization: 0.85
             max_model_len: 131072
-            max_num_seqs: 16
+            max_num_seqs: 256
             model_loader_extra_config:
               enable_multithread_load: true
               num_threads: 112
@@ -513,9 +526,9 @@ env:
           reasoning_bonus: 0.5
           answer_bonus: 0.5
           top_percentile: 0.2
-          group_reasoning_length_penalty_coeff: 0
-          group_answer_length_penalty_coeff: 0
-          group_style_penalty_coeff: 0.1
+          group_reasoning_length_penalty_coeff: 0.1
+          group_answer_length_penalty_coeff: 0.1
+          group_style_penalty_coeff: 0.0
           default_score: 3.0
           default_ranking: 3.5
 
@@ -529,14 +542,14 @@ env:
           uses_reasoning_parser: true
           return_token_id_information: false
           spinup_server: true
-          router_dp_size: 2
+          router_dp_size: 4
           server_args:
             attention_backend: FLASH_ATTN
             tensor_parallel_size: 4
             reasoning_parser: deepseek_r1
             gpu_memory_utilization: 0.85
             max_model_len: 60000
-            max_num_seqs: 16
+            max_num_seqs: 256
             model_loader_extra_config:
               enable_multithread_load: true
               num_threads: 112
@@ -565,7 +578,7 @@ env:
     code_gen:
       resources_servers:
         code_gen:
-          num_processes: 1024
+          num_processes: 2048
           unit_test_timeout_secs: 10
           debug: false
 
@@ -573,7 +586,7 @@ env:
 # Logger
 # =============================================================================
 logger:
-  log_dir: "logs"
+  log_dir: "/lustre/fsw/portfolios/llmservice/users/ansubramania/ultra_v3/runs/logs"
   num_val_samples_to_print: 0
   wandb_enabled: false
   tensorboard_enabled: false
@@ -582,11 +595,11 @@ logger:
   swanlab_enabled: false
   wandb:
     project: "grpo-ultra-v3"
-    name: "grpo-ultra-v3"
+    name: "grpo-ultra-v3-256n"
   tensorboard: {}
   mlflow:
     experiment_name: "grpo-ultra-v3"
-    run_name: "grpo-ultra-v3"
+    run_name: "grpo-ultra-v3-256n"
   gpu_monitoring:
     collection_interval: 10
     flush_interval: 10
@@ -595,7 +608,7 @@ logger:
 # Effort Levels
 # =============================================================================
 effort_levels:
-  low_string: "{reasoning effort: low}"
-  low_weight: 0.2
+  low_string: "{reasoning effort: efficient}"
+  low_weight: 0.1
   low_penalty: 1
-  low_ub: 3000
+  low_ub: 15000

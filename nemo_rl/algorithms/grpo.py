@@ -2391,6 +2391,8 @@ def grpo_train(
                     metrics.update(
                         {f"mtp/{k}": v for k, v in train_results["mtp_metrics"].items()}
                     )
+                if "mtp_grad_norm" in train_results:
+                    metrics["mtp/grad_norm"] = train_results["mtp_grad_norm"].numpy()
                 if master_config["grpo"]["use_dynamic_sampling"]:
                     metrics["filtered_reward"] = rewards.numpy()
                     metrics["reward"] = repeated_batch["total_reward"].numpy()
@@ -3247,6 +3249,31 @@ def async_grpo_train(
                             print(
                                 f"   Trajectory versions in buffer: {buffer_debug['trajectory_versions']}"
                             )
+                            diag = buffer_debug.get("starvation_diagnostics")
+                            if diag:
+                                print(
+                                    "   📊 Buffer starvation diagnostics (long-tail root cause):"
+                                )
+                                print(
+                                    f"      trajectory_duration_s: mean={diag['trajectory_duration_s']['mean']:.1f}s, "
+                                    f"median={diag['trajectory_duration_s']['median']:.1f}s, "
+                                    f"max={diag['trajectory_duration_s']['max']:.1f}s, "
+                                    f"p95={diag['trajectory_duration_s']['p95']:.1f}s"
+                                )
+                                print(
+                                    f"      max_gen_tokens_per_turn: mean={diag['max_gen_tokens_per_turn_in_buffer']['mean']:.0f}, "
+                                    f"median={diag['max_gen_tokens_per_turn_in_buffer']['median']:.0f}, "
+                                    f"max={diag['max_gen_tokens_per_turn_in_buffer']['max']:.0f}, "
+                                    f"p95={diag['max_gen_tokens_per_turn_in_buffer']['p95']:.0f} "
+                                    "(high = long single generations per turn)"
+                                )
+                                print(
+                                    f"      turns_per_sample: mean={diag['turns_per_sample_in_buffer']['mean']:.1f}, "
+                                    f"median={diag['turns_per_sample_in_buffer']['median']:.1f}, "
+                                    f"max={diag['turns_per_sample_in_buffer']['max']:.0f}, "
+                                    f"p95={diag['turns_per_sample_in_buffer']['p95']:.1f} "
+                                    "(high = many turns per trajectory)"
+                                )
 
                         with timer.time("idle/buffer_starvation"):
                             time.sleep(0.5)
@@ -3284,6 +3311,15 @@ def async_grpo_train(
                         elif k == "total_turns":
                             # For total counts, sum them
                             aggregated_rollout_metrics[k] = sum(v)
+                        elif k == "trajectory_duration_s":
+                            # Per-trajectory duration: report mean, max, p95 for diagnostics
+                            sorted_v = sorted(v)
+                            p95_idx = min(int(len(sorted_v) * 0.95), len(sorted_v) - 1)
+                            aggregated_rollout_metrics[k] = sum(v) / len(v)
+                            aggregated_rollout_metrics["trajectory_duration_s/max"] = max(v)
+                            aggregated_rollout_metrics["trajectory_duration_s/p95"] = (
+                                sorted_v[p95_idx] if sorted_v else 0
+                            )
                         else:
                             # For mean/rate metrics, take the average
                             aggregated_rollout_metrics[k] = sum(v) / len(v)
@@ -3649,6 +3685,8 @@ def async_grpo_train(
                     metrics.update(
                         {f"mtp/{k}": v for k, v in train_results["mtp_metrics"].items()}
                     )
+                if "mtp_grad_norm" in train_results:
+                    metrics["mtp/grad_norm"] = train_results["mtp_grad_norm"].numpy()
                 metrics.update(train_results["all_mb_metrics"])
                 for k, v in metrics.items():
                     if k in {"probs_ratio_min", "probs_ratio_clamped_min"}:
@@ -3702,8 +3740,6 @@ def async_grpo_train(
                 if master_config["checkpointing"]["enabled"] and (
                     should_save_by_step or should_save_by_timeout
                 ):
-                    policy.prepare_for_training()
-
                     grpo_save_state["current_step"] = step + 1
                     grpo_save_state["total_valid_tokens"] = total_valid_tokens
                     if val_metrics is not None:
@@ -3800,8 +3836,6 @@ def async_grpo_train(
                         cp_info["last_checkpoint_step"] = step + 1
                         with open(cp_info_path, "w") as f:
                             json.dump(cp_info, f)
-
-                    policy.offload_after_refit()
 
             # Logging
             # Log training data (match sync GRPO logging payload for parity)
