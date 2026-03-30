@@ -120,14 +120,14 @@ NRL_MAX_STEPS="${NRL_MAX_STEPS:-}"
 # =============================================================================
 # Job shape — specify the 3 intuitive node counts; everything else is derived.
 #
-#   Training:  64 nodes (256 GPUs)  — Megatron training backend
-#   vLLM:     176 nodes (704 GPUs)  — 88 instances at TP=8 EP=8
-#   Gym:       16 nodes ( 64 GPUs)  — judges (GenRM, NL2Bash, Safety)
+#   Training: 128 nodes (512 GPUs)  — Megatron training backend
+#   vLLM:     118 nodes (472 GPUs)  — 59 instances at TP=8 EP=8
+#   Gym:       10 nodes ( 40 GPUs)  — judges (GenRM, NL2Bash, Safety)
 #
 # =============================================================================
-NUM_TRAIN_NODES="${NUM_TRAIN_NODES:-64}"
-NUM_GEN_NODES="${NUM_GEN_NODES:-176}"
-NUM_GYM_NODES="${NUM_GYM_NODES:-16}"
+NUM_TRAIN_NODES="${NUM_TRAIN_NODES:-128}"
+NUM_GEN_NODES="${NUM_GEN_NODES:-118}"
+NUM_GYM_NODES="${NUM_GYM_NODES:-10}"
 
 NUM_TOTAL_NODES=$((NUM_TRAIN_NODES + NUM_GEN_NODES + NUM_GYM_NODES))
 

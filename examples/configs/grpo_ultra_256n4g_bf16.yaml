@@ -6,10 +6,10 @@
 #
 # Node allocation (256 total, set via launch script env vars):
 #   - Training:   64 nodes  (256 GPUs) — 4 segments of 16
-#   - vLLM:      176 nodes  (704 GPUs) — 88 instances at TP=8 EP=8 (2 nodes each)
-#   - Gym/Judge:  16 nodes  ( 64 GPUs) — judges scaled for production throughput
+#   - vLLM:      182 nodes  (728 GPUs) — 91 instances at TP=8 EP=8 (2 nodes each)
+#   - Gym/Judge:  10 nodes  ( 40 GPUs) — judges scaled for production throughput
 #
-# Generation-heavy split follows the SuperV3 production ratio (~25/69/6).
+# Generation-heavy split follows the SuperV3 production ratio (~25/71/4).
 #
 # Training parallelism (256 GPUs = 64 nodes):
 #   - TP: 8
@@ -124,7 +124,7 @@ loss_fn:
   use_on_policy_kl_approximation: true
   use_importance_sampling_correction: true
   truncated_importance_sampling_ratio: 5
-  truncated_importance_sampling_ratio_min: null
+  truncated_importance_sampling_ratio_min: 0.2
   truncated_importance_sampling_type: tis
   sequence_level_importance_ratios: false
   token_level_loss: true
@@ -204,9 +204,9 @@ policy:
     scale_loss_by_dp_cp_size: false
 
     # MTP — disabled
-    mtp_loss_scaling_factor: 0.0
+    mtp_loss_scaling_factor: 0.3
     mtp_use_repeated_layer: true
-    mtp_num_layers: 0
+    mtp_num_layers: 5
     mtp_detach_heads: true
 
     optimizer:
@@ -238,7 +238,7 @@ policy:
       weight_decay_incr_style: "constant"
       lr_decay_style: "constant"
       lr_decay_iters: null
-      lr_warmup_iters: 40
+      lr_warmup_iters: 10
       lr_warmup_init: 3e-7
       override_opt_param_scheduler: true
 
@@ -334,7 +334,7 @@ policy:
 
     vllm_kwargs:
       attention_backend: FLASH_ATTN
-      max_num_seqs: 16
+      max_num_seqs: 64
       mamba_ssm_cache_dtype: "float32"
       compilation_config:
         cudagraph_capture_sizes: [1,2,4,8,16,32,64]
@@ -345,7 +345,7 @@ policy:
       enabled: false
       resources:
         gpus_per_node: 4
-        num_nodes: 176   # Overridden by launch script
+        num_nodes: 182   # Overridden by launch script
 
 # =============================================================================
 # Data
@@ -377,7 +377,7 @@ env:
   genrm_compare_server_name: "genrm_compare"
   nemo_gym:
     skip_venv_if_present: true
-    num_gpu_nodes: 16    # Overridden by launch script
+    num_gpu_nodes: 10    # Overridden by launch script
     port_range_low: 5000
     port_range_high: 5999
     invalid_tool_call_patterns:
@@ -414,6 +414,7 @@ env:
       - resources_servers/inverse_if/configs/inverse_if.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/search_pivot_single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
 
     # Safety Model: 4B, so TP=1, so fits single GPU
     jailbreak_detection:
@@ -473,7 +474,7 @@ env:
             tool_call_parser: hermes
             gpu_memory_utilization: 0.85
             max_model_len: 131072
-            max_num_seqs: 16
+            max_num_seqs: 256
             model_loader_extra_config:
               enable_multithread_load: true
               num_threads: 112
@@ -525,9 +526,9 @@ env:
           reasoning_bonus: 0.5
           answer_bonus: 0.5
           top_percentile: 0.2
-          group_reasoning_length_penalty_coeff: 0
-          group_answer_length_penalty_coeff: 0
-          group_style_penalty_coeff: 0.1
+          group_reasoning_length_penalty_coeff: 0.1
+          group_answer_length_penalty_coeff: 0.1
+          group_style_penalty_coeff: 0.0
           default_score: 3.0
           default_ranking: 3.5
 
@@ -548,7 +549,7 @@ env:
             reasoning_parser: deepseek_r1
             gpu_memory_utilization: 0.85
             max_model_len: 60000
-            max_num_seqs: 16
+            max_num_seqs: 256
             model_loader_extra_config:
               enable_multithread_load: true
               num_threads: 112
@@ -607,7 +608,7 @@ logger:
 # Effort Levels
 # =============================================================================
 effort_levels:
-  low_string: "{reasoning effort: low}"
-  low_weight: 0.2
+  low_string: "{reasoning effort: efficient}"
+  low_weight: 0.1
   low_penalty: 1
-  low_ub: 3000
+  low_ub: 15000
