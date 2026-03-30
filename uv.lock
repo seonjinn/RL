@@ -2025,7 +2025,7 @@ wheels = [
 [[package]]
 name = "flashinfer-python"
 version = "0.6.5"
-source = { git = "https://github.com/TomerBN-Nvidia/flashinfer.git?rev=ultra-rl#bc799737ed6e70ba9203ef7a2c8b62124cf20243" }
+source = { git = "https://github.com/TomerBN-Nvidia/flashinfer.git?rev=ultra-rl#7f903f7868d55eb78022014cc44b10ee510a65f3" }
 dependencies = [
     { name = "apache-tvm-ffi" },
     { name = "click" },
