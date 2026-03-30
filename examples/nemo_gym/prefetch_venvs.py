@@ -98,8 +98,6 @@ def prefetch_nemo_gym_venvs(config_paths: list[str]) -> None:
                     "py_executable": nemo_gym_py_exec,
                     "env_vars": {
                         **os.environ,
-                        "VIRTUAL_ENV": nemo_gym_py_exec,
-                        "UV_PROJECT_ENVIRONMENT": nemo_gym_py_exec,
                     },
                 },
             }

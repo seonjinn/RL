@@ -134,7 +134,12 @@ COPY --from=nemo-rl . /opt/nemo-rl
 # so do a quick check before trying to unshallow.
 RUN git rev-parse --is-shallow-repository | grep -q true && git fetch --unshallow || true
 
-RUN --mount=type=ssh <<"EOF" bash -exu
+RUN --mount=type=ssh --mount=type=secret,id=CI_JOB_TOKEN <<"EOF" bash -exu
+# Authenticate with private GitLab PyPI index for flashinfer packages.
+if [[ -f /run/secrets/CI_JOB_TOKEN ]]; then
+    export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME=gitlab-ci-token
+    export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD=$(cat /run/secrets/CI_JOB_TOKEN)
+fi
 uv venv --seed
 # The custom build scripts will alter the pyproject.toml and uv.lock
 if [[ -n "${BUILD_CUSTOM_VLLM:-}" ]]; then
@@ -189,6 +194,15 @@ if [[ -n "$NEGATIVE_FILTERS" ]]; then
 else
     UV_LINK_MODE=hardlink uv run nemo_rl/utils/prefetch_venvs.py
 fi
+
+# download flashinfer cubin
+uv run --extra vllm flashinfer download-cubin || true
+# show the flashinfer config
+uv run --extra vllm flashinfer show-config || true
+
+# Gym environment download flashinfer cubin. TODO (guyueh): this relies on success of gym environment building, not guarantee to be successful.
+/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer download-cubin || true
+/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer show-config || true
 
 # Prune unreachable cache entries
 uv cache clean
