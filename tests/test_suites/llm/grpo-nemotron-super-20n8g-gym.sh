@@ -11,7 +11,7 @@ VAL_PATH=${NRL_VAL_PATH}
 NUM_NODES=20
 GPUS_PER_NODE=8
 STEPS_PER_RUN=15
-MAX_STEPS=20
+MAX_STEPS=15
 NUM_RUNS=$(( (MAX_STEPS + STEPS_PER_RUN - 1) / STEPS_PER_RUN ))  # Round up
 NUM_MINUTES=60
 # ===== END CONFIG =====
@@ -22,10 +22,10 @@ exit_if_max_steps_reached
 cd $PROJECT_ROOT
 
 export NRL_VLLM_USE_V1=1
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
     --config $CONFIG_PATH \
+    policy.generation.vllm_kwargs.attention_backend=FLASH_ATTN \
     policy.model_name=$MODEL_NAME \
     data.train_jsonl_fpath=$TRAIN_PATH \
     data.validation_jsonl_fpath=$VAL_PATH \

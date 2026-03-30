@@ -33,6 +33,11 @@ hf_home/
 hf_datasets_cache/
 *logs/
 /datasets/
+docker/*
+!docker/Dockerfile
+!docker/Dockerfile.ngc_pytorch
+!docker/build-vllm-sqsh.sh
+!docker/README.md
 wandb/
 checkpoints/
 results/

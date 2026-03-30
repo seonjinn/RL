@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import statistics
 import threading as _threading
 import time
 from typing import Any, Optional
@@ -28,6 +29,7 @@ from nemo_rl.experience.rollouts import (
     run_async_multi_turn_rollout,
 )
 from nemo_rl.models.generation.interfaces import GenerationInterface
+from nemo_rl.utils.timer import ThreadSafeTimer
 
 TokenizerType = PreTrainedTokenizerBase
 
@@ -51,6 +53,23 @@ class ReplayBuffer:
 
         self.last_target_weight_already_generated = -1
         self._lock = _threading.Lock()
+
+    @staticmethod
+    def _rollout_metrics_turn_count_for_diagnostics(rm: dict[str, Any]) -> Optional[float]:
+        """One scalar turn-depth per buffered trajectory for starvation diagnostics.
+
+        Supports sync multi-turn rollouts (`max_turns_per_sample` / `avg_turns_per_sample`)
+        and NeMo Gym (`turns_per_sample/max` / `turns_per_sample/mean`.
+        """
+        if "max_turns_per_sample" in rm:
+            return float(rm["max_turns_per_sample"])
+        if "avg_turns_per_sample" in rm:
+            return float(rm["avg_turns_per_sample"])
+        if "turns_per_sample/max" in rm:
+            return float(rm["turns_per_sample/max"])
+        if "turns_per_sample/mean" in rm:
+            return float(rm["turns_per_sample/mean"])
+        return None
 
     def push_with_wait_signal(
         self,
@@ -84,12 +103,65 @@ class ReplayBuffer:
 
     def get_debug_info(self) -> dict:
         """Get debug information about buffer state."""
-        return {
+        info = {
             "total_trajectories": len(self.trajectories),
             "trajectory_versions": self.trajectory_versions,
             "target_weight_versions": self.target_weight_versions,
             "max_size": self.max_size,
         }
+        if self.trajectories:
+            durations = []
+            max_gen_tokens_per_turn_list = []
+            turn_counts_list = []
+            for t in self.trajectories:
+                rm = t.get("rollout_metrics", {})
+                if "trajectory_duration_s" in rm:
+                    durations.append(rm["trajectory_duration_s"])
+                if "max_gen_tokens_per_turn/max" in rm:
+                    max_gen_tokens_per_turn_list.append(rm["max_gen_tokens_per_turn/max"])
+                elif "max_gen_tokens_per_turn" in rm:
+                    max_gen_tokens_per_turn_list.append(rm["max_gen_tokens_per_turn"])
+                tc = self._rollout_metrics_turn_count_for_diagnostics(rm)
+                if tc is not None:
+                    turn_counts_list.append(tc)
+
+            def _pct(values: list[float], p: float) -> float:
+                if not values:
+                    return 0.0
+                sorted_v = sorted(values)
+                idx = min(int(len(sorted_v) * p / 100), len(sorted_v) - 1)
+                return float(sorted_v[idx])
+
+            info["starvation_diagnostics"] = {
+                "trajectory_duration_s": {
+                    "mean": sum(durations) / len(durations) if durations else 0,
+                    "median": statistics.median(durations) if durations else 0,
+                    "max": max(durations) if durations else 0,
+                    "p95": _pct(durations, 95),
+                },
+                "max_gen_tokens_per_turn_in_buffer": {
+                    "mean": sum(max_gen_tokens_per_turn_list) / len(max_gen_tokens_per_turn_list)
+                    if max_gen_tokens_per_turn_list
+                    else 0,
+                    "median": statistics.median(max_gen_tokens_per_turn_list)
+                    if max_gen_tokens_per_turn_list
+                    else 0,
+                    "max": max(max_gen_tokens_per_turn_list)
+                    if max_gen_tokens_per_turn_list
+                    else 0,
+                    "p95": _pct(max_gen_tokens_per_turn_list, 95),
+                },
+                "turns_per_sample_in_buffer": {
+                    "mean": sum(turn_counts_list) / len(turn_counts_list)
+                    if turn_counts_list
+                    else 0,
+                    "median": statistics.median(turn_counts_list) if turn_counts_list else 0,
+                    "max": max(turn_counts_list) if turn_counts_list else 0,
+                    "p95": _pct(turn_counts_list, 95),
+                },
+                "num_trajectories_sampled": len(self.trajectories),
+            }
+        return info
 
     def get_last_target_weight_already_generated(self) -> int:
         with self._lock:
@@ -574,6 +646,9 @@ class AsyncTrajectoryCollector:
         self._completed_per_target: dict[int, int] = {}  # Prompt-group completions (counts once per prompt_idx; success + failure)
         self._counter_lock: _threading.Lock = _threading.Lock()
 
+        # Timer for efficiency metrics
+        self._efficiency_timer = ThreadSafeTimer(context={"worker": "collector"})
+
     def _calculate_target_weights(self, generation_weight_version: int) -> list[int]:
         """Calculate target weight versions for given generation weight version.
 
@@ -770,7 +845,8 @@ class AsyncTrajectoryCollector:
                 # Check if refit is in progress and wait
                 if not self._refit_pause_cleared.is_set() and self.running:
                     print("⏸️ Pausing collection for refit...")
-                    self._refit_pause_cleared.wait()
+                    with self._efficiency_timer.time("idle/refit_event_wait"):
+                        self._refit_pause_cleared.wait()
                     print("▶️ Refit completed, resuming collection")
 
                 # Check if generation limits require pausing collection
@@ -803,7 +879,8 @@ class AsyncTrajectoryCollector:
                         self._generation_limit_cleared.clear()  # Clear the event to pause
 
                     # Efficiently wait for generation limits to be cleared (no polling!)
-                    self._generation_limit_cleared.wait()
+                    with self._efficiency_timer.time("idle/generation_limit_pause"):
+                        self._generation_limit_cleared.wait()
 
                     # Double-check we're still running after being woken up
                     if not self.running:
@@ -888,7 +965,8 @@ class AsyncTrajectoryCollector:
                     print(
                         "   Note: With vLLM V1 async engine, active threads can complete during weight update"
                     )
-                    self._refit_pause_cleared.wait()
+                    with self._efficiency_timer.time("idle/refit_event_wait"):
+                        self._refit_pause_cleared.wait()
 
                     # After refit finishes if weight version has updated, reflect that in the new trajectories
                     generation_weight_version = self.current_weight_version
@@ -1044,6 +1122,13 @@ class AsyncTrajectoryCollector:
             return self.dataloader.state_dict()
         return {}
 
+    def get_efficiency_metrics(self) -> dict[str, float]:
+        """Return accumulated efficiency metrics (sum of durations per category).
+
+        Called by the driver process each step to merge collector-side metrics.
+        """
+        return self._efficiency_timer.get_timing_metrics(reduction_op="sum")
+
     def _cleanup_finished_threads(self) -> None:
         with self._threads_lock:
             finished = {t for t in self._inflight_threads if not t.is_alive()}
@@ -1062,6 +1147,7 @@ class AsyncTrajectoryCollector:
         RETRY_DELAY_BASE = 1.0  # seconds
         _retry_spawned = False  # Flag to skip finally cleanup when retry is spawned
 
+        worker_start = time.perf_counter()
         try:
             # Import here to avoid circular dependency
             from nemo_rl.algorithms.grpo import _should_use_nemo_gym
@@ -1116,6 +1202,11 @@ class AsyncTrajectoryCollector:
             final_batch_cpu = final_batch.to("cpu")
             del final_batch
 
+            # Record per-trajectory wall-clock duration for buffer starvation diagnostics
+            trajectory_duration_s = time.perf_counter() - worker_start
+            rollout_metrics = dict(rollout_metrics)
+            rollout_metrics["trajectory_duration_s"] = trajectory_duration_s
+
             trajectory_group = {
                 "batch": final_batch_cpu,
                 "rollout_metrics": rollout_metrics,
@@ -1125,6 +1216,7 @@ class AsyncTrajectoryCollector:
             # Use exponential backoff when buffer is full
             try:
                 backoff_delay = 0.01
+                backoff_start = None
                 while self.running:
                     status = ray.get(
                         self.replay_buffer.push_with_wait_signal.remote(
@@ -1141,6 +1233,11 @@ class AsyncTrajectoryCollector:
                             )
                             buffered_count = self._buffered_per_target[target_weight_version]
                             spawned_count = self._spawned_per_target.get(target_weight_version, 0)
+                        if backoff_start is not None:
+                            self._efficiency_timer.record(
+                                "idle/buffer_full_backoff",
+                                time.perf_counter() - backoff_start,
+                            )
                         print(
                             f"📦 Buffered per-prompt group (prompt_idx {prompt_idx}, target_weight {target_weight_version}) "
                             f"[{buffered_count}/{spawned_count} buffered for this target]"
@@ -1149,6 +1246,8 @@ class AsyncTrajectoryCollector:
                         # Reservation release is handled in finally block when ALL workers complete
                         break
                     elif status == "full":
+                        if backoff_start is None:
+                            backoff_start = time.perf_counter()
                         # Exponential backoff up to 0.5 second
                         time.sleep(min(backoff_delay, 0.5))
                         backoff_delay *= 1.5
@@ -1162,12 +1261,21 @@ class AsyncTrajectoryCollector:
                 print(
                     f"   ⚠️ This trajectory will NOT be buffered - may cause stall if training expects it!"
                 )
+                if backoff_start is not None:
+                    self._efficiency_timer.record(
+                        "idle/buffer_full_backoff",
+                        time.perf_counter() - backoff_start,
+                    )
+
                 import traceback
 
                 traceback.print_exc()
         except Exception as e:
             print(
                 f"❌ Error in prompt group worker (prompt_idx={prompt_idx}, target_weight={target_weight_version}, retry={retry_count}): {e}"
+            )
+            self._efficiency_timer.record(
+                "wasted/failed_trajectory", time.perf_counter() - worker_start
             )
 
             # Retry logic for transient errors (e.g., HTTP 500 from Penguin server)

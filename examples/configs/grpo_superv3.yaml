@@ -199,6 +199,10 @@ policy:
       fp8_recipe: "blockwise"
       fp8_param: false
 
+    first_last_layers_bf16: true
+    num_layers_at_start_in_bf16: 1
+    num_layers_at_end_in_bf16: 1
+
     env_vars: null
 
   dynamic_batching:
@@ -221,8 +225,8 @@ policy:
   scheduler: null
 
   generation:
-    port_range_low: 11001
-    port_range_high: 15000
+    port_range_low: 3000
+    port_range_high: 4999
     backend: "vllm"
     max_new_tokens: ${policy.max_total_sequence_length}
     temperature: 1.0
@@ -254,6 +258,7 @@ policy:
 
 
     vllm_kwargs:
+      attention_backend: FLASH_ATTN
       mamba_ssm_cache_dtype: "float32"
 # compilation_config:
 # mode: 0
@@ -287,8 +292,8 @@ env:
   genrm_compare_server_name: "genrm_compare"
   nemo_gym:
     num_gpu_nodes: 4
-    port_range_low: 15001
-    port_range_high: 20000
+    port_range_low: 5000
+    port_range_high: 5999
     invalid_tool_call_patterns:
       - "<tool_call>"
       - "</tool_call>"
@@ -342,14 +347,13 @@ env:
           spinup_server: true
           router_dp_size: 8
           server_args:
+            attention_backend: TRITON_ATTN
             tensor_parallel_size: 1
             gpu_memory_utilization: 0.85
             max_model_len: 96000
             model_loader_extra_config:
               enable_multithread_load: true
               num_threads: 2
-          server_env:
-            VLLM_ATTENTION_BACKEND: TRITON_ATTN
 
     terminal_pivot_simple_agent:
       responses_api_agents:

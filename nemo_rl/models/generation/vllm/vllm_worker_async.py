@@ -192,6 +192,12 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         self._deferred_bundle_indices = None
         self._deferred_seed = None
 
+        # Defaults for HTTP server state; overwritten by _create_engine()
+        # when the worker is a model owner and the model is actually loaded.
+        self.server_thread = None
+        self.base_url = None
+        self.http_server = None
+
         super().__init__(config, bundle_indices, fraction_of_gpus, seed, defer_model_load)
 
         if not self.is_model_owner or not defer_model_load:
@@ -230,6 +236,65 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             f"for vLLM HTTP server"
         )
 
+    def _seed_vllm_cache(self):
+        """Seed local vLLM compile cache from a warm directory if available.
+
+        Reads NRL_VLLM_CACHE_SEED_DIR and rsyncs it into VLLM_CACHE_ROOT.
+        Both are env vars set by the launch script — keeping them in the
+        same system avoids the inconsistency of mixing env vars and config.
+
+        Retries up to 3 times on transient failures. Timeout is controlled
+        by NRL_VLLM_CACHE_SEED_TIMEOUT (default 300s).
+        """
+        import os
+        import shutil
+        import subprocess
+
+        seed_dir = os.environ.get("NRL_VLLM_CACHE_SEED_DIR", "")
+        local_dst = os.environ.get("VLLM_CACHE_ROOT", "")
+        if not seed_dir or not local_dst or not os.path.isdir(seed_dir):
+            return
+        if not os.listdir(seed_dir):
+            return
+        if not shutil.which("rsync"):
+            print("[CACHE SEED] rsync not found, skipping cache seed", flush=True)
+            return
+
+        timeout = int(os.environ.get("NRL_VLLM_CACHE_SEED_TIMEOUT", "300"))
+        os.makedirs(local_dst, exist_ok=True)
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            t0 = time.perf_counter()
+            try:
+                result = subprocess.run(
+                    ["rsync", "-a", "--ignore-existing", f"{seed_dir}/", f"{local_dst}/"],
+                    capture_output=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                elapsed = time.perf_counter() - t0
+                print(
+                    f"[CACHE SEED] rsync timed out after {elapsed:.0f}s "
+                    f"(attempt {attempt}/{max_attempts})",
+                    flush=True,
+                )
+                continue
+
+            elapsed = time.perf_counter() - t0
+            if result.returncode == 0:
+                print(f"[CACHE SEED] vLLM compile cache seeded in {elapsed:.1f}s", flush=True)
+                return
+
+            stderr = result.stderr.decode(errors="replace")[:200]
+            print(
+                f"[CACHE SEED] rsync failed (attempt {attempt}/{max_attempts}, "
+                f"{elapsed:.1f}s): {stderr}",
+                flush=True,
+            )
+
+        print("[CACHE SEED] all attempts failed, proceeding with cold compile", flush=True)
+
     def load_model(self):
         """Load the vLLM model and create the engine.
 
@@ -237,6 +302,8 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         """
         if not self.is_model_owner:
             return
+
+        self._seed_vllm_cache()
         self._load_model(self._deferred_bundle_indices, self._deferred_seed)
 
     def _create_engine(self, llm_kwargs: dict[str, Any]) -> None:
@@ -261,7 +328,6 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             self.llm_async_engine_args, stat_loggers=self.stat_loggers
         )
 
-        self.server_thread, self.base_url, self.http_server = None, None, None
         if self.cfg["vllm_cfg"].get("expose_http_server"):
             self.server_thread, self.base_url, self.http_server = (
                 self._setup_vllm_server()
@@ -387,22 +453,25 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
 
         from fastapi import Request
         from fastapi.responses import JSONResponse, StreamingResponse
-        from vllm import __version__ as vllm_version
-        from vllm.entrypoints.openai.api_server import (
-            BaseModelPath,
-            OpenAIServingChat,
-            OpenAIServingModels,
-            OpenAIServingTokenization,
-        )
-        from vllm.entrypoints.openai.protocol import (
+        from vllm.entrypoints.openai.chat_completion.protocol import (
             ChatCompletionRequest,
             ChatCompletionResponse,
-            ErrorResponse,
+        )
+        from vllm.entrypoints.openai.chat_completion.serving import (
+            OpenAIServingChat,
+        )
+        from vllm.entrypoints.openai.engine.protocol import ErrorResponse
+        from vllm.entrypoints.openai.models.protocol import BaseModelPath
+        from vllm.entrypoints.openai.models.serving import OpenAIServingModels
+        from vllm.entrypoints.serve.tokenize.protocol import (
             TokenizeChatRequest,
             TokenizeCompletionRequest,
             TokenizeResponse,
         )
-        from vllm.entrypoints.openai.tool_parsers import ToolParserManager
+        from vllm.entrypoints.serve.tokenize.serving import (
+            OpenAIServingTokenization,
+        )
+        from vllm.tool_parsers.abstract_tool_parser import ToolParserManager
         from vllm.v1.engine.async_llm import logger as vllm_async_llm_logger
 
         maybe_tool_parser_plugin = self.cfg["vllm_cfg"].get("tool_parser_plugin")
@@ -442,18 +511,13 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         class NeMoRLOpenAIServingMixin:
             async def _preprocess_chat(
                 self,
-                request: NeMoRLOpenAIChatRequestMixin,
-                tokenizer,
+                request,
                 messages,
-                chat_template,
-                chat_template_content_format,
-                add_generation_prompt=True,
-                continue_final_message=False,
+                default_template,
+                default_template_content_format,
+                default_template_kwargs,
                 tool_dicts=None,
-                documents=None,
-                chat_template_kwargs=None,
                 tool_parser=None,
-                add_special_tokens=False,
             ):
                 # Materialize the message tool calls so we can deepcopy below.
                 for message in messages:
@@ -488,21 +552,16 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                     else:
                         messages_for_replace_prefix_tokens.append(deepcopy(msg))
 
-                # res is conversation, [request_prompt], [engine_prompt]
+                # res is (conversation, [engine_prompt])
                 try:
                     res = await super()._preprocess_chat(
-                        request,
-                        tokenizer,
-                        messages,
-                        chat_template,
-                        chat_template_content_format,
-                        add_generation_prompt,
-                        continue_final_message,
-                        tool_dicts,
-                        documents,
-                        chat_template_kwargs,
-                        tool_parser,
-                        add_special_tokens,
+                        request=request,
+                        messages=messages,
+                        default_template=default_template,
+                        default_template_content_format=default_template_content_format,
+                        default_template_kwargs=default_template_kwargs,
+                        tool_dicts=tool_dicts,
+                        tool_parser=tool_parser,
                     )
                 except ValueError as e:
                     if "maximum context length" in str(e):
@@ -538,20 +597,23 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                         ]
                     )
 
+                # For the prefix token calculation, we need add_generation_prompt=False
+                # to get tokens up to (and including) the last assistant message only.
+                # add_generation_prompt is a field on the request that gets embedded
+                # into ChatParams via build_chat_params().
+                modified_request = request.model_copy(
+                    update={"add_generation_prompt": False}
+                )
+
                 # Call the actual preprocess chat subroutine so we don't miss anything. Whatever they do is whatever we do since we literally do what they do.
                 corresponding_res = await super()._preprocess_chat(
-                    request,
-                    tokenizer,
-                    messages_to_last_assistant_message,
-                    chat_template,
-                    chat_template_content_format,
-                    add_generation_prompt=False,
-                    continue_final_message=False,
+                    request=modified_request,
+                    messages=messages_to_last_assistant_message,
+                    default_template=default_template,
+                    default_template_content_format=default_template_content_format,
+                    default_template_kwargs=default_template_kwargs,
                     tool_dicts=tool_dicts,
-                    documents=documents,
-                    chat_template_kwargs=chat_template_kwargs,
                     tool_parser=tool_parser,
-                    add_special_tokens=add_special_tokens,
                 )
                 actual_corresponding_token_ids = corresponding_res[1][0][
                     "prompt_token_ids"
@@ -562,7 +624,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 ]  # We need to modify engine_prompt.prompt_token_ids
 
                 final_prompt_token_ids = _replace_prefix_tokens(
-                    tokenizer=tokenizer,
+                    tokenizer=self.renderer.tokenizer,
                     model_prefix_token_ids=request.required_prefix_token_ids,
                     template_prefix_token_ids=actual_corresponding_token_ids,
                     template_token_ids=engine_prompt["prompt_token_ids"],
@@ -712,7 +774,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
 
         from logging import getLogger as _getLogger
 
-        _getLogger("vllm.entrypoints.openai.protocol").addFilter(CleanLoggingFilter())
+        _getLogger("vllm.entrypoints.openai.engine.protocol").addFilter(CleanLoggingFilter())
 
         # Suppress the noisy vLLM traceback when a prompt exceeds max_model_len.
         # This is expected during multi-turn rollouts; we log a clean one-line
@@ -1207,12 +1269,13 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 worker_results = await result_or_coro
             else:
                 worker_results = result_or_coro
+            
+            all_success = all([result[0] for result in worker_results])
+            exceptions_or_none = [result[1] for result in worker_results]
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
+            if not all_success:
                 print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
+                    f"Error: Worker failed to update weights. Result: {exceptions_or_none}"
                 )
                 return False
             return True
@@ -1244,11 +1307,12 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
+            all_success = all([result[0] for result in worker_results])
+            exceptions_or_none = [result[1] for result in worker_results]
 
-            if not worker_result:
+            if not all_success:
                 print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
+                    f"Error: Worker failed to update weights. Result: {exceptions_or_none}"
                 )
                 return False
             return True
