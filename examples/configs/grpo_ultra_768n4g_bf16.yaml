@@ -125,7 +125,7 @@ loss_fn:
   use_on_policy_kl_approximation: true
   use_importance_sampling_correction: true
   truncated_importance_sampling_ratio: 5
-  truncated_importance_sampling_ratio_min: null
+  truncated_importance_sampling_ratio_min: 0.2
   truncated_importance_sampling_type: tis
   sequence_level_importance_ratios: false
   token_level_loss: true
@@ -205,9 +205,9 @@ policy:
     scale_loss_by_dp_cp_size: false
 
     # MTP — disabled
-    mtp_loss_scaling_factor: 0.0
+    mtp_loss_scaling_factor: 0.3
     mtp_use_repeated_layer: true
-    mtp_num_layers: 0
+    mtp_num_layers: 5
     mtp_detach_heads: true
 
     optimizer:
@@ -239,7 +239,7 @@ policy:
       weight_decay_incr_style: "constant"
       lr_decay_style: "constant"
       lr_decay_iters: null
-      lr_warmup_iters: 40
+      lr_warmup_iters: 10
       lr_warmup_init: 3e-7
       override_opt_param_scheduler: true
 
@@ -415,6 +415,7 @@ env:
       - resources_servers/inverse_if/configs/inverse_if.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/search_pivot_single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
 
     # Safety Model: 4B, TP=1, dp=16 (2× vs 256n for higher throughput)
     jailbreak_detection:
@@ -526,9 +527,9 @@ env:
           reasoning_bonus: 0.5
           answer_bonus: 0.5
           top_percentile: 0.2
-          group_reasoning_length_penalty_coeff: 0
-          group_answer_length_penalty_coeff: 0
-          group_style_penalty_coeff: 0.1
+          group_reasoning_length_penalty_coeff: 0.1
+          group_answer_length_penalty_coeff: 0.1
+          group_style_penalty_coeff: 0.0
           default_score: 3.0
           default_ranking: 3.5
 
@@ -608,7 +609,7 @@ logger:
 # Effort Levels
 # =============================================================================
 effort_levels:
-  low_string: "{reasoning effort: low}"
-  low_weight: 0.2
+  low_string: "{reasoning effort: efficient}"
+  low_weight: 0.1
   low_penalty: 1
-  low_ub: 3000
+  low_ub: 15000

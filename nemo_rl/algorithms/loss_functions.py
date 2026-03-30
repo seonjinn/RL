@@ -422,7 +422,7 @@ class ClippedPGLossFn(LossFunction):
                 actor_importance_weights_expanded, nan=0.0, posinf=0.0, neginf=0.0
             )
         # ---- Truncated Importance Sampling ----
-        # "tis"          – clamp IS weights to [0, max]
+        # "tis"          – clamp IS weights to [min, max]
         # "icepop"       – zero out tokens whose IS weight ∉ [min, max]   (ref bounds: 0.5–5)
         # "seq-mask-tis" – zero out entire sequences whose geometric-mean
         #                  IS ratio ∉ [min, max]; retained sequences keep
@@ -430,11 +430,15 @@ class ClippedPGLossFn(LossFunction):
         #   Blog: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
         tis_clipped_fraction = 0.0
         if self.truncated_importance_sampling_ratio is not None:
+            _tis_min = self.truncated_importance_sampling_ratio_min if self.truncated_importance_sampling_ratio_min is not None else 0
             with torch.no_grad():
                 # Divide by global_valid_toks (not local mask.sum()) so that np.sum aggregation in grpo.py gives the correct global fraction
-                tis_clipped_fraction = ((actor_importance_weights_expanded > self.truncated_importance_sampling_ratio) & mask.bool()).sum().item() / max(global_valid_toks.item(), 1)
+                tis_clipped_fraction = (((actor_importance_weights_expanded > self.truncated_importance_sampling_ratio) | (actor_importance_weights_expanded < _tis_min)) & mask.bool()).sum().item() / max(global_valid_toks.item(), 1)
             if self.truncated_importance_sampling_type == "tis":
                 token_in_bounds = (
+                    actor_importance_weights_expanded
+                    >= _tis_min
+                ) & (
                     actor_importance_weights_expanded
                     <= self.truncated_importance_sampling_ratio
                 )
@@ -448,12 +452,13 @@ class ClippedPGLossFn(LossFunction):
                 }
                 actor_importance_weights_expanded = torch.clamp(
                     actor_importance_weights_expanded,
+                    min=_tis_min,
                     max=self.truncated_importance_sampling_ratio,
                 )
             elif self.truncated_importance_sampling_type == "icepop":
                 token_kept_mask = (
                     actor_importance_weights_expanded
-                    >= self.truncated_importance_sampling_ratio_min
+                    >= _tis_min
                 ) & (
                     actor_importance_weights_expanded
                     <= self.truncated_importance_sampling_ratio
@@ -486,7 +491,7 @@ class ClippedPGLossFn(LossFunction):
                 seq_kept_mask = (
                     (
                         seq_geomean_is_ratio
-                        >= self.truncated_importance_sampling_ratio_min
+                        >= _tis_min
                     )
                     & (seq_geomean_is_ratio <= self.truncated_importance_sampling_ratio)
                 ).float()  # [B]
