@@ -963,6 +963,7 @@ def setup(
                     nemo_gym_py_exec = create_local_venv_on_each_node(
                         nemo_gym_py_exec, "nemo_rl.environments.nemo_gym.NemoGym"
                     )
+                nemo_gym_py_venv = os.path.dirname(os.path.dirname(nemo_gym_py_exec)) # to remove the "bin/python" suffix
                 nemo_gym_dict = env_configs["nemo_gym"]
                 uv_cache_dir = get_nemo_gym_uv_cache_dir()
                 if uv_cache_dir is not None:
@@ -992,8 +993,8 @@ def setup(
                     "py_executable": nemo_gym_py_exec,
                     "env_vars": {
                         **os.environ,
-                        "VIRTUAL_ENV": nemo_gym_py_exec,
-                        "UV_PROJECT_ENVIRONMENT": nemo_gym_py_exec,
+                        "VIRTUAL_ENV": nemo_gym_py_venv,
+                        "UV_PROJECT_ENVIRONMENT": nemo_gym_py_venv,
                     },
                 }
                 actor = NemoGym.options(**nemo_gym_opts).remote(nemo_gym_cfg)
@@ -2997,13 +2998,14 @@ def async_grpo_train(
             _replay_py_exec,
             "nemo_rl.algorithms.async_utils.ReplayBuffer",
         )
+    _replay_py_venv = os.path.dirname(os.path.dirname(_replay_py_exec)) # to remove the "bin/python" suffix
 
     _replay_runtime_env = {
         "py_executable": _replay_py_exec,
         "env_vars": {
             **os.environ,
-            "VIRTUAL_ENV": _replay_py_exec,
-            "UV_PROJECT_ENVIRONMENT": _replay_py_exec,
+            "VIRTUAL_ENV": _replay_py_venv,
+            "UV_PROJECT_ENVIRONMENT": _replay_py_venv,
         },
     }
 
@@ -3057,13 +3059,14 @@ def async_grpo_train(
             _tc_py_exec,
             "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
         )
+    _tc_py_venv = os.path.dirname(os.path.dirname(_tc_py_exec)) # to remove the "bin/python" suffix
 
     _tc_runtime_env = {
         "py_executable": _tc_py_exec,
         "env_vars": {
             **os.environ,
-            "VIRTUAL_ENV": _tc_py_exec,
-            "UV_PROJECT_ENVIRONMENT": _tc_py_exec,
+            "VIRTUAL_ENV": _tc_py_venv,
+            "UV_PROJECT_ENVIRONMENT": _tc_py_venv,
         },
     }
 
