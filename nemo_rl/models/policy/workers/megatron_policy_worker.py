@@ -131,6 +131,10 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         """Initialize the MegatronPolicyWorker."""
         log_gpu_memory_diagnostics(label="init_start", worker_type="MegatronPolicyWorker")
 
+        from nemo_rl.distributed.numa_utils import bind_to_gpu_numa
+
+        bind_to_gpu_numa()
+
         self.cfg = config
 
         # Set rank for non-collocated to check which ranks to broadcast from
