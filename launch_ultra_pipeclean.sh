@@ -236,10 +236,13 @@ if [[ -z "${PERSISTENT_CACHE:-}" ]]; then
   PERSISTENT_CACHE="/lustre/fsw/portfolios/${_access_group}/users/${USER}/.cache/nemotron_ultra"
 fi
 # Lustre (shared) — persistent across jobs, used for sync-back and warm-start seeding.
-# torch_compile_cache hash dirs are content-addressed and accumulate across runs. 
-# bf16 and mxfp8 produce different hashes that coexist in the same tree:
-# each run finds its own hash and ignores the others.
-LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache"
+# bf16 and mxfp8 share torch_compile hash dirs but compile different subgraphs,
+# so they MUST use separate Lustre trees to avoid seeding partial caches.
+case "${PRECISION_RECIPE}" in
+  mxfp8-rollout|mxfp8-e2e) _vllm_cache_precision="mxfp8" ;;
+  *)                        _vllm_cache_precision="bf16"  ;;
+esac
+LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 # Node-local (fast) — each vLLM instance writes to ${NRL_VLLM_LOCAL_CACHE_DIR}_{seed}.

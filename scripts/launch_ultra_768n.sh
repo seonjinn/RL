@@ -178,7 +178,13 @@ if [[ -z "${PERSISTENT_CACHE:-}" ]]; then
   _access_group="${SLURM_ACCOUNT%%_*}"
   PERSISTENT_CACHE="/lustre/fsw/portfolios/${_access_group}/users/${USER}/.cache/nemotron_ultra"
 fi
-LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache"
+# bf16 and mxfp8 share torch_compile hash dirs but compile different subgraphs,
+# so they MUST use separate Lustre trees to avoid seeding partial caches.
+case "${PRECISION_RECIPE}" in
+  mxfp8-rollout|mxfp8-e2e) _vllm_cache_precision="mxfp8" ;;
+  *)                        _vllm_cache_precision="bf16"  ;;
+esac
+LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}"
 LUSTRE_FLASHINFER_CUBIN_CACHE="${PERSISTENT_CACHE}/flashinfer_cubins"
 FLASHINFER_CUBIN_CACHE="/tmp/nemo_rl_flashinfer_cubins"
 FLASHINFER_WS_BASE="${PERSISTENT_CACHE}/flashinfer_workspace"
