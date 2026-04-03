@@ -268,7 +268,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             t0 = time.perf_counter()
             try:
                 result = subprocess.run(
-                    ["rsync", "-a", "--ignore-existing", f"{seed_dir}/", f"{local_dst}/"],
+                    ["rsync", "-a", "--ignore-existing", "--prune-empty-dirs", f"{seed_dir}/", f"{local_dst}/"],
                     capture_output=True,
                     timeout=timeout,
                 )

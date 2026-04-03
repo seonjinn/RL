@@ -529,7 +529,7 @@ find "\$L_TRI" -maxdepth 1 -name '.tmp_*' -mmin +30 -exec rm -rf {} + 2>/dev/nul
 _seed_cache() {
   local lustre="\$1" local_dir="\$2" name="\$3"
   if [ -d "\$lustre" ] && [ "\$(ls -A "\$lustre" 2>/dev/null)" ]; then
-    rsync -a --exclude '.tmp_*' "\$lustre/" "\$local_dir/" 2>/dev/null \
+    rsync -a --exclude '.tmp_*' --prune-empty-dirs "\$lustre/" "\$local_dir/" 2>/dev/null \
       && echo "[CACHE SEED] \$name: seeded from Lustre (\$(du -sh "\$local_dir" 2>/dev/null | cut -f1))" \
       || echo "[CACHE SEED] \$name: seed failed (non-fatal)"
   else

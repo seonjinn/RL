@@ -480,6 +480,7 @@ export INDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR:-}
 export LUSTRE_TRITON_CACHE=${LUSTRE_TRITON_CACHE:-}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-}
 export CACHE_SYNC_FREQUENCY=${CACHE_SYNC_FREQUENCY:-0}
+export NRL_CACHE_SYNC_DELAY_SECONDS="${NRL_CACHE_SYNC_DELAY_SECONDS:-2700}"
 ENVEOF
 )
 
@@ -562,9 +563,13 @@ ray-status-sidecar &
 
 # Sync locally-compiled caches back to Lustre so subsequent jobs start warm.
 # Content-addressed: --ignore-existing is safe (identical hashes = identical files).
-# Artifacts are written atomically (torch.save temp+rename), so partial files can't exist.
 # Uses trap EXIT instead of ENDED polling — ENDED only fires on failure, but we also
 # need to sync on successful completion (Slurm SIGTERM → container exit).
+#
+# vLLM compile caches are delayed by NRL_CACHE_SYNC_DELAY_SECONDS (default 2700) from job start.
+# torch.compile runs during engine init at job startup
+# by the time the delay elapses, assume all vLLM instances have finished compiling. 
+# Syncing earlier risks pushing partially-compiled caches to Lustre that seed from them.
 cache-sync-sidecar() {
   set +x
   if [[ -z "${CACHE_SYNC_FREQUENCY:-}" ]] || [[ "${CACHE_SYNC_FREQUENCY}" == "0" ]]; then
@@ -577,7 +582,7 @@ cache-sync-sidecar() {
     [[ -d "$src" ]] || return
     [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return
     mkdir -p "$dst"
-    rsync -a --ignore-existing --exclude '.tmp_*' \
+    rsync -a --ignore-existing --exclude '.tmp_*' --prune-empty-dirs \
       "$src/" "$dst/" 2>/dev/null \
       && echo "[CACHE SYNC] ${name}: synced to Lustre" \
       || echo "[CACHE SYNC] ${name}: sync failed (non-fatal)"
@@ -587,8 +592,19 @@ cache-sync-sidecar() {
     local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
     local lustre_base="${LUSTRE_VLLM_CACHE:-}"
     [[ -z "$base" || -z "$lustre_base" ]] && return
+    local now
+    now=$(date +%s)
+    local elapsed=$(( now - NRL_JOB_START_EPOCH ))
+    if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
+      echo "[CACHE SYNC] vLLM: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
+      return
+    fi
     for d in "${base}" "${base}"_*; do
       [[ -d "$d" ]] || continue
+      if find "$d" -type f -mmin -5 -print -quit 2>/dev/null | grep -q .; then
+        echo "[CACHE SYNC] vLLM: skipping $d (files modified in last 5m)"
+        continue
+      fi
       local suffix="${d#"${base}"}"
       _sync_one "$d" "${lustre_base}${suffix}" "vLLM${suffix}"
     done
@@ -801,7 +817,7 @@ cache-sync-sidecar() {
     [[ -d "$src" ]] || return
     [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return
     mkdir -p "$dst"
-    rsync -a --ignore-existing --exclude '.tmp_*' \
+    rsync -a --ignore-existing --exclude '.tmp_*' --prune-empty-dirs \
       "$src/" "$dst/" 2>/dev/null \
       && echo "[CACHE SYNC] ${name}: synced to Lustre" \
       || echo "[CACHE SYNC] ${name}: sync failed (non-fatal)"
@@ -811,8 +827,19 @@ cache-sync-sidecar() {
     local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
     local lustre_base="${LUSTRE_VLLM_CACHE:-}"
     [[ -z "$base" || -z "$lustre_base" ]] && return
+    local now
+    now=$(date +%s)
+    local elapsed=$(( now - NRL_JOB_START_EPOCH ))
+    if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
+      echo "[CACHE SYNC] vLLM: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
+      return
+    fi
     for d in "${base}" "${base}"_*; do
       [[ -d "$d" ]] || continue
+      if find "$d" -type f -mmin -5 -print -quit 2>/dev/null | grep -q .; then
+        echo "[CACHE SYNC] vLLM: skipping $d (files modified in last 5m)"
+        continue
+      fi
       local suffix="${d#"${base}"}"
       _sync_one "$d" "${lustre_base}${suffix}" "vLLM${suffix}"
     done
