@@ -594,7 +594,7 @@ cache-sync-sidecar() {
     [[ -z "$base" || -z "$lustre_base" ]] && return
     local now
     now=$(date +%s)
-    local elapsed=$(( now - NRL_JOB_START_EPOCH ))
+    local elapsed=$(( now - ${NRL_JOB_START_EPOCH%%.*} ))
     if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
       echo "[CACHE SYNC] vLLM: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
       return
@@ -829,7 +829,7 @@ cache-sync-sidecar() {
     [[ -z "$base" || -z "$lustre_base" ]] && return
     local now
     now=$(date +%s)
-    local elapsed=$(( now - NRL_JOB_START_EPOCH ))
+    local elapsed=$(( now - ${NRL_JOB_START_EPOCH%%.*} ))
     if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
       echo "[CACHE SYNC] vLLM: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
       return
