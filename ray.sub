@@ -427,6 +427,8 @@ TOPO_PROBE_EOF
 SANDBOX_PORTS_DIR=""
 if [[ -n "${SANDBOX_CONTAINER:-}" ]] && [[ -n "${SANDBOX_COMMAND:-}" ]]; then
   SANDBOX_PORTS_DIR="$LOG_DIR/sandbox"
+  # Create shared directory between sandbox and head, used for select code execution tasks (ccc).
+  [[ -n "${SHARED_TEMP_DIR:-}" ]] && mkdir -p "$SHARED_TEMP_DIR"
   mkdir -p "$SANDBOX_PORTS_DIR"
 fi
 
@@ -958,7 +960,7 @@ if [[ -n "${SANDBOX_CONTAINER:-}" ]] && [[ -n "${SANDBOX_COMMAND:-}" ]]; then
   echo "[INFO] Starting sandbox on all $SLURM_JOB_NUM_NODES nodes (ports_dir=$SANDBOX_PORTS_DIR, port=$SANDBOX_PORT, base_port=$SANDBOX_BASE_PORT)..."
   srun --output "$SANDBOX_PORTS_DIR/sandbox-%t.log" \
     --container-image="$SANDBOX_CONTAINER" \
-    --container-mounts="$SANDBOX_PORTS_DIR:$SANDBOX_PORTS_DIR" \
+    --container-mounts="$SANDBOX_PORTS_DIR:$SANDBOX_PORTS_DIR${SHARED_TEMP_DIR:+,$SHARED_TEMP_DIR:$SHARED_TEMP_DIR}" \
     --no-container-mount-home \
     --mpi=pmix \
     -A "$SLURM_JOB_ACCOUNT" \
