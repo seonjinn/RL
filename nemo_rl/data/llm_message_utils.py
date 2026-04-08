@@ -396,12 +396,119 @@ def batched_message_log_to_flat_message(
             for v in values
         ]
 
-        # Pad and stack tensors (always right padding)
+        # Pre-allocate padded output and copy each sequence into it (always right padding)
         pad_value = pad_value_dict.get(key, 0) if pad_value_dict else 0
-        padded = [_pad_tensor(t, max_len, "right", pad_value) for t in filled_values]
-        result[key] = torch.stack(padded)
+        output = torch.full(
+            (len(filled_values), max_len, *tensors[0].shape[1:]),
+            pad_value,
+            dtype=tensors[0].dtype,
+            device=tensors[0].device,
+        )
+        for i, t in enumerate(filled_values):
+            if t.size(0) > 0:
+                output[i, : t.size(0)] = t
+        result[key] = output
 
     return result, input_lengths_tensor
+
+
+def fused_annotate_and_flatten_for_training(
+    message_log_batch: list[LLMMessageLogType],
+    advantages: Tensor,
+    pad_token_id: int,
+    make_sequence_length_divisible_by: int = 1,
+) -> tuple[BatchedDataDict[FlatMessagesType], Tensor]:
+    """Annotate messages and flatten to padded tensors in a single pass.
+
+    Fuses the annotate_messages loop (which adds token_loss_mask, generation_logprobs,
+    advantages per message) with batched_message_log_to_flat_message (which concatenates
+    per-message tensors and pads to max_len). Eliminates ~32K intermediate torch.cat calls
+    by copying message tensors directly into pre-allocated padded output.
+    """
+    batch_size = len(message_log_batch)
+    if batch_size == 0:
+        return BatchedDataDict(), torch.empty(0, dtype=torch.int32)
+
+    device = message_log_batch[0][0]["token_ids"].device
+
+    # Pass 1: compute total sequence length per sample
+    seq_lengths = torch.zeros(batch_size, dtype=torch.int32)
+    for i, ml in enumerate(message_log_batch):
+        for msg in ml:
+            seq_lengths[i] += msg["token_ids"].size(0)
+
+    max_len = int(seq_lengths.max().item())
+    if make_sequence_length_divisible_by > 1 and max_len % make_sequence_length_divisible_by != 0:
+        max_len = ((max_len // make_sequence_length_divisible_by) + 1) * make_sequence_length_divisible_by
+
+    # Pre-allocate all output tensors on the same device as the input
+    token_ids_out = torch.full((batch_size, max_len), pad_token_id, dtype=torch.long, device=device)
+    loss_mask_out = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
+    advantages_out = torch.zeros(batch_size, max_len, dtype=torch.float32, device=device)
+    gen_logprobs_out = torch.zeros(batch_size, max_len, dtype=torch.float32, device=device)
+    content_out: list[list[str]] = []
+
+    # Collect PackedTensor keys across all messages
+    packed_keys: dict[str, list[PackedTensor]] = {}
+
+    packed_key_dims: dict[str, int] = {}
+    for ml in message_log_batch:
+        for msg in ml:
+            for key, val in msg.items():
+                if isinstance(val, PackedTensor) and key not in packed_key_dims:
+                    packed_key_dims[key] = val.dim_to_pack
+
+    # Pass 2: copy message data directly into padded output
+    for i, ml in enumerate(message_log_batch):
+        offset = 0
+        sample_content: list[str] = []
+        per_sample_packed: dict[str, list[PackedTensor]] = {}
+
+        for msg in ml:
+            n = msg["token_ids"].size(0)
+            token_ids_out[i, offset:offset + n] = msg["token_ids"]
+
+            if msg["role"] == "assistant":
+                loss_mask_out[i, offset:offset + n] = 1
+
+            if "generation_logprobs" in msg:
+                gen_logprobs_out[i, offset:offset + n] = msg["generation_logprobs"]
+
+            advantages_out[i, offset:offset + n] = advantages[i]
+
+            if "content" in msg:
+                sample_content.append(msg["content"])
+
+            for key, val in msg.items():
+                if isinstance(val, PackedTensor):
+                    per_sample_packed.setdefault(key, []).append(val)
+
+            offset += n
+
+        content_out.append(sample_content)
+
+        for key, dim in packed_key_dims.items():
+            packed_list = per_sample_packed.get(key)
+            if packed_list is not None:
+                combined = PackedTensor.concat(packed_list) if len(packed_list) > 1 else packed_list[0]
+            else:
+                combined = PackedTensor([None], dim_to_pack=dim)
+            packed_keys.setdefault(key, []).append(combined)
+
+    result: BatchedDataDict[FlatMessagesType] = BatchedDataDict(
+        {
+            "token_ids": token_ids_out,
+            "token_loss_mask": loss_mask_out,
+            "advantages": advantages_out,
+            "generation_logprobs": gen_logprobs_out,
+            "content": content_out,
+        }
+    )
+
+    for key, packed_list in packed_keys.items():
+        result[key] = PackedTensor.flattened_concat(packed_list)
+
+    return result, seq_lengths
 
 
 def message_log_shape(message_log: LLMMessageLogType) -> list[dict[str, torch.Size]]:

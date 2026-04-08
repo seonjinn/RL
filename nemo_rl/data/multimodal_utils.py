@@ -71,6 +71,9 @@ class PackedTensor:
         non_none_tensors = [t for t in tensors if t is not None]
         if len(non_none_tensors) == 0:
             return None
+        if len(non_none_tensors) == 1:
+            t = non_none_tensors[0]
+            return t.to(device) if device is not None else t
         # Pad non-pack dimensions to the max size across tensors when they differ.
         # This handles variable-resolution images (e.g. pixel_values with different
         # H/W per sample in a sequence-packing bin). The padding is zero-filled and

@@ -51,6 +51,7 @@ from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.data.llm_message_utils import (
     batched_message_log_to_flat_message,
+    fused_annotate_and_flatten_for_training,
     get_keys_from_message_log,
 )
 from nemo_rl.data.multimodal_utils import PackedTensor
@@ -1184,25 +1185,19 @@ def grpo_train(
                 # Prepare batch
                 print("▶ Preparing batch...", flush=True)
                 with timer.time("data_processing"):
-                    # Repeat batch items
-                    repeated_batch: BatchedDataDict[DatumSpec] = (
-                        batch.repeat_interleave(
-                            master_config["grpo"]["num_generations_per_prompt"]
-                        )
+                    num_gens = master_config["grpo"]["num_generations_per_prompt"]
+                    # Flatten 512 prompts (not 8192) then repeat the tensor
+                    batched_flat, _ = batched_message_log_to_flat_message(
+                        batch["message_log"],
+                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
                     )
+                    input_ids = batched_flat["token_ids"].repeat_interleave(num_gens, dim=0)
+                    del batched_flat
+                    repeated_batch: BatchedDataDict[DatumSpec] = batch.repeat_interleave(num_gens)
                     if should_dedup_multimodal:
                         repeated_batch["_dedup_prompt_idx"] = torch.arange(
                             batch.size
-                        ).repeat_interleave(
-                            master_config["grpo"]["num_generations_per_prompt"]
-                        )
-                    # Convert LLMMessageLogType to FlatMessagesType for generation
-                    batched_flat, _ = batched_message_log_to_flat_message(
-                        repeated_batch["message_log"],
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                    )
-                    input_ids = batched_flat["token_ids"]
-                    del batched_flat
+                        ).repeat_interleave(num_gens)
 
                 # Generate responses - this updates the LLMMessageLogType in repeated_batch
                 print(
@@ -1454,29 +1449,13 @@ def grpo_train(
                             advantages = advantages[indices]
                             print(f"Effective batch size {effective_num_samples // master_config['grpo']['num_generations_per_prompt']} prompts, {effective_num_samples} rollouts")
 
-                    # Add loss mask and advantages to each message in LLMMessageLogType
-                    for i, message_log in enumerate(repeated_batch["message_log"]):
-                        for j, message in enumerate(message_log):
-                            if message["role"] == "assistant":
-                                message["token_loss_mask"] = torch.ones_like(
-                                    message["token_ids"]
-                                )
-                            else:
-                                message["token_loss_mask"] = torch.zeros_like(
-                                    message["token_ids"]
-                                )
-                            if "generation_logprobs" not in message:
-                                message["generation_logprobs"] = torch.zeros_like(
-                                    message["token_ids"], dtype=torch.float32
-                                )
-                            message["advantages"] = advantages[i].expand(
-                                message["token_ids"].shape
-                            )
-
-                    # Convert updated LLMMessageLogType to FlatMessagesType for training
-                    flat_messages, input_lengths = batched_message_log_to_flat_message(
+                    # Fused annotate + flatten: copies message tensors directly
+                    # into pre-allocated padded output, skipping per-message
+                    # tensor creation and ~32K intermediate torch.cat calls.
+                    flat_messages, input_lengths = fused_annotate_and_flatten_for_training(
                         repeated_batch["message_log"],
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                        advantages,
+                        pad_token_id=tokenizer.pad_token_id,
                         make_sequence_length_divisible_by=master_config["policy"][
                             "make_sequence_length_divisible_by"
                         ],
@@ -2621,29 +2600,11 @@ def async_grpo_train(
                         if use_zero_variance_prompt_filtering:
                             loss_multiplier[zero_var_mask] = 0
                         repeated_batch["loss_multiplier"] = loss_multiplier
-                    # Add loss mask and advantages to each message
-                    for i, message_log in enumerate(repeated_batch["message_log"]):
-                        for j, message in enumerate(message_log):
-                            if message["role"] == "assistant":
-                                message["token_loss_mask"] = torch.ones_like(
-                                    message["token_ids"]
-                                )
-                            else:
-                                message["token_loss_mask"] = torch.zeros_like(
-                                    message["token_ids"]
-                                )
-                            if "generation_logprobs" not in message:
-                                message["generation_logprobs"] = torch.zeros_like(
-                                    message["token_ids"], dtype=torch.float32
-                                )
-                            message["advantages"] = advantages[i].expand(
-                                message["token_ids"].shape
-                            )
-
-                    # Convert to flat format for training
-                    flat_messages, input_lengths = batched_message_log_to_flat_message(
+                    # Fused annotate + flatten (same as sync path)
+                    flat_messages, input_lengths = fused_annotate_and_flatten_for_training(
                         repeated_batch["message_log"],
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                        advantages,
+                        pad_token_id=tokenizer.pad_token_id,
                         make_sequence_length_divisible_by=master_config["policy"][
                             "make_sequence_length_divisible_by"
                         ],

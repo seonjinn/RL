@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from collections import UserDict
-from copy import deepcopy
+from copy import copy
 from typing import (
     Any,
     Generic,
@@ -39,6 +39,15 @@ from nemo_rl.distributed.collectives import (
 )
 
 DictT = TypeVar("DictT", bound=Mapping[str, Any])
+
+
+def _shallow_copy_item(item):
+    """Shallow-copy a list element for repeat_interleave without deep-copying tensor values."""
+    if isinstance(item, dict):
+        return {**item}
+    if isinstance(item, list):
+        return [{**elem} if isinstance(elem, dict) else copy(elem) for elem in item]
+    return item
 
 
 class SequencePackingArgs(TypedDict):
@@ -746,9 +755,12 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                     "PackedTensor does not currently support repeat_interleave"
                 )
             else:
-                # For lists or other sequences, use a list comprehension to repeat each element
+                # For lists or other sequences, repeat each element with shallow copies.
+                # For message logs (list[dict]), this creates new dict objects so downstream
+                # code can set keys independently, while sharing immutable values (tensors,
+                # images, strings) across the repeated copies.
                 repeated_batch[k] = [
-                    deepcopy(item) for item in v for _ in range(num_repeats)
+                    _shallow_copy_item(item) for item in v for _ in range(num_repeats)
                 ]
         return repeated_batch
 
