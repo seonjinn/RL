@@ -204,16 +204,23 @@ def _merge_pilot_and_remainder_all(
     Interleaves pilot and remainder samples so prompt groups are contiguous:
     [p0_pilot0..pilot_k, p0_rem0..rem_k, p1_pilot0..pilot_k, p1_rem0..rem_k, ...]
     """
-    G = pilot_k + remainder_k
-    # Concatenate pilot and remainder per prompt group
-    all_batches = []
-    for i in range(N):
-        pilot_slice = pilot.slice(i * pilot_k, (i + 1) * pilot_k)
-        rem_slice = remainder.slice(i * remainder_k, (i + 1) * remainder_k)
-        all_batches.append(pilot_slice)
-        all_batches.append(rem_slice)
+    # Concatenate pilot + remainder, then reorder with vectorized indices
+    combined = BatchedDataDict.from_batches([pilot, remainder])
+    total_pilot = N * pilot_k
 
-    return BatchedDataDict.from_batches(all_batches)
+    # Build interleaved index: for each prompt, pilot rows then remainder rows
+    prompt_range = torch.arange(N)
+    pilot_idx = prompt_range.unsqueeze(1) * pilot_k + torch.arange(pilot_k).unsqueeze(
+        0
+    )  # (N, pilot_k)
+    rem_idx = (
+        total_pilot
+        + prompt_range.unsqueeze(1) * remainder_k
+        + torch.arange(remainder_k).unsqueeze(0)
+    )  # (N, remainder_k)
+    reorder = torch.cat([pilot_idx, rem_idx], dim=1).reshape(-1)
+
+    return combined.select_indices(reorder)
 
 
 def _expand_pilot_to_full(
@@ -227,18 +234,13 @@ def _expand_pilot_to_full(
     For zero-variance groups, duplicating is safe since all samples have
     the same reward. Training will compute zero advantage for these.
     """
-    all_batches = []
-    for i in range(N):
-        pilot_group = pilot.slice(i * pilot_k, (i + 1) * pilot_k)
-        # Repeat pilot samples to fill G slots
-        repeats_needed = G // pilot_k
-        extra = G % pilot_k
-        parts = [pilot_group] * repeats_needed
-        if extra > 0:
-            parts.append(pilot_group.slice(0, extra))
-        all_batches.extend(parts)
+    # Build index tensor: for each prompt, repeat pilot_k indices to fill G slots
+    prompt_offsets = torch.arange(N).unsqueeze(1) * pilot_k  # (N, 1)
+    # Tile within-group indices to length G: [0,1,...,pk-1, 0,1,...] truncated to G
+    within_group = torch.arange(G) % pilot_k  # (G,)
+    indices = (prompt_offsets + within_group.unsqueeze(0)).reshape(-1)  # (N*G,)
 
-    return BatchedDataDict.from_batches(all_batches)
+    return pilot.select_indices(indices)
 
 
 def _merge_pilot_and_remainder_mixed(
@@ -252,30 +254,46 @@ def _merge_pilot_and_remainder_mixed(
     nonzero_indices: torch.Tensor,
 ) -> BatchedDataDict[DatumSpec]:
     """Merge pilot and remainder for mixed zero/non-zero variance case."""
-    all_batches = []
-    remainder_prompt_idx = 0
+    combined = BatchedDataDict.from_batches([pilot, remainder])
+    total_pilot = N * pilot_k
 
-    for i in range(N):
-        pilot_group = pilot.slice(i * pilot_k, (i + 1) * pilot_k)
+    # For non-zero-var prompts: pilot_k pilot rows + remainder_k remainder rows = G rows
+    # For zero-var prompts: G rows from pilot duplication
+    # Every prompt contributes exactly G rows to the output
 
-        if nonzero_mask[i]:
-            # This prompt has non-zero variance: use pilot + remainder
-            rem_start = remainder_prompt_idx * remainder_k
-            rem_end = rem_start + remainder_k
-            rem_group = remainder.slice(rem_start, rem_end)
-            all_batches.append(pilot_group)
-            all_batches.append(rem_group)
-            remainder_prompt_idx += 1
-        else:
-            # Zero variance: duplicate pilot to fill G slots
-            repeats_needed = G // pilot_k
-            extra = G % pilot_k
-            parts = [pilot_group] * repeats_needed
-            if extra > 0:
-                parts.append(pilot_group.slice(0, extra))
-            all_batches.extend(parts)
+    # 1) Build pilot indices for ALL prompts (N, pilot_k)
+    prompt_range = torch.arange(N)
+    pilot_idx = prompt_range.unsqueeze(1) * pilot_k + torch.arange(pilot_k).unsqueeze(0)
 
-    return BatchedDataDict.from_batches(all_batches)
+    # 2) For non-zero prompts: remainder indices; for zero: more pilot duplication
+    # Map each prompt to its remainder rank (only valid for nonzero prompts)
+    nonzero_rank = torch.zeros(N, dtype=torch.long)
+    nonzero_rank[nonzero_indices] = torch.arange(nonzero_indices.numel())
+
+    # Remainder indices for non-zero prompts (N, remainder_k)
+    # For zero-var prompts these values are garbage but will be replaced
+    rem_idx = (
+        total_pilot
+        + nonzero_rank.unsqueeze(1) * remainder_k
+        + torch.arange(remainder_k).unsqueeze(0)
+    )
+
+    # For non-zero prompts: [pilot_0..pilot_k, rem_0..rem_k] = G rows
+    nonzero_rows = torch.cat([pilot_idx, rem_idx], dim=1)  # (N, G)
+
+    # For zero-var prompts: duplicate pilot to fill G slots
+    dup_within = torch.arange(G) % pilot_k  # (G,)
+    zero_var_rows = prompt_range.unsqueeze(1) * pilot_k + dup_within.unsqueeze(
+        0
+    )  # (N, G)
+
+    # Select per-prompt: nonzero_mask picks between the two index patterns
+    mask_expanded = nonzero_mask.unsqueeze(1).expand(-1, G)  # (N, G)
+    all_row_indices = torch.where(mask_expanded, nonzero_rows, zero_var_rows).reshape(
+        -1
+    )
+
+    return combined.select_indices(all_row_indices)
 
 
 def _merge_rollout_metrics(primary: dict[str, Any], secondary: dict[str, Any]) -> None:

@@ -229,19 +229,14 @@ class GRESOState:
         # Record to profiler
         self.profiler.add_reward_list(step, data_ids, means.tolist())
 
-        # Compute zero-variance breakdown
-        easy_count = 0
-        hard_count = 0
-        zero_var_count = 0
-        for i in range(num_prompts):
-            is_zero_var = stds[i].item() == 0.0
-            if is_zero_var:
-                zero_var_count += 1
-                avg = means[i].item()
-                if avg >= self.easy_threshold:
-                    easy_count += 1
-                elif avg <= self.hard_threshold:
-                    hard_count += 1
+        # Compute zero-variance breakdown (vectorized)
+        zero_var_mask = stds == 0.0
+        easy_mask = zero_var_mask & (means >= self.easy_threshold)
+        hard_mask = zero_var_mask & (means <= self.hard_threshold)
+
+        zero_var_count = int(zero_var_mask.sum().item())
+        easy_count = int(easy_mask.sum().item())
+        hard_count = int(hard_mask.sum().item())
 
         easy_ratio = easy_count / max(num_prompts, 1)
         hard_ratio = hard_count / max(num_prompts, 1)
@@ -317,15 +312,16 @@ def filter_zero_advantage(
 
     # Keep prompts where max != min (non-zero variance)
     non_zero_mask = prompt_rewards.max(dim=1).values != prompt_rewards.min(dim=1).values
-    keep_prompt_indices = torch.arange(num_prompts)[non_zero_mask]
+    keep_prompt_indices = torch.arange(num_prompts, device=rewards.device)[
+        non_zero_mask
+    ]
 
     if len(keep_prompt_indices) == 0:
         return repeated_batch
 
-    # Expand to per-response indices
-    row_indices = []
-    for pi in keep_prompt_indices.tolist():
-        start = pi * G
-        row_indices.extend(range(start, start + G))
+    # Expand to per-response indices (vectorized)
+    row_indices = (
+        keep_prompt_indices.unsqueeze(1) * G + torch.arange(G, device=rewards.device)
+    ).reshape(-1)
 
     return repeated_batch.select_indices(row_indices)

@@ -116,11 +116,12 @@ def select_prompt_groups(
     _, selected_prompt_indices = torch.topk(scores, num_target_prompts, sorted=False)
     selected_prompt_indices = selected_prompt_indices.sort().values
 
-    # Convert prompt-level indices to row-level indices
-    row_indices = []
-    for pi in selected_prompt_indices.tolist():
-        start = pi * num_generations_per_prompt
-        row_indices.extend(range(start, start + num_generations_per_prompt))
+    # Convert prompt-level indices to row-level indices (vectorized)
+    G = num_generations_per_prompt
+    row_indices = (
+        selected_prompt_indices.unsqueeze(1) * G
+        + torch.arange(G, device=selected_prompt_indices.device)
+    ).reshape(-1)
 
     selected_batch = repeated_batch.select_indices(row_indices)
 
