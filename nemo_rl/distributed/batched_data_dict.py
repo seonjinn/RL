@@ -86,24 +86,15 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         self.micro_batch_lengths = None
         self.elem_counts_per_gb = None
 
-    _PIXEL_DTYPE_CAST_KEYS = frozenset({"pixel_values"})
-
     def get_multimodal_dict(
         self,
         as_tensors: bool = False,
         device: Optional[torch.device] = None,
-        pixel_dtype: Optional[torch.dtype] = None,
     ) -> dict[str, Any]:
         """Return a regular dict of tensors or packed multimodal data items."""
         multimodal_dict = {}
         for k, v in self.data.items():
             if isinstance(v, PackedTensor):
-                if pixel_dtype is not None and k in self._PIXEL_DTYPE_CAST_KEYS:
-                    v = PackedTensor(
-                        [t.to(pixel_dtype) if t is not None else None for t in v.tensors],
-                        v.dim_to_pack,
-                        dedup_indices=v._dedup_indices,
-                    )
                 value = v.as_tensor(device=device) if as_tensors else v
                 if value is not None:
                     multimodal_dict[k] = value

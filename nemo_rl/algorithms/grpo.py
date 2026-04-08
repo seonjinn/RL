@@ -1233,7 +1233,7 @@ def grpo_train(
                                 }
                             )
                             calibration_data.update(
-                                calib_flat.get_multimodal_dict(as_tensors=False, pixel_dtype=torch.bfloat16)
+                                calib_flat.get_multimodal_dict(as_tensors=False)
                             )
                             calibration_data.to("cpu")
                             print_multimodal_payload_metrics(
@@ -1483,7 +1483,7 @@ def grpo_train(
                     )
                     # this will be mini-batched inside the policy, so maintain the packed multimodal structure
                     multimodal_dict = flat_messages.get_multimodal_dict(
-                        as_tensors=False, pixel_dtype=torch.bfloat16
+                        as_tensors=False
                     )
                     if should_dedup_multimodal:
                         prompt_indices = repeated_batch["_dedup_prompt_idx"]
@@ -2637,7 +2637,7 @@ def async_grpo_train(
                         }
                     )
                     multimodal_dict = flat_messages.get_multimodal_dict(
-                        as_tensors=False, pixel_dtype=torch.bfloat16
+                        as_tensors=False
                     )
                     if deduplicate_multimodal_data:
                         prompt_indices = repeated_batch["_dedup_prompt_idx"]

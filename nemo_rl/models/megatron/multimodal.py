@@ -222,6 +222,10 @@ def prepare_multimodal_data(multimodal_data: dict, model, device: torch.device) 
     _prepare_sound_data(multimodal_data, model, device)
 
 
+RADIO_NORM_MEAN = (0.48145466, 0.4578275, 0.40821073)
+RADIO_NORM_STD = (0.26862954, 0.26130258, 0.27577711)
+
+
 def _prepare_image_data(multimodal_data: dict, model, device: torch.device) -> None:
     """Prepare pixel_values for Megatron forward (patchification for dynamic resolution)."""
     if "pixel_values" not in multimodal_data:
@@ -232,7 +236,14 @@ def _prepare_image_data(multimodal_data: dict, model, device: torch.device) -> N
         multimodal_data["num_image_tiles"] = torch.empty(0, dtype=torch.int, device=device)
         return
 
-    images = multimodal_data.pop("pixel_values").to(torch.bfloat16)
+    images = multimodal_data.pop("pixel_values")
+    if images.dtype == torch.uint8:
+        norm_mean = torch.tensor(RADIO_NORM_MEAN, dtype=torch.bfloat16, device=device)
+        norm_std = torch.tensor(RADIO_NORM_STD, dtype=torch.bfloat16, device=device)
+        images = images.to(dtype=torch.bfloat16, device=device) / 255.0
+        images = (images - norm_mean.view(1, 3, 1, 1)) / norm_std.view(1, 3, 1, 1)
+    else:
+        images = images.to(dtype=torch.bfloat16, device=device)
 
     inner = model
     while hasattr(inner, "module"):

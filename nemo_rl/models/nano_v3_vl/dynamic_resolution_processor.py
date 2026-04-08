@@ -18,7 +18,7 @@ from typing import Optional, Union
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from torchvision import transforms
+from torchvision.transforms.functional import pil_to_tensor
 from transformers import BatchFeature, PretrainedConfig
 from transformers.processing_utils import ProcessorMixin
 
@@ -83,11 +83,6 @@ class DynamicResolutionProcessor(ProcessorMixin):
         self.downsample_ratio = getattr(config, "downsample_ratio", 0.5)
         self.pixel_shuffle = getattr(config, "pixel_shuffle", True)
 
-        norm_mean = vision_args.get("norm_mean", [0.48145466, 0.4578275, 0.40821073])
-        norm_std = vision_args.get("norm_std", [0.26862954, 0.26130258, 0.27577711])
-        self.norm_mean = torch.tensor(norm_mean)
-        self.norm_std = torch.tensor(norm_std)
-
     def compute_num_embeddings(self, height: int, width: int) -> int:
         """Compute number of image embeddings for given dimensions.
 
@@ -150,8 +145,7 @@ class DynamicResolutionProcessor(ProcessorMixin):
         target_h, target_w = self.compute_target_resolution(image)
         resized = image.resize((target_w, target_h), Image.BICUBIC)
 
-        tensor = transforms.ToTensor()(resized)
-        tensor = (tensor - self.norm_mean.view(3, 1, 1)) / self.norm_std.view(3, 1, 1)
+        tensor = pil_to_tensor(resized)
 
         return tensor, (target_h, target_w)
 
