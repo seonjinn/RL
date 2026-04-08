@@ -62,6 +62,12 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_env
 from nemo_rl.distributed.virtual_cluster import ClusterConfig, RayVirtualCluster
 from nemo_rl.environments.interfaces import EnvironmentInterface
+from nemo_rl.algorithms.greso import GRESOConfig, GRESOState
+from nemo_rl.experience.rollout_manager import (
+    OverProvisioningConfig,
+    get_over_provisioned_prompt_count,
+    select_prompt_groups,
+)
 from nemo_rl.experience.rollouts import (
     run_async_multi_turn_rollout,
     run_async_nemo_gym_rollout,
@@ -169,6 +175,10 @@ class GRPOConfig(TypedDict):
     seq_logprob_error_threshold: float | None
     # Advantage estimator configuration (grpo or reinforce_plus_plus)
     adv_estimator: NotRequired[AdvEstimatorConfig]
+    # APRIL Phase 1: over-provision prompts and select best groups after generation
+    over_provisioning: NotRequired[OverProvisioningConfig]
+    # GRESO: pre-rollout prompt filtering to skip predicted zero-variance prompts
+    greso: NotRequired[GRESOConfig]
 
 
 class GRPOSaveState(TypedDict):
@@ -291,6 +301,33 @@ def setup(
     else:
         assert batch_multiplier == 1, (
             "batch_multiplier>1 can only be used if use_dynamic_sampling=True"
+        )
+
+    # APRIL Phase 1: over-provisioning inflates the generation batch size
+    over_prov_config: OverProvisioningConfig = grpo_config.get(
+        "over_provisioning", {"enabled": False}
+    )
+    if over_prov_config.get("enabled", False):
+        assert not grpo_config["use_dynamic_sampling"], (
+            "over_provisioning and use_dynamic_sampling cannot be used together"
+        )
+        over_prov_ratio = over_prov_config.get("ratio", 2.0)
+        assert over_prov_ratio > 1.0, (
+            f"over_provisioning.ratio must be > 1.0, got {over_prov_ratio}"
+        )
+        num_prompts_per_step = get_over_provisioned_prompt_count(
+            num_prompts_per_step, over_prov_config
+        )
+        dataloader_batch_size = get_over_provisioned_prompt_count(
+            dataloader_batch_size, over_prov_config
+        )
+
+    # GRESO: validate config compatibility
+    greso_config: GRESOConfig = grpo_config.get("greso", {"enabled": False})
+    if greso_config.get("enabled", False):
+        assert not grpo_config["use_dynamic_sampling"], (
+            "greso and use_dynamic_sampling cannot be used together. "
+            "GRESO subsumes dynamic sampling with pre-rollout filtering."
         )
 
     # Validate number of prompts per step
@@ -1367,6 +1404,23 @@ def grpo_train(
     val_period = master_config["grpo"]["val_period"]
     colocated_inference = master_config["policy"]["generation"]["colocated"]["enabled"]
 
+    # GRESO pre-rollout filtering state
+    greso_config: GRESOConfig = master_config["grpo"].get("greso", {"enabled": False})
+    greso_enabled = greso_config.get("enabled", False)
+    greso_state: GRESOState | None = None
+    if greso_enabled:
+        greso_state = GRESOState(greso_config)
+        last_ckpt = checkpointer.get_latest_checkpoint_path()
+        if last_ckpt is not None:
+            greso_ckpt_path = os.path.join(last_ckpt, "greso_state.pt")
+            if os.path.exists(greso_ckpt_path):
+                greso_state.load_state_dict(torch.load(greso_ckpt_path))
+
+    # APRIL Phase 1: over-provisioning config
+    over_prov_config: OverProvisioningConfig = master_config["grpo"].get(
+        "over_provisioning", {"enabled": False}
+    )
+
     # Initialize advantage estimator
     adv_estimator = _create_advantage_estimator(master_config)
 
@@ -1406,6 +1460,8 @@ def grpo_train(
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
         # batch cache is used for DAPO. We store prompts with non-zero standard deviation in this cache.
         batch_cache: BatchedDataDict[DatumSpec] = None
+        # GRESO pre-rollout accumulation cache
+        greso_batch_cache: BatchedDataDict[DatumSpec] | None = None
         # This is the number of batches we processed so far at each step to generate responses whose std is non-zero. Maximum threshold is set by dynamic_sampling_max_gen_batches. Used in the case of dynamic sampling.
         dynamic_sampling_num_gen_batches = 0
 
@@ -1430,11 +1486,41 @@ def grpo_train(
             if policy != policy_generation:
                 maybe_gpu_profile_step(policy_generation, total_steps + 1)
             val_metrics, validation_timings = None, None
+            overprov_metrics: dict[str, float] = {}
 
             with timer.time("total_step_time"):
                 # Prepare batch
                 print("▶ Preparing batch...", flush=True)
                 with timer.time("data_processing"):
+                    # GRESO pre-rollout filtering: skip prompts predicted to have zero-variance rewards
+                    if greso_enabled and greso_state is not None:
+                        original_size = batch.size
+                        batch, greso_filter_log = greso_state.filter_batch(batch)
+                        print(
+                            f"  GRESO: kept {batch.size}/{original_size} prompts "
+                            f"(easy_skip={greso_filter_log['greso/easy_skipped']}, "
+                            f"hard_skip={greso_filter_log['greso/hard_skipped']})",
+                            flush=True,
+                        )
+                        # Accumulate filtered prompts until we have enough for a training step
+                        if greso_batch_cache is not None:
+                            batch = BatchedDataDict.from_batches(
+                                [greso_batch_cache, batch]
+                            )
+                            greso_batch_cache = None
+
+                        target_prompts = master_config["grpo"]["num_prompts_per_step"]
+                        if batch.size < target_prompts:
+                            greso_batch_cache = batch
+                            print(
+                                f"  GRESO: accumulated {batch.size}/{target_prompts} prompts, need more...",
+                                flush=True,
+                            )
+                            continue
+                        elif batch.size > target_prompts:
+                            # Trim to exact size
+                            batch = batch.slice(0, target_prompts)
+
                     # Repeat batch items
                     repeated_batch: BatchedDataDict[DatumSpec] = (
                         batch.repeat_interleave(
@@ -1585,6 +1671,33 @@ def grpo_train(
                 if master_config["grpo"]["reward_shaping"]["enabled"]:
                     repeated_batch = apply_reward_shaping(
                         repeated_batch, master_config["grpo"]["reward_shaping"]
+                    )
+
+                # APRIL Phase 1: select best prompt groups from over-provisioned batch
+                # (must happen before GRESO reward update to avoid profiling discarded prompts)
+                if over_prov_config.get("enabled", False):
+                    G = master_config["grpo"]["num_generations_per_prompt"]
+                    target_prompts = master_config["grpo"]["num_prompts_per_step"]
+                    repeated_batch, overprov_metrics = select_prompt_groups(
+                        repeated_batch, target_prompts, G, over_prov_config
+                    )
+                    print(
+                        f"  APRIL: selected {target_prompts} from "
+                        f"{overprov_metrics.get('over_provisioning/num_provisioned_prompts', 0):.0f} prompts",
+                        flush=True,
+                    )
+
+                # GRESO post-rollout: update reward history and adapt exploration rates
+                if greso_enabled and greso_state is not None:
+                    G = master_config["grpo"]["num_generations_per_prompt"]
+                    greso_state.update_rewards(total_steps, repeated_batch, G)
+                    greso_state.adapt_exploration_rates()
+                    greso_metrics = greso_state.get_metrics()
+                    print(
+                        f"  GRESO: zero_var={greso_metrics.get('greso/zero_var_ratio', 0):.2%}, "
+                        f"p_easy={greso_metrics.get('greso/p_easy', 0):.3f}, "
+                        f"p_hard={greso_metrics.get('greso/p_hard', 0):.3f}",
+                        flush=True,
                     )
 
                 # Calculate rewards & advantages
@@ -1905,6 +2018,12 @@ def grpo_train(
                 if master_config["grpo"]["use_dynamic_sampling"]:
                     metrics["filtered_reward"] = rewards.numpy()
                     metrics["reward"] = repeated_batch["total_reward"].numpy()
+                # GRESO metrics
+                if greso_enabled and greso_state is not None:
+                    metrics.update(greso_state.get_metrics())
+                # APRIL over-provisioning metrics
+                if overprov_metrics:
+                    metrics.update(overprov_metrics)
 
                 metrics.update(train_results["all_mb_metrics"])
                 metrics.update(gen_step_metrics)
@@ -2040,6 +2159,11 @@ def grpo_train(
                             torch.save(
                                 wrapped_dataloader.state_dict(),
                                 os.path.join(checkpoint_path, "train_dataloader.pt"),
+                            )
+                        if greso_enabled and greso_state is not None:
+                            torch.save(
+                                greso_state.state_dict(),
+                                os.path.join(checkpoint_path, "greso_state.pt"),
                             )
                         checkpointer.finalize_checkpoint(checkpoint_path)
 
