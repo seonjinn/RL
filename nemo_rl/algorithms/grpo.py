@@ -1452,6 +1452,16 @@ def grpo_train(
         "over_provisioning", {"enabled": False}
     )
 
+    # Early stop generation config
+    early_stop_config: EarlyStopGenerationConfig = master_config["grpo"].get(
+        "early_stop_generation", {"enabled": False}
+    )
+
+    # Length-aware batching config
+    length_batching_config: LengthAwareBatchingConfig = master_config["grpo"].get(
+        "length_aware_batching", {"enabled": False}
+    )
+
     # Initialize advantage estimator
     adv_estimator = _create_advantage_estimator(master_config)
 
