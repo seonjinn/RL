@@ -61,7 +61,7 @@ def compute_pilot_and_remainder(
         (pilot_k, remainder): Number of pilot and remaining samples per prompt.
     """
     pilot_ratio = config.get("pilot_ratio", 0.5)
-    min_pilot = config.get("min_pilot_samples", 2)
+    min_pilot = max(2, config.get("min_pilot_samples", 2))  # min 2 for valid std()
 
     pilot_k = max(min_pilot, int(num_generations_per_prompt * pilot_ratio))
     pilot_k = min(pilot_k, num_generations_per_prompt - 1)  # at least 1 remainder
@@ -205,14 +205,7 @@ def _merge_pilot_and_remainder_all(
     [p0_pilot0..pilot_k, p0_rem0..rem_k, p1_pilot0..pilot_k, p1_rem0..rem_k, ...]
     """
     G = pilot_k + remainder_k
-    # Reshape and interleave
-    indices = []
-    for i in range(N):
-        # Pilot indices for prompt i
-        indices.extend(range(i * pilot_k, (i + 1) * pilot_k))
-        # Remainder indices for prompt i (offset by total pilot size)
-        # We'll use negative indices as markers for remainder batch
-    # Simpler approach: concatenate pilot and remainder per prompt group
+    # Concatenate pilot and remainder per prompt group
     all_batches = []
     for i in range(N):
         pilot_slice = pilot.slice(i * pilot_k, (i + 1) * pilot_k)
