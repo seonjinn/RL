@@ -212,6 +212,7 @@ class GRESOState:
         G = num_generations_per_prompt
         rewards = batch["total_reward"]
         num_samples = rewards.shape[0]
+        assert num_samples % G == 0, f"Batch size {num_samples} not divisible by G={G}"
         num_prompts = num_samples // G
 
         # Get prompt indices (one per prompt, from every G-th element)
@@ -222,15 +223,16 @@ class GRESOState:
         data_ids = DataProfiler.get_data_id_list(prompt_indices)
 
         # Compute per-prompt stats
-        rewards_grouped = rewards.view(num_prompts, G)
+        rewards_grouped = rewards.reshape(num_prompts, G)
         means = rewards_grouped.mean(dim=1)
-        stds = rewards_grouped.std(dim=1, correction=0)
 
         # Record to profiler
         self.profiler.add_reward_list(step, data_ids, means.tolist())
 
-        # Compute zero-variance breakdown (vectorized)
-        zero_var_mask = stds == 0.0
+        # Compute zero-variance breakdown (vectorized, using max==min for float robustness)
+        zero_var_mask = (
+            rewards_grouped.max(dim=1).values == rewards_grouped.min(dim=1).values
+        )
         easy_mask = zero_var_mask & (means >= self.easy_threshold)
         hard_mask = zero_var_mask & (means <= self.hard_threshold)
 
@@ -308,20 +310,16 @@ def filter_zero_advantage(
     G = num_generations_per_prompt
     rewards = repeated_batch["total_reward"]
     num_prompts = rewards.shape[0] // G
-    prompt_rewards = rewards.view(num_prompts, G)
+    prompt_rewards = rewards.reshape(num_prompts, G)
 
     # Keep prompts where max != min (non-zero variance)
     non_zero_mask = prompt_rewards.max(dim=1).values != prompt_rewards.min(dim=1).values
-    keep_prompt_indices = torch.arange(num_prompts, device=rewards.device)[
-        non_zero_mask
-    ]
+    keep_prompt_indices = torch.arange(num_prompts)[non_zero_mask]
 
     if len(keep_prompt_indices) == 0:
         return repeated_batch
 
-    # Expand to per-response indices (vectorized)
-    row_indices = (
-        keep_prompt_indices.unsqueeze(1) * G + torch.arange(G, device=rewards.device)
-    ).reshape(-1)
+    # Expand to per-response indices (vectorized, CPU for select_indices)
+    row_indices = (keep_prompt_indices.unsqueeze(1) * G + torch.arange(G)).reshape(-1)
 
     return repeated_batch.select_indices(row_indices)

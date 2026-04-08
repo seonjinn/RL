@@ -164,7 +164,7 @@ def two_phase_rollout(
     # Mixed case: some zero-var, some non-zero-var
     # Phase 2: generate remainder only for non-zero-variance prompts
     nonzero_indices = nonzero_mask.nonzero(as_tuple=True)[0]
-    nonzero_batch = batch.select_indices(nonzero_indices)
+    nonzero_batch = batch.select_indices(nonzero_indices.cpu())
     remainder_repeated = nonzero_batch.repeat_interleave(remainder)
 
     remainder_result, remainder_metrics = run_multi_turn_rollout(
@@ -257,6 +257,10 @@ def _merge_pilot_and_remainder_mixed(
     combined = BatchedDataDict.from_batches([pilot, remainder])
     total_pilot = N * pilot_k
 
+    # All index tensors on CPU (select_indices handles CPU indices on GPU data)
+    nonzero_mask_cpu = nonzero_mask.cpu()
+    nonzero_indices_cpu = nonzero_indices.cpu()
+
     # For non-zero-var prompts: pilot_k pilot rows + remainder_k remainder rows = G rows
     # For zero-var prompts: G rows from pilot duplication
     # Every prompt contributes exactly G rows to the output
@@ -268,10 +272,10 @@ def _merge_pilot_and_remainder_mixed(
     # 2) For non-zero prompts: remainder indices; for zero: more pilot duplication
     # Map each prompt to its remainder rank (only valid for nonzero prompts)
     nonzero_rank = torch.zeros(N, dtype=torch.long)
-    nonzero_rank[nonzero_indices] = torch.arange(nonzero_indices.numel())
+    nonzero_rank[nonzero_indices_cpu] = torch.arange(nonzero_indices_cpu.numel())
 
     # Remainder indices for non-zero prompts (N, remainder_k)
-    # For zero-var prompts these values are garbage but will be replaced
+    # For zero-var prompts these values are garbage but will be replaced by torch.where
     rem_idx = (
         total_pilot
         + nonzero_rank.unsqueeze(1) * remainder_k
@@ -288,7 +292,7 @@ def _merge_pilot_and_remainder_mixed(
     )  # (N, G)
 
     # Select per-prompt: nonzero_mask picks between the two index patterns
-    mask_expanded = nonzero_mask.unsqueeze(1).expand(-1, G)  # (N, G)
+    mask_expanded = nonzero_mask_cpu.unsqueeze(1).expand(-1, G)  # (N, G)
     all_row_indices = torch.where(mask_expanded, nonzero_rows, zero_var_rows).reshape(
         -1
     )

@@ -101,14 +101,14 @@ def select_prompt_groups(
     rewards = repeated_batch["total_reward"]
 
     # Reshape rewards to (num_prompts, num_generations_per_prompt)
-    prompt_rewards = rewards.view(total_prompts, num_generations_per_prompt)
+    prompt_rewards = rewards.reshape(total_prompts, num_generations_per_prompt)
 
     if selection_metric == "reward_std":
         # Select prompts with highest reward standard deviation
         # (most informative for advantage estimation)
         scores = prompt_rewards.std(dim=1, correction=0)
     elif selection_metric == "random":
-        scores = torch.rand(total_prompts)
+        scores = torch.rand(total_prompts, device=rewards.device)
     else:
         raise ValueError(f"Unknown selection_metric: {selection_metric}")
 
@@ -116,19 +116,17 @@ def select_prompt_groups(
     _, selected_prompt_indices = torch.topk(scores, num_target_prompts, sorted=False)
     selected_prompt_indices = selected_prompt_indices.sort().values
 
-    # Convert prompt-level indices to row-level indices (vectorized)
+    # Convert prompt-level indices to row-level indices (vectorized, CPU for select_indices)
     G = num_generations_per_prompt
-    row_indices = (
-        selected_prompt_indices.unsqueeze(1) * G
-        + torch.arange(G, device=selected_prompt_indices.device)
-    ).reshape(-1)
+    sel_cpu = selected_prompt_indices.cpu()
+    row_indices = (sel_cpu.unsqueeze(1) * G + torch.arange(G)).reshape(-1)
 
     selected_batch = repeated_batch.select_indices(row_indices)
 
-    # Compute metrics
+    # Compute metrics (all on same device as scores)
     num_discarded = total_prompts - num_target_prompts
     selected_stds = scores[selected_prompt_indices]
-    discarded_mask = torch.ones(total_prompts, dtype=torch.bool)
+    discarded_mask = torch.ones(total_prompts, dtype=torch.bool, device=scores.device)
     discarded_mask[selected_prompt_indices] = False
     discarded_stds = scores[discarded_mask]
 

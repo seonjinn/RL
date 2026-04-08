@@ -360,6 +360,10 @@ def setup(
         )
         pilot_k = max(min_pilot, int(G * pilot_ratio))
         assert pilot_k < G, f"pilot_k ({pilot_k}) must be less than G ({G})"
+        over_prov = grpo_config.get("over_provisioning", {})
+        assert not over_prov.get("enabled", False), (
+            "early_stop_generation and over_provisioning (APRIL) cannot be used together."
+        )
 
     # Length-aware batching: validate config
     length_batching_config: LengthAwareBatchingConfig = grpo_config.get(

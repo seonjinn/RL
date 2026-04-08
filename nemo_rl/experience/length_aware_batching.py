@@ -83,7 +83,9 @@ def sort_batch_by_prompt_length(
         "length_batching/mean_prompt_tokens": float(
             sorted_lengths.float().mean().item()
         ),
-        "length_batching/std_prompt_tokens": float(sorted_lengths.float().std().item()),
+        "length_batching/std_prompt_tokens": float(
+            sorted_lengths.float().std(correction=0).item()
+        ),
     }
 
     return sorted_batch, sort_indices, metrics
