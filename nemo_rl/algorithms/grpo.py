@@ -179,6 +179,10 @@ class GRPOConfig(TypedDict):
     over_provisioning: NotRequired[OverProvisioningConfig]
     # GRESO: pre-rollout prompt filtering to skip predicted zero-variance prompts
     greso: NotRequired[GRESOConfig]
+    # Two-phase early stop generation: pilot + conditional remainder
+    early_stop_generation: NotRequired[EarlyStopGenerationConfig]
+    # Prompt-length aware batching: sort prompts by input length before generation
+    length_aware_batching: NotRequired[LengthAwareBatchingConfig]
 
 
 class GRPOSaveState(TypedDict):
@@ -329,6 +333,25 @@ def setup(
             "greso and use_dynamic_sampling cannot be used together. "
             "GRESO subsumes dynamic sampling with pre-rollout filtering."
         )
+
+    # Early stop generation: validate config
+    early_stop_config: EarlyStopGenerationConfig = grpo_config.get(
+        "early_stop_generation", {"enabled": False}
+    )
+    if early_stop_config.get("enabled", False):
+        pilot_ratio = early_stop_config.get("pilot_ratio", 0.5)
+        min_pilot = early_stop_config.get("min_pilot_samples", 2)
+        G = grpo_config["num_generations_per_prompt"]
+        assert G >= 4, (
+            f"early_stop_generation requires num_generations_per_prompt >= 4, got {G}"
+        )
+        pilot_k = max(min_pilot, int(G * pilot_ratio))
+        assert pilot_k < G, f"pilot_k ({pilot_k}) must be less than G ({G})"
+
+    # Length-aware batching: validate config
+    length_batching_config: LengthAwareBatchingConfig = grpo_config.get(
+        "length_aware_batching", {"enabled": False}
+    )
 
     # Validate number of prompts per step
     if data_config["use_multiple_dataloader"]:
@@ -1487,6 +1510,8 @@ def grpo_train(
                 maybe_gpu_profile_step(policy_generation, total_steps + 1)
             val_metrics, validation_timings = None, None
             overprov_metrics: dict[str, float] = {}
+            early_stop_metrics: dict[str, float] = {}
+            length_batching_metrics: dict[str, float] = {}
 
             with timer.time("total_step_time"):
                 # Prepare batch
@@ -1521,18 +1546,37 @@ def grpo_train(
                             # Trim to exact size
                             batch = batch.slice(0, target_prompts)
 
-                    # Repeat batch items
-                    repeated_batch: BatchedDataDict[DatumSpec] = (
-                        batch.repeat_interleave(
-                            master_config["grpo"]["num_generations_per_prompt"]
+                    # Length-aware batching: sort prompts by input token length
+                    length_batching_metrics: dict[str, float] = {}
+                    if length_batching_config.get("enabled", False):
+                        batch, _sort_indices, length_batching_metrics = (
+                            sort_batch_by_prompt_length(batch, length_batching_config)
                         )
-                    )
-                    # Convert LLMMessageLogType to FlatMessagesType for generation
-                    batched_flat, input_lengths = batched_message_log_to_flat_message(
-                        repeated_batch["message_log"],
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                    )
-                    input_ids = batched_flat["token_ids"]
+                        print(
+                            f"  Length batching: sorted {batch.size} prompts "
+                            f"({length_batching_metrics.get('length_batching/min_prompt_tokens', 0):.0f}"
+                            f"-{length_batching_metrics.get('length_batching/max_prompt_tokens', 0):.0f} tokens)",
+                            flush=True,
+                        )
+
+                    # Repeat batch items (skip if early_stop handles its own repeat)
+                    if not early_stop_config.get("enabled", False):
+                        repeated_batch: BatchedDataDict[DatumSpec] = (
+                            batch.repeat_interleave(
+                                master_config["grpo"]["num_generations_per_prompt"]
+                            )
+                        )
+                        # Convert LLMMessageLogType to FlatMessagesType for generation
+                        batched_flat, input_lengths = (
+                            batched_message_log_to_flat_message(
+                                repeated_batch["message_log"],
+                                pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                            )
+                        )
+                        input_ids = batched_flat["token_ids"]
+                    else:
+                        # Early stop will create repeated_batch internally
+                        repeated_batch = batch  # placeholder, replaced in generation
 
                 # Generate responses - this updates the LLMMessageLogType in repeated_batch
                 memory_tracker.snapshot_start_of_stage("Generation", dir())
@@ -1543,6 +1587,13 @@ def grpo_train(
                 with timer.time("prepare_for_generation/total"):
                     if NEED_REFIT and POLICY_GENERATION_STALE:
                         # Compute KV scales if needed for FP8 quantization
+                        assert not (
+                            sync_kv_scales
+                            and kv_scales_cache is None
+                            and early_stop_config.get("enabled", False)
+                        ), (
+                            "FP8 KV scale calibration is not yet compatible with early_stop_generation"
+                        )
                         if sync_kv_scales and kv_scales_cache is None:
                             print("▶ Computing KV cache scales...", flush=True)
                             policy.prepare_for_lp_inference()
@@ -1637,6 +1688,32 @@ def grpo_train(
                             ],
                             greedy=False,
                         )
+                    # Two-phase early stop generation
+                    elif early_stop_config.get("enabled", False):
+                        repeated_batch, rollout_metrics, early_stop_metrics = (
+                            two_phase_rollout(
+                                policy_generation=policy_generation,
+                                batch=batch,
+                                tokenizer=tokenizer,
+                                task_to_env=task_to_env,
+                                max_seq_len=master_config["policy"][
+                                    "max_total_sequence_length"
+                                ],
+                                num_generations_per_prompt=master_config["grpo"][
+                                    "num_generations_per_prompt"
+                                ],
+                                config=early_stop_config,
+                                max_rollout_turns=master_config["grpo"][
+                                    "max_rollout_turns"
+                                ],
+                            )
+                        )
+                        print(
+                            f"  Early stop: {early_stop_metrics.get('early_stop/zero_var_prompts', 0):.0f}/"
+                            f"{early_stop_metrics.get('early_stop/num_prompts', 0):.0f} zero-var, "
+                            f"saved {early_stop_metrics.get('early_stop/gen_saved_ratio', 0):.1%} generation",
+                            flush=True,
+                        )
                     else:
                         repeated_batch, rollout_metrics = run_multi_turn_rollout(
                             policy_generation=policy_generation,
@@ -1663,6 +1740,16 @@ def grpo_train(
                         rollout_metrics["mean_gen_tokens_per_sample"]
                     )
                     logger.log_metrics(rollout_metrics, total_steps + 1, prefix="train")
+
+                    # Compute input_ids for early_stop path (skipped repeat_interleave earlier)
+                    if early_stop_config.get("enabled", False):
+                        batched_flat, input_lengths = (
+                            batched_message_log_to_flat_message(
+                                repeated_batch["message_log"],
+                                pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                            )
+                        )
+                        input_ids = batched_flat["token_ids"]
 
                 repeated_batch = scale_rewards(
                     repeated_batch, master_config["grpo"]["reward_scaling"]
@@ -2024,6 +2111,12 @@ def grpo_train(
                 # APRIL over-provisioning metrics
                 if overprov_metrics:
                     metrics.update(overprov_metrics)
+                # Early stop generation metrics
+                if early_stop_config.get("enabled", False):
+                    metrics.update(early_stop_metrics)
+                # Length-aware batching metrics
+                if length_batching_metrics:
+                    metrics.update(length_batching_metrics)
 
                 metrics.update(train_results["all_mb_metrics"])
                 metrics.update(gen_step_metrics)
