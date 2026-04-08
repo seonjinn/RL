@@ -63,6 +63,14 @@ from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_
 from nemo_rl.distributed.virtual_cluster import ClusterConfig, RayVirtualCluster
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.algorithms.greso import GRESOConfig, GRESOState
+from nemo_rl.experience.early_stop_generation import (  # noqa: E402
+    EarlyStopGenerationConfig,
+    two_phase_rollout,
+)
+from nemo_rl.experience.length_aware_batching import (  # noqa: E402
+    LengthAwareBatchingConfig,
+    sort_batch_by_prompt_length,
+)
 from nemo_rl.experience.rollout_manager import (
     OverProvisioningConfig,
     get_over_provisioned_prompt_count,
