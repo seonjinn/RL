@@ -1786,6 +1786,12 @@ def grpo_train(
                     repeated_batch, overprov_metrics = select_prompt_groups(
                         repeated_batch, target_prompts, G, over_prov_config
                     )
+                    # Recompute input_ids after trimming (was computed from full over-provisioned batch)
+                    batched_flat, input_lengths = batched_message_log_to_flat_message(
+                        repeated_batch["message_log"],
+                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                    )
+                    input_ids = batched_flat["token_ids"]
                     print(
                         f"  APRIL: selected {target_prompts} from "
                         f"{overprov_metrics.get('over_provisioning/num_provisioned_prompts', 0):.0f} prompts",
