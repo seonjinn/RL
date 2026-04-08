@@ -341,6 +341,11 @@ def setup(
             "greso and use_dynamic_sampling cannot be used together. "
             "GRESO subsumes dynamic sampling with pre-rollout filtering."
         )
+        over_prov = grpo_config.get("over_provisioning", {})
+        assert not over_prov.get("enabled", False), (
+            "greso and over_provisioning (APRIL) cannot be used together. "
+            "GRESO reduces the batch while APRIL expects an over-provisioned batch."
+        )
 
     # Early stop generation: validate config
     early_stop_config: EarlyStopGenerationConfig = grpo_config.get(
@@ -1445,7 +1450,9 @@ def grpo_train(
         if last_ckpt is not None:
             greso_ckpt_path = os.path.join(last_ckpt, "greso_state.pt")
             if os.path.exists(greso_ckpt_path):
-                greso_state.load_state_dict(torch.load(greso_ckpt_path))
+                greso_state.load_state_dict(
+                    torch.load(greso_ckpt_path, weights_only=False)
+                )
 
     # APRIL Phase 1: over-provisioning config
     over_prov_config: OverProvisioningConfig = master_config["grpo"].get(
@@ -1496,13 +1503,14 @@ def grpo_train(
             "See https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/grpo.md#multiple-dataloaders for more details."
         )
 
+    # GRESO pre-rollout accumulation cache (persists across epoch boundaries)
+    greso_batch_cache: BatchedDataDict[DatumSpec] | None = None
+
     while current_epoch < max_num_epochs and total_steps < max_num_steps:
         memory_tracker.snapshot_start_of_stage("Preparing batch", dir())
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
         # batch cache is used for DAPO. We store prompts with non-zero standard deviation in this cache.
         batch_cache: BatchedDataDict[DatumSpec] = None
-        # GRESO pre-rollout accumulation cache
-        greso_batch_cache: BatchedDataDict[DatumSpec] | None = None
         # This is the number of batches we processed so far at each step to generate responses whose std is non-zero. Maximum threshold is set by dynamic_sampling_max_gen_batches. Used in the case of dynamic sampling.
         dynamic_sampling_num_gen_batches = 0
 
@@ -1561,7 +1569,8 @@ def grpo_train(
                             )
                             continue
                         elif batch.size > target_prompts:
-                            # Trim to exact size
+                            # Trim to exact size, save excess for next step
+                            greso_batch_cache = batch.slice(target_prompts, batch.size)
                             batch = batch.slice(0, target_prompts)
 
                     # Length-aware batching: sort prompts by input token length

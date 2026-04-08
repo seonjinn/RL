@@ -53,6 +53,9 @@ class DataProfiler:
     streaks to compute probabilistic skip decisions.
     """
 
+    # Max history entries per prompt (skip functions only need recent streaks)
+    MAX_HISTORY_LEN = 50
+
     def __init__(
         self, easy_threshold: float = 0.98, hard_threshold: float = 0.11
     ) -> None:
@@ -65,6 +68,9 @@ class DataProfiler:
         if data_id not in self.data:
             self.data[data_id] = []
         self.data[data_id].append((step, reward))
+        # Cap history to prevent unbounded memory growth
+        if len(self.data[data_id]) > self.MAX_HISTORY_LEN:
+            self.data[data_id] = self.data[data_id][-self.MAX_HISTORY_LEN :]
 
     def add_reward_list(
         self, step: int, data_ids: list[str], rewards: list[float]
