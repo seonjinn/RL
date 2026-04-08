@@ -68,6 +68,7 @@ from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.models.policy.lm_policy import Policy
+from nemo_rl.utils.background_writer import BackgroundWriter
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.debug_snapshot import DebugSnapshotSaver
 from nemo_rl.utils.gpu_memory_logging import maybe_log_gpu_memory
@@ -1046,6 +1047,15 @@ def refit_policy_generation(
 # ===============================================================================
 
 
+def _write_train_data_jsonl(logger, filename, log_refs):
+    """Convert tensor values to Python lists and write to JSONL file."""
+    log_data = {
+        k: v.tolist() if isinstance(v, torch.Tensor) else v
+        for k, v in log_refs.items()
+    }
+    logger.log_batched_dict_as_jsonl(log_data, filename)
+
+
 def grpo_train(
     policy: ColocatablePolicyInterface,
     policy_generation: Optional[GenerationInterface],
@@ -1149,6 +1159,8 @@ def grpo_train(
         policy_generation.finish_generation()
         logger.log_metrics(val_metrics, current_step, prefix="validation")
         logger.log_metrics(validation_timings, current_step, prefix="timing/validation")
+
+    jsonl_writer = BackgroundWriter()
 
     while current_epoch < max_num_epochs and total_steps < max_num_steps:
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
@@ -1859,25 +1871,32 @@ def grpo_train(
                         checkpointer.finalize_checkpoint(checkpoint_path)
 
             # Logging
-            # Log training data
-            log_data = {}
+            # Log training data — .tolist() + JSON serialization runs in background thread
+            log_refs = {
+                "content": flat_messages["content"],
+                "rewards": rewards,
+                "input_lengths": input_lengths,
+                "token_ids": train_data["input_ids"],
+                "token_loss_mask": train_data["token_mask"],
+                "sample_loss_mask": train_data["sample_mask"],
+                "advantages": train_data["advantages"],
+                "generation_logprobs": train_data["generation_logprobs"],
+                "prev_logprobs": train_data["prev_logprobs"],
+                "dataset": [info.get("dataset") for info in repeated_batch["extra_env_info"]],
+                "ground_truth": [info.get("ground_truth") for info in repeated_batch["extra_env_info"]],
+                "sample_index": repeated_batch["idx"],
+                "subrewards": repeated_batch.get("subreward_breakdowns", [{}] * len(rewards)),
+            }
             if "agent_ref" in repeated_batch:
-                log_data["agent_ref"] = repeated_batch["agent_ref"]
-            log_data["content"] = flat_messages["content"]
-            log_data["rewards"] = rewards.tolist()
+                log_refs["agent_ref"] = repeated_batch["agent_ref"]
             if master_config["grpo"]["use_dynamic_sampling"]:
-                log_data["filtered_rewards"] = rewards.tolist()
-                log_data["rewards"] = repeated_batch["total_reward"].tolist()
-            log_data["input_lengths"] = input_lengths.tolist()
-            log_data["token_ids"] = train_data["input_ids"].tolist()
-            log_data["token_loss_mask"] = train_data["token_mask"].tolist()
-            log_data["sample_loss_mask"] = train_data["sample_mask"].tolist()
-            log_data["advantages"] = train_data["advantages"].tolist()
-            log_data["generation_logprobs"] = train_data["generation_logprobs"].tolist()
-            log_data["prev_logprobs"] = train_data["prev_logprobs"].tolist()
-
-            logger.log_batched_dict_as_jsonl(
-                log_data, f"train_data_step{total_steps + 1}.jsonl"
+                log_refs["filtered_rewards"] = rewards
+                log_refs["rewards"] = repeated_batch["total_reward"]
+            jsonl_writer.submit(
+                _write_train_data_jsonl,
+                logger,
+                f"train_data_step{total_steps + 1}.jsonl",
+                log_refs,
             )
 
             timing_metrics: dict[str, float] = timer.get_timing_metrics(
@@ -1986,16 +2005,20 @@ def grpo_train(
             total_steps += 1
             if should_save_by_timeout:
                 print("Timeout has been reached, stopping training early", flush=True)
+                jsonl_writer.drain()
                 return
             if total_steps >= max_num_steps:
                 print(
                     "Max number of steps has been reached, stopping training early",
                     flush=True,
                 )
+                jsonl_writer.drain()
                 return
 
         current_epoch += 1
         current_step = 0  # Reset step counter for new epoch
+
+    jsonl_writer.drain()
 
 
 def validate(
@@ -2418,6 +2441,7 @@ def async_grpo_train(
     print("✅ Buffer ready! Starting training loop...")
 
     # Main training loop
+    jsonl_writer = BackgroundWriter()
     try:
         while step < master_config["grpo"]["max_num_steps"]:
             print(
@@ -2971,13 +2995,21 @@ def async_grpo_train(
                         checkpointer.finalize_checkpoint(checkpoint_path)
                     policy.offload_after_refit()
 
-            log_data = {"content": flat_messages["content"]}
-            log_data["rewards"] = rewards.tolist()
-            log_data["generation_logprobs"] = train_data["generation_logprobs"].tolist()
-            log_data["prev_logprobs"] = train_data["prev_logprobs"].tolist()
-            log_data["input_lengths"] = input_lengths.tolist()
-            logger.log_batched_dict_as_jsonl(
-                log_data, f"train_data_step{step + 1}.jsonl"
+            jsonl_writer.submit(
+                _write_train_data_jsonl,
+                logger,
+                f"train_data_step{step + 1}.jsonl",
+                {
+                    "content": flat_messages["content"],
+                    "rewards": rewards,
+                    "generation_logprobs": train_data["generation_logprobs"],
+                    "prev_logprobs": train_data["prev_logprobs"],
+                    "input_lengths": input_lengths,
+                    "dataset": [info.get("dataset") for info in repeated_batch["extra_env_info"]],
+                    "ground_truth": [info.get("ground_truth") for info in repeated_batch["extra_env_info"]],
+                    "sample_index": repeated_batch["idx"],
+                    "subrewards": repeated_batch.get("subreward_breakdowns", [{}] * len(rewards)),
+                },
             )
 
             timing_metrics: dict[str, float] = timer.get_timing_metrics(
@@ -3066,6 +3098,7 @@ def async_grpo_train(
         traceback.print_exc()
 
     finally:
+        jsonl_writer.drain()
         # Clean up
         print("🛑 Stopping trajectory collection...")
         try:
