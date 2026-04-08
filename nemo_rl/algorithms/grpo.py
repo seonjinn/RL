@@ -2050,6 +2050,8 @@ def grpo_train(
                         metrics[k] = np.mean(v).item()
                     elif isinstance(v, (np.ndarray, list)):
                         metrics[k] = np.sum(v).item()
+                    elif isinstance(v, (float, int)):
+                        pass  # Already scalar, no aggregation needed
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
