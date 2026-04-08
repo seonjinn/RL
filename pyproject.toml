@@ -69,7 +69,8 @@ automodel = [
   "transformer-engine[pytorch]==2.8.0",
   # HybridEP branch for MoE expert parallelism
   # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@hybrid-ep",
+"deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@hybrid-ep ; platform_machine == 'aarch64'",
 ]
 vllm = [
   "cuda-python",
@@ -79,7 +80,8 @@ vllm = [
   # sudo apt-get install libibverbs-dev
   # HybridEP branch for MoE expert parallelism
   # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@hybrid-ep",
+"deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@hybrid-ep ; platform_machine == 'aarch64'",
   "vllm==0.11.2",
   "num2words>=0.5.14",
 ]
@@ -121,7 +123,8 @@ mcore = [
   "flash-attn==2.8.1",
   # HybridEP branch for MoE expert parallelism
   # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@hybrid-ep",
+"deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@bfded34800dfec415b71503f8205181de90b2480 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@hybrid-ep ; platform_machine == 'aarch64'",
 ]
 nemo_gym = ["nemo_gym"]
 
