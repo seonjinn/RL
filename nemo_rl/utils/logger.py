@@ -50,6 +50,7 @@ _rich_logging_configured = False
 class WandbConfig(TypedDict):
     project: NotRequired[str]
     name: NotRequired[str]
+    entity: NotRequired[str]
 
 
 class SwanlabConfig(TypedDict):
@@ -381,7 +382,7 @@ class WandbLogger(LoggerInterface):
         Args:
             params: Dict of hyperparameters to log
         """
-        self.run.config.update(params)
+        self.run.config.update(params, allow_val_change=True)
 
     def log_plot(self, figure: plt.Figure, step: int, name: str) -> None:
         """Log a plot to wandb.
@@ -448,7 +449,7 @@ class SwanlabLogger(LoggerInterface):
         Parameters:
             params (Mapping[str, Any]): Mapping of hyperparameter names to values to store in the run configuration.
         """
-        self.run.config.update(params)
+        self.run.config.update(params, allow_val_change=True)
 
     def log_plot(self, figure: plt.Figure, step: int, name: str) -> None:
         """Log a plot to swanlab.
