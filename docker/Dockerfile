@@ -127,6 +127,9 @@ ENV UV_LINK_MODE=copy
 # Ensure DeepEP is built for H100 and B200 (also mcore inference unified memory API now invokes a torch API that requires these to be set)
 ENV TORCH_CUDA_ARCH_LIST="9.0 10.0"
 
+# Ensure HybridEP runtime compilation can find the correct nvcc
+ENV CUDA_HOME=/usr/local/cuda
+
 # Copy in source from build context (defaults to cloned repo, can be overridden)
 COPY --from=nemo-rl . /opt/nemo-rl
 # Unshallow the repo to get the full history (in the case it was from the scratch layer).

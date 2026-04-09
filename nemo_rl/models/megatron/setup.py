@@ -413,6 +413,12 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
 
     model_cfg.moe_permute_fusion = config["megatron_cfg"]["moe_permute_fusion"]
 
+    # DeepEP configuration
+    model_cfg.moe_flex_dispatcher_backend = config["megatron_cfg"]["moe_flex_dispatcher_backend"]
+    model_cfg.moe_hybridep_num_sms = config["megatron_cfg"]["moe_hybridep_num_sms"]
+    os.environ["NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN"] = str(min(model_cfg.expert_model_parallel_size, 64))
+    os.environ["USE_MNNVL"] = str(int(model_cfg.expert_model_parallel_size > 4))
+
 def _apply_mtp_config(model_cfg: Any, config: PolicyConfig) -> None:
     """Apply Multi Token Prediction configuration."""
     model_cfg.mtp_loss_scaling_factor = config["megatron_cfg"][

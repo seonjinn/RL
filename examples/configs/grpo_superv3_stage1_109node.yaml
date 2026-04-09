@@ -135,6 +135,8 @@ policy:
     moe_permute_fusion: true
     moe_enable_deepep: false
     moe_token_dispatcher_type: "alltoall"
+    moe_flex_dispatcher_backend: "hybridep"
+    moe_hybridep_num_sms: 32
     moe_aux_loss_coeff: 0.0
     moe_router_enable_expert_bias: true
     moe_shared_expert_overlap: false

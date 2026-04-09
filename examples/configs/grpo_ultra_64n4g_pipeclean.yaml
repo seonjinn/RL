@@ -157,7 +157,7 @@ policy:
 
     tensor_model_parallel_size: 8
     expert_tensor_parallel_size: 1
-    expert_model_parallel_size: 32
+    expert_model_parallel_size: 64
     pipeline_model_parallel_size: 1
     num_layers_in_first_pipeline_stage: null
     num_layers_in_last_pipeline_stage: null
@@ -173,7 +173,9 @@ policy:
     moe_router_enable_expert_bias: true
     moe_permute_fusion: true
     moe_enable_deepep: false
-    moe_token_dispatcher_type: "alltoall"
+    moe_token_dispatcher_type: "flex"
+    moe_flex_dispatcher_backend: "hybridep"
+    moe_hybridep_num_sms: 32
     moe_aux_loss_coeff: 0.0
     moe_shared_expert_overlap: false
     use_gloo_process_groups: false
