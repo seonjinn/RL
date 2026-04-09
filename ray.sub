@@ -212,7 +212,7 @@ fi
 # (STARTED_RAY_HEAD, ray_worker_units, ENDED) relies on this. 
 # On systems without a shared FS, srun-based polling would be needed.
 BASE_LOG_DIR=${BASE_LOG_DIR:-$SLURM_SUBMIT_DIR}
-if [[ -n "$SLURM_RESTART_COUNT" ]]; then
+if [[ -n "${SLURM_RESTART_COUNT:-}" ]]; then
   LOG_DIR="$BASE_LOG_DIR/$SLURM_JOB_ID-$SLURM_RESTART_COUNT-logs"
 else
   LOG_DIR="$BASE_LOG_DIR/$SLURM_JOB_ID-logs"
