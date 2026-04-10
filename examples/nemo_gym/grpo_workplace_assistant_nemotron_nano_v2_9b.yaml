@@ -268,7 +268,8 @@ data:
 
 env:
   should_use_nemo_gym: true
-  should_log_nemo_gym_responses: true  # If you have low logging storage, set this to false
+  # true: skip expensive train_data_step*.jsonl; false: write jsonl (heavy). Prefer true if disk is tight.
+  should_log_nemo_gym_responses: true
   nemo_gym:  # This is passed into NeMo-Gym as the initial_global_config_dict
     rollout_max_attempts_to_avoid_lp_nan: 1
     is_trajectory_collection: false  # Set this to true to enable trajectory collection (no training). You may also want to increase `policy.generation.vllm_cfg.gpu_memory_utilization`

@@ -373,6 +373,8 @@ data:
 # =============================================================================
 env:
   should_use_nemo_gym: true
+  # true: skip expensive train_data_step*.jsonl (recommended for large Gym runs); false: write full jsonl.
+  should_log_nemo_gym_responses: true
   use_genrm_compare: true
   genrm_agent_names:
     - "genrm_simple_agent"
