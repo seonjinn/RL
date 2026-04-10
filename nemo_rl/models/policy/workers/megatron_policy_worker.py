@@ -36,10 +36,6 @@ from megatron.core.distributed import DistributedDataParallel
 from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
     FullyShardedDataParallel as custom_FSDP,
 )
-from megatron.core.inference.config import InferenceConfig
-from megatron.core.inference.text_generation_controllers.text_generation_controller import (
-    TextGenerationController,
-)
 from megatron.core.optimizer import ChainedOptimizer
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from transformers import PreTrainedTokenizerBase
@@ -876,6 +872,7 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             MegatronGenerationConfig, self.cfg["generation"]["mcore_generation_config"]
         )
 
+        from megatron.core.inference.config import InferenceConfig
         from megatron.core.inference.contexts.dynamic_context import (
             DynamicInferenceContext,
         )
@@ -886,6 +883,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             GPTInferenceWrapper,
         )
         from megatron.core.inference.sampling_params import SamplingParams
+        from megatron.core.inference.text_generation_controllers.text_generation_controller import (
+            TextGenerationController,
+        )
 
         model_config = self.model.config
         model_config.cuda_graph_impl = "local"
