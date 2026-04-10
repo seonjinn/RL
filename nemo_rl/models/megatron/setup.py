@@ -595,8 +595,8 @@ def _create_checkpoint_config(
         load_optim=optimizer_path is not None,
         pretrained_checkpoint=pretrained_path,
         async_save=False,
-        fully_parallel_save=True,
-        fully_parallel_load=True,
+        ckpt_fully_parallel_save=True,
+        ckpt_fully_parallel_load=True,
         load_rng=False,
     )
 
@@ -1028,7 +1028,7 @@ def setup_reference_model_state(
         pretrained_checkpoint=pretrained_path,
         save=None,
         load=None,
-        fully_parallel_load=True,
+        ckpt_fully_parallel_load=True,
         load_rng=False,
     )
 
