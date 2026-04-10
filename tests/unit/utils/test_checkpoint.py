@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import threading
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -467,3 +470,370 @@ def test_get_best_checkpoint_path_higher_is_better(tmp_path):
     with open(Path(best_path) / "training_info.json", "r") as f:
         metadata = json.load(f)
         assert metadata["accuracy"] == 0.9  # step 2
+
+
+@pytest.fixture
+def async_checkpoint_config(checkpoint_dir):
+    return {
+        "enabled": True,
+        "checkpoint_dir": checkpoint_dir,
+        "metric_name": None,
+        "higher_is_better": False,
+        "keep_top_k": None,
+    }
+
+
+@pytest.fixture
+def async_manager(async_checkpoint_config):
+    mgr = CheckpointManager(async_checkpoint_config)
+    yield mgr
+    mgr.shutdown()
+
+
+class TestBeginFinalization:
+    """Tests for CheckpointManager.begin_finalization()."""
+
+    def test_basic_rename(self, async_manager, checkpoint_dir):
+        """begin_finalization with no wait_fn renames immediately."""
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=None)
+        async_manager.finalize_pending()
+
+        assert not Path(tmp).exists()
+        assert (checkpoint_dir / "step_1").exists()
+
+    def test_wait_fn_called_before_rename(self, async_manager, checkpoint_dir):
+        """wait_fn is called and completes before the rename happens."""
+        call_order = []
+
+        def mock_wait():
+            call_order.append("wait_start")
+            time.sleep(0.05)
+            call_order.append("wait_end")
+
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=mock_wait)
+        async_manager.finalize_pending()
+
+        assert call_order == ["wait_start", "wait_end"]
+        assert (checkpoint_dir / "step_1").exists()
+
+    def test_begin_blocks_if_previous_pending(self, async_manager, checkpoint_dir):
+        """Second begin_finalization blocks until first completes."""
+        barrier = threading.Event()
+
+        def slow_wait():
+            barrier.wait(timeout=5)
+
+        tmp1 = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp1, wait_fn=slow_wait)
+
+        tmp2 = async_manager.init_tmp_checkpoint(2, {"loss": 0.2})
+        barrier.set()
+        async_manager.begin_finalization(tmp2, wait_fn=None)
+        async_manager.finalize_pending()
+
+        assert (checkpoint_dir / "step_1").exists()
+        assert (checkpoint_dir / "step_2").exists()
+
+    def test_sync_finalize_still_works(self, async_manager, checkpoint_dir):
+        """Original synchronous finalize_checkpoint API still works."""
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.finalize_checkpoint(tmp)
+
+        assert (checkpoint_dir / "step_1").exists()
+        assert not Path(tmp).exists()
+
+
+class TestFinalizePending:
+    """Tests for CheckpointManager.finalize_pending()."""
+
+    def test_noop_when_nothing_pending(self, async_manager):
+        """finalize_pending is a safe no-op when no finalization is active."""
+        async_manager.finalize_pending()
+
+    def test_idempotent_double_call(self, async_manager, checkpoint_dir):
+        """Calling finalize_pending twice is harmless."""
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=None)
+        async_manager.finalize_pending()
+        async_manager.finalize_pending()
+        assert (checkpoint_dir / "step_1").exists()
+
+    def test_propagates_error_from_wait_fn(self, async_manager):
+        """Exceptions in wait_fn are re-raised from finalize_pending."""
+
+        def failing_wait():
+            raise ValueError("Simulated async write failure")
+
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=failing_wait)
+
+        with pytest.raises(RuntimeError, match="Background checkpoint finalization failed"):
+            async_manager.finalize_pending()
+
+    def test_error_cleared_after_raise(self, async_manager, checkpoint_dir):
+        """After an error is raised, manager is in clean state for next save."""
+
+        def failing_wait():
+            raise ValueError("boom")
+
+        tmp1 = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp1, wait_fn=failing_wait)
+
+        with pytest.raises(RuntimeError):
+            async_manager.finalize_pending()
+
+        tmp2 = async_manager.init_tmp_checkpoint(2, {"loss": 0.2})
+        async_manager.begin_finalization(tmp2, wait_fn=None)
+        async_manager.finalize_pending()
+        assert (checkpoint_dir / "step_2").exists()
+
+
+class TestShutdown:
+    """Tests for CheckpointManager.shutdown()."""
+
+    def test_waits_for_rename_and_deletion(self, checkpoint_dir):
+        """shutdown() blocks until both rename and deletion complete."""
+        config = {
+            "enabled": True,
+            "checkpoint_dir": checkpoint_dir,
+            "metric_name": None,
+            "higher_is_better": False,
+            "keep_top_k": 1,
+        }
+        manager = CheckpointManager(config)
+
+        for step in [1, 2, 3]:
+            tmp = manager.init_tmp_checkpoint(step, {"loss": float(step)})
+            manager.begin_finalization(tmp, wait_fn=None)
+
+        manager.shutdown()
+
+        remaining = sorted(checkpoint_dir.glob("step_*"))
+        assert len(remaining) == 1
+        assert remaining[0].name == "step_3"
+
+    def test_noop_when_nothing_pending(self, async_manager):
+        """shutdown is safe to call with no pending work."""
+        async_manager.shutdown()
+
+    def test_double_shutdown(self, async_manager, checkpoint_dir):
+        """Calling shutdown twice is harmless."""
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=None)
+        async_manager.shutdown()
+        async_manager.shutdown()
+        assert (checkpoint_dir / "step_1").exists()
+
+    def test_usable_after_shutdown(self, async_manager, checkpoint_dir):
+        """Manager can be used for new saves after shutdown."""
+        tmp1 = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp1, wait_fn=None)
+        async_manager.shutdown()
+
+        tmp2 = async_manager.init_tmp_checkpoint(2, {"loss": 0.2})
+        async_manager.begin_finalization(tmp2, wait_fn=None)
+        async_manager.finalize_pending()
+        assert (checkpoint_dir / "step_2").exists()
+
+
+class TestHasPendingFinalization:
+    """Tests for CheckpointManager.has_pending_finalization property."""
+
+    def test_false_initially(self, async_manager):
+        assert not async_manager.has_pending_finalization
+
+    def test_true_while_active(self, async_manager):
+        barrier = threading.Event()
+
+        def slow_wait():
+            barrier.wait(timeout=5)
+
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=slow_wait)
+
+        assert async_manager.has_pending_finalization
+
+        barrier.set()
+        async_manager.finalize_pending()
+
+    def test_false_after_finalize(self, async_manager, checkpoint_dir):
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=None)
+        async_manager.finalize_pending()
+
+        assert not async_manager.has_pending_finalization
+
+    def test_false_after_error(self, async_manager):
+        """has_pending_finalization is False after a failed finalization."""
+
+        def failing_wait():
+            raise ValueError("boom")
+
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager.begin_finalization(tmp, wait_fn=failing_wait)
+
+        with pytest.raises(RuntimeError):
+            async_manager.finalize_pending()
+
+        assert not async_manager.has_pending_finalization
+
+
+class TestDeletionSerialization:
+    """Tests for deletion via ThreadPoolExecutor."""
+
+    def test_keep_top_k_with_async_finalization(self, checkpoint_dir):
+        """Old checkpoints are deleted without blocking the main thread."""
+        config = {
+            "enabled": True,
+            "checkpoint_dir": checkpoint_dir,
+            "metric_name": None,
+            "higher_is_better": False,
+            "keep_top_k": 2,
+        }
+        manager = CheckpointManager(config)
+
+        for step in range(1, 6):
+            tmp = manager.init_tmp_checkpoint(step, {"loss": float(step)})
+            manager.begin_finalization(tmp, wait_fn=None)
+
+        manager.shutdown()
+
+        remaining = sorted(
+            checkpoint_dir.glob("step_*"), key=lambda p: int(p.name.split("_")[1])
+        )
+        assert len(remaining) == 2
+        assert remaining[0].name == "step_4"
+        assert remaining[1].name == "step_5"
+
+    def test_deletion_does_not_block_next_save(self, checkpoint_dir):
+        """Deletion runs asynchronously, so the next begin_finalization returns quickly."""
+        config = {
+            "enabled": True,
+            "checkpoint_dir": checkpoint_dir,
+            "metric_name": None,
+            "higher_is_better": False,
+            "keep_top_k": 1,
+        }
+        manager = CheckpointManager(config)
+
+        tmp1 = manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        manager.begin_finalization(tmp1, wait_fn=None)
+        manager.finalize_pending()
+
+        tmp2 = manager.init_tmp_checkpoint(2, {"loss": 0.2})
+        start = time.monotonic()
+        manager.begin_finalization(tmp2, wait_fn=None)
+        elapsed = time.monotonic() - start
+        # begin_finalization should return quickly (< 1s) even if deletion is slow
+        assert elapsed < 1.0
+
+        manager.shutdown()
+        remaining = list(checkpoint_dir.glob("step_*"))
+        assert len(remaining) == 1
+        assert remaining[0].name == "step_2"
+
+
+class TestRenameCheckpoint:
+    """Tests for _rename_checkpoint edge cases."""
+
+    def test_rename_overwrites_existing_step(self, async_manager, checkpoint_dir):
+        """If step_N already exists, it is swapped via old_step_N."""
+        existing = checkpoint_dir / "step_1"
+        existing.mkdir(parents=True)
+        (existing / "stale_marker.txt").write_text("old")
+
+        tmp = async_manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        async_manager._rename_checkpoint(tmp)
+
+        assert (checkpoint_dir / "step_1").exists()
+        assert not (checkpoint_dir / "old_step_1").exists()
+        info = json.loads((checkpoint_dir / "step_1" / "training_info.json").read_text())
+        assert info["loss"] == 0.1
+        assert not (checkpoint_dir / "step_1" / "stale_marker.txt").exists()
+
+
+class TestMultiStepSequence:
+    """End-to-end multi-step save/finalize sequence mirroring the training loop."""
+
+    def test_three_step_sequence(self, checkpoint_dir):
+        """Simulate 3 training steps with async finalization."""
+        config = {
+            "enabled": True,
+            "checkpoint_dir": checkpoint_dir,
+            "metric_name": None,
+            "higher_is_better": False,
+            "keep_top_k": 2,
+        }
+        manager = CheckpointManager(config)
+
+        wait_called = []
+
+        def make_wait(step):
+            def wait_fn():
+                time.sleep(0.02)
+                wait_called.append(step)
+            return wait_fn
+
+        for step in [1, 2, 3]:
+            manager.finalize_pending()
+            tmp = manager.init_tmp_checkpoint(step, {"loss": 1.0 / step})
+            manager.begin_finalization(tmp, wait_fn=make_wait(step))
+
+        manager.shutdown()
+
+        assert wait_called == [1, 2, 3]
+
+        remaining = sorted(
+            checkpoint_dir.glob("step_*"), key=lambda p: int(p.name.split("_")[1])
+        )
+        assert len(remaining) == 2
+        assert remaining[0].name == "step_2"
+        assert remaining[1].name == "step_3"
+
+    def test_mixed_sync_and_async(self, checkpoint_dir):
+        """Mix of synchronous finalize_checkpoint and async begin_finalization."""
+        config = {
+            "enabled": True,
+            "checkpoint_dir": checkpoint_dir,
+            "metric_name": None,
+            "higher_is_better": False,
+            "keep_top_k": None,
+        }
+        manager = CheckpointManager(config)
+
+        tmp1 = manager.init_tmp_checkpoint(1, {"loss": 0.1})
+        manager.finalize_checkpoint(tmp1)
+
+        tmp2 = manager.init_tmp_checkpoint(2, {"loss": 0.2})
+        manager.begin_finalization(tmp2, wait_fn=None)
+
+        tmp3 = manager.init_tmp_checkpoint(3, {"loss": 0.3})
+        manager.finalize_checkpoint(tmp3)
+
+        manager.shutdown()
+
+        for step in [1, 2, 3]:
+            assert (checkpoint_dir / f"step_{step}").exists()
+
+    def test_latest_checkpoint_visible_after_async_finalize(
+        self, checkpoint_dir
+    ):
+        """get_latest_checkpoint_path reflects the async-finalized checkpoint."""
+        config = {
+            "enabled": True,
+            "checkpoint_dir": checkpoint_dir,
+            "metric_name": None,
+            "higher_is_better": False,
+            "keep_top_k": None,
+        }
+        manager = CheckpointManager(config)
+
+        tmp = manager.init_tmp_checkpoint(5, {"loss": 0.1})
+        manager.begin_finalization(tmp, wait_fn=None)
+        manager.finalize_pending()
+
+        latest = manager.get_latest_checkpoint_path()
+        assert latest is not None
+        assert Path(latest).name == "step_5"
