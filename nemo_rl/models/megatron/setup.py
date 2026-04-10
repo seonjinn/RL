@@ -588,6 +588,20 @@ def _create_checkpoint_config(
     pretrained_path: str, weights_path: Optional[str], optimizer_path: Optional[str]
 ) -> CheckpointConfig:
     """Create checkpoint configurations."""
+    import dataclasses
+
+    # Field was renamed across Megatron-LM versions: handle both.
+    _fields = {f.name for f in dataclasses.fields(CheckpointConfig)}
+    _parallel_save = (
+        "ckpt_fully_parallel_save"
+        if "ckpt_fully_parallel_save" in _fields
+        else "fully_parallel_save"
+    )
+    _parallel_load = (
+        "ckpt_fully_parallel_load"
+        if "ckpt_fully_parallel_load" in _fields
+        else "fully_parallel_load"
+    )
     return CheckpointConfig(
         save_interval=100,
         save=weights_path,
@@ -595,9 +609,8 @@ def _create_checkpoint_config(
         load_optim=optimizer_path is not None,
         pretrained_checkpoint=pretrained_path,
         async_save=False,
-        ckpt_fully_parallel_save=True,
-        ckpt_fully_parallel_load=True,
         load_rng=False,
+        **{_parallel_save: True, _parallel_load: True},
     )
 
 
@@ -1024,12 +1037,20 @@ def setup_reference_model_state(
 ) -> dict:
     """Setup the reference model for inference and return its state dict."""
     # Create reference checkpoint config
+    import dataclasses
+
+    _fields = {f.name for f in dataclasses.fields(CheckpointConfig)}
+    _parallel_load = (
+        "ckpt_fully_parallel_load"
+        if "ckpt_fully_parallel_load" in _fields
+        else "fully_parallel_load"
+    )
     ref_checkpoint_config = CheckpointConfig(
         pretrained_checkpoint=pretrained_path,
         save=None,
         load=None,
-        ckpt_fully_parallel_load=True,
         load_rng=False,
+        **{_parallel_load: True},
     )
 
     ref_ckpt_context = init_checkpointing_context(ref_checkpoint_config)
