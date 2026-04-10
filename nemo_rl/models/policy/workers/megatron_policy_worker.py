@@ -229,6 +229,99 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         ## used for streaming update inference engine weights
         self._held_gather_buffer = None
 
+        # CUDA graph training state (TE-based per-layer capture)
+        self._cuda_graph_helper = None
+        self._cuda_graph_train_steps = 0
+        self._cuda_graph_captured_seq_length = None
+
+    def _maybe_capture_cuda_graphs(
+        self, seq_length: int, micro_batch_size: int
+    ) -> None:
+        """Lazily create TECudaGraphHelper and capture graphs after warmup.
+
+        Called once per train() invocation (on the first global batch).
+
+        Design: "capture once, then replay or fallback"
+        - Warmup for N steps (cuda_graph_warmup_steps), then capture at the first
+          eligible seq_length.
+        - After capture, if seq_length matches the captured size: replay (fast).
+        - If seq_length > captured size: re-capture at the new (larger) size.
+          The warmup counter is NOT reset, so re-capture happens immediately.
+        - If seq_length < captured size (downward bucket switch): delete the
+          helper so TE hooks are removed, then fall back to regular execution
+          for this step. The warmup counter is NOT reset, so on the next step
+          with the larger seq_length the graph is re-captured immediately.
+        - If cuda_graph_buckets is configured, data.py signals a fallback step
+          by padding to the raw packed length (not a bucket value). The check
+          below returns early for such steps without touching the helper.
+        """
+        model_cfg = self.megatron_cfg.model
+        if getattr(model_cfg, "cuda_graph_impl", "none") != "transformer_engine":
+            return
+
+        # --- min_fill_ratio fallback (bucket mode) ---
+        # data.py pads to an exact bucket value for CG steps and to the raw
+        # packed length for fallback steps (when fill ratio is too low).
+        # Returning here does NOT disturb the helper or warmup counter.
+        cuda_graph_buckets = self.cfg["megatron_cfg"].get("cuda_graph_buckets", None)
+        if cuda_graph_buckets and seq_length not in set(cuda_graph_buckets):
+            return
+
+        from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
+
+        # --- Downward bucket switch: fallback without re-capture ---
+        # When the captured graph exists and seq_length decreased (smaller bucket),
+        # the existing graph cannot be replayed (tensor shapes differ). Delete the
+        # helper to remove TE hooks and fall back to regular execution.
+        # The warmup counter is preserved so the graph is re-captured immediately
+        # (without another warmup period) when the larger seq_length returns.
+        if (
+            self._cuda_graph_helper is not None
+            and self._cuda_graph_helper.graphs_created()
+            and seq_length < self._cuda_graph_captured_seq_length
+        ):
+            self._cuda_graph_helper.delete_cuda_graphs()
+            self._cuda_graph_helper = None
+            # _cuda_graph_train_steps intentionally NOT reset
+            return
+
+        # --- Upward bucket switch: re-capture at the new larger size ---
+        # The existing graph (if any) is too small; delete it and create a new one.
+        # The warmup counter is NOT reset so the new graph is captured immediately.
+        if (
+            self._cuda_graph_helper is not None
+            and seq_length != self._cuda_graph_captured_seq_length
+        ):
+            if self._cuda_graph_helper.graphs_created():
+                self._cuda_graph_helper.delete_cuda_graphs()
+            self._cuda_graph_helper = None
+            # _cuda_graph_train_steps intentionally NOT reset
+
+        # Create helper on first call (or after a bucket switch)
+        if self._cuda_graph_helper is None:
+            self._cuda_graph_helper = TECudaGraphHelper(
+                model=[self.model],
+                config=model_cfg,
+                seq_length=seq_length,
+                micro_batch_size=micro_batch_size,
+                optimizers=[self.optimizer],
+            )
+            self._cuda_graph_captured_seq_length = seq_length
+
+        # Capture graphs after warmup
+        self._cuda_graph_train_steps += 1
+        warmup_steps = getattr(model_cfg, "cuda_graph_warmup_steps", 3)
+        if (
+            not self._cuda_graph_helper.graphs_created()
+            and self._cuda_graph_train_steps > warmup_steps
+        ):
+            if self.should_disable_forward_pre_hook:
+                self.disable_forward_pre_hook(param_sync=False)
+            self._cuda_graph_helper.create_cudagraphs()
+            if self.should_disable_forward_pre_hook:
+                self.enable_forward_pre_hook()
+                self._cuda_graph_helper.cuda_graph_set_manual_hooks()
+
     def enable_forward_pre_hook(self):
         assert isinstance(self.model, DistributedDataParallel)
         self.model.enable_forward_pre_hook()
@@ -310,6 +403,10 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 )
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
+
+                # CUDA graph: init helper and capture after warmup (once per train() call)
+                if gb_idx == 0 and not eval_mode:
+                    self._maybe_capture_cuda_graphs(padded_seq_length, micro_batch_size)
 
                 loss_post_processor = LossPostProcessor(
                     loss_fn=loss_fn,

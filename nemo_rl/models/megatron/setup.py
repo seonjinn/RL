@@ -537,6 +537,22 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
                 "Refer to https://github.com/NVIDIA-NeMo/RL/issues/1164 for latest updates with this issue."
             )
 
+    # CUDA graph for training (requires Megatron-LM with packed-sequence CG support).
+    if config["megatron_cfg"].get("cuda_graph_impl"):
+        model_cfg.cuda_graph_impl = config["megatron_cfg"]["cuda_graph_impl"]
+    if config["megatron_cfg"].get("cuda_graph_scope"):
+        model_cfg.cuda_graph_scope = config["megatron_cfg"]["cuda_graph_scope"]
+    if "cuda_graph_warmup_steps" in config["megatron_cfg"]:
+        model_cfg.cuda_graph_warmup_steps = config["megatron_cfg"][
+            "cuda_graph_warmup_steps"
+        ]
+    if config["megatron_cfg"].get("cuda_graph_packed_seq"):
+        model_cfg.cuda_graph_packed_seq = True
+    if "cuda_graph_max_packed_seqs" in config["megatron_cfg"]:
+        model_cfg.cuda_graph_max_packed_seqs = config["megatron_cfg"][
+            "cuda_graph_max_packed_seqs"
+        ]
+
 
 def _validate_optimizer_config(config: PolicyConfig) -> None:
     """Validate optimizer configuration."""

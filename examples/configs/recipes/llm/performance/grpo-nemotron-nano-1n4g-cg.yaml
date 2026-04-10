@@ -1,0 +1,38 @@
+defaults: ../../../grpo_math_nemotron_nano_megatron.yaml
+grpo:
+  max_num_steps: 10
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-nemotron-nano-1n4g-cg
+policy:
+  train_global_batch_size: 64
+  max_total_sequence_length: 4096
+  make_sequence_length_divisible_by: 1
+  megatron_cfg:
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 1
+    sequence_parallel: false
+    activation_checkpointing: false
+    # CUDA graph configuration for mamba-attention hybrid models
+    # scope captures both attention and mamba layers
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope:
+    - attn
+    - mamba
+    cuda_graph_warmup_steps: 3
+    cuda_graph_packed_seq: true
+    optimizer:
+      lr: 5.0e-07
+      min_lr: 5.0e-08
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.5
+logger:
+  log_dir: logs/grpo-nemotron-nano-1n4g-cg
+  wandb_enabled: false
+  tensorboard_enabled: false
+cluster:
+  gpus_per_node: 4
+  num_nodes: 1

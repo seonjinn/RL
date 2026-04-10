@@ -194,8 +194,21 @@ def get_microbatch_iterator(
         straggler_timer=straggler_timer,
     )
 
-    # Compute padded sequence length for pipeline parallelism
-    padded_seq_length = pad_full_seq_to if pad_full_seq_to is not None else seq_dim_size
+    # Compute padded sequence length for Megatron's seq_length parameter.
+    # When sequence packing is enabled and there is no explicit target padding
+    # (e.g. CG fallback or PP-free non-CG path), use pack_seq_dim_size (the
+    # actual max packed length in this batch) rather than seq_dim_size (the
+    # original data tensor dimension). This gives _maybe_capture_cuda_graphs
+    # an unambiguous signal: a bucket-aligned value means "use CG", anything
+    # else means "fallback to regular execution this step".
+    if pack_seq_dim_size is not None:
+        padded_seq_length = (
+            pad_full_seq_to if pad_full_seq_to is not None else pack_seq_dim_size
+        )
+    else:
+        padded_seq_length = (
+            pad_full_seq_to if pad_full_seq_to is not None else seq_dim_size
+        )
 
     return (
         processed_iterator,
@@ -528,6 +541,33 @@ def _pack_sequences_for_megatron(
     )
 
 
+def _select_cuda_graph_bucket(
+    actual_seq_len: int,
+    buckets: list[int],
+    min_fill_ratio: float,
+) -> Optional[int]:
+    """Return the smallest bucket >= actual_seq_len, or None if fill ratio too low.
+
+    Args:
+        actual_seq_len: Actual packed sequence length for this batch.
+        buckets: Sorted list of candidate bucket sizes.
+        min_fill_ratio: Minimum fill ratio (actual / bucket) to use CG.
+                        0.0 disables the threshold (always use CG).
+
+    Returns:
+        Bucket size to pad to, or None if the fill ratio is below the threshold
+        (caller should fall back to regular execution without CUDA graph replay).
+    """
+    sorted_buckets = sorted(buckets)
+    # Smallest bucket that fits the actual length; clamp to largest if none fits.
+    bucket = next(
+        (b for b in sorted_buckets if b >= actual_seq_len), sorted_buckets[-1]
+    )
+    if min_fill_ratio > 0.0 and actual_seq_len / bucket < min_fill_ratio:
+        return None
+    return bucket
+
+
 def _get_pack_sequence_parameters_for_megatron(
     megatron_cfg: dict,
     pad_individual_seqs_to_multiple_of: int,
@@ -582,11 +622,48 @@ def _get_pack_sequence_parameters_for_megatron(
     else:
         pad_packed_seq_to_multiple_of = 1
 
-    # when PP is used, all sequences must have the same length, so we need to pad the packed sequence to the max sequence length in the batch.
+    # Determine target padding and whether this step uses CUDA graph replay.
+    #
+    # PP always requires fixed tensor shapes across micro-batches, so it takes priority.
+    # With cuda_graph_packed_seq + buckets, we round up to the nearest bucket and
+    # optionally fall back to regular execution if fill ratio is too low.
+    cuda_graph_packed_seq = megatron_cfg.get("cuda_graph_packed_seq", False)
+    cuda_graph_buckets = megatron_cfg.get("cuda_graph_buckets", None)
+    min_fill_ratio = megatron_cfg.get("cuda_graph_min_fill_ratio", 0.0)
+
+    is_cg_step = False
     if pp_size > 1:
+        # PP requires all micro-batches to have the same shape.
         pad_packed_seq_to = max_seq_len_in_batch
+        is_cg_step = cuda_graph_packed_seq
+    elif cuda_graph_packed_seq:
+        if cuda_graph_buckets:
+            bucket = _select_cuda_graph_bucket(
+                max_seq_len_in_batch, cuda_graph_buckets, min_fill_ratio
+            )
+            if bucket is not None:
+                # CG step: pad to bucket, will be captured/replayed.
+                pad_packed_seq_to = bucket
+                is_cg_step = True
+            else:
+                # Fallback: fill ratio too low, skip CG replay this step.
+                # Each micro-batch is padded only to its natural size
+                # (same behavior as when cuda_graph_packed_seq is disabled).
+                pad_packed_seq_to = None
+        else:
+            # No buckets: always pad to max packed length (original behavior).
+            pad_packed_seq_to = max_seq_len_in_batch
+            is_cg_step = True
     else:
         pad_packed_seq_to = None
+
+    # CUDA graph capture computes slen_per_cp = seq_length // cp_size, so the
+    # padded length must be divisible by cp_size (and tp_size when SP is on).
+    # Only enforce this for actual CG steps; fallback steps use natural padding.
+    if is_cg_step and pad_packed_seq_to is not None:
+        pad_packed_seq_to_multiple_of = max(
+            pad_packed_seq_to_multiple_of, minimum_pad_factor
+        )
 
     # make sure the pad_packed_seq_to is a multiple of the pad_packed_seq_to_multiple_of
     if pad_packed_seq_to is not None:
