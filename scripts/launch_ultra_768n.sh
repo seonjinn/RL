@@ -185,9 +185,6 @@ case "${PRECISION_RECIPE}" in
   *)                        _vllm_cache_precision="bf16"  ;;
 esac
 LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}"
-LUSTRE_FLASHINFER_CUBIN_CACHE="${PERSISTENT_CACHE}/flashinfer_cubins"
-FLASHINFER_CUBIN_CACHE="/tmp/nemo_rl_flashinfer_cubins"
-FLASHINFER_WS_BASE="${PERSISTENT_CACHE}/flashinfer_workspace"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 NRL_VLLM_LOCAL_CACHE_DIR="/tmp/nemo_rl_vllm_cache"
@@ -204,8 +201,7 @@ export INDUCTOR_CACHE_DIR
 export TRITON_CACHE_DIR
 export CACHE_SYNC_FREQUENCY
 
-mkdir -p "${LUSTRE_VLLM_CACHE}" "${LUSTRE_FLASHINFER_CUBIN_CACHE}" "${FLASHINFER_WS_BASE}" \
-  "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
+mkdir -p "${LUSTRE_VLLM_CACHE}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
 
 # =============================================================================
 # Code snapshot
@@ -330,9 +326,8 @@ RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
 UV_HTTP_TIMEOUT=10 \
 VLLM_USE_FLASHINFER_MOE_FP8=1 \
 VLLM_FLASHINFER_MOE_BACKEND=latency \
-FLASHINFER_CUBIN_DIR=${FLASHINFER_CUBIN_CACHE} \
-FLASHINFER_WORKSPACE_BASE=${FLASHINFER_WS_BASE} \
 NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
+NRL_WG_USE_RAY_REF=1 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \

@@ -182,6 +182,7 @@ policy:
 
     # Compute
     apply_rope_fusion: true
+    use_fused_weighted_squared_relu: true
     bias_activation_fusion: false
     defer_fp32_logits: true
 
@@ -274,6 +275,7 @@ policy:
     logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
     algorithm: "modified_first_fit_decreasing"
     sequence_length_round: 64
+    fuse_loss: true
 
   make_sequence_length_divisible_by: ${policy.megatron_cfg.tensor_model_parallel_size}
   max_grad_norm: 1.0

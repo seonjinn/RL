@@ -478,6 +478,7 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
     # Fusion settings
     model_cfg.apply_rope_fusion = config["megatron_cfg"]["apply_rope_fusion"]
     model_cfg.bias_activation_fusion = config["megatron_cfg"]["bias_activation_fusion"]
+    model_cfg.use_fused_weighted_squared_relu = config["megatron_cfg"].get("use_fused_weighted_squared_relu", False)
 
     # FP8 configuration
     fp8_cfg = config["megatron_cfg"].get("fp8_cfg", None)
