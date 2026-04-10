@@ -22,6 +22,8 @@ policy:
     - mamba
     cuda_graph_warmup_steps: 3
     cuda_graph_packed_seq: true
+    cuda_graph_buckets:
+    - 4096
     optimizer:
       lr: 5.0e-07
       min_lr: 5.0e-08
