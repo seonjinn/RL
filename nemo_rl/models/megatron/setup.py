@@ -552,6 +552,9 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.cuda_graph_max_packed_seqs = config["megatron_cfg"][
             "cuda_graph_max_packed_seqs"
         ]
+    if config["megatron_cfg"].get("cuda_graph_impl") == "transformer_engine":
+        # TE-based CUDA graphs require TE's RNG tracker to be active.
+        model_cfg.use_te_rng_tracker = True
 
 
 def _validate_optimizer_config(config: PolicyConfig) -> None:
