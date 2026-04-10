@@ -442,6 +442,16 @@ def _pack_sequences_for_megatron(
         seq_lens = cu_seqlens[1:] - cu_seqlens[:-1]
         max_seqlen = seq_lens.max().item()
 
+    # When padding to a fixed target length (CUDA graph bucket or PP alignment),
+    # max_seqlen_q/kv in PackedSeqParams must equal pad_packed_seq_to so that
+    # rotary_pos_emb is computed at the same sequence length used during graph
+    # capture.  Without this, get_rotary_seq_len(packed_seq_params) returns the
+    # actual per-micro-batch max individual sequence length, which may be shorter
+    # than the bucket, causing a shape mismatch when copying into the CUDA graph's
+    # static input surface.
+    if pad_packed_seq_to is not None:
+        max_seqlen = pad_packed_seq_to
+
     # Concatenate all valid tokens
     # If using individual padding, we need to pad individual sequences
     # CP will always need padding (of at least cp_size * 2)
