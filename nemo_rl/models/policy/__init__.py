@@ -251,6 +251,26 @@ class MegatronConfig(TypedDict):
     linear_ce_fusion_chunk_size: NotRequired[int]
     # When mtp_num_layers=0, Multi-Token Prediction is disabled.
     mtp_num_layers: NotRequired[int]
+    # TE CUDA graph for training with packed sequences (requires patched Megatron-LM).
+    # cuda_graph_impl must be set to "transformer_engine" to enable.
+    cuda_graph_impl: NotRequired[str]
+    # Which layer types to capture: "attn", "mamba", or "[attn,mamba]" for hybrid models.
+    cuda_graph_scope: NotRequired[str]
+    # Number of warmup steps before capturing graphs.
+    cuda_graph_warmup_steps: NotRequired[int]
+    # Enable packed-sequence CUDA graph support (pads each micro-batch to a fixed size).
+    cuda_graph_packed_seq: NotRequired[bool]
+    # Maximum number of packed sequences per micro-batch (for static buffer sizing).
+    cuda_graph_max_packed_seqs: NotRequired[int]
+    # Sequence length buckets for CUDA graph replay. Each entry is a target packed length;
+    # the actual packed length is rounded up to the nearest bucket. Include
+    # max_total_sequence_length as the largest bucket. When unset, always pads to the
+    # maximum packed length in the batch (single graph, captured once).
+    cuda_graph_buckets: NotRequired[list[int]]
+    # Minimum token fill ratio (actual_tokens / bucket_size) required to use CUDA graph
+    # replay. Steps below the threshold fall back to regular execution. 0.0 disables the
+    # threshold (always use CG). Requires cuda_graph_buckets to be set.
+    cuda_graph_min_fill_ratio: NotRequired[float]
 
 
 class DraftConfigDisabled(TypedDict):
