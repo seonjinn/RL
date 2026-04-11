@@ -271,6 +271,9 @@ class MegatronConfig(TypedDict):
     # replay. Steps below the threshold fall back to regular execution. 0.0 disables the
     # threshold (always use CG). Requires cuda_graph_buckets to be set.
     cuda_graph_min_fill_ratio: NotRequired[float]
+    # If False, skip Inf/NaN gradient detection during DDP grad sync (default True).
+    # Set to False only when debugging numerical stability issues.
+    check_for_nan_in_grad: NotRequired[bool]
 
 
 class DraftConfigDisabled(TypedDict):
