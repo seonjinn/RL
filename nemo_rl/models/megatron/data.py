@@ -570,10 +570,11 @@ def _select_cuda_graph_bucket(
         (caller should fall back to regular execution without CUDA graph replay).
     """
     sorted_buckets = sorted(buckets)
-    # Smallest bucket that fits the actual length; clamp to largest if none fits.
-    bucket = next(
-        (b for b in sorted_buckets if b >= actual_seq_len), sorted_buckets[-1]
-    )
+    # Smallest bucket that fits the actual length; None if actual exceeds all buckets.
+    bucket = next((b for b in sorted_buckets if b >= actual_seq_len), None)
+    if bucket is None:
+        # actual > max(buckets): cannot pad down, must fall back to eager.
+        return None
     if min_fill_ratio > 0.0 and actual_seq_len / bucket < min_fill_ratio:
         return None
     return bucket

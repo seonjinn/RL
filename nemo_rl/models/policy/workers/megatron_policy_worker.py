@@ -226,76 +226,185 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         self._held_gather_buffer = None
 
         # CUDA graph training state (TE-based per-layer capture)
-        self._cuda_graph_helper = None
+        self._cuda_graph_helper = None  # TECudaGraphHelper for single-bucket mode
         self._cuda_graph_train_steps = 0
-        self._cuda_graph_captured_seq_length = None
+        self._cuda_graph_captured_seq_length: Optional[int] = None  # single-bucket
+        self._cuda_graph_bucket_helpers: dict[
+            int, Any
+        ] = {}  # {seq_len: helper} multi-bucket
+        self._cuda_graph_bucket_graphs: dict[
+            int, dict
+        ] = {}  # {seq_len: {mod: [graphs]}}
+        self._cuda_graph_active_bucket: Optional[int] = None
+        self._cuda_graph_saved_graphs: dict = {}  # saved refs while hooks are disabled
+
+    # ------------------------------------------------------------------
+    # CUDA graph lifecycle helpers
+    # ------------------------------------------------------------------
+
+    def _get_cg_modules(self) -> list:
+        """Return all model submodules that carry a cuda_graphs attribute."""
+        return [m for m in self.model.modules() if hasattr(m, "cuda_graphs")]
+
+    def _clear_all_cuda_graphs(self) -> None:
+        """Clear the cuda_graphs list on every CG-eligible module."""
+        for m in self._get_cg_modules():
+            m.cuda_graphs = []
+
+    def _save_bucket_graphs(self, bucket: int) -> None:
+        """Snapshot per-module graph references for the given bucket."""
+        self._cuda_graph_bucket_graphs[bucket] = {
+            m: list(m.cuda_graphs) for m in self._get_cg_modules() if m.cuda_graphs
+        }
+
+    def _activate_bucket(self, bucket: int) -> None:
+        """Swap in the graph set for *bucket* and clear any saved-fallback state."""
+        if (
+            self._cuda_graph_active_bucket == bucket
+            and not self._cuda_graph_saved_graphs
+        ):
+            return  # Already active with hooks enabled — no-op.
+        self._clear_all_cuda_graphs()
+        for m, graphs in self._cuda_graph_bucket_graphs[bucket].items():
+            m.cuda_graphs = list(graphs)
+        self._cuda_graph_active_bucket = bucket
+        self._cuda_graph_saved_graphs = {}
+
+    def _disable_cuda_graph_hooks(self) -> None:
+        """Save module.cuda_graphs refs and clear them so TE runs eagerly."""
+        if self._cuda_graph_saved_graphs:
+            return  # Already disabled.
+        for m in self._get_cg_modules():
+            if m.cuda_graphs:
+                self._cuda_graph_saved_graphs[m] = list(m.cuda_graphs)
+                m.cuda_graphs = []
+
+    def _restore_cuda_graph_hooks(self) -> None:
+        """Restore module.cuda_graphs from saved state so CG replay resumes."""
+        if not self._cuda_graph_saved_graphs:
+            return  # Nothing to restore.
+        for m, graphs in self._cuda_graph_saved_graphs.items():
+            m.cuda_graphs = list(graphs)
+        self._cuda_graph_saved_graphs = {}
+
+    def _capture_all_buckets(self, buckets: list[int], micro_batch_size: int) -> None:
+        """Capture a CUDA graph set for each bucket in sequence.
+
+        Each bucket uses a fresh TECudaGraphHelper. After capture the
+        per-module graph references are saved into _cuda_graph_bucket_graphs
+        and the module lists are cleared before capturing the next bucket.
+        The helper objects are retained in _cuda_graph_bucket_helpers to
+        keep the underlying graph memory alive.
+        """
+        from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
+
+        model_cfg = self.megatron_cfg.model
+        for bucket in buckets:
+            self._clear_all_cuda_graphs()
+            helper = TECudaGraphHelper(
+                model=[self.model],
+                config=model_cfg,
+                seq_length=bucket,
+                micro_batch_size=micro_batch_size,
+                optimizers=[self.optimizer],
+            )
+            if self.should_disable_forward_pre_hook:
+                self.disable_forward_pre_hook(param_sync=False)
+            helper.create_cudagraphs()
+            if self.should_disable_forward_pre_hook:
+                self.enable_forward_pre_hook()
+                helper.cuda_graph_set_manual_hooks()
+            self._save_bucket_graphs(bucket)
+            self._cuda_graph_bucket_helpers[bucket] = helper
+
+    # ------------------------------------------------------------------
 
     def _maybe_capture_cuda_graphs(
         self, seq_length: int, micro_batch_size: int
     ) -> None:
-        """Lazily create TECudaGraphHelper and capture graphs after warmup.
+        """Manage CUDA graph capture and dynamic fallback.
 
-        Called once per train() invocation (on the first global batch).
+        Called once per train() invocation on the first global batch.
 
-        Design: "capture once at the configured seq_length, then replay"
-        - Warmup for N steps (cuda_graph_warmup_steps), then capture at the first
-          eligible seq_length (must be a value in cuda_graph_buckets).
-        - After capture, steps with the same seq_length replay the graph (fast).
-        - If seq_length differs from the captured size, delete the helper so TE
-          hooks are removed and fall back to regular execution. This should not
-          happen with a single-bucket config because data.py always pads to the
-          one bucket value.
-        - If cuda_graph_buckets is configured, data.py signals a fallback step
-          by padding to the raw packed length (not a bucket value). The check
-          below returns early for such steps without touching the helper.
+        Design: "capture once (per bucket), never delete, dynamic fallback."
 
-        Only single-bucket configs (len(cuda_graph_buckets)==1) are supported.
-        Multi-bucket requires capturing a separate graph per bucket, which is
-        not yet implemented.
+        Single-bucket mode (cuda_graph_buckets not configured):
+          Warmup for N steps, then capture at the first post-warmup
+          seq_length X and auto-register it as the single bucket
+          (cuda_graph_buckets=[X], cuda_graph_min_fill_ratio=0.7 default).
+          Future steps where data.py pads to X replay the graph.
+          Fallback steps (fill_ratio < threshold or actual > X) call
+          _disable_cuda_graph_hooks() so TE runs eagerly; the next
+          matching step calls _restore_cuda_graph_hooks().
+
+        Multi-bucket mode (cuda_graph_buckets=[B1, B2, ...]):
+          Warmup for N steps, then on the first eligible post-warmup step
+          capture all buckets via _capture_all_buckets(). At every
+          subsequent step, _activate_bucket(selected_bucket) swaps in the
+          matching per-module graph list. Fallback steps (seq_length not in
+          any bucket) call _disable_cuda_graph_hooks() for eager execution.
+
+        No graphs are ever deleted. The disable/restore mechanism
+        temporarily clears module.cuda_graphs so that TE's internal
+        _should_call_te_cudagraph() returns False (eager path).
         """
         model_cfg = self.megatron_cfg.model
         if getattr(model_cfg, "cuda_graph_impl", "none") != "transformer_engine":
             return
 
-        # --- min_fill_ratio fallback (bucket mode, packed-seq only) ---
-        # When cuda_graph_packed_seq=True, data.py pads to an exact bucket value
-        # for CG steps and to the raw packed length for fallback steps (fill ratio
-        # too low). The check below filters out fallback steps so the helper and
-        # warmup counter are not disturbed.
-        # For cuda_graph_packed_seq=False, padded_seq_length is always seq_dim_size
-        # (max_total_sequence_length) — there are no fallback steps and the bucket
-        # guard must not fire.
         cuda_graph_buckets = self.cfg["megatron_cfg"].get("cuda_graph_buckets", None)
         cuda_graph_packed_seq = self.cfg["megatron_cfg"].get(
             "cuda_graph_packed_seq", False
         )
-        if (
-            cuda_graph_buckets
-            and cuda_graph_packed_seq
-            and seq_length not in set(cuda_graph_buckets)
-        ):
+        warmup_steps = getattr(model_cfg, "cuda_graph_warmup_steps", 3)
+
+        # --- Bucket guard: filter fallback steps ---
+        # When cuda_graph_packed_seq=True, data.py pads to an exact bucket
+        # value for CG steps and to the raw packed length for fallback steps
+        # (fill ratio too low or actual > max bucket). If seq_length is not a
+        # recognised bucket value, treat this as a fallback step.
+        # For cuda_graph_packed_seq=False seq_length is always seq_dim_size
+        # (max_total_sequence_length) — no fallback steps, guard must not fire.
+        if cuda_graph_buckets and cuda_graph_packed_seq:
+            if seq_length not in set(cuda_graph_buckets):
+                # Disable CG hooks so TE runs eagerly on this step.
+                if (
+                    self._cuda_graph_bucket_graphs
+                    or self._cuda_graph_helper is not None
+                ):
+                    self._disable_cuda_graph_hooks()
+                return
+
+        # --- Warmup: count eligible (non-fallback) steps ---
+        self._cuda_graph_train_steps += 1
+        if self._cuda_graph_train_steps <= warmup_steps:
             return
 
+        # --- Post-warmup: use captured graphs or capture now ---
+
+        # Multi-bucket: graphs already captured → activate matching bucket.
+        if self._cuda_graph_bucket_graphs:
+            self._activate_bucket(seq_length)
+            return
+
+        # Single-bucket: graph already captured → restore or disable hooks.
+        if self._cuda_graph_helper is not None:
+            if seq_length == self._cuda_graph_captured_seq_length:
+                if self._cuda_graph_saved_graphs:
+                    self._restore_cuda_graph_hooks()
+            else:
+                self._disable_cuda_graph_hooks()
+            return
+
+        # First post-warmup eligible step: capture.
         from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
 
-        # --- Seq length mismatch: fallback to eager ---
-        # The graph was captured at a different seq_length. Remove TE hooks and
-        # fall back to regular execution for this step. The warmup counter is
-        # preserved so the graph can be restored on the next matching step.
-        # With a single-bucket config this should never fire, because data.py
-        # always pads to the one bucket value.
-        if (
-            self._cuda_graph_helper is not None
-            and seq_length != self._cuda_graph_captured_seq_length
-        ):
-            if self._cuda_graph_helper.graphs_created():
-                self._cuda_graph_helper.delete_cuda_graphs()
-            self._cuda_graph_helper = None
-            # _cuda_graph_train_steps intentionally NOT reset
-            return
-
-        # Create helper on first call (or after a bucket switch)
-        if self._cuda_graph_helper is None:
+        if cuda_graph_buckets:
+            # Multi-bucket mode: capture all configured buckets at once.
+            self._capture_all_buckets(sorted(cuda_graph_buckets), micro_batch_size)
+            self._activate_bucket(seq_length)
+        else:
+            # Single-bucket mode: capture at this step's seq_length.
             self._cuda_graph_helper = TECudaGraphHelper(
                 model=[self.model],
                 config=model_cfg,
@@ -303,21 +412,18 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 micro_batch_size=micro_batch_size,
                 optimizers=[self.optimizer],
             )
-            self._cuda_graph_captured_seq_length = seq_length
-
-        # Capture graphs after warmup
-        self._cuda_graph_train_steps += 1
-        warmup_steps = getattr(model_cfg, "cuda_graph_warmup_steps", 3)
-        if (
-            not self._cuda_graph_helper.graphs_created()
-            and self._cuda_graph_train_steps > warmup_steps
-        ):
             if self.should_disable_forward_pre_hook:
                 self.disable_forward_pre_hook(param_sync=False)
             self._cuda_graph_helper.create_cudagraphs()
             if self.should_disable_forward_pre_hook:
                 self.enable_forward_pre_hook()
                 self._cuda_graph_helper.cuda_graph_set_manual_hooks()
+            self._cuda_graph_captured_seq_length = seq_length
+            # Auto-register: update cfg so data.py pads to this bucket next step.
+            if cuda_graph_packed_seq:
+                self.cfg["megatron_cfg"]["cuda_graph_buckets"] = [seq_length]
+                if "cuda_graph_min_fill_ratio" not in self.cfg["megatron_cfg"]:
+                    self.cfg["megatron_cfg"]["cuda_graph_min_fill_ratio"] = 0.7
 
     def enable_forward_pre_hook(self):
         assert isinstance(self.model, DistributedDataParallel)
