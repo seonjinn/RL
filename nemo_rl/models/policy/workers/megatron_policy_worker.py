@@ -237,19 +237,21 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
         Called once per train() invocation (on the first global batch).
 
-        Design: "capture once, then replay or fallback"
+        Design: "capture once at the configured seq_length, then replay"
         - Warmup for N steps (cuda_graph_warmup_steps), then capture at the first
-          eligible seq_length.
-        - After capture, if seq_length matches the captured size: replay (fast).
-        - If seq_length > captured size: re-capture at the new (larger) size.
-          The warmup counter is NOT reset, so re-capture happens immediately.
-        - If seq_length < captured size (downward bucket switch): delete the
-          helper so TE hooks are removed, then fall back to regular execution
-          for this step. The warmup counter is NOT reset, so on the next step
-          with the larger seq_length the graph is re-captured immediately.
+          eligible seq_length (must be a value in cuda_graph_buckets).
+        - After capture, steps with the same seq_length replay the graph (fast).
+        - If seq_length differs from the captured size, delete the helper so TE
+          hooks are removed and fall back to regular execution. This should not
+          happen with a single-bucket config because data.py always pads to the
+          one bucket value.
         - If cuda_graph_buckets is configured, data.py signals a fallback step
           by padding to the raw packed length (not a bucket value). The check
           below returns early for such steps without touching the helper.
+
+        Only single-bucket configs (len(cuda_graph_buckets)==1) are supported.
+        Multi-bucket requires capturing a separate graph per bucket, which is
+        not yet implemented.
         """
         model_cfg = self.megatron_cfg.model
         if getattr(model_cfg, "cuda_graph_impl", "none") != "transformer_engine":
@@ -276,25 +278,12 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
         from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
 
-        # --- Downward bucket switch: fallback without re-capture ---
-        # When the captured graph exists and seq_length decreased (smaller bucket),
-        # the existing graph cannot be replayed (tensor shapes differ). Delete the
-        # helper to remove TE hooks and fall back to regular execution.
-        # The warmup counter is preserved so the graph is re-captured immediately
-        # (without another warmup period) when the larger seq_length returns.
-        if (
-            self._cuda_graph_helper is not None
-            and self._cuda_graph_helper.graphs_created()
-            and seq_length < self._cuda_graph_captured_seq_length
-        ):
-            self._cuda_graph_helper.delete_cuda_graphs()
-            self._cuda_graph_helper = None
-            # _cuda_graph_train_steps intentionally NOT reset
-            return
-
-        # --- Upward bucket switch: re-capture at the new larger size ---
-        # The existing graph (if any) is too small; delete it and create a new one.
-        # The warmup counter is NOT reset so the new graph is captured immediately.
+        # --- Seq length mismatch: fallback to eager ---
+        # The graph was captured at a different seq_length. Remove TE hooks and
+        # fall back to regular execution for this step. The warmup counter is
+        # preserved so the graph can be restored on the next matching step.
+        # With a single-bucket config this should never fire, because data.py
+        # always pads to the one bucket value.
         if (
             self._cuda_graph_helper is not None
             and seq_length != self._cuda_graph_captured_seq_length
@@ -303,6 +292,7 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 self._cuda_graph_helper.delete_cuda_graphs()
             self._cuda_graph_helper = None
             # _cuda_graph_train_steps intentionally NOT reset
+            return
 
         # Create helper on first call (or after a bucket switch)
         if self._cuda_graph_helper is None:

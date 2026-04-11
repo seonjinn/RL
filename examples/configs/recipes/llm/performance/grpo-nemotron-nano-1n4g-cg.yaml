@@ -5,11 +5,16 @@ checkpointing:
   enabled: false
   checkpoint_dir: results/grpo-nemotron-nano-1n4g-cg
 policy:
+  model_name: nvidia/Nemotron-H-8B-Base-8K
+  tokenizer:
+    name: nvidia/Nemotron-H-8B-Base-8K
   train_global_batch_size: 64
   max_total_sequence_length: 4096
-  make_sequence_length_divisible_by: 1
+  make_sequence_length_divisible_by: 2
+  sequence_packing:
+    enabled: false
   megatron_cfg:
-    tensor_model_parallel_size: 1
+    tensor_model_parallel_size: 2
     pipeline_model_parallel_size: 1
     context_parallel_size: 1
     sequence_parallel: false
@@ -21,7 +26,7 @@ policy:
     - attn
     - mamba
     cuda_graph_warmup_steps: 3
-    cuda_graph_packed_seq: true
+    cuda_graph_packed_seq: false
     cuda_graph_buckets:
     - 4096
     optimizer:
@@ -29,7 +34,7 @@ policy:
       min_lr: 5.0e-08
   generation:
     vllm_cfg:
-      tensor_parallel_size: 1
+      tensor_parallel_size: 2
       gpu_memory_utilization: 0.5
 logger:
   log_dir: logs/grpo-nemotron-nano-1n4g-cg
