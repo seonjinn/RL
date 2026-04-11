@@ -254,8 +254,8 @@ class MegatronConfig(TypedDict):
     # TE CUDA graph for training with packed sequences (requires patched Megatron-LM).
     # cuda_graph_impl must be set to "transformer_engine" to enable.
     cuda_graph_impl: NotRequired[str]
-    # Which layer types to capture: "attn", "mamba", or "[attn,mamba]" for hybrid models.
-    cuda_graph_scope: NotRequired[str]
+    # Which layer types to capture: "attn", "mamba", or a list ["attn","mamba"] for hybrid models.
+    cuda_graph_scope: NotRequired[Union[str, list[str]]]
     # Number of warmup steps before capturing graphs.
     cuda_graph_warmup_steps: NotRequired[int]
     # Enable packed-sequence CUDA graph support (pads each micro-batch to a fixed size).

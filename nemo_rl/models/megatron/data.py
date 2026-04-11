@@ -154,6 +154,7 @@ def get_microbatch_iterator(
     pad_factor = 1
     pad_full_seq_to = None
     pad_packed_seq_to_multiple_of = 1
+    pack_seq_dim_size = None
 
     _, seq_dim_size = get_and_validate_seqlen(data)
 
