@@ -72,6 +72,7 @@ from nemo_rl.experience.length_aware_batching import (  # noqa: E402
     sort_batch_by_prompt_length,
 )
 from nemo_rl.experience.rollout_manager import (
+    APRILState,
     OverProvisioningConfig,
     get_over_provisioned_prompt_count,
     select_prompt_groups,
@@ -327,6 +328,14 @@ def setup(
         assert over_prov_ratio > 1.0, (
             f"over_provisioning.ratio must be > 1.0, got {over_prov_ratio}"
         )
+        if over_prov_config.get("use_buffer", False):
+            assert (
+                over_prov_config.get("selection_metric", "reward_std") != "reward_std"
+            ), (
+                "use_buffer=True with selection_metric=reward_std is not supported. "
+                "Buffered prompts have stale rewards from the previous step. "
+                "Use selection_metric=response_length instead."
+            )
         num_prompts_per_step = get_over_provisioned_prompt_count(
             num_prompts_per_step, over_prov_config
         )
@@ -1458,10 +1467,15 @@ def grpo_train(
                     torch.load(greso_ckpt_path, weights_only=False)
                 )
 
-    # APRIL Phase 1: over-provisioning config
+    # APRIL: over-provisioning config + continuation buffer
     over_prov_config: OverProvisioningConfig = master_config["grpo"].get(
         "over_provisioning", {"enabled": False}
     )
+    april_state: APRILState | None = None
+    if over_prov_config.get("enabled", False) and over_prov_config.get(
+        "use_buffer", False
+    ):
+        april_state = APRILState()
 
     # Early stop generation config
     early_stop_config: EarlyStopGenerationConfig = master_config["grpo"].get(
@@ -1791,23 +1805,56 @@ def grpo_train(
                         repeated_batch, master_config["grpo"]["reward_shaping"]
                     )
 
-                # APRIL Phase 1: select best prompt groups from over-provisioned batch
+                # APRIL: select best prompt groups from over-provisioned batch
                 # (must happen before GRESO reward update to avoid profiling discarded prompts)
                 if over_prov_config.get("enabled", False):
                     G = master_config["grpo"]["num_generations_per_prompt"]
                     target_prompts = master_config["grpo"]["num_prompts_per_step"]
-                    repeated_batch, overprov_metrics = select_prompt_groups(
-                        repeated_batch, target_prompts, G, over_prov_config
+
+                    # Phase 2: merge buffered prompts from previous step
+                    num_buffered = 0
+                    if april_state is not None:
+                        repeated_batch, num_buffered = april_state.get_buffered_batch(
+                            repeated_batch, G
+                        )
+
+                    # Save pre-selection batch for buffer storage
+                    pre_selection_batch = (
+                        repeated_batch if april_state is not None else None
                     )
-                    # Recompute input_ids after trimming (was computed from full over-provisioned batch)
+                    total_before_selection = repeated_batch.size // G
+
+                    repeated_batch, overprov_metrics, selected_indices = (
+                        select_prompt_groups(
+                            repeated_batch, target_prompts, G, over_prov_config
+                        )
+                    )
+
+                    # Phase 2: store discarded prompts for next step
+                    if (
+                        april_state is not None
+                        and selected_indices is not None
+                        and pre_selection_batch is not None
+                    ):
+                        april_state.store_discarded(
+                            pre_selection_batch,
+                            selected_indices,
+                            total_before_selection,
+                            G,
+                        )
+                        overprov_metrics.update(april_state.get_metrics())
+
+                    # Recompute input_ids after trimming
                     batched_flat, input_lengths = batched_message_log_to_flat_message(
                         repeated_batch["message_log"],
                         pad_value_dict={"token_ids": tokenizer.pad_token_id},
                     )
                     input_ids = batched_flat["token_ids"]
+                    buf_msg = f", buffered={num_buffered}" if num_buffered > 0 else ""
                     print(
                         f"  APRIL: selected {target_prompts} from "
-                        f"{overprov_metrics.get('over_provisioning/num_provisioned_prompts', 0):.0f} prompts",
+                        f"{overprov_metrics.get('over_provisioning/num_provisioned_prompts', 0):.0f} prompts"
+                        f"{buf_msg}",
                         flush=True,
                     )
 

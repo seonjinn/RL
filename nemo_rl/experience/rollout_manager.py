@@ -46,6 +46,7 @@ class OverProvisioningConfig(TypedDict):
     enabled: bool
     ratio: NotRequired[float]
     selection_metric: NotRequired[str]
+    use_buffer: NotRequired[bool]
 
 
 def get_over_provisioned_prompt_count(
@@ -62,12 +63,119 @@ def get_over_provisioned_prompt_count(
     return int(num_prompts * ratio)
 
 
+def _compute_mean_response_lengths(
+    repeated_batch: BatchedDataDict[DatumSpec],
+    total_prompts: int,
+    num_generations_per_prompt: int,
+) -> torch.Tensor:
+    """Compute mean response length per prompt group from message_log.
+
+    Returns a (total_prompts,) tensor of mean assistant token counts.
+    """
+    message_logs = repeated_batch["message_log"]
+    total_rows = total_prompts * num_generations_per_prompt
+    assert len(message_logs) == total_rows
+
+    per_sample_lengths = torch.zeros(total_rows, dtype=torch.float32)
+    for i, messages in enumerate(message_logs):
+        gen_tokens = sum(
+            len(msg["token_ids"]) for msg in messages if msg["role"] == "assistant"
+        )
+        per_sample_lengths[i] = gen_tokens
+
+    # Mean over generations per prompt
+    return per_sample_lengths.reshape(total_prompts, num_generations_per_prompt).mean(
+        dim=1
+    )
+
+
+class APRILState:
+    """Continuation buffer for APRIL Phase 2.
+
+    Stores discarded prompt groups from the previous step so they can be
+    prepended to the next step's batch (skip generation, go straight to
+    selection).  This amortizes over-provisioning cost across steps.
+    """
+
+    def __init__(self) -> None:
+        self._buffer: BatchedDataDict[DatumSpec] | None = None
+        self._buffer_prompt_count: int = 0
+        self._reused_count: int = 0
+
+    @property
+    def has_buffer(self) -> bool:
+        return self._buffer is not None and self._buffer_prompt_count > 0
+
+    def get_buffered_batch(
+        self,
+        current_batch: BatchedDataDict[DatumSpec],
+        num_generations_per_prompt: int,
+    ) -> tuple[BatchedDataDict[DatumSpec], int]:
+        """Prepend buffered prompt groups to current batch.
+
+        Returns the merged batch and the number of buffered prompts included.
+        """
+        if not self.has_buffer:
+            return current_batch, 0
+
+        assert self._buffer is not None
+        merged = BatchedDataDict.from_batches([self._buffer, current_batch])
+        num_buffered = self._buffer_prompt_count
+        self._reused_count += num_buffered
+        # Clear buffer after use
+        self._buffer = None
+        self._buffer_prompt_count = 0
+        return merged, num_buffered
+
+    def store_discarded(
+        self,
+        repeated_batch: BatchedDataDict[DatumSpec],
+        selected_prompt_indices: torch.Tensor,
+        total_prompts: int,
+        num_generations_per_prompt: int,
+        max_buffer_prompts: int | None = None,
+    ) -> None:
+        """Save non-selected prompt groups for reuse in the next step.
+
+        Args:
+            max_buffer_prompts: Cap on how many prompt groups to buffer.
+                Defaults to num_target_prompts (= selected count) to prevent
+                unbounded growth.  Only the first max_buffer_prompts discarded
+                groups are kept (by their original order, not score).
+        """
+        G = num_generations_per_prompt
+        discarded_mask = torch.ones(total_prompts, dtype=torch.bool)
+        discarded_mask[selected_prompt_indices.cpu()] = False
+        discarded_indices = discarded_mask.nonzero(as_tuple=True)[0]
+
+        if discarded_indices.numel() == 0:
+            self._buffer = None
+            self._buffer_prompt_count = 0
+            return
+
+        # Cap buffer size to prevent unbounded growth
+        if max_buffer_prompts is None:
+            max_buffer_prompts = selected_prompt_indices.numel()
+        if discarded_indices.numel() > max_buffer_prompts:
+            discarded_indices = discarded_indices[:max_buffer_prompts]
+
+        row_indices = (discarded_indices.unsqueeze(1) * G + torch.arange(G)).reshape(-1)
+        self._buffer = repeated_batch.select_indices(row_indices)
+        self._buffer_prompt_count = discarded_indices.numel()
+
+    def get_metrics(self) -> dict[str, float]:
+        return {
+            "april_buffer/buffered_prompts": float(self._buffer_prompt_count),
+            "april_buffer/total_reused": float(self._reused_count),
+        }
+
+
 def select_prompt_groups(
     repeated_batch: BatchedDataDict[DatumSpec],
     num_target_prompts: int,
     num_generations_per_prompt: int,
     config: OverProvisioningConfig,
-) -> tuple[BatchedDataDict[DatumSpec], dict[str, float]]:
+) -> tuple[BatchedDataDict[DatumSpec], dict[str, float], torch.Tensor | None]:
     """Select the best prompt groups from an over-provisioned batch.
 
     The batch is expected to be in repeated-interleave format: consecutive
@@ -81,9 +189,10 @@ def select_prompt_groups(
         config: Over-provisioning configuration.
 
     Returns:
-        A tuple of (selected_batch, metrics) where selected_batch has exactly
-        ``num_target_prompts * num_generations_per_prompt`` rows and metrics
-        contains logging information about the selection.
+        A tuple of (selected_batch, metrics, selected_prompt_indices) where
+        selected_batch has exactly ``num_target_prompts * num_generations_per_prompt``
+        rows, metrics contains logging information, and selected_prompt_indices
+        is the prompt-level indices that were kept (None if no selection needed).
     """
     total_rows = repeated_batch.size
     total_prompts = total_rows // num_generations_per_prompt
@@ -95,7 +204,7 @@ def select_prompt_groups(
     )
 
     if total_prompts == num_target_prompts:
-        return repeated_batch, {}
+        return repeated_batch, {}, None
 
     selection_metric = config.get("selection_metric", "reward_std")
     rewards = repeated_batch["total_reward"]
@@ -107,6 +216,14 @@ def select_prompt_groups(
         # Select prompts with highest reward standard deviation
         # (most informative for advantage estimation)
         scores = prompt_rewards.std(dim=1, correction=0)
+    elif selection_metric == "response_length":
+        # APRIL: select prompts with shortest mean response length.
+        # Short completions = already answered, efficient for training.
+        # Negate so topk picks shortest.
+        response_lens = _compute_mean_response_lengths(
+            repeated_batch, total_prompts, num_generations_per_prompt
+        )
+        scores = -response_lens.to(rewards.device).float()
     elif selection_metric == "random":
         scores = torch.rand(total_prompts, device=rewards.device)
     else:
@@ -151,5 +268,15 @@ def select_prompt_groups(
             if discarded_mask.any()
             else 0.0
         )
+    elif selection_metric == "response_length":
+        # response_lens already computed above for scoring
+        metrics["over_provisioning/selected_mean_response_length"] = (
+            response_lens[selected_prompt_indices.cpu()].mean().item()
+        )
+        metrics["over_provisioning/discarded_mean_response_length"] = (
+            response_lens[discarded_mask.cpu()].mean().item()
+            if discarded_mask.any()
+            else 0.0
+        )
 
-    return selected_batch, metrics
+    return selected_batch, metrics, selected_prompt_indices
