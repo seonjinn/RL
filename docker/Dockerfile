@@ -52,6 +52,7 @@ apt-get install -y --no-install-recommends \
     wget \
     less \
     vim \
+    zstd \
 
 # Nsight
 apt install -y --no-install-recommends gnupg

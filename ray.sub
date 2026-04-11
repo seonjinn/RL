@@ -485,6 +485,7 @@ export LUSTRE_INDUCTOR_CACHE=${LUSTRE_INDUCTOR_CACHE:-}
 export INDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR:-}
 export LUSTRE_TRITON_CACHE=${LUSTRE_TRITON_CACHE:-}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-}
+export CACHE_WRITE_DIR=${CACHE_WRITE_DIR:-}
 export CACHE_SYNC_FREQUENCY=${CACHE_SYNC_FREQUENCY:-0}
 export NRL_CACHE_SYNC_DELAY_SECONDS="${NRL_CACHE_SYNC_DELAY_SECONDS:-2700}"
 ENVEOF
@@ -588,41 +589,92 @@ cache-sync-sidecar() {
     [[ -d "$src" ]] || return
     [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return
     mkdir -p "$dst"
-    rsync -a --ignore-existing --exclude '.tmp_*' --prune-empty-dirs \
-      "$src/" "$dst/" 2>/dev/null \
-      && echo "[CACHE SYNC] ${name}: synced to Lustre" \
-      || echo "[CACHE SYNC] ${name}: sync failed (non-fatal)"
+    local _err _rc=0
+    _err=$(rsync -a --ignore-existing --exclude '.tmp_*' --exclude 'tmp*/' --prune-empty-dirs \
+      "$src/" "$dst/" 2>&1) || _rc=$?
+    if (( _rc == 0 || _rc == 23 || _rc == 24 )); then
+      echo "[CACHE SYNC] ${name}: synced to Lustre"
+    else
+      echo "[CACHE SYNC] ${name}: sync failed (rc=${_rc}: ${_err})"
+    fi
+  }
+
+  _sync_cache_rsync() {
+    local src="$1" dst="$2" name="$3" force="${4:-0}"
+    [[ -z "$src" || -z "$dst" ]] && return 1
+    [[ -d "$src" ]] || return 1
+    [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return 1
+
+    if (( ! force )); then
+      local now elapsed
+      now=$(date +%s)
+      elapsed=$(( now - ${NRL_JOB_START_EPOCH%%.*} ))
+      if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
+        echo "[CACHE SYNC] ${name}: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
+        return 1
+      fi
+      if find "$src" -type f -mmin -5 -print -quit 2>/dev/null | grep -q .; then
+        echo "[CACHE SYNC] ${name}: skipping (files modified in last 5m)"
+        return 1
+      fi
+    fi
+
+    mkdir -p "$dst"
+    local _err _rc=0
+    _err=$(rsync -a --exclude='tmp*' --exclude='.tmp_*' "$src/" "$dst/" 2>&1) || _rc=$?
+    if (( _rc == 0 || _rc == 23 || _rc == 24 )); then
+      echo "[CACHE SYNC] ${name}: rsynced to Lustre ($(du -sh "$dst" 2>/dev/null | cut -f1))"
+      return 0
+    else
+      echo "[CACHE SYNC] ${name}: rsync failed (rc=${_rc}: ${_err})"
+      return 1
+    fi
   }
 
   _sync_vllm_caches() {
     local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
     local lustre_base="${LUSTRE_VLLM_CACHE:-}"
     [[ -z "$base" || -z "$lustre_base" ]] && return
-    local now
-    now=$(date +%s)
-    local elapsed=$(( now - ${NRL_JOB_START_EPOCH%%.*} ))
-    if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
-      echo "[CACHE SYNC] vLLM: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
-      return
-    fi
-    for d in "${base}" "${base}"_*; do
+    for d in "${base}"_*; do
       [[ -d "$d" ]] || continue
-      if find "$d" -type f -mmin -5 -print -quit 2>/dev/null | grep -q .; then
-        echo "[CACHE SYNC] vLLM: skipping $d (files modified in last 5m)"
-        continue
-      fi
       local suffix="${d#"${base}"}"
-      _sync_one "$d" "${lustre_base}${suffix}" "vLLM${suffix}"
+      _sync_one "$d" "${lustre_base}" "vLLM${suffix}"
     done
   }
 
+  _vllm_synced=0
+  _inductor_synced=0
+  _triton_synced=0
+
   _sync_all() {
-    _sync_vllm_caches
-    _sync_one "${INDUCTOR_CACHE_DIR:-}"   "${LUSTRE_INDUCTOR_CACHE:-}" "Inductor"
-    _sync_one "${TRITON_CACHE_DIR:-}"     "${LUSTRE_TRITON_CACHE:-}" "Triton"
+    if (( ! _vllm_synced )); then
+      local _now _elapsed
+      _now=$(date +%s)
+      _elapsed=$(( _now - ${NRL_JOB_START_EPOCH%%.*} ))
+      if (( _elapsed >= ${NRL_CACHE_SYNC_DELAY_SECONDS:-2700} )); then
+        _sync_vllm_caches
+        _vllm_synced=1
+      else
+        echo "[CACHE SYNC] vLLM: skipping (${_elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS:-2700}s)"
+      fi
+    fi
+    if (( ! _inductor_synced )); then
+      _sync_cache_rsync "${INDUCTOR_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/inductor_cache}" "Inductor" \
+        && _inductor_synced=1
+    fi
+    if (( ! _triton_synced )); then
+      _sync_cache_rsync "${TRITON_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/triton_cache}" "Triton" \
+        && _triton_synced=1
+    fi
   }
 
-  trap '_sync_all; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
+  _sync_final() {
+    _sync_vllm_caches
+    _sync_cache_rsync "${INDUCTOR_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/inductor_cache}" "Inductor" 1
+    _sync_cache_rsync "${TRITON_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/triton_cache}" "Triton" 1
+  }
+
+  trap '_sync_final; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
 
   while true; do
     sleep "${CACHE_SYNC_FREQUENCY}"
@@ -823,41 +875,92 @@ cache-sync-sidecar() {
     [[ -d "$src" ]] || return
     [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return
     mkdir -p "$dst"
-    rsync -a --ignore-existing --exclude '.tmp_*' --prune-empty-dirs \
-      "$src/" "$dst/" 2>/dev/null \
-      && echo "[CACHE SYNC] ${name}: synced to Lustre" \
-      || echo "[CACHE SYNC] ${name}: sync failed (non-fatal)"
+    local _err _rc=0
+    _err=$(rsync -a --ignore-existing --exclude '.tmp_*' --exclude 'tmp*/' --prune-empty-dirs \
+      "$src/" "$dst/" 2>&1) || _rc=$?
+    if (( _rc == 0 || _rc == 23 || _rc == 24 )); then
+      echo "[CACHE SYNC] ${name}: synced to Lustre"
+    else
+      echo "[CACHE SYNC] ${name}: sync failed (rc=${_rc}: ${_err})"
+    fi
+  }
+
+  _sync_cache_rsync() {
+    local src="$1" dst="$2" name="$3" force="${4:-0}"
+    [[ -z "$src" || -z "$dst" ]] && return 1
+    [[ -d "$src" ]] || return 1
+    [[ -n "$(ls -A "$src" 2>/dev/null)" ]] || return 1
+
+    if (( ! force )); then
+      local now elapsed
+      now=$(date +%s)
+      elapsed=$(( now - ${NRL_JOB_START_EPOCH%%.*} ))
+      if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
+        echo "[CACHE SYNC] ${name}: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
+        return 1
+      fi
+      if find "$src" -type f -mmin -5 -print -quit 2>/dev/null | grep -q .; then
+        echo "[CACHE SYNC] ${name}: skipping (files modified in last 5m)"
+        return 1
+      fi
+    fi
+
+    mkdir -p "$dst"
+    local _err _rc=0
+    _err=$(rsync -a --exclude='tmp*' --exclude='.tmp_*' "$src/" "$dst/" 2>&1) || _rc=$?
+    if (( _rc == 0 || _rc == 23 || _rc == 24 )); then
+      echo "[CACHE SYNC] ${name}: rsynced to Lustre ($(du -sh "$dst" 2>/dev/null | cut -f1))"
+      return 0
+    else
+      echo "[CACHE SYNC] ${name}: rsync failed (rc=${_rc}: ${_err})"
+      return 1
+    fi
   }
 
   _sync_vllm_caches() {
     local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
     local lustre_base="${LUSTRE_VLLM_CACHE:-}"
     [[ -z "$base" || -z "$lustre_base" ]] && return
-    local now
-    now=$(date +%s)
-    local elapsed=$(( now - ${NRL_JOB_START_EPOCH%%.*} ))
-    if (( elapsed < NRL_CACHE_SYNC_DELAY_SECONDS )); then
-      echo "[CACHE SYNC] vLLM: skipping (${elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS}s)"
-      return
-    fi
-    for d in "${base}" "${base}"_*; do
+    for d in "${base}"_*; do
       [[ -d "$d" ]] || continue
-      if find "$d" -type f -mmin -5 -print -quit 2>/dev/null | grep -q .; then
-        echo "[CACHE SYNC] vLLM: skipping $d (files modified in last 5m)"
-        continue
-      fi
       local suffix="${d#"${base}"}"
-      _sync_one "$d" "${lustre_base}${suffix}" "vLLM${suffix}"
+      _sync_one "$d" "${lustre_base}" "vLLM${suffix}"
     done
   }
 
+  _vllm_synced=0
+  _inductor_synced=0
+  _triton_synced=0
+
   _sync_all() {
-    _sync_vllm_caches
-    _sync_one "${INDUCTOR_CACHE_DIR:-}"   "${LUSTRE_INDUCTOR_CACHE:-}" "Inductor"
-    _sync_one "${TRITON_CACHE_DIR:-}"     "${LUSTRE_TRITON_CACHE:-}" "Triton"
+    if (( ! _vllm_synced )); then
+      local _now _elapsed
+      _now=$(date +%s)
+      _elapsed=$(( _now - ${NRL_JOB_START_EPOCH%%.*} ))
+      if (( _elapsed >= ${NRL_CACHE_SYNC_DELAY_SECONDS:-2700} )); then
+        _sync_vllm_caches
+        _vllm_synced=1
+      else
+        echo "[CACHE SYNC] vLLM: skipping (${_elapsed}s since job start, waiting for ${NRL_CACHE_SYNC_DELAY_SECONDS:-2700}s)"
+      fi
+    fi
+    if (( ! _inductor_synced )); then
+      _sync_cache_rsync "${INDUCTOR_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/inductor_cache}" "Inductor" \
+        && _inductor_synced=1
+    fi
+    if (( ! _triton_synced )); then
+      _sync_cache_rsync "${TRITON_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/triton_cache}" "Triton" \
+        && _triton_synced=1
+    fi
   }
 
-  trap '_sync_all; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
+  _sync_final() {
+    _sync_vllm_caches
+    _sync_cache_rsync "${INDUCTOR_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/inductor_cache}" "Inductor" 1
+    _sync_cache_rsync "${TRITON_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/triton_cache}" "Triton" 1
+  }
+
+  trap '_sync_final; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
 
   while true; do
     sleep "${CACHE_SYNC_FREQUENCY}"

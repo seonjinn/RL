@@ -242,13 +242,15 @@ case "${PRECISION_RECIPE}" in
   mxfp8-rollout|mxfp8-e2e) _vllm_cache_precision="mxfp8" ;;
   *)                        _vllm_cache_precision="bf16"  ;;
 esac
-LUSTRE_VLLM_CACHE="${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}"
+CACHE_READ_DIR="${PERSISTENT_CACHE}/cache_read"
+CACHE_WRITE_DIR="${PERSISTENT_CACHE}/cache_write"
+LUSTRE_VLLM_CACHE="${CACHE_WRITE_DIR}/vllm_compile_cache_${_vllm_cache_precision}"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 # Node-local (fast) — each vLLM instance writes to ${NRL_VLLM_LOCAL_CACHE_DIR}_{seed}.
 # Set as VLLM_CACHE_ROOT so torch.compile hits local disk, not Lustre.
 NRL_VLLM_LOCAL_CACHE_DIR="/tmp/nemo_rl_vllm_cache"
-# Read-only warm seed — SETUP_COMMAND copies one Lustre seed dir here per-node.
+# Read-only warm seed — SETUP_COMMAND extracts the precision-scoped tarball here per-node.
 # The framework rsyncs this into each instance's cache before compilation.
 NRL_VLLM_CACHE_SEED_DIR="/tmp/nemo_rl_vllm_cache_warm"
 INDUCTOR_CACHE_DIR="/tmp/nemo_rl_inductor_cache"
@@ -258,12 +260,132 @@ CACHE_SYNC_FREQUENCY="${CACHE_SYNC_FREQUENCY:-120}"
 export LUSTRE_VLLM_CACHE
 export LUSTRE_INDUCTOR_CACHE
 export LUSTRE_TRITON_CACHE
+export CACHE_READ_DIR
+export CACHE_WRITE_DIR
 export NRL_VLLM_LOCAL_CACHE_DIR
 export INDUCTOR_CACHE_DIR
 export TRITON_CACHE_DIR
 export CACHE_SYNC_FREQUENCY
 
-mkdir -p "${LUSTRE_VLLM_CACHE}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}"
+mkdir -p "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}" \
+  "${CACHE_READ_DIR}" "${CACHE_WRITE_DIR}"
+
+# Read path  : cache_read/*.tar.zst   — compute nodes extract tarballs
+# Write path : cache_write/*/     — sidecar rsyncs individual files
+# Splitting reads (tarball) from writes (directory) avoids Lustre MDT invalidation storms
+# and lets rsync accumulate the union of all roles' kernels across jobs.
+for _name in inductor_cache triton_cache; do
+  _write_dir="${CACHE_WRITE_DIR}/${_name}"
+  _old_dir="${PERSISTENT_CACHE}/${_name}"
+
+  # One-time migration: move legacy dir → cache_write/ (instant rename, same FS)
+  if ([ ! -d "$_write_dir" ] || [ -z "$(ls -A "$_write_dir" 2>/dev/null)" ]) \
+     && [ -d "$_old_dir" ] && [ -n "$(ls -A "$_old_dir" 2>/dev/null)" ]; then
+    [ -d "$_write_dir" ] && rmdir "$_write_dir" 2>/dev/null
+    mv "$_old_dir" "$_write_dir" 2>/dev/null \
+      && echo "[CACHE] Moved legacy ${_name}/ → cache_write/${_name}/" \
+      || echo "[CACHE] Failed to move legacy ${_name}/"
+  fi
+done
+
+# vLLM: migrate the most recent legacy seed dir → cache_write/ (one-time, instant rename)
+_vllm_write="${CACHE_WRITE_DIR}/vllm_compile_cache_${_vllm_cache_precision}"
+_vllm_read_tar="${CACHE_READ_DIR}/vllm_compile_cache_${_vllm_cache_precision}.tar.zst"
+
+if [ ! -d "$_vllm_write" ] || [ -z "$(ls -A "$_vllm_write" 2>/dev/null)" ]; then
+  _best="$(ls -1dt \
+      "${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}" \
+      "${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}_"* \
+    2>/dev/null \
+    | while IFS= read -r d; do
+        [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ] && echo "$d" && break
+      done
+  )" || true
+  if [ -n "$_best" ]; then
+    [ -d "$_vllm_write" ] && rmdir "$_vllm_write" 2>/dev/null || true
+    mv "$_best" "$_vllm_write" 2>/dev/null \
+      && echo "[CACHE] Moved $(basename "$_best") → cache_write/vllm_compile_cache_${_vllm_cache_precision}/" \
+      || echo "[CACHE] Failed to move vLLM cache"
+  fi
+fi
+
+# Purge redundant legacy vLLM cache directories.
+# The old sidecar wrote every vLLM seed as a separate directory on Lustre
+# (e.g. vllm_compile_cache_bf16_2058, _3072, ...). With cache_write/ + tarball,
+# only cache_write/vllm_compile_cache_{precision}/ matters. All seed copies are
+# content-addressed duplicates — safe to remove after migration.
+_purge_count=0
+# Current precision: base + all seed-suffixed (the best was already migrated above)
+for _d in "${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}" \
+          "${PERSISTENT_CACHE}/vllm_compile_cache_${_vllm_cache_precision}_"*; do
+  [ -d "$_d" ] || continue
+  rm -rf "$_d" 2>/dev/null && (( _purge_count++ )) || true
+done
+# Old-format dirs (pre-precision-fix): vllm_compile_cache_<number> with no bf16/mxfp8
+for _d in "${PERSISTENT_CACHE}"/vllm_compile_cache_[0-9]*/; do
+  [ -d "$_d" ] || continue
+  rm -rf "$_d" 2>/dev/null && (( _purge_count++ )) || true
+done
+# Stale base (no precision suffix) and old warm seed dir
+for _d in "${PERSISTENT_CACHE}/vllm_compile_cache" \
+          "${PERSISTENT_CACHE}/vllm_compile_cache_warm"; do
+  [ -d "$_d" ] || continue
+  rm -rf "$_d" 2>/dev/null && (( _purge_count++ )) || true
+done
+if (( _purge_count > 0 )); then
+  echo "[CACHE] Purged ${_purge_count} redundant legacy vLLM cache directories from ${PERSISTENT_CACHE}/"
+fi
+
+# Generate/refresh cache_read/ tarballs via srun (avoids slow tar/find on login node).
+# Triggered when at least one tarball is missing. The srun script also refreshes
+# stale tarballs while the compute node is allocated.
+_missing_tarballs=()
+for _tar_name in inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}"; do
+  _tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
+  _wd="${CACHE_WRITE_DIR}/${_tar_name}"
+  if [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] && [ ! -f "$_tar" ]; then
+    _missing_tarballs+=("$_tar_name")
+  fi
+done
+
+if (( ${#_missing_tarballs[@]} > 0 )); then
+  echo "[CACHE] Missing tarballs: ${_missing_tarballs[*]}"
+  echo "[CACHE] Generating via srun on a compute node..."
+  _promo_script="${CACHE_WRITE_DIR}/.promote_tarballs_$$.sh"
+  cat > "$_promo_script" <<'PROMOSCRIPT'
+#!/bin/bash
+set -euo pipefail
+CACHE_READ_DIR="$1"; CACHE_WRITE_DIR="$2"; shift 2
+for _tar_name in "$@"; do
+  _read_tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
+  _write_dir="${CACHE_WRITE_DIR}/${_tar_name}"
+  [ -d "$_write_dir" ] && [ -n "$(ls -A "$_write_dir" 2>/dev/null)" ] || continue
+  _needs=0
+  if [ ! -f "$_read_tar" ]; then
+    _needs=1
+  elif find "$_write_dir" -type f -newer "$_read_tar" -print -quit 2>/dev/null | grep -q .; then
+    _needs=1
+  fi
+  if (( _needs )); then
+    echo "Creating/refreshing ${_tar_name}.tar.zst..."
+    tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' . \
+      && mv "${_read_tar}.tmp.$$" "$_read_tar" \
+      && echo "Done: $(du -sh "$_read_tar" | cut -f1)" \
+      || { rm -f "${_read_tar}.tmp.$$"; echo "Failed: ${_tar_name}"; }
+  else
+    echo "${_tar_name}: tarball up to date"
+  fi
+done
+PROMOSCRIPT
+  chmod +x "$_promo_script"
+  srun -N1 -n1 -t 00:30:00 -A "${SLURM_ACCOUNT}" -p cpu \
+    -q cpu-normal \
+    bash "$_promo_script" "${CACHE_READ_DIR}" "${CACHE_WRITE_DIR}" \
+      inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}" \
+    && echo "[CACHE] srun tarball generation complete" \
+    || echo "[CACHE] srun tarball generation failed (non-fatal, first job will compile from scratch)"
+  rm -f "$_promo_script"
+fi
 
 VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_aarch64.whl}"
 
@@ -512,56 +634,44 @@ fi
 # skipping non-empty temp dirs). We rm -rf /tmp caches first, then seed fresh from Lustre.
 # =================================================================================================================
 read -r -d '' SETUP_COMMAND <<SETUPEOF || true
+command -v zstd >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq zstd; } 2>/dev/null || true
 echo "[CACHE SEED] Clearing stale /tmp caches and seeding from Lustre..."
-LOCAL_VLLM="${NRL_VLLM_LOCAL_CACHE_DIR}"
 WARM_SEED="${NRL_VLLM_CACHE_SEED_DIR}"
 LOCAL_IND="${INDUCTOR_CACHE_DIR}"
 LOCAL_TRI="${TRITON_CACHE_DIR}"
-L_VLLM="${LUSTRE_VLLM_CACHE}"
-L_IND="${LUSTRE_INDUCTOR_CACHE}"
-L_TRI="${LUSTRE_TRITON_CACHE}"
+CACHE_READ="${CACHE_READ_DIR}"
 
 # vLLM caches are per-instance (VLLM_CACHE_ROOT_{seed}). Clear ALL from prior jobs.
 rm -rf /tmp/nemo_rl_vllm_cache /tmp/nemo_rl_vllm_cache_*
 rm -rf "\$LOCAL_IND" "\$LOCAL_TRI"
 mkdir -p "\$LOCAL_IND" "\$LOCAL_TRI"
 
-# Clean orphaned .tmp_* dirs left by crashed sync-back sidecars from prior jobs.
-find "\$L_IND" -maxdepth 1 -name '.tmp_*' -mmin +30 -exec rm -rf {} + 2>/dev/null || true
-find "\$L_TRI" -maxdepth 1 -name '.tmp_*' -mmin +30 -exec rm -rf {} + 2>/dev/null || true
-
 _seed_cache() {
-  local lustre="\$1" local_dir="\$2" name="\$3"
-  if [ -d "\$lustre" ] && [ "\$(ls -A "\$lustre" 2>/dev/null)" ]; then
-    rsync -a --exclude '.tmp_*' --prune-empty-dirs "\$lustre/" "\$local_dir/" 2>/dev/null \
-      && echo "[CACHE SEED] \$name: seeded from Lustre (\$(du -sh "\$local_dir" 2>/dev/null | cut -f1))" \
-      || echo "[CACHE SEED] \$name: seed failed (non-fatal)"
+  local tarball="\$1" local_dir="\$2" name="\$3"
+  if [ -f "\$tarball" ]; then
+    tar --zstd -xf "\$tarball" -C "\$local_dir" \
+      && echo "[CACHE SEED] \$name: seeded from tarball (\$(du -sh "\$local_dir" 2>/dev/null | cut -f1))" \
+      || echo "[CACHE SEED] \$name: tarball extract failed (non-fatal)"
   else
     echo "[CACHE SEED] \$name: no warm cache on Lustre yet"
   fi
 }
 
-# Seed vLLM compile cache: find the most recently modified seed dir on Lustre.
-# Compile hashes are seed-independent, so any prior seed dir is valid.
-# Picking the newest maximises the chance it matches the current container.
-_found_warm=""
-if [ -n "\$L_VLLM" ]; then
-  _base="\$(basename "\$L_VLLM")"
-  _parent="\$(dirname "\$L_VLLM")"
-  _found_warm="\$(
-    ls -1dt "\${_parent}/\${_base}_"* 2>/dev/null \
-      | while IFS= read -r d; do
-          [ -d "\$d" ] && [ "\$(ls -A "\$d" 2>/dev/null)" ] && echo "\$d" && break
-        done
-  )"
-fi
-if [ -n "\$_found_warm" ]; then
-  rm -rf "\$WARM_SEED"
-  _seed_cache "\$_found_warm" "\$WARM_SEED" "vLLM (from \$(basename "\$_found_warm"))"
+# Seed vLLM compile cache from cache_read/ tarball (one per precision).
+rm -rf "\$WARM_SEED"
+_vllm_tar="\$CACHE_READ/vllm_compile_cache_${_vllm_cache_precision}.tar.zst"
+if [ -f "\$_vllm_tar" ]; then
+  mkdir -p "\$WARM_SEED"
+  tar --zstd -xf "\$_vllm_tar" -C "\$WARM_SEED" \
+    && echo "[CACHE SEED] vLLM (${_vllm_cache_precision}): seeded from tarball (\$(du -sh "\$WARM_SEED" 2>/dev/null | cut -f1))" \
+    || echo "[CACHE SEED] vLLM: tarball extract failed (non-fatal)"
 else
   echo "[CACHE SEED] vLLM: no warm cache on Lustre yet"
-  rm -rf "\$WARM_SEED"
 fi
+
+_seed_cache "\$CACHE_READ/inductor_cache.tar.zst" "\$LOCAL_IND" "Inductor"
+_seed_cache "\$CACHE_READ/triton_cache.tar.zst" "\$LOCAL_TRI" "Triton"
+
 echo "[CACHE SEED] Done."
 SETUPEOF
 export SETUP_COMMAND
