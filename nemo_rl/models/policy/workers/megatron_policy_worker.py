@@ -255,12 +255,23 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         if getattr(model_cfg, "cuda_graph_impl", "none") != "transformer_engine":
             return
 
-        # --- min_fill_ratio fallback (bucket mode) ---
-        # data.py pads to an exact bucket value for CG steps and to the raw
-        # packed length for fallback steps (when fill ratio is too low).
-        # Returning here does NOT disturb the helper or warmup counter.
+        # --- min_fill_ratio fallback (bucket mode, packed-seq only) ---
+        # When cuda_graph_packed_seq=True, data.py pads to an exact bucket value
+        # for CG steps and to the raw packed length for fallback steps (fill ratio
+        # too low). The check below filters out fallback steps so the helper and
+        # warmup counter are not disturbed.
+        # For cuda_graph_packed_seq=False, padded_seq_length is always seq_dim_size
+        # (max_total_sequence_length) — there are no fallback steps and the bucket
+        # guard must not fire.
         cuda_graph_buckets = self.cfg["megatron_cfg"].get("cuda_graph_buckets", None)
-        if cuda_graph_buckets and seq_length not in set(cuda_graph_buckets):
+        cuda_graph_packed_seq = self.cfg["megatron_cfg"].get(
+            "cuda_graph_packed_seq", False
+        )
+        if (
+            cuda_graph_buckets
+            and cuda_graph_packed_seq
+            and seq_length not in set(cuda_graph_buckets)
+        ):
             return
 
         from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
