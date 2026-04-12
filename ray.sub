@@ -481,8 +481,10 @@ export RAY_num_workers_soft_limit=$RAY_num_workers_soft_limit
 export LUSTRE_VLLM_CACHE=${LUSTRE_VLLM_CACHE:-}
 export NRL_VLLM_LOCAL_CACHE_DIR=${NRL_VLLM_LOCAL_CACHE_DIR:-}
 export NRL_VLLM_CACHE_SEED_DIR=${NRL_VLLM_CACHE_SEED_DIR:-}
+export VLLM_CACHE_ROOT=${NRL_VLLM_LOCAL_CACHE_DIR:-}
 export LUSTRE_INDUCTOR_CACHE=${LUSTRE_INDUCTOR_CACHE:-}
 export INDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR:-}
+export TORCHINDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR:-}
 export LUSTRE_TRITON_CACHE=${LUSTRE_TRITON_CACHE:-}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-}
 export CACHE_WRITE_DIR=${CACHE_WRITE_DIR:-}
@@ -635,6 +637,10 @@ cache-sync-sidecar() {
     local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
     local lustre_base="${LUSTRE_VLLM_CACHE:-}"
     [[ -z "$base" || -z "$lustre_base" ]] && return
+    # Bare base dir: Gym's local_vllm_model and other non-NeMo-RL vLLM
+    # processes inherit VLLM_CACHE_ROOT without a _seed suffix.
+    [[ -d "$base" ]] && _sync_one "$base" "${lustre_base}" "vLLM_base"
+    # Per-seed dirs: NeMo RL vllm_worker appends _{seed} to the base.
     for d in "${base}"_*; do
       [[ -d "$d" ]] || continue
       local suffix="${d#"${base}"}"
@@ -921,6 +927,10 @@ cache-sync-sidecar() {
     local base="${NRL_VLLM_LOCAL_CACHE_DIR:-}"
     local lustre_base="${LUSTRE_VLLM_CACHE:-}"
     [[ -z "$base" || -z "$lustre_base" ]] && return
+    # Bare base dir: Gym's local_vllm_model and other non-NeMo-RL vLLM
+    # processes inherit VLLM_CACHE_ROOT without a _seed suffix.
+    [[ -d "$base" ]] && _sync_one "$base" "${lustre_base}" "vLLM_base"
+    # Per-seed dirs: NeMo RL vllm_worker appends _{seed} to the base.
     for d in "${base}"_*; do
       [[ -d "$d" ]] || continue
       local suffix="${d#"${base}"}"

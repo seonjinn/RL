@@ -322,7 +322,7 @@ for _tar_name in "$@"; do
   fi
   if (( _needs )); then
     echo "Creating/refreshing ${_tar_name}.tar.zst..."
-    tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' . \
+    tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' --exclude='*/.*' . \
       && mv "${_read_tar}.tmp.$$" "$_read_tar" \
       && echo "Done: $(du -sh "$_read_tar" | cut -f1)" \
       || { rm -f "${_read_tar}.tmp.$$"; echo "Failed: ${_tar_name}"; }
