@@ -572,11 +572,33 @@ def _select_cuda_graph_bucket(
     sorted_buckets = sorted(buckets)
     # Smallest bucket that fits the actual length; None if actual exceeds all buckets.
     bucket = next((b for b in sorted_buckets if b >= actual_seq_len), None)
+    _rank0 = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
     if bucket is None:
         # actual > max(buckets): cannot pad down, must fall back to eager.
+        if _rank0:
+            print(
+                f"[CG-DEBUG data] actual_packed={actual_seq_len} > max_bucket={sorted_buckets[-1]}"
+                f" → EAGER FALLBACK (overflow)",
+                flush=True,
+            )
         return None
-    if min_fill_ratio > 0.0 and actual_seq_len / bucket < min_fill_ratio:
+    fill = actual_seq_len / bucket
+    if min_fill_ratio > 0.0 and fill < min_fill_ratio:
+        if _rank0:
+            print(
+                f"[CG-DEBUG data] actual_packed={actual_seq_len}, bucket={bucket},"
+                f" fill={fill:.3f} < min_fill={min_fill_ratio:.2f}"
+                f" → EAGER FALLBACK (low fill)",
+                flush=True,
+            )
         return None
+    if _rank0:
+        print(
+            f"[CG-DEBUG data] actual_packed={actual_seq_len}, bucket={bucket},"
+            f" fill={fill:.3f} (padding +{bucket - actual_seq_len} tokens,"
+            f" min_fill={min_fill_ratio:.2f}) → CG STEP",
+            flush=True,
+        )
     return bucket
 
 

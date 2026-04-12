@@ -357,6 +357,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             "cuda_graph_packed_seq", False
         )
         warmup_steps = getattr(model_cfg, "cuda_graph_warmup_steps", 3)
+        _rank0 = (
+            not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+        )
 
         # --- Bucket guard: filter fallback steps ---
         # When cuda_graph_packed_seq=True, data.py pads to an exact bucket
@@ -368,6 +371,12 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         if cuda_graph_buckets and cuda_graph_packed_seq:
             if seq_length not in set(cuda_graph_buckets):
                 # Disable CG hooks so TE runs eagerly on this step.
+                if _rank0:
+                    print(
+                        f"[CG-DEBUG worker] seq={seq_length} not in buckets={cuda_graph_buckets}"
+                        f" → EAGER FALLBACK (bucket guard)",
+                        flush=True,
+                    )
                 if (
                     self._cuda_graph_bucket_graphs
                     or self._cuda_graph_helper is not None
@@ -378,12 +387,24 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         # --- Warmup: count eligible (non-fallback) steps ---
         self._cuda_graph_train_steps += 1
         if self._cuda_graph_train_steps <= warmup_steps:
+            if _rank0:
+                print(
+                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}/{warmup_steps}"
+                    f" (warmup) seq={seq_length} → EAGER (no CG yet)",
+                    flush=True,
+                )
             return
 
         # --- Post-warmup: use captured graphs or capture now ---
 
         # Multi-bucket: graphs already captured → activate matching bucket.
         if self._cuda_graph_bucket_graphs:
+            if _rank0:
+                print(
+                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
+                    f" REPLAY multi-bucket seq={seq_length} → activate_bucket({seq_length})",
+                    flush=True,
+                )
             self._activate_bucket(seq_length)
             return
 
@@ -391,8 +412,28 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         if self._cuda_graph_helper is not None:
             if seq_length == self._cuda_graph_captured_seq_length:
                 if self._cuda_graph_saved_graphs:
+                    if _rank0:
+                        print(
+                            f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
+                            f" REPLAY single-bucket seq={seq_length} (restoring hooks)",
+                            flush=True,
+                        )
                     self._restore_cuda_graph_hooks()
+                else:
+                    if _rank0:
+                        print(
+                            f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
+                            f" REPLAY single-bucket seq={seq_length} (hooks already active)",
+                            flush=True,
+                        )
             else:
+                if _rank0:
+                    print(
+                        f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
+                        f" FALLBACK single-bucket seq={seq_length} ≠ captured={self._cuda_graph_captured_seq_length}"
+                        f" → EAGER FALLBACK",
+                        flush=True,
+                    )
                 self._disable_cuda_graph_hooks()
             return
 
@@ -401,10 +442,22 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
         if cuda_graph_buckets:
             # Multi-bucket mode: capture all configured buckets at once.
+            if _rank0:
+                print(
+                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
+                    f" CAPTURE multi-bucket buckets={sorted(cuda_graph_buckets)} seq={seq_length}",
+                    flush=True,
+                )
             self._capture_all_buckets(sorted(cuda_graph_buckets), micro_batch_size)
             self._activate_bucket(seq_length)
         else:
             # Single-bucket mode: capture at this step's seq_length.
+            if _rank0:
+                print(
+                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
+                    f" CAPTURE single-bucket seq={seq_length}",
+                    flush=True,
+                )
             self._cuda_graph_helper = TECudaGraphHelper(
                 model=[self.model],
                 config=model_cfg,
