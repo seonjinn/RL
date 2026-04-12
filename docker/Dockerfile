@@ -98,7 +98,7 @@ ENV NEMO_RL_VENV_DIR=/opt/ray_venvs
 ENV NEMO_GYM_VENV_DIR=/opt/gym_venvs
 # Config paths (relative to repo root) whose NeMo Gym venvs should be prefetched.
 # Override to prefetch venvs for different configs, or set to empty to skip.
-ARG NEMO_GYM_PREFETCH_CONFIGS="examples/configs/grpo_superv3.yaml"
+ARG NEMO_GYM_PREFETCH_CONFIGS="examples/configs/grpo_ultra_768n4g_bf16.yaml"
 
 
 FROM base AS hermetic
@@ -199,14 +199,20 @@ else
     UV_LINK_MODE=hardlink uv run nemo_rl/utils/prefetch_venvs.py
 fi
 
-# download flashinfer cubin
+# Pre-download TRT-LLM headers (.h files) that aren't included in the
+# flashinfer-cubin wheel. Without this, cubin_loader.py downloads them at
+# runtime from edge.urm.nvidia.com, causing Lustre lock contention at scale.
+# FLASHINFER_CUDA_ARCH_LIST is required because there's no GPU during
+# docker build -- without it, flashinfer can't determine target architectures
+# and the download silently fails.
+export FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a"
 uv run --extra vllm flashinfer download-cubin || true
-# show the flashinfer config
 uv run --extra vllm flashinfer show-config || true
 
-# Gym environment download flashinfer cubin. TODO (guyueh): this relies on success of gym environment building, not guarantee to be successful.
-/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer download-cubin || true
-/opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer show-config || true
+if [[ -x /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer ]]; then
+    FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a" /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer download-cubin || true
+    /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer show-config || true
+fi
 
 # Prune unreachable cache entries
 uv cache clean
