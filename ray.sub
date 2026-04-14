@@ -490,6 +490,8 @@ export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-}
 export CACHE_WRITE_DIR=${CACHE_WRITE_DIR:-}
 export CACHE_SYNC_FREQUENCY=${CACHE_SYNC_FREQUENCY:-0}
 export NRL_CACHE_SYNC_DELAY_SECONDS="${NRL_CACHE_SYNC_DELAY_SECONDS:-2700}"
+export NRL_CACHE_SYNC_JITTER_SECONDS="${NRL_CACHE_SYNC_JITTER_SECONDS:-120}"
+export NRL_CACHE_SYNC_EXIT_JITTER_SECONDS="${NRL_CACHE_SYNC_EXIT_JITTER_SECONDS:-}"
 ENVEOF
 )
 
@@ -675,12 +677,24 @@ cache-sync-sidecar() {
   }
 
   _sync_final() {
+    local _nnodes=${TOTAL_NUM_NODES:-${SLURM_JOB_NUM_NODES:-1}}
+    local _auto_exit_window=$(( _nnodes / 20 ))
+    (( _auto_exit_window < 15 )) && _auto_exit_window=15
+    (( _auto_exit_window > 45 )) && _auto_exit_window=45
+    local _exit_window=${NRL_CACHE_SYNC_EXIT_JITTER_SECONDS:-$_auto_exit_window}
+    local _exit_jitter=$(( RANDOM % _exit_window ))
+    echo "[CACHE SYNC] Exit jitter: ${_exit_jitter}s (window=${_exit_window}s, nodes=${_nnodes})"
+    sleep "$_exit_jitter"
     _sync_vllm_caches
     _sync_cache_rsync "${INDUCTOR_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/inductor_cache}" "Inductor" 1
     _sync_cache_rsync "${TRITON_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/triton_cache}" "Triton" 1
   }
 
   trap '_sync_final; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
+
+  local _jitter=$(( RANDOM % ${NRL_CACHE_SYNC_JITTER_SECONDS:-120} ))
+  echo "[CACHE SYNC] Per-node jitter: ${_jitter}s (spreading initial sync across ${NRL_CACHE_SYNC_JITTER_SECONDS:-120}s window)"
+  sleep "$_jitter"
 
   while true; do
     sleep "${CACHE_SYNC_FREQUENCY}"
@@ -965,12 +979,24 @@ cache-sync-sidecar() {
   }
 
   _sync_final() {
+    local _nnodes=${TOTAL_NUM_NODES:-${SLURM_JOB_NUM_NODES:-1}}
+    local _auto_exit_window=$(( _nnodes / 20 ))
+    (( _auto_exit_window < 15 )) && _auto_exit_window=15
+    (( _auto_exit_window > 45 )) && _auto_exit_window=45
+    local _exit_window=${NRL_CACHE_SYNC_EXIT_JITTER_SECONDS:-$_auto_exit_window}
+    local _exit_jitter=$(( RANDOM % _exit_window ))
+    echo "[CACHE SYNC] Exit jitter: ${_exit_jitter}s (window=${_exit_window}s, nodes=${_nnodes})"
+    sleep "$_exit_jitter"
     _sync_vllm_caches
     _sync_cache_rsync "${INDUCTOR_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/inductor_cache}" "Inductor" 1
     _sync_cache_rsync "${TRITON_CACHE_DIR:-}" "${CACHE_WRITE_DIR:+${CACHE_WRITE_DIR}/triton_cache}" "Triton" 1
   }
 
   trap '_sync_final; echo "[CACHE SYNC] Final sync complete (exit trap)."' EXIT
+
+  local _jitter=$(( RANDOM % ${NRL_CACHE_SYNC_JITTER_SECONDS:-120} ))
+  echo "[CACHE SYNC] Per-node jitter: ${_jitter}s (spreading initial sync across ${NRL_CACHE_SYNC_JITTER_SECONDS:-120}s window)"
+  sleep "$_jitter"
 
   while true; do
     sleep "${CACHE_SYNC_FREQUENCY}"
