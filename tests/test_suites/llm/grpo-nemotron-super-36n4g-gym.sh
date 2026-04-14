@@ -29,8 +29,8 @@ uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
     policy.model_name=$MODEL_NAME \
     data.train_jsonl_fpath=$TRAIN_PATH \
     data.validation_jsonl_fpath=$VAL_PATH \
-    env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.model=$NL2BASH_JUDGE_MODEL_PATH \
-    env.nemo_gym.genrm_model.responses_api_models.vllm_model.model=$GENRM_MODEL_PATH \
+    env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.model=$NL2BASH_JUDGE_MODEL_PATH \
+    env.nemo_gym.genrm_model.responses_api_models.genrm_model.model=$GENRM_MODEL_PATH \
     grpo.max_num_steps=$MAX_STEPS \
     logger.log_dir=$LOG_DIR \
     logger.wandb_enabled=True \

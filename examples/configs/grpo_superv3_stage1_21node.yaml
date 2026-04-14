@@ -25,20 +25,20 @@ env:
   nemo_gym:
     genrm_model:
       responses_api_models:
-        vllm_model:
-          router_dp_size: 2
-          server_args:
+        genrm_model:
+          vllm_serve_kwargs:
             max_num_seqs: 16
+            data_parallel_size: 2
     nl2bash_judge_model:
       responses_api_models:
-        vllm_model:
-          router_dp_size: 2
-          server_args:
+        local_vllm_model:
+          vllm_serve_kwargs:
             max_num_seqs: 16
+            data_parallel_size: 2
     safety_judge_model:
       responses_api_models:
-        vllm_model:
-          server_args:
+        local_vllm_model:
+          vllm_serve_kwargs:
             max_num_seqs: 16
 
 cluster:

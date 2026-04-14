@@ -1158,7 +1158,6 @@ class AsyncTrajectoryCollector:
             # Check if we should use nemo_gym (similar to synchronous GRPO)
             if _should_use_nemo_gym(self.master_config):
                 generation_config = self.master_config["policy"]["generation"]
-                env_cfg = self.master_config.get("env") or {}
                 nemo_gym_rollout_result = run_async_nemo_gym_rollout(
                     policy_generation=self.policy_generation,
                     input_batch=repeated_batch,
@@ -1168,19 +1167,6 @@ class AsyncTrajectoryCollector:
                     generation_config=generation_config,
                     max_rollout_turns=None,
                     greedy=False,
-                    # GenRM compare config
-                    use_genrm_compare=env_cfg.get(
-                        "use_genrm_compare", False
-                    ),
-                    num_generations_per_prompt=self.master_config["grpo"][
-                        "num_generations_per_prompt"
-                    ],
-                    genrm_compare_server_name=env_cfg.get(
-                        "genrm_compare_server_name", "genrm_compare"
-                    ),
-                    genrm_agent_names=env_cfg.get(
-                        "genrm_agent_names", ["genrm_simple_agent"]
-                    ),
                     master_config=self.master_config,
                 )
                 final_batch = nemo_gym_rollout_result.final_batch

@@ -62,14 +62,14 @@ models**. Pass them as Hydra overrides on the launch command:
 ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
 
 # NeMo Gym judge models (repeat for each judge)
-++env.nemo_gym.genrm_model.responses_api_models.vllm_model.server_args.max_num_seqs=16
-++env.nemo_gym.genrm_model.responses_api_models.vllm_model.server_args.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
+++env.nemo_gym.genrm_model.responses_api_models.genrm_model.vllm_serve_kwargs.max_num_seqs=16
+++env.nemo_gym.genrm_model.responses_api_models.genrm_model.vllm_serve_kwargs.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
 
-++env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.server_args.max_num_seqs=16
-++env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.server_args.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
+++env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.vllm_serve_kwargs.max_num_seqs=16
+++env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.vllm_serve_kwargs.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
 
-++env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.server_args.max_num_seqs=16
-++env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.server_args.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
+++env.nemo_gym.safety_judge_model.responses_api_models.local_vllm_model.vllm_serve_kwargs.max_num_seqs=16
+++env.nemo_gym.safety_judge_model.responses_api_models.local_vllm_model.vllm_serve_kwargs.compilation_config.cudagraph_capture_sizes='[1,2,4,8,16]'
 ```
 
 ---

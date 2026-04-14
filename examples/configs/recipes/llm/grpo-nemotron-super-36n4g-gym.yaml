@@ -11,8 +11,9 @@ env:
   nemo_gym:
     nl2bash_judge_model:
       responses_api_models:
-        vllm_model:
-          router_dp_size: 1
+        local_vllm_model:
+          vllm_serve_kwargs:
+            data_parallel_size: 1
 
 cluster:
   gpus_per_node: 4

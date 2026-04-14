@@ -41,6 +41,38 @@ from nemo_rl.utils.venvs import create_local_venv_on_each_node
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
 
+def prepare_vllm_configs_for_prefetch(
+    config: object, placeholder_model: str
+) -> None:
+    """Make NeMo Gym vLLM configs safe for dry-run venv prefetch.
+
+    Some NeMo Gym configs intentionally leave auxiliary vLLM server `model`
+    fields as null and rely on launch scripts to inject real values. Dry-run
+    prefetch does not use those launch-time overrides, but Gym still validates
+    every server config. Fill only missing model values so validation succeeds
+    while preserving any real model paths already present in the config.
+
+    Dry-run prefetch also provides no GPU nodes, so GPU-backed vLLM servers
+    must not attempt to spin up inference workers. Force `spinup_server=false`
+    for prefetch while still allowing the environment build path to run.
+    """
+
+    if isinstance(config, dict):
+        responses_api_models = config.get("responses_api_models")
+        if isinstance(responses_api_models, dict):
+            vllm_model = responses_api_models.get("vllm_model")
+            if isinstance(vllm_model, dict):
+                if vllm_model.get("model") is None:
+                    vllm_model["model"] = placeholder_model
+                vllm_model["spinup_server"] = False
+
+        for value in config.values():
+            prepare_vllm_configs_for_prefetch(value, placeholder_model)
+    elif isinstance(config, list):
+        for item in config:
+            prepare_vllm_configs_for_prefetch(item, placeholder_model)
+
+
 def prefetch_nemo_gym_venvs(config_paths: list[str]) -> None:
     """Prefetch NeMo Gym venvs for each config by doing a dry-run initialization.
 
@@ -72,6 +104,9 @@ def prefetch_nemo_gym_venvs(config_paths: list[str]) -> None:
 
             nemo_gym_dict = dict(config["env"]["nemo_gym"])
             nemo_gym_dict["dry_run"] = True
+            prepare_vllm_configs_for_prefetch(
+                nemo_gym_dict, placeholder_model="dummy-prefetch-model"
+            )
             uv_cache_dir = get_nemo_gym_uv_cache_dir()
             if uv_cache_dir is not None:
                 nemo_gym_dict.setdefault("uv_cache_dir", uv_cache_dir)
@@ -82,8 +117,6 @@ def prefetch_nemo_gym_venvs(config_paths: list[str]) -> None:
             nemo_gym_cfg = NemoGymConfig(
                 model_name="dummy-model",
                 base_urls=["http://localhost:8000"],
-                ray_gpu_nodes=[],
-                ray_gpu_pgs=[],
                 ray_num_gpus_per_node=0,
                 ray_namespace=None,
                 initial_global_config_dict=nemo_gym_dict,

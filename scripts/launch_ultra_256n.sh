@@ -82,14 +82,15 @@ ln -sfn "${RUN_DIR}" "${RESULTS_DIR}/runs/latest"
 # =============================================================================
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-llmservice_nemotron_ultra}"
 PARTITION="${PARTITION:-batch}"
-SLURM_QOS="${SLURM_QOS:-normal}"
+SLURM_QOS="${SLURM_QOS:-nemotron-hero}"
 WALLTIME="${WALLTIME:-4:00:00}"
 EXCLUDE_NODES="${EXCLUDE_NODES:-}"
 
 # =============================================================================
 # Container & mounts
 # =============================================================================
-export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/rl.nightly.sqsh}"
+# TODO(ansubramania): Update container back to the nightly default (rl.nightly.sqsh) once CI builds with the safety_judge_model TP=4 config change
+export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/pipe.48282302.sqsh}"
 MOUNTS="/lustre:/lustre"
 
 # GB200 NVL72: fixed at 4 GPUs/node.
@@ -98,7 +99,7 @@ export CPUS_PER_WORKER="${CPUS_PER_WORKER:-144}"
 
 # =============================================================================
 # HuggingFace configuration
-# =============================================================================
+# ===========================================================================0==
 export HF_HOME
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
@@ -129,7 +130,8 @@ NUM_TRAIN_NODES="${NUM_TRAIN_NODES:-128}"
 NUM_GEN_NODES="${NUM_GEN_NODES:-118}"
 NUM_GYM_NODES="${NUM_GYM_NODES:-10}"
 
-NUM_TOTAL_NODES=$((NUM_TRAIN_NODES + NUM_GEN_NODES + NUM_GYM_NODES))
+NUM_ACTOR_NODES=$((NUM_TRAIN_NODES + NUM_GEN_NODES))
+NUM_TOTAL_NODES=$((NUM_ACTOR_NODES + NUM_GYM_NODES))
 
 # Sanity checks — catch typos before wasting a Slurm allocation.
 if (( NUM_TRAIN_NODES <= 0 )); then
@@ -496,14 +498,14 @@ uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
 --config examples/configs/grpo_ultra_256n4g_${PRECISION_RECIPE}.yaml \
 policy.model_name=${NRL_MODEL_PATH} \
 cluster.gpus_per_node=4 \
-cluster.num_nodes=${NUM_TOTAL_NODES} \
+cluster.num_nodes=${NUM_ACTOR_NODES} \
 policy.generation.colocated.enabled=False \
 policy.generation.colocated.resources.num_nodes=${NUM_GEN_NODES} \
 policy.generation.colocated.resources.gpus_per_node=4 \
-env.nemo_gym.num_gpu_nodes=${NUM_GYM_NODES} \
-env.nemo_gym.genrm_model.responses_api_models.vllm_model.model=${NRL_GENRM_MODEL_PATH} \
-env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
-env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
+env.nemo_gym.genrm_model.responses_api_models.genrm_model.model=${NRL_GENRM_MODEL_PATH} \
+env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
+env.nemo_gym.safety_judge_model.responses_api_models.local_vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
+env.nemo_gym.nemo_gym_log_dir=\${LOG_DIR}/nemo_gym \
 data.train.data_path=${NRL_TRAIN_PATH} \
 data.validation.data_path=${NRL_VAL_PATH} \
 checkpointing.checkpoint_dir=${CHECKPOINT_DIR} \

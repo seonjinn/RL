@@ -343,18 +343,21 @@ env:
 
     safety_judge_model:
       responses_api_models:
-        vllm_model:
+        local_vllm_model:
           entrypoint: app.py
-          base_url: http://127.0.0.1:8001/v1
-          api_key: dummy_key
           model: /scratch/fsw/portfolios/llmservice/users/makeshn/super_v3/model_checkpoints/Nemotron-Content-Safety-Reasoning-4B
           return_token_id_information: false
           uses_reasoning_parser: false
-          spinup_server: true
-          router_dp_size: 8
-          server_args:
+          debug: true
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+
+          vllm_serve_kwargs:
             attention_backend: TRITON_ATTN
             tensor_parallel_size: 1
+            data_parallel_size: 8
+            data_parallel_size_local: 1
+            pipeline_parallel_size: 1
             gpu_memory_utilization: 0.85
             max_model_len: 96000
             model_loader_extra_config:
@@ -371,19 +374,21 @@ env:
 
     nl2bash_judge_model:
       responses_api_models:
-        vllm_model:
+        local_vllm_model:
           entrypoint: app.py
-          base_url: http://127.0.0.1:10000/v1
-          api_key: dummy_key
           model: "/scratch/fsw/portfolios/llmservice/users/jiaqiz/models/Qwen3-235B-A22B-Instruct-2507-FP8"
-          return_token_id_information: False
-          uses_reasoning_parser: False
-          spinup_server: True
-          router_dp_size: 2
-          server_args:
+          return_token_id_information: false
+          uses_reasoning_parser: false
+          debug: true
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+
+          vllm_serve_kwargs:
             tensor_parallel_size: 8
-            data_parallel_size: 1
-            enable_expert_parallel: True
+            data_parallel_size: 2
+            data_parallel_size_local: 1
+            pipeline_parallel_size: 1
+            enable_expert_parallel: true
             enable_auto_tool_choice: true
             tool_call_parser: hermes
             gpu_memory_utilization: 0.85
@@ -447,17 +452,21 @@ env:
 
     genrm_model:
       responses_api_models:
-        vllm_model:
+        genrm_model:
           entrypoint: app.py
-          base_url: http://127.0.0.1:8000/v1
-          api_key: dummy_key
           model: "/scratch/fsw/portfolios/llmservice/users/jiaqiz/models/qwen235b_principle_comparison_genrm_step1230"
-          uses_reasoning_parser: True
-          return_token_id_information: False
-          spinup_server: True
-          router_dp_size: 2
-          server_args:
+          uses_reasoning_parser: true
+          return_token_id_information: false
+          debug: true
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+
+          vllm_serve_kwargs:
+            attention_backend: FLASH_ATTN
             tensor_parallel_size: 8
+            data_parallel_size: 2
+            data_parallel_size_local: 1
+            pipeline_parallel_size: 1
             reasoning_parser: deepseek_r1
             gpu_memory_utilization: 0.85
             max_model_len: 60000

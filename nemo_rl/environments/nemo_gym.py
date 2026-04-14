@@ -57,23 +57,11 @@ def get_nemo_gym_venv_dir() -> Optional[str]:
 class NemoGymConfig(TypedDict):
     model_name: str
     base_urls: List[str]
-    ray_gpu_nodes: List[str]
-    ray_gpu_pgs: List
     ray_num_gpus_per_node: Optional[int]
     ray_namespace: Optional[str]
     initial_global_config_dict: Dict[str, Any]
     invalid_tool_call_patterns: Optional[List[str]]  # Substrings in assistant text content that indicate an invalid tool call (default: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"])
     thinking_tags: Optional[List[str]]  # Thinking tags to check for malformed usage (default: ["<think>", "</think>"])
-
-
-class GenRMCompareConfig(TypedDict, total=False):
-    """Configuration for GenRM batch comparison."""
-
-    enabled: bool
-    agent_names: List[str]
-    server_name: str
-    num_generations_per_prompt: int
-    policy_model_server_name: str
 
 
 @ray.remote(max_restarts=-1, max_task_retries=-1)  # pragma: no cover
@@ -143,15 +131,9 @@ Depending on your data shape, you may want to change these values."""
             initial_global_config_dict["ray_namespace"] = ray_namespace
             print(f"Ray namespace: {ray_namespace}")
 
-        initial_global_config_dict["ray_gpu_nodes"] = self.cfg["ray_gpu_nodes"]
-        # ray_gpu_pgs are Ray PlacementGroup objects — can't go through OmegaConf.
-        # They are passed separately to the scheduling helper via set_gpu_pgs().
         initial_global_config_dict["ray_num_gpus_per_node"] = self.cfg[
             "ray_num_gpus_per_node"
         ]
-        print(
-            f"Ray reserved GPU nodes: {len(initial_global_config_dict['ray_gpu_nodes'])}"
-        )
         print(
             f"Ray num GPUs per node: {initial_global_config_dict['ray_num_gpus_per_node']}"
         )
@@ -178,8 +160,6 @@ Depending on your data shape, you may want to change these values."""
                 initial_global_config_dict=DictConfig(initial_global_config_dict),
                 skip_load_from_cli=True,
             ),
-            ray_gpu_pgs=self.cfg["ray_gpu_pgs"],
-            ray_gpu_nodes=self.cfg["ray_gpu_nodes"],
         )
 
         # Setup for rollout collection
@@ -194,30 +174,9 @@ Depending on your data shape, you may want to change these values."""
         nemo_gym_examples: list[dict],
         tokenizer: PreTrainedTokenizerBase,
         timer_prefix: str,
-        genrm_config: Optional[GenRMCompareConfig] = None,
     ) -> list[dict]:
         timer = Timer(context={"worker": "nemo_gym"})
 
-        # Build comparison strategy if GenRM is enabled
-        comparison_strategy = None
-        if genrm_config and genrm_config.get("enabled", False):
-            from nemo_gym.comparison_strategies import (
-                GenRMStrategy,
-                GenRMStrategyConfig,
-            )
-
-            comparison_strategy = GenRMStrategy(
-                GenRMStrategyConfig(
-                    agent_names=genrm_config.get("agent_names", ["genrm_simple_agent"]),
-                    genrm_compare_server_name=genrm_config.get(
-                        "server_name", "genrm_compare"
-                    ),
-                    policy_model_server_name=genrm_config.get("policy_model_server_name", "policy_model"),
-                    num_generations_per_prompt=genrm_config.get(
-                        "num_generations_per_prompt", 16
-                    ),
-                )
-            )
 
         timer.start("_run_rollouts_total")
         max_attempts, trial = self.rollout_max_attempts_to_avoid_lp_nan, 0
@@ -226,7 +185,6 @@ Depending on your data shape, you may want to change these values."""
             nemo_gym_result_iterator = self.rch.run_examples(
                 examples=nemo_gym_examples,
                 head_server_config=self.head_server_config,
-                comparison_strategy=comparison_strategy,
             )
 
             nemo_rl_rowidxs = []
@@ -285,7 +243,7 @@ Depending on your data shape, you may want to change these values."""
         )
 
         nemo_rl_message_log = []
-        seen_token_ids = torch.tensor([])
+        seen_token_ids = torch.tensor([], dtype=torch.int64)
 
         batch_decode_items = []  # Collect (output_item_dict, prompt_token_ids, generation_token_ids) for batch decode
         for output_item_dict in nemo_gym_result["response"]["output"]:
@@ -297,7 +255,9 @@ Depending on your data shape, you may want to change these values."""
             if "generation_token_ids" not in output_item_dict:
                 continue
 
-            prompt_token_ids_tensor = torch.tensor(output_item_dict["prompt_token_ids"])
+            prompt_token_ids_tensor = torch.tensor(
+                output_item_dict["prompt_token_ids"], dtype=torch.int64
+            )
             n_seen = len(seen_token_ids)
             if n_seen > 0:
                 assert torch.equal(
@@ -311,12 +271,14 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
 
             # Create tensors for new tokens
             new_prompt_token_ids = torch.tensor(
-                output_item_dict["prompt_token_ids"][n_seen:]
+                output_item_dict["prompt_token_ids"][n_seen:], dtype=torch.int64
             )
             generation_token_ids = torch.tensor(
-                output_item_dict["generation_token_ids"]
+                output_item_dict["generation_token_ids"], dtype=torch.int64
             )
-            generation_logprobs = torch.tensor(output_item_dict["generation_log_probs"])
+            generation_logprobs = torch.tensor(
+                output_item_dict["generation_log_probs"], dtype=torch.float32
+            )
 
 
             nemo_rl_message_log.append(

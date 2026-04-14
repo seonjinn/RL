@@ -376,14 +376,9 @@ env:
   should_use_nemo_gym: true
   # true: skip expensive train_data_step*.jsonl (recommended for large Gym runs); false: write full jsonl.
   should_log_nemo_gym_responses: true
-  use_genrm_compare: true
-  genrm_agent_names:
-    - "genrm_simple_agent"
-    - "genrm_simple_agent_reasoning_off"
-  genrm_compare_server_name: "genrm_compare"
   nemo_gym:
+    nemo_gym_log_dir: "logs/nemo_gym"
     skip_venv_if_present: true
-    num_gpu_nodes: 10    # Overridden by launch script
     port_range_low: 5000
     port_range_high: 5999
     invalid_tool_call_patterns:
@@ -420,9 +415,9 @@ env:
       - resources_servers/inverse_if/configs/inverse_if.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/search_pivot_single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
-      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
 
-    # Safety Model: 4B, so TP=1, so fits single GPU
+    # Safety Model: 4B — TP=4 ensures each PG claims a full node,
+    # avoiding GPU fragmentation that can block larger-TP models.
     jailbreak_detection:
       resources_servers:
         jailbreak_detection:
@@ -432,24 +427,27 @@ env:
 
     safety_judge_model:
       responses_api_models:
-        vllm_model:
+        local_vllm_model:
           entrypoint: app.py
-          base_url: http://127.0.0.1:8001/v1
-          api_key: dummy_key
           model: null   # Set by launch script
           return_token_id_information: false
           uses_reasoning_parser: false
-          spinup_server: true
-          router_dp_size: 8
-          server_args:
+          debug: true
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+
+          vllm_serve_kwargs:
             attention_backend: TRITON_ATTN
-            tensor_parallel_size: 1
+            tensor_parallel_size: 4
+            data_parallel_size: 2
+            data_parallel_size_local: 1
+            pipeline_parallel_size: 1
             gpu_memory_utilization: 0.85
             max_model_len: 96000
             max_num_seqs: 16
             model_loader_extra_config:
               enable_multithread_load: true
-              num_threads: 2
+              num_threads: 112
             compilation_config:
               cudagraph_capture_sizes: [1,2,4,8,16]
 
@@ -462,19 +460,21 @@ env:
     # nl2bash / General Judge: TP=4 on GB200 192GB
     nl2bash_judge_model:
       responses_api_models:
-        vllm_model:
+        local_vllm_model:
           entrypoint: app.py
-          base_url: http://127.0.0.1:10000/v1
-          api_key: dummy_key
           model: null   # Set by launch script
           return_token_id_information: false
           uses_reasoning_parser: false
-          spinup_server: true
-          router_dp_size: 4
-          server_args:
+          debug: true
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+
+          vllm_serve_kwargs:
             attention_backend: FLASH_ATTN
             tensor_parallel_size: 4
-            data_parallel_size: 1
+            data_parallel_size: 4
+            data_parallel_size_local: 1
+            pipeline_parallel_size: 1
             enable_expert_parallel: true
             enable_auto_tool_choice: true
             tool_call_parser: hermes
@@ -514,9 +514,10 @@ env:
             max_output_tokens: 8192
 
     # GenRM: TP=4 on GB200 192GB
-    genrm_compare:
+    genrm_compare_resources_server:
       resources_servers:
         genrm_compare:
+          num_rollouts_per_prompt: ${grpo.num_generations_per_prompt}
           genrm_model_server:
             type: responses_api_models
             name: genrm_model
@@ -532,26 +533,29 @@ env:
           reasoning_bonus: 0.5
           answer_bonus: 0.5
           top_percentile: 0.2
-          group_reasoning_length_penalty_coeff: 0.1
-          group_answer_length_penalty_coeff: 0.1
-          group_style_penalty_coeff: 0.0
+          group_reasoning_length_penalty_coeff: 0
+          group_answer_length_penalty_coeff: 0
+          group_style_penalty_coeff: 0.1
           default_score: 3.0
           default_ranking: 3.5
 
     genrm_model:
       responses_api_models:
-        vllm_model:
+        genrm_model:
           entrypoint: app.py
-          base_url: http://127.0.0.1:8000/v1
-          api_key: dummy_key
           model: null   # Set by launch script
           uses_reasoning_parser: true
           return_token_id_information: false
-          spinup_server: true
-          router_dp_size: 4
-          server_args:
+          debug: true
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+
+          vllm_serve_kwargs:
             attention_backend: FLASH_ATTN
             tensor_parallel_size: 4
+            data_parallel_size: 4
+            data_parallel_size_local: 1
+            pipeline_parallel_size: 1
             reasoning_parser: deepseek_r1
             gpu_memory_utilization: 0.85
             max_model_len: 60000

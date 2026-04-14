@@ -136,7 +136,7 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-}"
 
 # ---------- W&B Configuration ----------
 WANDB_PROJ="${WANDB_PROJ:-grpo-ultra-v3-pipeclean}"
-WANDB_NAME="${WANDB_NAME:-ultra-v3-grpo-$(date +%m%d-%H%M)}"
+WANDB_NAME="${WANDB_NAME:-ultra-v3-grpo-pipeclean-$(date +%Y%m%d-%H%M%S)}"
 export WANDB_API_KEY="${WANDB_API_KEY:-}"
 
 # ---------- Training ----------
@@ -497,7 +497,7 @@ echo "Persistent cache root: ${PERSISTENT_CACHE}"
 # a fresh shell and executes $COMMAND via enroot exec inside the container.
 #
 # All static config (parallelism, vLLM kwargs, judge server_args, sequence
-# packing, etc.) lives in grpo_ultra_v3.yaml. Only per-run variables are
+# packing, etc.) lives in grpo_ultra_64n4g_pipeclean.yaml. Only per-run variables are
 # overridden here.
 TRAIN_CMD="cd ${CODE_ROOT} && date ; \
 ${VLLM_ENV_SOURCE}\
@@ -510,7 +510,8 @@ DG_JIT_CACHE_DIR=${NRL_VLLM_LOCAL_CACHE_DIR}/deep_gemm \
 TORCHINDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR} \
 TRITON_CACHE_DIR=${TRITON_CACHE_DIR} \
 UV_CACHE_DIR=${PERSISTENT_CACHE}/uv \
-NEMO_GYM_SKIP_VENV_IF_PRESENT=1 \
+UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME=${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:-} \
+UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD=${UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD:-} \
 RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
 UV_HTTP_TIMEOUT=10 \
 VLLM_USE_PRECOMPILED=1 \
@@ -525,14 +526,13 @@ uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
 --config examples/configs/grpo_ultra_64n4g_pipeclean.yaml \
 policy.model_name=${NRL_MODEL_PATH} \
 cluster.gpus_per_node=4 \
-cluster.num_nodes=${NUM_TOTAL_NODES} \
+cluster.num_nodes=${NUM_ACTOR_NODES} \
 policy.generation.colocated.enabled=${COLOCATED_INFERENCE} \
 policy.generation.colocated.resources.num_nodes=${GENERATION_NUM_NODES} \
 policy.generation.colocated.resources.gpus_per_node=4 \
-env.nemo_gym.num_gpu_nodes=${NUM_JUDGE_NODES} \
-env.nemo_gym.genrm_model.responses_api_models.vllm_model.model=${NRL_GENRM_MODEL_PATH} \
-env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
-env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
+env.nemo_gym.genrm_model.responses_api_models.genrm_model.model=${NRL_GENRM_MODEL_PATH} \
+env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
+env.nemo_gym.safety_judge_model.responses_api_models.local_vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
 data.train.data_path=${NRL_TRAIN_PATH} \
 data.validation.data_path=${NRL_VAL_PATH} \
 checkpointing.checkpoint_dir=${CHECKPOINT_DIR} \
@@ -692,10 +692,6 @@ export SETUP_COMMAND
 #   1. Attach interactively and source/paste it
 #   2. Run non-interactively: COMMAND="$(cat <jobid>-run-cmd.sh)" bash <jobid>-attach.sh
 #   3. Edit and re-run without requeueing
-#
-# A background watcher auto-runs the training command as soon as Ray is ready,
-# so the scheduler never preempts the job for idle GPUs. After training finishes
-# the allocation stays alive — re-attach and iterate without requeueing.
 # =============================================================================
 if [[ "${INTERACTIVE}" == "1" ]]; then
   # Ensure COMMAND is not in the environment. ray.sub does COMMAND=${COMMAND:-}
@@ -710,7 +706,7 @@ if [[ "${INTERACTIVE}" == "1" ]]; then
   echo "  INTERACTIVE MODE"
   echo "================================================================"
   echo "  Submitting ${NUM_TOTAL_NODES}-node allocation (walltime: ${WALLTIME})"
-  echo "  Ray cluster will start; training auto-runs when ready."
+  echo "  Ray cluster will start and idle until you attach."
   echo ""
 
   submission_output=$(sbatch \
@@ -749,57 +745,16 @@ ${TRAIN_CMD}
 CMDEOF
   chmod +x "${CMD_FILE}"
 
-  # -----------------------------------------------------------------
-  # Background watcher — auto-runs training so GPUs are never idle
-  # waiting for a human to type the first command.
-  # Polls for the attach script, then fires the training command.
-  # After training finishes the allocation stays alive (ray.sub idles)
-  # so the user can re-attach and iterate.
-  # -----------------------------------------------------------------
-  WATCHER_LOG="${LAUNCH_DIR}/${JOB_ID}-watcher.log"
-
-  nohup bash -c '
-    set -euo pipefail
-    ATTACH_SCRIPT="'"${ATTACH_SCRIPT}"'"
-    CMD_FILE="'"${CMD_FILE}"'"
-    JOB_ID="'"${JOB_ID}"'"
-
-    echo "[$(date)] Watcher started for job ${JOB_ID}"
-    echo "[$(date)] Polling for attach script: ${ATTACH_SCRIPT}"
-
-    while [[ ! -f "${ATTACH_SCRIPT}" ]]; do
-      state=$(squeue -j "${JOB_ID}" -h -o "%T" 2>/dev/null || true)
-      if [[ -z "${state}" ]]; then
-        echo "[$(date)] Job ${JOB_ID} is no longer in the queue. Exiting watcher."
-        exit 1
-      fi
-      echo "[$(date)] Job state: ${state}"
-      sleep 15
-    done
-
-    echo "[$(date)] Ray cluster ready. Auto-running training command..."
-    COMMAND="$(cat "${CMD_FILE}")" bash "${ATTACH_SCRIPT}"
-    rc=$?
-    echo "[$(date)] Training command finished (exit code: ${rc})."
-    echo "[$(date)] Allocation is still alive — re-attach with:"
-    echo "  bash ${ATTACH_SCRIPT}"
-  ' > "${WATCHER_LOG}" 2>&1 &
-
-  WATCHER_PID=$!
-  disown "${WATCHER_PID}"
-
   echo ""
   echo "  Saved training command to:"
   echo "    ${CMD_FILE}"
   echo ""
-  echo "  Background watcher running (PID: ${WATCHER_PID})"
-  echo "    Log: ${WATCHER_LOG}"
-  echo "    tail -f ${WATCHER_LOG}"
-  echo ""
-  echo "  Training will auto-start when Ray is ready, even if you're away."
-  echo ""
-  echo "  After training finishes, the allocation stays alive. Re-attach with:"
+  echo "  Attach to the cluster when Ray is ready:"
   echo "    bash ${ATTACH_SCRIPT}"
+  echo ""
+  echo "  Then run the training command:"
+  echo "    source ${CMD_FILE}"
+  echo "    # or: COMMAND=\"\$(cat ${CMD_FILE})\" bash ${ATTACH_SCRIPT}"
   echo ""
   echo "  Between runs (clean up GPUs, clear caches, re-run):"
   echo "    python ${PROJECT_ROOT}/reset_ray_cluster.py"
@@ -810,20 +765,17 @@ CMDEOF
   echo "    source ${CMD_FILE}"
   echo ""
   echo "  Cancel: scancel ${JOB_ID}"
-  echo "  Kill watcher: kill ${WATCHER_PID}"
 
   if [[ "${INTERACTIVE_WAIT}" == "1" ]]; then
     echo ""
-    echo "  Also waiting in foreground (Ctrl+C is safe — watcher continues)..."
+    echo "  Waiting in foreground for Ray to be ready (Ctrl+C to stop waiting)..."
     echo ""
 
-    # Foreground poll — purely for UX. The watcher handles the real work.
     prev_state=""
     while [[ ! -f "${ATTACH_SCRIPT}" ]]; do
       state=$(squeue -j "${JOB_ID}" -h -o "%T" 2>/dev/null || true)
       if [[ -z "${state}" ]]; then
         echo "  Job ${JOB_ID} is no longer in the queue. Check: sacct -j ${JOB_ID}"
-        echo "  (Watcher may have already handled this — check ${WATCHER_LOG})"
         exit 1
       fi
       if [[ "${state}" != "${prev_state}" ]]; then
@@ -834,10 +786,8 @@ CMDEOF
     done
 
     echo ""
-    echo "  Ray cluster is ready! Watcher is auto-running the training command."
-    echo "  You can attach to monitor:"
+    echo "  Ray cluster is ready! Attach with:"
     echo "    bash ${ATTACH_SCRIPT}"
-    echo "    tail -f ${WATCHER_LOG}"
     echo ""
   fi
 

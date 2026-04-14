@@ -23,16 +23,10 @@ from typing import Any, NotRequired, Optional, TypedDict, TypeVar, cast
 
 import numpy as np
 import ray
-import ray.util.state
 import torch
 from ray.actor import ActorProxy
-from ray.util.placement_group import (
-    placement_group,
-    remove_placement_group,
-)
 from ray.util.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
-    PlacementGroupSchedulingStrategy,
 )
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoProcessor
@@ -76,7 +70,6 @@ from nemo_rl.distributed.virtual_cluster import (
     NVLINK_DOMAIN_UNKNOWN,
     TOPO_RANK_UNKNOWN,
     ClusterConfig,
-    _get_node_info,
     RayVirtualCluster,
     get_ray_cluster_topology,
     select_segment_nodes,
@@ -433,9 +426,6 @@ def setup(
 
     segment_size = cluster_config.get("segment_size")
 
-    nemo_gym_nodes: list[dict] = []
-    nemo_gym_judge_pgs: list = []
-
     if colocated_inference:
         if total_nodes == 1:
             policy_gpus_per_node = cluster_config["gpus_per_node"] - rm_gpus_per_node
@@ -675,73 +665,6 @@ def setup(
             flush=True,
         )
 
-    # Reserve nemo_gym judge nodes after training and inference clusters are
-    # created (so topology-constrained PGs claim aligned nodes first).
-    if nemo_gym_num_nodes:
-        node_infos: dict[str, dict] = {}
-        ray_nodes = ray.util.state.list_nodes(limit=10000)
-        for node in ray_nodes:
-            assert node.node_ip not in node_infos
-            node_infos[node.node_ip] = {
-                "node_id": node.node_id,
-                "node_ip": node.node_ip,
-            }
-        del ray_nodes
-
-        nemo_gym_judge_pgs = []
-        for nemo_gym_node_idx in range(nemo_gym_num_nodes):
-            helper_bundles = [{"GPU": nemo_gym_num_gpus_per_node, "CPU": 1}]
-            helper_pg = placement_group(
-                bundles=helper_bundles,
-                strategy="STRICT_PACK",
-                name=f"nemo_gym-pnode{nemo_gym_node_idx}",
-            )
-            try:
-                ray.get(helper_pg.ready(), timeout=30)
-            except (TimeoutError, ray.exceptions.GetTimeoutError):
-                try:
-                    remove_placement_group(helper_pg)
-                except Exception:
-                    pass
-                raise TimeoutError(
-                    "Timed out waiting for placement groups to be ready. The cluster may not have enough resources "
-                    "to satisfy the requested configuration, or the resources may be busy with other tasks."
-                )
-            nemo_gym_judge_pgs.append(helper_pg)
-
-        node_info_refs = []
-        for nemo_gym_node_idx in range(nemo_gym_num_nodes):
-            helper_pg = nemo_gym_judge_pgs[nemo_gym_node_idx]
-            node_info_refs.append(
-                _get_node_info.options(
-                    num_gpus=nemo_gym_num_gpus_per_node,
-                    scheduling_strategy=PlacementGroupSchedulingStrategy(
-                        placement_group=helper_pg,
-                        placement_group_capture_child_tasks=True,
-                    ),
-                ).remote()
-            )
-
-        nemo_gym_nodes.extend(ray.get(node_info_refs))
-
-        for nemo_gym_node_idx in range(nemo_gym_num_nodes):
-            node_id = nemo_gym_nodes[nemo_gym_node_idx]["node_id"]
-            node_ip = nemo_gym_nodes[nemo_gym_node_idx]["node_ip"]
-            if not node_id:
-                node_id = node_infos[node_ip]["node_id"]
-                assert node_id
-                nemo_gym_nodes[nemo_gym_node_idx]["node_id"] = node_id
-
-        print(
-            f"  ✓ Ray cluster for NeMo Gym reserved with {nemo_gym_num_nodes} nodes",
-            flush=True,
-        )
-        print(f"DEBUG: grpo setup: nemo_gym_num_nodes = {nemo_gym_num_nodes}", flush=True)
-        print(f"DEBUG: grpo setup: nemo_gym_nodes     = {nemo_gym_nodes}", flush=True)
-        assert len(nemo_gym_nodes) == nemo_gym_num_nodes, (
-            f"expected {nemo_gym_num_nodes} nemo gym nodes, actual: {nemo_gym_nodes}"
-        )
-
     # ==========================
     #   Training and Inference
     # ==========================
@@ -974,8 +897,6 @@ def setup(
                 nemo_gym_cfg = NemoGymConfig(
                     model_name=generation_config["model_name"],
                     base_urls=deferred_vllm.dp_openai_server_base_urls,
-                    ray_gpu_nodes=[node["node_id"] for node in nemo_gym_nodes],
-                    ray_gpu_pgs=nemo_gym_judge_pgs,
                     ray_num_gpus_per_node=nemo_gym_num_gpus_per_node,
                     ray_namespace=ray_namespace,
                     initial_global_config_dict=nemo_gym_dict,
@@ -1932,19 +1853,6 @@ def grpo_train(
                             generation_config=generation_config,
                             max_rollout_turns=None,
                             greedy=False,
-                            # GenRM compare config
-                            use_genrm_compare=master_config["env"].get(
-                                "use_genrm_compare", False
-                            ),
-                            num_generations_per_prompt=master_config["grpo"][
-                                "num_generations_per_prompt"
-                            ],
-                            genrm_compare_server_name=master_config["env"].get(
-                                "genrm_compare_server_name", "genrm_compare"
-                            ),
-                            genrm_agent_names=master_config["env"].get(
-                                "genrm_agent_names", ["genrm_simple_agent"]
-                            ),
                             master_config=master_config
                         )
                         input_ids = nemo_gym_rollout_result.input_ids
@@ -2725,15 +2633,7 @@ def validate(
     with timer.time("total_validation_time"):
         print(f"▶ Starting validation at step {step}...", flush=True)
 
-        # Validate GenRM compare configuration
-        use_genrm_compare = master_config["env"].get("use_genrm_compare", False)
         num_val_gens = master_config["grpo"].get("num_val_generations_per_prompt", 1)
-        if use_genrm_compare and num_val_gens <= 1:
-            raise ValueError(
-                f"GenRM compare requires num_val_generations_per_prompt > 1 for pairwise comparison, "
-                f"but got num_val_generations_per_prompt={num_val_gens}. "
-                f"Set grpo.num_val_generations_per_prompt to at least 2."
-            )
 
         total_rewards = []
         total_lengths = []
@@ -2770,15 +2670,6 @@ def validate(
                     generation_config=generation_config,
                     max_rollout_turns=None,
                     greedy=False,
-                    # GenRM compare config
-                    use_genrm_compare=use_genrm_compare,
-                    num_generations_per_prompt=num_val_gens,
-                    genrm_compare_server_name=master_config["env"].get(
-                        "genrm_compare_server_name", "genrm_compare"
-                    ),
-                    genrm_agent_names=master_config["env"].get(
-                        "genrm_agent_names", ["genrm_simple_agent"]
-                    ),
                     master_config=master_config
                 )
                 val_batch = nemo_gym_rollout_result.final_batch
