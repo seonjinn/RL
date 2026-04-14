@@ -14,6 +14,8 @@
 import os
 import warnings
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Optional, TypedDict, cast
@@ -267,21 +269,35 @@ def setup(
     )
 
 
-def add_ref_logprobs_to_data(dataloader, policy, master_config, is_val=False):
-    dataloader_iter = iter(dataloader)
-    while True:
-        try:
-            batch = next(dataloader_iter)
+def add_ref_logprobs_to_data(dataloader, policy, master_config, is_val=False, timer=None):
+    """Iterate dataloader, compute reference logprobs, and prefetch next batch in background."""
+    micro_batch_size = (
+        master_config["mpo"]["val_micro_batch_size"] * 2
+        if is_val
+        else master_config["policy"]["train_micro_batch_size"] * 2
+    )
+    dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
+    _time = timer.time if timer else lambda label: nullcontext()
 
-            micro_batch_size = (
-                master_config["mpo"]["val_micro_batch_size"] * 2
-                if is_val
-                else master_config["policy"]["train_micro_batch_size"] * 2
-            )
+    dataloader_iter = iter(dataloader)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(next, dataloader_iter)
+        while True:
+            with _time("data_loading"):
+                try:
+                    batch = future.result()
+                except StopIteration:
+                    break
+
+                # Snapshot state AFTER getting current batch but BEFORE
+                # prefetching the next one — the prefetch advances the
+                # dataloader iterator one step ahead, which would cause
+                # checkpoint resume to skip a batch.
+                dataloader._checkpoint_state_dict = dataloader.state_dict()
+                future = executor.submit(next, dataloader_iter)
 
             # when running validation with drop_last=False, we might end up with a partial batch.
             # In this case, we pad the batch to the next multiple of micro_batch_size * dp_size.
-            dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
             if batch.size % (dp_size * micro_batch_size) != 0:
                 assert is_val, (
                     "Partial batches should only happen during validation, but got a partial batch during training."
@@ -289,18 +305,16 @@ def add_ref_logprobs_to_data(dataloader, policy, master_config, is_val=False):
                 batch = maybe_pad_last_batch(batch, dp_size, micro_batch_size)
 
             ## append ref policy logprobs to batch
-            logprobs = policy.get_reference_policy_logprobs(
-                batch,
-                micro_batch_size=micro_batch_size,
-            )["reference_logprobs"]
-            ## want logprobs for batch to correspond to the log probabilities of the next tokens
-            ## so we roll the logprobs to the left by one
-            batch["reference_policy_logprobs"] = torch.roll(logprobs, -1, dims=-1)
+            with _time("reference_logprobs"):
+                logprobs = policy.get_reference_policy_logprobs(
+                    batch,
+                    micro_batch_size=micro_batch_size,
+                )["reference_logprobs"]
+                ## want logprobs for batch to correspond to the log probabilities of the next tokens
+                ## so we roll the logprobs to the left by one
+                batch["reference_policy_logprobs"] = torch.roll(logprobs, -1, dims=-1)
 
             yield batch
-
-        except StopIteration:
-            break
 
 
 # =======================================================
@@ -546,7 +560,12 @@ def mpo_train(
     ):
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
 
+<<<<<<< HEAD
         for batch in add_ref_logprobs_to_data(train_dataloader, policy, master_config):
+=======
+        timer.start("total_step_time")
+        for batch in add_ref_logprobs_to_data(train_dataloader, policy, master_config, timer=timer):
+>>>>>>> cd79820a (Interleave MPO data loading with training)
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(train_dataloader), master_config['mpo']['max_num_steps'])} {'=' * 25}"
             )
@@ -658,7 +677,7 @@ def mpo_train(
                             ),
                         )
                         torch.save(
-                            train_dataloader.state_dict(),
+                            train_dataloader._checkpoint_state_dict,
                             os.path.join(checkpoint_path, "train_dataloader.pt"),
                         )
                         checkpointer.finalize_checkpoint(checkpoint_path)
