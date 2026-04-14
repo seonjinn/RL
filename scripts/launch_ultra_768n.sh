@@ -279,19 +279,21 @@ if (( _purge_count > 0 )); then
 fi
 
 # Generate/refresh cache_read/ tarballs via srun (avoids slow tar/find on login node).
-# Triggered when at least one tarball is missing. The srun script also refreshes
-# stale tarballs while the compute node is allocated.
-_missing_tarballs=()
+# Triggered when at least one tarball is missing OR stale (cache_write has newer files).
+_stale_tarballs=()
 for _tar_name in inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}"; do
   _tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
   _wd="${CACHE_WRITE_DIR}/${_tar_name}"
-  if [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] && [ ! -f "$_tar" ]; then
-    _missing_tarballs+=("$_tar_name")
+  [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] || continue
+  if [ ! -f "$_tar" ]; then
+    _stale_tarballs+=("$_tar_name")
+  elif find "$_wd" -type f -newer "$_tar" -print -quit 2>/dev/null | grep -q .; then
+    _stale_tarballs+=("$_tar_name")
   fi
 done
 
-if (( ${#_missing_tarballs[@]} > 0 )); then
-  echo "[CACHE] Missing tarballs: ${_missing_tarballs[*]}"
+if (( ${#_stale_tarballs[@]} > 0 )); then
+  echo "[CACHE] Missing or stale tarballs: ${_stale_tarballs[*]}"
   echo "[CACHE] Generating via srun on a compute node..."
   _promo_script="${CACHE_WRITE_DIR}/.promote_tarballs_$$.sh"
   cat > "$_promo_script" <<'PROMOSCRIPT'
