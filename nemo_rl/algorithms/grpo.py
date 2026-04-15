@@ -193,8 +193,6 @@ class GRPOConfig(TypedDict):
     seq_logprob_error_threshold: float | None
     penalize_invalid_tool_call: bool  # If True, assign a negative advantage to invalid tool call tokens
     invalid_tool_call_advantage: NotRequired[float]  # Advantage value for invalid tool calls when penalize_invalid_tool_call is True (default: -5.0)
-    penalize_malformed_thinking: bool  # If True, assign a negative advantage to tokens with malformed <think>/</think> tags
-    malformed_thinking_advantage: NotRequired[float]  # Advantage value for malformed thinking when penalize_malformed_thinking is True (default: -5.0)
     # Advantage estimator configuration (grpo or reinforce_plus_plus)
     adv_estimator: NotRequired[AdvEstimatorConfig]
 
@@ -2181,27 +2179,21 @@ def grpo_train(
                     if clip_high is not None:
                         train_data["advantages"] = train_data["advantages"].clamp(max=clip_high)
 
-                    # Apply invalid tool call / malformed thinking penalization per-message.
+                    # Apply invalid tool call penalization per-message.
                     # Only override the specific message's token positions within the
                     # flattened sequence.
                     penalize_invalid_tool_call = master_config["grpo"].get("penalize_invalid_tool_call", False)
-                    penalize_malformed_thinking = master_config["grpo"].get("penalize_malformed_thinking", False)
-                    if penalize_invalid_tool_call or penalize_malformed_thinking:
+                    if penalize_invalid_tool_call:
                         invalid_neg_adv = master_config["grpo"].get("invalid_tool_call_advantage", -5.0)
-                        malformed_neg_adv = master_config["grpo"].get("malformed_thinking_advantage", -5.0)
                         for i, message_log in enumerate(repeated_batch["message_log"]):
                             token_offset = 0
                             for j, message in enumerate(message_log):
                                 msg_len = len(message["token_ids"])
                                 is_assistant = message["role"] == "assistant" and "generation_logprobs" in message
-                                is_invalid = is_assistant and penalize_invalid_tool_call and message.get("is_invalid_tool_call", False)
-                                is_malformed_thinking_msg = is_assistant and penalize_malformed_thinking and message.get("has_malformed_thinking", False)
+                                is_invalid = is_assistant and message.get("is_invalid_tool_call", False)
                                 if is_invalid:
                                     print(f"Setting negative advantage ({invalid_neg_adv}) for invalid tool call in assistant message {i} {j}", flush=True)
                                     train_data["advantages"][i, token_offset:token_offset + msg_len] = invalid_neg_adv
-                                elif is_malformed_thinking_msg:
-                                    print(f"Setting negative advantage ({malformed_neg_adv}) for malformed thinking in assistant message {i} {j}", flush=True)
-                                    train_data["advantages"][i, token_offset:token_offset + msg_len] = malformed_neg_adv
                                 token_offset += msg_len
 
                 memory_tracker.snapshot_start_of_stage("Policy train", dir())
@@ -3423,29 +3415,21 @@ def async_grpo_train(
                     if clip_high is not None:
                         train_data["advantages"] = train_data["advantages"].clamp(max=clip_high)
 
-                    # Apply invalid tool call / malformed thinking penalization per-message.
+                    # Apply invalid tool call penalization per-message.
                     # Only override the specific message's token positions within the
                     # flattened sequence.
                     penalize_invalid_tool_call = master_config["grpo"].get("penalize_invalid_tool_call", False)
-                    penalize_malformed_thinking = master_config["grpo"].get("penalize_malformed_thinking", False)
-                    if penalize_invalid_tool_call or penalize_malformed_thinking:
-                        print(f"Penalize invalid tool call: {penalize_invalid_tool_call}", flush=True)
-                        print(f"Penalize malformed thinking: {penalize_malformed_thinking}", flush=True)
+                    if penalize_invalid_tool_call:
                         invalid_neg_adv = master_config["grpo"].get("invalid_tool_call_advantage", -5.0)
-                        malformed_neg_adv = master_config["grpo"].get("malformed_thinking_advantage", -5.0)
                         for i, message_log in enumerate(repeated_batch["message_log"]):
                             token_offset = 0
                             for j, message in enumerate(message_log):
                                 msg_len = len(message["token_ids"])
                                 is_assistant = message["role"] == "assistant" and "generation_logprobs" in message
-                                is_invalid = is_assistant and penalize_invalid_tool_call and message.get("is_invalid_tool_call", False)
-                                is_malformed_thinking = is_assistant and penalize_malformed_thinking and message.get("has_malformed_thinking", False)
+                                is_invalid = is_assistant and message.get("is_invalid_tool_call", False)
                                 if is_invalid:
                                     print(f"Setting negative advantage ({invalid_neg_adv}) for invalid tool call in assistant message {i} {j}", flush=True)
                                     train_data["advantages"][i, token_offset:token_offset + msg_len] = invalid_neg_adv
-                                elif is_malformed_thinking:
-                                    print(f"Setting negative advantage ({malformed_neg_adv}) for malformed thinking in assistant message {i} {j}", flush=True)
-                                    train_data["advantages"][i, token_offset:token_offset + msg_len] = malformed_neg_adv
                                 token_offset += msg_len
 
                 print("▶ Preparing for training...")

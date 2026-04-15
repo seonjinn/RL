@@ -76,8 +76,6 @@ grpo:
 
   penalize_invalid_tool_call: true
   invalid_tool_call_advantage: -5.0
-  penalize_malformed_thinking: true
-  malformed_thinking_advantage: -5.0
 
   reward_shaping:
     enabled: false
@@ -405,7 +403,7 @@ env:
       - resources_servers/equivalence_llm_judge/configs/equivalence_llm_judge.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/reasoning_gym/configs/reasoning_gym.yaml
-      - resources_servers/terminal_pivot/configs/terminal_pivot.yaml
+      - resources_servers/terminus_judge/configs/terminus_judge_string_only.yaml
       - resources_servers/ns_tools/configs/ns_tools.yaml
       - resources_servers/math_formal_lean/configs/math_formal_lean_multi_turn.yaml
       # swerl_gen disabled: requires Apptainer/Singularity (not available on aarch64)
@@ -451,12 +449,6 @@ env:
               num_threads: 2
             compilation_config:
               cudagraph_capture_sizes: [1,2,4,8,16,32,64]
-
-    terminal_pivot_simple_agent:
-      responses_api_agents:
-        simple_agent:
-          model_server:
-            name: policy_model
 
     # nl2bash / General Judge: TP=4, dp=8 (2× vs 256n for higher throughput)
     nl2bash_judge_model:
@@ -534,9 +526,9 @@ env:
           reasoning_bonus: 0.5
           answer_bonus: 0.5
           top_percentile: 0.2
-          group_reasoning_length_penalty_coeff: 0
-          group_answer_length_penalty_coeff: 0
-          group_style_penalty_coeff: 0.1
+          group_reasoning_length_penalty_coeff: 0.1
+          group_answer_length_penalty_coeff: 0.1
+          group_style_penalty_coeff: 0.0
           default_score: 3.0
           default_ranking: 3.5
 
@@ -623,3 +615,19 @@ effort_levels:
   low_weight: 0.1
   low_penalty: 1
   low_ub: 15000
+
+# =============================================================================
+# Token IDs (model-specific, used by token-based penalties)
+# =============================================================================
+token_ids:
+  eos: 2           # </s>
+  think_open: 12   # <think>
+  think_close: 13  # </think>
+
+# =============================================================================
+# Reward Penalties (set reward to 0 when triggered)
+# =============================================================================
+penalize_duplicated_reasoning: true   # reasoning content == final answer
+penalize_empty_final_answer: true     # last message output has empty content
+penalize_eos_token: true              # eos token appears in generation
+penalize_malformed_think_tag: true     # <think>/<\/think> count != 1 per turn
