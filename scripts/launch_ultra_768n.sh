@@ -451,6 +451,7 @@ NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 NRL_WG_USE_RAY_REF=1 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
+NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-0} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
 --config examples/configs/grpo_ultra_768n4g_${PRECISION_RECIPE}.yaml \
 policy.model_name=${NRL_MODEL_PATH} \

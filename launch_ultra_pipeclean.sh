@@ -522,6 +522,7 @@ NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 NRL_WG_USE_RAY_REF=1 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
+NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-1} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
 --config examples/configs/grpo_ultra_64n4g_pipeclean.yaml \
 policy.model_name=${NRL_MODEL_PATH} \

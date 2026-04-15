@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+import os
 import random
 import warnings
 from functools import partial, wraps
@@ -25,6 +26,8 @@ from transformers import (
     AutoTokenizer,
     PreTrainedTokenizerBase,
 )
+
+from nemo_rl.utils.fastokens import maybe_patch_fastokens
 
 from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
 from nemo_rl.models.policy import TokenizerConfig
@@ -264,6 +267,8 @@ def get_tokenizer(
         >>>
         ```
     """
+    maybe_patch_fastokens()
+
     processor = None
 
     if get_processor:

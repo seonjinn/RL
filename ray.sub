@@ -465,6 +465,7 @@ export NUM_ACTORS=$NUM_ACTORS
 export NRL_JOB_START_EPOCH=$NRL_JOB_START_EPOCH
 export SANDBOX_PORTS_DIR="$SANDBOX_PORTS_DIR"
 export TOTAL_NUM_NODES=$SLURM_JOB_NUM_NODES
+export NRL_USE_FASTOKENS="${NRL_USE_FASTOKENS:-0}"
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=$RAY_ENABLE_UV_RUN_RUNTIME_ENV
 export RAY_gcs_server_rpc_server_thread_num=$RAY_gcs_server_rpc_server_thread_num
 export RAY_num_server_call_thread=$RAY_num_server_call_thread
