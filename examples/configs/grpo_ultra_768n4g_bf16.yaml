@@ -54,7 +54,7 @@ checkpointing:
 # GRPO Algorithm
 # =============================================================================
 grpo:
-  num_prompts_per_step: 256
+  num_prompts_per_step: 512
   num_generations_per_prompt: 16
   num_val_generations_per_prompt: 2
   max_rollout_turns: 1
@@ -142,7 +142,7 @@ policy:
     chat_template_kwargs: null
   hf_config_overrides: {}
 
-  train_global_batch_size: 4096
+  train_global_batch_size: 8192
   train_micro_batch_size: 1
   generation_batch_size: 128
   logprob_batch_size: 1
@@ -405,6 +405,7 @@ env:
       - resources_servers/equivalence_llm_judge/configs/equivalence_llm_judge.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/reasoning_gym/configs/reasoning_gym.yaml
+      - resources_servers/terminal_pivot/configs/terminal_pivot.yaml
       - resources_servers/terminus_judge/configs/terminus_judge_string_only.yaml
       - resources_servers/ns_tools/configs/ns_tools.yaml
       - resources_servers/math_formal_lean/configs/math_formal_lean_multi_turn.yaml
@@ -451,6 +452,12 @@ env:
               num_threads: 2
             compilation_config:
               cudagraph_capture_sizes: [1,2,4,8,16,32,64]
+
+    terminal_pivot_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          model_server:
+            name: policy_model
 
     # nl2bash / General Judge: TP=4, dp=8 (2× vs 256n for higher throughput)
     nl2bash_judge_model:

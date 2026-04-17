@@ -557,6 +557,7 @@ policy.generation.colocated.resources.gpus_per_node=4 \
 env.nemo_gym.genrm_model.responses_api_models.genrm_model.model=${NRL_GENRM_MODEL_PATH} \
 env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
 env.nemo_gym.safety_judge_model.responses_api_models.local_vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
+env.nemo_gym.nemo_gym_log_dir=\${LOG_DIR}/nemo_gym \
 data.train.data_path=${NRL_TRAIN_PATH} \
 data.validation.data_path=${NRL_VAL_PATH} \
 checkpointing.checkpoint_dir=${CHECKPOINT_DIR} \

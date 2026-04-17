@@ -97,7 +97,7 @@ fi
 # During init, the burst of actor creation triggers thousands of RegisterWorker
 # RPCs to the single GCS server on the head node. The burst of traffic causes
 # overloads which create cascading failures: GCS RPC queue backs up -> workers
-# timeout during registration -> raylet kills them -> NCCL collectives hang.
+# timeout during registration -> raylet kills them -> job fails.
 #
 # These settings increase GCS throughput, extend timeouts to survive the burst,
 # and reduce background RPC noise during init. Set via RAY_<config_name> env
@@ -152,6 +152,20 @@ export RAY_task_events_report_interval_ms="${RAY_task_events_report_interval_ms:
 export RAY_gcs_resource_broadcast_max_batch_size="${RAY_gcs_resource_broadcast_max_batch_size:-512}"
 export RAY_gcs_resource_broadcast_max_batch_delay_ms="${RAY_gcs_resource_broadcast_max_batch_delay_ms:-100}"
 
+# --- GCS reply-path threads ---
+# gcs_server_rpc_client_thread_num (default max(1, num_cpus/4)): threads for
+#   GCS to send gRPC replies back to raylets. Match to the server (inbound)
+#   thread count to avoid a reply-path bottleneck during actor creation bursts.
+export RAY_gcs_server_rpc_client_thread_num="${RAY_gcs_server_rpc_client_thread_num:-64}"
+
+# --- Increase GCS active RPC headroom ---
+# gcs_max_active_rpcs_per_handler (default rpc_server_thread_num * 100):
+#   maximum concurrent RPCs per handler in the GCS. With rpc_thread_num=64
+#   the auto-computed default is 6400. Explicitly set higher to ensure the
+#   handler queue doesn't become a bottleneck when thousands of actors
+#   register simultaneously without staggering.
+export RAY_gcs_max_active_rpcs_per_handler="${RAY_gcs_max_active_rpcs_per_handler:-12800}"
+
 # --- Subscriber cleanup ---
 # subscriber_timeout_ms (default 300,000 = 5 min): time before a dead
 #   subscriber is cleaned up from the GCS pub/sub publisher. At scale, dead
@@ -165,6 +179,38 @@ export RAY_subscriber_timeout_ms="${RAY_subscriber_timeout_ms:-60000}"
 #   connection. Cap at 16 — our tasks are short-lived (port discovery, GPU ID
 #   queries) so 16 concurrent workers per node is sufficient.
 export RAY_num_workers_soft_limit="${RAY_num_workers_soft_limit:-16}"
+
+
+# --- Reduce gRPC keepalive overhead ---
+# grpc_keepalive_time_ms (default 10s): interval between keepalive pings to
+#   the GCS server. With 768 nodes at 10s, keepalive alone generates ~77
+#   pings/sec on GCS. 60s reduces this 6x during the init burst.
+# grpc_keepalive_timeout_ms (default 20s): timeout for keepalive ACK.
+#   Must be >= keepalive_time to avoid false dead-connection detection during
+#   GCS load spikes.
+export RAY_grpc_keepalive_time_ms="${RAY_grpc_keepalive_time_ms:-60000}"
+export RAY_grpc_keepalive_timeout_ms="${RAY_grpc_keepalive_timeout_ms:-60000}"
+
+# --- Disable observability features not in use ---
+# enable_timeline (default true): every actor/task creation emits a timeline
+#   event to GCS. Disabling eliminates thousands of GCS writes during init.
+# event_stats (default true): internal event loop statistics collection.
+#   Disabling reduces per-event overhead in the GCS event loop.
+export RAY_enable_timeline="${RAY_enable_timeline:-false}"
+export RAY_event_stats="${RAY_event_stats:-false}"
+
+# --- Reduce syncer, heartbeat, and health-check background traffic ---
+# ray_syncer_message_refresh_interval_ms (default 3s): periodic state refresh
+#   across all nodes via ray_syncer. 10s reduces traffic 3x.
+# core_worker_internal_heartbeat_ms (default 1s): worker heartbeat to raylet.
+#   During init, 3000+ workers heartbeating at 1s adds indirect GCS load via
+#   raylet resource aggregation. 5s is sufficient.
+# health_check_period_ms (default 3s): nodes health-check GCS every 3s.
+#   At 768 nodes = 256 checks/sec. 10s reduces to ~77/sec. Acceptable
+#   during init where node-failure detection latency is not critical.
+export RAY_ray_syncer_message_refresh_interval_ms="${RAY_ray_syncer_message_refresh_interval_ms:-10000}"
+export RAY_core_worker_internal_heartbeat_ms="${RAY_core_worker_internal_heartbeat_ms:-5000}"
+export RAY_health_check_period_ms="${RAY_health_check_period_ms:-10000}"
 
 # Worker port range must NOT overlap with the OS ephemeral range to prevent
 # TOCTOU collisions.  Ray's Raylet uses a probe-and-release pattern
@@ -467,18 +513,27 @@ export SANDBOX_PORTS_DIR="$SANDBOX_PORTS_DIR"
 export TOTAL_NUM_NODES=$SLURM_JOB_NUM_NODES
 export NRL_USE_FASTOKENS="${NRL_USE_FASTOKENS:-0}"
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=$RAY_ENABLE_UV_RUN_RUNTIME_ENV
-export RAY_gcs_server_rpc_server_thread_num=$RAY_gcs_server_rpc_server_thread_num
-export RAY_num_server_call_thread=$RAY_num_server_call_thread
-export RAY_worker_register_timeout_seconds=$RAY_worker_register_timeout_seconds
+export RAY_core_worker_internal_heartbeat_ms=$RAY_core_worker_internal_heartbeat_ms
+export RAY_enable_timeline=$RAY_enable_timeline
+export RAY_event_stats=$RAY_event_stats
+export RAY_gcs_max_active_rpcs_per_handler=$RAY_gcs_max_active_rpcs_per_handler
+export RAY_gcs_resource_broadcast_max_batch_delay_ms=$RAY_gcs_resource_broadcast_max_batch_delay_ms
+export RAY_gcs_resource_broadcast_max_batch_size=$RAY_gcs_resource_broadcast_max_batch_size
 export RAY_gcs_rpc_server_connect_timeout_s=$RAY_gcs_rpc_server_connect_timeout_s
 export RAY_gcs_rpc_server_reconnect_timeout_s=$RAY_gcs_rpc_server_reconnect_timeout_s
 export RAY_gcs_server_request_timeout_seconds=$RAY_gcs_server_request_timeout_seconds
-export RAY_raylet_report_resources_period_milliseconds=$RAY_raylet_report_resources_period_milliseconds
-export RAY_task_events_report_interval_ms=$RAY_task_events_report_interval_ms
-export RAY_gcs_resource_broadcast_max_batch_size=$RAY_gcs_resource_broadcast_max_batch_size
-export RAY_gcs_resource_broadcast_max_batch_delay_ms=$RAY_gcs_resource_broadcast_max_batch_delay_ms
-export RAY_subscriber_timeout_ms=$RAY_subscriber_timeout_ms
+export RAY_gcs_server_rpc_client_thread_num=$RAY_gcs_server_rpc_client_thread_num
+export RAY_gcs_server_rpc_server_thread_num=$RAY_gcs_server_rpc_server_thread_num
+export RAY_grpc_keepalive_time_ms=$RAY_grpc_keepalive_time_ms
+export RAY_grpc_keepalive_timeout_ms=$RAY_grpc_keepalive_timeout_ms
+export RAY_health_check_period_ms=$RAY_health_check_period_ms
+export RAY_num_server_call_thread=$RAY_num_server_call_thread
 export RAY_num_workers_soft_limit=$RAY_num_workers_soft_limit
+export RAY_ray_syncer_message_refresh_interval_ms=$RAY_ray_syncer_message_refresh_interval_ms
+export RAY_raylet_report_resources_period_milliseconds=$RAY_raylet_report_resources_period_milliseconds
+export RAY_subscriber_timeout_ms=$RAY_subscriber_timeout_ms
+export RAY_task_events_report_interval_ms=$RAY_task_events_report_interval_ms
+export RAY_worker_register_timeout_seconds=$RAY_worker_register_timeout_seconds
 export LUSTRE_VLLM_CACHE=${LUSTRE_VLLM_CACHE:-}
 export NRL_VLLM_LOCAL_CACHE_DIR=${NRL_VLLM_LOCAL_CACHE_DIR:-}
 export NRL_VLLM_CACHE_SEED_DIR=${NRL_VLLM_CACHE_SEED_DIR:-}

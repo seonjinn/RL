@@ -151,13 +151,23 @@ def _bind_socket_in_range(
 def _get_free_port_local(
     port_range_low: int = DEFAULT_PORT_RANGE_LOW,
     port_range_high: int = DEFAULT_PORT_RANGE_HIGH,
+    max_retries: int = 50,
 ) -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        port = _bind_socket_in_range(s, port_range_low, port_range_high)
-        s.listen(1)
+    import random
 
-    return port
+    for _ in range(max_retries):
+        port = random.randint(port_range_low, port_range_high - 1)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", port))
+                s.listen(1)
+                return port
+        except OSError:
+            continue
+
+    raise RuntimeError(
+        f"Could not find a free port in range [{port_range_low}, {port_range_high}) after {max_retries} attempts."
+    )
 
 
 def init_ray(log_dir: Optional[str] = None) -> None:

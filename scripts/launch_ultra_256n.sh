@@ -93,8 +93,7 @@ EXCLUDE_NODES="${EXCLUDE_NODES:-}"
 # =============================================================================
 # Container & mounts
 # =============================================================================
-# TODO(ansubramania): Update container back to the nightly default (rl.nightly.sqsh) once CI builds with the safety_judge_model TP=4 config change
-export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/pipe.48282302.sqsh}"
+export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/rl.nightly.sqsh}"
 MOUNTS="/lustre:/lustre"
 
 # GB200 NVL72: fixed at 4 GPUs/node.
@@ -519,7 +518,7 @@ NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 NRL_WG_USE_RAY_REF=1 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
-NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-0} \
+NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-1} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
 --config examples/configs/grpo_ultra_256n4g_${PRECISION_RECIPE}.yaml \
 policy.model_name=${NRL_MODEL_PATH} \

@@ -480,7 +480,10 @@ class RayWorkerGroup:
         # env_vars are passed through create_worker(). This reduces GCS actor
         # registrations from N_workers to N_nodes.
         unique_pg_indices = sorted({pg_idx for pg_idx, _ in bundle_indices_list})
-        initializer_runtime_env = {"py_executable": py_executable}
+        initializer_runtime_env = {
+            "py_executable": py_executable,
+            "env_vars": {"NRL_NUM_GPUS_PER_NODE": str(self.cluster.num_gpus_per_node)},
+        }
         self._initializer_pool: dict[int, ray.actor.ActorHandle] = {}
         for pg_idx in unique_pg_indices:
             # num_cpus=0 so the initializer doesn't consume a CPU slot — it

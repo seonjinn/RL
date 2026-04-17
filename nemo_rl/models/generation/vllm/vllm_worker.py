@@ -107,12 +107,24 @@ class BaseVllmGenerationWorker:
             # See ray.sub port layout comment for the full allocation map.
             # vLLM's _get_open_port() reads VLLM_PORT and auto-increments on
             # collision, so 100-port spacing per engine provides headroom.
+            #
+            # In the cross-node model-parallel path
+            # local_bundle_indices is a slice of global bundle ids spanning multiple nodes
+            # so a naive local_bundle_indices[0] // mp_size produces a global engine counter
+            # that can push VLLM_PORT into the OS ephemeral range.
+            # This can cause races and address-in-use errors with random OS-allocated sockets.
             _VLLM_PORT_RANGE_LOW = 7000
             _VLLM_PORTS_PER_ENGINE = 100
-            if len(local_bundle_indices) == 1:
-                engine_index_on_node = local_bundle_indices[0]
+            _num_gpus_per_node = int(os.environ.get("NRL_NUM_GPUS_PER_NODE", "4"))
+            mp_size = len(local_bundle_indices)
+            if mp_size > _num_gpus_per_node:
+                # Cross-node MP: each engine's driver (EngineCore_DP0) lives on a unique
+                # first-node, so slot 0 is collision-free across engines on different nodes.
+                engine_index_on_node = 0
+            elif mp_size == 1:
+                engine_index_on_node = local_bundle_indices[0] % _num_gpus_per_node
             else:
-                engine_index_on_node = local_bundle_indices[0] // len(local_bundle_indices)
+                engine_index_on_node = (local_bundle_indices[0] % _num_gpus_per_node) // mp_size
             env_vars["VLLM_PORT"] = str(_VLLM_PORT_RANGE_LOW + engine_index_on_node * _VLLM_PORTS_PER_ENGINE)
 
         # Check if this worker is part of a parallel group (TP or TP+PP).
@@ -298,25 +310,64 @@ class BaseVllmGenerationWorker:
             2. Add NCCL_CUMEM_ENABLE and NCCL_NVLS_ENABLE to vLLM ADDITIONAL_ENV_VARS.
                 - This is a workaround to fix async vllm in some scenarios.
                 - See https://github.com/NVIDIA-NeMo/RL/pull/898 for more details.
+            3. Wrap the TP rendezvous RPC chain (init_worker + init_device) in an
+               EADDRINUSE retry loop.
+                - vLLM's _get_open_port() closes the socket before TCPStore.bind(),
+                  leaving a TOCTOU window where another process can grab the port.
+                - On EADDRINUSE we regenerate distributed_init_method with a fresh
+                  port and retry. load_model stays outside the retry (non-network).
             """
             file_to_patch = _get_vllm_file("v1/executor/ray_executor.py")
 
-            old_lines = [
-                "self._init_workers_ray(placement_group)",
-                'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}',
-            ]
+            old_init_rpc_block = (
+                '        self.collective_rpc("init_worker", args=(all_kwargs,))\n'
+                "\n"
+                "        is_eep_new_worker = envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH\n"
+                "        if not is_eep_new_worker:\n"
+                '            self.collective_rpc("init_device")\n'
+                '            self.collective_rpc("load_model")\n'
+            )
 
-            new_lines = [
-                f'self._init_workers_ray(placement_group, runtime_env={{"py_executable": "{self.py_executable}"}})',
-                'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "NCCL_CUMEM_ENABLE", "NCCL_NVLS_ENABLE", "RAY_ENABLE_UV_RUN_RUNTIME_ENV"}',
+            new_init_rpc_block = (
+                "        is_eep_new_worker = envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH\n"
+                "        for _nrl_attempt in range(5):\n"
+                "            try:\n"
+                '                self.collective_rpc("init_worker", args=(all_kwargs,))\n'
+                "                if not is_eep_new_worker:\n"
+                '                    self.collective_rpc("init_device")\n'
+                "                break\n"
+                "            except Exception as _nrl_e:\n"
+                '                if "EADDRINUSE" not in repr(_nrl_e) or _nrl_attempt == 4:\n'
+                "                    raise\n"
+                "                logger.warning(\n"
+                '                    "nemo-rl: TP rendezvous EADDRINUSE on %s (attempt %d/5); regenerating distributed_init_method",\n'
+                "                    distributed_init_method, _nrl_attempt + 1,\n"
+                "                )\n"
+                "                distributed_init_method = get_distributed_init_method(driver_ip, get_open_port())\n"
+                "                for _kw in all_kwargs:\n"
+                '                    _kw["distributed_init_method"] = distributed_init_method\n'
+                "        if not is_eep_new_worker:\n"
+                '            self.collective_rpc("load_model")\n'
+            )
+
+            replacements = [
+                (
+                    "self._init_workers_ray(placement_group)",
+                    f'self._init_workers_ray(placement_group, runtime_env={{"py_executable": "{self.py_executable}"}})',
+                ),
+                (
+                    'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}',
+                    'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "NCCL_CUMEM_ENABLE", "NCCL_NVLS_ENABLE", "RAY_ENABLE_UV_RUN_RUNTIME_ENV"}',
+                ),
+                (old_init_rpc_block, new_init_rpc_block),
             ]
 
             with _locked_file_patch(file_to_patch) as (content, write_back):
                 need_replace = False
-                for old_line, new_line in zip(old_lines, new_lines):
-                    if new_line in content or old_line not in content:
+                for old, new in replacements:
+                    if new in content or old not in content:
                         continue
-                    content = content.replace(old_line, new_line)
+                    content = content.replace(old, new)
                     need_replace = True
 
                 if need_replace:

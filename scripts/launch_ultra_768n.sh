@@ -76,16 +76,16 @@ ln -sfn "${RUN_DIR}" "${RESULTS_DIR}/runs/latest"
 # SLURM configuration
 # =============================================================================
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-llmservice_nemotron_ultra}"
-PARTITION="${PARTITION:-batch_long}"
-SLURM_QOS="${SLURM_QOS:-nemotron-hero}"
+PARTITION="${PARTITION:-batch}"
+SLURM_QOS="${SLURM_QOS:-normal}"
 WALLTIME="${WALLTIME:-4:00:00}"
 EXCLUDE_NODES="${EXCLUDE_NODES:-}"
+RESERVATION="${RESERVATION:-sla_res_nemotron}"
 
 # =============================================================================
 # Container & mounts
 # =============================================================================
-# TODO(ansubramania): Update container back to the nightly default (rl.nightly.sqsh) once CI builds with the safety_judge_model TP=4 config change
-export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/pipe.48282302.sqsh}"
+export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/rl.nightly.sqsh}"
 MOUNTS="/lustre:/lustre"
 
 # GB200 NVL72: fixed at 4 GPUs/node.
@@ -223,7 +223,7 @@ NRL_VLLM_LOCAL_CACHE_DIR="/tmp/nemo_rl_vllm_cache"
 NRL_VLLM_CACHE_SEED_DIR="/tmp/nemo_rl_vllm_cache_warm"
 INDUCTOR_CACHE_DIR="/tmp/nemo_rl_inductor_cache"
 TRITON_CACHE_DIR="/tmp/nemo_rl_triton_cache"
-CACHE_SYNC_FREQUENCY="${CACHE_SYNC_FREQUENCY:-120}"
+CACHE_SYNC_FREQUENCY="${CACHE_SYNC_FREQUENCY:-0}"
 
 export LUSTRE_VLLM_CACHE
 export LUSTRE_INDUCTOR_CACHE
@@ -307,56 +307,56 @@ fi
 
 # Generate/refresh cache_read/ tarballs via srun (avoids slow tar/find on login node).
 # Triggered when at least one tarball is missing OR stale (cache_write has newer files).
-_stale_tarballs=()
-for _tar_name in inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}"; do
-  _tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
-  _wd="${CACHE_WRITE_DIR}/${_tar_name}"
-  [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] || continue
-  if [ ! -f "$_tar" ]; then
-    _stale_tarballs+=("$_tar_name")
-  elif find "$_wd" -type f -newer "$_tar" -print -quit 2>/dev/null | grep -q .; then
-    _stale_tarballs+=("$_tar_name")
-  fi
-done
+# _stale_tarballs=()
+# for _tar_name in inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}"; do
+#   _tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
+#   _wd="${CACHE_WRITE_DIR}/${_tar_name}"
+#   [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] || continue
+#   if [ ! -f "$_tar" ]; then
+#     _stale_tarballs+=("$_tar_name")
+#   elif find "$_wd" -type f -newer "$_tar" -print -quit 2>/dev/null | grep -q .; then
+#     _stale_tarballs+=("$_tar_name")
+#   fi
+# done
 
-if (( ${#_stale_tarballs[@]} > 0 )); then
-  echo "[CACHE] Missing or stale tarballs: ${_stale_tarballs[*]}"
-  echo "[CACHE] Generating via srun on a compute node..."
-  _promo_script="${CACHE_WRITE_DIR}/.promote_tarballs_$$.sh"
-  cat > "$_promo_script" <<'PROMOSCRIPT'
-#!/bin/bash
-set -euo pipefail
-CACHE_READ_DIR="$1"; CACHE_WRITE_DIR="$2"; shift 2
-for _tar_name in "$@"; do
-  _read_tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
-  _write_dir="${CACHE_WRITE_DIR}/${_tar_name}"
-  [ -d "$_write_dir" ] && [ -n "$(ls -A "$_write_dir" 2>/dev/null)" ] || continue
-  _needs=0
-  if [ ! -f "$_read_tar" ]; then
-    _needs=1
-  elif find "$_write_dir" -type f -newer "$_read_tar" -print -quit 2>/dev/null | grep -q .; then
-    _needs=1
-  fi
-  if (( _needs )); then
-    echo "Creating/refreshing ${_tar_name}.tar.zst..."
-    tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' --exclude='*/.*' . \
-      && mv "${_read_tar}.tmp.$$" "$_read_tar" \
-      && echo "Done: $(du -sh "$_read_tar" | cut -f1)" \
-      || { rm -f "${_read_tar}.tmp.$$"; echo "Failed: ${_tar_name}"; }
-  else
-    echo "${_tar_name}: tarball up to date"
-  fi
-done
-PROMOSCRIPT
-  chmod +x "$_promo_script"
-  srun -N1 -n1 -t 00:30:00 -A "${SLURM_ACCOUNT}" -p cpu \
-    -q cpu-normal \
-    bash "$_promo_script" "${CACHE_READ_DIR}" "${CACHE_WRITE_DIR}" \
-      inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}" \
-    && echo "[CACHE] srun tarball generation complete" \
-    || echo "[CACHE] srun tarball generation failed (non-fatal, first job will compile from scratch)"
-  rm -f "$_promo_script"
-fi
+# if (( ${#_stale_tarballs[@]} > 0 )); then
+#   echo "[CACHE] Missing or stale tarballs: ${_stale_tarballs[*]}"
+#   echo "[CACHE] Generating via srun on a compute node..."
+#   _promo_script="${CACHE_WRITE_DIR}/.promote_tarballs_$$.sh"
+#   cat > "$_promo_script" <<'PROMOSCRIPT'
+# #!/bin/bash
+# set -euo pipefail
+# CACHE_READ_DIR="$1"; CACHE_WRITE_DIR="$2"; shift 2
+# for _tar_name in "$@"; do
+#   _read_tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
+#   _write_dir="${CACHE_WRITE_DIR}/${_tar_name}"
+#   [ -d "$_write_dir" ] && [ -n "$(ls -A "$_write_dir" 2>/dev/null)" ] || continue
+#   _needs=0
+#   if [ ! -f "$_read_tar" ]; then
+#     _needs=1
+#   elif find "$_write_dir" -type f -newer "$_read_tar" -print -quit 2>/dev/null | grep -q .; then
+#     _needs=1
+#   fi
+#   if (( _needs )); then
+#     echo "Creating/refreshing ${_tar_name}.tar.zst..."
+#     tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' --exclude='*/.*' . \
+#       && mv "${_read_tar}.tmp.$$" "$_read_tar" \
+#       && echo "Done: $(du -sh "$_read_tar" | cut -f1)" \
+#       || { rm -f "${_read_tar}.tmp.$$"; echo "Failed: ${_tar_name}"; }
+#   else
+#     echo "${_tar_name}: tarball up to date"
+#   fi
+# done
+# PROMOSCRIPT
+#   chmod +x "$_promo_script"
+#   srun -N1 -n1 -t 00:30:00 -A "${SLURM_ACCOUNT}" -p cpu \
+#     -q cpu-normal \
+#     bash "$_promo_script" "${CACHE_READ_DIR}" "${CACHE_WRITE_DIR}" \
+#       inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}" \
+#     && echo "[CACHE] srun tarball generation complete" \
+#     || echo "[CACHE] srun tarball generation failed (non-fatal, first job will compile from scratch)"
+#   rm -f "$_promo_script"
+# fi
 
 # =============================================================================
 # Code snapshot
@@ -476,7 +476,7 @@ NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 NRL_WG_USE_RAY_REF=1 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
-NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-0} \
+NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-1} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
 --config examples/configs/grpo_ultra_768n4g_${PRECISION_RECIPE}.yaml \
 policy.model_name=${NRL_MODEL_PATH} \
@@ -582,6 +582,7 @@ SBATCH_OUTPUT=$(sbatch \
   --error="${SLURM_LOG_DIR}/%j.err" \
   ${SLURM_QOS:+--qos="${SLURM_QOS}"} \
   ${EXCLUDE_NODES:+--exclude="${EXCLUDE_NODES}"} \
+  ${RESERVATION:+--reservation="${RESERVATION}"} \
   "${RAY_SUB}")
 
 echo "${SBATCH_OUTPUT}"
