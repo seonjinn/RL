@@ -2,59 +2,56 @@
 set -euo pipefail
 
 # =============================================================================
-# launch_ultra_pipeclean.sh
+# launch_ultra_256n_inescapable_sawfly.sh
 #
-# GRPO Ultra V3 pipe-cleaning on GB200 NVL72 with NeMo Gym
+# GRPO Ultra V3 — 256-node GB200 NVL72 inescapable-sawfly experiment with NeMo Gym
 #
-# By default, this runs from what's built into the container without overlay mounts applied. 
+# Replicates jiaqiz's inescapable-sawfly 256-node setup.
+#
+# By default, this runs from what's built into the container without overlay mounts applied.
 # Set USE_WORKTREE=1 to overlay your local worktree submodules for development.
 # Set INTERACTIVE=1 to get a persistent allocation in slurm for iterative debugging.
 #
 # Usage:
-#   ./launch_ultra_pipeclean.sh                                   # batch, bare container (10 steps)
-#   NRL_MAX_STEPS=4 ./launch_ultra_pipeclean.sh                   # CI: fewer steps
-#   USE_WORKTREE=1 ./launch_ultra_pipeclean.sh                    # batch, overlay local code
-#   WALLTIME=4:00:00 ./launch_ultra_pipeclean.sh
+#   ./launch_ultra_256n_inescapable_sawfly.sh
+#   NRL_MAX_STEPS=4 ./launch_ultra_256n_inescapable_sawfly.sh
+#   USE_WORKTREE=1 ./launch_ultra_256n_inescapable_sawfly.sh
+#   WALLTIME=4:00:00 ./launch_ultra_256n_inescapable_sawfly.sh
+#   DRY_RUN=1 ./launch_ultra_256n_inescapable_sawfly.sh
+#
+# Adjust node allocation:
+#   NUM_TRAIN_NODES=32 NUM_GEN_NODES=80 NUM_GYM_NODES=16 ./launch_ultra_256n_inescapable_sawfly.sh
 #
 # Extra positional arguments are forwarded as Hydra overrides:
-#   ./launch_ultra_pipeclean.sh grpo.max_num_steps=2 policy.precision=float32
-#
-# Enable MTP (multi-token prediction) speculative decoding for vLLM:
-#   ENABLE_MTP_INFERENCE=1 ./launch_ultra_pipeclean.sh
-#   ENABLE_MTP_INFERENCE=1 NUM_SPECULATIVE_TOKENS=3 ./launch_ultra_pipeclean.sh
+#   ./launch_ultra_256n_inescapable_sawfly.sh grpo.max_num_steps=2 policy.precision=float32
 #
 # Interactive debugging (reuse allocation across runs):
-#   INTERACTIVE=1 ./launch_ultra_pipeclean.sh                     # submits, auto-runs, waits
-#   INTERACTIVE=1 INTERACTIVE_WAIT=0 ./launch_ultra_pipeclean.sh  # submit only (no foreground wait)
-#   INTERACTIVE=1 INTERACTIVE_WALLTIME=2:0:0 SLURM_QOS=short ./launch_ultra_pipeclean.sh  # submit and wait in foreground
-#   INTERACTIVE=1 INTERACTIVE_WALLTIME=8:0:0 ./launch_ultra_pipeclean.sh  # longer allocation
-#
-#   A background watcher auto-runs the training command as soon as Ray is ready,
-#   so GPUs are never idle waiting for you to type. After training finishes the
-#   allocation stays alive — re-attach and iterate without requeueing.
-#
-#   Once Ray is up, you can:
-#     # Run non-interactively from login node
-#     COMMAND="$(cat <jobid>-run-cmd.sh)" bash <jobid>-attach.sh
-#
-#     # Or attach interactively, then run inside the container
-#     bash <jobid>-attach.sh
-#     source <jobid>-run-cmd.sh
-#
-#     # Edit and re-run without requeueing
-#     vim <jobid>-run-cmd.sh
-#     COMMAND="$(cat <jobid>-run-cmd.sh)" bash <jobid>-attach.sh
+#   INTERACTIVE=1 ./launch_ultra_256n_inescapable_sawfly.sh
+#   INTERACTIVE=1 INTERACTIVE_WAIT=0 ./launch_ultra_256n_inescapable_sawfly.sh
+#   INTERACTIVE=1 INTERACTIVE_WALLTIME=2:0:0 SLURM_QOS=short ./launch_ultra_256n_inescapable_sawfly.sh
 # =============================================================================
+#
+# Example(yifu):
+# USE_SNAPSHOT=0 \
+# SLURM_ACCOUNT=llmservice_nemotron_ultra \
+# EXP_SUFFIX=ultra-v3-grpo-mtp5-prefcache-inescapable_sawfly \
+# NRL_MEGATRON_LM_DIR=/lustre/fsw/portfolios/coreai/users/yifuw/code/ultra3/nemo-rl-internal/3rdparty/Megatron-LM-workspace/Megatron-LM/ \
+# NRL_MEGATRON_BRIDGE_DIR=/lustre/fsw/portfolios/coreai/users/yifuw/code/ultra3/nemo-rl-internal/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/ \
+# NRL_VLLM_DIR=/lustre/fsw/portfolios/coreai/users/yifuw/code/ultra3/nemo-rl-internal/3rdparty/vllm \
+# PERSISTENT_CACHE=/lustre/fsw/portfolios/llmservice/users/yifuw/ultra_cache_mtp5_inescapable_sawfly \
+# WALLTIME=24:00:00 \
+# SLURM_QOS=normal \
+# ./launch_ultra_256n_inescapable_sawfly.sh
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-PROJECT_ROOT=${SCRIPT_DIR}
-cd ${PROJECT_ROOT}
+PROJECT_ROOT=$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)
+cd "${PROJECT_ROOT}"
 
 USE_WORKTREE="${USE_WORKTREE:-0}"
 INTERACTIVE="${INTERACTIVE:-0}"
 INTERACTIVE_WAIT="${INTERACTIVE_WAIT:-1}"
 
-# ---------- Precision configuration ------
+# ---------- Precision configuration ----------
 get_precision_config() {
   local PRECISION_RECIPE="$1"
   local DISABLE_FP8_LINEAR="$2"
@@ -78,8 +75,8 @@ policy.generation.vllm_cfg.expert_parallel_size=4"
   MXFP8_GEN_EXTRA_ARGS="$MXFP8_GEN_EXTRA_ARGS +policy.generation.vllm_cfg.quantization_ignored_layer_kws=[$IGNORED_LAYER_KWS]"
 
   MXFP8_TRAIN_EXTRA_ARGS="policy.megatron_cfg.fp8_cfg.enabled=true \
-policy.megatron_cfg.fp8_cfg.fp8="e4m3" \
-policy.megatron_cfg.fp8_cfg.fp8_recipe="mxfp8" \
+policy.megatron_cfg.fp8_cfg.fp8=\"e4m3\" \
+policy.megatron_cfg.fp8_cfg.fp8_recipe=\"mxfp8\" \
 ++policy.megatron_cfg.fp8_cfg.fp8_param=false \
 policy.megatron_cfg.moe_router_dtype=fp32 \
 policy.megatron_cfg.expert_model_parallel_size=64 \
@@ -122,8 +119,9 @@ echo "PRECISION_EXTRA_ARGS: ${PRECISION_EXTRA_ARGS}"
 # ---------- SLURM configuration ----------
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-llmservice_nemotron_ultra}"
 PARTITION="${PARTITION:-batch}"
-SLURM_QOS="${SLURM_QOS:-}"
-WALLTIME="${WALLTIME:-4:00:00}"
+SLURM_QOS="${SLURM_QOS:-normal}"
+WALLTIME="${WALLTIME:-24:00:00}"
+EXCLUDE_NODES="${EXCLUDE_NODES:-}"
 
 # ---------- Container & mounts ----------
 export CONTAINER="${CONTAINER:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/images/high_stripe/rl.nightly.sqsh}"
@@ -139,52 +137,53 @@ export HF_HUB_CACHE="${HF_HUB_CACHE:-}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-}"
 
 # ---------- W&B Configuration ----------
-WANDB_PROJ="${WANDB_PROJ:-grpo-ultra-v3-pipeclean}"
-WANDB_NAME="${WANDB_NAME:-ultra-v3-grpo-pipeclean-$(date +%Y%m%d-%H%M%S)}"
+WANDB_PROJ="${WANDB_PROJ:-ultra-v3-pipeclean}"
+WANDB_ENTITY="${WANDB_ENTITY:-nvidia}"
+WANDB_NAME="${WANDB_NAME:-}"
 export WANDB_API_KEY="${WANDB_API_KEY:-}"
+export WANDB_ENTITY
 
 # ---------- Training ----------
 NRL_MAX_STEPS="${NRL_MAX_STEPS:-}"
 
-# ---------- MTP speculative decoding (optional) ----------
-# Set ENABLE_MTP_INFERENCE=1 to turn on MTP speculative decoding for vLLM inference.
-# Tune via NUM_SPECULATIVE_TOKENS / MAX_NUM_BATCHED_TOKENS if needed.
-ENABLE_MTP_INFERENCE="${ENABLE_MTP_INFERENCE:-0}"
-NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-5}"
-MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8480}"
-MTP_EXTRA_ARGS=""
-if [[ "${ENABLE_MTP_INFERENCE}" == "1" ]]; then
-  MTP_EXTRA_ARGS="\
-++policy.generation.vllm_cfg.enable_prefix_caching=true \
-++policy.generation.vllm_kwargs.enable_chunked_prefill=true \
-++policy.generation.vllm_kwargs.max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS} \
-++policy.generation.vllm_kwargs.mamba_cache_mode=align \
-~policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes \
-++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${NUM_SPECULATIVE_TOKENS} \
-++policy.generation.vllm_kwargs.speculative_config.method=mtp"
-  echo "MTP speculative decoding ENABLED (num_speculative_tokens=${NUM_SPECULATIVE_TOKENS})"
+# ---------- Model configuration ----------
+TP="${TP:-8}"
+CP="${CP:-8}"
+EP="${EP:-64}"
+PP="${PP:-1}"
+GPP="${GPP:-16}"
+PPS="${PPS:-256}"
+GBS="${GBS:-4096}"
+VAL_PERIOD="${VAL_PERIOD:-10000}"
+SAVE_PERIOD="${SAVE_PERIOD:-6}"
+ADVANTAGE_CLIP_LOW="${ADVANTAGE_CLIP_LOW:--20}"
+ADVANTAGE_CLIP_HIGH="${ADVANTAGE_CLIP_HIGH:-20}"
+
+# =============================================================================
+# Job shape — 3-way split: Training, Generation (vLLM), Gym (judges)
+#
+#   Training:  128 nodes (512 GPUs)  — Megatron training backend
+#   vLLM:      118 nodes (472 GPUs)  — 59 instances at TP=8
+#   Gym:        10 nodes ( 40 GPUs)  — judges (GenRM, NL2Bash, Safety)
+#
+# =============================================================================
+NUM_TRAIN_NODES="${NUM_TRAIN_NODES:-128}"
+NUM_GEN_NODES="${NUM_GEN_NODES:-118}"
+NUM_GYM_NODES="${NUM_GYM_NODES:-10}"
+
+NUM_TOTAL_NODES=$((NUM_TRAIN_NODES + NUM_GEN_NODES + NUM_GYM_NODES))
+
+if (( NUM_TRAIN_NODES <= 0 )); then
+  echo "ERROR: NUM_TRAIN_NODES must be > 0 (got ${NUM_TRAIN_NODES})" >&2; exit 1
+fi
+if (( NUM_GEN_NODES <= 0 )); then
+  echo "ERROR: NUM_GEN_NODES must be > 0 (got ${NUM_GEN_NODES})" >&2; exit 1
+fi
+if (( NUM_GYM_NODES < 0 )); then
+  echo "ERROR: NUM_GYM_NODES must be >= 0 (got ${NUM_GYM_NODES})" >&2; exit 1
 fi
 
-# ---------- Job Shape ----------
-GENERATION_NUM_NODES="${GENERATION_NUM_NODES:-26}"
-NUM_ACTOR_NODES="${NUM_ACTOR_NODES:-58}"
-COLOCATED_INFERENCE="${COLOCATED_INFERENCE:-False}"
-
-NUM_GENRM_NODES="${NUM_GENRM_NODES:-2}"
-NUM_LLMJUDGE_NODES="${NUM_LLMJUDGE_NODES:-2}"
-NUM_SAFETY_NODES="${NUM_SAFETY_NODES:-1}"
-NUM_GYM_EXTRA_NODES="${NUM_GYM_EXTRA_NODES:-1}"
-NUM_JUDGE_NODES=$((NUM_GENRM_NODES + NUM_LLMJUDGE_NODES + NUM_SAFETY_NODES + NUM_GYM_EXTRA_NODES))
-NUM_TOTAL_NODES=$((NUM_ACTOR_NODES + NUM_JUDGE_NODES))
-
-# GB200 NVL72: each rack has 18 nodes sharing an NVLink domain.
-# --segment tells SLURM to allocate nodes in groups of this size from
-# the same topology block, guaranteeing complete rack-aligned segments for training EP.
-# Inference and judges inherit the constraint but don't require it.
-# Must stay in sync with cluster.segment_size in the YAML config.
-#
-# When SEGMENT_SIZE is unset, default to 16 if NUM_TOTAL_NODES >= 16.
-# When NUM_TOTAL_NODES < segment size, skip --segment to avoid sbatch failures.
+# GB200 NVL72: 18 nodes per NVLink domain, allocate in groups of 16.
 SEGMENT_SIZE="${SEGMENT_SIZE:-}"
 if [ -z "${SEGMENT_SIZE}" ] && [ "${NUM_TOTAL_NODES}" -ge 16 ]; then
   SEGMENT_SIZE=16
@@ -193,11 +192,17 @@ if [ -n "${SEGMENT_SIZE}" ] && [ "${NUM_TOTAL_NODES}" -lt "${SEGMENT_SIZE}" ]; t
   echo "ERROR: NUM_TOTAL_NODES=${NUM_TOTAL_NODES} < SEGMENT_SIZE=${SEGMENT_SIZE}" >&2
   exit 1
 fi
+if [ -n "${SEGMENT_SIZE}" ] && (( NUM_TOTAL_NODES % SEGMENT_SIZE != 0 )); then
+  echo "ERROR: NUM_TOTAL_NODES=${NUM_TOTAL_NODES} is not divisible by SEGMENT_SIZE=${SEGMENT_SIZE}." >&2
+  echo "  Training=${NUM_TRAIN_NODES} + Generation=${NUM_GEN_NODES} + Gym=${NUM_GYM_NODES} = ${NUM_TOTAL_NODES}" >&2
+  echo "  Adjust node counts so the total is a multiple of ${SEGMENT_SIZE}." >&2
+  exit 1
+fi
 
 # ---------- Model and data paths ----------
-NRL_TRAIN_PATH="${NRL_TRAIN_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/data/gym/rl-data-tools/blends/curriculum_v29_warping-muskox.no-swerl.max16k.train.jsonl}"
-NRL_VAL_PATH="${NRL_VAL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/data/gym/rl-data-tools/blends/curriculum_v29_warping-muskox.no-swerl.max16k.val.jsonl}"
-NRL_MODEL_PATH="${NRL_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/ci/checkpoints/ultra-v3-sft-hsg-mainfeb19merge-mxfp8_fixed-hf_converted}"
+NRL_TRAIN_PATH="${NRL_TRAIN_PATH:-/lustre/fsw/portfolios/llmservice/users/jiaqiz/data/gym/rl-data-tools/blends/curriculum_v35_inescapable-sawfly.train.efforts0p15_qamathcode.jsonl}"
+NRL_VAL_PATH="${NRL_VAL_PATH:-/lustre/fsw/portfolios/llmservice/users/jiaqiz/data/gym/rl-data-tools/blends/curriculum_v35_inescapable-sawfly.train.efforts0p15_qamathcode.jsonl}"
+NRL_MODEL_PATH="${NRL_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/wdai/megatron-lm-ultra/checkpoints/ultra-v3-sft-bf16-hybridep-ep64-cp32-bindpcie-recompute-offload-288k-nano-loss-032026/iter_0003200/hf}"
 NRL_GENRM_MODEL_PATH="${NRL_GENRM_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/models/qwen235b_principle_comparison_genrm_step1230}"
 NRL_NL2BASH_JUDGE_MODEL_PATH="${NRL_NL2BASH_JUDGE_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/models/Qwen3-235B-A22B-Instruct-2507-FP8}"
 NRL_SAFETY_MODEL_PATH="${NRL_SAFETY_MODEL_PATH:-/lustre/fsw/portfolios/llmservice/users/ansubramania/super_v3/model_checkpoints/Nemotron-Content-Safety-Reasoning-4B}"
@@ -207,18 +212,35 @@ export SANDBOX_CONTAINER="${SANDBOX_CONTAINER:-/lustre/fsw/portfolios/llmservice
 export SANDBOX_COMMAND="${SANDBOX_COMMAND:-/start-with-nginx.sh}"
 export NEMO_SKILLS_SANDBOX_PORT="${NEMO_SKILLS_SANDBOX_PORT:-6000}"
 
-# ---------- Ray log sync (copy actor logs from /tmp/ray to $LOG_DIR/ray/) ----------
+# ---------- Ray log sync ----------
 export RAY_LOG_SYNC_FREQUENCY="${RAY_LOG_SYNC_FREQUENCY:-60}"
 
-EXP_SUFFIX="${EXP_SUFFIX:-ultra-v3-grpo-pipeclean}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-results/${EXP_SUFFIX}}"
+# ---------- Job identity ----------
+JOB_PREFIX="${JOB_PREFIX:-pipeclean-ultra-rl}"
+EXP_SUFFIX="${EXP_SUFFIX:-${JOB_PREFIX}-inescapable-sawfly_tp${TP}_cp${CP}_ep${EP}_pp${PP}_gpp${GPP}_pps${PPS}_gbs${GBS}}"
+JOB_NAME="${EXP_SUFFIX}"
+
+# ---------- Output directories ----------
+export BASE_LOG_DIR="${BASE_LOG_DIR:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nemotron_ultra/nemo_rl/logs}"
+export BASE_LOG_DIR="${BASE_LOG_DIR}/${EXP_SUFFIX}"
+
+RESULTS_DIR="${RESULTS_DIR:-results/${EXP_SUFFIX}}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RESULTS_DIR}}"
 mkdir -p "${CHECKPOINT_DIR}"
 CHECKPOINT_DIR="$(cd "${CHECKPOINT_DIR}" && pwd)"
+RESULTS_DIR="$(cd "${RESULTS_DIR}" && pwd)"
+
+# Per-submission dirs for logs and slurm output (timestamped for history).
+RUN_DIR="${RESULTS_DIR}/runs/$(date +%Y%m%d-%H%M)"
+LOG_DIR="${RUN_DIR}/logs"
+SLURM_LOG_DIR="${RUN_DIR}/slurm"
+mkdir -p "${LOG_DIR}" "${SLURM_LOG_DIR}"
+ln -sfn "${RUN_DIR}" "${RESULTS_DIR}/runs/latest"
+
+# W&B name defaults to EXP_SUFFIX if not set
+WANDB_NAME="${WANDB_NAME:-${EXP_SUFFIX}}"
 
 # ---------- Code snapshot ----------
-# Batch mode: snapshot by default so code is frozen at submission time.
-# Interactive mode: live directory by default for fast iteration.
-# Override with USE_SNAPSHOT=0 or USE_SNAPSHOT=1 to force either behavior.
 if [[ "${INTERACTIVE}" == "1" ]]; then
   USE_SNAPSHOT="${USE_SNAPSHOT:-0}"
 else
@@ -228,7 +250,6 @@ fi
 if [[ "${USE_SNAPSHOT}" == "1" ]]; then
   SNAPSHOT_DIR=$(bash "${PROJECT_ROOT}/tools/code_snapshot.sh" "${EXP_SUFFIX}")
 
-  # Symlink 3rdparty/vllm if present (large, not git-tracked in all setups)
   if [[ -d "${PROJECT_ROOT}/3rdparty/vllm" ]] && [[ ! -e "${SNAPSHOT_DIR}/3rdparty/vllm" ]]; then
     mkdir -p "${SNAPSHOT_DIR}/3rdparty"
     ln -s "${PROJECT_ROOT}/3rdparty/vllm" "${SNAPSHOT_DIR}/3rdparty/vllm"
@@ -241,24 +262,10 @@ else
 fi
 
 # ---------- Persistent cache directories ----------
-# Per-user cache for compiled artifacts (vLLM, FlashInfer cubins, Deep Gemm
-# JIT, Triton, Inductor, uv).  Each user gets their own directory to avoid
-# shared-permission issues on Lustre.
-#
-# Lustre holds the warm persistent cache. At job start, SETUP_COMMAND clears
-# stale /tmp caches then seeds node-local /tmp from Lustre. JIT writes go to
-# /tmp to avoid Lustre metadata contention from parallel compilation.
-#
-# Default path: /lustre/fsw/portfolios/{access_group}/users/$USER/.cache
-# where {access_group} is the first segment of SLURM_ACCOUNT
-# (e.g. llmservice_nemotron_ultra → llmservice).
-#
-# Override with PERSISTENT_CACHE=/path/to/your/cache if needed.
 if [[ -z "${PERSISTENT_CACHE:-}" ]]; then
   _access_group="${SLURM_ACCOUNT%%_*}"
   PERSISTENT_CACHE="/lustre/fsw/portfolios/${_access_group}/users/${USER}/.cache/nemotron_ultra"
 fi
-# Lustre (shared) — persistent across jobs, used for sync-back and warm-start seeding.
 # bf16 and mxfp8 share torch_compile hash dirs but compile different subgraphs,
 # so they MUST use separate Lustre trees to avoid seeding partial caches.
 case "${PRECISION_RECIPE}" in
@@ -268,6 +275,9 @@ esac
 CACHE_READ_DIR="${PERSISTENT_CACHE}/cache_read"
 CACHE_WRITE_DIR="${PERSISTENT_CACHE}/cache_write"
 LUSTRE_VLLM_CACHE="${CACHE_WRITE_DIR}/vllm_compile_cache_${_vllm_cache_precision}"
+LUSTRE_FLASHINFER_CUBIN_CACHE="${PERSISTENT_CACHE}/flashinfer_cubins"
+FLASHINFER_CUBIN_CACHE="/tmp/nemo_rl_flashinfer_cubins"
+FLASHINFER_WS_BASE="${PERSISTENT_CACHE}/flashinfer_workspace"
 LUSTRE_INDUCTOR_CACHE="${PERSISTENT_CACHE}/inductor_cache"
 LUSTRE_TRITON_CACHE="${PERSISTENT_CACHE}/triton_cache"
 # Node-local (fast) — each vLLM instance writes to ${NRL_VLLM_LOCAL_CACHE_DIR}_{seed}.
@@ -290,11 +300,12 @@ export INDUCTOR_CACHE_DIR
 export TRITON_CACHE_DIR
 export CACHE_SYNC_FREQUENCY
 
-mkdir -p "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}" \
+mkdir -p "${LUSTRE_FLASHINFER_CUBIN_CACHE}" "${FLASHINFER_WS_BASE}" \
+  "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACHE}" \
   "${CACHE_READ_DIR}" "${CACHE_WRITE_DIR}"
 
-# Read path  : cache_read/*.tar.zst   — compute nodes extract tarballs
-# Write path : cache_write/*/     — sidecar rsyncs individual files
+# Read path  : cache_read/*.tar.zst   — compute nodes extract tarballs (hundreds of concurrent reads)
+# Write path : cache_write/*/     — sidecar rsyncs individual files (one sequential writer)
 # Splitting reads (tarball) from writes (directory) avoids Lustre MDT invalidation storms
 # and lets rsync accumulate the union of all roles' kernels across jobs.
 for _name in inductor_cache triton_cache; do
@@ -360,21 +371,19 @@ if (( _purge_count > 0 )); then
 fi
 
 # Generate/refresh cache_read/ tarballs via srun (avoids slow tar/find on login node).
-# Triggered when at least one tarball is missing OR stale (cache_write has newer files).
-_stale_tarballs=()
+# Triggered when at least one tarball is missing. The srun script also refreshes
+# stale tarballs while the compute node is allocated.
+_missing_tarballs=()
 for _tar_name in inductor_cache triton_cache "vllm_compile_cache_${_vllm_cache_precision}"; do
   _tar="${CACHE_READ_DIR}/${_tar_name}.tar.zst"
   _wd="${CACHE_WRITE_DIR}/${_tar_name}"
-  [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] || continue
-  if [ ! -f "$_tar" ]; then
-    _stale_tarballs+=("$_tar_name")
-  elif find "$_wd" -type f -newer "$_tar" -print -quit 2>/dev/null | grep -q .; then
-    _stale_tarballs+=("$_tar_name")
+  if [ -d "$_wd" ] && [ -n "$(ls -A "$_wd" 2>/dev/null)" ] && [ ! -f "$_tar" ]; then
+    _missing_tarballs+=("$_tar_name")
   fi
 done
 
-if (( ${#_stale_tarballs[@]} > 0 )); then
-  echo "[CACHE] Missing or stale tarballs: ${_stale_tarballs[*]}"
+if (( ${#_missing_tarballs[@]} > 0 )); then
+  echo "[CACHE] Missing tarballs: ${_missing_tarballs[*]}"
   echo "[CACHE] Generating via srun on a compute node..."
   _promo_script="${CACHE_WRITE_DIR}/.promote_tarballs_$$.sh"
   cat > "$_promo_script" <<'PROMOSCRIPT'
@@ -393,7 +402,7 @@ for _tar_name in "$@"; do
   fi
   if (( _needs )); then
     echo "Creating/refreshing ${_tar_name}.tar.zst..."
-    tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' --exclude='*/.*' . \
+    tar --zstd -cf "${_read_tar}.tmp.$$" --blocking-factor=8192 -C "$_write_dir" --exclude='tmp*' --exclude='.tmp_*' --exclude='.*' . \
       && mv "${_read_tar}.tmp.$$" "$_read_tar" \
       && echo "Done: $(du -sh "$_read_tar" | cut -f1)" \
       || { rm -f "${_read_tar}.tmp.$$"; echo "Failed: ${_tar_name}"; }
@@ -417,20 +426,17 @@ VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://gith
 # =============================================================================
 # Validation
 # =============================================================================
-
-# Walltime cap: Slurm partitions typically enforce <=4h; fail early.
 _walltime_secs() {
   local t="$1" h m s
   IFS=: read -r h m s <<< "${t}"
   echo $(( 10#${h} * 3600 + 10#${m} * 60 + 10#${s} ))
 }
 
-if (( $(_walltime_secs "${WALLTIME}") > 4 * 3600 )); then
-  echo "ERROR: WALLTIME=${WALLTIME} exceeds the 4-hour maximum."
+if (( $(_walltime_secs "${WALLTIME}") > 24 * 3600 )); then
+  echo "ERROR: WALLTIME=${WALLTIME} exceeds the 24-hour maximum."
   exit 1
 fi
 
-# QOS=interactive caps walltime at 2 hours.
 if [[ "${SLURM_QOS}" == "interactive" ]]; then
   if (( $(_walltime_secs "${INTERACTIVE_WALLTIME:-${WALLTIME}}") > 2 * 3600 )); then
     echo "ERROR: SLURM_QOS=interactive requires walltime <= 2 hours."
@@ -439,14 +445,11 @@ if [[ "${SLURM_QOS}" == "interactive" ]]; then
   fi
 fi
 
-# W&B: warn (but don't fail) if WANDB_API_KEY is unset — runs will log locally only.
 if [[ -z "${WANDB_API_KEY:-}" ]]; then
   echo "WARNING: WANDB_API_KEY is not set. W&B logging will fail or fall back to offline mode."
   echo "  export WANDB_API_KEY=<your-key> to enable cloud logging."
 fi
 
-# HF_TOKEN: required when loading models from the HuggingFace Hub (not local paths).
-# Hub IDs look like "org/model-name" (no leading slash). Local paths start with "/".
 if [[ "${NRL_MODEL_PATH}" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_./-]+$ ]]; then
   if [[ -z "${HF_TOKEN:-}" ]]; then
     echo "ERROR: NRL_MODEL_PATH (${NRL_MODEL_PATH}) looks like a HuggingFace Hub model ID"
@@ -497,9 +500,6 @@ fi
 # =============================================================================
 # Code root — container path or worktree
 # =============================================================================
-# NOTE: In bare container mode we assume /opt/nemo-rl/3rdparty/vllm/nemo-rl.env
-# exists inside the container. 
-# This can't be verified from the login node.
 if [[ "${USE_WORKTREE}" == "1" ]]; then
   CODE_ROOT="${WORKTREE_ROOT}"
   VLLM_ENV_SOURCE="source ${MAIN_REPO_ROOT}/3rdparty/vllm/nemo-rl.env && "
@@ -508,20 +508,42 @@ else
   VLLM_ENV_SOURCE="source /opt/nemo-rl/3rdparty/vllm/nemo-rl.env && "
 fi
 
-echo "Nodes: ${NUM_TOTAL_NODES} (actor=${NUM_ACTOR_NODES} [train=$((NUM_ACTOR_NODES - GENERATION_NUM_NODES)), gen=${GENERATION_NUM_NODES}], judge=${NUM_JUDGE_NODES})"
-echo "Code root: ${CODE_ROOT}"
-echo "Persistent cache root: ${PERSISTENT_CACHE}"
+echo ""
+echo "================================================================"
+echo "  GRPO Ultra V3 — ${NUM_TOTAL_NODES}-node inescapable-sawfly"
+echo "================================================================"
+echo "  Job name:    ${JOB_NAME}  (singleton — only one runs at a time)"
+echo "  Nodes:       ${NUM_TOTAL_NODES} total  (segment=${SEGMENT_SIZE:-none})"
+echo "    Training:  ${NUM_TRAIN_NODES}  ($((NUM_TRAIN_NODES * GPUS_PER_NODE)) GPUs)"
+echo "    vLLM gen:  ${NUM_GEN_NODES}  ($((NUM_GEN_NODES * GPUS_PER_NODE)) GPUs)"
+echo "    Gym:       ${NUM_GYM_NODES}  ($((NUM_GYM_NODES * GPUS_PER_NODE)) GPUs)"
+echo "  Walltime:    ${WALLTIME}"
+echo ""
+echo "  Checkpoints: ${CHECKPOINT_DIR}"
+echo "  Run dir:     ${RUN_DIR}"
+echo "  Logs:        ${LOG_DIR}"
+echo "  Slurm logs:  ${SLURM_LOG_DIR}"
+echo "  W&B:         ${WANDB_ENTITY}/${WANDB_PROJ} / ${WANDB_NAME}"
+echo ""
+echo "  Model:       ${NRL_MODEL_PATH}"
+echo "  Container:   ${CONTAINER}"
+if [[ "${USE_SNAPSHOT}" == "1" ]]; then
+echo "  Snapshot:    ${SNAPSHOT_DIR}"
+fi
+echo ""
+echo "  Code root:   ${CODE_ROOT}"
+echo "  Cache root:  ${PERSISTENT_CACHE}"
+echo ""
+echo "  Monitor:  squeue -u \$USER -n ${JOB_NAME}"
+echo "  Logs:     tail -f ${SLURM_LOG_DIR}/*.out"
+echo "  Latest:   ls -la ${RESULTS_DIR}/runs/latest"
+echo ""
+echo "================================================================"
+echo ""
 
 # =============================================================================
 # Build the training command
 # =============================================================================
-# All env vars that need to reach compute nodes are set INSIDE the command
-# string. sbatch does not propagate the login node's exports — ray.sub starts
-# a fresh shell and executes $COMMAND via enroot exec inside the container.
-#
-# All static config (parallelism, vLLM kwargs, judge server_args, sequence
-# packing, etc.) lives in grpo_ultra_64n4g_pipeclean.yaml. Only per-run variables are
-# overridden here.
 TRAIN_CMD="cd ${CODE_ROOT} && date ; \
 ${VLLM_ENV_SOURCE}\
 OMP_NUM_THREADS=16 \
@@ -533,8 +555,7 @@ DG_JIT_CACHE_DIR=${NRL_VLLM_LOCAL_CACHE_DIR}/deep_gemm \
 TORCHINDUCTOR_CACHE_DIR=${INDUCTOR_CACHE_DIR} \
 TRITON_CACHE_DIR=${TRITON_CACHE_DIR} \
 UV_CACHE_DIR=${PERSISTENT_CACHE}/uv \
-UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME=${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:-} \
-UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD=${UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD:-} \
+NEMO_GYM_SKIP_VENV_IF_PRESENT=1 \
 RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
 UV_HTTP_TIMEOUT=10 \
 VLLM_USE_PRECOMPILED=1 \
@@ -545,54 +566,50 @@ NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800 \
 NRL_WG_USE_RAY_REF=1 \
 HF_HOME=${HF_HOME} \
 HF_TOKEN=${HF_TOKEN:-} \
-NRL_USE_FASTOKENS=${NRL_USE_FASTOKENS:-1} \
 uv run ./examples/nemo_gym/run_grpo_nemo_gym.py \
---config examples/configs/grpo_ultra_64n4g_pipeclean.yaml \
+--config examples/configs/grpo_ultra_256n4g_inescapable_sawfly.yaml \
 policy.model_name=${NRL_MODEL_PATH} \
 cluster.gpus_per_node=4 \
-cluster.num_nodes=${NUM_ACTOR_NODES} \
-policy.generation.colocated.enabled=${COLOCATED_INFERENCE} \
-policy.generation.colocated.resources.num_nodes=${GENERATION_NUM_NODES} \
+cluster.num_nodes=${NUM_TOTAL_NODES} \
+grpo.num_prompts_per_step=${PPS} \
+grpo.num_generations_per_prompt=${GPP} \
+grpo.val_period=${VAL_PERIOD} \
+grpo.advantage_clip_low=${ADVANTAGE_CLIP_LOW} \
+grpo.advantage_clip_high=${ADVANTAGE_CLIP_HIGH} \
+grpo.penalize_invalid_tool_call=false \
+grpo.penalize_malformed_thinking=false \
+policy.train_global_batch_size=${GBS} \
+policy.megatron_cfg.tensor_model_parallel_size=${TP} \
+policy.megatron_cfg.context_parallel_size=${CP} \
+policy.megatron_cfg.expert_model_parallel_size=${EP} \
+policy.megatron_cfg.pipeline_model_parallel_size=${PP} \
+policy.megatron_cfg.empty_unused_memory_level=1 \
+policy.generation.vllm_cfg.expert_parallel_size=1 \
+policy.generation.colocated.enabled=False \
+policy.generation.colocated.resources.num_nodes=${NUM_GEN_NODES} \
 policy.generation.colocated.resources.gpus_per_node=4 \
-env.nemo_gym.genrm_model.responses_api_models.genrm_model.model=${NRL_GENRM_MODEL_PATH} \
-env.nemo_gym.nl2bash_judge_model.responses_api_models.local_vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
-env.nemo_gym.safety_judge_model.responses_api_models.local_vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
+checkpointing.save_period=${SAVE_PERIOD} \
+env.nemo_gym.num_gpu_nodes=${NUM_GYM_NODES} \
+env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.server_args.max_num_seqs=256 \
+env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.server_args.max_num_seqs=256 \
+env.nemo_gym.genrm_model.responses_api_models.vllm_model.server_args.max_num_seqs=256 \
+env.nemo_gym.genrm_model.responses_api_models.vllm_model.model=${NRL_GENRM_MODEL_PATH} \
+env.nemo_gym.nl2bash_judge_model.responses_api_models.vllm_model.model=${NRL_NL2BASH_JUDGE_MODEL_PATH} \
+env.nemo_gym.safety_judge_model.responses_api_models.vllm_model.model=${NRL_SAFETY_MODEL_PATH} \
 data.train.data_path=${NRL_TRAIN_PATH} \
 data.validation.data_path=${NRL_VAL_PATH} \
 checkpointing.checkpoint_dir=${CHECKPOINT_DIR} \
-logger.log_dir=${CHECKPOINT_DIR}/logs \
+logger.log_dir=${LOG_DIR} \
 logger.wandb_enabled=True \
 logger.wandb.name=${WANDB_NAME} \
 logger.wandb.project=${WANDB_PROJ} \
 ${NRL_MAX_STEPS:+grpo.max_num_steps=${NRL_MAX_STEPS}} \
 ${PRECISION_EXTRA_ARGS} \
-${MTP_EXTRA_ARGS} \
 ${*}"
 
 
 # =============================================================================
 # Overlay mounts
-# =============================================================================
-# Local source directories are bind-mounted into the container so edits on
-# Lustre take effect without rebuilding the container.
-#
-# MOUNTED BY DEFAULT:
-#   NRL_NEMO_RL_DIR      → /opt/nemo-rl/nemo_rl          (Python package)
-#   NRL_CONFIGS_DIR      → /opt/nemo-rl/examples/configs  (YAML configs)
-#
-# OPT-IN ONLY (set the env var to enable — overlaying these shadows prebuilt
-# venvs and compiled artifacts inside the container, forcing expensive
-# re-creation at startup):
-#   NRL_MEGATRON_LM_DIR     → /opt/nemo-rl/3rdparty/Megatron-LM-workspace/Megatron-LM
-#   NRL_MEGATRON_BRIDGE_DIR → /opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-#   NRL_GYM_DIR             → /opt/nemo-rl/3rdparty/Gym-workspace/Gym
-#   NRL_VLLM_DIR            → /opt/nemo-rl/3rdparty/vllm
-#
-# To enable a 3rdparty mount, set the var to the host path. Example:
-#   NRL_GYM_DIR=/path/to/Gym ./launch_ultra_pipeclean.sh
-#
-# Paths that don't exist on disk are silently skipped (container built-ins
-# are used instead). Set any var to "" to explicitly skip a default mount.
 # =============================================================================
 NRL_NEMO_RL_DIR="${NRL_NEMO_RL_DIR:-${OVERLAY_SOURCE}/nemo_rl}"
 NRL_CONFIGS_DIR="${NRL_CONFIGS_DIR:-${OVERLAY_SOURCE}/examples/configs}"
@@ -650,16 +667,9 @@ if [[ ! -f "${RAY_SUB}" ]]; then
   exit 1
 fi
 
-# =================================================================================================================
+# =============================================================================
 # Per-node cache seeding
-# =================================================================================================================
-# Triton, Inductor, and FlashInfer cubins compile/download to node-local /tmp to avoid Lustre race conditions
-# and file lock contention during concurrent JIT compilation and cubin fetching.
-# To avoid cold-start penalties, we seed /tmp from a warm Lustre cache before Ray starts (SETUP_COMMAND).
-#
-# IMPORTANT: Stale /tmp caches from previous jobs can cause hangs (e.g. triton_bundler
-# skipping non-empty temp dirs). We rm -rf /tmp caches first, then seed fresh from Lustre.
-# =================================================================================================================
+# =============================================================================
 read -r -d '' SETUP_COMMAND <<SETUPEOF || true
 command -v zstd >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq zstd; } 2>/dev/null || true
 echo "[CACHE SEED] Clearing stale /tmp caches and seeding from Lustre..."
@@ -703,27 +713,41 @@ echo "[CACHE SEED] Done."
 SETUPEOF
 export SETUP_COMMAND
 
+# =============================================================================
+# Record code provenance
+# =============================================================================
+{
+  echo "timestamp: $(date -Iseconds)"
+  echo "branch: $(git -C "${PROJECT_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  echo "commit: $(git -C "${PROJECT_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "dirty: $(git -C "${PROJECT_ROOT}" status --porcelain 2>/dev/null | head -20)"
+  echo "snapshot: ${USE_SNAPSHOT}"
+  if [[ "${USE_SNAPSHOT}" == "1" ]]; then
+    echo "snapshot_dir: ${SNAPSHOT_DIR}"
+  fi
+  echo "container: ${CONTAINER}"
+  echo "command: ${TRAIN_CMD}"
+} > "${RUN_DIR}/provenance.txt"
+
+# =============================================================================
+# Dry-run mode
+# =============================================================================
+DRY_RUN="${DRY_RUN:-0}"
+if [[ "${DRY_RUN}" == "1" ]]; then
+  echo "DRY_RUN=1 — printing TRAIN_CMD and exiting without submission."
+  echo ""
+  echo "--- TRAIN_CMD ---"
+  echo "${TRAIN_CMD}"
+  echo "--- end ---"
+  exit 0
+fi
 
 # =============================================================================
 # Interactive mode
 # =============================================================================
-# When COMMAND is empty/unset, ray.sub starts the Ray cluster then idles.
-# It creates $SLURM_SUBMIT_DIR/<jobid>-attach.sh which supports:
-#   bash <jobid>-attach.sh              # interactive shell on head node
-#   bash <jobid>-attach.sh 1            # interactive shell on worker 1
-#   COMMAND='...' bash <jobid>-attach.sh # run command non-interactively
-#
-# We save the training command to <jobid>-run-cmd.sh so the user can:
-#   1. Attach interactively and source/paste it
-#   2. Run non-interactively: COMMAND="$(cat <jobid>-run-cmd.sh)" bash <jobid>-attach.sh
-#   3. Edit and re-run without requeueing
-# =============================================================================
 if [[ "${INTERACTIVE}" == "1" ]]; then
-  # Ensure COMMAND is not in the environment. ray.sub does COMMAND=${COMMAND:-}
-  # so unset → empty string → idle mode (creates attach script, sleeps forever).
   unset COMMAND 2>/dev/null || true
 
-  # Interactive allocations default to 1h; INTERACTIVE_WALLTIME overrides.
   WALLTIME="${INTERACTIVE_WALLTIME:-4:0:0}"
 
   echo ""
@@ -731,13 +755,13 @@ if [[ "${INTERACTIVE}" == "1" ]]; then
   echo "  INTERACTIVE MODE"
   echo "================================================================"
   echo "  Submitting ${NUM_TOTAL_NODES}-node allocation (walltime: ${WALLTIME})"
-  echo "  Ray cluster will start and idle until you attach."
+  echo "  Ray cluster will start; training auto-runs when ready."
   echo ""
 
   submission_output=$(sbatch \
     --nodes="${NUM_TOTAL_NODES}" \
     --account="${SLURM_ACCOUNT}" \
-    --job-name="interactive-${WANDB_NAME}" \
+    --job-name="interactive-${EXP_SUFFIX}" \
     --partition=batch \
     --time="${WALLTIME}" \
     --gres=gpu:4 \
@@ -745,6 +769,8 @@ if [[ "${INTERACTIVE}" == "1" ]]; then
     --mem=0 \
     ${SEGMENT_SIZE:+--segment="${SEGMENT_SIZE}"} \
     ${SLURM_QOS:+--qos="${SLURM_QOS}"} \
+    --output="${SLURM_LOG_DIR}/%j.out" \
+    --error="${SLURM_LOG_DIR}/%j.err" \
     "${RAY_SUB}")
 
   echo "${submission_output}"
@@ -756,30 +782,59 @@ if [[ "${INTERACTIVE}" == "1" ]]; then
     exit 1
   fi
 
-  # ray.sub writes the attach script to $SLURM_SUBMIT_DIR/<jobid>-attach.sh.
-  # SLURM_SUBMIT_DIR is the cwd when sbatch was invoked, which is our $(pwd).
   LAUNCH_DIR="$(pwd)"
   ATTACH_SCRIPT="${LAUNCH_DIR}/${JOB_ID}-attach.sh"
   CMD_FILE="${LAUNCH_DIR}/${JOB_ID}-run-cmd.sh"
 
-  # Save the training command. This file is intended to be:
-  #   - Sourced from inside an interactive attach session, OR
-  #   - Passed via: COMMAND="$(cat <file>)" bash <jobid>-attach.sh
   cat > "${CMD_FILE}" <<CMDEOF
 ${TRAIN_CMD}
 CMDEOF
   chmod +x "${CMD_FILE}"
 
+  WATCHER_LOG="${LAUNCH_DIR}/${JOB_ID}-watcher.log"
+
+  nohup bash -c '
+    set -euo pipefail
+    ATTACH_SCRIPT="'"${ATTACH_SCRIPT}"'"
+    CMD_FILE="'"${CMD_FILE}"'"
+    JOB_ID="'"${JOB_ID}"'"
+
+    echo "[$(date)] Watcher started for job ${JOB_ID}"
+    echo "[$(date)] Polling for attach script: ${ATTACH_SCRIPT}"
+
+    while [[ ! -f "${ATTACH_SCRIPT}" ]]; do
+      state=$(squeue -j "${JOB_ID}" -h -o "%T" 2>/dev/null || true)
+      if [[ -z "${state}" ]]; then
+        echo "[$(date)] Job ${JOB_ID} is no longer in the queue. Exiting watcher."
+        exit 1
+      fi
+      echo "[$(date)] Job state: ${state}"
+      sleep 15
+    done
+
+    echo "[$(date)] Ray cluster ready. Auto-running training command..."
+    COMMAND="$(cat "${CMD_FILE}")" bash "${ATTACH_SCRIPT}"
+    rc=$?
+    echo "[$(date)] Training command finished (exit code: ${rc})."
+    echo "[$(date)] Allocation is still alive — re-attach with:"
+    echo "  bash ${ATTACH_SCRIPT}"
+  ' > "${WATCHER_LOG}" 2>&1 &
+
+  WATCHER_PID=$!
+  disown "${WATCHER_PID}"
+
   echo ""
   echo "  Saved training command to:"
   echo "    ${CMD_FILE}"
   echo ""
-  echo "  Attach to the cluster when Ray is ready:"
-  echo "    bash ${ATTACH_SCRIPT}"
+  echo "  Background watcher running (PID: ${WATCHER_PID})"
+  echo "    Log: ${WATCHER_LOG}"
+  echo "    tail -f ${WATCHER_LOG}"
   echo ""
-  echo "  Then run the training command:"
-  echo "    source ${CMD_FILE}"
-  echo "    # or: COMMAND=\"\$(cat ${CMD_FILE})\" bash ${ATTACH_SCRIPT}"
+  echo "  Training will auto-start when Ray is ready, even if you're away."
+  echo ""
+  echo "  After training finishes, the allocation stays alive. Re-attach with:"
+  echo "    bash ${ATTACH_SCRIPT}"
   echo ""
   echo "  Between runs (clean up GPUs, clear caches, re-run):"
   echo "    python ${PROJECT_ROOT}/reset_ray_cluster.py"
@@ -790,10 +845,11 @@ CMDEOF
   echo "    source ${CMD_FILE}"
   echo ""
   echo "  Cancel: scancel ${JOB_ID}"
+  echo "  Kill watcher: kill ${WATCHER_PID}"
 
   if [[ "${INTERACTIVE_WAIT}" == "1" ]]; then
     echo ""
-    echo "  Waiting in foreground for Ray to be ready (Ctrl+C to stop waiting)..."
+    echo "  Also waiting in foreground (Ctrl+C is safe — watcher continues)..."
     echo ""
 
     prev_state=""
@@ -801,6 +857,7 @@ CMDEOF
       state=$(squeue -j "${JOB_ID}" -h -o "%T" 2>/dev/null || true)
       if [[ -z "${state}" ]]; then
         echo "  Job ${JOB_ID} is no longer in the queue. Check: sacct -j ${JOB_ID}"
+        echo "  (Watcher may have already handled this — check ${WATCHER_LOG})"
         exit 1
       fi
       if [[ "${state}" != "${prev_state}" ]]; then
@@ -811,8 +868,10 @@ CMDEOF
     done
 
     echo ""
-    echo "  Ray cluster is ready! Attach with:"
+    echo "  Ray cluster is ready! Watcher is auto-running the training command."
+    echo "  You can attach to monitor:"
     echo "    bash ${ATTACH_SCRIPT}"
+    echo "    tail -f ${WATCHER_LOG}"
     echo ""
   fi
 
@@ -824,16 +883,28 @@ fi
 # =============================================================================
 export COMMAND="${TRAIN_CMD}"
 
-sbatch \
+SBATCH_OUTPUT=$(sbatch \
   --nodes="${NUM_TOTAL_NODES}" \
   --account="${SLURM_ACCOUNT}" \
-  --job-name="${WANDB_NAME}" \
+  --job-name="${JOB_NAME}" \
   --partition="${PARTITION}" \
   --time="${WALLTIME}" \
   --gres=gpu:4 \
   --exclusive \
   --mem=0 \
-  --dependency=singleton \
+  --dependency="${SBATCH_DEPENDENCY:-singleton}" \
   ${SEGMENT_SIZE:+--segment="${SEGMENT_SIZE}"} \
   ${SLURM_QOS:+--qos="${SLURM_QOS}"} \
-  "${RAY_SUB}"
+  ${EXCLUDE_NODES:+--exclude="${EXCLUDE_NODES}"} \
+  --output="${SLURM_LOG_DIR}/%j.out" \
+  --error="${SLURM_LOG_DIR}/%j.err" \
+  "${RAY_SUB}")
+
+echo "${SBATCH_OUTPUT}"
+JOB_ID=$(echo "${SBATCH_OUTPUT}" | grep -oP '\d+$')
+
+if [[ -n "${JOB_ID}" ]]; then
+  echo ""
+  echo "  Ray logs:    ${BASE_LOG_DIR}/${JOB_ID}-logs/"
+  echo ""
+fi

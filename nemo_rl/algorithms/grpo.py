@@ -2556,6 +2556,9 @@ def grpo_train(
                 train_results, metrics, timing_metrics, master_config
             )
 
+            metrics.pop("generation_logger_metrics", None)
+            for _hk in [k for k in metrics if k.startswith("histogram/")]:
+                del metrics[_hk]
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(
                 performance_metrics, total_steps + 1, prefix="performance"
@@ -3080,6 +3083,11 @@ def async_grpo_train(
     timer.stop("init/total")
     print(f"✅ Buffer ready for step {step}! Starting training loop...")
 
+    # Snapshot spec decode counters before training loop so we can
+    # report per-step deltas (acceptance rate, draft tokens, etc.).
+    if hasattr(policy_generation, "snapshot_step_metrics"):
+        policy_generation.snapshot_step_metrics()
+
     # Main training loop
     try:
         while step < master_config["grpo"]["max_num_steps"]:
@@ -3587,6 +3595,10 @@ def async_grpo_train(
                     else:
                         metrics[k] = np.sum(v).item()
                 metrics.update(rollout_metrics)
+                if hasattr(policy_generation, "get_step_metrics"):
+                    gen_step_metrics = policy_generation.get_step_metrics()
+                    metrics.update(gen_step_metrics)
+                    policy_generation.snapshot_step_metrics()
                 if generation_logger_metrics is not None:
                     metrics["generation_logger_metrics"] = generation_logger_metrics
                 total_valid_tokens += metrics["global_valid_toks"]
@@ -3831,6 +3843,9 @@ def async_grpo_train(
             )
 
             logger.log_metrics(performance_metrics, step + 1, prefix="performance")
+            metrics.pop("generation_logger_metrics", None)
+            for _hk in [k for k in metrics if k.startswith("histogram/")]:
+                del metrics[_hk]
             logger.log_metrics(metrics, step + 1, prefix="train")
             logger.log_metrics(timing_metrics, step + 1, prefix="timing/train")
             # step_finished=True here since this is the final log of our current step.

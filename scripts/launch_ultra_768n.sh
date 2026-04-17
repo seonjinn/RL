@@ -24,6 +24,10 @@ set -euo pipefail
 # Extra positional arguments are forwarded as Hydra overrides:
 #   ./launch_ultra_768n.sh grpo.max_num_steps=2 policy.precision=float32
 #
+# Enable MTP (multi-token prediction) speculative decoding for vLLM:
+#   ENABLE_MTP_INFERENCE=1 ./launch_ultra_768n.sh
+#   ENABLE_MTP_INFERENCE=1 NUM_SPECULATIVE_TOKENS=3 ./launch_ultra_768n.sh
+#
 # =============================================================================
 
 # =============================================================================
@@ -108,6 +112,27 @@ export WANDB_ENTITY
 # Training
 # =============================================================================
 NRL_MAX_STEPS="${NRL_MAX_STEPS:-}"
+
+# =============================================================================
+# MTP speculative decoding (optional)
+# =============================================================================
+# Set ENABLE_MTP_INFERENCE=1 to turn on MTP speculative decoding for vLLM inference.
+# Tune via NUM_SPECULATIVE_TOKENS / MAX_NUM_BATCHED_TOKENS if needed.
+ENABLE_MTP_INFERENCE="${ENABLE_MTP_INFERENCE:-0}"
+NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-5}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8480}"
+MTP_EXTRA_ARGS=""
+if [[ "${ENABLE_MTP_INFERENCE}" == "1" ]]; then
+  MTP_EXTRA_ARGS="\
+++policy.generation.vllm_cfg.enable_prefix_caching=true \
+++policy.generation.vllm_kwargs.enable_chunked_prefill=true \
+++policy.generation.vllm_kwargs.max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS} \
+++policy.generation.vllm_kwargs.mamba_cache_mode=align \
+~policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes \
+++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${NUM_SPECULATIVE_TOKENS} \
+++policy.generation.vllm_kwargs.speculative_config.method=mtp"
+  echo "MTP speculative decoding ENABLED (num_speculative_tokens=${NUM_SPECULATIVE_TOKENS})"
+fi
 
 # =============================================================================
 # Job shape — specify the 3 intuitive node counts; everything else is derived.
@@ -472,6 +497,7 @@ logger.wandb_enabled=True \
 logger.wandb.name=${WANDB_NAME} \
 logger.wandb.project=${WANDB_PROJ} \
 ${NRL_MAX_STEPS:+grpo.max_num_steps=${NRL_MAX_STEPS}} \
+${MTP_EXTRA_ARGS} \
 ${*}"
 
 export COMMAND="${TRAIN_CMD}"
