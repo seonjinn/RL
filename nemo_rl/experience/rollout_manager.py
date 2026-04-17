@@ -225,7 +225,9 @@ def select_prompt_groups(
         )
         scores = -response_lens.to(rewards.device).float()
     elif selection_metric == "random":
-        scores = torch.rand(total_prompts, device=rewards.device)
+        # Use CPU RNG (seeded by grpo.seed via set_seed) so random selection
+        # is reproducible; CUDA RNG state is advanced by unrelated kernels.
+        scores = torch.rand(total_prompts).to(rewards.device)
     else:
         raise ValueError(f"Unknown selection_metric: {selection_metric}")
 
