@@ -3833,7 +3833,8 @@ def async_grpo_train(
             logger.log_metrics(performance_metrics, step + 1, prefix="performance")
             logger.log_metrics(metrics, step + 1, prefix="train")
             logger.log_metrics(timing_metrics, step + 1, prefix="timing/train")
-            logger.log_metrics(efficiency_loggable, step + 1, prefix="")
+            # step_finished=True here since this is the final log of our current step.
+            logger.log_metrics(efficiency_loggable, step + 1, prefix="", step_finished=True)
 
             timer.reset()
             step += 1
