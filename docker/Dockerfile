@@ -53,6 +53,8 @@ apt-get install -y --no-install-recommends \
     less \
     vim \
     zstd \
+    libxrender1 \
+    libxext6 \
 
 # Nsight
 apt install -y --no-install-recommends gnupg
