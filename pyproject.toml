@@ -13,7 +13,7 @@ readme = { file = "README.md", content-type = "text/markdown" }
 name = "nemo-rl"
 dynamic = ["version", "readme"]
 description = "NeMo RL: A Scalable and Efficient Post-Training Library for Models Ranging from 1 GPU to 1000s, and from Tiny to >100B Parameters"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 license = { text = "Apache 2.0" }
 dependencies = [
   "setuptools",
@@ -216,6 +216,11 @@ explicit = true
 
 [tool.uv]
 preview = true # Enable preview features like extra-build-dependencies
+# Restrict resolution to linux only
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 extra-build-variables = { sgl-kernel = { CMAKE_BUILD_PARALLEL_LEVEL = "24", FLASHINFER_CUDA_ARCH_LIST = "9.0a 10.0a", CMAKE_ARGS = "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" }, flashinfer-jit-cache = { FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a" } }
 no-build-isolation-package = [
   "transformer-engine-torch",
@@ -259,6 +264,7 @@ override-dependencies = [
   "opentelemetry-exporter-otlp==1.39.1",
   "opentelemetry-exporter-otlp-proto-grpc==1.39.1",
   "opentelemetry-proto==1.39.1",
+  "opentelemetry-exporter-prometheus==0.60b0",
   "nvidia-cutlass-dsl>=4.3.4",
   # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
   "setuptools>=80.10.2",
