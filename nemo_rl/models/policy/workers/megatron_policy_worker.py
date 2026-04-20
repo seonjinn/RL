@@ -1048,6 +1048,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             [self.model],
             show_progress=False,
             conversion_tasks=self.refit_conversion_tasks,  # used for metadata caching
+            merge_adapter_weights=False,  # skip the extra module walk looking for adapter weights
         )
 
         # Yield the original parameters first.
