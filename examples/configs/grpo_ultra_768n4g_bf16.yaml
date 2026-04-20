@@ -560,7 +560,6 @@ env:
       responses_api_models:
         genrm_model:
           entrypoint: app.py
-          base_url: null
           api_key: dummy_key
           model: null   # Set by launch script
           uses_reasoning_parser: true
