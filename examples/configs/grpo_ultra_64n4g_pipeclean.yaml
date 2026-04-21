@@ -416,6 +416,7 @@ env:
       - resources_servers/format_verification/configs/citation_format.yaml
       - resources_servers/rdkit_chemistry/configs/rdkit_chemistry.yaml
       - resources_servers/jailbreak_detection/configs/jailbreak_detection_nemotron_combined_reward_tp8.yaml
+      - resources_servers/over_refusal_detection/configs/over_refusal_detection_nemotron_tp8.yaml
       - resources_servers/indirect_prompt_injection/configs/indirect_prompt_injection.yaml
 
     abstention:
