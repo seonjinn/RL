@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ from nemo_rl.utils.fastokens import maybe_patch_fastokens
 from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
 from nemo_rl.models.policy import TokenizerConfig
 from nemo_rl.utils.logger import Logger
+from nemo_rl.utils.vlm_debug import debug_enabled, stable_hash, write_stage
 
 
 def calculate_kl(
@@ -193,6 +194,112 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def _special_token_id(tokenizer: PreTrainedTokenizerBase, token: str) -> int | None:
+    try:
+        vocab = tokenizer.get_vocab()
+    except Exception:
+        vocab = None
+
+    if isinstance(vocab, dict) and token not in vocab:
+        return None
+
+    try:
+        token_id = tokenizer.convert_tokens_to_ids(token)
+    except Exception:
+        return None
+
+    if token_id is None:
+        return None
+
+    return int(token_id)
+
+
+def _debug_config_value(processor: Any, config: Any, field_name: str) -> Any:
+    search_order = (
+        processor,
+        getattr(processor, "image_processor", None),
+        config,
+        getattr(config, "vision_config", None),
+    )
+    for source in search_order:
+        if source is None:
+            continue
+        value = getattr(source, field_name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _load_debug_config(model_name: str, processor: Any) -> Any:
+    config = getattr(processor, "config", None)
+    if config is not None:
+        return config
+
+    try:
+        from transformers import AutoConfig
+
+        return AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    except Exception:
+        return None
+
+
+def _write_processor_init_debug(
+    tokenizer_config: TokenizerConfig,
+    tokenizer: PreTrainedTokenizerBase,
+    processor: Any,
+) -> None:
+    if not debug_enabled() or processor is None:
+        return
+
+    config = _load_debug_config(tokenizer_config["name"], processor)
+    architectures = getattr(config, "architectures", None) if config is not None else None
+    architecture = architectures[0] if architectures else getattr(config, "model_type", None)
+    chat_template = getattr(processor, "chat_template", None) or tokenizer.chat_template
+
+    dynamic_resolution_config = {}
+    for field_name in (
+        "patch_size",
+        "min_num_patches",
+        "max_num_patches",
+        "max_num_tiles",
+        "downsample_ratio",
+        "force_image_size",
+        "use_thumbnail",
+        "max_resolution",
+        "preferred_resolution",
+        "video_temporal_patch_size",
+    ):
+        value = _debug_config_value(processor, config, field_name)
+        if value is not None:
+            dynamic_resolution_config[field_name] = value
+
+    write_stage(
+        "processor_init",
+        {
+            "checkpoint": tokenizer_config["name"],
+            "processor_class": type(processor).__name__,
+            "tokenizer_class": type(tokenizer).__name__,
+            "config_class": type(config).__name__ if config is not None else None,
+            "architecture": architecture,
+            "processor_model_input_names": list(
+                getattr(processor, "model_input_names", []) or []
+            ),
+            "image_processor_model_input_names": list(
+                getattr(getattr(processor, "image_processor", None), "model_input_names", [])
+                or []
+            ),
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+            "bos_token_id": tokenizer.bos_token_id,
+            "image_token_id": _special_token_id(tokenizer, "<image>"),
+            "image_start_token_id": _special_token_id(tokenizer, "<img>"),
+            "image_end_token_id": _special_token_id(tokenizer, "</img>"),
+            "chat_template_hash": stable_hash(chat_template),
+            "dynamic_resolution_config": dynamic_resolution_config,
+        },
+    )
+
+
 def get_tokenizer(
     tokenizer_config: TokenizerConfig, get_processor: bool = False
 ) -> PreTrainedTokenizerBase:
@@ -270,16 +377,45 @@ def get_tokenizer(
     maybe_patch_fastokens()
 
     processor = None
+    processor_config = None
 
     if get_processor:
         processor = AutoProcessor.from_pretrained(
             tokenizer_config["name"], trust_remote_code=True, use_fast=True
         )
-        tokenizer = processor.tokenizer
+        tokenizer = getattr(processor, "tokenizer", None)
+        if tokenizer is None:
+            raise ValueError(
+                "Expected processor to expose a tokenizer for multimodal training."
+            )
+
+        from transformers import AutoConfig
+
+        processor_config = AutoConfig.from_pretrained(
+            tokenizer_config["name"], trust_remote_code=True
+        )
+        from nemo_rl.models.nano_v3_vl import (
+            DynamicResolutionProcessor,
+            is_dynamic_resolution_model,
+        )
+
+        if is_dynamic_resolution_model(processor_config):
+            print("Using DynamicResolutionProcessor")
+            processor = DynamicResolutionProcessor(
+                tokenizer,
+                processor_config,
+                chat_template=getattr(tokenizer, "chat_template", None),
+            )
+            tokenizer = processor.tokenizer
     else:
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_config["name"], trust_remote_code=True
         )
+
+    def set_chat_template(chat_template: str) -> None:
+        tokenizer.chat_template = chat_template
+        if processor is not None:
+            processor.chat_template = chat_template
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -287,7 +423,7 @@ def get_tokenizer(
     if "chat_template" in tokenizer_config:
         if tokenizer_config["chat_template"] is None:
             print("Using passthrough chat template")
-            tokenizer.chat_template = COMMON_CHAT_TEMPLATES.passthrough_prompt_response
+            set_chat_template(COMMON_CHAT_TEMPLATES.passthrough_prompt_response)
         elif tokenizer_config["chat_template"].lower() == "default":
             print("Using tokenizer's default chat template")
         elif tokenizer_config["chat_template"].endswith(".jinja"):
@@ -295,12 +431,15 @@ def get_tokenizer(
             template_path = tokenizer_config["chat_template"]
             print(f"Loading chat template from file: {template_path}")
             with open(template_path, "r") as f:
-                tokenizer.chat_template = f.read()
+                set_chat_template(f.read())
         else:
             print("Using custom chat template")
-            tokenizer.chat_template = tokenizer_config["chat_template"]
+            set_chat_template(tokenizer_config["chat_template"])
     else:
         print("No chat template provided, using tokenizer's default")
+
+    if processor is not None and getattr(processor, "chat_template", None) is None:
+        processor.chat_template = tokenizer.chat_template
 
     if (
         "chat_template_kwargs" in tokenizer_config
@@ -325,6 +464,8 @@ def get_tokenizer(
         processor.bos_token_id = tokenizer.bos_token_id
         # copy name_or_path from tokenizer to processor for logging
         processor.name_or_path = tokenizer.name_or_path
+
+    _write_processor_init_debug(tokenizer_config, tokenizer, processor)
 
     return tokenizer if processor is None else processor
 

@@ -24,6 +24,7 @@ from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.utils import setup_response_data
 from nemo_rl.distributed.virtual_cluster import init_ray
 from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models import nemotron_h_nano_vl
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
@@ -48,6 +49,7 @@ def main() -> None:
     """Main entry point."""
     main_start = time.perf_counter()
     log_container_init_timing()
+    nemotron_h_nano_vl.register()
 
     rl_init_timer = Timer(context={"worker": "driver"})
 
