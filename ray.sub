@@ -534,6 +534,8 @@ export RAY_raylet_report_resources_period_milliseconds=$RAY_raylet_report_resour
 export RAY_subscriber_timeout_ms=$RAY_subscriber_timeout_ms
 export RAY_task_events_report_interval_ms=$RAY_task_events_report_interval_ms
 export RAY_worker_register_timeout_seconds=$RAY_worker_register_timeout_seconds
+# Propagate optional submit-host overrides into the Ray containers.
+${NEMO_RL_VENV_DIR:+export NEMO_RL_VENV_DIR="$NEMO_RL_VENV_DIR"}
 # Only export cache directories when they are set on the submit host
 ${LUSTRE_VLLM_CACHE:+export LUSTRE_VLLM_CACHE=$LUSTRE_VLLM_CACHE}
 ${NRL_VLLM_LOCAL_CACHE_DIR:+export NRL_VLLM_LOCAL_CACHE_DIR=$NRL_VLLM_LOCAL_CACHE_DIR; export VLLM_CACHE_ROOT=$NRL_VLLM_LOCAL_CACHE_DIR}

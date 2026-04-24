@@ -18,12 +18,13 @@ import pytest
 import torch
 
 from nemo_rl.data.multimodal_utils import PackedTensor
-from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict, SlicedDataDict
 from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
     compute_spec_decode_metrics,
     format_prompt_for_vllm_generation,
 )
+from nemo_rl.models.generation.vllm.vllm_generation import _build_compact_mm_payload
 
 
 def _mk_inputs(batch_size: int = 2, seq_len: int = 5):
@@ -119,6 +120,45 @@ def test_vllm_utils_vlm_adds_precomputed_sizes_from_list_form():
     assert prompt["mm_processor_kwargs"] == {
         "precomputed_imgs_sizes": [[10, 12]]
     }
+
+
+def test_vllm_utils_vlm_compact_payload_matches_raw_prompt_format():
+    input_ids = torch.arange(15).view(3, 5)
+    input_lengths = torch.tensor([5, 4, 3])
+    raw_data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths,
+            "vllm_content": ["prompt-a", "prompt-a", None],
+            "vllm_images": [["img1"], ["img1"], []],
+            "imgs_sizes": PackedTensor(
+                [
+                    torch.tensor([[4, 5]], dtype=torch.int32),
+                    torch.tensor([[4, 5]], dtype=torch.int32),
+                    torch.tensor([[9, 9]], dtype=torch.int32),
+                ],
+                dim_to_pack=0,
+            ),
+            "vllm_max_num_tiles": [12, 12, None],
+        }
+    )
+
+    raw_prompts = format_prompt_for_vllm_generation(raw_data)
+
+    compact_data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths,
+            "imgs_sizes": raw_data["imgs_sizes"],
+            "vllm_mm_compact_payload": _build_compact_mm_payload(
+                SlicedDataDict(dict(raw_data))
+            ),
+        }
+    )
+
+    compact_prompts = format_prompt_for_vllm_generation(compact_data)
+
+    assert compact_prompts == raw_prompts
 
 
 def test_vllm_utils_vlm_with_missing_images_fallback_to_tokens():

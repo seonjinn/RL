@@ -43,7 +43,7 @@ dependencies = [
   "plotly",
   "sympy>=1.14.0",
   "pillow>=11.3.0",
-  "torchvision==0.25.0",
+  "torchvision>=0.22.0",
   "num2words>=0.5.14",                                                                                                # for SmolVLM
   "mlflow>=3.5.0,<3.6.0",
   "nvidia-nvshmem-cu12; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')", # for deep_ep build
@@ -71,7 +71,7 @@ automodel = [
   "transformer-engine[pytorch]==2.12.0",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@7febc6e25660af0f54d95dd781ecdcd62265ecca",
 ]
-vllm = ["cuda-python", "deep_gemm @ git+https://github.com/deepseek-ai/DeepGEMM.git@7b6b5563b9d4c1ae07ffbce7f78ad3ac9204827c", "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@7febc6e25660af0f54d95dd781ecdcd62265ecca", "num2words>=0.5.14", "vllm", "flashinfer-python", "mamba-ssm", "flashinfer-cubin", "flashinfer-jit-cache==0.6.5+cu129"]
+vllm = ["cuda-python", "deep_gemm @ git+https://github.com/deepseek-ai/DeepGEMM.git@7b6b5563b9d4c1ae07ffbce7f78ad3ac9204827c", "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@7febc6e25660af0f54d95dd781ecdcd62265ecca", "num2words>=0.5.14", "vllm", "flashinfer-python", "mamba-ssm", "msgspec"]
 sglang = [
   "sglang==0.5.7",
   "orjson",

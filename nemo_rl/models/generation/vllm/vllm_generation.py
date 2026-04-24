@@ -44,14 +44,182 @@ from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
     compute_spec_decode_metrics,
 )
+from nemo_rl.utils.multimodal_payload_metrics import (
+    collect_multimodal_payload_metrics,
+    print_multimodal_payload_metrics,
+)
 
 # Global thresholds for top_k and top_p validation.
 # While top-k/p are not supported, these values allow for token filtering while the logprobs should be compatible.
 # See https://github.com/NVIDIA-NeMo/RL/issues/69 and https://github.com/NVIDIA-NeMo/RL/issues/237 for more details.
 TOP_K_THRESHOLD = 8000  # Allow top_k >= 8000 (effectively no filtering)
 TOP_P_THRESHOLD = 0.99  # Allow top_p >= 0.99 (close to 1.0)
+_COMPACT_SCHEMA_VERSION = 2
 
 logger = logging.getLogger(__name__)
+
+
+def _row_has_real_images(images: Any) -> bool:
+    return (
+        isinstance(images, (list, tuple))
+        and len(images) > 0
+        and (not isinstance(images[0], str) or images[0] != "__noimage__")
+    )
+
+
+def _has_nonempty_sequence(values: Any) -> bool:
+    if values is None:
+        return False
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            if len(value) > 0:
+                return True
+        elif value is not None:
+            return True
+    return False
+
+
+def _can_compact_multimodal_payload(shard: SlicedDataDict) -> bool:
+    """Return whether a shard can use Gate 6 image-only compact transport."""
+    if "vllm_content" not in shard or "vllm_images" not in shard:
+        return False
+
+    # Gate 6 is intentionally image-only. Keep video/audio on the raw path.
+    if _has_nonempty_sequence(shard.get("vllm_videos", None)):
+        return False
+    if _has_nonempty_sequence(shard.get("vllm_audio_paths", None)):
+        return False
+
+    vllm_content = shard["vllm_content"]
+    vllm_images = shard["vllm_images"]
+    has_real_image_row = False
+
+    for index, content in enumerate(vllm_content):
+        if content is not None and not isinstance(content, str):
+            return False
+
+        images = vllm_images[index]
+        if images is None:
+            continue
+        if not isinstance(images, (list, tuple)):
+            return False
+        if not _row_has_real_images(images):
+            continue
+        if not all(isinstance(image, str) for image in images):
+            return False
+        has_real_image_row = True
+
+    return has_real_image_row
+
+
+def _build_compact_mm_payload(shard: SlicedDataDict) -> dict[str, Any]:
+    """Build a compact image-only multimodal payload for a sharded batch."""
+    row_count = len(shard["input_ids"])
+
+    unique_contents: list[str] = []
+    unique_images: list[str] = []
+    content_to_idx: dict[str, int] = {}
+    image_to_idx: dict[str, int] = {}
+
+    row_use_token_prompt: list[bool] = []
+    row_content_idx: list[int] = []
+    row_image_ref_indices: list[list[int]] = []
+    row_max_num_tiles: list[Any] = []
+    row_max_num_patches: list[Any] = []
+
+    vllm_content = shard.get("vllm_content", None)
+    vllm_images = shard.get("vllm_images", None)
+    vllm_max_num_tiles = shard.get("vllm_max_num_tiles", None)
+    vllm_max_num_patches = shard.get("vllm_max_num_patches", None)
+
+    for index in range(row_count):
+        content = vllm_content[index] if vllm_content is not None else None
+        images = vllm_images[index] if vllm_images is not None else None
+        has_real_images = _row_has_real_images(images)
+
+        if content is None or not has_real_images:
+            row_use_token_prompt.append(True)
+            row_content_idx.append(-1)
+            row_image_ref_indices.append([])
+            row_max_num_tiles.append(
+                vllm_max_num_tiles[index] if vllm_max_num_tiles is not None else None
+            )
+            row_max_num_patches.append(
+                vllm_max_num_patches[index]
+                if vllm_max_num_patches is not None
+                else None
+            )
+            continue
+
+        row_use_token_prompt.append(False)
+
+        if content not in content_to_idx:
+            content_to_idx[content] = len(unique_contents)
+            unique_contents.append(content)
+        row_content_idx.append(content_to_idx[content])
+
+        image_refs: list[int] = []
+        for image in images:
+            if image not in image_to_idx:
+                image_to_idx[image] = len(unique_images)
+                unique_images.append(image)
+            image_refs.append(image_to_idx[image])
+        row_image_ref_indices.append(image_refs)
+
+        row_max_num_tiles.append(
+            vllm_max_num_tiles[index] if vllm_max_num_tiles is not None else None
+        )
+        row_max_num_patches.append(
+            vllm_max_num_patches[index] if vllm_max_num_patches is not None else None
+        )
+
+    return {
+        "schema_version": _COMPACT_SCHEMA_VERSION,
+        "row_count": row_count,
+        "row_use_token_prompt": row_use_token_prompt,
+        "row_content_idx": row_content_idx,
+        "row_image_ref_indices": row_image_ref_indices,
+        "unique_contents": unique_contents,
+        "unique_images": unique_images,
+        "row_max_num_tiles": row_max_num_tiles,
+        "row_max_num_patches": row_max_num_patches,
+    }
+
+
+def _aggregate_shard_payload_metrics(
+    sharded_data: list[SlicedDataDict], boundary: str
+) -> dict[str, float | int]:
+    bytes_tensor = f"payload_bytes/{boundary}/tensor_mm"
+    bytes_non_tensor = f"payload_bytes/{boundary}/non_tensor_mm"
+    bytes_total = f"payload_bytes/{boundary}/total_mm"
+    rows_key = f"payload_counts/{boundary}/logical_rows"
+    prompts_key = f"payload_counts/{boundary}/unique_prompts"
+    items_key = f"payload_counts/{boundary}/unique_mm_items"
+    ratio_key = f"payload_ratio/{boundary}/logical_to_unique"
+
+    aggregate = {
+        bytes_tensor: 0,
+        bytes_non_tensor: 0,
+        bytes_total: 0,
+        rows_key: 0,
+        prompts_key: 0,
+        items_key: 0,
+        ratio_key: 0.0,
+    }
+
+    for shard in sharded_data:
+        metrics = collect_multimodal_payload_metrics(shard, boundary=boundary)
+        aggregate[bytes_tensor] += int(metrics[bytes_tensor])
+        aggregate[bytes_non_tensor] += int(metrics[bytes_non_tensor])
+        aggregate[bytes_total] += int(metrics[bytes_total])
+        aggregate[rows_key] += int(metrics[rows_key])
+        aggregate[prompts_key] += int(metrics[prompts_key])
+        aggregate[items_key] += int(metrics[items_key])
+
+    prompts = int(aggregate[prompts_key])
+    rows = int(aggregate[rows_key])
+    aggregate[ratio_key] = float(rows) / float(prompts) if prompts > 0 else 0.0
+    return aggregate
 
 
 class VllmGeneration(GenerationInterface):
@@ -696,6 +864,34 @@ class VllmGeneration(GenerationInterface):
         sharded_data: list[SlicedDataDict] = data.shard_by_batch_size(
             dp_size, allow_uneven_shards=True
         )
+        debug_payload_metrics = self.cfg.get("debug_payload_metrics", False)
+
+        if self.cfg.get("deduplicate_multimodal_data", False):
+            for shard in sharded_data:
+                if not _can_compact_multimodal_payload(shard):
+                    continue
+                shard["vllm_mm_compact_payload"] = _build_compact_mm_payload(shard)
+                shard.pop("vllm_content", None)
+                shard.pop("vllm_images", None)
+                shard.pop("vllm_max_num_tiles", None)
+                shard.pop("vllm_max_num_patches", None)
+
+            print_multimodal_payload_metrics(
+                _aggregate_shard_payload_metrics(
+                    sharded_data, boundary="driver_to_vllm_generation"
+                ),
+                enabled=debug_payload_metrics,
+            )
+        else:
+            print_multimodal_payload_metrics(
+                collect_multimodal_payload_metrics(
+                    data,
+                    boundary="driver_to_vllm_generation",
+                    logical_rows=len(data["input_ids"]),
+                ),
+                enabled=debug_payload_metrics,
+            )
+
         future_bundle = self.worker_group.run_all_workers_sharded_data(
             "generate",
             data=sharded_data,

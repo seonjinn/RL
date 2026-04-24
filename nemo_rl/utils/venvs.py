@@ -28,6 +28,139 @@ git_root = os.path.abspath(os.path.join(dir_path, "../.."))
 DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 
 logger = logging.getLogger(__name__)
+_UV_RUN_PROJECT_FLAGS_WITH_VALUES = {
+    "--extra",
+    "--group",
+    "--directory",
+    "--project",
+    "--config-file",
+}
+_VLLM_PRECOMPILED_ENV_VARS = {
+    "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM",
+    "VLLM_PRECOMPILED_WHEEL_COMMIT",
+    "VLLM_PRECOMPILED_WHEEL_LOCATION",
+    "VLLM_PRECOMPILED_WHEEL_VARIANT",
+    "VLLM_USE_PRECOMPILED",
+}
+
+
+def _prepare_uv_environment_commands(
+    py_executable: str, python_path: str
+) -> tuple[list[str], list[str], list[str]]:
+    """Derive scoped bootstrap/install commands from a ``uv run`` template."""
+    exec_cmd = shlex.split(py_executable)
+    if exec_cmd[:2] != ["uv", "run"]:
+        return [], [], exec_cmd
+
+    options = exec_cmd[2:]
+    project_path = git_root
+    extras: list[str] = []
+    groups: list[str] = []
+    config_file: str | None = None
+
+    i = 0
+    while i < len(options):
+        arg = options[i]
+        if arg in _UV_RUN_PROJECT_FLAGS_WITH_VALUES and i + 1 < len(options):
+            value = options[i + 1]
+            if arg in {"--directory", "--project"}:
+                project_path = value
+            elif arg == "--extra":
+                extras.append(value)
+            elif arg == "--group":
+                groups.append(value)
+            elif arg == "--config-file":
+                config_file = value
+            i += 2
+            continue
+        i += 1
+
+    build_cmd = [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        python_path,
+        "--project",
+        project_path,
+        "--group",
+        "build",
+    ]
+    install_cmd = [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        python_path,
+        "--project",
+        project_path,
+        "--editable",
+    ]
+
+    if config_file is not None:
+        build_cmd.extend(["--config-file", config_file])
+        install_cmd.extend(["--config-file", config_file])
+    editable_target = project_path
+    if extras:
+        editable_target = f"{project_path}[{','.join(extras)}]"
+    install_cmd.append(editable_target)
+    for group in groups:
+        install_cmd.extend(["--group", group])
+
+    exec_cmd = exec_cmd.copy()
+    if "--no-sync" not in exec_cmd:
+        exec_cmd.append("--no-sync")
+
+    return build_cmd, install_cmd, exec_cmd
+
+
+def _py_executable_requests_extra(py_executable: str, extra_name: str) -> bool:
+    """Return whether a ``uv run`` template requests a given extra."""
+    exec_cmd = shlex.split(py_executable)
+    if exec_cmd[:2] != ["uv", "run"]:
+        return False
+
+    options = exec_cmd[2:]
+    i = 0
+    while i < len(options):
+        arg = options[i]
+        if arg == "--extra" and i + 1 < len(options):
+            if options[i + 1] == extra_name:
+                return True
+            i += 2
+            continue
+        if arg in _UV_RUN_PROJECT_FLAGS_WITH_VALUES and i + 1 < len(options):
+            i += 2
+            continue
+        i += 1
+    return False
+
+
+def _prepare_uv_install_env(
+    base_env: dict[str, str], py_executable: str
+) -> dict[str, str]:
+    """Prepare the environment for editable uv installs.
+
+    For vLLM actor envs, strip any container-baked precompiled-wheel overrides so
+    the editable install does not inject an incompatible native extension into the
+    vendored source tree.
+
+    TODO: Remove this workaround once the runtime container stops exporting stale
+    vLLM precompiled-wheel environment variables into NeMo RL worker env builds.
+    """
+    env = base_env.copy()
+    if _py_executable_requests_extra(py_executable, "vllm"):
+        for key in _VLLM_PRECOMPILED_ENV_VARS:
+            env.pop(key, None)
+    return env
+
+
+def _prepare_uv_bootstrap_packages(py_executable: str) -> list[str]:
+    """Prepare seed packages for a fresh uv worker environment."""
+    packages = ["setuptools", "setuptools_scm", "torch==2.9.0"]
+    if _py_executable_requests_extra(py_executable, "vllm"):
+        packages.extend(["cmake>=3.26.1", "ninja"])
+    return packages
 
 
 @lru_cache(maxsize=None)
@@ -88,24 +221,36 @@ def create_local_venv(
     #  https://docs.astral.sh/uv/concepts/projects/config/#project-environment-path
     env["UV_PROJECT_ENVIRONMENT"] = venv_path
 
-    # Split the py_executable into command and arguments
-    exec_cmd = shlex.split(py_executable)
-    # Command doesn't matter, since `uv` syncs the environment no matter the command.
+    python_path = os.path.join(venv_path, "bin", "python")
+    build_cmd, install_cmd, exec_cmd = _prepare_uv_environment_commands(
+        py_executable, python_path
+    )
+    uv_env = _prepare_uv_install_env(env, py_executable)
+    # Command doesn't matter; we only use it as a final `uv run --no-sync` sanity check.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
-    # TODO this is temporarily needed b/c container has mcore before fix to build-meta was introduced
+    # TODO: Remove this bootstrap install once the refreshed container no longer
+    # needs the pre-build-meta mcore workaround and provides the vLLM build
+    # toolchain without local seeding here.
     subprocess.run(
-        "uv pip install setuptools setuptools_scm torch==2.9.0 --torch-backend=cu129".split(),
-        env=env | {"VIRTUAL_ENV": venv_path},
+        [
+            "uv",
+            "pip",
+            "install",
+            "--torch-backend=cu129",
+            *_prepare_uv_bootstrap_packages(py_executable),
+        ],
+        env=uv_env | {"VIRTUAL_ENV": venv_path},
         check=True,
     )
 
-    # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
-    subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
-    subprocess.run(exec_cmd, env=env, check=True)
+    if build_cmd:
+        subprocess.run(build_cmd, env=uv_env, check=True)
+    if install_cmd:
+        subprocess.run(install_cmd, env=uv_env, check=True)
+    subprocess.run(exec_cmd, env=uv_env, check=True)
 
     # Return the path to the python executable in the virtual environment
-    python_path = os.path.join(venv_path, "bin", "python")
     return python_path
 
 

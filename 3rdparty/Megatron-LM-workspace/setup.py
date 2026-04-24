@@ -43,32 +43,18 @@ megatron_core_cpp_extension_source_file = "megatron/core/datasets/helpers.cpp"
 # VCS dependencies use full "pkg @ git+URL@rev" format matching pyproject.toml [tool.uv.sources]
 CACHED_DEPENDENCIES = [
     # Default dependencies from pyproject.toml
-    "torch>=2.6.0",
-    "numpy",
-    "packaging>=24.2",
+    "torch",
+    "numpy<2.0.0",
     # Dev dependencies from pyproject.toml
-    "nvidia-modelopt[torch]; sys_platform != 'darwin'",
-    "transformer-engine[pytorch,core_cu13]>=2.9.0a0,<2.12.0",
-    "nvidia-resiliency-ext",
     "tqdm",
-    "einops~=0.8",
-    "tensorstore~=0.1,!=0.1.46,!=0.1.72",
-    "nvtx~=0.2",
-    "multi-storage-client~=0.27",
-    "opentelemetry-api~=1.33.1",
-    "mamba-ssm~=2.2",
-    "causal-conv1d~=1.5",
-    "flash-linear-attention~=0.4.0",
-    "nv-grouped-gemm~=1.1",
-    "megatron-energon[av_decode]~=6.0",
-    "av",
-    "flashinfer-python~=0.5.0",
-    "wget",
-    "onnxscript",
-    # VCS dependency - must match pyproject.toml [tool.uv.sources]
-    "emerging_optimizers @ git+https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git@v0.1.0",
-    "datasets",
-    "fastapi~=0.50",
+    "einops",
+    "tensorstore!=0.1.46,!=0.1.72",
+    "nvtx",
+    "transformers",
+    "multi-storage-client",
+    "setuptools<80.0.0",
+    "nvidia-modelopt[torch]~=0.31.0; sys_platform != 'darwin'",
+    "megatron-energon[av_decode]<7",
 ]
 
 

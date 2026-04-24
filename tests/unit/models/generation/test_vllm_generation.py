@@ -25,6 +25,7 @@ import torch
 from nemo_rl.algorithms.grpo import refit_policy_generation
 from nemo_rl.algorithms.loss_functions import NLLLoss
 from nemo_rl.algorithms.utils import get_tokenizer
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.models.generation import configure_generation_config
@@ -1987,6 +1988,82 @@ def test_vllm_non_divisible_batch_handling(policy):
     assert all(outputs[key].shape[0] == 1 for key in required_keys), (
         "Output tensors should have a batch dimension of 1"
     )
+
+
+def test_vllm_generation_generate_compacts_image_only_multimodal_payload():
+    class DummySharding:
+        def get_axis_size(self, name: str) -> int:
+            assert name == "data_parallel"
+            return 1
+
+    class DummyWorkerGroup:
+        def __init__(self):
+            self.shards = None
+
+        def run_all_workers_sharded_data(
+            self,
+            method_name,
+            data,
+            in_sharded_axes,
+            replicate_on_axes,
+            output_is_replicated,
+            common_kwargs,
+        ):
+            assert method_name == "generate"
+            self.shards = data
+            return "future_bundle"
+
+        def get_all_worker_results(self, future_bundle, timeout=None):
+            assert future_bundle == "future_bundle"
+            return [
+                BatchedDataDict(
+                    {
+                        "output_ids": torch.zeros((2, 1), dtype=torch.long),
+                        "generation_lengths": torch.ones(2, dtype=torch.long),
+                        "unpadded_sequence_lengths": torch.ones(2, dtype=torch.long),
+                        "logprobs": torch.zeros((2, 1), dtype=torch.float32),
+                    }
+                )
+            ]
+
+    vllm_generation = object.__new__(VllmGeneration)
+    vllm_generation.cfg = {
+        "deduplicate_multimodal_data": True,
+        "debug_payload_metrics": False,
+        "_pad_token_id": 0,
+    }
+    vllm_generation.sharding_annotations = DummySharding()
+    vllm_generation.worker_group = DummyWorkerGroup()
+
+    test_input_data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1, 2, 3], [4, 5, 0]], dtype=torch.long),
+            "input_lengths": torch.tensor([3, 2], dtype=torch.long),
+            "vllm_content": ["prompt-a", "prompt-a"],
+            "vllm_images": [["img1"], ["img1"]],
+            "imgs_sizes": PackedTensor(
+                [
+                    torch.tensor([[4, 5]], dtype=torch.int32),
+                    torch.tensor([[4, 5]], dtype=torch.int32),
+                ],
+                dim_to_pack=0,
+            ),
+            "vllm_max_num_tiles": [12, 12],
+        }
+    )
+
+    outputs = vllm_generation.generate(test_input_data, greedy=True)
+
+    shard = vllm_generation.worker_group.shards[0]
+    assert "vllm_mm_compact_payload" in shard
+    assert "vllm_content" not in shard
+    assert "vllm_images" not in shard
+    assert "vllm_max_num_tiles" not in shard
+    assert shard["vllm_mm_compact_payload"]["unique_contents"] == ["prompt-a"]
+    assert shard["vllm_mm_compact_payload"]["unique_images"] == ["img1"]
+    assert shard["vllm_mm_compact_payload"]["row_image_ref_indices"] == [[0], [0]]
+    assert "imgs_sizes" in shard
+    assert outputs["output_ids"].shape == (2, 1)
 
 
 @pytest.mark.asyncio
