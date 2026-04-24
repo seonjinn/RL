@@ -383,30 +383,50 @@ def get_tokenizer(
         processor = AutoProcessor.from_pretrained(
             tokenizer_config["name"], trust_remote_code=True, use_fast=True
         )
-        tokenizer = getattr(processor, "tokenizer", None)
-        if tokenizer is None:
-            raise ValueError(
-                "Expected processor to expose a tokenizer for multimodal training."
-            )
-
         from transformers import AutoConfig
 
-        processor_config = AutoConfig.from_pretrained(
-            tokenizer_config["name"], trust_remote_code=True
-        )
-        from nemo_rl.models.nano_v3_vl import (
-            DynamicResolutionProcessor,
-            is_dynamic_resolution_model,
-        )
+        if (
+            not hasattr(processor, "tokenizer")
+            and "InternVL" in tokenizer_config["name"]
+        ):
+            # InternVL native checkpoint lacks a processor.
+            from nemo_rl.models.internvl import InternVLProcessor
 
-        if is_dynamic_resolution_model(processor_config):
-            print("Using DynamicResolutionProcessor")
-            processor = DynamicResolutionProcessor(
-                tokenizer,
-                processor_config,
-                chat_template=getattr(tokenizer, "chat_template", None),
+            processor_config = AutoConfig.from_pretrained(
+                tokenizer_config["name"], trust_remote_code=True
             )
-            tokenizer = processor.tokenizer
+            processor = InternVLProcessor(processor, processor_config)
+        elif hasattr(processor, "tokenizer"):
+            # Dynamic-resolution Nano checkpoints need a local wrapper to
+            # bypass HF static tiling and preserve Omni audio hooks.
+            from nemo_rl.models.nano_v3_omni import (
+                OmniDynamicResolutionProcessor,
+                is_omni_model,
+            )
+            from nemo_rl.models.nano_v3_vl import (
+                DynamicResolutionProcessor,
+                is_dynamic_resolution_model,
+            )
+
+            processor_config = AutoConfig.from_pretrained(
+                tokenizer_config["name"], trust_remote_code=True
+            )
+            if is_omni_model(processor_config):
+                print("Using OmniDynamicResolutionProcessor (vision + audio)")
+                processor = OmniDynamicResolutionProcessor(
+                    processor.tokenizer,
+                    processor_config,
+                    chat_template=processor.tokenizer.chat_template,
+                )
+            elif is_dynamic_resolution_model(processor_config):
+                print("Using DynamicResolutionProcessor (bypassing HF static tiling)")
+                processor = DynamicResolutionProcessor(
+                    processor.tokenizer,
+                    processor_config,
+                    chat_template=processor.tokenizer.chat_template,
+                )
+
+        tokenizer = processor.tokenizer
     else:
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_config["name"], trust_remote_code=True
@@ -438,7 +458,7 @@ def get_tokenizer(
     else:
         print("No chat template provided, using tokenizer's default")
 
-    if processor is not None and getattr(processor, "chat_template", None) is None:
+    if processor is not None and tokenizer.chat_template:
         processor.chat_template = tokenizer.chat_template
 
     if (

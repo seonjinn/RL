@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,169 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from collections import defaultdict
 from typing import Any, Optional
 
+import numpy as np
+
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
+
+
+class AudioLoadError(RuntimeError):
+    """Raised when audio cannot be loaded from a file path."""
+
+    def __init__(self, path: str, reason: str = "unknown"):
+        self.path = path
+        super().__init__(f"Failed to load audio from {path}: {reason}")
+
+
+def _load_audio_pyav(
+    audio_path: str,
+    target_sr: int = 16000,
+    max_duration: Optional[float] = None,
+) -> Optional[np.ndarray]:
+    """Load audio from a file using PyAV, matching SFT's AVDecoder.get_audio()."""
+    import av
+    import librosa
+
+    _debug = os.environ.get("NRL_DEBUG", "0") == "1"
+
+    try:
+        container = av.open(audio_path)
+    except Exception as e:
+        if _debug:
+            print(f"[AUDIO_PYAV] Cannot open {audio_path}: {e}", flush=True)
+        return None
+
+    if not container.streams.audio:
+        container.close()
+        if _debug:
+            print(f"[AUDIO_PYAV] No audio stream in {audio_path}", flush=True)
+        return None
+
+    stream = container.streams.audio[0]
+    stream.codec_context.thread_type = "NONE"
+    native_sr = stream.rate
+    n_channels = stream.channels if hasattr(stream, "channels") else None
+
+    chunks: list[np.ndarray] = []
+    try:
+        for frame in container.decode(audio=0):
+            arr = frame.to_ndarray().astype(np.float32)
+            if arr.ndim > 1 and arr.shape[0] > 1:
+                arr = arr.mean(axis=0)
+            elif arr.ndim > 1:
+                arr = arr.reshape(-1)
+            else:
+                arr = arr.ravel()
+            if arr.size > 0:
+                chunks.append(arr)
+    except Exception as e:
+        if _debug:
+            print(f"[AUDIO_PYAV] Decode error for {audio_path}: {e}", flush=True)
+    finally:
+        container.close()
+
+    if not chunks:
+        if _debug:
+            print(
+                f"[AUDIO_PYAV] No audio frames decoded from {audio_path}", flush=True
+            )
+        return None
+
+    waveform = np.concatenate(chunks).astype(np.float32)
+
+    if waveform.size == 0:
+        if _debug:
+            print(f"[AUDIO_PYAV] Zero-length audio from {audio_path}", flush=True)
+        return None
+
+    raw_len = len(waveform)
+
+    if native_sr != target_sr:
+        waveform = librosa.resample(waveform, orig_sr=native_sr, target_sr=target_sr)
+
+    if max_duration is not None:
+        max_samples = int(max_duration * target_sr)
+        waveform = waveform[:max_samples]
+
+    if _debug:
+        print(
+            f"[AUDIO_PYAV] _load_audio_pyav: path={audio_path.split('/')[-1]} "
+            f"native_sr={native_sr} target_sr={target_sr} "
+            f"channels={n_channels} raw_samples={raw_len} "
+            f"resampled={'yes' if native_sr != target_sr else 'no'} "
+            f"final_len={len(waveform)} "
+            f"waveform_stats(mean={waveform.mean():.6f},std={waveform.std():.6f},"
+            f"min={waveform.min():.6f},max={waveform.max():.6f}) "
+            f"first5={waveform[:5].tolist()}",
+            flush=True,
+        )
+
+    return waveform
+
+
+def load_audio_waveform(
+    audio_path: str,
+    target_sr: int = 16000,
+    max_duration: Optional[float] = None,
+    raise_on_failure: bool = False,
+    force_pyav: bool = False,
+) -> Optional[np.ndarray]:
+    """Load audio from a file path and return a 1-D float32 waveform."""
+    import librosa
+
+    _debug = os.environ.get("NRL_DEBUG", "0") == "1"
+    native_sr = None
+    waveform = None
+
+    video_extensions = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".ts"}
+    ext = os.path.splitext(audio_path)[1].lower()
+
+    if not force_pyav and ext not in video_extensions:
+        try:
+            import soundfile as sf
+
+            waveform, native_sr = sf.read(audio_path, dtype="float32", always_2d=True)
+            waveform = waveform.mean(axis=1)
+        except Exception:
+            waveform = None
+
+    if waveform is None:
+        result = _load_audio_pyav(
+            audio_path, target_sr=target_sr, max_duration=max_duration
+        )
+        if result is not None:
+            return result
+        if _debug:
+            print(f"[DEBUG] Audio load failed for {audio_path}. Skipping audio.", flush=True)
+        if raise_on_failure:
+            raise AudioLoadError(
+                audio_path, reason="both soundfile and PyAV failed"
+            )
+        return None
+
+    if waveform.size == 0:
+        if _debug:
+            print(
+                f"[DEBUG] Zero-length audio from {audio_path}. Skipping audio.",
+                flush=True,
+            )
+        if raise_on_failure:
+            raise AudioLoadError(audio_path, reason="zero-length waveform")
+        return None
+
+    waveform = waveform.astype(np.float32)
+
+    if native_sr != target_sr:
+        waveform = librosa.resample(waveform, orig_sr=native_sr, target_sr=target_sr)
+
+    if max_duration is not None:
+        max_samples = int(max_duration * target_sr)
+        waveform = waveform[:max_samples]
+    return waveform
 
 
 def format_prompt_for_vllm_generation(

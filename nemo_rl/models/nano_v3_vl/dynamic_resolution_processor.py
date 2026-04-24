@@ -16,6 +16,10 @@ import math
 import os
 from typing import Optional, Union
 
+import numpy as np
+
+_DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
+
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -23,52 +27,86 @@ from torchvision import transforms
 from transformers import BatchFeature, PretrainedConfig
 from transformers.processing_utils import ProcessorMixin
 
-from nemo_rl.models.nemotron_h_nano_vl.image_processing import (
-    dynamic_preprocess as _internvl_dynamic_preprocess,
-)
-
-_DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
-
-# Configure PIL to handle large images without warnings.
-Image.MAX_IMAGE_PIXELS = None
-
-IMG_INPUT_TAG = "<image>"
-IMG_START = "<img>"
-IMG_END = "</img>"
-IMG_CONTEXT = "<image>"
-
 
 def _wrap_enable_thinking(kwargs: dict) -> dict:
-    """Mirror ``enable_thinking`` into both template styles."""
+    """Mirror ``enable_thinking`` into both template styles.
 
+    Some Nemotron-Omni checkpoints read ``enable_thinking`` as a top-level
+    Jinja variable, while older templates read it from the nested
+    ``chat_template_kwargs`` dict. Keep the top-level kwarg intact and also
+    mirror it into ``chat_template_kwargs`` so both template variants behave
+    consistently.
+    """
     if "enable_thinking" in kwargs:
         val = kwargs["enable_thinking"]
         ct_kw = dict(kwargs.get("chat_template_kwargs", {}) or {})
         ct_kw["enable_thinking"] = val
         kwargs["chat_template_kwargs"] = ct_kw
+        if _DEBUG:
+            print(
+                f"[THINK_FIX] _wrap_enable_thinking: "
+                f"enable_thinking={val} top_level_preserved=True "
+                f"chat_template_kwargs={ct_kw}"
+            )
     return kwargs
 
 
+from nemo_rl.models.nemotron_h_nano_vl.image_processing import (
+    dynamic_preprocess as _internvl_dynamic_preprocess,
+)
+
+# Configure PIL to handle large images without warnings
+# This prevents DecompressionBombWarning for legitimate large images
+Image.MAX_IMAGE_PIXELS = None
+
+DEFAULT_NUM_TILES = 12
+
+# Incoming prompt tags
+IMG_INPUT_TAG = "<image>"
+# Preprocessed prompt placeholders
+IMG_START = "<img>"
+IMG_END = "</img>"
+IMG_CONTEXT = "<image>"
+
+
 def _flatten_images(images):
+    """Recursively flatten nested lists of images into a flat list."""
     if images is None:
         return []
     if isinstance(images, Image.Image):
         return [images]
     if isinstance(images, list):
-        flattened = []
+        result = []
         for item in images:
-            flattened.extend(_flatten_images(item))
-        return flattened
+            result.extend(_flatten_images(item))
+        return result
     return [images]
 
 
 class DynamicResolutionProcessor(ProcessorMixin):
-    """Nemotron image processor that preserves dynamic-resolution sizing."""
+    """Dual-mode image processor for VLMs (Nano v3 VL / Omni).
+
+    Mirrors the 3rdparty vLLM ``nano_nemotron_vl.py`` behavior:
+
+    * **Dynamic resolution** (default, when ``max_num_tiles`` is *not* set):
+      resizes images to variable dimensions constrained by ``max_num_patches``
+      from the model's ``vision_config``.  Returns ``pixel_values`` +
+      ``imgs_sizes`` for the RADIO vision encoder.
+
+    * **Static InternVL tiling** (when ``max_num_tiles`` *is* set):
+      splits images into fixed ``image_size x image_size`` tiles, matching
+      vLLM's ``image_to_pixel_values`` path.  Returns ``pixel_values_flat`` +
+      ``image_num_patches``.
+
+    Both ``max_num_tiles`` and ``max_num_patches`` can be overridden per-call
+    via ``**kwargs`` (plumbed from the data config).  When absent, the
+    model's ``vision_config`` defaults are used.
+    """
 
     attributes = ["tokenizer"]
     tokenizer_class = "PreTrainedTokenizerFast"
     model_input_names = ["pixel_values", "imgs_sizes"]
-    image_token = IMG_CONTEXT
+    image_token = "<image>"
 
     def __init__(
         self,
@@ -90,7 +128,8 @@ class DynamicResolutionProcessor(ProcessorMixin):
         self.image_size = getattr(config, "force_image_size", 512)
         self.use_thumbnail = getattr(config, "use_thumbnail", True)
         self.num_image_token = int(
-            (self.image_size // self.patch_size) ** 2 * (self.downsample_ratio**2)
+            (self.image_size // self.patch_size) ** 2
+            * (self.downsample_ratio**2)
         )
 
         norm_mean = vision_args.get("norm_mean", [0.48145466, 0.4578275, 0.40821073])
@@ -98,48 +137,278 @@ class DynamicResolutionProcessor(ProcessorMixin):
         self.norm_mean = torch.tensor(norm_mean)
         self.norm_std = torch.tensor(norm_std)
 
-        if _DEBUG:
-            print(
-                f"[{type(self).__name__}] patch_size={self.patch_size} "
-                f"image_size={self.image_size} max_num_patches={self.max_num_patches} "
-                f"min_num_patches={self.min_num_patches} "
-                f"downsample_ratio={self.downsample_ratio} "
-                f"pixel_shuffle={self.pixel_shuffle}",
-                flush=True,
-            )
+        print(
+            f"[{type(self).__name__}] initialized: "
+            f"patch_size={self.patch_size} image_size={self.image_size} "
+            f"max_num_patches={self.max_num_patches} min_num_patches={self.min_num_patches} "
+            f"downsample_ratio={self.downsample_ratio} num_image_token={self.num_image_token} "
+            f"use_thumbnail={self.use_thumbnail}"
+        )
 
     @staticmethod
     def conversation_preprocessor(message: dict) -> dict:
-        """Flatten multimodal content lists into plain strings for chat templates."""
+        """Flatten multimodal content lists into plain strings for chat templates.
 
+        Chat templates (Jinja2) that do ``message.content | string`` will
+        produce Python repr for list content.  This method converts the list
+        into a single string with ``<image>`` / ``<so_embedding>`` placeholders
+        so the template renders them correctly.
+        """
         content = message.get("content")
         if not isinstance(content, list):
             return message
-
         parts: list[str] = []
         for item in content:
             if not isinstance(item, dict):
                 parts.append(str(item))
                 continue
-            item_type = item.get("type", "")
-            if item_type == "image":
+            ctype = item.get("type", "")
+            if ctype == "image":
                 parts.append(IMG_INPUT_TAG)
-            elif item_type == "text":
+            elif ctype == "video":
+                # Video entries should be expanded into image entries by
+                # _expand_video_entries before reaching here.  Emit a single
+                # <image> tag as a fallback so the template doesn't produce
+                # garbage (the dict repr) for unexpanded video entries.
+                parts.append(IMG_INPUT_TAG)
+            elif ctype == "audio":
+                parts.append("<so_embedding>")
+            elif ctype == "text":
                 parts.append(item.get("text", ""))
             else:
                 parts.append(str(item))
         return {**message, "content": "".join(parts)}
 
     def compute_num_embeddings(self, height: int, width: int) -> int:
+        """Compute number of image embeddings for given dimensions.
+
+        This must match vLLM's DynamicResolutionImageTiler._get_num_embeddings().
+        Formula: (height // patch_size) * (width // patch_size) // downsample_ratio²
+        """
         reduction_factor = int(1 / self.downsample_ratio)
         num_patches = (height // self.patch_size) * (width // self.patch_size)
         return num_patches // (reduction_factor**2)
+
+    @staticmethod
+    def video_target_resolution(
+        orig_w: int,
+        orig_h: int,
+        video_target_num_patches: int,
+        patch_size: int,
+        pixel_shuffle: bool,
+        maintain_aspect_ratio: bool = True,
+    ) -> tuple[int, int]:
+        """Compute target resolution for a video frame (SFT-compatible).
+
+        Ported from Megatron SFT ``DynamicResolutionImageTilingStrategy.process_media``
+        (``is_video=True`` branch).  Also matches vLLM
+        ``_compute_aspect_preserving_size``.
+
+        Returns:
+            ``(target_width, target_height)`` in pixels.
+        """
+        if maintain_aspect_ratio:
+            aspect = orig_w / max(orig_h, 1)
+            ph = round(math.sqrt(video_target_num_patches / aspect))
+            pw = round(math.sqrt(video_target_num_patches * aspect))
+        else:
+            side = int(math.sqrt(video_target_num_patches))
+            ph = pw = side
+
+        ph, pw = max(1, ph), max(1, pw)
+
+        required_divisor = 2 if pixel_shuffle else 1
+        over_target = ph * pw > video_target_num_patches
+        if required_divisor > 1:
+            rem_h = ph % required_divisor
+            if rem_h != 0:
+                if over_target:
+                    ph -= rem_h
+                else:
+                    ph += required_divisor - rem_h
+            rem_w = pw % required_divisor
+            if rem_w != 0:
+                if over_target:
+                    pw -= rem_w
+                else:
+                    pw += required_divisor - rem_w
+            ph = max(required_divisor, ph)
+            pw = max(required_divisor, pw)
+
+        if _DEBUG:
+            print(
+                f"[VIDEO_TARGET_RES] ({orig_w}x{orig_h}) -> "
+                f"({pw * patch_size}x{ph * patch_size}) "
+                f"patches=({pw}x{ph}={pw * ph}) "
+                f"target_num_patches={video_target_num_patches} "
+                f"maintain_aspect={maintain_aspect_ratio}",
+                flush=True,
+            )
+
+        return pw * patch_size, ph * patch_size
+
+    def compute_params(
+        self,
+        images: list[Image.Image],
+        num_tokens_available: int,
+        video_flags: Optional[list[bool]] = None,
+        video_temporal_patch_size: int = 1,
+        video_target_num_patches: Optional[int] = None,
+        video_maintain_aspect_ratio: bool = True,
+    ) -> list[int]:
+        """SFT-style iterative token budget allocation across images.
+
+        Ported from Megatron SFT ``DynamicResolutionImageTilingStrategy.compute_params``
+        (image_processing.py).  Distributes a shared token budget across all
+        images/video-frames so the total vision tokens stay within the sequence
+        length limit.
+
+        Args:
+            images: Flat list of PIL images (regular images + video frames).
+            num_tokens_available: Post-reduction vision token budget (LLM token
+                space).  The method internally expands by pixel_shuffle / conv
+                merging factors.
+            video_flags: Per-image boolean; ``True`` for video frames, ``False``
+                for regular images.  ``None`` means all images.
+            video_temporal_patch_size: Conv3D temporal patch size (T).
+            video_target_num_patches: Fixed patch target for video frames.
+            video_maintain_aspect_ratio: Aspect-ratio preservation for video.
+
+        Returns:
+            List of per-image ``max_num_patches`` values that
+            ``compute_target_resolution`` / ``preprocess_image`` should use.
+        """
+        if not images:
+            return []
+
+        if video_flags is None:
+            video_flags = [False] * len(images)
+
+        num_images = sum(1 for f in video_flags if not f)
+        num_video_frames = sum(1 for f in video_flags if f)
+
+        budget = num_tokens_available * (4 if self.pixel_shuffle else 1)
+
+        if video_temporal_patch_size > 1 and num_video_frames > 0:
+            if num_images == 0:
+                budget *= video_temporal_patch_size
+            else:
+                imgs_frac = num_images / len(images)
+                vid_frac = num_video_frames / len(images)
+                budget = int(
+                    budget * (imgs_frac + vid_frac * video_temporal_patch_size)
+                )
+
+        budget = max(budget, self.min_num_patches * len(images))
+
+        per_image_budgets: list[int] = []
+        for is_video in video_flags:
+            if is_video and video_target_num_patches is not None:
+                per_image_budgets.append(video_target_num_patches)
+            else:
+                per_image_budgets.append(
+                    max(min(budget, self.max_num_patches), self.min_num_patches)
+                )
+
+        if _DEBUG:
+            print(
+                f"[COMPUTE_PARAMS] entry: n_images={num_images} "
+                f"n_video_frames={num_video_frames} "
+                f"num_tokens_available={num_tokens_available} "
+                f"expanded_budget={budget} "
+                f"video_temporal_patch_size={video_temporal_patch_size} "
+                f"video_target_num_patches={video_target_num_patches}",
+                flush=True,
+            )
+
+        for iteration in range(10):
+            token_counts: list[int] = []
+            for img, img_budget, is_video in zip(images, per_image_budgets, video_flags):
+                if is_video and video_target_num_patches is not None:
+                    tw, th = self.video_target_resolution(
+                        img.width,
+                        img.height,
+                        video_target_num_patches,
+                        self.patch_size,
+                        self.pixel_shuffle,
+                        maintain_aspect_ratio=video_maintain_aspect_ratio,
+                    )
+                    count = (th // self.patch_size) * (tw // self.patch_size)
+                else:
+                    th, tw = self.compute_target_resolution(img, img_budget)
+                    count = (th // self.patch_size) * (tw // self.patch_size)
+                token_counts.append(count)
+
+            total = sum(token_counts)
+
+            if _DEBUG and iteration == 0:
+                print(
+                    f"[COMPUTE_PARAMS] iter={iteration} "
+                    f"total_patches={total} budget={budget} "
+                    f"per_image_counts={token_counts[:5]}{'...' if len(token_counts) > 5 else ''}",
+                    flush=True,
+                )
+
+            if total <= budget:
+                if _DEBUG:
+                    print(
+                        f"[COMPUTE_PARAMS] converged iter={iteration} "
+                        f"total={total} <= budget={budget}",
+                        flush=True,
+                    )
+                return per_image_budgets
+
+            scaling_factor = budget / total
+            new_budgets = [
+                max(self.min_num_patches, int(tc * scaling_factor))
+                for tc in token_counts
+            ]
+            scaled_down = any(
+                new_budgets[i] < per_image_budgets[i]
+                for i in range(len(per_image_budgets))
+                if not (video_flags[i] and video_target_num_patches is not None)
+            )
+            if not scaled_down:
+                for i in range(len(per_image_budgets)):
+                    if not (video_flags[i] and video_target_num_patches is not None):
+                        per_image_budgets[i] = self.min_num_patches
+            else:
+                for i in range(len(per_image_budgets)):
+                    if not (video_flags[i] and video_target_num_patches is not None):
+                        per_image_budgets[i] = new_budgets[i]
+
+            if _DEBUG:
+                print(
+                    f"[COMPUTE_PARAMS] iter={iteration} over budget: "
+                    f"total={total} > budget={budget} "
+                    f"scaling_factor={scaling_factor:.4f} "
+                    f"scaled_down={scaled_down}",
+                    flush=True,
+                )
+
+        if _DEBUG:
+            _final_total = sum(token_counts)
+            print(
+                f"[COMPUTE_PARAMS] WARNING: did not converge after 10 iters, "
+                f"final_total={_final_total} budget={budget}",
+                flush=True,
+            )
+        return per_image_budgets
 
     def compute_target_resolution(
         self,
         image: Image.Image,
         max_num_patches: Optional[int] = None,
     ) -> tuple[int, int]:
+        """Compute dynamic target resolution for an image.
+
+        Ported from vLLM's DynamicResolutionImageTiler.process_media().
+
+        Args:
+            image: PIL image to compute resolution for.
+            max_num_patches: Per-image patch cap override. When ``None``,
+                falls back to ``self.max_num_patches`` from vision_config.
+        """
         effective_max = (
             max_num_patches if max_num_patches is not None else self.max_num_patches
         )
@@ -154,12 +423,41 @@ class DynamicResolutionProcessor(ProcessorMixin):
         target_patch_width = math.floor(factor * closest_patch_width)
 
         target_patches = target_patch_height * target_patch_width
-        if effective_max > self.min_num_patches and target_patches < self.min_num_patches:
+        if (
+            effective_max > self.min_num_patches
+            and target_patches < self.min_num_patches
+        ):
             up_factor = math.sqrt(self.min_num_patches / target_patches)
             up_h = math.ceil(up_factor * target_patch_height)
             up_w = math.ceil(up_factor * target_patch_width)
             if effective_max >= up_h * up_w:
+                if _DEBUG:
+                    print(
+                        f"[MIN_PATCHES_UPSCALE] applied: "
+                        f"({target_patch_height}x{target_patch_width}={target_patches}) -> "
+                        f"({up_h}x{up_w}={up_h * up_w}) "
+                        f"min_num_patches={self.min_num_patches} "
+                        f"effective_max={effective_max} "
+                        f"image=({orig_width}x{orig_height})",
+                        flush=True,
+                    )
                 target_patch_height, target_patch_width = up_h, up_w
+            elif _DEBUG:
+                print(
+                    f"[MIN_PATCHES_SKIP] upscale would exceed budget: "
+                    f"({up_h}x{up_w}={up_h * up_w}) > effective_max={effective_max} "
+                    f"keeping ({target_patch_height}x{target_patch_width}={target_patches}) "
+                    f"image=({orig_width}x{orig_height})",
+                    flush=True,
+                )
+        elif _DEBUG and target_patches < self.min_num_patches:
+            print(
+                f"[MIN_PATCHES_SKIP] budget too small: "
+                f"effective_max={effective_max} <= min_num_patches={self.min_num_patches} "
+                f"target=({target_patch_height}x{target_patch_width}={target_patches}) "
+                f"image=({orig_width}x{orig_height})",
+                flush=True,
+            )
 
         if self.pixel_shuffle:
             required_divisor = 2
@@ -169,7 +467,9 @@ class DynamicResolutionProcessor(ProcessorMixin):
                 if (target_patch_height + inc_h) * target_patch_width <= effective_max:
                     target_patch_height += inc_h
                 else:
-                    target_patch_height = max(required_divisor, target_patch_height - rem_h)
+                    target_patch_height = max(
+                        required_divisor, target_patch_height - rem_h
+                    )
 
             rem_w = target_patch_width % required_divisor
             if rem_w != 0:
@@ -177,17 +477,21 @@ class DynamicResolutionProcessor(ProcessorMixin):
                 if target_patch_height * (target_patch_width + inc_w) <= effective_max:
                     target_patch_width += inc_w
                 else:
-                    target_patch_width = max(required_divisor, target_patch_width - rem_w)
+                    target_patch_width = max(
+                        required_divisor, target_patch_width - rem_w
+                    )
 
         target_height = target_patch_height * self.patch_size
         target_width = target_patch_width * self.patch_size
         return target_height, target_width
 
+    # Dynamic resolution preprocessing
     def preprocess_image(
         self,
         image: Image.Image,
         max_num_patches: Optional[int] = None,
     ) -> tuple[torch.Tensor, tuple[int, int]]:
+        """Preprocess a single image using dynamic resolution."""
         if image.mode != "RGB":
             image = image.convert("RGB")
 
@@ -195,14 +499,24 @@ class DynamicResolutionProcessor(ProcessorMixin):
         resized = image.resize((target_w, target_h), Image.BICUBIC)
 
         tensor = transforms.ToTensor()(resized)
-        tensor = (tensor - self.norm_mean.view(3, 1, 1)) / self.norm_std.view(3, 1, 1)
+        tensor = (tensor - self.norm_mean.view(3, 1, 1)) / self.norm_std.view(
+            3, 1, 1
+        )
+
         return tensor, (target_h, target_w)
 
+    # Static InternVL tiling preprocessing
     def preprocess_image_static(
         self,
         image: Image.Image,
         max_num_tiles: int,
     ) -> tuple[torch.Tensor, int]:
+        """Preprocess a single image using InternVL-style static tiling.
+
+        Returns:
+            (stacked_tiles, num_tiles): tiles tensor of shape
+            ``[num_tiles, 3, image_size, image_size]`` and the tile count.
+        """
         if image.mode != "RGB":
             image = image.convert("RGB")
         tile_images = _internvl_dynamic_preprocess(
@@ -212,57 +526,166 @@ class DynamicResolutionProcessor(ProcessorMixin):
             use_thumbnail=self.use_thumbnail,
         )
         stacked = torch.stack(tile_images)
-        stacked = (stacked - self.norm_mean.view(1, 3, 1, 1)) / self.norm_std.view(
-            1, 3, 1, 1
-        )
+        stacked = (
+            stacked - self.norm_mean.view(1, 3, 1, 1)
+        ) / self.norm_std.view(1, 3, 1, 1)
         return stacked, stacked.shape[0]
 
+    # Placeholder expansion
     def _add_image_placeholders_dynamic(
         self,
         text: list[str],
         imgs_sizes_list: list[list[int]],
     ) -> list[str]:
+        """Expand ``<image>`` tags using dynamic-resolution embedding counts."""
         if len(imgs_sizes_list) == 0:
             return text
 
-        results = []
-        for item in text:
-            parts = item.split(IMG_INPUT_TAG)
+        if _DEBUG:
+            print(
+                f"[ADD_IMG_PLACEHOLDER_DEBUG] dynamic mode: text count={len(text)}, imgs_sizes count={len(imgs_sizes_list)}"
+            )
+
+        results_lst = []
+        for t in text:
+            parts = t.split(IMG_INPUT_TAG)
             assert len(parts) - 1 == len(imgs_sizes_list), (
                 f"Number of {IMG_INPUT_TAG} tokens ({len(parts) - 1}) "
                 f"doesn't match number of images ({len(imgs_sizes_list)})"
             )
             result = parts[0]
-            for (height, width), suffix in zip(imgs_sizes_list, parts[1:]):
-                num_embeddings = self.compute_num_embeddings(height, width)
-                placeholder = IMG_START + IMG_CONTEXT * num_embeddings + IMG_END
-                result += placeholder + suffix
-            results.append(result)
-        return results
+            for (h, w), part in zip(imgs_sizes_list, parts[1:]):
+                num_embeddings = self.compute_num_embeddings(h, w)
+                image_placeholder = IMG_START + IMG_CONTEXT * num_embeddings + IMG_END
+                result += image_placeholder + part
+            results_lst.append(result)
+        return results_lst
 
     def _add_image_placeholders_static(
         self,
         text: list[str],
         num_tiles_per_image: list[int],
     ) -> list[str]:
+        """Expand ``<image>`` tags using static-tiling token counts."""
         if len(num_tiles_per_image) == 0:
             return text
 
-        results = []
-        for item in text:
-            parts = item.split(IMG_INPUT_TAG)
+        if _DEBUG:
+            print(
+                f"[ADD_IMG_PLACEHOLDER_DEBUG] static mode: text count={len(text)}, tiles_per_image={num_tiles_per_image}"
+            )
+
+        results_lst = []
+        for t in text:
+            parts = t.split(IMG_INPUT_TAG)
             assert len(parts) - 1 == len(num_tiles_per_image), (
                 f"Number of {IMG_INPUT_TAG} tokens ({len(parts) - 1}) "
                 f"doesn't match number of images ({len(num_tiles_per_image)})"
             )
             result = parts[0]
-            for num_tiles, suffix in zip(num_tiles_per_image, parts[1:]):
+            for num_tiles, part in zip(num_tiles_per_image, parts[1:]):
                 num_embeddings = num_tiles * self.num_image_token
-                placeholder = IMG_START + IMG_CONTEXT * num_embeddings + IMG_END
-                result += placeholder + suffix
-            results.append(result)
-        return results
+                image_placeholder = IMG_START + IMG_CONTEXT * num_embeddings + IMG_END
+                result += image_placeholder + part
+            results_lst.append(result)
+        return results_lst
 
+    # keep old name as alias for backwards compatibility
+    def _add_image_placeholders(self, text, imgs_sizes_list):
+        return self._add_image_placeholders_dynamic(text, imgs_sizes_list)
+
+    # Shared dynamic-resolution helper
+    def _resolve_dynamic_images(
+        self,
+        flat_images: list[Image.Image],
+        max_num_patches: Optional[int],
+        num_tokens_available: Optional[int] = None,
+        video_flags: Optional[list[bool]] = None,
+        video_temporal_patch_size: int = 1,
+        video_target_num_patches: Optional[int] = None,
+        video_maintain_aspect_ratio: bool = True,
+    ) -> tuple[list[torch.Tensor], list[list[int]]]:
+        """Resolve per-image resolutions and preprocess.
+
+        When *num_tokens_available* is provided, uses SFT-style shared
+        budgeting via :meth:`compute_params`.  Otherwise falls back to the
+        flat per-image *max_num_patches* (backward compatible).
+
+        Returns:
+            ``(pixel_values_list, imgs_sizes_list)``
+        """
+        if num_tokens_available is not None and flat_images:
+            per_image_budgets = self.compute_params(
+                flat_images,
+                num_tokens_available,
+                video_flags=video_flags,
+                video_temporal_patch_size=video_temporal_patch_size,
+                video_target_num_patches=video_target_num_patches,
+                video_maintain_aspect_ratio=video_maintain_aspect_ratio,
+            )
+            if _DEBUG:
+                print(
+                    f"[RESOLVE_DYN] shared_budget path: "
+                    f"num_tokens_available={num_tokens_available} "
+                    f"n_images={len(flat_images)} "
+                    f"budgets={per_image_budgets[:5]}{'...' if len(per_image_budgets) > 5 else ''}",
+                    flush=True,
+                )
+        else:
+            per_image_budgets = [max_num_patches] * len(flat_images)
+            if _DEBUG and flat_images:
+                print(
+                    f"[RESOLVE_DYN] per_image_flat path: "
+                    f"max_num_patches={max_num_patches} n_images={len(flat_images)}",
+                    flush=True,
+                )
+
+        if video_flags is None:
+            _vflags = [False] * len(flat_images)
+        else:
+            _vflags = video_flags
+
+        pixel_values_list: list[torch.Tensor] = []
+        imgs_sizes_list: list[list[int]] = []
+
+        for image, budget, is_vid in zip(flat_images, per_image_budgets, _vflags):
+            if not isinstance(image, Image.Image):
+                raise ValueError(f"Expected PIL Image, got {type(image)}")
+            if is_vid and video_target_num_patches is not None:
+                target_w, target_h = self.video_target_resolution(
+                    image.width,
+                    image.height,
+                    video_target_num_patches,
+                    self.patch_size,
+                    self.pixel_shuffle,
+                    maintain_aspect_ratio=video_maintain_aspect_ratio,
+                )
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                arr = np.asarray(image, dtype=np.uint8)
+                t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+                if t.shape[2] != target_h or t.shape[3] != target_w:
+                    t = F.interpolate(
+                        t,
+                        size=(target_h, target_w),
+                        mode="bicubic",
+                        align_corners=False,
+                        antialias=True,
+                    )
+                tensor = t.squeeze(0) / 255.0
+                tensor = (tensor - self.norm_mean.view(3, 1, 1)) / self.norm_std.view(
+                    3, 1, 1
+                )
+                pixel_values_list.append(tensor)
+                imgs_sizes_list.append([target_h, target_w])
+            else:
+                pv, (h, w) = self.preprocess_image(image, budget)
+                pixel_values_list.append(pv)
+                imgs_sizes_list.append([h, w])
+
+        return pixel_values_list, imgs_sizes_list
+
+    # Main entry point
     def __call__(
         self,
         images: Optional[Union[Image.Image, list[Image.Image]]] = None,
@@ -277,34 +700,59 @@ class DynamicResolutionProcessor(ProcessorMixin):
 
         max_num_tiles: Optional[int] = kwargs.pop("max_num_tiles", None)
         max_num_patches: Optional[int] = kwargs.pop("max_num_patches", None)
-        kwargs.pop("num_tokens_available", None)
-        kwargs.pop("video_flags", None)
-        kwargs.pop("video_temporal_patch_size", None)
-        kwargs.pop("video_target_num_patches", None)
-        kwargs.pop("video_maintain_aspect_ratio", None)
+        num_tokens_available: Optional[int] = kwargs.pop("num_tokens_available", None)
+        video_flags: Optional[list[bool]] = kwargs.pop("video_flags", None)
+        video_temporal_patch_size: int = kwargs.pop("video_temporal_patch_size", 1)
+        video_target_num_patches: Optional[int] = kwargs.pop(
+            "video_target_num_patches", None
+        )
+        video_maintain_aspect_ratio: bool = kwargs.pop(
+            "video_maintain_aspect_ratio", True
+        )
 
         flat_images = _flatten_images(images) if images is not None else []
+
         if max_num_tiles is not None and flat_images:
             return self._call_static(text, flat_images, max_num_tiles, **kwargs)
-        return self._call_dynamic(text, flat_images, max_num_patches, **kwargs)
+        else:
+            return self._call_dynamic(
+                text,
+                flat_images,
+                max_num_patches,
+                num_tokens_available=num_tokens_available,
+                video_flags=video_flags,
+                video_temporal_patch_size=video_temporal_patch_size,
+                video_target_num_patches=video_target_num_patches,
+                video_maintain_aspect_ratio=video_maintain_aspect_ratio,
+                **kwargs,
+            )
 
+    # Dynamic resolution path
     def _call_dynamic(
         self,
         text: list[str],
         flat_images: list[Image.Image],
         max_num_patches: Optional[int],
+        *,
+        num_tokens_available: Optional[int] = None,
+        video_flags: Optional[list[bool]] = None,
+        video_temporal_patch_size: int = 1,
+        video_target_num_patches: Optional[int] = None,
+        video_maintain_aspect_ratio: bool = True,
         **kwargs,
     ) -> BatchFeature:
-        pixel_values_list: list[torch.Tensor] = []
-        imgs_sizes_list: list[list[int]] = []
-        for image in flat_images:
-            if not isinstance(image, Image.Image):
-                raise ValueError(f"Expected PIL Image, got {type(image)}")
-            pixel_values, (height, width) = self.preprocess_image(image, max_num_patches)
-            pixel_values_list.append(pixel_values)
-            imgs_sizes_list.append([height, width])
+        pixel_values_list, imgs_sizes_list = self._resolve_dynamic_images(
+            flat_images,
+            max_num_patches,
+            num_tokens_available=num_tokens_available,
+            video_flags=video_flags,
+            video_temporal_patch_size=video_temporal_patch_size,
+            video_target_num_patches=video_target_num_patches,
+            video_maintain_aspect_ratio=video_maintain_aspect_ratio,
+        )
 
         processed_text = self._add_image_placeholders_dynamic(text, imgs_sizes_list)
+
         text_inputs = self.tokenizer(
             processed_text,
             return_tensors=kwargs.get("return_tensors"),
@@ -312,22 +760,24 @@ class DynamicResolutionProcessor(ProcessorMixin):
         )
 
         result = BatchFeature(data=dict(text_inputs))
+
         if pixel_values_list:
-            max_h = max(size[0] for size in imgs_sizes_list)
-            max_w = max(size[1] for size in imgs_sizes_list)
+            max_h = max(s[0] for s in imgs_sizes_list)
+            max_w = max(s[1] for s in imgs_sizes_list)
             padded_pvs = []
-            for pixel_values, (height, width) in zip(pixel_values_list, imgs_sizes_list):
-                pad_h = max_h - height
-                pad_w = max_w - width
+            for pv, (h, w) in zip(pixel_values_list, imgs_sizes_list):
+                pad_h = max_h - h
+                pad_w = max_w - w
                 if pad_h > 0 or pad_w > 0:
-                    pixel_values = F.pad(pixel_values, (0, pad_w, 0, pad_h), value=0)
-                padded_pvs.append(pixel_values)
+                    pv = F.pad(pv, (0, pad_w, 0, pad_h), value=0)
+                padded_pvs.append(pv)
 
             result["pixel_values"] = torch.stack(padded_pvs)
             result["imgs_sizes"] = torch.tensor(imgs_sizes_list, dtype=torch.int32)
 
         return result
 
+    # Static InternVL tiling path
     def _call_static(
         self,
         text: list[str],
@@ -337,14 +787,16 @@ class DynamicResolutionProcessor(ProcessorMixin):
     ) -> BatchFeature:
         all_tiles: list[torch.Tensor] = []
         num_tiles_per_image: list[int] = []
+
         for image in flat_images:
             if not isinstance(image, Image.Image):
                 raise ValueError(f"Expected PIL Image, got {type(image)}")
-            tiles, num_tiles = self.preprocess_image_static(image, max_num_tiles)
+            tiles, n_tiles = self.preprocess_image_static(image, max_num_tiles)
             all_tiles.append(tiles)
-            num_tiles_per_image.append(num_tiles)
+            num_tiles_per_image.append(n_tiles)
 
         processed_text = self._add_image_placeholders_static(text, num_tiles_per_image)
+
         text_inputs = self.tokenizer(
             processed_text,
             return_tensors=kwargs.get("return_tensors"),
@@ -352,33 +804,56 @@ class DynamicResolutionProcessor(ProcessorMixin):
         )
 
         result = BatchFeature(data=dict(text_inputs))
+
         if all_tiles:
             result["pixel_values_flat"] = torch.cat(all_tiles, dim=0)
             result["image_num_patches"] = torch.tensor(
                 num_tiles_per_image, dtype=torch.int32
             )
+
         return result
 
     def apply_chat_template(self, conversation, tokenize=True, **kwargs):
-        """Handle multimodal content lists before rendering the chat template."""
+        """Override to handle multimodal content lists in messages.
 
+        The base Jinja2 chat template does ``message.content | string`` which
+        produces the Python repr of list content instead of inserting
+        ``<image>`` tokens.  This override:
+        1. Extracts PIL images from content lists.
+        2. Flattens content lists to strings with ``<image>`` placeholders via
+           ``conversation_preprocessor``.
+        3. Renders the template with the flattened messages.
+        4. For tokenize=True, calls ``self.__call__`` with extracted images.
+        """
         images = []
         preprocessed = []
-        for message in conversation:
-            content = message.get("content")
+        for msg in conversation:
+            content = msg.get("content")
             if isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "image":
-                        image = item.get("image")
-                        if isinstance(image, Image.Image):
-                            images.append(image)
-                preprocessed.append(self.conversation_preprocessor(message))
+                        img = item.get("image")
+                        if isinstance(img, Image.Image):
+                            images.append(img)
+                preprocessed.append(self.conversation_preprocessor(msg))
             else:
-                preprocessed.append(message)
+                preprocessed.append(msg)
 
         if not tokenize:
             kwargs = _wrap_enable_thinking(kwargs)
-            return super().apply_chat_template(preprocessed, tokenize=False, **kwargs)
+            result = super().apply_chat_template(
+                preprocessed, tokenize=False, **kwargs
+            )
+            if _DEBUG and isinstance(result, str):
+                _tail = result[-80:].replace("\n", "\\n")
+                _has_open_think = result.endswith("<think>\n")
+                _has_closed_think = "<think></think>" in result[-40:]
+                print(
+                    f"[THINK_FIX] apply_chat_template(tokenize=False): "
+                    f"open_think={_has_open_think} closed_think={_has_closed_think} "
+                    f"tail={_tail!r}"
+                )
+            return result
 
         add_generation_prompt = kwargs.pop("add_generation_prompt", False)
         enable_thinking = kwargs.pop("enable_thinking", None)
@@ -388,12 +863,19 @@ class DynamicResolutionProcessor(ProcessorMixin):
             render_kwargs["chat_template_kwargs"] = {
                 "enable_thinking": enable_thinking
             }
-
+        if _DEBUG:
+            print(
+                f"[THINK_FIX] apply_chat_template(tokenize=True): "
+                f"enable_thinking={enable_thinking} render_kwargs={render_kwargs}"
+            )
         rendered_text = super().apply_chat_template(
             preprocessed,
             tokenize=False,
             **render_kwargs,
         )
+        if _DEBUG:
+            _tail = rendered_text[-80:].replace("\n", "\\n")
+            print(f"[THINK_FIX] rendered_text tail={_tail!r}")
         return self(
             text=rendered_text,
             images=images or None,
@@ -408,8 +890,7 @@ class DynamicResolutionProcessor(ProcessorMixin):
 
 
 def is_dynamic_resolution_model(config: PretrainedConfig) -> bool:
-    """Check if the model uses dynamic-resolution image sizing."""
-
+    """Check if model uses dynamic resolution (not static InternVL tiling)."""
     if not hasattr(config, "vision_config"):
         return False
     vision_args = getattr(config.vision_config, "args", None)
