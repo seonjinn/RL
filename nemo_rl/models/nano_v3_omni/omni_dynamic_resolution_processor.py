@@ -33,6 +33,7 @@ from transformers import BatchFeature, PretrainedConfig
 from nemo_rl.models.nano_v3_vl.dynamic_resolution_processor import (
     DynamicResolutionProcessor,
     _flatten_images,
+    _write_processor_output_debug,
 )
 
 AUDIO_INPUT_TAG = "<so_embedding>"
@@ -373,6 +374,21 @@ class OmniDynamicResolutionProcessor(DynamicResolutionProcessor):
             result["pixel_values"] = torch.stack(padded_pvs)
             result["imgs_sizes"] = torch.tensor(imgs_sizes_list, dtype=torch.int32)
 
+        _write_processor_output_debug(
+            self,
+            text,
+            processed_text,
+            result,
+            path_type="static" if use_static else "dynamic",
+            max_num_tiles=max_num_tiles,
+            max_num_patches=max_num_patches,
+            num_tokens_available=num_tokens_available,
+            video_flags=video_flags,
+            extra_payload={
+                "audio_clip_count": len(audio_clips),
+                "audio_token_count": sum(audio_num_tokens),
+            },
+        )
         return result
 
     @staticmethod

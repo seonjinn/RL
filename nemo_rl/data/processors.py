@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -532,7 +532,14 @@ def vlm_hf_data_processor(
     user_message["token_ids"] = message["input_ids"][0]
     # add all keys and values to the user message, and the list of keys
     multimodal_keys = get_multimodal_keys_from_processor(processor)
-    for key in multimodal_keys:
+    extra_multimodal_keys = {"pixel_values_flat", "image_num_patches"}
+    all_multimodal_keys = list(
+        dict.fromkeys(
+            list(multimodal_keys)
+            + [key for key in extra_multimodal_keys if key in message]
+        )
+    )
+    for key in all_multimodal_keys:
         if key in message:
             user_message[key] = PackedTensor(
                 message[key], dim_to_pack=get_dim_to_pack_along(processor, key)

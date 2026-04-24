@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,8 +37,16 @@ from nemo_rl.distributed.collectives import (
     gather_jagged_object_lists,
     rebalance_nd_tensor,
 )
+from nemo_rl.utils.vlm_debug import debug_enabled, write_stage
 
 DictT = TypeVar("DictT", bound=Mapping[str, Any])
+
+
+def _packed_tensor_shapes(packed_tensor: PackedTensor) -> list[list[int] | None]:
+    return [
+        list(tensor.shape) if tensor is not None else None
+        for tensor in packed_tensor.tensors
+    ]
 
 
 class SequencePackingArgs(TypedDict):
@@ -76,6 +84,11 @@ class BatchedDataDict(UserDict, Generic[DictT]):
     # keys that are model specific, but not part of the PackedTensor
     ADDITIONAL_OPTIONAL_KEY_TENSORS = [
         "token_type_ids",  # specific to gemma3 that tells where the image tokens are in the sequence, not required for llm-only inference/training
+        "imgs_sizes",  # dynamic-resolution VLMs: [num_images, 2] with (H, W) per image
+        "image_num_patches",  # static InternVL tiling: number of patches per image
+        "num_frames",  # temporal grouping metadata for image/video batches
+        "sound_clip_duration",  # audio clip splitting max duration in seconds
+        "sound_clip_min_duration",  # audio clip splitting min tail duration in seconds
     ]
 
     def __init__(self, *args, **kwargs):
@@ -168,6 +181,31 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                     )
                 )
             stacked_dict[k] = tensor_or_list
+
+        if debug_enabled():
+            packed_keys = [
+                key for key, value in stacked_dict.items() if isinstance(value, PackedTensor)
+            ]
+            if packed_keys:
+                write_stage(
+                    "collated_batch",
+                    {
+                        "batch_count": len(batches),
+                        "keys": sorted(stacked_dict.keys()),
+                        "packed_keys": sorted(packed_keys),
+                        "packed_tensor_shapes": {
+                            key: _packed_tensor_shapes(stacked_dict[key])
+                            for key in sorted(packed_keys)
+                        },
+                        "packed_dim_to_pack": {
+                            key: stacked_dict[key].dim_to_pack
+                            for key in sorted(packed_keys)
+                        },
+                        "packed_logical_lengths": {
+                            key: len(stacked_dict[key]) for key in sorted(packed_keys)
+                        },
+                    },
+                )
 
         return stacked_dict
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +14,24 @@
 
 import base64
 from io import BytesIO
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import requests
 import torch
 from PIL import Image
 from transformers import PreTrainedTokenizerBase
+
+from nemo_rl.utils.vlm_debug import debug_enabled, write_stage
+
+
+def _tensor_shape(tensor: Optional[torch.Tensor]) -> list[int] | None:
+    return list(tensor.shape) if tensor is not None else None
+
+
+def _tensor_shape_list(
+    tensors: list[Optional[torch.Tensor]],
+) -> list[list[int] | None]:
+    return [_tensor_shape(tensor) for tensor in tensors]
 
 
 class PackedTensor:
@@ -52,6 +64,15 @@ class PackedTensor:
                 f"Unsupported type for input tensors to PackedTensor: {type(tensors)}"
             )
         self.dim_to_pack = dim_to_pack
+        if debug_enabled():
+            write_stage(
+                "packed_tensor_create",
+                {
+                    "dim_to_pack": self.dim_to_pack,
+                    "logical_length": len(self.tensors),
+                    "tensor_shapes": _tensor_shape_list(self.tensors),
+                },
+            )
 
     def as_tensor(
         self, device: Optional[torch.device] = None
@@ -64,8 +85,49 @@ class PackedTensor:
         non_none_tensors = [t for t in self.tensors if t is not None]
         if len(non_none_tensors) == 0:
             return None
-        else:
-            return torch.cat(non_none_tensors, dim=self.dim_to_pack).to(device)
+        padding_applied: list[list[int]] = []
+        if len(non_none_tensors) > 1:
+            ndim = non_none_tensors[0].ndim
+            pack_dim = self.dim_to_pack % ndim
+            has_mismatch = any(
+                non_none_tensors[0].shape[d] != tensor.shape[d]
+                for tensor in non_none_tensors[1:]
+                for d in range(ndim)
+                if d != pack_dim
+            )
+            if has_mismatch:
+                max_shape = [
+                    max(tensor.shape[d] for tensor in non_none_tensors)
+                    for d in range(ndim)
+                ]
+                padded_tensors = []
+                for tensor in non_none_tensors:
+                    pad: list[int] = []
+                    pad_per_dim = [0] * ndim
+                    for d in reversed(range(ndim)):
+                        pad_amount = 0 if d == pack_dim else max_shape[d] - tensor.shape[d]
+                        pad.extend([0, pad_amount])
+                        pad_per_dim[d] = pad_amount
+                    padded_tensors.append(torch.nn.functional.pad(tensor, pad, value=0))
+                    padding_applied.append(pad_per_dim)
+                non_none_tensors = padded_tensors
+
+        result = torch.cat(non_none_tensors, dim=self.dim_to_pack).to(device)
+        if debug_enabled():
+            write_stage(
+                "packed_tensor_as_tensor",
+                {
+                    "dim_to_pack": self.dim_to_pack,
+                    "logical_length": len(self.tensors),
+                    "input_tensor_shapes": _tensor_shape_list(self.tensors),
+                    "non_none_tensor_shapes": [
+                        list(tensor.shape) for tensor in non_none_tensors
+                    ],
+                    "padding_applied": padding_applied or None,
+                    "output_shape": list(result.shape),
+                },
+            )
+        return result
 
     def __len__(self) -> int:
         # this is the number of tensors in this data wrapper
@@ -163,15 +225,33 @@ def get_multimodal_keys_from_processor(processor) -> list[str]:
         return []
 
     all_keys = set()
+    processor_model_input_names = list(getattr(processor, "model_input_names", []))
+    image_processor_model_input_names = []
     if hasattr(processor, "image_processor"):
-        all_keys.update(processor.image_processor.model_input_names)
+        image_processor_model_input_names = list(
+            getattr(processor.image_processor, "model_input_names", [])
+        )
+        all_keys.update(image_processor_model_input_names)
     if hasattr(processor, "video_processor"):
         all_keys.update(processor.video_processor.model_input_names)
     if hasattr(processor, "feature_extractor"):
         all_keys.update(processor.feature_extractor.model_input_names)
-    # all_keys.update(processor.model_input_names)
-    all_keys.difference_update(set(processor.tokenizer.model_input_names))
-    return list(all_keys)
+    all_keys.update(processor_model_input_names)
+    tokenizer_model_input_names = list(processor.tokenizer.model_input_names)
+    all_keys.difference_update(set(tokenizer_model_input_names))
+    multimodal_keys = list(all_keys)
+    if debug_enabled():
+        write_stage(
+            "multimodal_keys",
+            {
+                "processor_class": type(processor).__name__,
+                "processor_model_input_names": processor_model_input_names,
+                "image_processor_model_input_names": image_processor_model_input_names,
+                "tokenizer_model_input_names": tokenizer_model_input_names,
+                "multimodal_keys": sorted(multimodal_keys),
+            },
+        )
+    return multimodal_keys
 
 
 def get_dim_to_pack_along(processor, key: str) -> int:

@@ -14,7 +14,7 @@
 
 import math
 import os
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 
@@ -27,6 +27,12 @@ from torchvision import transforms
 from transformers import BatchFeature, PretrainedConfig
 from transformers.processing_utils import ProcessorMixin
 
+from nemo_rl.utils.vlm_debug import (
+    debug_enabled,
+    stable_hash,
+    tensor_summary,
+    write_stage,
+)
 
 def _wrap_enable_thinking(kwargs: dict) -> dict:
     """Mirror ``enable_thinking`` into both template styles.
@@ -81,6 +87,143 @@ def _flatten_images(images):
             result.extend(_flatten_images(item))
         return result
     return [images]
+
+
+def _text_boundary(
+    text: str | None,
+    token: str,
+    context: int = 80,
+) -> dict[str, Any] | None:
+    if text is None:
+        return None
+    index = text.find(token)
+    if index < 0:
+        return {"token": token, "index": -1, "snippet": None}
+    start = max(0, index - context)
+    end = min(len(text), index + len(token) + context)
+    return {
+        "token": token,
+        "index": index,
+        "snippet": text[start:end],
+    }
+
+
+def _first_tensor_row(value: Any) -> torch.Tensor | None:
+    if not torch.is_tensor(value):
+        return None
+    if value.ndim == 0:
+        return value.reshape(1)
+    if value.ndim == 1:
+        return value
+    return value[0]
+
+
+def _tensor_shape(value: Any) -> list[int] | None:
+    if torch.is_tensor(value):
+        return list(value.shape)
+    return None
+
+
+def _json_list(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            return None
+    return value
+
+
+def _token_count(sequence: torch.Tensor | None, token_id: int | None) -> int | None:
+    if sequence is None or token_id is None:
+        return None
+    return int((sequence == token_id).sum().item())
+
+
+def _write_processor_output_debug(
+    processor: "DynamicResolutionProcessor",
+    rendered_text: list[str],
+    processed_text: list[str],
+    batch: BatchFeature,
+    *,
+    path_type: str,
+    max_num_tiles: Optional[int] = None,
+    max_num_patches: Optional[int] = None,
+    num_tokens_available: Optional[int] = None,
+    video_flags: Optional[list[bool]] = None,
+    extra_payload: Optional[dict[str, Any]] = None,
+) -> None:
+    if not debug_enabled():
+        return
+
+    input_ids = _first_tensor_row(batch.get("input_ids"))
+    attention_mask = _first_tensor_row(batch.get("attention_mask"))
+    pixel_values = batch.get("pixel_values")
+    pixel_values_name = "pixel_values"
+    if pixel_values is None:
+        pixel_values = batch.get("pixel_values_flat")
+        pixel_values_name = "pixel_values_flat"
+    pixel_values_summary = (
+        tensor_summary(pixel_values_name, pixel_values)
+        if torch.is_tensor(pixel_values)
+        else None
+    )
+
+    tokenizer = processor.tokenizer
+    image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT)
+    image_start_token_id = tokenizer.convert_tokens_to_ids(IMG_START)
+    image_end_token_id = tokenizer.convert_tokens_to_ids(IMG_END)
+
+    payload: dict[str, Any] = {
+        "checkpoint": getattr(processor, "name_or_path", None)
+        or getattr(tokenizer, "name_or_path", None),
+        "processor_class": type(processor).__name__,
+        "processor_model_input_names": list(
+            getattr(processor, "model_input_names", []) or []
+        ),
+        "path_type": path_type,
+        "rendered_text_hash": stable_hash(rendered_text),
+        "rendered_text_boundary": _text_boundary(
+            rendered_text[0] if rendered_text else None, IMG_INPUT_TAG
+        ),
+        "processed_text_hash": stable_hash(processed_text),
+        "processed_text_boundary": _text_boundary(
+            processed_text[0] if processed_text else None, IMG_START
+        ),
+        "input_ids_shape": _tensor_shape(batch.get("input_ids")),
+        "input_ids_len": int(input_ids.shape[0]) if input_ids is not None else None,
+        "input_ids_hash": stable_hash(input_ids.tolist()) if input_ids is not None else None,
+        "attention_mask_shape": _tensor_shape(batch.get("attention_mask")),
+        "attention_mask_len": (
+            int(attention_mask.shape[0]) if attention_mask is not None else None
+        ),
+        "attention_mask_hash": (
+            stable_hash(attention_mask.tolist()) if attention_mask is not None else None
+        ),
+        "image_token_count": _token_count(input_ids, image_token_id),
+        "image_start_count": _token_count(input_ids, image_start_token_id),
+        "image_end_count": _token_count(input_ids, image_end_token_id),
+        "pixel_values_shape": _tensor_shape(pixel_values),
+        "pixel_values_summary": pixel_values_summary,
+        "imgs_sizes": _json_list(batch.get("imgs_sizes")),
+        "image_num_patches": _json_list(batch.get("image_num_patches")),
+        "max_num_tiles": (
+            max_num_tiles
+            if max_num_tiles is not None
+            else getattr(processor, "max_num_tiles", None)
+        ),
+        "max_num_patches": (
+            max_num_patches
+            if max_num_patches is not None
+            else getattr(processor, "max_num_patches", None)
+        ),
+        "num_tokens_available": num_tokens_available,
+        "video_flag_count": sum(1 for flag in video_flags if flag) if video_flags else 0,
+    }
+    if extra_payload:
+        payload.update(extra_payload)
+    write_stage("processor_output", payload)
 
 
 class DynamicResolutionProcessor(ProcessorMixin):
@@ -775,6 +918,16 @@ class DynamicResolutionProcessor(ProcessorMixin):
             result["pixel_values"] = torch.stack(padded_pvs)
             result["imgs_sizes"] = torch.tensor(imgs_sizes_list, dtype=torch.int32)
 
+        _write_processor_output_debug(
+            self,
+            text,
+            processed_text,
+            result,
+            path_type="dynamic",
+            max_num_patches=max_num_patches,
+            num_tokens_available=num_tokens_available,
+            video_flags=video_flags,
+        )
         return result
 
     # Static InternVL tiling path
@@ -811,6 +964,14 @@ class DynamicResolutionProcessor(ProcessorMixin):
                 num_tiles_per_image, dtype=torch.int32
             )
 
+        _write_processor_output_debug(
+            self,
+            text,
+            processed_text,
+            result,
+            path_type="static",
+            max_num_tiles=max_num_tiles,
+        )
         return result
 
     def apply_chat_template(self, conversation, tokenize=True, **kwargs):

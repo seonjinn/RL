@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ import torch
 from nemo_rl.data.llm_message_utils import batched_message_log_to_flat_message
 from nemo_rl.data.multimodal_utils import (
     PackedTensor,
+    get_multimodal_keys_from_processor,
 )
 from nemo_rl.distributed.batched_data_dict import (
     BatchedDataDict,
@@ -267,12 +268,14 @@ def test_multimodal_specific_functionality():
         mm_data = mm_data.to("cuda")
         assert mm_data.tensors[0].device.type == "cuda"
 
-    # images differ along a different dimension
-    image_tensors = [torch.randn(3, 128, 128 + i) for i in range(2)]
-
+    # Variable-resolution images are padded on non-pack dimensions before concat.
+    image_tensors = [torch.ones(1, 3, 128, 128), torch.full((1, 3, 128, 129), 2.0)]
     mm_batch = PackedTensor(image_tensors, dim_to_pack=0)
-    with pytest.raises(RuntimeError):
-        batch_tensor = mm_batch.as_tensor()
+    batch_tensor = mm_batch.as_tensor()
+    assert batch_tensor.shape == (2, 3, 128, 129)
+    assert torch.equal(batch_tensor[0, :, :, :128], image_tensors[0][0])
+    assert torch.count_nonzero(batch_tensor[0, :, :, 128:]) == 0
+    assert torch.equal(batch_tensor[1], image_tensors[1][0])
 
     # check for packing on correct dimension
     image_tensors = [torch.randn(3 + 10**i, 128, 128) for i in range(2)]
@@ -349,3 +352,51 @@ def test_packedtensor_as_tensor_with_mixed_none_and_tensors():
     out = pt.as_tensor()
     expected = torch.cat([t1, t3], dim=0)
     assert torch.equal(out, expected)
+
+
+def test_get_multimodal_keys_from_processor_includes_processor_model_inputs():
+    class DummyTokenizer:
+        model_input_names = ["input_ids", "attention_mask"]
+
+    class DummyImageProcessor:
+        model_input_names = []
+
+    class DummyProcessor:
+        tokenizer = DummyTokenizer()
+        image_processor = DummyImageProcessor()
+        model_input_names = [
+            "input_ids",
+            "attention_mask",
+            "pixel_values",
+            "imgs_sizes",
+            "sound_clips",
+        ]
+
+    keys = get_multimodal_keys_from_processor(DummyProcessor())
+    assert set(keys) == {"pixel_values", "imgs_sizes", "sound_clips"}
+
+
+def test_batched_data_dict_preserves_variable_resolution_multimodal_fields():
+    batch_a = {
+        "token_ids": torch.tensor([1, 2, 3]),
+        "pixel_values": PackedTensor(torch.ones(1, 3, 4, 5), dim_to_pack=0),
+        "imgs_sizes": PackedTensor(
+            torch.tensor([[4, 5]], dtype=torch.int32), dim_to_pack=0
+        ),
+    }
+    batch_b = {
+        "token_ids": torch.tensor([4, 5]),
+        "pixel_values": PackedTensor(torch.full((1, 3, 6, 4), 2.0), dim_to_pack=0),
+        "imgs_sizes": PackedTensor(
+            torch.tensor([[6, 4]], dtype=torch.int32), dim_to_pack=0
+        ),
+    }
+
+    stacked = BatchedDataDict.from_batches([batch_a, batch_b])
+    multimodal = stacked.get_multimodal_dict(as_tensors=True)
+
+    assert multimodal["pixel_values"].shape == (2, 3, 6, 5)
+    assert multimodal["imgs_sizes"].tolist() == [[4, 5], [6, 4]]
+    assert torch.equal(multimodal["pixel_values"][0, :, :4, :5], batch_a["pixel_values"].tensors[0][0])
+    assert torch.count_nonzero(multimodal["pixel_values"][0, :, 4:, :]) == 0
+    assert torch.count_nonzero(multimodal["pixel_values"][1, :, :, 4:]) == 0

@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -628,6 +628,21 @@ def get_formatted_message_log(
             for key in multimodal_keys:
                 if key in processed_chunk:
                     new_message[key] = PackedTensor(processed_chunk[key], dim_to_pack=0)
+
+            if "imgs_sizes" in processed_chunk:
+                imgs_sizes = processed_chunk["imgs_sizes"]
+                if not isinstance(imgs_sizes, torch.Tensor):
+                    imgs_sizes = torch.tensor(imgs_sizes, dtype=torch.int32)
+                new_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
+
+            if "pixel_values_flat" in processed_chunk:
+                new_message["pixel_values_flat"] = PackedTensor(
+                    processed_chunk["pixel_values_flat"], dim_to_pack=0
+                )
+            if "image_num_patches" in processed_chunk:
+                new_message["image_num_patches"] = PackedTensor(
+                    processed_chunk["image_num_patches"], dim_to_pack=0
+                )
 
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,
