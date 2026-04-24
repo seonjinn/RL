@@ -51,3 +51,4 @@ class VllmSpecificArgs(TypedDict):
 class VllmConfig(GenerationConfig):
     vllm_cfg: VllmSpecificArgs
     vllm_kwargs: NotRequired[dict[str, Any]]
+    deduplicate_multimodal_data: NotRequired[bool]

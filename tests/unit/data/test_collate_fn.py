@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import torch
 
-from nemo_rl.data.collate_fn import preference_collate_fn
+from nemo_rl.data.collate_fn import preference_collate_fn, rl_collate_fn
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
@@ -149,3 +149,32 @@ def test_preference_collate_fn():
     assert torch.equal(
         train_data["input_ids"][1][3:5], torch.tensor([8, 9])
     )  # assistant
+
+
+def test_rl_collate_fn_preserves_vllm_processor_overrides():
+    batch = rl_collate_fn(
+        [
+            DatumSpec(
+                message_log=[
+                    {
+                        "role": "user",
+                        "content": "look",
+                        "token_ids": torch.tensor([1, 2, 3]),
+                    }
+                ],
+                length=3,
+                extra_env_info=None,
+                loss_multiplier=1.0,
+                idx=0,
+                vllm_content="prompt-with-image",
+                vllm_images=["img1"],
+                vllm_max_num_tiles=8,
+                vllm_max_num_patches=256,
+            )
+        ]
+    )
+
+    assert batch["vllm_content"] == ["prompt-with-image"]
+    assert batch["vllm_images"] == [["img1"]]
+    assert batch["vllm_max_num_tiles"] == [8]
+    assert batch["vllm_max_num_patches"] == [256]

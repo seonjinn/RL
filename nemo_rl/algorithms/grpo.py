@@ -61,6 +61,7 @@ from nemo_rl.data.llm_message_utils import (
     batched_message_log_to_flat_message,
     get_keys_from_message_log,
 )
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data.utils import extract_necessary_env_names
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_env
@@ -195,6 +196,7 @@ class GRPOConfig(TypedDict):
     invalid_tool_call_advantage: NotRequired[float]  # Advantage value for invalid tool calls when penalize_invalid_tool_call is True (default: -5.0)
     # Advantage estimator configuration (grpo or reinforce_plus_plus)
     adv_estimator: NotRequired[AdvEstimatorConfig]
+    deduplicate_multimodal_data: NotRequired[bool]
 
 
 class GRPOSaveState(TypedDict):
@@ -792,6 +794,9 @@ def setup(
     elif backend == "vllm":
         # vLLM generation: setup config, then initialize with policy
         generation_config = cast(VllmConfig, generation_config)
+        generation_config["deduplicate_multimodal_data"] = grpo_config.get(
+            "deduplicate_multimodal_data", False
+        )
         if generation_config["vllm_cfg"]["precision"] == "fp8":
             assert loss_config["use_importance_sampling_correction"] is True, (
                 "Importance sampling must be enabled for vLLM FP8 generation for good convergence!"
@@ -1705,9 +1710,22 @@ def grpo_train(
     val_at_start = master_config["grpo"]["val_at_start"]
     val_at_end = master_config["grpo"]["val_at_end"]
     val_period = master_config["grpo"]["val_period"]
+    deduplicate_multimodal_data = master_config["grpo"].get(
+        "deduplicate_multimodal_data", False
+    )
 
     to_compute_kl = master_config["loss_fn"]["reference_policy_kl_penalty"] > 0
     colocated_inference = master_config["policy"]["generation"]["colocated"]["enabled"]
+    if deduplicate_multimodal_data:
+        generation_cfg = master_config["policy"]["generation"]
+        if generation_cfg is None or generation_cfg.get("backend") != "vllm":
+            raise ValueError(
+                "grpo.deduplicate_multimodal_data requires policy.generation.backend='vllm'."
+            )
+        if _should_use_async_rollouts(master_config):
+            raise ValueError(
+                "grpo.deduplicate_multimodal_data currently supports only sync rollout paths."
+            )
 
     # Initialize advantage estimator
     adv_estimator = _create_advantage_estimator(master_config)
@@ -1770,6 +1788,12 @@ def grpo_train(
                                 master_config["grpo"]["num_generations_per_prompt"]
                             )
                         )
+                        if deduplicate_multimodal_data:
+                            repeated_batch["_dedup_prompt_idx"] = torch.arange(
+                                batch.size
+                            ).repeat_interleave(
+                                master_config["grpo"]["num_generations_per_prompt"]
+                            )
                     with timer.time("batch_message"):
                         # Convert LLMMessageLogType to FlatMessagesType for generation
                         batched_flat, input_lengths = batched_message_log_to_flat_message(
@@ -1895,6 +1919,7 @@ def grpo_train(
                                 "max_rollout_turns"
                             ],
                             greedy=False,
+                            skip_generation_multimodal_tensors=deduplicate_multimodal_data,
                         )
                     policy_generation.finish_generation()
                     # Collect generation logger metrics for performance reporting after each generation step
@@ -2056,8 +2081,20 @@ def grpo_train(
                     # This is also used to populate part of the downstream logprob calculation data
                     with timer.time("multimodal_dict"):
                         extra_multimodal_data = flat_messages.get_multimodal_dict(
-                            as_tensors=False
+                            as_tensors=False,
+                            pixel_dtype=(
+                                torch.bfloat16
+                                if deduplicate_multimodal_data
+                                else None
+                            ),
                         )
+                        if deduplicate_multimodal_data:
+                            prompt_indices = repeated_batch["_dedup_prompt_idx"]
+                            for key, val in extra_multimodal_data.items():
+                                if isinstance(val, PackedTensor):
+                                    extra_multimodal_data[key] = val.deduplicate(
+                                        prompt_indices
+                                    )
                         train_data.update(extra_multimodal_data)
                         train_data.to("cpu")
 
@@ -2630,6 +2667,9 @@ def validate(
         print(f"▶ Starting validation at step {step}...", flush=True)
 
         num_val_gens = master_config["grpo"].get("num_val_generations_per_prompt", 1)
+        deduplicate_multimodal_data = master_config["grpo"].get(
+            "deduplicate_multimodal_data", False
+        )
 
         total_rewards = []
         total_lengths = []
@@ -2649,6 +2689,10 @@ def validate(
             # Similar to training, this allows evaluating model consistency and diversity
             if num_val_gens > 1:
                 val_batch_for_rollout = val_batch.repeat_interleave(num_val_gens)
+                if deduplicate_multimodal_data:
+                    val_batch_for_rollout["_dedup_prompt_idx"] = torch.arange(
+                        val_batch.size
+                    ).repeat_interleave(num_val_gens)
             else:
                 val_batch_for_rollout = val_batch
 
@@ -2690,6 +2734,7 @@ def validate(
                     max_seq_len=master_config["policy"]["max_total_sequence_length"],
                     max_rollout_turns=master_config["grpo"]["max_rollout_turns"],
                     greedy=False,
+                    skip_generation_multimodal_tensors=deduplicate_multimodal_data,
                 )
 
             total_rewards.extend(val_batch["total_reward"].tolist())

@@ -17,9 +17,12 @@ from collections import defaultdict
 from typing import Any, Optional
 
 import numpy as np
+import torch
 
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
+from nemo_rl.utils.vlm_debug import debug_enabled, write_stage
 
 
 class AudioLoadError(RuntimeError):
@@ -179,7 +182,7 @@ def load_audio_waveform(
 
 def format_prompt_for_vllm_generation(
     data: BatchedDataDict[GenerationDatumSpec], sample_idx: Optional[int] = None
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     """Format a list of prompts for vllm generation (which requires a specific format for its own `generate` method).
 
     See https://docs.vllm.ai/en/v0.9.1/features/multimodal_inputs.html for prompt format for multimodal inputs.
@@ -201,7 +204,7 @@ def format_prompt_for_vllm_generation(
         start_idx = sample_idx
         end_idx = sample_idx + 1
 
-    def _get_regular_prompt(index: int):
+    def _get_regular_prompt(index: int) -> dict[str, Any]:
         valid_length = input_lengths[index].item()
         valid_ids = (
             input_ids[index, :valid_length]
@@ -211,34 +214,169 @@ def format_prompt_for_vllm_generation(
         token_ids = valid_ids.tolist()
         return {"prompt_token_ids": token_ids}
 
-    # Check if this is VLM generation by looking for message_log with images
-    # Support for videos/audio/etc. can be added here
-    # if 'message_log' in data and any('images' in msg for msg in data['message_log']):
+    def _coerce_hw_pair_list(value: Any) -> list[list[int]] | None:
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            value = value.tolist()
+        elif hasattr(value, "tolist") and not isinstance(value, (list, tuple)):
+            value = value.tolist()
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)):
+            return None
+        if len(value) == 0:
+            return []
+        first = value[0]
+        if isinstance(first, (int, float)):
+            return [[int(v) for v in value]]
+        pairs: list[list[int]] = []
+        for item in value:
+            if torch.is_tensor(item):
+                item = item.tolist()
+            if hasattr(item, "tolist") and not isinstance(item, (list, tuple)):
+                item = item.tolist()
+            if not isinstance(item, (list, tuple)):
+                continue
+            pairs.append([int(v) for v in item])
+        return pairs
+
+    def _resolve_sample_imgs_sizes(index: int) -> list[list[int]] | None:
+        imgs_sizes = data.get("imgs_sizes", None)
+        if imgs_sizes is None:
+            return None
+
+        sample_sizes: Any = None
+        if isinstance(imgs_sizes, PackedTensor):
+            dedup_indices = getattr(imgs_sizes, "_dedup_indices", None)
+            resolved_index = (
+                dedup_indices[index] if dedup_indices is not None else index
+            )
+            sample_sizes = imgs_sizes.tensors[resolved_index]
+        elif torch.is_tensor(imgs_sizes):
+            sample_sizes = imgs_sizes[index] if imgs_sizes.ndim >= 3 else imgs_sizes
+        elif isinstance(imgs_sizes, (list, tuple)):
+            if len(imgs_sizes) == 0:
+                sample_sizes = []
+            elif index < len(imgs_sizes) and isinstance(
+                imgs_sizes[index], (list, tuple, torch.Tensor)
+            ):
+                candidate = imgs_sizes[index]
+                if len(candidate) == 0:
+                    sample_sizes = candidate
+                else:
+                    first = candidate[0]
+                    if isinstance(first, (list, tuple, torch.Tensor)):
+                        sample_sizes = candidate
+                    else:
+                        sample_sizes = imgs_sizes
+            else:
+                sample_sizes = imgs_sizes
+
+        return _coerce_hw_pair_list(sample_sizes)
+
+    def _get_sample_images(index: int) -> list[Any] | None:
+        images = data.get("vllm_images", None)
+        if images is None:
+            return None
+        sample_images = images[index]
+        if sample_images is None:
+            return None
+        if isinstance(sample_images, list):
+            return sample_images
+        if isinstance(sample_images, tuple):
+            return list(sample_images)
+        return [sample_images]
+
+    def _get_debug_image_sizes(images: list[Any]) -> list[list[int] | None]:
+        debug_sizes: list[list[int] | None] = []
+        for image in images:
+            image_size = getattr(image, "size", None)
+            if isinstance(image_size, tuple) and len(image_size) == 2:
+                debug_sizes.append([int(image_size[0]), int(image_size[1])])
+            else:
+                debug_sizes.append(None)
+        return debug_sizes
+
+    def _emit_prompt_debug(
+        index: int,
+        prompt_type: str,
+        images: list[Any] | None = None,
+        mm_processor_kwargs: dict[str, Any] | None = None,
+        fallback_reason: str | None = None,
+    ) -> None:
+        if not debug_enabled():
+            return
+        mm_kwargs = mm_processor_kwargs or {}
+        write_stage(
+            "vllm_prompt_format",
+            {
+                "sample_index": index,
+                "prompt_type": prompt_type,
+                "image_count": 0 if images is None else len(images),
+                "image_sizes": [] if images is None else _get_debug_image_sizes(images),
+                "mm_processor_kwargs": mm_kwargs or None,
+                "has_precomputed_imgs_sizes": "precomputed_imgs_sizes" in mm_kwargs,
+                "fallback_reason": fallback_reason,
+            },
+        )
+
     if "vllm_content" in data:
-        # VLM generation using content and multi_modal_data
         for i in range(start_idx, end_idx):
             msg = data["vllm_content"][i]
-            # if msg is None, this conversation had no multimodal content, fallback to regular prompt
             if msg is None:
-                prompts.append(_get_regular_prompt(i))
+                prompt = _get_regular_prompt(i)
+                _emit_prompt_debug(
+                    i,
+                    prompt_type="token_ids",
+                    fallback_reason="missing_vllm_content",
+                )
+                prompts.append(prompt)
                 continue
-            # init prompt dict
-            prompt_dict = {"prompt": msg}
-            # add additional data if present
-            images = data.get("vllm_images", None)
-            if images is None or len(images[i]) == 0:
-                prompts.append(_get_regular_prompt(i))
+
+            sample_images = _get_sample_images(i)
+            if sample_images is None or len(sample_images) == 0:
+                prompt = _get_regular_prompt(i)
+                _emit_prompt_debug(
+                    i,
+                    prompt_type="token_ids",
+                    fallback_reason="missing_vllm_images",
+                )
+                prompts.append(prompt)
                 continue
-            else:
-                prompt_dict["multi_modal_data"] = {
-                    "image": images[i][0] if len(images[i]) == 1 else images[i]
-                }
+
+            prompt_dict: dict[str, Any] = {"prompt": msg}
+            prompt_dict["multi_modal_data"] = {
+                "image": sample_images[0] if len(sample_images) == 1 else sample_images
+            }
+
+            mm_processor_kwargs: dict[str, Any] = {}
+            max_num_tiles = data.get("vllm_max_num_tiles", None)
+            if max_num_tiles is not None and max_num_tiles[i] is not None:
+                mm_processor_kwargs["max_num_tiles"] = max_num_tiles[i]
+            max_num_patches = data.get("vllm_max_num_patches", None)
+            if max_num_patches is not None and max_num_patches[i] is not None:
+                mm_processor_kwargs["max_num_patches"] = max_num_patches[i]
+
+            precomputed_imgs_sizes = _resolve_sample_imgs_sizes(i)
+            if precomputed_imgs_sizes is not None:
+                mm_processor_kwargs["precomputed_imgs_sizes"] = precomputed_imgs_sizes
+
+            if mm_processor_kwargs:
+                prompt_dict["mm_processor_kwargs"] = mm_processor_kwargs
+
+            _emit_prompt_debug(
+                i,
+                prompt_type="multimodal_prompt",
+                images=sample_images,
+                mm_processor_kwargs=mm_processor_kwargs,
+            )
             prompts.append(prompt_dict)
     else:
-        # Regular LLM generation using token_ids
         for i in range(start_idx, end_idx):
-            # Use input_lengths to get only valid tokens (not padding)
-            prompts.append(_get_regular_prompt(i))
+            prompt = _get_regular_prompt(i)
+            _emit_prompt_debug(i, prompt_type="token_ids")
+            prompts.append(prompt)
 
     return prompts if return_all else prompts[0]
 

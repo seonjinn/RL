@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ from nemo_rl.data.llm_message_utils import (
     add_loss_mask_to_message_log,
     batched_message_log_to_flat_message,
 )
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 TokenizerType = Union[PreTrainedTokenizerBase, AutoProcessor]
@@ -55,9 +56,17 @@ def rl_collate_fn(data_batch: list[DatumSpec]) -> BatchedDataDict[Any]:
         ]
         vllm_images = [datum_spec.get("vllm_images", []) for datum_spec in data_batch]
         vllm_videos = [datum_spec.get("vllm_videos", []) for datum_spec in data_batch]
+        vllm_max_num_tiles = [
+            datum_spec.get("vllm_max_num_tiles", None) for datum_spec in data_batch
+        ]
+        vllm_max_num_patches = [
+            datum_spec.get("vllm_max_num_patches", None) for datum_spec in data_batch
+        ]
         extra_args["vllm_content"] = vllm_content
         extra_args["vllm_images"] = vllm_images
         extra_args["vllm_videos"] = vllm_videos
+        extra_args["vllm_max_num_tiles"] = vllm_max_num_tiles
+        extra_args["vllm_max_num_patches"] = vllm_max_num_patches
 
     output: BatchedDataDict[Any] = BatchedDataDict(
         message_log=message_log,
@@ -129,6 +138,7 @@ def preference_collate_fn(
     tokenizer: TokenizerType,
     make_sequence_length_divisible_by: int,
     add_loss_mask: bool,
+    deduplicate_multimodal_data: bool = False,
 ) -> BatchedDataDict[Any]:
     """Collate function for preference data training.
 
@@ -193,5 +203,19 @@ def preference_collate_fn(
     )
     if add_loss_mask:
         data["token_mask"] = cat_and_padded["token_loss_mask"]
+
+    pixel_dtype = torch.bfloat16 if deduplicate_multimodal_data else None
+    data.update(
+        cat_and_padded.get_multimodal_dict(
+            as_tensors=False, pixel_dtype=pixel_dtype
+        )
+    )
+
+    if deduplicate_multimodal_data:
+        prompt_indices = torch.arange(len(data_batch)).repeat_interleave(2)
+        for key in list(data.data.keys()):
+            val = data.data[key]
+            if isinstance(val, PackedTensor) and val._dedup_indices is None:
+                data.data[key] = val.deduplicate(prompt_indices)
 
     return data

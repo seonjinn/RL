@@ -88,6 +88,7 @@ class DistillationConfig(TypedDict):
     max_val_samples: int
     topk_logits_k: int
     seed: int
+    deduplicate_multimodal_data: NotRequired[bool]
 
 
 class DistillationSaveState(TypedDict):
@@ -419,6 +420,9 @@ def setup(
         student_generation = None
     elif backend == "vllm":
         generation_config = cast(VllmConfig, generation_config)
+        generation_config["deduplicate_multimodal_data"] = master_config[
+            "distillation"
+        ].get("deduplicate_multimodal_data", False)
         if "vllm_cfg" in generation_config:
             ## make vllm hf overrides match the training policy
             generation_config["vllm_cfg"]["hf_overrides"] = policy_config.get(
@@ -562,6 +566,19 @@ def distillation_train(
     max_steps = master_config["distillation"][
         "max_num_steps"
     ]  # max number of steps to train for
+    deduplicate_multimodal_data = master_config["distillation"].get(
+        "deduplicate_multimodal_data", False
+    )
+    if deduplicate_multimodal_data:
+        generation_cfg = master_config["policy"]["generation"]
+        if generation_cfg is None or generation_cfg.get("backend") != "vllm":
+            raise ValueError(
+                "distillation.deduplicate_multimodal_data requires policy.generation.backend='vllm'."
+            )
+        if _should_use_async_rollouts(master_config):
+            raise ValueError(
+                "distillation.deduplicate_multimodal_data currently supports only sync rollout paths."
+            )
 
     # Run validation at the start if configured
     if val_at_start and total_steps == 0:
@@ -614,6 +631,14 @@ def distillation_train(
                             master_config["distillation"]["num_generations_per_prompt"]
                         )
                     )
+                    if deduplicate_multimodal_data:
+                        repeated_batch["_dedup_prompt_idx"] = torch.arange(
+                            batch.size
+                        ).repeat_interleave(
+                            master_config["distillation"][
+                                "num_generations_per_prompt"
+                            ]
+                        )
 
                 # Generate responses - this updates the LLMMessageLogType in repeated_batch
                 print(
@@ -664,6 +689,7 @@ def distillation_train(
                                 "max_rollout_turns"
                             ],
                             greedy=False,
+                            skip_generation_multimodal_tensors=deduplicate_multimodal_data,
                         )
                     student_generation.finish_generation()
 
@@ -981,6 +1007,9 @@ def validate(
     with timer.time("total_validation_time"):
         print(f"▶ Starting validation at step {step}...", flush=True)
 
+        deduplicate_multimodal_data = master_config["distillation"].get(
+            "deduplicate_multimodal_data", False
+        )
         total_rewards = []  # Can be any metric. Setted to 'accuracy' by default.
         total_lengths = []
         all_message_logs = []  # Collect all message logs
@@ -1018,6 +1047,7 @@ def validate(
                         "max_rollout_turns"
                     ],
                     greedy=False,
+                    skip_generation_multimodal_tensors=deduplicate_multimodal_data,
                 )
             rewards = val_batch["total_reward"]
 

@@ -291,6 +291,74 @@ def test_validate_function(mock_components):
     # Note: validate() function itself doesn't call logger.log_metrics - that's done by the caller
 
 
+def test_validate_passes_skip_generation_multimodal_tensors_when_dedup_enabled():
+    mock_policy_gen = MagicMock()
+    mock_tokenizer = MagicMock()
+    mock_tokenizer.pad_token_id = 0
+
+    val_batch = BatchedDataDict[DatumSpec](
+        {
+            "message_log": [
+                [
+                    {
+                        "role": "user",
+                        "content": "test",
+                        "token_ids": torch.tensor([1, 2, 3]),
+                    }
+                ]
+            ],
+            "task_name": ["math"],
+            "extra_env_info": [{}],
+            "loss_multiplier": torch.tensor([1.0]),
+            "idx": torch.tensor([0]),
+            "length": torch.tensor([3]),
+        }
+    )
+    rollout_batch = val_batch.copy()
+    rollout_batch["total_reward"] = torch.tensor([1.0])
+
+    mock_dataloader = MagicMock(spec=StatefulDataLoader)
+    mock_dataloader.__iter__ = MagicMock(return_value=iter([val_batch]))
+
+    mock_env = {"math": MagicMock()}
+    mock_config = {
+        "distillation": {
+            "max_val_samples": 10,
+            "val_batch_size": 1,
+            "max_rollout_turns": 1,
+            "deduplicate_multimodal_data": True,
+        },
+        "policy": {
+            "max_total_sequence_length": 2048,
+            "generation": {
+                "backend": "vllm",
+                "colocated": {"enabled": True},
+                "vllm_cfg": {"async_engine": False},
+            },
+        },
+    }
+
+    with patch("nemo_rl.algorithms.distillation.run_multi_turn_rollout") as mock_rollout:
+        mock_rollout.return_value = (
+            rollout_batch,
+            {"mean_gen_tokens_per_sample": 4.0},
+        )
+        with patch(
+            "nemo_rl.algorithms.distillation._should_use_async_rollouts",
+            return_value=False,
+        ), patch("nemo_rl.algorithms.distillation.print_message_log_samples"):
+            validate(
+                mock_policy_gen,
+                mock_dataloader,
+                mock_tokenizer,
+                mock_env,
+                step=0,
+                master_config=mock_config,
+            )
+
+    assert mock_rollout.call_args.kwargs["skip_generation_multimodal_tensors"]
+
+
 def test_check_vocab_equality_pass(monkeypatch):
     student_tokenizer = MagicMock()
     student_tokenizer.get_vocab.return_value = {"a": 0, "b": 1}

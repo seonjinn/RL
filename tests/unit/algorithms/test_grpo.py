@@ -1810,6 +1810,93 @@ def test_reinforce_plus_plus_global_normalization():
 class TestValidateFunction:
     """Tests for the validate() function."""
 
+    def test_validate_threads_sync_dedup_prompt_indices(self):
+        mock_policy_gen = MagicMock()
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.pad_token_id = 0
+
+        val_batch = BatchedDataDict[DatumSpec](
+            {
+                "message_log": [
+                    [
+                        {
+                            "role": "user",
+                            "content": "test1",
+                            "token_ids": torch.tensor([1, 2, 3]),
+                        }
+                    ],
+                    [
+                        {
+                            "role": "user",
+                            "content": "test2",
+                            "token_ids": torch.tensor([4, 5, 6]),
+                        }
+                    ],
+                ],
+                "task_name": ["math", "math"],
+                "extra_env_info": [{}, {}],
+                "loss_multiplier": torch.tensor([1.0, 1.0]),
+                "idx": torch.tensor([0, 1]),
+                "length": torch.tensor([3, 3]),
+            }
+        )
+        rollout_batch = val_batch.repeat_interleave(2)
+        rollout_batch["total_reward"] = torch.tensor([1.0, 1.0, 0.5, 0.5])
+
+        mock_dataloader = MagicMock(spec=StatefulDataLoader)
+        mock_dataloader.__iter__ = MagicMock(return_value=iter([val_batch]))
+
+        mock_env = MagicMock(spec=EnvironmentInterface)
+        mock_env.global_post_process_and_metrics.return_value = (rollout_batch, {})
+
+        mock_config = {
+            "grpo": {
+                "max_val_samples": 10,
+                "val_batch_size": 2,
+                "max_rollout_turns": 1,
+                "num_val_generations_per_prompt": 2,
+                "deduplicate_multimodal_data": True,
+            },
+            "policy": {
+                "max_total_sequence_length": 2048,
+                "generation": {
+                    "backend": "vllm",
+                    "colocated": {"enabled": True},
+                    "vllm_cfg": {"async_engine": False},
+                },
+            },
+            "logger": {
+                "num_val_samples_to_print": 1,
+            },
+        }
+
+        with patch("nemo_rl.algorithms.grpo.run_multi_turn_rollout") as mock_rollout:
+            mock_rollout.return_value = (
+                rollout_batch,
+                {"mean_gen_tokens_per_sample": 10.0},
+            )
+            with patch(
+                "nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=False
+            ), patch(
+                "nemo_rl.algorithms.grpo._should_use_async_rollouts",
+                return_value=False,
+            ), patch("nemo_rl.algorithms.grpo.print_message_log_samples"):
+                validate(
+                    mock_policy_gen,
+                    mock_dataloader,
+                    mock_tokenizer,
+                    {"math": mock_env},
+                    step=5,
+                    master_config=mock_config,
+                    logger=None,
+                )
+
+        rollout_input_batch = mock_rollout.call_args.args[1]
+        assert torch.equal(
+            rollout_input_batch["_dedup_prompt_idx"], torch.tensor([0, 0, 1, 1])
+        )
+        assert mock_rollout.call_args.kwargs["skip_generation_multimodal_tensors"]
+
     def test_validate_logs_data_when_logger_provided(self, tmp_path):
         """Test that validation data is logged to JSONL when logger is provided."""
 

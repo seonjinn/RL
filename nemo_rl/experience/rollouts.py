@@ -353,6 +353,7 @@ def run_multi_turn_rollout(
     max_seq_len: int,
     max_rollout_turns: int = 999999,
     greedy: bool = False,
+    skip_generation_multimodal_tensors: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], dict[str, Any]]:
     """Runs a multi-turn rollout loop, interacting with the environment.
 
@@ -364,6 +365,9 @@ def run_multi_turn_rollout(
         max_rollout_turns: Maximum number of agent-environment interaction turns.
         max_seq_len: Maximum sequence length allowed.
         greedy: Whether to use greedy decoding.
+        skip_generation_multimodal_tensors: If True, omit tensor/PackedTensor
+            multimodal payloads from generation input while preserving the
+            lightweight metadata needed for vLLM prompt formatting.
 
     Returns:
         Tuple containing:
@@ -420,9 +424,13 @@ def run_multi_turn_rollout(
                 "stop_strings": active_stop_strings,
             }
         )
-        # add the multimodal data to the generation input data
-        multimodal_data = active_flat_messages.get_multimodal_dict(as_tensors=False)
-        generation_input_data.update(multimodal_data)
+        if not skip_generation_multimodal_tensors:
+            multimodal_data = active_flat_messages.get_multimodal_dict(as_tensors=False)
+            generation_input_data.update(multimodal_data)
+        else:
+            imgs_sizes = active_flat_messages.data.get("imgs_sizes")
+            if imgs_sizes is not None:
+                generation_input_data["imgs_sizes"] = imgs_sizes
 
         # keep message log for generation
         if "vllm_content" in active_batch:
@@ -431,6 +439,14 @@ def run_multi_turn_rollout(
             generation_input_data["vllm_images"] = active_batch["vllm_images"]
         if "vllm_videos" in active_batch:
             generation_input_data["vllm_videos"] = active_batch["vllm_videos"]
+        if "vllm_max_num_tiles" in active_batch:
+            generation_input_data["vllm_max_num_tiles"] = active_batch[
+                "vllm_max_num_tiles"
+            ]
+        if "vllm_max_num_patches" in active_batch:
+            generation_input_data["vllm_max_num_patches"] = active_batch[
+                "vllm_max_num_patches"
+            ]
 
         # generate_responses updates active_batch["message_log"] in-place
         active_batch, generated_ids, gen_metrics = generate_responses(

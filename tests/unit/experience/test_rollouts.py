@@ -17,6 +17,8 @@ import json
 import tempfile
 from copy import deepcopy
 from dataclasses import asdict
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import ray
@@ -27,9 +29,11 @@ from nemo_rl.data.collate_fn import rl_collate_fn
 from nemo_rl.data.datasets.response_datasets import NemoGymDataset
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.data.llm_message_utils import batched_message_log_to_flat_message
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data.processors import nemo_gym_data_processor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
+from nemo_rl.environments.interfaces import EnvironmentReturn
 from nemo_rl.environments.games.sliding_puzzle import (
     SlidingPuzzleConfig,
     SlidingPuzzleEnv,
@@ -63,6 +67,106 @@ from tests.unit.test_envs import (
 )
 
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+
+
+def test_run_multi_turn_rollout_skip_generation_multimodal_tensors():
+    class DummyTokenizer:
+        pad_token_id = 0
+
+        def __call__(self, text, return_tensors="pt", add_special_tokens=False):
+            if text:
+                return SimpleNamespace(
+                    input_ids=torch.tensor([[9]], dtype=torch.int64)
+                )
+            return SimpleNamespace(input_ids=torch.zeros((1, 0), dtype=torch.int64))
+
+    tokenizer = DummyTokenizer()
+    input_batch = BatchedDataDict[DatumSpec](
+        {
+            "message_log": [
+                [
+                    {
+                        "role": "user",
+                        "content": "look",
+                        "token_ids": torch.tensor([1, 2, 3], dtype=torch.int64),
+                        "pixel_values": PackedTensor(
+                            [torch.ones((1, 3, 2, 2), dtype=torch.float32)],
+                            dim_to_pack=0,
+                        ),
+                        "imgs_sizes": PackedTensor(
+                            [torch.tensor([[4, 5]], dtype=torch.int32)],
+                            dim_to_pack=0,
+                        ),
+                    }
+                ]
+            ],
+            "extra_env_info": [{}],
+            "loss_multiplier": torch.tensor([1.0]),
+            "idx": [0],
+            "task_name": ["math"],
+            "vllm_content": ["prompt-with-image"],
+            "vllm_images": [["img1"]],
+            "vllm_max_num_tiles": [8],
+        }
+    )
+
+    captured: dict[str, BatchedDataDict] = {}
+
+    def fake_generate_responses(
+        policy_generation,
+        generation_input_data,
+        batch,
+        tokenizer,
+        input_lengths,
+        include_logprobs=True,
+        greedy=False,
+    ):
+        captured["generation_input_data"] = generation_input_data
+        batch["message_log"][0].append(
+            {
+                "role": "assistant",
+                "content": "done",
+                "token_ids": torch.tensor([7], dtype=torch.int64),
+            }
+        )
+        return batch, [torch.tensor([7], dtype=torch.int64)], {
+            "mean_generation_length": 1.0,
+            "total_generated_tokens": 1,
+        }
+
+    env_output = EnvironmentReturn(
+        observations=[{"role": "environment", "content": ""}],
+        metadata=[None],
+        next_stop_strings=[None],
+        rewards=torch.tensor([1.0]),
+        terminateds=torch.tensor([True]),
+        answers=[None],
+    )
+
+    with patch(
+        "nemo_rl.experience.rollouts.generate_responses",
+        side_effect=fake_generate_responses,
+    ), patch(
+        "nemo_rl.experience.rollouts.calculate_rewards", return_value=env_output
+    ):
+        final_batch, rollout_metrics = run_multi_turn_rollout(
+            policy_generation=MagicMock(),
+            input_batch=input_batch,
+            tokenizer=tokenizer,
+            task_to_env={"math": MagicMock()},
+            max_seq_len=32,
+            max_rollout_turns=1,
+            skip_generation_multimodal_tensors=True,
+        )
+
+    generation_input_data = captured["generation_input_data"]
+    assert "pixel_values" not in generation_input_data
+    assert "imgs_sizes" in generation_input_data
+    assert generation_input_data["vllm_content"] == ["prompt-with-image"]
+    assert generation_input_data["vllm_images"] == [["img1"]]
+    assert generation_input_data["vllm_max_num_tiles"] == [8]
+    assert final_batch["total_reward"][0].item() == 1.0
+    assert rollout_metrics["mean_gen_tokens_per_sample"] == 1.0
 
 
 class TestCalculateSingleMetric:

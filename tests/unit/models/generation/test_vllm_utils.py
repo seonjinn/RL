@@ -17,6 +17,7 @@ import math
 import pytest
 import torch
 
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
@@ -67,6 +68,57 @@ def test_vllm_utils_vlm_with_images_and_text():
     assert prompts[0]["multi_modal_data"]["image"] == "img1"
     assert prompts[1]["prompt"] == "<s>user: hello</s>"
     assert prompts[1]["multi_modal_data"]["image"] == ["img2a", "img2b"]
+
+
+def test_vllm_utils_vlm_adds_mm_processor_kwargs_from_packed_imgs_sizes():
+    input_ids, input_lengths = _mk_inputs()
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths,
+            "vllm_content": ["prompt-a", "prompt-b"],
+            "vllm_images": [["img1"], ["img2a", "img2b"]],
+            "imgs_sizes": PackedTensor(
+                [
+                    torch.tensor([[4, 5]], dtype=torch.int32),
+                    torch.tensor([[6, 4], [8, 8]], dtype=torch.int32),
+                ],
+                dim_to_pack=0,
+            ),
+            "vllm_max_num_tiles": [12, None],
+            "vllm_max_num_patches": [None, 256],
+        }
+    )
+
+    prompts = format_prompt_for_vllm_generation(data)
+
+    assert prompts[0]["mm_processor_kwargs"] == {
+        "max_num_tiles": 12,
+        "precomputed_imgs_sizes": [[4, 5]],
+    }
+    assert prompts[1]["mm_processor_kwargs"] == {
+        "max_num_patches": 256,
+        "precomputed_imgs_sizes": [[6, 4], [8, 8]],
+    }
+
+
+def test_vllm_utils_vlm_adds_precomputed_sizes_from_list_form():
+    input_ids, input_lengths = _mk_inputs(batch_size=1)
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths[:1],
+            "vllm_content": ["prompt-a"],
+            "vllm_images": [["img1"]],
+            "imgs_sizes": [[[10, 12]]],
+        }
+    )
+
+    prompt = format_prompt_for_vllm_generation(data, sample_idx=0)
+
+    assert prompt["mm_processor_kwargs"] == {
+        "precomputed_imgs_sizes": [[10, 12]]
+    }
 
 
 def test_vllm_utils_vlm_with_missing_images_fallback_to_tokens():
