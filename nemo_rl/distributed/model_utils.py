@@ -1073,6 +1073,7 @@ def from_parallel_logits_to_logprobs_packed_sequences(
     """
     batch_size = cu_seqlens_padded.shape[0] - 1
     cp_size = 1 if cp_group is None else torch.distributed.get_world_size(cp_group)
+    cu_seqlens_padded_list = cu_seqlens_padded.tolist()
 
     if not target_is_pre_rolled:
         # Roll each sequence individually and CP-shard the targets
@@ -1085,8 +1086,8 @@ def from_parallel_logits_to_logprobs_packed_sequences(
             target.shape[0] // cp_size, dtype=target.dtype, device=target.device
         )
         for i in range(batch_size):
-            start_idx = cu_seqlens_padded[i].item()
-            end_idx = cu_seqlens_padded[i + 1].item()
+            start_idx = cu_seqlens_padded_list[i]
+            end_idx = cu_seqlens_padded_list[i + 1]
 
             seq_targets = target[start_idx:end_idx]
             rolled_seq_targets = seq_targets.roll(shifts=-1, dims=0)
@@ -1155,8 +1156,8 @@ def from_parallel_logits_to_logprobs_packed_sequences(
         # per-sequence cp_allgather
         final_probs = torch.zeros(probs.shape[0] * cp_size, device=probs.device)
         for i in range(batch_size):
-            start_idx = cu_seqlens_padded[i].item()
-            end_idx = cu_seqlens_padded[i + 1].item()
+            start_idx = cu_seqlens_padded_list[i]
+            end_idx = cu_seqlens_padded_list[i + 1]
             final_probs[start_idx:end_idx] = allgather_cp_sharded_tensor(
                 probs[start_idx // cp_size : end_idx // cp_size], cp_group, seq_dim=0
             )
@@ -1167,8 +1168,8 @@ def from_parallel_logits_to_logprobs_packed_sequences(
     )
     # Filter out the last token of each sequence
     for i in range(batch_size):
-        start_idx = cu_seqlens_padded[i].item()
-        end_idx = cu_seqlens_padded[i + 1].item()
+        start_idx = cu_seqlens_padded_list[i]
+        end_idx = cu_seqlens_padded_list[i + 1]
 
         # Exclude the last position (which has the rolled target from position 0)
         if end_idx - start_idx > 0:

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional, Tuple
@@ -405,10 +406,13 @@ def _pack_sequences_for_megatron(
 
     pad_factor = pad_individual_seqs_to_multiple_of
 
+    if torch.is_tensor(seq_lengths):
+        seq_lengths_list = seq_lengths.tolist()
+    else:
+        seq_lengths_list = list(seq_lengths)
+
     for b in range(batch_size):
-        seq_len = (
-            seq_lengths[b].item() if torch.is_tensor(seq_lengths[b]) else seq_lengths[b]
-        )
+        seq_len = seq_lengths_list[b]
 
         # Extract valid tokens for this sequence
         valid_tokens.append(input_ids[b, :seq_len])
@@ -569,35 +573,38 @@ def _select_cuda_graph_bucket(
         Bucket size to pad to, or None if the fill ratio is below the threshold
         (caller should fall back to regular execution without CUDA graph replay).
     """
-    sorted_buckets = sorted(buckets)
     # Smallest bucket that fits the actual length; None if actual exceeds all buckets.
-    bucket = next((b for b in sorted_buckets if b >= actual_seq_len), None)
+    # Expects buckets to be pre-sorted ascending by caller.
+    bucket = next((b for b in buckets if b >= actual_seq_len), None)
     _rank0 = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
     if bucket is None:
         # actual > max(buckets): cannot pad down, must fall back to eager.
         if _rank0:
-            print(
-                f"[CG-DEBUG data] actual_packed={actual_seq_len} > max_bucket={sorted_buckets[-1]}"
-                f" → EAGER FALLBACK (overflow)",
-                flush=True,
+            logging.debug(
+                "[CG] actual_packed=%d > max_bucket=%d → EAGER FALLBACK (overflow)",
+                actual_seq_len,
+                buckets[-1],
             )
         return None
     fill = actual_seq_len / bucket
     if min_fill_ratio > 0.0 and fill < min_fill_ratio:
         if _rank0:
-            print(
-                f"[CG-DEBUG data] actual_packed={actual_seq_len}, bucket={bucket},"
-                f" fill={fill:.3f} < min_fill={min_fill_ratio:.2f}"
-                f" → EAGER FALLBACK (low fill)",
-                flush=True,
+            logging.debug(
+                "[CG] actual_packed=%d, bucket=%d, fill=%.3f < min_fill=%.2f → EAGER FALLBACK (low fill)",
+                actual_seq_len,
+                bucket,
+                fill,
+                min_fill_ratio,
             )
         return None
     if _rank0:
-        print(
-            f"[CG-DEBUG data] actual_packed={actual_seq_len}, bucket={bucket},"
-            f" fill={fill:.3f} (padding +{bucket - actual_seq_len} tokens,"
-            f" min_fill={min_fill_ratio:.2f}) → CG STEP",
-            flush=True,
+        logging.debug(
+            "[CG] actual_packed=%d, bucket=%d, fill=%.3f (padding +%d tokens, min_fill=%.2f) → CG STEP",
+            actual_seq_len,
+            bucket,
+            fill,
+            bucket - actual_seq_len,
+            min_fill_ratio,
         )
     return bucket
 
@@ -663,6 +670,8 @@ def _get_pack_sequence_parameters_for_megatron(
     # optionally fall back to regular execution if fill ratio is too low.
     cuda_graph_packed_seq = megatron_cfg.get("cuda_graph_packed_seq", False)
     cuda_graph_buckets = megatron_cfg.get("cuda_graph_buckets", None)
+    if cuda_graph_buckets:
+        cuda_graph_buckets = sorted(cuda_graph_buckets)
     min_fill_ratio = megatron_cfg.get("cuda_graph_min_fill_ratio", 0.0)
 
     is_cg_step = False

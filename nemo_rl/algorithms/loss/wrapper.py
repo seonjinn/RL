@@ -80,12 +80,14 @@ class SequencePackingLossWrapper:
             padded_seq_lengths = unpadded_seq_lengths
         seq_starts = padded_cu_seqlens[:-1]
         seq_ends = padded_cu_seqlens[1:]
+        seq_starts_list = seq_starts.tolist()
+        seq_ends_list = seq_ends.tolist()
 
         loss_accum = 0
         metrics_accum = {}
         for seq_idx in range(len(seq_starts)):
-            seq_start = seq_starts[seq_idx].item()
-            seq_end = seq_ends[seq_idx].item()
+            seq_start = seq_starts_list[seq_idx]
+            seq_end = seq_ends_list[seq_idx]
 
             # get sequence and unpad all 'data' tensors. The data dict is a BatchedDataDict of unpacked tensors
             seq_data = data.slice(seq_idx, seq_idx + 1)
