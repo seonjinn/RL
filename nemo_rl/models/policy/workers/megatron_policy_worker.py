@@ -92,6 +92,16 @@ from nemo_rl.utils.packed_tensor import packed_broadcast_producer
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
+@contextmanager
+def nvtx_range(name: str):
+    """Emit a scoped NVTX range for finer-grained nsys attribution."""
+    torch.cuda.nvtx.range_push(name)
+    try:
+        yield
+    finally:
+        torch.cuda.nvtx.range_pop()
+
+
 # Classes with @ray.remote can't be inherited from, so we split the implementation out.
 # This is useful when using worker extension classes.
 class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface):
@@ -552,52 +562,61 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             losses = []
             total_num_microbatches = 0
             for gb_idx in range(num_global_batches):
-                gb_result = process_global_batch(
-                    data,
-                    loss_fn=loss_fn,
-                    dp_group=parallel_state.get_data_parallel_group(),
-                    batch_idx=gb_idx,
-                    batch_size=local_gbs,
-                )
+                with nvtx_range(
+                    f"megatron_policy_worker/train/global_batch_{gb_idx}/process_batch"
+                ):
+                    gb_result = process_global_batch(
+                        data,
+                        loss_fn=loss_fn,
+                        dp_group=parallel_state.get_data_parallel_group(),
+                        batch_idx=gb_idx,
+                        batch_size=local_gbs,
+                    )
                 batch = gb_result["batch"]
                 global_valid_seqs = gb_result["global_valid_seqs"]
                 global_valid_toks = gb_result["global_valid_toks"]
 
-                (
-                    data_iterator,
-                    num_microbatches,
-                    micro_batch_size,
-                    seq_length,
-                    padded_seq_length,
-                ) = get_microbatch_iterator(
-                    batch,
-                    self.cfg,
-                    mbs,
-                    straggler_timer=self.mcore_state.straggler_timer,
-                )
+                with nvtx_range(
+                    f"megatron_policy_worker/train/global_batch_{gb_idx}/microbatch_setup"
+                ):
+                    (
+                        data_iterator,
+                        num_microbatches,
+                        micro_batch_size,
+                        seq_length,
+                        padded_seq_length,
+                    ) = get_microbatch_iterator(
+                        batch,
+                        self.cfg,
+                        mbs,
+                        straggler_timer=self.mcore_state.straggler_timer,
+                    )
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
 
                 # CUDA graph: init helper and capture after warmup (once per train() call)
                 if not eval_mode:
-                    if gb_idx == 0:
-                        self._maybe_capture_cuda_graphs(
-                            padded_seq_length, micro_batch_size
-                        )
-                    elif (
-                        getattr(self.megatron_cfg.model, "cuda_graph_impl", "none")
-                        != "none"
+                    with nvtx_range(
+                        f"megatron_policy_worker/train/global_batch_{gb_idx}/cuda_graph_gate"
                     ):
-                        assert (
-                            padded_seq_length == self._cuda_graph_captured_seq_length
-                            or self._cuda_graph_captured_seq_length is None
-                        ), (
-                            f"CUDA graphs do not support num_global_batches > 1 when different "
-                            f"global batches produce different padded sequence lengths "
-                            f"(gb_idx={gb_idx}: seq={padded_seq_length}, "
-                            f"captured={self._cuda_graph_captured_seq_length}). "
-                            f"Reduce num_global_batches to 1 or disable CUDA graphs."
-                        )
+                        if gb_idx == 0:
+                            self._maybe_capture_cuda_graphs(
+                                padded_seq_length, micro_batch_size
+                            )
+                        elif (
+                            getattr(self.megatron_cfg.model, "cuda_graph_impl", "none")
+                            != "none"
+                        ):
+                            assert (
+                                padded_seq_length == self._cuda_graph_captured_seq_length
+                                or self._cuda_graph_captured_seq_length is None
+                            ), (
+                                f"CUDA graphs do not support num_global_batches > 1 when different "
+                                f"global batches produce different padded sequence lengths "
+                                f"(gb_idx={gb_idx}: seq={padded_seq_length}, "
+                                f"captured={self._cuda_graph_captured_seq_length}). "
+                                f"Reduce num_global_batches to 1 or disable CUDA graphs."
+                            )
 
                 loss_post_processor = LossPostProcessor(
                     loss_fn=loss_fn,
@@ -610,30 +629,36 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 rerun_state_machine = get_rerun_state_machine()
                 while rerun_state_machine.should_run_forward_backward(data_iterator):
                     # Set grad to zero.
-                    self.model.zero_grad_buffer()
-                    self.optimizer.zero_grad()
+                    with nvtx_range(
+                        f"megatron_policy_worker/train/global_batch_{gb_idx}/zero_grad"
+                    ):
+                        self.model.zero_grad_buffer()
+                        self.optimizer.zero_grad()
 
                     # Forward pass.
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
-                    losses_reduced = megatron_forward_backward(
-                        model=self.model,
-                        data_iterator=data_iterator,
-                        num_microbatches=num_microbatches,
-                        seq_length=padded_seq_length,
-                        mbs=micro_batch_size,
-                        post_processing_fn=loss_post_processor,
-                        forward_only=eval_mode,
-                        defer_fp32_logits=self.defer_fp32_logits,
-                        global_valid_seqs=global_valid_seqs,
-                        global_valid_toks=global_valid_toks,
-                        sampling_params=self.sampling_params,
-                        straggler_timer=self.mcore_state.straggler_timer,
-                        draft_model=self.draft_model,
-                        enable_hidden_capture=draft_enabled,
-                        use_linear_ce_fusion_loss=self.cfg["megatron_cfg"].get(
-                            "use_linear_ce_fusion_loss", False
-                        ),
-                    )
+                    with nvtx_range(
+                        f"megatron_policy_worker/train/global_batch_{gb_idx}/forward_backward"
+                    ):
+                        losses_reduced = megatron_forward_backward(
+                            model=self.model,
+                            data_iterator=data_iterator,
+                            num_microbatches=num_microbatches,
+                            seq_length=padded_seq_length,
+                            mbs=micro_batch_size,
+                            post_processing_fn=loss_post_processor,
+                            forward_only=eval_mode,
+                            defer_fp32_logits=self.defer_fp32_logits,
+                            global_valid_seqs=global_valid_seqs,
+                            global_valid_toks=global_valid_toks,
+                            sampling_params=self.sampling_params,
+                            straggler_timer=self.mcore_state.straggler_timer,
+                            draft_model=self.draft_model,
+                            enable_hidden_capture=draft_enabled,
+                            use_linear_ce_fusion_loss=self.cfg["megatron_cfg"].get(
+                                "use_linear_ce_fusion_loss", False
+                            ),
+                        )
 
                 # Empty unused memory.
                 if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
@@ -641,27 +666,33 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
                 # Update parameters.
                 if not eval_mode:
-                    update_successful, grad_norm, num_zeros_in_grad = (
-                        self.optimizer.step()
-                    )
+                    with nvtx_range(
+                        f"megatron_policy_worker/train/global_batch_{gb_idx}/optimizer_step"
+                    ):
+                        update_successful, grad_norm, num_zeros_in_grad = (
+                            self.optimizer.step()
+                        )
                 else:
                     update_successful, grad_norm, num_zeros_in_grad = (True, 0.0, 0.0)
 
-                pg_collection = get_pg_collection(self.model)
+                with nvtx_range(
+                    f"megatron_policy_worker/train/global_batch_{gb_idx}/optimizer_postprocess"
+                ):
+                    pg_collection = get_pg_collection(self.model)
 
-                # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
-                # so we must gather across mp ranks
-                update_successful = logical_and_across_model_parallel_group(
-                    update_successful, mp_group=pg_collection.mp
-                )
-                # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
-                # so we must gather across mp ranks
-                grad_norm: float = reduce_max_stat_across_model_parallel_group(
-                    grad_norm, mp_group=pg_collection.mp
-                )
-                num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
-                    num_zeros_in_grad, mp_group=pg_collection.mp
-                )
+                    # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
+                    # so we must gather across mp ranks
+                    update_successful = logical_and_across_model_parallel_group(
+                        update_successful, mp_group=pg_collection.mp
+                    )
+                    # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
+                    # so we must gather across mp ranks
+                    grad_norm: float = reduce_max_stat_across_model_parallel_group(
+                        grad_norm, mp_group=pg_collection.mp
+                    )
+                    num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
+                        num_zeros_in_grad, mp_group=pg_collection.mp
+                    )
 
                 # Empty unused memory.
                 if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 2:
@@ -691,9 +722,12 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                     gb_loss_metrics = None
 
                 # Broadcast loss metrics from last stage to all stages
-                gb_loss_metrics = broadcast_loss_metrics_from_last_stage(
-                    gb_loss_metrics
-                )
+                with nvtx_range(
+                    f"megatron_policy_worker/train/global_batch_{gb_idx}/broadcast_loss_metrics"
+                ):
+                    gb_loss_metrics = broadcast_loss_metrics_from_last_stage(
+                        gb_loss_metrics
+                    )
                 if not parallel_state.is_pipeline_last_stage(ignore_virtual=True):
                     mb_losses = [x["loss"] for x in gb_loss_metrics]
 
@@ -704,14 +738,16 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             # take one LR step every rollout batch
             # we need to scale the step by gbs to counteract the fact that NeMo automatically
             # scales lr_warmup_steps by gbs during init
-            self.scheduler.step(increment=gbs)
+            with nvtx_range("megatron_policy_worker/train/scheduler_step"):
+                self.scheduler.step(increment=gbs)
 
         # Aggregate metrics across all microbatches
-        mb_metrics, global_loss = aggregate_training_statistics(
-            all_mb_metrics=all_mb_metrics,
-            losses=losses,
-            data_parallel_group=parallel_state.get_data_parallel_group(),
-        )
+        with nvtx_range("megatron_policy_worker/train/aggregate_training_statistics"):
+            mb_metrics, global_loss = aggregate_training_statistics(
+                all_mb_metrics=all_mb_metrics,
+                losses=losses,
+                data_parallel_group=parallel_state.get_data_parallel_group(),
+            )
 
         metrics = {
             "global_loss": global_loss.cpu(),
@@ -895,24 +931,30 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             copy_stream.wait_stream(default_stream)
             model_state_dict = {}
             with torch.cuda.stream(copy_stream):
-                for name, item in self.model.state_dict().items():
-                    if isinstance(item, torch.Tensor) and item.is_cuda:
-                        cpu_buf = torch.empty(
-                            item.shape, dtype=item.dtype, device="cpu", pin_memory=True
-                        )
-                        cpu_buf.copy_(item.detach(), non_blocking=True)
-                        item = cpu_buf
-                    elif isinstance(item, torch.Tensor):
-                        item = item.detach().clone()
-                    model_state_dict[name] = item
+                with nvtx_range(
+                    "megatron_policy_worker/use_reference_model/save_policy_state"
+                ):
+                    for name, item in self.model.state_dict().items():
+                        if isinstance(item, torch.Tensor) and item.is_cuda:
+                            cpu_buf = torch.empty(
+                                item.shape, dtype=item.dtype, device="cpu", pin_memory=True
+                            )
+                            cpu_buf.copy_(item.detach(), non_blocking=True)
+                            item = cpu_buf
+                        elif isinstance(item, torch.Tensor):
+                            item = item.detach().clone()
+                        model_state_dict[name] = item
 
                 # Apply reference weights H2D on the same copy stream so it
                 # overlaps with any in-flight side-stream work; default
                 # stream waits below before consumers (eval forward) run.
-                self._apply_state_dict_to_model(
-                    self.reference_state_dict,
-                    raise_if_key_missing=True,
-                )
+                with nvtx_range(
+                    "megatron_policy_worker/use_reference_model/load_reference_state"
+                ):
+                    self._apply_state_dict_to_model(
+                        self.reference_state_dict,
+                        raise_if_key_missing=True,
+                    )
             default_stream.wait_stream(copy_stream)
 
             if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
@@ -947,10 +989,13 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             default_stream = torch.cuda.current_stream()
             copy_stream.wait_stream(default_stream)
             with torch.cuda.stream(copy_stream):
-                self._apply_state_dict_to_model(
-                    model_state_dict,
-                    raise_if_key_missing=True,
-                )
+                with nvtx_range(
+                    "megatron_policy_worker/use_reference_model/restore_policy_state"
+                ):
+                    self._apply_state_dict_to_model(
+                        model_state_dict,
+                        raise_if_key_missing=True,
+                    )
             default_stream.wait_stream(copy_stream)
 
             if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
@@ -1448,11 +1493,13 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         gc.collect()
         torch.cuda.empty_cache()
 
+    @wrap_with_nvtx_name("megatron_policy_worker/prepare_for_training")
     def prepare_for_training(self, *args, **kwargs):
         # onload models and optimizer state to cuda
-        self.model = self.move_model(
-            self.model, "cuda", move_grads=True, move_params=True
-        )
+        with nvtx_range("megatron_policy_worker/prepare_for_training/move_model"):
+            self.model = self.move_model(
+                self.model, "cuda", move_grads=True, move_params=True
+            )
         self.model.train()
 
         # Move optimizer state to CUDA if it exists
@@ -1463,7 +1510,8 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             and not self.optimizer_cpu_offload
             and (self.offload_optimizer_for_logprob or self.is_generation_colocated)
         ):
-            self.move_optimizer("cuda")
+            with nvtx_range("megatron_policy_worker/prepare_for_training/move_optimizer"):
+                self.move_optimizer("cuda")
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
@@ -1533,42 +1581,43 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         default_stream = torch.cuda.current_stream()
         copy_stream.wait_stream(default_stream)
         with torch.cuda.stream(copy_stream):
-            if isinstance(model, DistributedDataParallel):
-                for buffers in [model.buffers, model.expert_parallel_buffers]:
-                    for buffer_idx in range(len(buffers)):
-                        if device == "cpu":
-                            buffers[buffer_idx].offload_to_cpu(
-                                move_params=move_params, move_grads=move_grads
-                            )
-                        elif device == "cuda":
-                            buffers[buffer_idx].reload_from_cpu(
-                                move_params=move_params, move_grads=move_grads
-                            )
-                        else:
-                            raise ValueError(
-                                f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                            )
-            elif isinstance(model, custom_FSDP):
-                if device == "cpu":
-                    model.param_and_grad_buffer.offload_to_cpu(move_params, move_grads)
-                elif device == "cuda":
-                    model.param_and_grad_buffer.reload_from_cpu(
-                        move_params=move_params, move_grads=move_grads
-                    )
+            with nvtx_range(f"megatron_policy_worker/move_model/{device}"):
+                if isinstance(model, DistributedDataParallel):
+                    for buffers in [model.buffers, model.expert_parallel_buffers]:
+                        for buffer_idx in range(len(buffers)):
+                            if device == "cpu":
+                                buffers[buffer_idx].offload_to_cpu(
+                                    move_params=move_params, move_grads=move_grads
+                                )
+                            elif device == "cuda":
+                                buffers[buffer_idx].reload_from_cpu(
+                                    move_params=move_params, move_grads=move_grads
+                                )
+                            else:
+                                raise ValueError(
+                                    f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+                                )
+                elif isinstance(model, custom_FSDP):
+                    if device == "cpu":
+                        model.param_and_grad_buffer.offload_to_cpu(move_params, move_grads)
+                    elif device == "cuda":
+                        model.param_and_grad_buffer.reload_from_cpu(
+                            move_params=move_params, move_grads=move_grads
+                        )
+                    else:
+                        raise ValueError(
+                            f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+                        )
                 else:
-                    raise ValueError(
-                        f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                    )
-            else:
-                if move_params:
-                    new_state_dict = {}
-                    for name, item in model.state_dict().items():
-                        if isinstance(item, torch.Tensor):
-                            item = item.detach().to(
-                                device=device, non_blocking=True, copy=True
-                            )
-                        new_state_dict[name] = item
-                    model.load_state_dict(new_state_dict)
+                    if move_params:
+                        new_state_dict = {}
+                        for name, item in model.state_dict().items():
+                            if isinstance(item, torch.Tensor):
+                                item = item.detach().to(
+                                    device=device, non_blocking=True, copy=True
+                                )
+                            new_state_dict[name] = item
+                        model.load_state_dict(new_state_dict)
         default_stream.wait_stream(copy_stream)
         return model
 
@@ -1582,22 +1631,23 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         else:
             optimizer_state = self.optimizer._get_state()
         with torch.cuda.stream(copy_stream):
-            for _, state in optimizer_state.items():
-                # Iterate through the state items (e.g., momentum, variance) for a parameter
-                for k, v in state.items():
-                    # Check if the item is a tensor
-                    if torch.is_tensor(v):
-                        # Move the tensor to device and update the state dictionary
-                        if device == "cpu":
-                            if v.is_cuda:
-                                state[k] = v.to("cpu", non_blocking=True)
-                        elif device == "cuda":
-                            if not v.is_cuda:
-                                state[k] = v.to("cuda", non_blocking=True)
-                        else:
-                            raise ValueError(
-                                f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                            )
+            with nvtx_range(f"megatron_policy_worker/move_optimizer/{device}"):
+                for _, state in optimizer_state.items():
+                    # Iterate through the state items (e.g., momentum, variance) for a parameter
+                    for k, v in state.items():
+                        # Check if the item is a tensor
+                        if torch.is_tensor(v):
+                            # Move the tensor to device and update the state dictionary
+                            if device == "cpu":
+                                if v.is_cuda:
+                                    state[k] = v.to("cpu", non_blocking=True)
+                            elif device == "cuda":
+                                if not v.is_cuda:
+                                    state[k] = v.to("cuda", non_blocking=True)
+                            else:
+                                raise ValueError(
+                                    f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+                                )
         default_stream.wait_stream(copy_stream)
 
     def save_checkpoint(
