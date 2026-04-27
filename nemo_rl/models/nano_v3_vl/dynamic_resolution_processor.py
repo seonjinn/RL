@@ -635,11 +635,12 @@ class DynamicResolutionProcessor(ProcessorMixin):
         max_num_patches: Optional[int] = None,
     ) -> tuple[torch.Tensor, tuple[int, int]]:
         """Preprocess a single image using dynamic resolution."""
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
         target_h, target_w = self.compute_target_resolution(image, max_num_patches)
         resized = image.resize((target_w, target_h), Image.BICUBIC)
+        # Match vLLM's DynamicResolutionImageTiler ordering: resize first,
+        # then convert non-RGB images just before tensorization.
+        if resized.mode != "RGB":
+            resized = resized.convert("RGB")
 
         tensor = transforms.ToTensor()(resized)
         tensor = (tensor - self.norm_mean.view(3, 1, 1)) / self.norm_std.view(
@@ -660,8 +661,6 @@ class DynamicResolutionProcessor(ProcessorMixin):
             (stacked_tiles, num_tiles): tiles tensor of shape
             ``[num_tiles, 3, image_size, image_size]`` and the tile count.
         """
-        if image.mode != "RGB":
-            image = image.convert("RGB")
         tile_images = _internvl_dynamic_preprocess(
             image,
             image_size=self.image_size,
