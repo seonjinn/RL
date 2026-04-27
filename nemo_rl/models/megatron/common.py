@@ -32,6 +32,46 @@ def _round_up_to_multiple(value: int, multiple: int) -> int:
     )
 
 
+def _vlm_sp_repad_collapsed(
+    input_ids: torch.Tensor,
+    tokens_removed_per_sample: Optional[torch.Tensor],
+    divisor: int,
+) -> torch.Tensor:
+    """Re-pad collapsed VLM input_ids so the LLaVA-expanded length is divisible.
+
+    In the non-packed VLM path all samples share the same tensor width. The
+    LLaVA model re-expands collapsed image tokens internally during
+    ``_preprocess_data``, producing a wider activation tensor:
+        ``combined_embeddings.shape[0] = collapsed_width + max(tokens_removed)``
+    Megatron's ``_calc_shard_factor`` then asserts this expanded width is
+    divisible by some ``shard_factor`` derived from the active model-parallel
+    config:
+
+      * ``sequence_parallel=True`` requires divisibility by ``tp_size``;
+      * ``context_parallel_size > 1`` requires divisibility by ``cp_size * 2``
+        (factor of 2 for causal-attention load balancing);
+      * with both active, by ``lcm(tp_size, cp_size * 2)``.
+
+    The caller computes the appropriate ``divisor`` from the active config and
+    we simply pad ``collapsed_width`` so that
+    ``(collapsed_width + max_removed) % divisor == 0``.
+
+    For text-only / non-VLM paths this is a no-op (returns ``input_ids``).
+    """
+    if tokens_removed_per_sample is None or divisor <= 1:
+        return input_ids
+    max_removed = int(tokens_removed_per_sample.max().item())
+    collapsed_width = input_ids.shape[1]
+    required_width = (
+        _round_up_to_multiple(collapsed_width + max_removed, divisor) - max_removed
+    )
+    if required_width > collapsed_width:
+        input_ids = torch.nn.functional.pad(
+            input_ids, (0, required_width - collapsed_width), value=0
+        )
+    return input_ids
+
+
 def broadcast_tensor(
     tensor: torch.Tensor | None, src_rank: int, group: dist.ProcessGroup
 ) -> torch.Tensor:
