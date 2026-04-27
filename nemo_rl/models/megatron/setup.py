@@ -538,10 +538,18 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             )
 
     # CUDA graph for training (requires Megatron-LM with packed-sequence CG support).
-    if config["megatron_cfg"].get("cuda_graph_impl"):
-        model_cfg.cuda_graph_impl = config["megatron_cfg"]["cuda_graph_impl"]
-    if config["megatron_cfg"].get("cuda_graph_scope"):
-        model_cfg.cuda_graph_scope = config["megatron_cfg"]["cuda_graph_scope"]
+    cg_impl = config["megatron_cfg"].get("cuda_graph_impl")
+    cg_scope = config["megatron_cfg"].get("cuda_graph_scope")
+    if cg_impl and cg_impl != "none":
+        if not cg_scope:
+            raise ValueError(
+                f"cuda_graph_scope must be set when cuda_graph_impl is '{cg_impl}'. "
+                f"Set megatron_cfg.cuda_graph_scope (e.g. 'full_model')."
+            )
+        model_cfg.cuda_graph_impl = cg_impl
+        model_cfg.cuda_graph_scope = cg_scope
+    elif cg_scope:
+        model_cfg.cuda_graph_scope = cg_scope
     if "cuda_graph_warmup_steps" in config["megatron_cfg"]:
         model_cfg.cuda_graph_warmup_steps = config["megatron_cfg"][
             "cuda_graph_warmup_steps"
@@ -552,7 +560,7 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.cuda_graph_max_packed_seqs = config["megatron_cfg"][
             "cuda_graph_max_packed_seqs"
         ]
-    if config["megatron_cfg"].get("cuda_graph_impl") == "transformer_engine":
+    if cg_impl == "transformer_engine":
         # TE-based CUDA graphs require TE's RNG tracker to be active.
         model_cfg.use_te_rng_tracker = True
 
@@ -1155,14 +1163,23 @@ def setup_reference_model_state(
     if should_load_checkpoint or use_peft:
         reference_model = reference_model[0]
         reference_model.eval()
-        # Store reference state dict on CPU
+        # Store reference state dict on CPU using pinned host memory so the
+        # later H2D restore (in _apply_state_dict_to_model with non_blocking=True)
+        # is truly async rather than falling back to sync on pageable memory.
         for name, item in reference_model.state_dict().items():
             if isinstance(item, torch.Tensor):
-                cpu_item = item.detach().to(device="cpu", non_blocking=True, copy=True)
+                if item.is_cuda:
+                    cpu_item = torch.empty(
+                        item.shape, dtype=item.dtype, device="cpu", pin_memory=True
+                    )
+                    cpu_item.copy_(item.detach(), non_blocking=True)
+                else:
+                    cpu_item = item.detach().clone()
                 del item
             else:
                 cpu_item = item
             reference_state_dict[name] = cpu_item
+        torch.cuda.current_stream().synchronize()
         print("Reference model loaded")
     else:
         print("Reference model not loaded")

@@ -833,12 +833,15 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 continue
             source_value = source_state_dict[state_dict_key]
 
-            # Case 1: Same shape → in-place copy (parameters / buffers)
+            # Case 1: Same shape → in-place copy (parameters / buffers).
+            # non_blocking=True makes H2D async when source is pinned host memory
+            # (saved model_state_dict in use_reference_model uses pinned dest);
+            # otherwise PyTorch falls back to sync. Either way, correctness preserved.
             if (
                 isinstance(source_value, torch.Tensor)
                 and param_or_buf.shape == source_value.shape
             ):
-                param_or_buf.copy_(source_value)
+                param_or_buf.copy_(source_value, non_blocking=True)
                 continue
 
             # Case 2: _extra_state (shape mismatch or non-Tensor) → set_extra_state()
@@ -874,12 +877,24 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         torch.cuda.synchronize()
 
         with torch.no_grad():
-            # Save original references
+            # Save original references using pinned-host destinations so D2H is
+            # truly async (PyTorch otherwise falls back to sync on pageable dest).
+            # Combined with the synchronize() above, all per-tensor D2H copies
+            # can pipeline rather than serializing on host.
             model_state_dict = {}
             for name, item in self.model.state_dict().items():
-                if isinstance(item, torch.Tensor):
-                    item = item.detach().to(device="cpu", non_blocking=True, copy=True)
+                if isinstance(item, torch.Tensor) and item.is_cuda:
+                    cpu_buf = torch.empty(
+                        item.shape, dtype=item.dtype, device="cpu", pin_memory=True
+                    )
+                    cpu_buf.copy_(item.detach(), non_blocking=True)
+                    item = cpu_buf
+                elif isinstance(item, torch.Tensor):
+                    item = item.detach().clone()
                 model_state_dict[name] = item
+            # Ensure all async D2H copies finished before yielding (downstream
+            # eval forward shouldn't race with the in-flight transfers).
+            torch.cuda.current_stream().synchronize()
 
             # Swap reference model state_dict into self.model (reference weights + optional FP8 extra_state)
             self._apply_state_dict_to_model(
