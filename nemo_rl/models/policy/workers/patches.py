@@ -267,7 +267,6 @@ def _install_transformer_engine_graph_runtime_nvtx_patch() -> None:
     torch.cuda.Stream.wait_event = _wrap_nvtx(
         "wait_event", torch.cuda.Stream.wait_event
     )
-    torch.Tensor.copy_ = _wrap_nvtx("copy", torch.Tensor.copy_)
     print("Installed runtime NVTX monkey patch for transformer_engine graph replay.")
 
 
