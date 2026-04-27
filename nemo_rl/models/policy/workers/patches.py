@@ -211,6 +211,9 @@ def _install_transformer_engine_graph_runtime_nvtx_patch() -> None:
     working across minor TE version/layout changes inside the container. The wrappers
     only annotate calls whose stack originates from ``transformer_engine/pytorch/graph.py``.
     """
+    if os.environ.get("NRL_ENABLE_TE_RUNTIME_NVTX_PATCH") != "1":
+        return
+
     if not os.environ.get("NRL_NSYS_WORKER_PATTERNS"):
         return
 
