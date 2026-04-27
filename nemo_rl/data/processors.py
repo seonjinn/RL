@@ -457,7 +457,6 @@ def vlm_hf_data_processor(
         PackedTensor,
         get_dim_to_pack_along,
         get_multimodal_keys_from_processor,
-        resolve_to_image,
     )
 
     # depending on the task, format the data differently
@@ -501,8 +500,6 @@ def vlm_hf_data_processor(
     else:
         # conversation consists of a text-only message
         user_message["content"] = task_data_spec.prompt.format(problem)
-
-    images = [resolve_to_image(image) for image in images]
 
     # get formatted user message
     if hasattr(processor, "conversation_preprocessor"):

@@ -16,6 +16,7 @@ import math
 
 import pytest
 import torch
+from PIL import Image
 
 from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict, SlicedDataDict
@@ -32,6 +33,29 @@ def _mk_inputs(batch_size: int = 2, seq_len: int = 5):
     # make second example shorter
     input_lengths = torch.tensor([seq_len, seq_len - 2])
     return input_ids, input_lengths
+
+
+def _summarize_image_payload(image_payload):
+    if isinstance(image_payload, list):
+        return [_summarize_image_payload(image) for image in image_payload]
+    if isinstance(image_payload, Image.Image):
+        return {
+            "kind": "pil",
+            "mode": image_payload.mode,
+            "size": list(image_payload.size),
+        }
+    return image_payload
+
+
+def _summarize_prompt(prompt: dict) -> dict:
+    summary = dict(prompt)
+    multi_modal_data = summary.get("multi_modal_data")
+    if isinstance(multi_modal_data, dict) and "image" in multi_modal_data:
+        summary["multi_modal_data"] = {
+            **multi_modal_data,
+            "image": _summarize_image_payload(multi_modal_data["image"]),
+        }
+    return summary
 
 
 def test_vllm_utils_regular_llm_path():
@@ -71,7 +95,28 @@ def test_vllm_utils_vlm_with_images_and_text():
     assert prompts[1]["multi_modal_data"]["image"] == ["img2a", "img2b"]
 
 
-def test_vllm_utils_vlm_adds_mm_processor_kwargs_from_packed_imgs_sizes():
+def test_vllm_utils_vlm_loads_local_image_paths(tmp_path):
+    input_ids, input_lengths = _mk_inputs(batch_size=1)
+    image_path = tmp_path / "fixture.png"
+    Image.new("RGB", (10, 12), color=(1, 2, 3)).save(image_path)
+
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths[:1],
+            "vllm_content": ["<s>user: hi</s>"],
+            "vllm_images": [[str(image_path)]],
+        }
+    )
+
+    prompt = format_prompt_for_vllm_generation(data, sample_idx=0)
+
+    image_payload = prompt["multi_modal_data"]["image"]
+    assert isinstance(image_payload, Image.Image)
+    assert image_payload.size == (10, 12)
+
+
+def test_vllm_utils_vlm_only_adds_supported_mm_processor_kwargs_from_packed_imgs_sizes():
     input_ids, input_lengths = _mk_inputs()
     data = BatchedDataDict(
         {
@@ -93,17 +138,11 @@ def test_vllm_utils_vlm_adds_mm_processor_kwargs_from_packed_imgs_sizes():
 
     prompts = format_prompt_for_vllm_generation(data)
 
-    assert prompts[0]["mm_processor_kwargs"] == {
-        "max_num_tiles": 12,
-        "precomputed_imgs_sizes": [[4, 5]],
-    }
-    assert prompts[1]["mm_processor_kwargs"] == {
-        "max_num_patches": 256,
-        "precomputed_imgs_sizes": [[6, 4], [8, 8]],
-    }
+    assert prompts[0]["mm_processor_kwargs"] == {"max_num_tiles": 12}
+    assert prompts[1]["mm_processor_kwargs"] == {"max_num_patches": 256}
 
 
-def test_vllm_utils_vlm_adds_precomputed_sizes_from_list_form():
+def test_vllm_utils_vlm_does_not_forward_imgs_sizes_from_list_form():
     input_ids, input_lengths = _mk_inputs(batch_size=1)
     data = BatchedDataDict(
         {
@@ -117,20 +156,22 @@ def test_vllm_utils_vlm_adds_precomputed_sizes_from_list_form():
 
     prompt = format_prompt_for_vllm_generation(data, sample_idx=0)
 
-    assert prompt["mm_processor_kwargs"] == {
-        "precomputed_imgs_sizes": [[10, 12]]
-    }
+    assert "mm_processor_kwargs" not in prompt
 
 
-def test_vllm_utils_vlm_compact_payload_matches_raw_prompt_format():
+def test_vllm_utils_vlm_compact_payload_matches_raw_prompt_format_for_local_paths(
+    tmp_path,
+):
     input_ids = torch.arange(15).view(3, 5)
     input_lengths = torch.tensor([5, 4, 3])
+    image_path = tmp_path / "fixture.png"
+    Image.new("RGB", (10, 12), color=(1, 2, 3)).save(image_path)
     raw_data = BatchedDataDict(
         {
             "input_ids": input_ids,
             "input_lengths": input_lengths,
             "vllm_content": ["prompt-a", "prompt-a", None],
-            "vllm_images": [["img1"], ["img1"], []],
+            "vllm_images": [[str(image_path)], [str(image_path)], []],
             "imgs_sizes": PackedTensor(
                 [
                     torch.tensor([[4, 5]], dtype=torch.int32),
@@ -158,7 +199,9 @@ def test_vllm_utils_vlm_compact_payload_matches_raw_prompt_format():
 
     compact_prompts = format_prompt_for_vllm_generation(compact_data)
 
-    assert compact_prompts == raw_prompts
+    assert [_summarize_prompt(prompt) for prompt in compact_prompts] == [
+        _summarize_prompt(prompt) for prompt in raw_prompts
+    ]
 
 
 def test_vllm_utils_vlm_with_missing_images_fallback_to_tokens():

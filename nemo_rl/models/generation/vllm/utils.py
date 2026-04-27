@@ -14,12 +14,14 @@
 
 import os
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import torch
+from PIL import Image
 
-from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data.multimodal_utils import PackedTensor, resolve_to_image
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 from nemo_rl.utils.vlm_debug import debug_enabled, write_stage
@@ -267,6 +269,30 @@ def _get_sample_images(
     return [sample_images]
 
 
+def _coerce_vllm_image(
+    image: Any, image_cache: dict[str, Image.Image] | None = None
+) -> Any:
+    """Load local image paths eagerly so vLLM receives image objects, not strings."""
+    if isinstance(image, Image.Image):
+        return image
+    if isinstance(image, os.PathLike):
+        image = os.fspath(image)
+    if isinstance(image, str):
+        local_path = image.removeprefix("file://")
+        should_resolve = image.startswith(("http://", "https://", "data:", "file://")) or Path(
+            local_path
+        ).exists()
+        if should_resolve:
+            cache_key = image
+            if image_cache is not None and cache_key in image_cache:
+                return image_cache[cache_key]
+            resolved_image = resolve_to_image(local_path if image.startswith("file://") else image)
+            if image_cache is not None:
+                image_cache[cache_key] = resolved_image
+            return resolved_image
+    return image
+
+
 def _get_debug_image_sizes(images: list[Any]) -> list[list[int] | None]:
     debug_sizes: list[list[int] | None] = []
     for image in images:
@@ -329,10 +355,6 @@ def _build_mm_processor_kwargs(
     if max_num_patches is not None:
         mm_processor_kwargs["max_num_patches"] = max_num_patches
 
-    precomputed_imgs_sizes = _resolve_sample_imgs_sizes(data, index)
-    if precomputed_imgs_sizes is not None:
-        mm_processor_kwargs["precomputed_imgs_sizes"] = precomputed_imgs_sizes
-
     return mm_processor_kwargs
 
 
@@ -344,10 +366,14 @@ def _build_multimodal_prompt(
     *,
     max_num_tiles: Any = None,
     max_num_patches: Any = None,
+    image_cache: dict[str, Image.Image] | None = None,
 ) -> dict[str, Any]:
+    resolved_images = [
+        _coerce_vllm_image(image, image_cache=image_cache) for image in sample_images
+    ]
     prompt_dict: dict[str, Any] = {"prompt": prompt_text}
     prompt_dict["multi_modal_data"] = {
-        "image": sample_images[0] if len(sample_images) == 1 else sample_images
+        "image": resolved_images[0] if len(resolved_images) == 1 else resolved_images
     }
 
     mm_processor_kwargs = _build_mm_processor_kwargs(
@@ -362,7 +388,7 @@ def _build_multimodal_prompt(
     _emit_prompt_debug(
         index,
         prompt_type="multimodal_prompt",
-        images=sample_images,
+        images=resolved_images,
         mm_processor_kwargs=mm_processor_kwargs,
     )
     return prompt_dict
@@ -373,6 +399,7 @@ def _format_prompts_from_compact_payload(
     compact: dict[str, Any],
     start_idx: int,
     end_idx: int,
+    image_cache: dict[str, Image.Image] | None = None,
 ) -> list[dict[str, Any]]:
     """Reconstruct per-row vLLM prompt dicts from a compact image payload."""
     input_ids = data["input_ids"]
@@ -429,6 +456,7 @@ def _format_prompts_from_compact_payload(
                 sample_images,
                 max_num_tiles=_get_row_scalar(row_max_num_tiles, index),
                 max_num_patches=_get_row_scalar(row_max_num_patches, index),
+                image_cache=image_cache,
             )
         )
 
@@ -458,10 +486,11 @@ def format_prompt_for_vllm_generation(
     else:
         start_idx = sample_idx
         end_idx = sample_idx + 1
+    image_cache: dict[str, Image.Image] = {}
 
     if "vllm_mm_compact_payload" in data:
         prompts = _format_prompts_from_compact_payload(
-            data, data["vllm_mm_compact_payload"], start_idx, end_idx
+            data, data["vllm_mm_compact_payload"], start_idx, end_idx, image_cache
         )
         return prompts if return_all else prompts[0]
 
@@ -495,6 +524,7 @@ def format_prompt_for_vllm_generation(
                     i,
                     msg,
                     sample_images,
+                    image_cache=image_cache,
                 )
             )
     else:
