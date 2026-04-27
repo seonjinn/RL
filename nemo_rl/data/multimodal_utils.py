@@ -49,7 +49,17 @@ class PackedTensor:
         self,
         tensors: Union[torch.Tensor, list[Optional[torch.Tensor]], list[None]],
         dim_to_pack: int,
+        dedup_indices: Optional[list[int]] = None,
     ) -> None:
+        """Wrap a list of tensors with optional logical deduplication.
+
+        ``dedup_indices`` (when provided) makes ``self.tensors`` a *unique* set
+        and treats ``dedup_indices[i]`` as the index into ``self.tensors`` for
+        logical position ``i``. This lets repeated rollouts of the same prompt
+        share a single underlying tensor (e.g. one ``pixel_values`` per unique
+        prompt instead of N copies for N rollouts) while still presenting a
+        len-N logical view to consumers.
+        """
         assert tensors is not None, "Input tensors to PackedTensor cannot be None"
 
         if isinstance(tensors, torch.Tensor):
@@ -64,12 +74,25 @@ class PackedTensor:
                 f"Unsupported type for input tensors to PackedTensor: {type(tensors)}"
             )
         self.dim_to_pack = dim_to_pack
+        if dedup_indices is not None:
+            assert len(dedup_indices) > 0, (
+                "dedup_indices must be non-empty when provided"
+            )
+            assert min(dedup_indices) >= 0, (
+                "dedup_indices must contain only non-negative values"
+            )
+            assert max(dedup_indices) < len(self.tensors), (
+                "dedup_indices cannot reference out-of-range unique tensor indices"
+            )
+        self._dedup_indices = dedup_indices
         if debug_enabled():
             write_stage(
                 "packed_tensor_create",
                 {
                     "dim_to_pack": self.dim_to_pack,
-                    "logical_length": len(self.tensors),
+                    "logical_length": len(self),
+                    "unique_length": len(self.tensors),
+                    "is_deduplicated": self._dedup_indices is not None,
                     "tensor_shapes": _tensor_shape_list(self.tensors),
                 },
             )
@@ -82,7 +105,12 @@ class PackedTensor:
             for i, item in enumerate(self.tensors):
                 if item is not None:
                     self.tensors[i] = item.to(device)
-        non_none_tensors = [t for t in self.tensors if t is not None]
+        # Re-expand deduplicated tensors to logical positions before packing,
+        # so callers that don't care about dedup see the full N-row tensor.
+        tensors = self.tensors
+        if self._dedup_indices is not None:
+            tensors = [self.tensors[i] for i in self._dedup_indices]
+        non_none_tensors = [t for t in tensors if t is not None]
         if len(non_none_tensors) == 0:
             return None
         padding_applied: list[list[int]] = []
@@ -118,7 +146,9 @@ class PackedTensor:
                 "packed_tensor_as_tensor",
                 {
                     "dim_to_pack": self.dim_to_pack,
-                    "logical_length": len(self.tensors),
+                    "logical_length": len(self),
+                    "unique_length": len(self.tensors),
+                    "is_deduplicated": self._dedup_indices is not None,
                     "input_tensor_shapes": _tensor_shape_list(self.tensors),
                     "non_none_tensor_shapes": [
                         list(tensor.shape) for tensor in non_none_tensors
@@ -130,23 +160,54 @@ class PackedTensor:
         return result
 
     def __len__(self) -> int:
-        # this is the number of tensors in this data wrapper
+        """Logical length: number of rollout slots, not the number of unique tensors.
+
+        For a deduplicated ``PackedTensor`` this returns
+        ``len(self._dedup_indices)``; otherwise it falls through to the raw
+        underlying tensor list length.
+        """
+        if self._dedup_indices is not None:
+            return len(self._dedup_indices)
         return len(self.tensors)
 
-    def to(self, device: str | torch.device) -> "PackedTensor":
+    def to(
+        self, device_or_dtype: str | torch.device | torch.dtype
+    ) -> "PackedTensor":
         self.tensors = [
-            item.to(device) if item is not None else None for item in self.tensors
+            item.to(device_or_dtype) if item is not None else None
+            for item in self.tensors
         ]
         return self
 
     def slice(self, indices: Union[list[int], torch.Tensor]) -> "PackedTensor":
+        """Return a new ``PackedTensor`` with the given logical positions.
+
+        For a deduplicated ``PackedTensor``, ``indices`` are positions in the
+        logical (post-dedup-expansion) view. The result keeps only the unique
+        tensors actually referenced by the slice and rewrites
+        ``_dedup_indices`` to remap into that compacted unique list.
+        """
         idx = indices.tolist() if isinstance(indices, torch.Tensor) else indices
+        if self._dedup_indices is not None:
+            new_dedup = [self._dedup_indices[i] for i in idx]
+            used_unique_indices = sorted(set(new_dedup))
+            remap = {old: new for new, old in enumerate(used_unique_indices)}
+            unique_tensors = [self.tensors[i] for i in used_unique_indices]
+            return PackedTensor(
+                unique_tensors,
+                self.dim_to_pack,
+                dedup_indices=[remap[i] for i in new_dedup],
+            )
         tensors = [self.tensors[i] for i in idx]
         return PackedTensor(tensors, self.dim_to_pack)
 
     @classmethod
     def empty_like(cls, other: "PackedTensor") -> "PackedTensor":
         """Return a new PackedTensor with same length and dim_to_pack as `other`, with all entries None."""
+        assert other._dedup_indices is None, (
+            "empty_like on a deduplicated PackedTensor is ambiguous "
+            "(len(tensors) != logical length). Deduplicate after empty_like if needed."
+        )
         return cls([None] * len(other.tensors), other.dim_to_pack)
 
     @classmethod
@@ -156,6 +217,12 @@ class PackedTensor:
         The underlying tensors from the PackedTensors are combined into a single list of tensors and used to create a new PackedTensor.
 
         Each batch must have the same dim_to_pack.
+
+        When any input is deduplicated, the result preserves dedup metadata:
+        each input's unique tensors are appended to the merged unique list and
+        its ``_dedup_indices`` are offset to land on those new positions, so
+        the logical (post-expansion) tensor of the concat equals the
+        concatenation of each input's logical tensor.
 
         Example:
         ```{doctest}
@@ -175,12 +242,61 @@ class PackedTensor:
         assert len(set(dim_to_packs)) == 1, (
             "All packed tensors must have the same dim_to_pack"
         )
+        dim_to_pack = dim_to_packs[0]
+        if any(pt._dedup_indices is not None for pt in from_packed_tensors):
+            all_tensors: list[Optional[torch.Tensor]] = []
+            all_dedup_indices: list[int] = []
+            offset = 0
+            for packed_tensor in from_packed_tensors:
+                if packed_tensor._dedup_indices is not None:
+                    all_tensors.extend(packed_tensor.tensors)
+                    all_dedup_indices.extend(
+                        idx + offset for idx in packed_tensor._dedup_indices
+                    )
+                    offset += len(packed_tensor.tensors)
+                else:
+                    all_tensors.extend(packed_tensor.tensors)
+                    all_dedup_indices.extend(
+                        range(offset, offset + len(packed_tensor.tensors))
+                    )
+                    offset += len(packed_tensor.tensors)
+            return cls(all_tensors, dim_to_pack, dedup_indices=all_dedup_indices)
         # concatenate the tensors
         tensors = []
         for packed_tensor in from_packed_tensors:
             tensors.extend(packed_tensor.tensors)
-        dim_to_pack = dim_to_packs[0]
         return cls(tensors, dim_to_pack)
+
+    def deduplicate(self, prompt_indices: torch.Tensor) -> "PackedTensor":
+        """Return a deduplicated copy keyed on per-position prompt identity.
+
+        ``prompt_indices`` must have one entry per current logical position of
+        this ``PackedTensor`` and assigns each position a prompt id. Positions
+        with the same prompt id collapse to a single underlying tensor (the
+        first occurrence is kept), and ``_dedup_indices`` records the mapping
+        from logical position to that compacted unique list.
+        """
+        assert self._dedup_indices is None, (
+            "Cannot deduplicate an already-deduplicated PackedTensor"
+        )
+        prompt_index_list = prompt_indices.tolist()
+        assert len(self.tensors) == len(prompt_index_list), (
+            f"PackedTensor has {len(self.tensors)} entries but got "
+            f"{len(prompt_index_list)} prompt indices"
+        )
+
+        seen: dict[int, int] = {}
+        unique_tensors: list[Optional[torch.Tensor]] = []
+        dedup_indices: list[int] = []
+        for i, prompt_idx in enumerate(prompt_index_list):
+            if prompt_idx not in seen:
+                seen[prompt_idx] = len(unique_tensors)
+                unique_tensors.append(self.tensors[i])
+            dedup_indices.append(seen[prompt_idx])
+
+        return PackedTensor(
+            unique_tensors, self.dim_to_pack, dedup_indices=dedup_indices
+        )
 
     @classmethod
     def flattened_concat(
