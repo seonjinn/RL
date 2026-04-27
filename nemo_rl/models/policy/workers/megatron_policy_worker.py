@@ -871,16 +871,11 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         if self.should_disable_forward_pre_hook:
             self.disable_forward_pre_hook()
 
-        # CG fix: drain capture-stream tail before per-tensor state_dict transfers.
-        # Each .to("cpu", non_blocking=True) below would otherwise host-block on
-        # CG side-stream queue back-pressure (~365ms × N tensors).
-        torch.cuda.synchronize()
-
         with torch.no_grad():
             # Save original references using pinned-host destinations so D2H is
             # truly async (PyTorch otherwise falls back to sync on pageable dest).
-            # Combined with the synchronize() above, all per-tensor D2H copies
-            # can pipeline rather than serializing on host.
+            # Same-stream ordering serializes downstream consumers, so no explicit
+            # synchronize is needed (and explicit sync killed offload/rollout overlap).
             model_state_dict = {}
             for name, item in self.model.state_dict().items():
                 if isinstance(item, torch.Tensor) and item.is_cuda:
@@ -892,9 +887,6 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 elif isinstance(item, torch.Tensor):
                     item = item.detach().clone()
                 model_state_dict[name] = item
-            # Ensure all async D2H copies finished before yielding (downstream
-            # eval forward shouldn't race with the in-flight transfers).
-            torch.cuda.current_stream().synchronize()
 
             # Swap reference model state_dict into self.model (reference weights + optional FP8 extra_state)
             self._apply_state_dict_to_model(
@@ -927,10 +919,6 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
             # Restore sampling_params
             self.sampling_params = saved_sampling_params
-
-            # CG fix: drain side-stream after eval forward so per-tensor restore
-            # transfers below don't each host-block.
-            torch.cuda.synchronize()
 
             # Restore original policy state (weights + FP8 extra_state) from saved model_state_dict
             self._apply_state_dict_to_model(
@@ -1510,11 +1498,6 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         move_params: bool = True,
         move_grads: bool = True,
     ) -> torch.nn.Module:
-        # CG fix: drain capture-stream tail once. With CUDA Graph the side-stream
-        # holds queued kernels at this point; subsequent per-bucket cudaMemcpyAsync
-        # calls would each host-block on queue back-pressure (~365ms × N stalls).
-        # A single synchronize collapses N stalls into 1.
-        torch.cuda.synchronize()
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
             # DDP case
@@ -1557,9 +1540,6 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         return model
 
     def move_optimizer(self, device: str):
-        # CG fix: same rationale as move_model — drain capture-stream once
-        # so per-tensor .to() calls don't each host-block on queue back-pressure.
-        torch.cuda.synchronize()
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
