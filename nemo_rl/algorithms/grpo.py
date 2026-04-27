@@ -100,6 +100,11 @@ from nemo_rl.utils.logger import (
     print_message_log_samples,
 )
 from nemo_rl.utils.memory_tracker import MemoryTracker
+from nemo_rl.utils.multimodal_payload_metrics import (
+    collect_multimodal_payload_metrics,
+    infer_unique_prompt_count,
+    print_multimodal_payload_metrics,
+)
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
@@ -197,6 +202,13 @@ class GRPOConfig(TypedDict):
     # Advantage estimator configuration (grpo or reinforce_plus_plus)
     adv_estimator: NotRequired[AdvEstimatorConfig]
     deduplicate_multimodal_data: NotRequired[bool]
+    # Emit driver-side multimodal payload-bytes / prompt-count metrics at the
+    # four sync-rollout boundaries (driver-to-vllm-generation, -to-policy-
+    # get-logprobs, -to-policy-train, post-train kv-scale recompute). Used by
+    # the dedup verification methodology to confirm tensor_mm / non_tensor_mm
+    # bytes shrink with grpo.deduplicate_multimodal_data=true while logical
+    # row counts stay equal between dedup-on and dedup-off runs.
+    debug_payload_metrics: NotRequired[bool]
 
 
 class GRPOSaveState(TypedDict):
@@ -1837,6 +1849,15 @@ def grpo_train(
                                 calib_flat.get_multimodal_dict(as_tensors=False)
                             )
                             calibration_data.to("cpu")
+                            print_multimodal_payload_metrics(
+                                collect_multimodal_payload_metrics(
+                                    calibration_data,
+                                    boundary="driver_to_policy_calibrate_qkv_fp8_scales_pre_refit",
+                                ),
+                                enabled=master_config["grpo"].get(
+                                    "debug_payload_metrics", False
+                                ),
+                            )
                             kv_scales_cache = policy.calibrate_qkv_fp8_scales(
                                 calibration_data, include_q=True
                             )["layers"]
@@ -2100,6 +2121,21 @@ def grpo_train(
 
                     metrics_logging_data["content"] = flat_messages["content"]
 
+                # Driver-side multimodal payload-bytes / prompt-count
+                # instrumentation. ``unique_prompts_for_policy`` is computed
+                # once on ``repeated_batch`` (which still carries
+                # ``_dedup_prompt_idx`` set by the rollout path when
+                # ``deduplicate_multimodal_data=True``) and reused for every
+                # downstream boundary so dedup-on vs dedup-off runs report
+                # identical logical-row / unique-prompt counts and only
+                # tensor_mm bytes shrink with dedup.
+                debug_payload_metrics = master_config["grpo"].get(
+                    "debug_payload_metrics", False
+                )
+                unique_prompts_for_policy = infer_unique_prompt_count(
+                    repeated_batch, default_rows=train_data.size
+                )
+
                 memory_tracker.snapshot_start_of_stage("Computing logprobs", dir())
                 # Skip prev_logprobs computation when force_on_policy_ratio=True
                 # unless seq_logprob_error_threshold is set (which requires prev_logprobs)
@@ -2133,6 +2169,14 @@ def grpo_train(
                         }
                     )
                     if not skip_prev_logprobs:
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                logprob_data,
+                                boundary="driver_to_policy_get_logprobs",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
+                        )
                         train_data["prev_logprobs"] = policy.get_logprobs(
                             logprob_data, timer=timer
                         )["logprobs"]
@@ -2142,6 +2186,14 @@ def grpo_train(
                     if to_compute_kl and not master_config["grpo"].get(
                         "skip_reference_policy_logprobs_calculation"
                     ):
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                logprob_data,
+                                boundary="driver_to_policy_get_reference_policy_logprobs",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
+                        )
                         train_data["reference_policy_logprobs"] = (
                             policy.get_reference_policy_logprobs(
                                 logprob_data,
@@ -2241,6 +2293,14 @@ def grpo_train(
 
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
+                    print_multimodal_payload_metrics(
+                        collect_multimodal_payload_metrics(
+                            train_data,
+                            boundary="driver_to_policy_train",
+                            unique_prompts=unique_prompts_for_policy,
+                        ),
+                        enabled=debug_payload_metrics,
+                    )
                     train_results = policy.train(
                         train_data,
                         loss_fn,
@@ -2253,6 +2313,14 @@ def grpo_train(
                         print(
                             "▶ Recomputing KV cache scales after policy update...",
                             flush=True,
+                        )
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                train_data,
+                                boundary="driver_to_policy_calibrate_qkv_fp8_scales_post_train",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
                         )
                         kv_scales_cache = policy.calibrate_qkv_fp8_scales(
                             train_data, include_q=True
