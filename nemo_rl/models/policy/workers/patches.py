@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import os
+import sys
+import threading
 from importlib.util import find_spec
 
 
@@ -202,6 +204,73 @@ def _patch_transformer_engine_graph_nvtx() -> None:
     print("Successfully patched transformer_engine graph.py with NVTX replay ranges.")
 
 
+def _install_transformer_engine_graph_runtime_nvtx_patch() -> None:
+    """Install a runtime monkey patch for TE graph replay internals.
+
+    We patch PyTorch CUDA methods instead of editing TE source so the patch keeps
+    working across minor TE version/layout changes inside the container. The wrappers
+    only annotate calls whose stack originates from ``transformer_engine/pytorch/graph.py``.
+    """
+    if not os.environ.get("NRL_NSYS_WORKER_PATTERNS"):
+        return
+
+    import torch
+
+    if getattr(torch.cuda.CUDAGraph.replay, "_nrl_te_nvtx_patched", False):
+        return
+
+    graph_file = _get_transformer_engine_file("pytorch/graph.py")
+    thread_state = threading.local()
+    thread_state.depth = 0
+
+    def _find_te_graph_phase():
+        frame = sys._getframe(1)
+        while frame is not None:
+            code = frame.f_code
+            filename = code.co_filename
+            if filename == graph_file:
+                name = code.co_name
+                if name == "forward":
+                    return "fwd"
+                if name == "backward":
+                    return "bwd"
+                return "generic"
+            frame = frame.f_back
+        return None
+
+    def _wrap_nvtx(label, fn):
+        def wrapped(*args, **kwargs):
+            phase = _find_te_graph_phase()
+            if phase is None:
+                return fn(*args, **kwargs)
+
+            depth = getattr(thread_state, "depth", 0)
+            thread_state.depth = depth + 1
+            try:
+                torch.cuda.nvtx.range_push(f"te_graph/{phase}_{label}")
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    torch.cuda.nvtx.range_pop()
+            finally:
+                thread_state.depth -= 1
+
+        wrapped._nrl_te_nvtx_patched = True
+        return wrapped
+
+    torch.cuda.CUDAGraph.replay = _wrap_nvtx(
+        "graph_replay", torch.cuda.CUDAGraph.replay
+    )
+    torch.cuda.Stream.wait_stream = _wrap_nvtx(
+        "wait_stream", torch.cuda.Stream.wait_stream
+    )
+    torch.cuda.Stream.wait_event = _wrap_nvtx(
+        "wait_event", torch.cuda.Stream.wait_event
+    )
+    torch.Tensor.copy_ = _wrap_nvtx("copy", torch.Tensor.copy_)
+    print("Installed runtime NVTX monkey patch for transformer_engine graph replay.")
+
+
 def apply_transformer_engine_patch():
     """Apply patch from https://github.com/NVIDIA/TransformerEngine/pull/2286/files.
 
@@ -218,12 +287,7 @@ def apply_transformer_engine_patch():
                 f"Could not write permutation patch to transformer_engine (permission denied?): {e}"
             )
 
-        try:
-            _patch_transformer_engine_graph_nvtx()
-        except OSError as e:
-            print(
-                f"Could not write graph NVTX patch to transformer_engine (permission denied?): {e}"
-            )
+        _install_transformer_engine_graph_runtime_nvtx_patch()
 
         # If the permutation module is already imported in this process,
         # reload it so that the patched source takes effect for subsequent use.
