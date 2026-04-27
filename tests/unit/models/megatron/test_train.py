@@ -440,6 +440,61 @@ class TestForwardWithPostProcessingFn:
         assert torch.equal(data_dict["input_ids"], text_ids_before)
         assert torch.equal(data_dict["input_lengths"], text_lens)
 
+    def test_repack_original_tokens_for_vlm_logprobs_basic(self):
+        """Direct unit test for the repack helper.
+
+        Two samples of original (uncollapsed) ids of lengths 10 and 12; the
+        expanded packed layout has slots [0, 10, 22] (so slot widths exactly
+        match the per-sample original lengths). The helper must place each
+        sample's original tokens into its slot, leaving zeros nowhere.
+        """
+        from nemo_rl.distributed.model_utils import (
+            repack_original_tokens_for_vlm_logprobs,
+        )
+
+        original_ids = torch.zeros(2, 12, dtype=torch.long)
+        original_ids[0, :10] = torch.arange(1, 11)  # sample 0: 1..10
+        original_ids[1, :12] = torch.arange(101, 113)  # sample 1: 101..112
+        original_lens = torch.tensor([10, 12])
+        cu_seqlens_padded = torch.tensor([0, 10, 22], dtype=torch.int32)
+
+        packed = repack_original_tokens_for_vlm_logprobs(
+            original_input_ids=original_ids,
+            original_input_lengths=original_lens,
+            cu_seqlens_padded=cu_seqlens_padded,
+            device=torch.device("cpu"),
+        )
+
+        assert packed.shape == (1, 22)
+        assert torch.equal(packed[0, :10], torch.arange(1, 11))
+        assert torch.equal(packed[0, 10:22], torch.arange(101, 113))
+
+    def test_repack_original_tokens_pads_unused_slot_tail_with_zeros(self):
+        """When a sample's original_seq_len is shorter than its expanded slot
+        width (pack-mode per-sequence padding), the helper must leave the
+        unused tail of the slot at zero rather than copy out-of-range tokens.
+        """
+        from nemo_rl.distributed.model_utils import (
+            repack_original_tokens_for_vlm_logprobs,
+        )
+
+        original_ids = torch.zeros(1, 8, dtype=torch.long)
+        original_ids[0, :5] = torch.tensor([7, 8, 9, 10, 11])
+        original_lens = torch.tensor([5])
+        # Slot is 8 wide but sample only fills 5; the trailing 3 must stay 0.
+        cu_seqlens_padded = torch.tensor([0, 8], dtype=torch.int32)
+
+        packed = repack_original_tokens_for_vlm_logprobs(
+            original_input_ids=original_ids,
+            original_input_lengths=original_lens,
+            cu_seqlens_padded=cu_seqlens_padded,
+            device=torch.device("cpu"),
+        )
+
+        assert packed.shape == (1, 8)
+        assert torch.equal(packed[0, :5], torch.tensor([7, 8, 9, 10, 11]))
+        assert torch.equal(packed[0, 5:8], torch.zeros(3, dtype=torch.long))
+
     @patch(
         "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
     )
@@ -449,16 +504,17 @@ class TestForwardWithPostProcessingFn:
         "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
     )
     @patch("nemo_rl.models.megatron.train.model_forward")
-    def test_forward_pack_plus_vlm_raises_not_implemented(
+    def test_forward_pack_plus_vlm_repacks_target_in_expanded_space(
         self, mock_model_forward, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
     ):
-        """Pack mode + VLM (``original_input_ids`` is not None and
-        ``sequence_packing.enabled=True``) needs the
-        ``repack_original_tokens_for_vlm_logprobs`` helper to align the
-        per-sequence target into the model's expanded packed layout. That
-        helper is not yet ported to Super, so the central swap site must
-        refuse early -- before any post-processor runs -- so neither the
-        loss nor the logprob path silently scores logits at the wrong length.
+        """Pack mode + VLM: the central swap must repack
+        ``original_input_ids`` into the model's expanded packed layout via
+        ``repack_original_tokens_for_vlm_logprobs`` and rewrite the local
+        ``input_ids`` and ``cu_seqlens_padded`` so ``LogprobsPostProcessor``
+        receives an expanded packed target aligned with the expanded logits
+        from the model. ``data_dict["input_ids"]`` is also restored to the
+        per-sample original ids so ``SequencePackingLossWrapper`` and any
+        debug emitter see consistent state.
         """
         from nemo_rl.distributed.batched_data_dict import BatchedDataDict
         from nemo_rl.models.megatron.data import ProcessedMicrobatch
@@ -469,40 +525,83 @@ class TestForwardWithPostProcessingFn:
 
         mock_tp_grp.return_value = MagicMock()
         mock_cp_grp.return_value = MagicMock()
-        mock_model_forward.return_value = torch.randn(1, 7, 100)
 
-        collapsed_ids = torch.tensor([[1, 2, 99, 4, 5]])
-        original_ids = torch.tensor([[1, 2, 99, 99, 99, 4, 5]])
-        data_dict = BatchedDataDict(
-            {"input_ids": collapsed_ids, "input_lengths": torch.tensor([5])}
-        )
-        processed_mb = ProcessedMicrobatch(
-            data_dict=data_dict,
-            input_ids=collapsed_ids,
-            input_ids_cp_sharded=collapsed_ids,
-            attention_mask=torch.ones(1, 5),
-            position_ids=torch.arange(5).unsqueeze(0),
-            packed_seq_params=MagicMock(),
-            cu_seqlens_padded=torch.tensor([0, 5]),
-            use_llava_handoff=True,
-            original_input_ids=original_ids,
-            original_input_lengths=torch.tensor([7]),
-        )
+        # 1 sample: collapsed_padded=8 (one <image> + a few text tokens in
+        # the collapsed pack), expanded=10 (the original uncollapsed length)
+        # via tokens_removed=2. The model's logits live at length 10.
+        collapsed_packed = torch.tensor([[1, 2, 99, 4, 5, 6, 7, 8]])
+        original_ids = torch.tensor([[1, 2, 99, 99, 99, 4, 5, 6, 7, 8]])
+        original_lens = torch.tensor([10])
+        # Expanded cu_seqlens (Super's process_microbatch writes this shape
+        # onto packed_seq_params.cu_seqlens_q_padded).
+        cu_seqlens_padded_expanded = torch.tensor([0, 10], dtype=torch.int32)
+        packed_seq_params = MagicMock()
+        packed_seq_params.cu_seqlens_q_padded = cu_seqlens_padded_expanded
+
+        # Make the wrapped LogprobsPostProcessor.__call__ a spy so we can
+        # introspect what got passed in.
+        captured: dict[str, Any] = {}
+
+        class _SpyPostProcessor(LogprobsPostProcessor):
+            def __call__(self, data_dict, input_ids, cu_seqlens_padded):
+                captured["input_ids"] = input_ids
+                captured["cu_seqlens_padded"] = cu_seqlens_padded
+                captured["data_dict_input_ids"] = data_dict["input_ids"]
+                return MagicMock()  # any callable
 
         cfg = {"sequence_packing": {"enabled": True}}
 
-        with pytest.raises(
-            NotImplementedError,
-            match=(
-                "VLM logprob/loss alignment with sequence_packing.enabled=True"
-            ),
-        ):
-            forward_with_post_processing_fn(
-                data_iterator=iter([processed_mb]),
-                model=MagicMock(),
-                cfg=cfg,
-                post_processing_fn=LogprobsPostProcessor(cfg=cfg),
-            )
+        # Model returns expanded packed logits [1, 10, vocab].
+        mock_model_forward.return_value = torch.randn(1, 10, 100)
+
+        data_dict = BatchedDataDict(
+            {
+                "input_ids": collapsed_packed,
+                "input_lengths": torch.tensor([8]),
+            }
+        )
+        processed_mb = ProcessedMicrobatch(
+            data_dict=data_dict,
+            input_ids=collapsed_packed,
+            input_ids_cp_sharded=collapsed_packed,
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=packed_seq_params,
+            # Note: ``cu_seqlens_padded`` on ``processed_mb`` is the *collapsed*
+            # one (Super's process_microbatch keeps the local in collapsed
+            # space; only ``packed_seq_params.cu_seqlens_q_padded`` was
+            # rewritten to expanded). The central swap should override.
+            cu_seqlens_padded=torch.tensor([0, 8], dtype=torch.int32),
+            use_llava_handoff=True,
+            original_input_ids=original_ids,
+            original_input_lengths=original_lens,
+        )
+
+        forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            cfg=cfg,
+            post_processing_fn=_SpyPostProcessor(cfg=cfg),
+        )
+
+        # ``input_ids`` passed to LogprobsPostProcessor must be the
+        # *expanded packed* target (built by the repack helper), not the
+        # collapsed packed input the model consumed.
+        assert captured["input_ids"].shape == (1, 10), (
+            f"expected expanded packed target [1, 10], got "
+            f"{tuple(captured['input_ids'].shape)}"
+        )
+        # The first 10 tokens match original_ids; the helper zero-pads
+        # any unused slot tail (here orig_seq_len == slot_len so no pad).
+        assert torch.equal(captured["input_ids"][0, :10], original_ids[0])
+        # ``cu_seqlens_padded`` must be the expanded one.
+        assert torch.equal(
+            captured["cu_seqlens_padded"], cu_seqlens_padded_expanded
+        )
+        # ``data_dict["input_ids"]`` must be the per-sample original ids
+        # (so SequencePackingLossWrapper / debug emitters / unpacked_seqlen
+        # all see consistent state).
+        assert torch.equal(captured["data_dict_input_ids"], original_ids)
 
     @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_topk_post_processor(self, mock_model_forward):

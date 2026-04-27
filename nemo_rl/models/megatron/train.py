@@ -40,6 +40,7 @@ from nemo_rl.distributed.model_utils import (
     distributed_vocab_topk,
     from_parallel_logits_to_logprobs,
     from_parallel_logits_to_logprobs_packed_sequences,
+    repack_original_tokens_for_vlm_logprobs,
 )
 from nemo_rl.models.megatron.data import ProcessedMicrobatch
 from nemo_rl.models.megatron.multimodal import prepare_multimodal_data
@@ -234,19 +235,36 @@ def forward_with_post_processing_fn(
     # non-LLaVA paths where ``original_input_ids`` is None.
     if processed_mb.original_input_ids is not None:
         if cfg.get("sequence_packing", {}).get("enabled", False):
-            # Pack mode + VLM needs ``repack_original_tokens_for_vlm_logprobs``
-            # to align the per-sequence target into the model's expanded
-            # packed layout (cu_seqlens_padded is already in expanded space,
-            # but ``original_input_ids`` is per-sample unpacked). That helper
-            # has not yet been ported to Super; refuse early so callers don't
-            # silently score logits against a misaligned target.
-            raise NotImplementedError(
-                "VLM logprob/loss alignment with sequence_packing.enabled=True "
-                "requires ``repack_original_tokens_for_vlm_logprobs`` "
-                "(pack-mode target repack) which is not yet ported to Super. "
-                "Disable sequence_packing for the VLM run, or wait until the "
-                "repack helper lands."
+            # Pack mode + VLM: ``LogprobsPostProcessor`` reads the explicit
+            # ``input_ids`` / ``cu_seqlens_padded`` kwargs (not data_dict),
+            # so we additionally need an *expanded packed* target tensor at
+            # the same length as the model's expanded packed logits. Build
+            # it via the repack helper, using the expanded
+            # ``cu_seqlens_q_padded`` that ``process_microbatch`` already
+            # wrote on ``packed_seq_params``.
+            assert (
+                packed_seq_params is not None
+                and processed_mb.original_input_lengths is not None
+            ), (
+                "Pack VLM logprob/loss requires packed_seq_params and "
+                "original_input_lengths to be set on ProcessedMicrobatch."
             )
+            cu_seqlens_padded_expanded = packed_seq_params.cu_seqlens_q_padded
+            input_ids = repack_original_tokens_for_vlm_logprobs(
+                original_input_ids=processed_mb.original_input_ids,
+                original_input_lengths=processed_mb.original_input_lengths,
+                cu_seqlens_padded=cu_seqlens_padded_expanded,
+                device=processed_mb.original_input_ids.device,
+            )
+            cu_seqlens_padded = cu_seqlens_padded_expanded
+        # Restore per-sample original ids on data_dict so:
+        #   * LossPostProcessor's loss_fn (wrapped by SequencePackingLossWrapper
+        #     in pack mode) reads aligned per-sample targets,
+        #   * LogprobsPostProcessor's ``unpacked_seqlen = data_dict["input_ids"].shape[1]``
+        #     reflects the *original* (uncollapsed) per-sample length used to
+        #     reshape the logprob output back to per-sample form,
+        #   * any debug emitter or downstream consumer reading
+        #     ``data_dict["input_ids"]`` sees the right tokens.
         data_dict["input_ids"] = processed_mb.original_input_ids
         if processed_mb.original_input_lengths is not None:
             data_dict["input_lengths"] = processed_mb.original_input_lengths

@@ -18,6 +18,62 @@ import torch
 from torch.distributed.tensor import DTensor, distribute_tensor
 
 
+def repack_original_tokens_for_vlm_logprobs(
+    original_input_ids: torch.Tensor,
+    original_input_lengths: torch.Tensor,
+    cu_seqlens_padded: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """Repack original (uncollapsed) tokens into expanded space for VLM logprob computation.
+
+    When sequence packing is enabled for VLMs, the data path collapses
+    multimodal tokens before packing (so the model sees the shrunken
+    ``<img><image></img>`` form), but the LLaVA model internally re-expands
+    those spans during ``_preprocess_data`` and emits logits at the
+    *expanded* per-sequence length. ``cu_seqlens_padded`` is the cumulative
+    boundary tensor for that expanded layout (``forward_with_post_processing_fn``
+    sources it from ``packed_seq_params.cu_seqlens_q_padded`` which Super's
+    ``process_microbatch`` already wrote in expanded space).
+
+    Place each sample's *original* (uncollapsed) tokens into its expanded
+    slot in a ``thd``-format flat target tensor, so that
+    ``from_parallel_logits_to_logprobs_packed_sequences`` can score the
+    model's expanded logits against per-token targets at matching positions.
+
+    Args:
+        original_input_ids: Per-sample uncollapsed tokens ``[batch, max_seqlen]``.
+        original_input_lengths: Per-sample valid lengths ``[batch]`` for
+            ``original_input_ids``.
+        cu_seqlens_padded: Cumulative sequence lengths in *expanded* space
+            ``[n_seqs + 1]``.
+        device: Target device for the output tensor.
+
+    Returns:
+        Packed target tensor ``[1, total_expanded]`` ready to use as
+        ``target=`` for ``from_parallel_logits_to_logprobs_packed_sequences``.
+    """
+    n_seqs = cu_seqlens_padded.shape[0] - 1
+    total_expanded = int(cu_seqlens_padded[-1].item())
+
+    packed_orig_target = torch.zeros(
+        1, total_expanded,
+        dtype=original_input_ids.dtype,
+        device=device,
+    )
+
+    for i in range(n_seqs):
+        start_idx = int(cu_seqlens_padded[i].item())
+        end_idx = int(cu_seqlens_padded[i + 1].item())
+        slot_len = end_idx - start_idx
+        orig_seq_len = int(original_input_lengths[i].item())
+        copy_len = min(orig_seq_len, slot_len)
+        packed_orig_target[0, start_idx : start_idx + copy_len] = (
+            original_input_ids[i, :copy_len].to(device)
+        )
+
+    return packed_orig_target
+
+
 @torch.no_grad()
 def _compute_distributed_log_softmax(
     vocab_parallel_logits: torch.Tensor, group: torch.distributed.ProcessGroup
