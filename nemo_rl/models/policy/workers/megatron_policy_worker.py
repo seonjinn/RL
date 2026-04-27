@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import logging
 import os
 import re
 import warnings
@@ -372,10 +373,10 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             if seq_length not in set(cuda_graph_buckets):
                 # Disable CG hooks so TE runs eagerly on this step.
                 if _rank0:
-                    print(
-                        f"[CG-DEBUG worker] seq={seq_length} not in buckets={cuda_graph_buckets}"
-                        f" → EAGER FALLBACK (bucket guard)",
-                        flush=True,
+                    logging.debug(
+                        "[CG] seq=%d not in buckets=%s → EAGER FALLBACK (bucket guard)",
+                        seq_length,
+                        cuda_graph_buckets,
                     )
                 if (
                     self._cuda_graph_bucket_graphs
@@ -388,10 +389,11 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         self._cuda_graph_train_steps += 1
         if self._cuda_graph_train_steps <= warmup_steps:
             if _rank0:
-                print(
-                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}/{warmup_steps}"
-                    f" (warmup) seq={seq_length} → EAGER (no CG yet)",
-                    flush=True,
+                logging.debug(
+                    "[CG] step=%d/%d (warmup) seq=%d → EAGER (no CG yet)",
+                    self._cuda_graph_train_steps,
+                    warmup_steps,
+                    seq_length,
                 )
             return
 
@@ -400,10 +402,11 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         # Multi-bucket: graphs already captured → activate matching bucket.
         if self._cuda_graph_bucket_graphs:
             if _rank0:
-                print(
-                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
-                    f" REPLAY multi-bucket seq={seq_length} → activate_bucket({seq_length})",
-                    flush=True,
+                logging.debug(
+                    "[CG] step=%d REPLAY multi-bucket seq=%d → activate_bucket(%d)",
+                    self._cuda_graph_train_steps,
+                    seq_length,
+                    seq_length,
                 )
             self._activate_bucket(seq_length)
             return
@@ -413,26 +416,26 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             if seq_length == self._cuda_graph_captured_seq_length:
                 if self._cuda_graph_saved_graphs:
                     if _rank0:
-                        print(
-                            f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
-                            f" REPLAY single-bucket seq={seq_length} (restoring hooks)",
-                            flush=True,
+                        logging.debug(
+                            "[CG] step=%d REPLAY single-bucket seq=%d (restoring hooks)",
+                            self._cuda_graph_train_steps,
+                            seq_length,
                         )
                     self._restore_cuda_graph_hooks()
                 else:
                     if _rank0:
-                        print(
-                            f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
-                            f" REPLAY single-bucket seq={seq_length} (hooks already active)",
-                            flush=True,
+                        logging.debug(
+                            "[CG] step=%d REPLAY single-bucket seq=%d (hooks already active)",
+                            self._cuda_graph_train_steps,
+                            seq_length,
                         )
             else:
                 if _rank0:
-                    print(
-                        f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
-                        f" FALLBACK single-bucket seq={seq_length} ≠ captured={self._cuda_graph_captured_seq_length}"
-                        f" → EAGER FALLBACK",
-                        flush=True,
+                    logging.debug(
+                        "[CG] step=%d FALLBACK single-bucket seq=%d != captured=%s → EAGER FALLBACK",
+                        self._cuda_graph_train_steps,
+                        seq_length,
+                        self._cuda_graph_captured_seq_length,
                     )
                 self._disable_cuda_graph_hooks()
             return
@@ -443,20 +446,21 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         if cuda_graph_buckets:
             # Multi-bucket mode: capture all configured buckets at once.
             if _rank0:
-                print(
-                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
-                    f" CAPTURE multi-bucket buckets={sorted(cuda_graph_buckets)} seq={seq_length}",
-                    flush=True,
+                logging.debug(
+                    "[CG] step=%d CAPTURE multi-bucket buckets=%s seq=%d",
+                    self._cuda_graph_train_steps,
+                    sorted(cuda_graph_buckets),
+                    seq_length,
                 )
             self._capture_all_buckets(sorted(cuda_graph_buckets), micro_batch_size)
             self._activate_bucket(seq_length)
         else:
             # Single-bucket mode: capture at this step's seq_length.
             if _rank0:
-                print(
-                    f"[CG-DEBUG worker] step={self._cuda_graph_train_steps}"
-                    f" CAPTURE single-bucket seq={seq_length}",
-                    flush=True,
+                logging.debug(
+                    "[CG] step=%d CAPTURE single-bucket seq=%d",
+                    self._cuda_graph_train_steps,
+                    seq_length,
                 )
             self._cuda_graph_helper = TECudaGraphHelper(
                 model=[self.model],
@@ -561,8 +565,25 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                 total_num_microbatches += int(num_microbatches)
 
                 # CUDA graph: init helper and capture after warmup (once per train() call)
-                if gb_idx == 0 and not eval_mode:
-                    self._maybe_capture_cuda_graphs(padded_seq_length, micro_batch_size)
+                if not eval_mode:
+                    if gb_idx == 0:
+                        self._maybe_capture_cuda_graphs(
+                            padded_seq_length, micro_batch_size
+                        )
+                    elif (
+                        getattr(self.megatron_cfg.model, "cuda_graph_impl", "none")
+                        != "none"
+                    ):
+                        assert (
+                            padded_seq_length == self._cuda_graph_captured_seq_length
+                            or self._cuda_graph_captured_seq_length is None
+                        ), (
+                            f"CUDA graphs do not support num_global_batches > 1 when different "
+                            f"global batches produce different padded sequence lengths "
+                            f"(gb_idx={gb_idx}: seq={padded_seq_length}, "
+                            f"captured={self._cuda_graph_captured_seq_length}). "
+                            f"Reduce num_global_batches to 1 or disable CUDA graphs."
+                        )
 
                 loss_post_processor = LossPostProcessor(
                     loss_fn=loss_fn,
@@ -847,6 +868,11 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         if self.should_disable_forward_pre_hook:
             self.disable_forward_pre_hook()
 
+        # CG fix: drain capture-stream tail before per-tensor state_dict transfers.
+        # Each .to("cpu", non_blocking=True) below would otherwise host-block on
+        # CG side-stream queue back-pressure (~365ms × N tensors).
+        torch.cuda.synchronize()
+
         with torch.no_grad():
             # Save original references
             model_state_dict = {}
@@ -886,6 +912,10 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
 
             # Restore sampling_params
             self.sampling_params = saved_sampling_params
+
+            # CG fix: drain side-stream after eval forward so per-tensor restore
+            # transfers below don't each host-block.
+            torch.cuda.synchronize()
 
             # Restore original policy state (weights + FP8 extra_state) from saved model_state_dict
             self._apply_state_dict_to_model(
@@ -1465,6 +1495,11 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         move_params: bool = True,
         move_grads: bool = True,
     ) -> torch.nn.Module:
+        # CG fix: drain capture-stream tail once. With CUDA Graph the side-stream
+        # holds queued kernels at this point; subsequent per-bucket cudaMemcpyAsync
+        # calls would each host-block on queue back-pressure (~365ms × N stalls).
+        # A single synchronize collapses N stalls into 1.
+        torch.cuda.synchronize()
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
             # DDP case
@@ -1507,6 +1542,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         return model
 
     def move_optimizer(self, device: str):
+        # CG fix: same rationale as move_model — drain capture-stream once
+        # so per-tensor .to() calls don't each host-block on queue back-pressure.
+        torch.cuda.synchronize()
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
