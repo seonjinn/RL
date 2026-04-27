@@ -90,6 +90,13 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         "sound_clip_duration",  # audio clip splitting max duration in seconds
         "sound_clip_min_duration",  # audio clip splitting min tail duration in seconds
     ]
+    # ``PackedTensor`` keys for which ``get_multimodal_dict(pixel_dtype=...)``
+    # eagerly casts the underlying tensors before serialization. Used by the
+    # zero-N multimedia transfer path (``deduplicate_multimodal_data=true``)
+    # to ship ``pixel_values`` as ``bfloat16`` instead of ``float32`` over Ray,
+    # cutting per-tensor transport ~2x and matching the model-side runtime
+    # dtype.
+    _PIXEL_DTYPE_CAST_KEYS = frozenset({"pixel_values"})
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -99,15 +106,58 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         self.elem_counts_per_gb = None
 
     def get_multimodal_dict(
-        self, as_tensors: bool = False, device: Optional[torch.device] = None
+        self,
+        as_tensors: bool = False,
+        device: Optional[torch.device] = None,
+        pixel_dtype: Optional[torch.dtype] = None,
     ) -> dict[str, Any]:
-        """Return a regular dict of tensors or packed multimodal data items."""
+        """Return a regular dict of tensors or packed multimodal data items.
+
+        Args:
+            as_tensors: If True, materialize each ``PackedTensor`` into a
+                concrete ``torch.Tensor`` via ``as_tensor(device=...)`` (which
+                also re-expands deduplicated entries to logical positions).
+                If False, the ``PackedTensor`` objects are returned as-is so
+                downstream code can preserve dedup metadata across more
+                Ray-boundary hops.
+            device: Optional target device for the returned tensors when
+                ``as_tensors=True``. Also used to move
+                ``ADDITIONAL_OPTIONAL_KEY_TENSORS`` plain tensors.
+            pixel_dtype: Optional target dtype for ``_PIXEL_DTYPE_CAST_KEYS``
+                ``PackedTensor`` entries (currently just ``pixel_values``).
+                When set, we re-wrap the matching ``PackedTensor`` with
+                cast underlying tensors before returning, preserving
+                ``_dedup_indices`` so the dedup contract is unchanged. The
+                zero-N transfer path passes ``torch.bfloat16`` here to halve
+                pixel transport bytes; legacy callers leave it ``None`` and
+                see no behaviour change.
+
+        Skips ``ADDITIONAL_OPTIONAL_KEY_TENSORS`` entries whose value is
+        ``None`` so callers can store ``None`` as a "not present" sentinel
+        without leaking it into the multimodal kwargs.
+        """
         multimodal_dict = {}
         for k, v in self.data.items():
             if isinstance(v, PackedTensor):
-                multimodal_dict[k] = v.as_tensor(device=device) if as_tensors else v
-            elif k in self.ADDITIONAL_OPTIONAL_KEY_TENSORS:
-                multimodal_dict[k] = v
+                if pixel_dtype is not None and k in self._PIXEL_DTYPE_CAST_KEYS:
+                    # Cast the unique tensors only; dedup indices are
+                    # preserved so the logical view is unchanged.
+                    v = PackedTensor(
+                        [
+                            t.to(pixel_dtype) if t is not None else None
+                            for t in v.tensors
+                        ],
+                        v.dim_to_pack,
+                        dedup_indices=v._dedup_indices,
+                    )
+                value = v.as_tensor(device=device) if as_tensors else v
+                if value is not None:
+                    multimodal_dict[k] = value
+            elif k in self.ADDITIONAL_OPTIONAL_KEY_TENSORS and v is not None:
+                if as_tensors and device is not None and torch.is_tensor(v):
+                    multimodal_dict[k] = v.to(device)
+                else:
+                    multimodal_dict[k] = v
 
         return multimodal_dict
 

@@ -402,6 +402,78 @@ def test_batched_data_dict_preserves_variable_resolution_multimodal_fields():
     assert torch.count_nonzero(multimodal["pixel_values"][1, :, :, 4:]) == 0
 
 
+def test_get_multimodal_dict_pixel_dtype_cast_preserves_dedup():
+    """``pixel_dtype`` casts ``pixel_values`` while preserving dedup metadata.
+
+    The zero-N multimedia transfer path (``deduplicate_multimodal_data=true``
+    in ``collate_fn``) routes through ``get_multimodal_dict(pixel_dtype=
+    torch.bfloat16)`` to halve pixel transport bytes before Ray serialization.
+    The cast must (a) only touch ``pixel_values`` (not other PackedTensors),
+    (b) preserve any ``_dedup_indices`` so a deduplicated batch stays
+    deduplicated, and (c) leave the rest of the dict untouched.
+    """
+    pixel_t = torch.full((1, 3, 4, 4), 0.25, dtype=torch.float32)
+    sizes_t = torch.tensor([[4, 4]], dtype=torch.int32)
+    batch = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1, 2, 3]]),
+            "pixel_values": PackedTensor([pixel_t], dim_to_pack=0),
+            "imgs_sizes": PackedTensor([sizes_t], dim_to_pack=0),
+        }
+    )
+
+    mm = batch.get_multimodal_dict(as_tensors=False, pixel_dtype=torch.bfloat16)
+
+    pv = mm["pixel_values"]
+    assert isinstance(pv, PackedTensor)
+    assert all(t is None or t.dtype == torch.bfloat16 for t in pv.tensors)
+    # imgs_sizes is also a PackedTensor but is NOT in
+    # ``_PIXEL_DTYPE_CAST_KEYS`` so its dtype must stay int32.
+    sizes = mm["imgs_sizes"]
+    assert isinstance(sizes, PackedTensor)
+    assert sizes.tensors[0].dtype == torch.int32
+
+    # Now repeat with a deduplicated pixel_values: cast must keep the
+    # _dedup_indices intact so logical length is unchanged.
+    # Three logical rollouts of the same prompt -> three identical
+    # underlying tensors collapse to one unique after deduplicate().
+    pixel_dup = [
+        torch.ones(1, 3, 4, 4, dtype=torch.float32) for _ in range(3)
+    ]
+    deduped = PackedTensor(pixel_dup, dim_to_pack=0).deduplicate(
+        torch.tensor([0, 0, 0], dtype=torch.long)
+    )
+    batch2 = BatchedDataDict(
+        {
+            "input_ids": torch.zeros(3, 4, dtype=torch.long),
+            "pixel_values": deduped,
+        }
+    )
+    mm2 = batch2.get_multimodal_dict(as_tensors=False, pixel_dtype=torch.bfloat16)
+    pv2 = mm2["pixel_values"]
+    assert isinstance(pv2, PackedTensor)
+    assert pv2._dedup_indices == [0, 0, 0]
+    assert len(pv2) == 3  # logical length unchanged
+    assert len(pv2.tensors) == 1  # unique tensor count unchanged
+    assert pv2.tensors[0].dtype == torch.bfloat16
+
+
+def test_get_multimodal_dict_pixel_dtype_default_no_cast():
+    """When ``pixel_dtype`` is omitted, ``pixel_values`` dtype is preserved."""
+    pixel_t = torch.full((1, 3, 4, 4), 0.25, dtype=torch.float32)
+    batch = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1, 2, 3]]),
+            "pixel_values": PackedTensor([pixel_t], dim_to_pack=0),
+        }
+    )
+
+    mm = batch.get_multimodal_dict(as_tensors=False)
+    pv = mm["pixel_values"]
+    assert isinstance(pv, PackedTensor)
+    assert pv.tensors[0].dtype == torch.float32
+
+
 # ---------------------------------------------------------------------------
 # Logical deduplication: ``PackedTensor.deduplicate`` collapses repeated
 # rollouts (same prompt id) onto a single underlying tensor while keeping a
