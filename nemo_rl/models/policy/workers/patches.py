@@ -44,6 +44,164 @@ def _get_transformer_engine_file(relative_path: str) -> str:
     return file_path
 
 
+def _patch_transformer_engine_permutation() -> None:
+    perm_file = _get_transformer_engine_file("pytorch/triton/permutation.py")
+
+    with open(perm_file, "r") as f:
+        content = f.read()
+
+    if "get_int_dtype = triton.constexpr_function(get_int_dtype)" in content:
+        return
+
+    print(f"Applying Triton fix to {perm_file}...")
+
+    old_usage = "idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)"
+    new_usage = (
+        "idtype = get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)"
+    )
+    jit_anchor = "@triton.jit"
+    new_definition = (
+        "\n\n"
+        "get_int_dtype = core.get_int_dtype\n"
+        "get_int_dtype = triton.constexpr_function(get_int_dtype)\n"
+    )
+
+    new_content = None
+    if old_usage in content:
+        temp_content = content.replace(old_usage, new_usage)
+
+        if jit_anchor in temp_content:
+            new_content = temp_content.replace(jit_anchor, new_definition + jit_anchor, 1)
+
+    if new_content:
+        with open(perm_file, "w") as f:
+            f.write(new_content)
+        print("Successfully patched transformer_engine permutation.py.")
+
+
+def _patch_transformer_engine_graph_nvtx() -> None:
+    graph_file = _get_transformer_engine_file("pytorch/graph.py")
+
+    with open(graph_file, "r") as f:
+        content = f.read()
+
+    marker = 'torch.cuda.nvtx.range_push("te_graph/fwd_graph_replay")'
+    if marker in content:
+        return
+
+    replacements = [
+        (
+            """                if cuda_graph_stream != torch.cuda.current_stream():
+                    if need_copy_idx:
+                        cuda_graph_stream.wait_stream(torch.cuda.current_stream())
+                    with cuda_graph_stream:
+                        for i in need_copy_idx:
+                            static_input_surface[i].copy_(inputs[i])
+                        fwd_graph.replay()
+                    if cuda_graph_event is not None:
+                        torch.cuda.current_stream().wait_event(cuda_graph_event)
+                    else:
+                        torch.cuda.current_stream().wait_stream(cuda_graph_stream)
+                else:
+                    for i in need_copy_idx:
+                        static_input_surface[i].copy_(inputs[i])
+                    fwd_graph.replay()
+""",
+            """                if cuda_graph_stream != torch.cuda.current_stream():
+                    if need_copy_idx:
+                        torch.cuda.nvtx.range_push("te_graph/fwd_wait_for_inputs")
+                        cuda_graph_stream.wait_stream(torch.cuda.current_stream())
+                        torch.cuda.nvtx.range_pop()
+                    with cuda_graph_stream:
+                        if need_copy_idx:
+                            torch.cuda.nvtx.range_push("te_graph/fwd_static_input_copy")
+                            for i in need_copy_idx:
+                                static_input_surface[i].copy_(inputs[i])
+                            torch.cuda.nvtx.range_pop()
+                        torch.cuda.nvtx.range_push("te_graph/fwd_graph_replay")
+                        fwd_graph.replay()
+                        torch.cuda.nvtx.range_pop()
+                    torch.cuda.nvtx.range_push("te_graph/fwd_wait_for_completion")
+                    if cuda_graph_event is not None:
+                        torch.cuda.current_stream().wait_event(cuda_graph_event)
+                    else:
+                        torch.cuda.current_stream().wait_stream(cuda_graph_stream)
+                    torch.cuda.nvtx.range_pop()
+                else:
+                    if need_copy_idx:
+                        torch.cuda.nvtx.range_push("te_graph/fwd_static_input_copy")
+                        for i in need_copy_idx:
+                            static_input_surface[i].copy_(inputs[i])
+                        torch.cuda.nvtx.range_pop()
+                    torch.cuda.nvtx.range_push("te_graph/fwd_graph_replay")
+                    fwd_graph.replay()
+                    torch.cuda.nvtx.range_pop()
+""",
+        ),
+        (
+            """                if ctx.cuda_graph_stream != torch.cuda.current_stream():
+                    if grad_copy_pairs:
+                        ctx.cuda_graph_stream.wait_stream(torch.cuda.current_stream())
+                    with ctx.cuda_graph_stream:
+                        for g, grad in grad_copy_pairs:
+                            g.copy_(grad)
+                        bwd_graph.replay()
+                    if ctx.cuda_graph_event is not None:
+                        torch.cuda.current_stream().wait_event(ctx.cuda_graph_event)
+                    else:
+                        torch.cuda.current_stream().wait_stream(ctx.cuda_graph_stream)
+                else:
+                    for g, grad in grad_copy_pairs:
+                        g.copy_(grad)
+                    bwd_graph.replay()
+""",
+            """                if ctx.cuda_graph_stream != torch.cuda.current_stream():
+                    if grad_copy_pairs:
+                        torch.cuda.nvtx.range_push("te_graph/bwd_wait_for_grads")
+                        ctx.cuda_graph_stream.wait_stream(torch.cuda.current_stream())
+                        torch.cuda.nvtx.range_pop()
+                    with ctx.cuda_graph_stream:
+                        if grad_copy_pairs:
+                            torch.cuda.nvtx.range_push("te_graph/bwd_static_grad_copy")
+                            for g, grad in grad_copy_pairs:
+                                g.copy_(grad)
+                            torch.cuda.nvtx.range_pop()
+                        torch.cuda.nvtx.range_push("te_graph/bwd_graph_replay")
+                        bwd_graph.replay()
+                        torch.cuda.nvtx.range_pop()
+                    torch.cuda.nvtx.range_push("te_graph/bwd_wait_for_completion")
+                    if ctx.cuda_graph_event is not None:
+                        torch.cuda.current_stream().wait_event(ctx.cuda_graph_event)
+                    else:
+                        torch.cuda.current_stream().wait_stream(ctx.cuda_graph_stream)
+                    torch.cuda.nvtx.range_pop()
+                else:
+                    if grad_copy_pairs:
+                        torch.cuda.nvtx.range_push("te_graph/bwd_static_grad_copy")
+                        for g, grad in grad_copy_pairs:
+                            g.copy_(grad)
+                        torch.cuda.nvtx.range_pop()
+                    torch.cuda.nvtx.range_push("te_graph/bwd_graph_replay")
+                    bwd_graph.replay()
+                    torch.cuda.nvtx.range_pop()
+""",
+        ),
+    ]
+
+    new_content = content
+    for old, new in replacements:
+        if old not in new_content:
+            raise RuntimeError(
+                "Failed to locate expected Transformer Engine graph snippet for NVTX patch. "
+                "This likely indicates a TE version mismatch."
+            )
+        new_content = new_content.replace(old, new, 1)
+
+    with open(graph_file, "w") as f:
+        f.write(new_content)
+    print("Successfully patched transformer_engine graph.py with NVTX replay ranges.")
+
+
 def apply_transformer_engine_patch():
     """Apply patch from https://github.com/NVIDIA/TransformerEngine/pull/2286/files.
 
@@ -53,45 +211,19 @@ def apply_transformer_engine_patch():
     the patched source takes effect.
     """
     try:
-        perm_file = _get_transformer_engine_file("pytorch/triton/permutation.py")
-
-        with open(perm_file, "r") as f:
-            content = f.read()
-
-        if "get_int_dtype = triton.constexpr_function(get_int_dtype)" not in content:
-            print(f"Applying Triton fix to {perm_file}...")
-
-            # 1. Replace the usage
-            old_usage = "idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)"
-            new_usage = "idtype = get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)"
-
-            # 2. Insert the definition before the first @triton.jit
-            jit_anchor = "@triton.jit"
-
-            new_definition = (
-                "\n\n"
-                "get_int_dtype = core.get_int_dtype\n"
-                "get_int_dtype = triton.constexpr_function(get_int_dtype)\n"
+        try:
+            _patch_transformer_engine_permutation()
+        except OSError as e:
+            print(
+                f"Could not write permutation patch to transformer_engine (permission denied?): {e}"
             )
 
-            new_content = None
-            if old_usage in content:
-                temp_content = content.replace(old_usage, new_usage)
-
-                if jit_anchor in temp_content:
-                    new_content = temp_content.replace(
-                        jit_anchor, new_definition + jit_anchor, 1
-                    )
-
-            if new_content:
-                try:
-                    with open(perm_file, "w") as f:
-                        f.write(new_content)
-                    print("Successfully patched transformer_engine permutation.py.")
-                except OSError as e:
-                    print(
-                        f"Could not write patch to transformer_engine (permission denied?): {e}"
-                    )
+        try:
+            _patch_transformer_engine_graph_nvtx()
+        except OSError as e:
+            print(
+                f"Could not write graph NVTX patch to transformer_engine (permission denied?): {e}"
+            )
 
         # If the permutation module is already imported in this process,
         # reload it so that the patched source takes effect for subsequent use.
@@ -101,6 +233,9 @@ def apply_transformer_engine_patch():
         perm_module_name = "transformer_engine.pytorch.triton.permutation"
         if perm_module_name in sys.modules:
             importlib.reload(sys.modules[perm_module_name])
+        graph_module_name = "transformer_engine.pytorch.graph"
+        if graph_module_name in sys.modules:
+            importlib.reload(sys.modules[graph_module_name])
 
     except Exception as e:
         print(f"Error checking/patching transformer_engine: {e}")
