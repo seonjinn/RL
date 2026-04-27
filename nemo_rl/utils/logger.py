@@ -24,14 +24,31 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Mapping, NotRequired, Optional, TypedDict
 
-import mlflow
 import numpy as np
 import ray
 import requests
-import swanlab
 import torch
-import wandb
 from matplotlib import pyplot as plt
+
+# Optional tracker backends. They are only required when the matching
+# tracker is enabled in ``LoggerConfig`` (e.g. ``wandb_enabled = True``),
+# and pulling them in eagerly forces every consumer of this module --
+# including pure unit tests for unrelated code -- to install the entire
+# tracker stack (and their transitive deps such as ``pyecharts``). Import
+# them lazily and let the matching tracker class raise a clear error when
+# the dep is actually needed.
+try:
+    import mlflow  # type: ignore[import-not-found]
+except ImportError:
+    mlflow = None  # type: ignore[assignment]
+try:
+    import swanlab  # type: ignore[import-not-found]
+except ImportError:
+    swanlab = None  # type: ignore[assignment]
+try:
+    import wandb  # type: ignore[import-not-found]
+except ImportError:
+    wandb = None  # type: ignore[assignment]
 from prometheus_client.parser import text_string_to_metric_families
 from prometheus_client.samples import Sample
 from rich.box import ROUNDED
@@ -206,6 +223,12 @@ class WandbLogger(LoggerInterface):
     """Weights & Biases logger backend."""
 
     def __init__(self, cfg: WandbConfig, log_dir: Optional[str] = None):
+        if wandb is None:
+            raise ImportError(
+                "Weights & Biases logging is enabled in the config but the "
+                "`wandb` package is not installed. Run `pip install wandb` "
+                "to use it, or disable `wandb_enabled` in your logger config."
+            )
         self.run = wandb.init(**cfg, dir=log_dir)
 
         if os.environ.get("RAY_BACKEND_LOG_LEVEL", "").lower() == "debug":
@@ -414,6 +437,12 @@ class SwanlabLogger(LoggerInterface):
             cfg (SwanlabConfig): Configuration for the Swanlab run (e.g., project and name).
             log_dir (Optional[str]): Optional offline log directory passed to Swanlab's init.
         """
+        if swanlab is None:
+            raise ImportError(
+                "SwanLab logging is enabled in the config but the `swanlab` "
+                "package is not installed. Run `pip install swanlab` to use "
+                "it, or disable `swanlab_enabled` in your logger config."
+            )
         self.run = swanlab.init(**cfg, logdir=log_dir)
         print(
             f"Initialized SwanlabLogger for project {cfg.get('project')}, run {cfg.get('name')} (with offline logdir={log_dir})"
@@ -773,6 +802,12 @@ class MLflowLogger(LoggerInterface):
             cfg: MLflow configuration
             log_dir: Optional log directory (used as fallback if artifact_location not in cfg)
         """
+        if mlflow is None:
+            raise ImportError(
+                "MLflow logging is enabled in the config but the `mlflow` "
+                "package is not installed. Run `pip install mlflow` to use "
+                "it, or disable `mlflow_enabled` in your logger config."
+            )
         tracking_uri = cfg.get("tracking_uri") or os.getenv("MLFLOW_TRACKING_URI")
         if tracking_uri and not mlflow.is_tracking_uri_set():
             mlflow.set_tracking_uri(tracking_uri)
