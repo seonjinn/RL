@@ -243,6 +243,20 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
     # CUDA graph lifecycle helpers
     # ------------------------------------------------------------------
 
+    @property
+    def _offload_copy_stream(self) -> "torch.cuda.Stream":
+        """Dedicated stream for offload/refit H2D and D2H transfers.
+
+        Issuing the per-tensor copies on a separate SW stream avoids enqueue
+        back-pressure from the CG capture/replay side-stream, which is the
+        cause of ~365ms cudaMemcpyAsync host-blocks observed in nsys. The
+        copy stream is synchronized with the default stream via wait_stream
+        at producer/consumer boundaries to preserve correctness.
+        """
+        if not hasattr(self, "_offload_copy_stream_obj"):
+            self._offload_copy_stream_obj = torch.cuda.Stream()
+        return self._offload_copy_stream_obj
+
     def _get_cg_modules(self) -> list:
         """Return all model submodules that carry a cuda_graphs attribute."""
         return [m for m in self.model.modules() if hasattr(m, "cuda_graphs")]
@@ -872,27 +886,34 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             self.disable_forward_pre_hook()
 
         with torch.no_grad():
-            # Save original references using pinned-host destinations so D2H is
-            # truly async (PyTorch otherwise falls back to sync on pageable dest).
-            # Same-stream ordering serializes downstream consumers, so no explicit
-            # synchronize is needed (and explicit sync killed offload/rollout overlap).
+            # Issue D2H copies on a dedicated stream so they don't enqueue
+            # behind CG side-stream kernel chains (which causes 365ms
+            # host-blocks per cudaMemcpyAsync). Pinned dest keeps the copy
+            # truly async at the driver level.
+            copy_stream = self._offload_copy_stream
+            default_stream = torch.cuda.current_stream()
+            copy_stream.wait_stream(default_stream)
             model_state_dict = {}
-            for name, item in self.model.state_dict().items():
-                if isinstance(item, torch.Tensor) and item.is_cuda:
-                    cpu_buf = torch.empty(
-                        item.shape, dtype=item.dtype, device="cpu", pin_memory=True
-                    )
-                    cpu_buf.copy_(item.detach(), non_blocking=True)
-                    item = cpu_buf
-                elif isinstance(item, torch.Tensor):
-                    item = item.detach().clone()
-                model_state_dict[name] = item
+            with torch.cuda.stream(copy_stream):
+                for name, item in self.model.state_dict().items():
+                    if isinstance(item, torch.Tensor) and item.is_cuda:
+                        cpu_buf = torch.empty(
+                            item.shape, dtype=item.dtype, device="cpu", pin_memory=True
+                        )
+                        cpu_buf.copy_(item.detach(), non_blocking=True)
+                        item = cpu_buf
+                    elif isinstance(item, torch.Tensor):
+                        item = item.detach().clone()
+                    model_state_dict[name] = item
 
-            # Swap reference model state_dict into self.model (reference weights + optional FP8 extra_state)
-            self._apply_state_dict_to_model(
-                self.reference_state_dict,
-                raise_if_key_missing=True,
-            )
+                # Apply reference weights H2D on the same copy stream so it
+                # overlaps with any in-flight side-stream work; default
+                # stream waits below before consumers (eval forward) run.
+                self._apply_state_dict_to_model(
+                    self.reference_state_dict,
+                    raise_if_key_missing=True,
+                )
+            default_stream.wait_stream(copy_stream)
 
             if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
                 gc.collect()
@@ -920,11 +941,17 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             # Restore sampling_params
             self.sampling_params = saved_sampling_params
 
-            # Restore original policy state (weights + FP8 extra_state) from saved model_state_dict
-            self._apply_state_dict_to_model(
-                model_state_dict,
-                raise_if_key_missing=True,
-            )
+            # Restore original policy state (weights + FP8 extra_state) from saved
+            # model_state_dict on the dedicated copy stream — see save block above.
+            copy_stream = self._offload_copy_stream
+            default_stream = torch.cuda.current_stream()
+            copy_stream.wait_stream(default_stream)
+            with torch.cuda.stream(copy_stream):
+                self._apply_state_dict_to_model(
+                    model_state_dict,
+                    raise_if_key_missing=True,
+                )
+            default_stream.wait_stream(copy_stream)
 
             if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
                 gc.collect()
@@ -1498,69 +1525,80 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         move_params: bool = True,
         move_grads: bool = True,
     ) -> torch.nn.Module:
-        # move all param and grad buffers to the device
-        if isinstance(model, DistributedDataParallel):
-            # DDP case
-            for buffers in [model.buffers, model.expert_parallel_buffers]:
-                for buffer_idx in range(len(buffers)):
-                    if device == "cpu":
-                        buffers[buffer_idx].offload_to_cpu(
-                            move_params=move_params, move_grads=move_grads
-                        )
-                    elif device == "cuda":
-                        buffers[buffer_idx].reload_from_cpu(
-                            move_params=move_params, move_grads=move_grads
-                        )
-                    else:
-                        raise ValueError(
-                            f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                        )
-        elif isinstance(model, custom_FSDP):
-            if device == "cpu":
-                model.param_and_grad_buffer.offload_to_cpu(move_params, move_grads)
-            elif device == "cuda":
-                model.param_and_grad_buffer.reload_from_cpu(
-                    move_params=move_params, move_grads=move_grads
-                )
+        # Issue per-bucket offload/reload copies on a dedicated stream so they
+        # don't enqueue behind the CG side-stream kernel chain. Megatron's
+        # _ParamAndGradBuffer.offload_to_cpu/reload_from_cpu use non_blocking
+        # pinned memory, so they pick up the active stream from this context.
+        copy_stream = self._offload_copy_stream
+        default_stream = torch.cuda.current_stream()
+        copy_stream.wait_stream(default_stream)
+        with torch.cuda.stream(copy_stream):
+            if isinstance(model, DistributedDataParallel):
+                for buffers in [model.buffers, model.expert_parallel_buffers]:
+                    for buffer_idx in range(len(buffers)):
+                        if device == "cpu":
+                            buffers[buffer_idx].offload_to_cpu(
+                                move_params=move_params, move_grads=move_grads
+                            )
+                        elif device == "cuda":
+                            buffers[buffer_idx].reload_from_cpu(
+                                move_params=move_params, move_grads=move_grads
+                            )
+                        else:
+                            raise ValueError(
+                                f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+                            )
+            elif isinstance(model, custom_FSDP):
+                if device == "cpu":
+                    model.param_and_grad_buffer.offload_to_cpu(move_params, move_grads)
+                elif device == "cuda":
+                    model.param_and_grad_buffer.reload_from_cpu(
+                        move_params=move_params, move_grads=move_grads
+                    )
+                else:
+                    raise ValueError(
+                        f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+                    )
             else:
-                raise ValueError(
-                    f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                )
-        else:
-            # Ordinary offload case
-            if move_params:
-                new_state_dict = {}
-                for name, item in model.state_dict().items():
-                    if isinstance(item, torch.Tensor):
-                        item = item.detach().to(
-                            device=device, non_blocking=True, copy=True
-                        )
-                    new_state_dict[name] = item
-                model.load_state_dict(new_state_dict)
+                if move_params:
+                    new_state_dict = {}
+                    for name, item in model.state_dict().items():
+                        if isinstance(item, torch.Tensor):
+                            item = item.detach().to(
+                                device=device, non_blocking=True, copy=True
+                            )
+                        new_state_dict[name] = item
+                    model.load_state_dict(new_state_dict)
+        default_stream.wait_stream(copy_stream)
         return model
 
     def move_optimizer(self, device: str):
+        copy_stream = self._offload_copy_stream
+        default_stream = torch.cuda.current_stream()
+        copy_stream.wait_stream(default_stream)
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
         else:
             optimizer_state = self.optimizer._get_state()
-        for _, state in optimizer_state.items():
-            # Iterate through the state items (e.g., momentum, variance) for a parameter
-            for k, v in state.items():
-                # Check if the item is a tensor
-                if torch.is_tensor(v):
-                    # Move the tensor to device and update the state dictionary
-                    if device == "cpu":
-                        if v.is_cuda:
-                            state[k] = v.to("cpu")
-                    elif device == "cuda":
-                        if not v.is_cuda:
-                            state[k] = v.to("cuda")
-                    else:
-                        raise ValueError(
-                            f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                        )
+        with torch.cuda.stream(copy_stream):
+            for _, state in optimizer_state.items():
+                # Iterate through the state items (e.g., momentum, variance) for a parameter
+                for k, v in state.items():
+                    # Check if the item is a tensor
+                    if torch.is_tensor(v):
+                        # Move the tensor to device and update the state dictionary
+                        if device == "cpu":
+                            if v.is_cuda:
+                                state[k] = v.to("cpu", non_blocking=True)
+                        elif device == "cuda":
+                            if not v.is_cuda:
+                                state[k] = v.to("cuda", non_blocking=True)
+                        else:
+                            raise ValueError(
+                                f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+                            )
+        default_stream.wait_stream(copy_stream)
 
     def save_checkpoint(
         self,
