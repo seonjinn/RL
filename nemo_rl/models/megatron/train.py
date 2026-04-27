@@ -222,6 +222,35 @@ def forward_with_post_processing_fn(
         use_llava_handoff=use_llava_handoff,
     )
 
+    # VLM logprob/loss alignment: the LLaVA model emits logits at the
+    # *expanded* (= original uncollapsed) sequence length, but
+    # ``data_dict["input_ids"]`` was overwritten with the *collapsed* tokens
+    # by ``collapse_multimodal_tokens`` upstream. Restore the uncollapsed
+    # ids (and matching lengths) here -- after the model has consumed the
+    # collapsed inputs -- so the downstream post-processors (Loss /
+    # Logprobs / Topk) score logits[i] against target[i+1] at the right
+    # length. Mirrors Omni's ``loss_data["input_ids"] = original_input_ids``
+    # restore in ``forward_step_arbitrary_loss``. A no-op for text-only /
+    # non-LLaVA paths where ``original_input_ids`` is None.
+    if processed_mb.original_input_ids is not None:
+        if cfg.get("sequence_packing", {}).get("enabled", False):
+            # Pack mode + VLM needs ``repack_original_tokens_for_vlm_logprobs``
+            # to align the per-sequence target into the model's expanded
+            # packed layout (cu_seqlens_padded is already in expanded space,
+            # but ``original_input_ids`` is per-sample unpacked). That helper
+            # has not yet been ported to Super; refuse early so callers don't
+            # silently score logits against a misaligned target.
+            raise NotImplementedError(
+                "VLM logprob/loss alignment with sequence_packing.enabled=True "
+                "requires ``repack_original_tokens_for_vlm_logprobs`` "
+                "(pack-mode target repack) which is not yet ported to Super. "
+                "Disable sequence_packing for the VLM run, or wait until the "
+                "repack helper lands."
+            )
+        data_dict["input_ids"] = processed_mb.original_input_ids
+        if processed_mb.original_input_lengths is not None:
+            data_dict["input_lengths"] = processed_mb.original_input_lengths
+
     # Apply temperature scaling only for sampling-oriented post-processors.
     # Loss computation should use unscaled logits.
     if isinstance(
@@ -413,7 +442,11 @@ class LogprobsPostProcessor:
         to token-level log probabilities, handling both packed and unpacked sequences.
 
         Args:
-            data_dict: Batched data dictionary containing input sequences
+            data_dict: Batched data dictionary containing input sequences. For
+                LLaVA-style models the caller (``forward_with_post_processing_fn``)
+                is responsible for restoring ``data_dict["input_ids"]`` to the
+                *uncollapsed* tokens before invoking this post-processor, so the
+                target here matches the model's expanded-length logits.
             input_ids: Processed input token IDs
             cu_seqlens_padded: Cumulative sequence lengths for packed sequences
 

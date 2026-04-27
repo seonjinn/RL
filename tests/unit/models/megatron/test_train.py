@@ -311,6 +311,199 @@ class TestForwardWithPostProcessingFn:
 
         mock_model_forward.assert_called_once()
 
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_swaps_data_dict_input_ids_to_original_for_vlm(
+        self, mock_model_forward, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        """For VLM microbatches, ``forward_with_post_processing_fn`` must
+        restore the *original* (uncollapsed) input_ids onto ``data_dict``
+        after the model has consumed the collapsed ones, so the loss /
+        logprob / topk post-processors all score logits at the right length.
+        """
+        from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        mock_tp_grp.return_value = MagicMock()
+        mock_cp_grp.return_value = MagicMock()
+        mock_model_forward.return_value = torch.randn(1, 7, 100)
+
+        # The model received the collapsed ids; data_dict["input_ids"] was
+        # overwritten with the collapsed version by collapse_multimodal_tokens
+        # upstream. We assert below that the swap restores original_input_ids.
+        collapsed_ids = torch.tensor([[1, 2, 99, 4, 5]])
+        collapsed_lens = torch.tensor([5])
+        original_ids = torch.tensor([[1, 2, 99, 99, 99, 4, 5]])
+        original_lens = torch.tensor([7])
+
+        data_dict = BatchedDataDict(
+            {
+                "input_ids": collapsed_ids,
+                "input_lengths": collapsed_lens,
+            }
+        )
+        processed_mb = ProcessedMicrobatch(
+            data_dict=data_dict,
+            input_ids=collapsed_ids,
+            input_ids_cp_sharded=collapsed_ids,
+            attention_mask=torch.ones(1, 5),
+            position_ids=torch.arange(5).unsqueeze(0),
+            packed_seq_params=None,
+            cu_seqlens_padded=None,
+            use_llava_handoff=True,
+            original_input_ids=original_ids,
+            original_input_lengths=original_lens,
+        )
+
+        cfg = {"sequence_packing": {"enabled": False}}
+        post_processor = LossPostProcessor(loss_fn=MagicMock(), cfg=cfg)
+
+        forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            cfg=cfg,
+            post_processing_fn=post_processor,
+        )
+
+        # After the call, data_dict["input_ids"] must be the *original*
+        # (uncollapsed) tokens, not the collapsed ones the model saw.
+        assert torch.equal(data_dict["input_ids"], original_ids)
+        assert torch.equal(data_dict["input_lengths"], original_lens)
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_text_only_does_not_mutate_data_dict_input_ids(
+        self, mock_model_forward, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        """For text-only / non-LLaVA microbatches (``original_input_ids`` is
+        ``None``), ``forward_with_post_processing_fn`` must leave
+        ``data_dict["input_ids"]`` untouched -- the swap is a no-op.
+        """
+        from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        mock_tp_grp.return_value = MagicMock()
+        mock_cp_grp.return_value = MagicMock()
+        mock_model_forward.return_value = torch.randn(1, 5, 100)
+
+        text_ids = torch.tensor([[1, 2, 3, 4, 5]])
+        text_lens = torch.tensor([5])
+        text_ids_before = text_ids.clone()
+
+        data_dict = BatchedDataDict(
+            {"input_ids": text_ids, "input_lengths": text_lens}
+        )
+        processed_mb = ProcessedMicrobatch(
+            data_dict=data_dict,
+            input_ids=text_ids,
+            input_ids_cp_sharded=text_ids,
+            attention_mask=torch.ones(1, 5),
+            position_ids=torch.arange(5).unsqueeze(0),
+            packed_seq_params=None,
+            cu_seqlens_padded=None,
+            # original_input_ids defaults to None -- the text-only path.
+        )
+
+        cfg = {"sequence_packing": {"enabled": False}}
+        post_processor = LossPostProcessor(loss_fn=MagicMock(), cfg=cfg)
+
+        forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            cfg=cfg,
+            post_processing_fn=post_processor,
+        )
+
+        # data_dict["input_ids"] must still be the original (untouched).
+        assert torch.equal(data_dict["input_ids"], text_ids_before)
+        assert torch.equal(data_dict["input_lengths"], text_lens)
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_pack_plus_vlm_raises_not_implemented(
+        self, mock_model_forward, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        """Pack mode + VLM (``original_input_ids`` is not None and
+        ``sequence_packing.enabled=True``) needs the
+        ``repack_original_tokens_for_vlm_logprobs`` helper to align the
+        per-sequence target into the model's expanded packed layout. That
+        helper is not yet ported to Super, so the central swap site must
+        refuse early -- before any post-processor runs -- so neither the
+        loss nor the logprob path silently scores logits at the wrong length.
+        """
+        from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LogprobsPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        mock_tp_grp.return_value = MagicMock()
+        mock_cp_grp.return_value = MagicMock()
+        mock_model_forward.return_value = torch.randn(1, 7, 100)
+
+        collapsed_ids = torch.tensor([[1, 2, 99, 4, 5]])
+        original_ids = torch.tensor([[1, 2, 99, 99, 99, 4, 5]])
+        data_dict = BatchedDataDict(
+            {"input_ids": collapsed_ids, "input_lengths": torch.tensor([5])}
+        )
+        processed_mb = ProcessedMicrobatch(
+            data_dict=data_dict,
+            input_ids=collapsed_ids,
+            input_ids_cp_sharded=collapsed_ids,
+            attention_mask=torch.ones(1, 5),
+            position_ids=torch.arange(5).unsqueeze(0),
+            packed_seq_params=MagicMock(),
+            cu_seqlens_padded=torch.tensor([0, 5]),
+            use_llava_handoff=True,
+            original_input_ids=original_ids,
+            original_input_lengths=torch.tensor([7]),
+        )
+
+        cfg = {"sequence_packing": {"enabled": True}}
+
+        with pytest.raises(
+            NotImplementedError,
+            match=(
+                "VLM logprob/loss alignment with sequence_packing.enabled=True"
+            ),
+        ):
+            forward_with_post_processing_fn(
+                data_iterator=iter([processed_mb]),
+                model=MagicMock(),
+                cfg=cfg,
+                post_processing_fn=LogprobsPostProcessor(cfg=cfg),
+            )
+
     @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_topk_post_processor(self, mock_model_forward):
         """Test forward with TopkLogitsPostProcessor."""
@@ -859,7 +1052,6 @@ class TestLogprobsPostProcessor:
 
         mock_from_logits_packed.assert_called_once()
         assert "logprobs" in result
-
 
 class TestTopkLogitsPostProcessor:
     """Tests for TopkLogitsPostProcessor class."""

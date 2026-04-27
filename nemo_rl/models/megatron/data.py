@@ -50,6 +50,8 @@ class ProcessedInputs:
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
     use_llava_handoff: bool = False
+    original_input_ids: Optional[torch.Tensor] = None
+    original_input_lengths: Optional[torch.Tensor] = None
 
 
 @dataclass
@@ -70,6 +72,14 @@ class ProcessedMicrobatch:
         use_llava_handoff: True when the model is a LLaVA-style model, in which case
             ``input_ids`` (full, unsharded) must be forwarded to the model and CP
             sharding is applied internally by ``LLaVAModel._preprocess_data``.
+        original_input_ids: For LLaVA-style models, the *uncollapsed* token ids
+            captured before ``collapse_multimodal_tokens`` ran. The model output
+            tensor lives at expanded length (= original length), so
+            logprob/loss code must use these (not the collapsed ``input_ids``)
+            as the per-token target. ``None`` for text-only / non-LLaVA paths.
+        original_input_lengths: Matching per-sample lengths for
+            ``original_input_ids``. Used by the pack-mode repack helper when
+            ``sequence_packing.enabled=True``.
     """
 
     data_dict: BatchedDataDict[Any]
@@ -81,6 +91,8 @@ class ProcessedMicrobatch:
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
     use_llava_handoff: bool = False
+    original_input_ids: Optional[torch.Tensor] = None
+    original_input_lengths: Optional[torch.Tensor] = None
 
 
 def make_processed_microbatch_iterator(
@@ -122,6 +134,20 @@ def make_processed_microbatch_iterator(
     for data_dict in raw_iterator:
         data_dict = data_dict.to("cuda")
 
+        # Capture the *uncollapsed* tokens before ``collapse_multimodal_tokens``
+        # mutates ``data_dict``. The Megatron LLaVA forward emits logits at
+        # the post-collapse-then-re-expand length (which equals the original
+        # uncollapsed length for the placeholder-baked-in vLLM/HF prompt
+        # contract), so logprob/loss code must score against
+        # ``original_input_ids``, not the collapsed ``input_ids`` we feed to
+        # the model. ``None`` outside the LLaVA path.
+        original_input_ids: Optional[torch.Tensor] = None
+        original_input_lengths: Optional[torch.Tensor] = None
+        if use_llava_handoff:
+            original_input_ids = data_dict["input_ids"].clone()
+            if "input_lengths" in data_dict:
+                original_input_lengths = data_dict["input_lengths"].clone()
+
         # VLM token collapse: shrink N image tokens per image to 1 collapsed slot
         # so packing/CP shard math operates in the collapsed (vLLM-style) length
         # space. The model re-expands internally via ``LLaVAModel._preprocess_data``.
@@ -143,6 +169,8 @@ def make_processed_microbatch_iterator(
             tokens_removed_per_sample=tokens_removed_per_sample,
             use_llava_handoff=use_llava_handoff,
             policy_cfg=cfg,
+            original_input_ids=original_input_ids,
+            original_input_lengths=original_input_lengths,
         )
 
         yield ProcessedMicrobatch(
@@ -155,6 +183,8 @@ def make_processed_microbatch_iterator(
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
             use_llava_handoff=processed_inputs.use_llava_handoff,
+            original_input_ids=processed_inputs.original_input_ids,
+            original_input_lengths=processed_inputs.original_input_lengths,
         )
 
 
@@ -253,6 +283,8 @@ def process_microbatch(
     tokens_removed_per_sample: Optional[torch.Tensor] = None,
     use_llava_handoff: bool = False,
     policy_cfg: Optional[dict[str, Any]] = None,
+    original_input_ids: Optional[torch.Tensor] = None,
+    original_input_lengths: Optional[torch.Tensor] = None,
 ) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass.
 
@@ -424,6 +456,8 @@ def process_microbatch(
         cu_seqlens_padded=cu_seqlens_padded,
         mtp_loss_mask=mtp_loss_mask,
         use_llava_handoff=use_llava_handoff,
+        original_input_ids=original_input_ids,
+        original_input_lengths=original_input_lengths,
     )
 
 
