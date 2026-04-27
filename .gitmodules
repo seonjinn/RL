@@ -1,6 +1,6 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM-workspace/Megatron-LM
-	url = https://gitlab-master.nvidia.com/ADLR/megatron-lm.git
+	url = git@gitlab-master.nvidia.com:ADLR/megatron-lm.git
 	branch = tpoon/super-vlm2
 	shallow = true
 [submodule "3rdparty/Megatron-Bridge"]
