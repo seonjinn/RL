@@ -141,12 +141,14 @@ def test_py_executable_requests_vllm_extra():
     )
 
 
-def test_prepare_uv_install_env_strips_precompiled_vllm_overrides():
+def test_prepare_uv_install_env_keeps_wheel_location_but_strips_stale_vllm_overrides():
     base_env = {
         "KEEP_ME": "1",
         "VLLM_PRECOMPILED_WHEEL_LOCATION": "https://example.invalid/vllm.whl",
         "VLLM_USE_PRECOMPILED": "1",
         "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM": "0.14.0",
+        "VLLM_PRECOMPILED_WHEEL_COMMIT": "deadbeef",
+        "VLLM_PRECOMPILED_WHEEL_VARIANT": "cuda",
     }
 
     install_env = _prepare_uv_install_env(
@@ -154,7 +156,10 @@ def test_prepare_uv_install_env_strips_precompiled_vllm_overrides():
         "uv run --locked --extra vllm --directory /tmp/repo",
     )
 
-    assert install_env == {"KEEP_ME": "1"}
+    assert install_env == {
+        "KEEP_ME": "1",
+        "VLLM_PRECOMPILED_WHEEL_LOCATION": "https://example.invalid/vllm.whl",
+    }
 
 
 def test_prepare_uv_install_env_keeps_non_vllm_overrides():
@@ -179,7 +184,7 @@ def test_prepare_uv_bootstrap_packages_adds_vllm_build_tools():
     assert packages == [
         "setuptools",
         "setuptools_scm",
-        "torch==2.9.0",
+        "torch==2.10.0",
         "cmake>=3.26.1",
         "ninja",
     ]
@@ -193,5 +198,5 @@ def test_prepare_uv_bootstrap_packages_keeps_base_packages_for_non_vllm():
     assert packages == [
         "setuptools",
         "setuptools_scm",
-        "torch==2.9.0",
+        "torch==2.10.0",
     ]

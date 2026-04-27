@@ -35,10 +35,9 @@ _UV_RUN_PROJECT_FLAGS_WITH_VALUES = {
     "--project",
     "--config-file",
 }
-_VLLM_PRECOMPILED_ENV_VARS = {
+_VLLM_BUILD_OVERRIDE_ENV_VARS_TO_STRIP = {
     "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM",
     "VLLM_PRECOMPILED_WHEEL_COMMIT",
-    "VLLM_PRECOMPILED_WHEEL_LOCATION",
     "VLLM_PRECOMPILED_WHEEL_VARIANT",
     "VLLM_USE_PRECOMPILED",
 }
@@ -141,23 +140,20 @@ def _prepare_uv_install_env(
 ) -> dict[str, str]:
     """Prepare the environment for editable uv installs.
 
-    For vLLM actor envs, strip any container-baked precompiled-wheel overrides so
-    the editable install does not inject an incompatible native extension into the
-    vendored source tree.
-
-    TODO: Remove this workaround once the runtime container stops exporting stale
-    vLLM precompiled-wheel environment variables into NeMo RL worker env builds.
+    For vLLM actor envs, preserve the container-pinned wheel location but strip
+    stale version/commit overrides that can steer the editable install toward an
+    incompatible native extension.
     """
     env = base_env.copy()
     if _py_executable_requests_extra(py_executable, "vllm"):
-        for key in _VLLM_PRECOMPILED_ENV_VARS:
+        for key in _VLLM_BUILD_OVERRIDE_ENV_VARS_TO_STRIP:
             env.pop(key, None)
     return env
 
 
 def _prepare_uv_bootstrap_packages(py_executable: str) -> list[str]:
     """Prepare seed packages for a fresh uv worker environment."""
-    packages = ["setuptools", "setuptools_scm", "torch==2.9.0"]
+    packages = ["setuptools", "setuptools_scm", "torch==2.10.0"]
     if _py_executable_requests_extra(py_executable, "vllm"):
         packages.extend(["cmake>=3.26.1", "ninja"])
     return packages
@@ -229,9 +225,9 @@ def create_local_venv(
     # Command doesn't matter; we only use it as a final `uv run --no-sync` sanity check.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
-    # TODO: Remove this bootstrap install once the refreshed container no longer
-    # needs the pre-build-meta mcore workaround and provides the vLLM build
-    # toolchain without local seeding here.
+    # TODO: After Gate 6 passes on the ultra-rl-v0.17 container, re-check whether
+    # this local bootstrap is still needed or whether we can rely entirely on the
+    # container-baked torch/build toolchain for fresh Ray worker envs.
     subprocess.run(
         [
             "uv",
