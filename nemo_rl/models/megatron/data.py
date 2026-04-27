@@ -28,7 +28,14 @@ from megatron.training.utils import get_ltor_masks_and_position_ids
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
-from nemo_rl.models.megatron.common import _round_up_to_multiple
+from nemo_rl.models.megatron.common import (
+    _round_up_to_multiple,
+    _vlm_sp_repad_collapsed,
+)
+from nemo_rl.models.megatron.multimodal import (
+    collapse_multimodal_tokens,
+    is_llava_model,
+)
 
 
 @dataclass
@@ -42,6 +49,7 @@ class ProcessedInputs:
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
+    use_llava_handoff: bool = False
 
 
 @dataclass
@@ -59,6 +67,9 @@ class ProcessedMicrobatch:
         position_ids: Position IDs tensor (None for packed sequences)
         packed_seq_params: PackedSeqParams for sequence packing (None if not packing)
         cu_seqlens_padded: Padded cumulative sequence lengths (None if not packing)
+        use_llava_handoff: True when the model is a LLaVA-style model, in which case
+            ``input_ids`` (full, unsharded) must be forwarded to the model and CP
+            sharding is applied internally by ``LLaVAModel._preprocess_data``.
     """
 
     data_dict: BatchedDataDict[Any]
@@ -69,6 +80,7 @@ class ProcessedMicrobatch:
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
+    use_llava_handoff: bool = False
 
 
 def make_processed_microbatch_iterator(
@@ -79,6 +91,7 @@ def make_processed_microbatch_iterator(
     pad_packed_seq_to_multiple_of: int,
     straggler_timer: StragglerDetector,
     pad_full_seq_to: Optional[int],
+    model: Any = None,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -93,17 +106,32 @@ def make_processed_microbatch_iterator(
         pad_individual_seqs_to_multiple_of: Padding multiple for individual sequences
         pad_packed_seq_to_multiple_of: Padding multiple for packed sequences
         pad_full_seq_to: Target length for full sequence padding (optional)
+        model: Optional Megatron model. When provided and detected as a LLaVA-style
+            model (``is_llava_model``), the raw microbatch is run through
+            ``collapse_multimodal_tokens`` before packing/CP sharding so that the
+            packed sequence layout matches the collapsed token space the LLaVA
+            ``_preprocess_data`` step expects. For text-only or non-LLaVA models
+            this is a no-op and the original behaviour is preserved.
 
     Yields:
         ProcessedMicrobatch objects containing processed tensors ready for model forward
     """
     pack_sequences = cfg["sequence_packing"]["enabled"]
+    use_llava_handoff = bool(model is not None and is_llava_model(model))
 
     for data_dict in raw_iterator:
-        # Move to GPU
         data_dict = data_dict.to("cuda")
 
-        # Process the microbatch
+        # VLM token collapse: shrink N image tokens per image to 1 collapsed slot
+        # so packing/CP shard math operates in the collapsed (vLLM-style) length
+        # space. The model re-expands internally via ``LLaVAModel._preprocess_data``.
+        # Safe to call unconditionally: returns ``data_dict`` unchanged for
+        # text-only or non-LLaVA models.
+        if model is not None:
+            data_dict = collapse_multimodal_tokens(data_dict, model)
+
+        tokens_removed_per_sample = data_dict.pop("tokens_removed_per_sample", None)
+
         processed_inputs = process_microbatch(
             data_dict=data_dict,
             seq_length_key=seq_length_key,
@@ -112,6 +140,9 @@ def make_processed_microbatch_iterator(
             pad_full_seq_to=pad_full_seq_to,
             pack_sequences=pack_sequences,
             straggler_timer=straggler_timer,
+            tokens_removed_per_sample=tokens_removed_per_sample,
+            use_llava_handoff=use_llava_handoff,
+            policy_cfg=cfg,
         )
 
         yield ProcessedMicrobatch(
@@ -123,6 +154,7 @@ def make_processed_microbatch_iterator(
             packed_seq_params=processed_inputs.packed_seq_params,
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
+            use_llava_handoff=processed_inputs.use_llava_handoff,
         )
 
 
@@ -132,6 +164,7 @@ def get_microbatch_iterator(
     mbs: int,
     straggler_timer: StragglerDetector,
     seq_length_key: Optional[str] = None,
+    model: Any = None,
 ) -> Tuple[Iterator[ProcessedMicrobatch], int, int, int, int]:
     """Create a processed microbatch iterator from a batch of data.
 
@@ -194,6 +227,7 @@ def get_microbatch_iterator(
         pad_packed_seq_to_multiple_of=pad_packed_seq_to_multiple_of,
         pad_full_seq_to=pad_full_seq_to,
         straggler_timer=straggler_timer,
+        model=model,
     )
 
     # Compute padded sequence length for pipeline parallelism
@@ -216,15 +250,31 @@ def process_microbatch(
     pad_full_seq_to: Optional[int] = None,
     pack_sequences: bool = False,
     straggler_timer: Optional[StragglerDetector] = None,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    Optional[torch.Tensor],
-    Optional[torch.Tensor],
-    Optional[PackedSeqParams],
-    Optional[torch.Tensor],
-]:
-    """Process a microbatch for Megatron model forward pass."""
+    tokens_removed_per_sample: Optional[torch.Tensor] = None,
+    use_llava_handoff: bool = False,
+    policy_cfg: Optional[dict[str, Any]] = None,
+) -> ProcessedInputs:
+    """Process a microbatch for Megatron model forward pass.
+
+    Args:
+        data_dict: The (possibly multimodal-collapsed) microbatch data.
+        seq_length_key: Key in ``data_dict`` containing actual sequence lengths.
+        pad_individual_seqs_to_multiple_of: Per-sequence padding factor for packing.
+        pad_packed_seq_to_multiple_of: Packed-sequence padding factor.
+        pad_full_seq_to: Optional total length the packed sequence is padded to.
+        pack_sequences: Whether to pack sequences for sequence-packed training.
+        straggler_timer: Optional Megatron straggler detector.
+        tokens_removed_per_sample: Per-sample count of image tokens removed by
+            ``collapse_multimodal_tokens``. Used to (a) track expanded sequence
+            boundaries that the LLaVA model will see internally and (b) re-pad
+            collapsed input ids for sequence-parallel alignment when SP is on.
+            ``None`` for text-only or non-LLaVA paths.
+        use_llava_handoff: True when the model is a LLaVA-style model. In that
+            case the model expects the unsharded ``input_ids`` and applies CP
+            sharding internally via ``_preprocess_data``.
+        policy_cfg: Optional policy config used to look up ``sequence_parallel``
+            and ``tensor_model_parallel_size`` for VLM SP repadding.
+    """
     ctx = straggler_timer(bdata=True) if straggler_timer is not None else nullcontext()
     with ctx:
         input_ids = data_dict["input_ids"]
@@ -266,7 +316,45 @@ def process_microbatch(
                 pad_full_seq_to,
                 cp_rank=get_context_parallel_rank(),
                 cp_size=get_context_parallel_world_size(),
+                tokens_removed_per_sample=tokens_removed_per_sample,
+                skip_local_cp_sharding=use_llava_handoff,
             )
+
+            # VLM + sequence packing: the LLaVA model re-expands collapsed image
+            # tokens internally during ``_preprocess_data``, so the attention
+            # mechanism must see the *expanded* cu_seqlens for every sequence in
+            # the pack, not just the trailing one. This mirrors Omni's bookkeeping
+            # in ``forward_step_arbitrary_loss``.
+            if tokens_removed_per_sample is not None and cu_seqlens_padded is not None:
+                n_seqs = cu_seqlens_padded.shape[0] - 1
+                cumulative_removed = torch.zeros(
+                    n_seqs + 1,
+                    dtype=torch.int32,
+                    device=cu_seqlens_padded.device,
+                )
+                cumulative_removed[1:] = (
+                    tokens_removed_per_sample[:n_seqs].to(torch.int32).cumsum(0)
+                )
+                cu_seqlens_padded_expanded = (
+                    cu_seqlens_padded.clone() + cumulative_removed
+                )
+                # Single clone aliased into all four PackedSeqParams fields:
+                # TE relies on ``cu_seqlens_q is cu_seqlens_kv`` identity to
+                # detect self-attention. Distinct clones break that.
+                cu_seqlens_for_attn = cu_seqlens_padded_expanded.clone()
+                packed_seq_params.cu_seqlens_q = cu_seqlens_for_attn
+                packed_seq_params.cu_seqlens_kv = cu_seqlens_for_attn
+                packed_seq_params.cu_seqlens_q_padded = cu_seqlens_for_attn
+                packed_seq_params.cu_seqlens_kv_padded = cu_seqlens_for_attn
+                expanded_slot_lengths = (
+                    cu_seqlens_padded_expanded[1:] - cu_seqlens_padded_expanded[:-1]
+                )
+                packed_seq_params.max_seqlen_q = int(
+                    expanded_slot_lengths.max().item()
+                )
+                packed_seq_params.max_seqlen_kv = int(
+                    expanded_slot_lengths.max().item()
+                )
 
             # Pack pre-computed mtp_loss_mask the same way as input_ids
             if "mtp_loss_mask" in data_dict:
@@ -291,6 +379,32 @@ def process_microbatch(
             position_ids = None
             attention_mask = None
         else:
+            # VLM + (sequence-parallel or context-parallel) without packing:
+            # LLaVA re-expands collapsed image tokens internally, producing a
+            # wider activation tensor that must be divisible by the active
+            # ``_calc_shard_factor`` -- ``tp_size`` (for SP), ``cp_size * 2``
+            # (for CP load balancing), or their LCM when both are on. Re-pad
+            # the collapsed input_ids so that the LLaVA-expanded length aligns.
+            if policy_cfg is not None and tokens_removed_per_sample is not None:
+                megatron_cfg = policy_cfg.get("megatron_cfg", {}) or {}
+                sp = bool(megatron_cfg.get("sequence_parallel", False))
+                tp_size = int(megatron_cfg.get("tensor_model_parallel_size", 1))
+                cp_size = int(megatron_cfg.get("context_parallel_size", 1))
+                divisor = 1
+                if sp and tp_size > 1:
+                    divisor = tp_size
+                if cp_size > 1:
+                    cp_factor = cp_size * 2
+                    if divisor > 1:
+                        from math import gcd
+                        divisor = (divisor * cp_factor) // gcd(divisor, cp_factor)
+                    else:
+                        divisor = cp_factor
+                if divisor > 1:
+                    input_ids = _vlm_sp_repad_collapsed(
+                        input_ids, tokens_removed_per_sample, divisor
+                    )
+                    data_dict["input_ids"] = input_ids
             input_ids_cp_sharded = input_ids
             attention_mask, _, position_ids = get_ltor_masks_and_position_ids(
                 data=input_ids,
@@ -309,6 +423,7 @@ def process_microbatch(
         packed_seq_params=packed_seq_params,
         cu_seqlens_padded=cu_seqlens_padded,
         mtp_loss_mask=mtp_loss_mask,
+        use_llava_handoff=use_llava_handoff,
     )
 
 
@@ -373,7 +488,15 @@ def _pack_sequences_for_megatron(
     pad_packed_seq_to: Optional[int] = None,
     cp_rank: int = 0,
     cp_size: int = 1,
-) -> tuple[torch.Tensor, PackedSeqParams, torch.Tensor, Optional[torch.Tensor]]:
+    tokens_removed_per_sample: Optional[torch.Tensor] = None,
+    skip_local_cp_sharding: bool = False,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    PackedSeqParams,
+    torch.Tensor,
+    Optional[torch.Tensor],
+]:
     """Pack sequences for Megatron model processing with optional context parallelism.
 
     Args:
@@ -384,6 +507,14 @@ def _pack_sequences_for_megatron(
         pad_packed_seq_to: Pad packed sequences to this value (before CP)
             - The three parameters above can be calculated using _get_pack_sequence_parameters_for_megatron, we do not recommend users to set these parameters manually.
         cp_size: Context parallelism size
+        tokens_removed_per_sample: Per-sample count of image tokens removed by
+            ``collapse_multimodal_tokens``. When provided, per-sequence padding
+            ensures that expanded lengths (collapsed + removed) are multiples
+            of ``pad_individual_seqs_to_multiple_of``. ``None`` for non-VLM paths.
+            Currently raises ``NotImplementedError`` if combined with PP+CP>1.
+        skip_local_cp_sharding: If True, return the unsharded packed input as
+            ``input_ids_cp_sharded`` so the LLaVA model can apply CP sharding
+            internally after rebuilding embeddings.
 
     Returns:
         Tuple of:
@@ -393,57 +524,129 @@ def _pack_sequences_for_megatron(
         - cu_seqlens: Cumulative sequence lengths
         - cu_seqlens_padded: Padded cumulative sequence lengths
     """
-    batch_size = input_ids.shape[0]
+    if (
+        tokens_removed_per_sample is not None
+        and pad_packed_seq_to is not None
+        and cp_size > 1
+    ):
+        raise NotImplementedError(
+            "PP > 1 with VLM sequence packing and CP > 1 is not yet supported. "
+            "Per-microbatch VLM token expansion produces variable expanded "
+            "lengths that break PP's uniform sequence-length requirement."
+        )
 
-    # Build cumulative sequence lengths (cu_seqlens) and extract valid tokens
+    if tokens_removed_per_sample is not None:
+        assert tokens_removed_per_sample.shape[0] >= input_ids.shape[0], (
+            f"tokens_removed_per_sample has {tokens_removed_per_sample.shape[0]} "
+            f"entries but batch_size is {input_ids.shape[0]}"
+        )
+
+    batch_size = input_ids.shape[0]
     needs_padding = (
         pad_individual_seqs_to_multiple_of > 1
         or pad_packed_seq_to_multiple_of > 1
         or pad_packed_seq_to is not None
     )
 
-    cu_seqlens = [0]
-    cu_seqlens_padded = [0] if needs_padding else None
-    valid_tokens = []
-
     if pad_packed_seq_to is not None:
         assert pad_packed_seq_to % pad_packed_seq_to_multiple_of == 0, (
-            f"pad_packed_seq_to ({pad_packed_seq_to}) is not a multiple of pad_packed_seq_to_multiple_of ({pad_packed_seq_to_multiple_of})."
+            f"pad_packed_seq_to ({pad_packed_seq_to}) is not a multiple of "
+            f"pad_packed_seq_to_multiple_of ({pad_packed_seq_to_multiple_of})."
         )
 
     pad_factor = pad_individual_seqs_to_multiple_of
 
+    # --- Loop 1: build cu_seqlens (collapsed) and padded_seq_lens (collapsed,
+    # but VLM-aware so the *expanded* length is divisible by pad_factor). The
+    # padded_seq_lens list is shared with Loop 2 to avoid recomputation drift.
+    cu_seqlens = [0]
+    valid_tokens: list[torch.Tensor] = []
+    padded_seq_lens: list[int] = []
     for b in range(batch_size):
         seq_len = (
             seq_lengths[b].item() if torch.is_tensor(seq_lengths[b]) else seq_lengths[b]
         )
-
-        # Extract valid tokens for this sequence
         valid_tokens.append(input_ids[b, :seq_len])
-
-        # Update cumulative sequence lengths
         cu_seqlens.append(cu_seqlens[-1] + seq_len)
-
-        # For context parallelism, track padded sequence lengths
         if needs_padding:
-            # Pad sequence length to multiple of (cp_size * 2)
-            padded_seq_len = _round_up_to_multiple(seq_len, pad_factor)
-            cu_seqlens_padded.append(cu_seqlens_padded[-1] + padded_seq_len)
+            removed = (
+                int(tokens_removed_per_sample[b].item())
+                if tokens_removed_per_sample is not None
+                else 0
+            )
+            # VLM-aware: pad collapsed length so (collapsed_padded + removed)
+            # is a multiple of pad_factor. removed=0 degenerates to the
+            # standard text-only formula.
+            padded_seq_len = (
+                _round_up_to_multiple(seq_len + removed, pad_factor) - removed
+            )
+            padded_seq_lens.append(padded_seq_len)
 
-    # Convert to tensors
-    cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32, device=input_ids.device)
-    if needs_padding:
-        cu_seqlens_padded = torch.tensor(
-            cu_seqlens_padded, dtype=torch.int32, device=input_ids.device
-        )
+    # --- Post-loop: adjust the last sequence so the packed-total alignment
+    # holds (PP requires fixed total via pad_packed_seq_to; FP8 requires the
+    # total to be a multiple of pad_packed_seq_to_multiple_of).
+    if needs_padding and batch_size > 0:
+        running = sum(padded_seq_lens[:-1]) if batch_size > 1 else 0
         if pad_packed_seq_to is not None:
-            cu_seqlens_padded[-1] = pad_packed_seq_to
+            # PP > 1: target collapsed total is fixed. VLM+CP>1 is guarded
+            # above, so this is non-VLM or CP=1 VLM.
+            padded_seq_lens[-1] = pad_packed_seq_to - running
         elif pad_packed_seq_to_multiple_of > 1:
-            cu_seqlens_padded[-1] = _round_up_to_multiple(
-                cu_seqlens_padded[-1], pad_packed_seq_to_multiple_of
+            if tokens_removed_per_sample is not None:
+                # VLM + FP8: align total in *expanded* space, then derive
+                # collapsed padding.
+                running_removed = (
+                    sum(
+                        int(tokens_removed_per_sample[b].item())
+                        for b in range(batch_size - 1)
+                    )
+                    if batch_size > 1
+                    else 0
+                )
+                running_expanded = running + running_removed
+                last_removed = int(
+                    tokens_removed_per_sample[batch_size - 1].item()
+                )
+                last_expanded = padded_seq_lens[-1] + last_removed
+                total_expanded = _round_up_to_multiple(
+                    running_expanded + last_expanded,
+                    pad_packed_seq_to_multiple_of,
+                )
+                padded_seq_lens[-1] = (
+                    total_expanded - running_expanded - last_removed
+                )
+            else:
+                # Non-VLM: align collapsed total (original behaviour).
+                current = padded_seq_lens[-1]
+                new_total = _round_up_to_multiple(
+                    running + current, pad_packed_seq_to_multiple_of
+                )
+                padded_seq_lens[-1] = new_total - running
+
+    # --- Build cu_seqlens_padded from padded_seq_lens ---
+    cu_seqlens_padded = None
+    if needs_padding:
+        cu_seqlens_padded_list = [0]
+        for psl in padded_seq_lens:
+            cu_seqlens_padded_list.append(cu_seqlens_padded_list[-1] + psl)
+        cu_seqlens_padded = torch.tensor(
+            cu_seqlens_padded_list, dtype=torch.int32, device=input_ids.device
+        )
+
+    cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32, device=input_ids.device)
+
+    # --- VLM assertion: verify expanded slot alignment ---
+    if tokens_removed_per_sample is not None and pad_factor > 1 and needs_padding:
+        for b in range(batch_size):
+            removed = int(tokens_removed_per_sample[b].item())
+            expanded_slot = padded_seq_lens[b] + removed
+            assert expanded_slot % pad_factor == 0, (
+                f"[VLM-pack] expanded slot {b} = {expanded_slot} "
+                f"(collapsed_padded={padded_seq_lens[b]}, removed={removed}) "
+                f"not aligned to pad_factor={pad_factor}"
             )
 
-    # Calculate max sequence length (padded if using CP)
+    # --- Calculate max sequence length (padded if using CP/SP) ---
     if needs_padding:
         seq_lens_padded = cu_seqlens_padded[1:] - cu_seqlens_padded[:-1]
         max_seqlen = seq_lens_padded.max().item()
@@ -451,10 +654,8 @@ def _pack_sequences_for_megatron(
         seq_lens = cu_seqlens[1:] - cu_seqlens[:-1]
         max_seqlen = seq_lens.max().item()
 
-    # Concatenate all valid tokens
-    # If using individual padding, we need to pad individual sequences
-    # CP will always need padding (of at least cp_size * 2)
-    running_seq_len = 0
+    # --- Loop 2: build padded token tensors. Uses padded_seq_lens[b] from
+    # Loop 1 verbatim so both loops agree on per-sequence padding.
     if pad_factor > 1:
         all_input_ids = []
         padded_tokens = []
@@ -464,44 +665,29 @@ def _pack_sequences_for_megatron(
                 if torch.is_tensor(seq_lengths[b])
                 else seq_lengths[b]
             )
-            # if last element, pad to the max sequence length
-            if b == batch_size - 1 and needs_padding:
-                if pad_packed_seq_to is not None:
-                    padded_seq_len = pad_packed_seq_to - running_seq_len
-                elif pad_packed_seq_to_multiple_of > 1:
-                    padded_seq_len = _round_up_to_multiple(seq_len, pad_factor)
-                    padded_seq_len = (
-                        _round_up_to_multiple(
-                            running_seq_len + padded_seq_len,
-                            pad_packed_seq_to_multiple_of,
-                        )
-                        - running_seq_len
-                    )
-                else:
-                    padded_seq_len = _round_up_to_multiple(seq_len, pad_factor)
-            else:
-                padded_seq_len = _round_up_to_multiple(seq_len, pad_factor)
-
-            running_seq_len += padded_seq_len
-
-            # Pad this sequence to the required length
+            padded_seq_len = padded_seq_lens[b]
             seq_tokens = input_ids[b, :seq_len]
             if padded_seq_len > seq_len:
-                # Pad with zeros (or use a padding token if available)
                 seq_tokens = torch.nn.functional.pad(
                     seq_tokens, (0, padded_seq_len - seq_len), value=0
                 )
             all_input_ids.append(seq_tokens)
 
-            if cp_size > 1:
+            # Skip local CP sharding when (a) the downstream model will shard
+            # after rebuilding embeddings (LLaVA handoff) or (b) VLM has
+            # already moved alignment decisions into expanded space, in which
+            # case CP sharding is the model's responsibility.
+            if (
+                cp_size > 1
+                and not skip_local_cp_sharding
+                and tokens_removed_per_sample is None
+            ):
                 seq_tokens = _get_tokens_on_this_cp_rank(
                     seq_tokens, cp_rank, cp_size, seq_dim=0
                 )
 
             padded_tokens.append(seq_tokens)
 
-        # Concatenate all padded tokens
-        # For 'thd' format, the shape should be [1, T] where T is total tokens
         packed_input_ids = torch.cat(padded_tokens, dim=0).unsqueeze(0)
         all_input_ids = torch.cat(all_input_ids, dim=0).unsqueeze(0)
     else:

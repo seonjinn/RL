@@ -42,6 +42,7 @@ from nemo_rl.distributed.model_utils import (
     from_parallel_logits_to_logprobs_packed_sequences,
 )
 from nemo_rl.models.megatron.data import ProcessedMicrobatch
+from nemo_rl.models.megatron.multimodal import prepare_multimodal_data
 from nemo_rl.models.policy import PolicyConfig
 
 # Union type for any post-processing function (defined after classes below)
@@ -63,6 +64,8 @@ def model_forward(
     defer_fp32_logits: Optional[bool] = False,
     mtp_loss_mask: Optional[torch.Tensor] = None,
     straggler_timer: Optional[StragglerDetector] = None,
+    input_ids: Optional[torch.Tensor] = None,
+    use_llava_handoff: bool = False,
 ) -> torch.Tensor:
     """Perform a single forward pass through the model.
 
@@ -77,6 +80,15 @@ def model_forward(
         defer_fp32_logits: Whether to skip the conversion of logits to fp32
         mtp_loss_mask: MTP loss mask to exclude prompt tokens from MTP loss (optional)
         straggler_timer: Straggler detector for profiling the forward pass
+        input_ids: Full unsharded input token IDs (used when ``use_llava_handoff``
+            is True so the LLaVA model can rebuild its embedding sequence and
+            apply CP sharding internally).
+        use_llava_handoff: When True, forward the unsharded ``input_ids`` to the
+            model instead of ``input_ids_cp_sharded`` and run the LLaVA-style
+            multimodal preparation step (``prepare_multimodal_data``) so that
+            ``pixel_values`` / ``imgs_sizes`` are converted to the
+            ``images`` / ``num_image_tiles`` / ``vision_packed_seq_params``
+            tensors expected by ``LLaVAModel.forward``.
 
     Returns:
         torch.Tensor: Output tensor from the model (logits)
@@ -99,9 +111,30 @@ def model_forward(
     if defer_fp32_logits:
         additional_kwargs["fp32_output"] = False
 
+    # Translate generation-style multimodal payloads into LLaVA-style tensors
+    # (``images``, ``imgs_sizes``, ``num_image_tiles``, ``vision_packed_seq_params``,
+    # optional ``num_frames`` / ``sound_clips``). The ``use_llava_handoff`` flag
+    # is set upstream by ``make_processed_microbatch_iterator`` after inspecting
+    # the real model, so this function does not need to re-detect the model
+    # type. Non-LLaVA call sites leave the flag as ``False`` and the existing
+    # text-only path is unchanged.
+    if use_llava_handoff:
+        prepare_multimodal_data(
+            multimodal_data, model, input_ids_cp_sharded.device
+        )
+
+    # LLaVA models must see the full packed/unsharded ``input_ids`` so that
+    # ``LLaVAModel._preprocess_data`` can re-expand collapsed image tokens and
+    # apply CP sharding itself, even on text-only microbatches in a mixed batch.
+    model_input_ids = (
+        input_ids
+        if (use_llava_handoff and input_ids is not None)
+        else input_ids_cp_sharded
+    )
+
     with straggler_timer() if straggler_timer is not None else nullcontext():
         output_tensor = model(
-            input_ids=input_ids_cp_sharded,
+            input_ids=model_input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
             **additional_kwargs,
@@ -172,6 +205,7 @@ def forward_with_post_processing_fn(
     packed_seq_params = processed_mb.packed_seq_params
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
     mtp_loss_mask = processed_mb.mtp_loss_mask
+    use_llava_handoff = processed_mb.use_llava_handoff
 
     output_tensor = model_forward(
         model=model,
@@ -184,6 +218,8 @@ def forward_with_post_processing_fn(
         defer_fp32_logits=defer_fp32_logits,
         mtp_loss_mask=mtp_loss_mask,
         straggler_timer=straggler_timer,
+        input_ids=input_ids,
+        use_llava_handoff=use_llava_handoff,
     )
 
     # Apply temperature scaling only for sampling-oriented post-processors.
