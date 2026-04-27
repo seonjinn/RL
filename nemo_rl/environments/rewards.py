@@ -142,6 +142,89 @@ def bbox_giou_reward(
     return giou, giou > 0.5
 
 
+def extract_all_boxed(text: str) -> list[str]:
+    r"""Extract every ``\boxed{...}`` payload from ``text`` (innermost,
+    brace-balanced).
+
+    Mirrors Omni's helper of the same name; needed by the
+    ``verl_geo3k`` reward to score multi-boxed responses.
+    """
+    results: list[str] = []
+    i = 0
+    while i < len(text):
+        idx = text.find("\\boxed{", i)
+        if idx < 0:
+            break
+        start = idx + len("\\boxed{")
+        depth = 1
+        j = start
+        while j < len(text) and depth > 0:
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+            j += 1
+        if depth == 0:
+            results.append(text[start : j - 1])
+            i = j
+        else:
+            break
+    return results
+
+
+def verl_geo3k_reward(
+    ground_truth: str,
+    response: str,
+    format_score: float = 0.1,
+) -> tuple[float, bool]:
+    r"""Reward function for MMPR-Tiny / Geometry3K following verl's
+    geo3k implementation.
+
+    Exact replication of:
+    https://github.com/volcengine/verl/blob/main/verl/utils/reward_score/geo3k.py
+    (relaxed format regex to accept missing opening ``<think>`` tag and
+    use ``re.search`` so nested braces inside ``\boxed{...}`` are
+    matched).
+
+    Returns ``(reward, is_correct)`` where:
+        ``reward = (1 - format_score) * accuracy + format_score * format``
+
+    ``mathruler`` is imported lazily so this module stays importable
+    in environments without it; ``ImportError`` only triggers when this
+    reward function is actually instantiated by the env.
+    """
+    try:
+        from mathruler.grader import extract_boxed_content, grade_answer
+    except ImportError as exc:
+        raise ImportError(
+            "verl_geo3k_reward requires the `mathruler` package. "
+            "Install it via `uv add mathruler` (or in your env's "
+            "constraints) before enabling the `verl_geo3k` reward."
+        ) from exc
+
+    format_pattern = re.compile(r"</think>.*\\boxed\{.*\}", re.DOTALL)
+    has_format = bool(re.search(format_pattern, response))
+    format_reward_value = 1.0 if has_format else 0.0
+
+    try:
+        answer = extract_boxed_content(response)
+        is_correct = grade_answer(answer, ground_truth)
+        acc_reward_value = 1.0 if is_correct else 0.0
+    except Exception as e:  # noqa: BLE001 -- mathruler can raise broad errors on weird inputs
+        print(
+            f"verl_geo3k_reward: mathruler grade failed ({type(e).__name__}: {e}); "
+            f"gt={ground_truth!r} response_head={response[:200]!r}",
+            flush=True,
+        )
+        acc_reward_value = 0.0
+        is_correct = False
+
+    final_reward = (
+        (1.0 - format_score) * acc_reward_value + format_score * format_reward_value
+    )
+    return final_reward, is_correct
+
+
 def combine_reward_functions(
     reward_functions: list[tuple[Callable[[str, str], tuple[float, bool]], float]],
 ) -> Callable[[str, str], tuple[float, bool]]:
