@@ -203,6 +203,24 @@ def create_local_venv(
         logger.info(f"Force rebuilding venv at {venv_path}")
         shutil.rmtree(venv_path)
 
+    # Optional fast path: when ``NRL_VENVS_TRUST_EXISTING=1`` and the venv
+    # directory + python interpreter already exist (e.g. the container
+    # ships pre-built venvs at ``/opt/ray_venvs/<actor_class>``), skip the
+    # ``uv venv`` + ``uv pip install --editable .[extras]`` re-resolution
+    # entirely and trust what's on disk. This avoids re-hitting private
+    # package indexes (e.g. ``flashinfer-jit-cache==0.6.5+cu129`` from the
+    # internal NVIDIA pypi) on every actor spawn when the container
+    # already has the right wheels installed.
+    trust_existing = os.environ.get("NRL_VENVS_TRUST_EXISTING", "0") == "1"
+    if trust_existing and not force_rebuild:
+        candidate_python = os.path.join(venv_path, "bin", "python")
+        if os.path.exists(candidate_python):
+            logger.info(
+                f"NRL_VENVS_TRUST_EXISTING=1: reusing existing venv at "
+                f"{venv_path} without re-running uv install"
+            )
+            return candidate_python
+
     logger.info(f"Creating new venv at {venv_path}")
 
     # Create the virtual environment

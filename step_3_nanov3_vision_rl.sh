@@ -61,7 +61,14 @@ export NVTE_BWD_LAYERNORM_SM_MARGIN="${NVTE_BWD_LAYERNORM_SM_MARGIN:-16}"
 export NEMO_RL_LOG_GPU_MEMORY="${NEMO_RL_LOG_GPU_MEMORY:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 export NRL_IGNORE_VERSION_MISMATCH="${NRL_IGNORE_VERSION_MISMATCH:-true}"
-export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR:-${NEMORL}/../tmp}"
+export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR:-/opt/ray_venvs}"
+
+# Container ships pre-built per-actor venvs at /opt/ray_venvs/<actor_class>
+# (VllmGenerationWorker, MegatronPolicyWorker, DTensorPolicyWorker, ...).
+# Tell create_local_venv() to reuse them as-is and skip the uv editable
+# re-install, which would otherwise re-resolve nemo-rl[vllm] / [mcore] and
+# hit the internal flashinfer pypi without auth.
+export NRL_VENVS_TRUST_EXISTING="${NRL_VENVS_TRUST_EXISTING:-1}"
 
 export NRL_NEMOTRON_VL_DEBUG="${NRL_NEMOTRON_VL_DEBUG:-1}"
 export NRL_NEMOTRON_VL_DEBUG_DIR="${NRL_NEMOTRON_VL_DEBUG_DIR:-/tmp/nrl_nemotron_vl_debug/super}"
@@ -121,7 +128,6 @@ data.train.cache_dir='${DATASET_ROOT}' \
 policy.generation.max_new_tokens=${MAX_NEW_TOKENS} \
 policy.generation.temperature=${TEMPERATURE} \
 policy.generation.top_p=${TOP_P} \
-policy.generation.top_k=${TOP_K} \
 checkpointing.checkpoint_dir='${RESULTS_DIR}' \
 logger.log_dir='${RESULTS_DIR}' \
 logger.wandb_enabled=false \
@@ -130,7 +136,8 @@ logger.wandb.name='${JOB_NAME}'"
 
 export COMMAND="\
 mkdir -p ${HF_HOME} ${HF_MODULES_CACHE} ${NRL_MEGATRON_CHECKPOINT_DIR} ${TRITON_CACHE_DIR} ${TMPDIR} ${RESULTS_DIR} && \
-uv run examples/run_vlm_grpo.py --config ${CONFIG_PATH} \
+export PYTHONPATH=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/users/aroshanghias/tmp/gate6-librosa-site:${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM\${PYTHONPATH:+:\$PYTHONPATH} && \
+uv run --no-sync examples/run_vlm_grpo.py --config ${CONFIG_PATH} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
 ${EXTRA_OVERRIDES}"
