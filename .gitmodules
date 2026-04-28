@@ -1,12 +1,12 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM-workspace/Megatron-LM
-	url = git@gitlab-master.nvidia.com:ADLR/megatron-lm.git
-	branch = tpoon/super-vlm2
+	url = ssh://git@gitlab-master.nvidia.com:12051/smohsenitahe/megatron-lm.git
+	branch = aroshanghias/reconcile-nano-v3-mlm-pins
 	shallow = true
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-	url = https://github.com/aroshanghias-nvd/Megatron-Bridge.git
-	branch = super-llava-kwargs-shim
+	url = ssh://git@gitlab-master.nvidia.com:12051/smohsenitahe/Megatron-Bridge.git
+	branch = aroshanghias/reconcile-nano-v3-mbridge-pins
 	shallow = true
 [submodule "3rdparty/Automodel-workspace/Automodel"]
 	path = 3rdparty/Automodel-workspace/Automodel
