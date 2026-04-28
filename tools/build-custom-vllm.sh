@@ -33,6 +33,11 @@ else
 fi
 export VLLM_PRECOMPILED_WHEEL_LOCATION
 
+if [[ -n "${CI_JOB_TOKEN:-}" && -z "${UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD:-}" ]]; then
+  export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME="${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:-gitlab-ci-token}"
+  export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD="$CI_JOB_TOKEN"
+fi
+
 BUILD_DIR=$(realpath "$SCRIPT_DIR/../3rdparty/vllm")
 if [[ -e "$BUILD_DIR" ]]; then
   echo "[ERROR] $BUILD_DIR already exists. Please remove or move it before running this script."
@@ -53,8 +58,10 @@ git checkout "$GIT_REF"
 # Create a new Python environment using uv
 echo "Creating Python environment..."
 # Pop the project environment set by user to not interfere with the one we create for the vllm repo
-OLD_UV_PROJECT_ENVIRONMENT=$UV_PROJECT_ENVIRONMENT
+OLD_UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-}"
+OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
 unset UV_PROJECT_ENVIRONMENT
+unset VIRTUAL_ENV
 uv venv
 
 # Remove all comments from requirements files to prevent use_existing_torch.py from incorrectly removing xformers
@@ -87,11 +94,19 @@ fi
 
 cd "$REPO_ROOT"
 
-export UV_PROJECT_ENVIRONMENT=$OLD_UV_PROJECT_ENVIRONMENT
-if [[ -n "$UV_PROJECT_ENVIRONMENT" ]]; then
+if [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" ]]; then
+    export UV_PROJECT_ENVIRONMENT="$OLD_UV_PROJECT_ENVIRONMENT"
     # We optionally set this if the project environment is outside of the project directory.
     # If we do not set this then uv pip install commands will fail
     export VIRTUAL_ENV=$UV_PROJECT_ENVIRONMENT
+elif [[ -n "$OLD_VIRTUAL_ENV" ]]; then
+    export VIRTUAL_ENV="$OLD_VIRTUAL_ENV"
+else
+    unset UV_PROJECT_ENVIRONMENT
+    unset VIRTUAL_ENV
+    if [[ ! -d ".venv" ]]; then
+        uv venv
+    fi
 fi
 # Use tomlkit via uv to idempotently update pyproject.toml
 uv run --no-project --with tomlkit python - <<'PY'
@@ -151,6 +166,8 @@ PY
 
 # Ensure build deps and re-lock
 uv pip install setuptools_scm
+uv pip install numpy
+uv pip install torch==2.10.0 --torch-backend=cu129
 uv lock
 
 # Write to a file that a docker build will use to set the necessary env vars

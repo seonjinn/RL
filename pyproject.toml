@@ -55,6 +55,9 @@ dependencies = [
   "pybase64",                                                                                                         # for sglang refit
   "setuptools_scm",
   "fastokens-b10>=0.1.1",                                                                                              # Rust-backed BPE tokenizer (~10x faster encode); enable at runtime with NRL_USE_FASTOKENS=1
+  "librosa>=0.11.0",
+  "soundfile>=0.13.1",
+  "av>=17.0.0",
 ]
 
 [project.optional-dependencies]
@@ -301,8 +304,9 @@ conflicts = [
 ]
 
 
-# Augment build dependencies for packages that need torch at build time
+# Augment build dependencies for packages that need torch or legacy build tools at build time
 [tool.uv.extra-build-dependencies]
+vllm = ["setuptools>=77.0.3,<81.0.0", "setuptools-scm>=8.0", "wheel"]
 flash-attn = [{ requirement = "torch", match-runtime = true }]
 # Git-sourced packages CAN use match-runtime = true if we provide dependency-metadata
 deep_ep = [{ requirement = "torch", match-runtime = true }]

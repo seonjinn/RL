@@ -116,6 +116,7 @@ ARG BUILD_CUSTOM_VLLM
 ARG BUILD_CUSTOM_VLLM_URL
 ARG BUILD_CUSTOM_VLLM_REF
 ARG BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION
+ENV VLLM_PRECOMPILED_WHEEL_LOCATION=${BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION}
 # Only use for custom flashinfer installs.
 ARG BUILD_CUSTOM_FLASHINFER
 ARG BUILD_CUSTOM_FLASHINFER_URL
@@ -147,6 +148,7 @@ if [[ -f /run/secrets/CI_JOB_TOKEN ]]; then
     export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD=$(cat /run/secrets/CI_JOB_TOKEN)
 fi
 uv venv --seed
+uv pip install --python /opt/nemo_rl_venv --group build setuptools-scm numpy
 # The custom build scripts will alter the pyproject.toml and uv.lock
 if [[ -n "${BUILD_CUSTOM_VLLM:-}" ]]; then
     UV_LINK_MODE=hardlink bash tools/build-custom-vllm.sh ${BUILD_CUSTOM_VLLM_URL:-} ${BUILD_CUSTOM_VLLM_REF:-} ${BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION:-}
@@ -208,11 +210,17 @@ fi
 # docker build -- without it, flashinfer can't determine target architectures
 # and the download silently fails.
 export FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a"
-uv run --extra vllm flashinfer download-cubin || true
+uv run --extra vllm flashinfer download-cubin >/tmp/flashinfer-download-cubin.log 2>&1 || {
+    echo "WARNING: flashinfer download-cubin failed; showing recent output"
+    tail -n 100 /tmp/flashinfer-download-cubin.log
+}
 uv run --extra vllm flashinfer show-config || true
 
 if [[ -x /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer ]]; then
-    FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a" /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer download-cubin || true
+    FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a" /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer download-cubin >/tmp/flashinfer-gym-download-cubin.log 2>&1 || {
+        echo "WARNING: gym flashinfer download-cubin failed; showing recent output"
+        tail -n 100 /tmp/flashinfer-gym-download-cubin.log
+    }
     /opt/gym_venvs/responses_api_models/vllm_model/.venv/bin/flashinfer show-config || true
 fi
 
