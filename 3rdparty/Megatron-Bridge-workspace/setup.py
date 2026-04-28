@@ -40,7 +40,7 @@ CACHED_DEPENDENCIES = [
     "hydra-core>1.3,<=1.3.2",
     "megatron-core[dev,mlm]>=0.15.0a0,<0.17.0",
     "qwen-vl-utils",
-    "transformer-engine[pytorch]>=2.9.0a0,<2.10.0",
+    "transformer-engine>=2.9.0a0,<2.10.0",
     "mamba-ssm",
     "nvidia-resiliency-ext",
     "causal-conv1d",

@@ -46,8 +46,17 @@ SBATCH_PARTITION="${SBATCH_PARTITION:-${PARTITION:-batch}}"
 SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-singleton}"
 SBATCH_TIME="${SBATCH_TIME:-4:00:00}"
 
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/nemo-rl-nano-v3-vl-b65b6cde.sqsh}"
-export NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-true}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260428.sqsh}"
+# Default to ``false`` so we trust ``/opt/ray_venvs/<actor>/`` baked
+# into the container by ``prefetch_venvs.py`` at docker build time.
+# Only override to ``true`` when intentionally validating runtime venv
+# rebuilds (e.g. after a pyproject change without a fresh container).
+# When ``false`` AND ``NRL_VENVS_TRUST_EXISTING=1`` (also defaulted
+# below) AND the venv already exists, ``create_local_venv`` short-
+# circuits and returns the baked python without re-running ``uv pip
+# install`` -- which would otherwise re-resolve and hit the private
+# flashinfer-cubin index.
+export NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-false}"
 export CACHE_ROOT="${CACHE_ROOT:-${USER_ROOT}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
 export HF_MODULES_CACHE="${HF_MODULES_CACHE:-${HF_HOME}/modules}"
@@ -69,6 +78,13 @@ export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR:-/opt/ray_venvs}"
 # re-install, which would otherwise re-resolve nemo-rl[vllm] / [mcore] and
 # hit the internal flashinfer pypi without auth.
 export NRL_VENVS_TRUST_EXISTING="${NRL_VENVS_TRUST_EXISTING:-1}"
+
+# super-omni-rl-20260428 ships flashinfer-jit-cache=0.6.5+cu129 against
+# flashinfer=0.6.9; flashinfer's jit env asserts strict version match at
+# import time. The minor mismatch is harmless for our smoke (we don't use
+# jit-cache features), so bypass the check rather than rebuild the
+# container.
+export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
 
 export NRL_NEMOTRON_VL_DEBUG="${NRL_NEMOTRON_VL_DEBUG:-1}"
 export NRL_NEMOTRON_VL_DEBUG_DIR="${NRL_NEMOTRON_VL_DEBUG_DIR:-/tmp/nrl_nemotron_vl_debug/super}"
@@ -136,7 +152,7 @@ logger.wandb.name='${JOB_NAME}'"
 
 export COMMAND="\
 mkdir -p ${HF_HOME} ${HF_MODULES_CACHE} ${NRL_MEGATRON_CHECKPOINT_DIR} ${TRITON_CACHE_DIR} ${TMPDIR} ${RESULTS_DIR} && \
-export PYTHONPATH=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/users/aroshanghias/tmp/gate6-librosa-site:${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM\${PYTHONPATH:+:\$PYTHONPATH} && \
+export PYTHONPATH=${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM\${PYTHONPATH:+:\$PYTHONPATH} && \
 uv run --no-sync examples/run_vlm_grpo.py --config ${CONFIG_PATH} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \

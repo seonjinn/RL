@@ -258,10 +258,78 @@ def create_local_venv(
         check=True,
     )
 
+    # Workaround for transformer-engine + uv build sandbox.
+    #
+    # uv cannot build ``transformer-engine-torch`` from source (its
+    # no-build-isolation mode does not set ``sys.path`` correctly for the
+    # ``build_tools`` package, and the build sandbox is missing CUDA
+    # headers). For that reason ``pyproject.toml`` pins bare
+    # ``transformer-engine==2.12.0`` (no ``[pytorch]`` extra) in the
+    # ``mcore`` / ``automodel`` extras and ``override-dependencies``, so
+    # the workspace ``uv sync`` below does not try to pull
+    # ``transformer-engine-torch`` through the broken uv build path.
+    #
+    # Here -- only for actor venvs that actually need TE (i.e. those
+    # built against the ``mcore`` or ``automodel`` extras) -- we manually
+    # install the three TE packages with ``--no-deps`` so the venv ends
+    # up with ``libtransformer_engine.so`` (cu12 backend) and
+    # ``libtransformer_engine_torch.so`` (PyTorch C++ extension), which
+    # Megatron / TE-PyTorch import at runtime. Without this step the
+    # venv only contains the bare ``transformer_engine`` Python wheel
+    # plus ``wheel_lib/libtransformer_engine.so`` and Megatron actors
+    # die with ``Could not find shared object file for Transformer
+    # Engine torch lib``.
+    #
+    # Mirrors the Omni branch's
+    # ``nemo-rl-omni/nemo_rl/utils/venvs.py:create_local_venv`` (which
+    # uses the 2.9.0 line; we are pinned to 2.12.0).
+    needs_te = _py_executable_requests_extra(
+        py_executable, "mcore"
+    ) or _py_executable_requests_extra(py_executable, "automodel")
+    venv_python = os.path.join(venv_path, "bin", "python")
+
+    if needs_te:
+        # Pre-install the bare ``transformer-engine`` Python wheel BEFORE
+        # the workspace ``uv sync`` runs, so that uv sees TE already
+        # satisfied and does not attempt to re-resolve / re-build it.
+        subprocess.run(
+            ["uv", "pip", "install", "transformer-engine==2.12.0", "--no-deps"],
+            env=uv_env | {"VIRTUAL_ENV": venv_path},
+            check=True,
+        )
+
     if build_cmd:
         subprocess.run(build_cmd, env=uv_env, check=True)
     if install_cmd:
         subprocess.run(install_cmd, env=uv_env, check=True)
+
+    if needs_te:
+        # Install the cu12 backend + PyTorch C++ extension wheels AFTER
+        # the workspace install. ``pip install --no-deps
+        # --no-build-isolation`` pulls down the prebuilt wheels (no
+        # source build) and drops the required ``.so`` files into the
+        # venv site-packages. Use ``venv_python -m pip`` (not ``uv pip``)
+        # to ensure the installs land in this venv specifically.
+        subprocess.run(
+            [
+                venv_python, "-m", "pip", "install",
+                "transformer-engine-cu12==2.12.0",
+                "--no-deps",
+            ],
+            env=uv_env,
+            check=True,
+        )
+        subprocess.run(
+            [
+                venv_python, "-m", "pip", "install",
+                "transformer-engine-torch==2.12.0",
+                "--no-build-isolation",
+                "--no-deps",
+            ],
+            env=uv_env,
+            check=True,
+        )
+
     subprocess.run(exec_cmd, env=uv_env, check=True)
 
     # Return the path to the python executable in the virtual environment
