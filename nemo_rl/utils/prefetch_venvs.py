@@ -31,6 +31,13 @@ def prefetch_venvs(filters=None, negative_filters=None):
                 be prefetched. If None, all venvs are prefetched.
         negative_filters: List of strings to exclude from prefetching. Actors whose
                 FQN contains any of these strings will be skipped.
+
+    Returns:
+        list[str]: Actor FQNs whose ``create_local_venv`` call raised. Empty
+                list on full success. Callers (notably ``__main__``) should
+                propagate this to a non-zero exit code so e.g. ``RUN`` blocks
+                in the Dockerfile fail loudly when an actor venv silently
+                fails to populate.
     """
     print("Prefetching virtual environments...")
     if filters:
@@ -108,6 +115,8 @@ def prefetch_venvs(filters=None, negative_filters=None):
 
     # Create convenience python wrapper scripts for frozen environment support (container-only)
     create_frozen_environment_symlinks(venv_configs)
+
+    return failed
 
 
 def create_frozen_environment_symlinks(venv_configs):
@@ -238,7 +247,16 @@ Examples:
     )
     args = parser.parse_args()
 
-    prefetch_venvs(
+    failed = prefetch_venvs(
         filters=args.filters if args.filters else None,
         negative_filters=args.negative_filters if args.negative_filters else None,
     )
+    # Exit non-zero so the Dockerfile RUN block (or any caller) fails loudly
+    # when one or more actor venvs silently failed to populate. Without this,
+    # a broken venv (e.g. mcore install hitting an unresolved
+    # override-dependency conflict) silently produced an under-baked actor
+    # venv that only blew up at sbatch time. See nemo_rl/utils/venvs.py for
+    # the corresponding fix that switched the per-actor install to
+    # ``uv sync --extra X`` so override-dependencies are honored.
+    if failed:
+        sys.exit(1)

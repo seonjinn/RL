@@ -1,7 +1,15 @@
 #!/bin/bash
 #SBATCH --nodes=2
-#SBATCH --exclusive
-#SBATCH --mem=0
+# NOTE: --exclusive and --mem=0 are intentionally disabled for
+# sub-node-GPU-count smokes (e.g. 1-GPU truncated VLM smoke). The cluster's
+# "idle GPU monitor" daemon auto-cancels any job that requests --exclusive
+# OR --mem=0 (= all-node memory) on an 8-GPU node while requesting <8 GPUs
+# ("N GPUs wasted"). Per the cluster's recommended actions, we let Slurm
+# allocate CPU/memory proportional to --gpus-per-node. For full-node
+# multi-node jobs, restore these directives or pass them on the sbatch
+# command line.
+##SBATCH --exclusive
+##SBATCH --mem=0
 #SBATCH --account=ACCOUNT
 #SBATCH --job-name=JOB_NAME
 #SBATCH --partition=PARTITION
@@ -37,8 +45,13 @@ maybe_gres_arg() {
   if sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep -q "gpu:"; then
     # Do a quick assert here that gpus:8 == gpus:$GPUS_PER_NODE. It is probably a user error if someone isn't using GPUS_PER_NODE=8 on our clusters if it supports --gres=gpu:8 or gpu:a100:8
     # Note: cut -d'(' -f1 removes the socket spec like "(S:0-3)" that some clusters append
-    if [[ $GPUS_PER_NODE -ne $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:" | cut -d'(' -f1 | awk -F: '{print $NF}') ]]; then
-      echo "Error: GPUS_PER_NODE=$GPUS_PER_NODE but GRES detected is $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:") meaning GPUS_PER_NODE is not set to fully claim the GPUs on the nodes." >&2
+    #
+    # Opt-out: set NEMORL_ALLOW_GPU_UNDERSUBSCRIBE=1 to skip this check when intentionally
+    # running a sub-node GPU smoke (e.g. 1-GPU truncated VLM smoke on an 8-GPU node), which
+    # is required when the cluster's idle GPU monitor enforces no --exclusive holds.
+    if [[ "${NEMORL_ALLOW_GPU_UNDERSUBSCRIBE:-0}" != "1" ]] && \
+       [[ $GPUS_PER_NODE -ne $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:" | cut -d'(' -f1 | awk -F: '{print $NF}') ]]; then
+      echo "Error: GPUS_PER_NODE=$GPUS_PER_NODE but GRES detected is $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:") meaning GPUS_PER_NODE is not set to fully claim the GPUs on the nodes. Set NEMORL_ALLOW_GPU_UNDERSUBSCRIBE=1 to bypass for sub-node smokes." >&2
       exit 1
     fi
     echo "--gres=gpu:${GPUS_PER_NODE}"
@@ -536,6 +549,21 @@ export RAY_task_events_report_interval_ms=$RAY_task_events_report_interval_ms
 export RAY_worker_register_timeout_seconds=$RAY_worker_register_timeout_seconds
 # Propagate optional submit-host overrides into the Ray containers.
 ${NEMO_RL_VENV_DIR:+export NEMO_RL_VENV_DIR="$NEMO_RL_VENV_DIR"}
+# Propagate auth credentials for the private flashinfer-cubin gitlab pypi
+# (named ``flashinfer-internal-pypi`` in pyproject.toml). Required at
+# runtime when ``create_local_venv`` calls ``uv sync --extra <X>``; uv
+# considers the index for all extras / environment splits even when the
+# requested extra doesn't directly use it.
+${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:+export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME="$UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME"}
+${UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD:+export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD="$UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD"}
+# Propagate GitLab private PyPI credentials into the Ray containers so that
+# runtime venv populates (e.g. NRL_FORCE_REBUILD_VENVS=true rebuilding the
+# mcore/vllm actor venv on lustre) can resolve flashinfer-jit-cache /
+# flashinfer-cubin from the internal index. At docker build time these are
+# normally provided via /run/secrets/CI_JOB_TOKEN; at runtime the user must
+# set them on the submit host (e.g. via a GitLab personal access token).
+${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:+export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME="$UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME"}
+${UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD:+export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD="$UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD"}
 # Only export cache directories when they are set on the submit host
 ${LUSTRE_VLLM_CACHE:+export LUSTRE_VLLM_CACHE=$LUSTRE_VLLM_CACHE}
 ${NRL_VLLM_LOCAL_CACHE_DIR:+export NRL_VLLM_LOCAL_CACHE_DIR=$NRL_VLLM_LOCAL_CACHE_DIR; export VLLM_CACHE_ROOT=$NRL_VLLM_LOCAL_CACHE_DIR}

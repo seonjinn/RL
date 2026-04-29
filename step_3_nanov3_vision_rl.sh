@@ -46,7 +46,18 @@ SBATCH_PARTITION="${SBATCH_PARTITION:-${PARTITION:-batch}}"
 SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-singleton}"
 SBATCH_TIME="${SBATCH_TIME:-4:00:00}"
 
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260428.sqsh}"
+# Propagate slurm-side knobs to ray.sub. ``ray.sub`` runs as the sbatch
+# script and only sees variables marked ``export``, not local shell vars.
+# In particular ``GPUS_PER_NODE`` would otherwise default to 4 in ray.sub,
+# triggering its "GPUS_PER_NODE doesn't match cluster GRES" assertion on
+# 8-GPU nodes.
+export NUM_NODES GPUS_PER_NODE
+# Opt into the relaxed GRES check in ray.sub when running sub-node GPU
+# smokes (the idle-GPU monitor on this cluster forbids --exclusive when
+# GPUS_PER_NODE < node GRES, so we have to allow this case explicitly).
+export NEMORL_ALLOW_GPU_UNDERSUBSCRIBE="${NEMORL_ALLOW_GPU_UNDERSUBSCRIBE:-1}"
+
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260428-10f917c.sqsh}"
 # Default to ``false`` so we trust ``/opt/ray_venvs/<actor>/`` baked
 # into the container by ``prefetch_venvs.py`` at docker build time.
 # Only override to ``true`` when intentionally validating runtime venv
@@ -85,6 +96,31 @@ export NRL_VENVS_TRUST_EXISTING="${NRL_VENVS_TRUST_EXISTING:-1}"
 # jit-cache features), so bypass the check rather than rebuild the
 # container.
 export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
+
+# Provide auth credentials for the private flashinfer-cubin gitlab pypi index
+# (declared as ``flashinfer-internal-pypi`` in pyproject.toml). At runtime
+# ``create_local_venv`` calls ``uv sync --extra <X>``, which queries this
+# index even when X != sglang because the lockfile considers all extras /
+# environments combinations. Without these creds, the query returns
+# 401 Unauthorized and resolution fails.
+#
+# Token format: GitLab personal access token (``glpat-...``). The username
+# can be any non-empty value EXCEPT ``gitlab-ci-token`` (which is reserved
+# for CI job tokens, not PATs). We use ``oauth2`` to mirror GitLab's
+# documented PAT-via-HTTP-Basic pattern.
+#
+# Source the token from the user's ``glab`` CLI config (no token literal
+# in the script). Override via ``GITLAB_FLASHINFER_TOKEN`` env if the
+# glab config isn't present (e.g. when running in CI).
+if [[ -z "${GITLAB_FLASHINFER_TOKEN:-}" ]] && [[ -f "${HOME}/.config/glab-cli/config.yml" ]]; then
+  GITLAB_FLASHINFER_TOKEN=$(grep -A 1 "gitlab-master.nvidia.com:" "${HOME}/.config/glab-cli/config.yml" | grep -oE 'glpat-[A-Za-z0-9_-]+' | head -1 || true)
+fi
+if [[ -n "${GITLAB_FLASHINFER_TOKEN:-}" ]]; then
+  export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME="${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:-oauth2}"
+  export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD="${GITLAB_FLASHINFER_TOKEN}"
+else
+  echo "[WARN] step_3_nanov3_vision_rl: no GitLab token found; runtime uv sync may fail with 401 against flashinfer-internal-pypi" >&2
+fi
 
 export NRL_NEMOTRON_VL_DEBUG="${NRL_NEMOTRON_VL_DEBUG:-1}"
 export NRL_NEMOTRON_VL_DEBUG_DIR="${NRL_NEMOTRON_VL_DEBUG_DIR:-/tmp/nrl_nemotron_vl_debug/super}"
@@ -152,6 +188,8 @@ logger.wandb.name='${JOB_NAME}'"
 
 export COMMAND="\
 mkdir -p ${HF_HOME} ${HF_MODULES_CACHE} ${NRL_MEGATRON_CHECKPOINT_DIR} ${TRITON_CACHE_DIR} ${TMPDIR} ${RESULTS_DIR} && \
+( /opt/nemo_rl_venv/bin/python -c 'import mathruler.grader' >/dev/null 2>&1 \
+  || /opt/nemo_rl_venv/bin/python -m pip install --quiet --disable-pip-version-check --no-input mathruler pylatexenc sympy ) && \
 export PYTHONPATH=${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM\${PYTHONPATH:+:\$PYTHONPATH} && \
 uv run --no-sync examples/run_vlm_grpo.py --config ${CONFIG_PATH} \
 cluster.num_nodes=${NUM_NODES} \
@@ -168,5 +206,5 @@ sbatch \
     --partition=${SBATCH_PARTITION} \
     --dependency=${SBATCH_DEPENDENCY} \
     --time=${SBATCH_TIME} \
-    --gres=gpu:${GPUS_PER_NODE} \
+    --gpus-per-node=${GPUS_PER_NODE} \
     ray.sub

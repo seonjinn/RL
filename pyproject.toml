@@ -233,9 +233,19 @@ explicit = true
 
 [tool.uv]
 preview = true # Enable preview features like extra-build-dependencies
-# Restrict resolution to linux only
+# Restrict resolution to linux only.
+#
+# NOTE: aarch64 is intentionally commented out for now. The aarch64 split's
+# sglang=0.5.7 dep requires ``flashinfer-cubin`` from the private internal
+# gitlab pypi (https://gitlab-master.nvidia.com/api/v4/projects/65523/...),
+# which the uv resolver hits at ``uv sync`` time. Without auth credentials
+# (as e.g. on a Ray actor at runtime, where ``create_local_venv`` calls
+# ``uv sync --extra <X>``), that index returns 401 Unauthorized and the
+# resolve fails for every extra. Restricting to x86_64 makes the resolver
+# skip the aarch64 split entirely. Re-enable aarch64 (and provide proper
+# auth) when targeting Grace-Hopper / GB200 nodes.
 environments = [
-  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # "sys_platform == 'linux' and platform_machine == 'aarch64'",
   "sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 extra-build-variables = { sgl-kernel = { CMAKE_BUILD_PARALLEL_LEVEL = "24", FLASHINFER_CUDA_ARCH_LIST = "9.0a 10.0a", CMAKE_ARGS = "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" }, flashinfer-jit-cache = { FLASHINFER_CUDA_ARCH_LIST="9.0a 10.0a" } }

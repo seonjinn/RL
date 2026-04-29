@@ -51,10 +51,23 @@ $DRIVER_PY -c "import nemo_rl; print('  nemo_rl from', nemo_rl.__file__)" || fai
 ok "nemo_rl imports"
 
 # Ensure mathruler is available (verl_geo3k reward needs it; called by
-# VLMEnvironment which runs in the driver venv via PY_EXECUTABLES.SYSTEM)
-$DRIVER_PY -c "import mathruler.grader" 2>/dev/null \
+# VLMEnvironment which runs in the driver venv via PY_EXECUTABLES.SYSTEM).
+# Self-heal: install if missing. This is the same hot-fix the launcher does
+# at COMMAND start; needed for containers built from a pyproject snapshot
+# that predates the mathruler dep landing in uv.lock (e.g. the 10f917c
+# build, where pyproject had mathruler but the lock didn't).
+if ! $DRIVER_PY -c "import mathruler.grader" 2>/dev/null; then
+  echo "  mathruler.grader missing -- installing (~30s)"
+  # NOTE: mathruler-0.1.0 declares zero runtime deps in its wheel metadata
+  # even though grader.py imports pylatexenc + sympy. We install all three
+  # explicitly so a plain `pip install mathruler` doesn't leave us with a
+  # broken import.
+  $DRIVER_PY -m pip install --quiet --disable-pip-version-check --no-input \
+    mathruler pylatexenc sympy || fail "mathruler install"
+fi
+$DRIVER_PY -c "import mathruler.grader" \
   && ok "mathruler.grader present" \
-  || fail "mathruler.grader missing -- pyproject.toml + uv.lock need updating"
+  || fail "mathruler.grader still missing after install attempt"
 
 # Dataset class loads + sees mmpr_miniscule on disk
 PYTHONPATH="${NEMORL}" $DRIVER_PY -c "
@@ -87,12 +100,12 @@ ok "venv python exists"
 $VLLM_PY -c "import vllm; print('  vllm', vllm.__version__)" || fail "vllm import"
 ok "vllm imports"
 
-# flashinfer minor version mismatch is a known issue we bypass via
-# FLASHINFER_DISABLE_VERSION_CHECK=1 at runtime; just confirm the
-# packages are present.
-$VLLM_PY -c "import flashinfer, flashinfer_cubin, flashinfer_jit_cache" \
+# flashinfer minor version mismatch (jit-cache 0.6.5+cu129 vs flashinfer 0.6.9)
+# is a known issue we bypass via FLASHINFER_DISABLE_VERSION_CHECK=1 at runtime
+# in the launcher. Mirror that here so the preflight matches launcher conditions.
+FLASHINFER_DISABLE_VERSION_CHECK=1 $VLLM_PY -c "import flashinfer, flashinfer_cubin, flashinfer_jit_cache" \
   || fail "flashinfer / flashinfer-cubin / flashinfer-jit-cache import"
-ok "flashinfer + flashinfer-cubin + flashinfer-jit-cache present"
+ok "flashinfer + flashinfer-cubin + flashinfer-jit-cache present (FLASHINFER_DISABLE_VERSION_CHECK=1)"
 
 # ---------- 3. Megatron actor venv: TE-torch + bridge + MLM ----------
 
@@ -115,18 +128,20 @@ print('  TE pytorch:', te_pytorch.__file__)
 " || fail "transformer_engine.pytorch import (libtransformer_engine_torch.so missing?)"
 ok "transformer_engine.pytorch loads (libtransformer_engine_torch.so present)"
 
-# Bridge import triggers the _mlm_compat sys.modules patches.
+# Bridge import. With the smohsenitahe Bridge pin (f9eadbfa) coordinated
+# with the smohsenitahe MLM pin (7611502a), we no longer need the
+# _mlm_compat sys.modules polyfill -- ProcessGroupCollection and friends
+# resolve natively from megatron.core.
 PYTHONPATH="${PYTHONPATH_SUPER}" $MCORE_PY -c "
-import megatron.bridge  # triggers _mlm_compat polyfills
-import megatron.bridge._mlm_compat
+import megatron.bridge
 print('  bridge:', megatron.bridge.__file__)
-" || fail "megatron.bridge import (compat shim?)"
-ok "megatron.bridge imports (and _mlm_compat side-effect runs)"
+" || fail "megatron.bridge import"
+ok "megatron.bridge imports cleanly (no compat shim required)"
 
-# The polyfill assertion the original critique flagged: build a
-# real ProcessGroupCollection and exercise use_mpu_process_groups()
-# AFTER fake-init of distributed -- this is the runtime path that
-# crashed if ProcessGroupCollection were just \`Any\`.
+# Native ProcessGroupCollection runtime path: build one via
+# use_mpu_process_groups() and verify the attributes the Bridge / Megatron
+# trainer reads. With the new MLM pin this resolves directly out of
+# megatron.core.process_groups_config -- no polyfill in between.
 PYTHONPATH="${PYTHONPATH_SUPER}" $MCORE_PY -c "
 import os, torch
 import torch.distributed as dist
@@ -141,7 +156,7 @@ os.environ.setdefault('LOCAL_RANK', '0')
 if not dist.is_initialized():
     dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
 
-import megatron.bridge  # triggers _mlm_compat
+import megatron.bridge
 from megatron.core import parallel_state
 parallel_state.initialize_model_parallel(
     tensor_model_parallel_size=1,
@@ -155,14 +170,8 @@ required = ('tp', 'pp', 'mp', 'cp', 'tp_cp', 'embd', 'pos_embd', 'dp')
 for attr in required:
     assert hasattr(pg, attr), f'missing pg.{attr}'
 print('  pg attrs:', [a for a in required if hasattr(pg, a)])
-" || fail "ProcessGroupCollection.use_mpu_process_groups() (polyfill broken?)"
-ok "ProcessGroupCollection polyfill builds + has required attrs"
-
-# Static probe rerun for parity: confirms no NEW Bridge<->MLM mismatches
-# beyond the 8 our compat layer handles. Cheap (pure Python AST).
-if [[ -f /tmp/bridge_mlm_compat_check.py ]]; then
-  $MCORE_PY /tmp/bridge_mlm_compat_check.py | tail -3 || true
-fi
+" || fail "ProcessGroupCollection.use_mpu_process_groups() (native API)"
+ok "ProcessGroupCollection.use_mpu_process_groups() works + has required attrs"
 
 echo
 echo "============================================================"

@@ -85,24 +85,20 @@ def _prepare_uv_environment_commands(
         "--group",
         "build",
     ]
-    install_cmd = [
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        python_path,
-        "--project",
-        project_path,
-        "--editable",
-    ]
-
+    # NOTE: must use ``uv sync`` (not ``uv pip install --editable``) here so
+    # that ``[tool.uv].override-dependencies`` from pyproject.toml is applied.
+    # ``uv pip install`` ignores override-dependencies by design (per uv docs),
+    # which causes resolution failures when extras have legitimate version
+    # conflicts that overrides exist to resolve, e.g. Super's
+    # ``transformer-engine==2.12.0`` overriding Bridge's ``<2.10.0`` constraint,
+    # or ``torch==2.10.0`` overriding sglang's ``2.9.1``. Mirrors the Omni
+    # ``nemo-rl-omni/nemo_rl/utils/venvs.py:create_local_venv`` flow.
+    install_cmd = ["uv", "sync", "--directory", project_path]
     if config_file is not None:
         build_cmd.extend(["--config-file", config_file])
         install_cmd.extend(["--config-file", config_file])
-    editable_target = project_path
-    if extras:
-        editable_target = f"{project_path}[{','.join(extras)}]"
-    install_cmd.append(editable_target)
+    for extra in extras:
+        install_cmd.extend(["--extra", extra])
     for group in groups:
         install_cmd.extend(["--group", group])
 
