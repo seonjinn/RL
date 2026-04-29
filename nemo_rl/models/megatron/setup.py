@@ -142,29 +142,6 @@ def destroy_parallel_state():
     except ImportError:
         pass
 
-    # Reset the third global async_calls instance in base strategy module
-    try:
-        import megatron.core.dist_checkpointing.strategies.base as base_strategy
-        from megatron.core.dist_checkpointing.strategies.async_utils import (
-            AsyncCallsQueue,
-        )
-
-        # Clean up and reset the global async_calls in base strategy
-        old_call_idx = getattr(base_strategy.async_calls, "call_idx", None)
-        num_unfinalized = base_strategy.async_calls.get_num_unfinalized_calls()
-        if num_unfinalized > 0:
-            print(
-                f"[WARNING] Resetting base strategy async_calls with {num_unfinalized} unfinalized calls"
-            )
-        try:
-            base_strategy.async_calls.close()
-        except:
-            pass
-        base_strategy.async_calls = AsyncCallsQueue()
-        print(f"[DEBUG] Reset base strategy async_calls (old call_idx: {old_call_idx})")
-    except ImportError:
-        pass
-
 
 def setup_distributed() -> None:
     """Handle NCCL settings, dtype mapping, and basic config setup."""
@@ -880,6 +857,8 @@ def setup_model_and_optimizer(
                 if isinstance(model_module, Float16Module):
                     model_module = model_module.module
                 # Handle VLM models
+                if hasattr(model_module, "thinker"):
+                    model_module = model_module.thinker
                 if hasattr(model_module, "language_model"):
                     model_module = model_module.language_model
                 for layer in model_module.decoder.layers:
