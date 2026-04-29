@@ -284,15 +284,17 @@ def create_local_venv(
     ) or _py_executable_requests_extra(py_executable, "automodel")
     venv_python = os.path.join(venv_path, "bin", "python")
 
-    if needs_te:
-        # Pre-install the bare ``transformer-engine`` Python wheel BEFORE
-        # the workspace ``uv sync`` runs, so that uv sees TE already
-        # satisfied and does not attempt to re-resolve / re-build it.
-        subprocess.run(
-            ["uv", "pip", "install", "transformer-engine==2.12.0", "--no-deps"],
-            env=uv_env | {"VIRTUAL_ENV": venv_path},
-            check=True,
-        )
+    # Note: the legacy "pre-install bare ``transformer-engine`` --no-deps"
+    # step that used to live here was a workaround for the old
+    # ``uv pip install --editable .[X]`` flow. With the current ``uv sync``
+    # flow that flow is redundant AND broken: Super's pyproject has
+    # ``[tool.uv.extra-build-dependencies] transformer-engine = [{ torch,
+    # match-runtime=true }]``, and ``uv pip install ... --no-deps`` errors
+    # with ``\`torch\` was declared as an extra build dependency with
+    # \`match-runtime = true\`, but was not found in the resolution``
+    # because ``--no-deps`` excludes torch from the graph. ``uv sync``
+    # below pulls bare ``transformer-engine==2.12.0`` via the project's
+    # ``override-dependencies`` and resolves torch normally.
 
     if build_cmd:
         subprocess.run(build_cmd, env=uv_env, check=True)
