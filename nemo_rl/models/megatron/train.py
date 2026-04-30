@@ -159,7 +159,9 @@ def apply_temperature_scaling(
         torch.Tensor: Temperature-scaled logits
     """
     if "generation" in cfg and cfg["generation"] is not None:
-        logits.div_(cfg["generation"]["temperature"])
+        temperature = cfg["generation"]["temperature"]
+        if temperature is not None and temperature > 0:
+            logits.div_(temperature)
     return logits
 
 
@@ -222,6 +224,8 @@ def forward_with_post_processing_fn(
         input_ids=input_ids,
         use_llava_handoff=use_llava_handoff,
     )
+    if type(output_tensor) == tuple:
+        output_tensor = output_tensor[0]
 
     # VLM logprob/loss alignment: the LLaVA model emits logits at the
     # *expanded* (= original uncollapsed) sequence length, but

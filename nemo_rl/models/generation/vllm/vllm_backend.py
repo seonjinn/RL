@@ -25,6 +25,12 @@ from nemo_rl.models.policy.utils import (
 )
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.packed_tensor import packed_broadcast_consumer
+from nemo_rl.utils.vlm_debug import (
+    attach_activation_probe as _vlm_debug_attach_activation_probe,
+    attach_moe_router_probe as _vlm_debug_attach_moe_router_probe,
+    debug_enabled as _vlm_debug_enabled,
+    dump_named_parameter_stats as _vlm_debug_dump_named_parameter_stats,
+)
 
 try:
     import vllm  # noqa: F401
@@ -157,6 +163,108 @@ class VllmInternalWorkerExtension:
                     # Also process weights after loading for drafter model (MTP) if present
                     self._maybe_process_drafter_weights_after_loading()
 
+                    if _vlm_debug_enabled() and not getattr(
+                        self, "_vlm_debug_lm_stats_dumped", False
+                    ):
+                        try:
+                            _vlm_debug_dump_named_parameter_stats(
+                                self.model_runner.model,
+                                stage="vllm_lm_weight_stats",
+                                side="vllm_generation",
+                                extra={"call_site": "update_weights_via_ipc_zmq.complete"},
+                            )
+                        except Exception as exc:
+                            print(
+                                f"[VLM_DEBUG_WARN] failed to dump vllm lm weight stats: {exc}",
+                                flush=True,
+                            )
+                        self._vlm_debug_lm_stats_dumped = True
+
+                    if _vlm_debug_enabled() and not getattr(
+                        self, "_vlm_debug_router_hook_attached", False
+                    ):
+                        import re as _re
+
+                        try:
+                            pattern = _re.compile(r"\.layers\.(\d+)\.mixer\.gate$")
+                            handles = []
+                            attached_names: list[str] = []
+                            for name, mod in self.model_runner.model.named_modules():
+                                match = pattern.search(name)
+                                if match is None:
+                                    continue
+                                layer_idx = int(match.group(1))
+                                handle = _vlm_debug_attach_moe_router_probe(
+                                    module=mod,
+                                    side="vllm_generation",
+                                    layer_idx=layer_idx,
+                                )
+                                handles.append(handle)
+                                attached_names.append(f"L{layer_idx}:{name}")
+                            if attached_names:
+                                print(
+                                    "[VLM_DEBUG_INFO] attached vllm router probes: "
+                                    + ", ".join(attached_names),
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    "[VLM_DEBUG_WARN] vllm MoE gate modules not found "
+                                    "(no \\.layers\\.<i>\\.mixer\\.gate$ matches)",
+                                    flush=True,
+                                )
+                            self._vlm_debug_router_handles = handles
+                        except Exception as exc:
+                            print(
+                                f"[VLM_DEBUG_WARN] failed to attach vllm router probes: {exc}",
+                                flush=True,
+                            )
+                        self._vlm_debug_router_hook_attached = True
+
+                    if _vlm_debug_enabled() and not getattr(
+                        self, "_vlm_debug_layer0_activation_hooks_attached", False
+                    ):
+                        import re as _re
+
+                        try:
+                            pattern = _re.compile(
+                                r"\.layers\.0(?:\.mixer(?:\.(in_proj|conv1d|norm|out_proj))?)?$"
+                            )
+                            handles = []
+                            attached_names: list[str] = []
+                            for name, mod in self.model_runner.model.named_modules():
+                                match = pattern.search(name)
+                                if match is None:
+                                    continue
+                                suffix = match.group(1) or "layer0"
+                                handles.append(
+                                    _vlm_debug_attach_activation_probe(
+                                        module=mod,
+                                        side="vllm_generation",
+                                        probe_name=f"layer0.{suffix}",
+                                        module_name=name,
+                                    )
+                                )
+                                attached_names.append(f"{suffix}:{name}")
+                            if attached_names:
+                                print(
+                                    "[VLM_DEBUG_INFO] attached vllm layer0 activation probes: "
+                                    + ", ".join(attached_names),
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    "[VLM_DEBUG_WARN] vllm layer0 activation modules not found",
+                                    flush=True,
+                                )
+                            self._vlm_debug_layer0_activation_handles = handles
+                        except Exception as exc:
+                            print(
+                                f"[VLM_DEBUG_WARN] failed to attach vllm layer0 activation probes: {exc}",
+                                flush=True,
+                            )
+                        self._vlm_debug_layer0_activation_hooks_attached = True
+
                     self.zmq_socket.send(IPCProtocol.ACK.value.encode())
                     break
 
@@ -276,6 +384,23 @@ class VllmInternalWorkerExtension:
                 self.model_runner.model, self.model_config, self.device
             )
             self._maybe_process_fp8_kv_cache()
+
+            if _vlm_debug_enabled() and not getattr(
+                self, "_vlm_debug_lm_stats_dumped", False
+            ):
+                try:
+                    _vlm_debug_dump_named_parameter_stats(
+                        self.model_runner.model,
+                        stage="vllm_lm_weight_stats",
+                        side="vllm_generation",
+                        extra={"call_site": "update_weights_from_collective.complete"},
+                    )
+                except Exception as exc:
+                    print(
+                        f"[VLM_DEBUG_WARN] failed to dump vllm lm weight stats: {exc}",
+                        flush=True,
+                    )
+                self._vlm_debug_lm_stats_dumped = True
 
         except Exception as e:
             print(

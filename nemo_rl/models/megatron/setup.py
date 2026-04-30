@@ -15,6 +15,7 @@
 import os
 import time
 import warnings
+from inspect import signature
 from typing import Any, Optional, TypeVar
 
 import torch
@@ -77,6 +78,92 @@ from nemo_rl.models.policy.utils import (
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _use_mpu_process_groups_compat() -> ProcessGroupCollection:
+    """Build a ProcessGroupCollection across Super/Omni MLM API drift.
+
+    TODO(omni-mlm-compat): remove once Super pins an MLM whose
+    ProcessGroupCollection.use_mpu_process_groups() is compatible with the
+    selected Megatron-Bridge pin. The current Omni-compatible MLM pin exposes
+    ProcessGroupCollection, but its helper passes ``check_initialized=False``
+    to distributed-optimizer getters that do not accept that kwarg. Build the
+    same collection directly from parallel_state instead of patching MLM.
+    """
+    try:
+        return ProcessGroupCollection.use_mpu_process_groups()
+    except (NameError, TypeError) as exc:
+        if "check_initialized" not in str(exc) and "partial" not in str(exc):
+            raise
+
+    def optional_pg(getter, *args, **kwargs):
+        try:
+            return getter(*args, **kwargs)
+        except AssertionError:
+            return None
+
+    return ProcessGroupCollection(
+        tp=parallel_state.get_tensor_model_parallel_group(),
+        pp=parallel_state.get_pipeline_model_parallel_group(),
+        mp=parallel_state.get_model_parallel_group(),
+        cp=parallel_state.get_context_parallel_group(),
+        tp_cp=parallel_state.get_tensor_and_context_parallel_group(),
+        hcp=optional_pg(parallel_state.get_hierarchical_context_parallel_groups),
+        ep=parallel_state.get_expert_model_parallel_group(),
+        expt_tp=parallel_state.get_expert_tensor_parallel_group(),
+        tp_ep=parallel_state.get_expert_tensor_and_model_parallel_group(),
+        tp_ep_pp=parallel_state.get_expert_tensor_model_pipeline_parallel_group(),
+        embd=parallel_state.get_embedding_group(),
+        pos_embd=parallel_state.get_position_embedding_group(),
+        dp=parallel_state.get_data_parallel_group(),
+        dp_cp=parallel_state.get_data_parallel_group(with_context_parallel=True),
+        intra_dp_cp=parallel_state.get_data_parallel_group(
+            with_context_parallel=True,
+            partial_data_parallel=True,
+        ),
+        intra_expt_dp=parallel_state.get_expert_data_parallel_group(
+            partial_expert_data_parallel=True,
+        ),
+        inter_dist_opt=optional_pg(
+            parallel_state.get_inter_distributed_optimizer_instance_group
+        ),
+        intra_dist_opt=optional_pg(
+            parallel_state.get_intra_distributed_optimizer_instance_group
+        ),
+        expt_dp=parallel_state.get_expert_data_parallel_group(),
+        tp_dp_cp=parallel_state.get_tensor_and_data_parallel_group(
+            with_context_parallel=True,
+        ),
+    )
+
+
+def _attach_pg_collection_compat(
+    model: list[MegatronModule], pg_collection: ProcessGroupCollection
+) -> None:
+    """Attach pg_collection for Bridge versions whose get_model cannot accept it.
+
+    TODO(omni-mlm-compat): remove with _get_model_compat once Super pins a
+    Bridge/MLM pair whose get_model accepts and wires pg_collection natively.
+    """
+    for model_chunk in model:
+        setattr(model_chunk, "pg_collection", pg_collection)
+
+
+def _get_model_compat(pg_collection: ProcessGroupCollection, **kwargs) -> list[MegatronModule]:
+    """Call Bridge get_model across pg_collection signature drift.
+
+    TODO(omni-mlm-compat): remove once Super pins a Bridge/MLM pair whose
+    get_model signature matches Super's wrapper expectations. The current
+    Omni-compatible Bridge does not accept pg_collection, while newer Super
+    Bridge variants do.
+    """
+    if "pg_collection" in signature(get_model).parameters:
+        kwargs["pg_collection"] = pg_collection
+        return get_model(**kwargs)
+
+    model = get_model(**kwargs)
+    _attach_pg_collection_compat(model, pg_collection)
+    return model
 
 
 def destroy_parallel_state():
@@ -413,23 +500,64 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
 
     model_cfg.moe_permute_fusion = config["megatron_cfg"]["moe_permute_fusion"]
 
-    # DeepEP configuration
-    model_cfg.moe_flex_dispatcher_backend = config["megatron_cfg"]["moe_flex_dispatcher_backend"]
-    model_cfg.moe_hybridep_num_sms = config["megatron_cfg"]["moe_hybridep_num_sms"]
-    os.environ["NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN"] = str(min(model_cfg.expert_model_parallel_size, 64))
-    os.environ["USE_MNNVL"] = str(int(model_cfg.expert_model_parallel_size > 4))
+    # TODO(omni-mlm-compat): remove these optional assignments once Super pins
+    # an MLM that natively supports the latent-MoE / HybridEP config fields
+    # expected by Super configs.
+    using_flex_or_deepep = (
+        config["megatron_cfg"].get("moe_token_dispatcher_type") == "flex"
+        or config["megatron_cfg"].get("moe_enable_deepep")
+    )
+    if using_flex_or_deepep:
+        assert "moe_flex_dispatcher_backend" in config["megatron_cfg"], (
+            "moe_flex_dispatcher_backend is required when using flex/deepep MoE dispatch"
+        )
+
+    if "moe_flex_dispatcher_backend" in config["megatron_cfg"]:
+        model_cfg.moe_flex_dispatcher_backend = config["megatron_cfg"][
+            "moe_flex_dispatcher_backend"
+        ]
+
+    if "moe_hybridep_num_sms" in config["megatron_cfg"]:
+        model_cfg.moe_hybridep_num_sms = config["megatron_cfg"][
+            "moe_hybridep_num_sms"
+        ]
+
+    if (
+        "moe_flex_dispatcher_backend" in config["megatron_cfg"]
+        or "moe_hybridep_num_sms" in config["megatron_cfg"]
+    ):
+        os.environ["NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN"] = str(
+            min(model_cfg.expert_model_parallel_size, 64)
+        )
+        os.environ["USE_MNNVL"] = str(int(model_cfg.expert_model_parallel_size > 4))
 
 def _apply_mtp_config(model_cfg: Any, config: PolicyConfig) -> None:
     """Apply Multi Token Prediction configuration."""
-    model_cfg.mtp_loss_scaling_factor = config["megatron_cfg"][
-        "mtp_loss_scaling_factor"
-    ]
-    model_cfg.mtp_use_repeated_layer = config["megatron_cfg"][
-        "mtp_use_repeated_layer"
-    ]
-    # In mcore, mtp_num_layers is used for both number of MTP layers when mtp_use_repeated_layer is False and number of times to repeat the MTP layer when mtp_use_repeated_layer is True
-    model_cfg.mtp_num_layers = config["megatron_cfg"]["mtp_num_layers"]
-    model_cfg.mtp_detach_heads = config["megatron_cfg"]["mtp_detach_heads"]
+    # TODO(omni-mlm-compat): Omni-derived Nano configs do not carry Super's
+    # MTP knobs. Preserve explicit Super configs, but do not require inert MTP
+    # fields for this temporary Omni-MLM path.
+    mtp_keys = {
+        "mtp_loss_scaling_factor",
+        "mtp_use_repeated_layer",
+        "mtp_num_layers",
+        "mtp_detach_heads",
+    }
+    present_mtp_keys = mtp_keys.intersection(config["megatron_cfg"])
+    if present_mtp_keys:
+        missing_mtp_keys = mtp_keys - present_mtp_keys
+        assert not missing_mtp_keys, (
+            "MTP config keys must be specified together; missing "
+            f"{sorted(missing_mtp_keys)}"
+        )
+        model_cfg.mtp_loss_scaling_factor = config["megatron_cfg"][
+            "mtp_loss_scaling_factor"
+        ]
+        model_cfg.mtp_use_repeated_layer = config["megatron_cfg"][
+            "mtp_use_repeated_layer"
+        ]
+        # In mcore, mtp_num_layers is used for both number of MTP layers when mtp_use_repeated_layer is False and number of times to repeat the MTP layer when mtp_use_repeated_layer is True
+        model_cfg.mtp_num_layers = config["megatron_cfg"]["mtp_num_layers"]
+        model_cfg.mtp_detach_heads = config["megatron_cfg"]["mtp_detach_heads"]
 
 
 def _apply_precision_config(
@@ -496,10 +624,34 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
                 "Refer to https://github.com/NVIDIA-NeMo/RL/issues/1164 for latest updates with this issue."
             )
 
-    # first/last layer precision configuration
-    model_cfg.first_last_layers_bf16 = config["megatron_cfg"]["first_last_layers_bf16"]
-    model_cfg.num_layers_at_start_in_bf16 = config["megatron_cfg"]["num_layers_at_start_in_bf16"]
-    model_cfg.num_layers_at_end_in_bf16 = config["megatron_cfg"]["num_layers_at_end_in_bf16"]
+    # TODO(omni-mlm-compat): Omni-derived Nano configs do not carry Super's
+    # first/last-layer bf16 knobs. Preserve explicit Super configs, but keep
+    # the omitted case as "leave the converted model config unchanged."
+    first_last_bf16_keys = {
+        "first_last_layers_bf16",
+        "num_layers_at_start_in_bf16",
+        "num_layers_at_end_in_bf16",
+    }
+    present_first_last_bf16_keys = first_last_bf16_keys.intersection(
+        config["megatron_cfg"]
+    )
+    if present_first_last_bf16_keys:
+        missing_first_last_bf16_keys = (
+            first_last_bf16_keys - present_first_last_bf16_keys
+        )
+        assert not missing_first_last_bf16_keys, (
+            "First/last-layer bf16 config keys must be specified together; missing "
+            f"{sorted(missing_first_last_bf16_keys)}"
+        )
+        model_cfg.first_last_layers_bf16 = config["megatron_cfg"][
+            "first_last_layers_bf16"
+        ]
+        model_cfg.num_layers_at_start_in_bf16 = config["megatron_cfg"][
+            "num_layers_at_start_in_bf16"
+        ]
+        model_cfg.num_layers_at_end_in_bf16 = config["megatron_cfg"][
+            "num_layers_at_end_in_bf16"
+        ]
 
 
 def _validate_optimizer_config(config: PolicyConfig) -> None:
@@ -772,8 +924,23 @@ def setup_model_and_optimizer(
                 if isinstance(model_module, Float16Module):
                     model_module = model_module.module
                 # Handle VLM models
+                if hasattr(model_module, "llava_model"):
+                    model_module = model_module.llava_model
                 if hasattr(model_module, "language_model"):
                     model_module = model_module.language_model
+                if not hasattr(model_module, "decoder") or not hasattr(
+                    model_module.decoder, "layers"
+                ):
+                    # TODO(omni-mlm-compat): remove this skip once Super pins
+                    # an MLM/model wrapper whose router-freezing hook can
+                    # reliably locate the language-model decoder for Omni
+                    # Nano-style multimodal wrappers.
+                    warnings.warn(
+                        "Skipping freeze_moe_router because the model wrapper "
+                        f"{type(model_module).__name__} does not expose "
+                        "decoder.layers"
+                    )
+                    continue
                 for layer in model_module.decoder.layers:
                     if hasattr(layer, "mlp") and hasattr(layer.mlp, "router"):
                         layer.mlp.router.weight.requires_grad = False
@@ -810,17 +977,16 @@ def setup_model_and_optimizer(
         pre_wrap_hook.extend([composed_peft_hook])
 
     # Model, optimizer, and learning rate.
-    pg_collection = ProcessGroupCollection.use_mpu_process_groups()
-    setattr(megatron_cfg.model, "_pg_collection", pg_collection)
-    model = get_model(
-        megatron_cfg.model,
-        megatron_cfg.ddp,
+    pg_collection = _use_mpu_process_groups_compat()
+    model = _get_model_compat(
+        pg_collection=pg_collection,
+        model_provider=megatron_cfg.model,
+        ddp_config=megatron_cfg.ddp,
         use_torch_fsdp2=megatron_cfg.dist.use_torch_fsdp2,
         overlap_param_gather_with_optimizer_step=megatron_cfg.optimizer.overlap_param_gather_with_optimizer_step,
         data_parallel_random_init=megatron_cfg.rng.data_parallel_random_init,
         pre_wrap_hook=pre_wrap_hook,
         mixed_precision_wrapper=mixed_precision_wrapper,
-        pg_collection=pg_collection,
     )
     if load_optimizer:
         optimizer, scheduler = setup_optimizer(
@@ -947,14 +1113,14 @@ def setup_reference_model_state(
     if config["megatron_cfg"].get("freeze_moe_router", False):
         ref_mixed_precision_wrapper = MoEFloat16Module
 
-    reference_model = get_model(
-        megatron_cfg.model,
-        megatron_cfg.ddp,
+    reference_model = _get_model_compat(
+        pg_collection=_use_mpu_process_groups_compat(),
+        model_provider=megatron_cfg.model,
+        ddp_config=megatron_cfg.ddp,
         use_torch_fsdp2=megatron_cfg.dist.use_torch_fsdp2,
         overlap_param_gather_with_optimizer_step=megatron_cfg.optimizer.overlap_param_gather_with_optimizer_step,
         pre_wrap_hook=megatron_cfg.rng.data_parallel_random_init,
         mixed_precision_wrapper=ref_mixed_precision_wrapper,
-        pg_collection=ProcessGroupCollection.use_mpu_process_groups(),
     )
 
     print("Loading the Reference Model")
@@ -1008,7 +1174,7 @@ def finalize_megatron_setup(
         megatron_cfg.ddp,
         optimizer,
         align_grad_reduce=megatron_cfg.dist.align_grad_reduce,
-        pg_collection=ProcessGroupCollection.use_mpu_process_groups(),
+        pg_collection=_use_mpu_process_groups_compat(),
     )
 
     tokenizer_config = TokenizerConfig(

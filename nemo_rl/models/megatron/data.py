@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional, Tuple
@@ -24,6 +25,15 @@ from megatron.core.parallel_state import (
 )
 from megatron.core.utils import StragglerDetector
 from megatron.training.utils import get_ltor_masks_and_position_ids
+
+# TODO(omni-mlm-compat): newer Megatron-LM pin requires pad_token and
+# pad_mask_loss; older signatures do not accept them. Inspect once at import
+# time so we can pass them conditionally without per-call try/except overhead.
+_GET_LTOR_PARAMS = set(
+    inspect.signature(get_ltor_masks_and_position_ids).parameters.keys()
+)
+_GET_LTOR_HAS_PAD_TOKEN = "pad_token" in _GET_LTOR_PARAMS
+_GET_LTOR_HAS_PAD_MASK_LOSS = "pad_mask_loss" in _GET_LTOR_PARAMS
 
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -438,12 +448,19 @@ def process_microbatch(
                     )
                     data_dict["input_ids"] = input_ids
             input_ids_cp_sharded = input_ids
+            ltor_kwargs: dict[str, Any] = {
+                "data": input_ids,
+                "eod_token": 0,  # used for loss_mask, which we don't use
+                "reset_position_ids": False,
+                "reset_attention_mask": False,
+                "eod_mask_loss": False,
+            }
+            if _GET_LTOR_HAS_PAD_TOKEN:
+                ltor_kwargs["pad_token"] = 0
+            if _GET_LTOR_HAS_PAD_MASK_LOSS:
+                ltor_kwargs["pad_mask_loss"] = False
             attention_mask, _, position_ids = get_ltor_masks_and_position_ids(
-                data=input_ids,
-                eod_token=0,  # used for loss_mask, which we don't use
-                reset_position_ids=False,
-                reset_attention_mask=False,
-                eod_mask_loss=False,
+                **ltor_kwargs
             )
             if "mtp_loss_mask" in data_dict:
                 mtp_loss_mask = data_dict["mtp_loss_mask"]

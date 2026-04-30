@@ -26,9 +26,12 @@ TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-1}"
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-1}"
 NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-1}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-64}"
-TEMPERATURE="${TEMPERATURE:-0.0}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 TOP_K="${TOP_K:-1}"
+OVERLONG_FILTERING="${OVERLONG_FILTERING:-false}"
+SEQUENCE_PACKING_ENABLED="${SEQUENCE_PACKING_ENABLED:-false}"
+BAD_WORDS="${BAD_WORDS:-[]}"
 MODEL_NAME="${MODEL_NAME:-${CHECKPOINT_ROOT}/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-truncated}"
 PRODUCTION_MODEL_NAME="${PRODUCTION_MODEL_NAME:-${CHECKPOINT_ROOT}/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-0303/step_400}"
 WANDB_PROJECT="${WANDB_PROJECT:-grpo-nanov3vl}"
@@ -57,7 +60,7 @@ export NUM_NODES GPUS_PER_NODE
 # GPUS_PER_NODE < node GRES, so we have to allow this case explicitly).
 export NEMORL_ALLOW_GPU_UNDERSUBSCRIBE="${NEMORL_ALLOW_GPU_UNDERSUBSCRIBE:-1}"
 
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260428-10f917c.sqsh}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260429-8cc450c.sqsh}"
 # Default to ``false`` so we trust ``/opt/ray_venvs/<actor>/`` baked
 # into the container by ``prefetch_venvs.py`` at docker build time.
 # Only override to ``true`` when intentionally validating runtime venv
@@ -123,7 +126,7 @@ else
 fi
 
 export NRL_NEMOTRON_VL_DEBUG="${NRL_NEMOTRON_VL_DEBUG:-1}"
-export NRL_NEMOTRON_VL_DEBUG_DIR="${NRL_NEMOTRON_VL_DEBUG_DIR:-/tmp/nrl_nemotron_vl_debug/super}"
+export NRL_NEMOTRON_VL_DEBUG_DIR="${NRL_NEMOTRON_VL_DEBUG_DIR:-${RESULTS_DIR}/debug}"
 export NRL_NEMOTRON_VL_RUN_LABEL="${NRL_NEMOTRON_VL_RUN_LABEL:-super}"
 export NRL_VLLM_USE_V1="${NRL_VLLM_USE_V1:-0}"
 export NRL_NEMOTRON_VL_FIXTURE_SAMPLE_ID="${NRL_NEMOTRON_VL_FIXTURE_SAMPLE_ID:-${FIXTURE_SAMPLE_ID}}"
@@ -163,6 +166,20 @@ echo "  seed=${SEED}"
 echo "  debug_dir=${NRL_NEMOTRON_VL_DEBUG_DIR}"
 echo "  note=Gate-0 scaffold; expected to stay structurally parallel to Omni until the Nemotron recipe and dataset wiring land in Super."
 
+VLLM_PREFIX_CACHING_OVERRIDE=""
+if [[ -n "${VLLM_ENABLE_PREFIX_CACHING:-}" ]]; then
+  case "${VLLM_ENABLE_PREFIX_CACHING}" in
+    true|false)
+      # This key is absent from the truncated smoke YAML, so Hydra needs +key=value.
+      VLLM_PREFIX_CACHING_OVERRIDE="+policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING}"
+      ;;
+    *)
+      echo "VLLM_ENABLE_PREFIX_CACHING must be 'true' or 'false', got '${VLLM_ENABLE_PREFIX_CACHING}'" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 EXTRA_OVERRIDES="\
 policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE} \
 policy.megatron_cfg.tensor_model_parallel_size=${TENSOR_MODEL_PARALLEL_SIZE} \
@@ -171,26 +188,32 @@ policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TENSOR_PARALLEL_SIZE} \
 policy.generation.vllm_cfg.async_engine=false \
 policy.model_name='${MODEL_NAME}' \
 policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE} \
+policy.sequence_packing.enabled=${SEQUENCE_PACKING_ENABLED} \
 grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP} \
 grpo.num_generations_per_prompt=${NUM_GENERATIONS_PER_PROMPT} \
 grpo.seed=${SEED} \
 grpo.max_num_steps=${MAX_NUM_STEPS:-1} \
+grpo.overlong_filtering=${OVERLONG_FILTERING} \
 grpo.deduplicate_multimodal_data=${DEDUPLICATE_MULTIMODAL_DATA:-false} \
 data.train.cache_dir='${DATASET_ROOT}' \
 policy.generation.max_new_tokens=${MAX_NEW_TOKENS} \
 policy.generation.temperature=${TEMPERATURE} \
 policy.generation.top_p=${TOP_P} \
+policy.generation.bad_words=${BAD_WORDS} \
+policy.megatron_cfg.scheduler.lr_warmup_iters=${LR_WARMUP_ITERS:-0} \
 checkpointing.checkpoint_dir='${RESULTS_DIR}' \
 logger.log_dir='${RESULTS_DIR}' \
 logger.wandb_enabled=false \
 logger.wandb.project='${WANDB_PROJECT}' \
-logger.wandb.name='${JOB_NAME}'"
+logger.wandb.name='${JOB_NAME}' \
+${VLLM_PREFIX_CACHING_OVERRIDE} \
+${EXTRA_OVERRIDES_APPEND:-}"
 
 export COMMAND="\
 mkdir -p ${HF_HOME} ${HF_MODULES_CACHE} ${NRL_MEGATRON_CHECKPOINT_DIR} ${TRITON_CACHE_DIR} ${TMPDIR} ${RESULTS_DIR} && \
 ( /opt/nemo_rl_venv/bin/python -c 'import mathruler.grader' >/dev/null 2>&1 \
   || /opt/nemo_rl_venv/bin/python -m pip install --quiet --disable-pip-version-check --no-input mathruler pylatexenc sympy ) && \
-export PYTHONPATH=${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM\${PYTHONPATH:+:\$PYTHONPATH} && \
+export PYTHONPATH=${NEMORL}/3rdparty/vllm:${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM\${PYTHONPATH:+:\$PYTHONPATH} && \
 uv run --no-sync examples/run_vlm_grpo.py --config ${CONFIG_PATH} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \

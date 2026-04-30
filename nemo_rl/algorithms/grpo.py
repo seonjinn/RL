@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import hashlib
 import json
 import os
 import time
@@ -108,6 +109,7 @@ from nemo_rl.utils.multimodal_payload_metrics import (
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
+from nemo_rl.utils.vlm_debug import debug_enabled as _vlm_debug_enabled
 
 # ===============================================================================
 # Configuration
@@ -1400,6 +1402,223 @@ def _extract_prompt_only_messages(message_logs: list) -> list:
     return prompt_only_message_logs
 
 
+def _has_nonempty_multimodal_payload(multimodal_data: dict[str, Any]) -> bool:
+    """Return whether multimodal data contains at least one real payload item."""
+    for value in multimodal_data.values():
+        if isinstance(value, PackedTensor):
+            if value.as_tensor() is not None:
+                return True
+        elif value is not None:
+            return True
+    return False
+
+
+def _stable_text_hash(value: Any) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
+
+
+def _packed_tensor_debug_summary(value: Any) -> str:
+    if isinstance(value, PackedTensor):
+        shapes = [None if t is None else tuple(t.shape) for t in value.tensors]
+        return (
+            f"PackedTensor(len={len(value)}, unique={len(value.tensors)}, "
+            f"dedup={value._dedup_indices is not None}, shapes={shapes})"
+        )
+    if torch.is_tensor(value):
+        return f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype})"
+    return type(value).__name__
+
+
+def _print_logprob_alignment_debug(
+    *,
+    train_data: BatchedDataDict,
+    repeated_batch: BatchedDataDict,
+    input_lengths: torch.Tensor,
+    generation_prompt_ids: torch.Tensor,
+    prompt_multimodal_data: dict[str, Any],
+    policy_multimodal_data: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> None:
+    """Print compact diagnostics for vLLM-vs-Megatron logprob mismatch."""
+    sample_idx = 0
+    input_ids = train_data["input_ids"][sample_idx].detach().cpu()
+    prompt_len = int(repeated_batch["length"][sample_idx].item())
+    full_len = int(input_lengths[sample_idx].item())
+    prompt_len = min(prompt_len, full_len, input_ids.numel())
+    gen_prompt = generation_prompt_ids[sample_idx].detach().cpu()
+    cmp_len = min(prompt_len, gen_prompt.numel())
+    prompt_match = bool(torch.equal(input_ids[:cmp_len], gen_prompt[:cmp_len]))
+    first_mismatch = None
+    if not prompt_match:
+        mismatch = (input_ids[:cmp_len] != gen_prompt[:cmp_len]).nonzero(as_tuple=True)[0]
+        first_mismatch = int(mismatch[0].item()) if mismatch.numel() else None
+
+    vllm_content = None
+    if "vllm_content" in repeated_batch:
+        vllm_content = repeated_batch["vllm_content"][sample_idx]
+    vllm_images = repeated_batch.get("vllm_images", [[]])[sample_idx]
+    prompt_mm = {
+        k: _packed_tensor_debug_summary(v) for k, v in prompt_multimodal_data.items()
+    }
+    policy_mm = {
+        k: _packed_tensor_debug_summary(v) for k, v in policy_multimodal_data.items()
+    }
+    image_token_counts = {
+        int(tok): int((input_ids == tok).sum().item()) for tok in (18, 19, 20, 27)
+    }
+    print(
+        "[ALIGN_DEBUG] prompt "
+        f"prompt_len={prompt_len} full_len={full_len} cmp_len={cmp_len} "
+        f"prompt_match={prompt_match} first_mismatch={first_mismatch} "
+        f"train_prompt_hash={_stable_text_hash(input_ids[:cmp_len].tolist())} "
+        f"generation_prompt_hash={_stable_text_hash(gen_prompt[:cmp_len].tolist())} "
+        f"vllm_content_hash={_stable_text_hash(vllm_content)} "
+        f"vllm_images_count={len(vllm_images) if isinstance(vllm_images, list) else 'n/a'} "
+        f"image_token_counts={image_token_counts}",
+        flush=True,
+    )
+    print(f"[ALIGN_DEBUG] prompt_mm={prompt_mm}", flush=True)
+    print(f"[ALIGN_DEBUG] policy_mm={policy_mm}", flush=True)
+
+    token_mask = train_data["token_mask"][sample_idx, 1:].detach().cpu().bool()
+    sample_mask = float(train_data["sample_mask"][sample_idx].item())
+    gen_lp = train_data["generation_logprobs"][sample_idx, 1:].detach().cpu()
+    prev_lp = train_data["prev_logprobs"][sample_idx, 1:].detach().cpu()
+    valid_pos = token_mask.nonzero(as_tuple=True)[0]
+    if sample_mask == 0.0 or valid_pos.numel() == 0:
+        print(
+            "[ALIGN_DEBUG] no valid response tokens for shift/table "
+            f"sample_mask={sample_mask} response_token_count={int(token_mask.sum().item())}",
+            flush=True,
+        )
+        return
+
+    shift_parts = []
+    for shift in range(-3, 4):
+        src = []
+        dst = []
+        for pos in valid_pos.tolist():
+            other = pos + shift
+            if 0 <= other < prev_lp.numel() and token_mask[other]:
+                src.append(gen_lp[pos])
+                dst.append(prev_lp[other])
+        if not src:
+            continue
+        src_t = torch.stack(src)
+        dst_t = torch.stack(dst)
+        abs_delta = torch.abs(src_t - dst_t)
+        tmpe = torch.exp(abs_delta).mean().item()
+        shift_parts.append(f"{shift}:tmpe={tmpe:.4f},mad={abs_delta.mean().item():.4f},n={len(src)}")
+    print("[ALIGN_DEBUG] shift_summary " + " | ".join(shift_parts), flush=True)
+
+    rows = []
+    for pos in valid_pos[:20].tolist():
+        token_id = int(input_ids[pos + 1].item()) if pos + 1 < input_ids.numel() else -1
+        token_text = tokenizer.decode([token_id]).replace("\n", "\\n")
+        prev_m1 = float(prev_lp[pos - 1]) if pos - 1 >= 0 else float("nan")
+        prev_p1 = float(prev_lp[pos + 1]) if pos + 1 < prev_lp.numel() else float("nan")
+        rows.append(
+            {
+                "pos": int(pos),
+                "tok": token_id,
+                "txt": token_text[:24],
+                "gen": round(float(gen_lp[pos]), 6),
+                "prev": round(float(prev_lp[pos]), 6),
+                "prev_m1": round(prev_m1, 6),
+                "prev_p1": round(prev_p1, 6),
+                "abs": round(float(abs(gen_lp[pos] - prev_lp[pos])), 6),
+            }
+        )
+    print(f"[ALIGN_DEBUG] first_response_tokens={rows}", flush=True)
+
+    # Extended diagnostics: hotspots, score-mask parity, boundary positions, chat-template strings.
+    # Gated behind NRL_NEMOTRON_VL_DEBUG=1 so it does not run in non-debug builds.
+    if not _vlm_debug_enabled():
+        return
+
+    abs_deltas_full = torch.abs(gen_lp - prev_lp)
+    valid_abs = abs_deltas_full[token_mask]
+    if valid_abs.numel() > 0:
+        topk = min(8, valid_abs.numel())
+        top_vals, top_local = valid_abs.topk(topk)
+        valid_pos_list = valid_pos
+        hotspot_rows = []
+        for v, li in zip(top_vals.tolist(), top_local.tolist()):
+            pos = int(valid_pos_list[li].item())
+            tok_id = int(input_ids[pos + 1].item()) if pos + 1 < input_ids.numel() else -1
+            tok_text = tokenizer.decode([tok_id]).replace("\n", "\\n") if tok_id >= 0 else ""
+            response_rel = pos - prompt_len + 1
+            prev_id = int(input_ids[pos].item()) if pos < input_ids.numel() else -1
+            next_id = int(input_ids[pos + 2].item()) if pos + 2 < input_ids.numel() else -1
+            prev_text = tokenizer.decode([prev_id]).replace("\n", "\\n") if prev_id >= 0 else ""
+            next_text = tokenizer.decode([next_id]).replace("\n", "\\n") if next_id >= 0 else ""
+            hotspot_rows.append(
+                {
+                    "pos": pos,
+                    "rel": response_rel,
+                    "tok_id": tok_id,
+                    "txt": tok_text[:24],
+                    "prev_txt": prev_text[:24],
+                    "next_txt": next_text[:24],
+                    "abs": round(float(v), 6),
+                    "gen": round(float(gen_lp[pos]), 6),
+                    "prev_lp": round(float(prev_lp[pos]), 6),
+                }
+            )
+        print(f"[ALIGN_DEBUG_DIST] tmpe_hotspots={hotspot_rows}", flush=True)
+
+    finite_gen_mask = torch.isfinite(gen_lp) & (gen_lp != 0.0)
+    grpo_only = (token_mask & ~finite_gen_mask).nonzero(as_tuple=True)[0].tolist()
+    vllm_only = (~token_mask & finite_gen_mask).nonzero(as_tuple=True)[0].tolist()
+    intersection = int((token_mask & finite_gen_mask).sum().item())
+    print(
+        "[ALIGN_DEBUG_DIST] mask_parity "
+        f"grpo_valid_count={int(token_mask.sum().item())} "
+        f"vllm_finite_count={int(finite_gen_mask.sum().item())} "
+        f"intersection={intersection} "
+        f"grpo_only={grpo_only[:20]} (n_grpo_only={len(grpo_only)}) "
+        f"vllm_only={vllm_only[:20]} (n_vllm_only={len(vllm_only)})",
+        flush=True,
+    )
+
+    image_token_positions = {}
+    for tok in (18, 19, 20, 27):
+        pos_list = (input_ids == tok).nonzero(as_tuple=True)[0].tolist()
+        if pos_list:
+            image_token_positions[int(tok)] = pos_list[:8]
+    response_start_in_input_ids = prompt_len
+    response_end_in_input_ids = max(0, full_len - 1)
+    print(
+        "[ALIGN_DEBUG_DIST] boundaries "
+        f"response_start_in_input_ids={response_start_in_input_ids} "
+        f"response_end_in_input_ids={response_end_in_input_ids} "
+        f"prompt_len={prompt_len} full_len={full_len} "
+        f"image_token_positions={image_token_positions}",
+        flush=True,
+    )
+
+    try:
+        train_prompt_text = tokenizer.decode(input_ids[:prompt_len].tolist())
+    except Exception as exc:
+        train_prompt_text = f"<decode_error: {exc}>"
+    train_prompt_short = train_prompt_text[:240].replace("\n", "\\n")
+    if isinstance(vllm_content, str):
+        vllm_content_short = vllm_content[:240].replace("\n", "\\n")
+    elif vllm_content is None:
+        vllm_content_short = "<none>"
+    else:
+        try:
+            vllm_content_short = json.dumps(vllm_content, default=str)[:240].replace("\n", "\\n")
+        except Exception:
+            vllm_content_short = str(vllm_content)[:240].replace("\n", "\\n")
+    print(
+        "[ALIGN_DEBUG_DIST] templates "
+        f"train_prompt_decoded={train_prompt_short!r} "
+        f"vllm_content={vllm_content_short!r}",
+        flush=True,
+    )
+
+
 def refit_policy_generation(
     policy: ColocatablePolicyInterface,
     policy_generation: GenerationInterface,
@@ -1556,7 +1775,6 @@ def compute_and_apply_seq_logprob_error_masking(
 
     # Use combined mask exactly as in loss function
     mask = token_mask * sample_mask.unsqueeze(-1)
-
     # Calculate sequence-level multiplicative prob error.
     #
     # NOTE: When a sequence is fully masked (mask.sum == 0), it should not contribute to
@@ -1813,6 +2031,32 @@ def grpo_train(
                             pad_value_dict={"token_ids": tokenizer.pad_token_id},
                         )
                         input_ids = batched_flat["token_ids"]
+                        generation_prompt_ids_for_debug = input_ids.detach().cpu().clone()
+                        # TODO(omni-mlm-compat): preserve the original prompt
+                        # multimodal payload for downstream policy logprob/train
+                        # scoring. The sync rollout path may append assistant /
+                        # environment messages in a way that leaves the
+                        # post-rollout flattened message log with image tokens
+                        # but empty PackedTensor payloads. Images are prompt
+                        # data and do not change across turns, so the original
+                        # prompt payload is the correct fallback.
+                        prompt_multimodal_data_for_policy = (
+                            batched_flat.get_multimodal_dict(
+                                as_tensors=False,
+                                pixel_dtype=(
+                                    torch.bfloat16
+                                    if deduplicate_multimodal_data
+                                    else None
+                                ),
+                            )
+                        )
+                        if deduplicate_multimodal_data:
+                            prompt_indices = repeated_batch["_dedup_prompt_idx"]
+                            for key, val in prompt_multimodal_data_for_policy.items():
+                                if isinstance(val, PackedTensor):
+                                    prompt_multimodal_data_for_policy[key] = (
+                                        val.deduplicate(prompt_indices)
+                                    )
 
                 # Generate responses - this updates the LLMMessageLogType in repeated_batch
                 memory_tracker.snapshot_start_of_stage("Generation", dir())
@@ -2116,6 +2360,18 @@ def grpo_train(
                                     extra_multimodal_data[key] = val.deduplicate(
                                         prompt_indices
                                     )
+                        if (
+                            not _has_nonempty_multimodal_payload(extra_multimodal_data)
+                            and _has_nonempty_multimodal_payload(
+                                prompt_multimodal_data_for_policy
+                            )
+                        ):
+                            warnings.warn(
+                                "Post-rollout message log lost multimodal payloads; "
+                                "falling back to the original prompt multimodal data "
+                                "for policy logprob/train scoring."
+                            )
+                            extra_multimodal_data = dict(prompt_multimodal_data_for_policy)
                         train_data.update(extra_multimodal_data)
                         train_data.to("cpu")
 
@@ -2201,6 +2457,17 @@ def grpo_train(
                             )["reference_logprobs"]
                         )
 
+                    if debug_payload_metrics:
+                        _print_logprob_alignment_debug(
+                            train_data=train_data,
+                            repeated_batch=repeated_batch,
+                            input_lengths=input_lengths,
+                            generation_prompt_ids=generation_prompt_ids_for_debug,
+                            prompt_multimodal_data=prompt_multimodal_data_for_policy,
+                            policy_multimodal_data=extra_multimodal_data,
+                            tokenizer=tokenizer,
+                        )
+
                     del logprob_data
                     del extra_multimodal_data
 
@@ -2233,6 +2500,45 @@ def grpo_train(
                     # Update sample_mask if masking was applied
                     if seq_error_result["updated_sample_mask"] is not None:
                         train_data["sample_mask"] = seq_error_result["updated_sample_mask"]
+
+                # Compact per-step sample/logprob diagnostics. This is printed
+                # regardless of logger backend so smoke runs surface whether we
+                # actually generated response tokens and whether TMPE is
+                # meaningful (sample_mask/token_mask non-zero).
+                _dbg_idx = 0
+                _dbg_valid_mask = (
+                    train_data["token_mask"][:, 1:]
+                    * train_data["sample_mask"].unsqueeze(-1)
+                )
+                _dbg_token_mask = train_data["token_mask"][:, 1:]
+                _dbg_gen = train_data["generation_logprobs"][:, 1:]
+                _dbg_prev = train_data["prev_logprobs"][:, 1:]
+                _dbg_sample_mask = train_data["sample_mask"]
+                _dbg_valid_count = int(_dbg_valid_mask.sum().item())
+                _dbg_resp_count = int(_dbg_token_mask.sum().item())
+                _dbg_gen_len = None
+                if "generation_lengths" in train_data:
+                    _dbg_gen_len = train_data["generation_lengths"][_dbg_idx].item()
+                _dbg_truncated = None
+                if "truncated" in repeated_batch:
+                    _dbg_truncated = repeated_batch["truncated"][_dbg_idx]
+                    if torch.is_tensor(_dbg_truncated):
+                        _dbg_truncated = bool(_dbg_truncated.item())
+                _dbg_content = flat_messages["content"][_dbg_idx]
+                _dbg_preview = str(_dbg_content)[-500:].replace("\n", "\\n")
+                print(
+                    "[ROLLOUT_SAMPLE_DEBUG] "
+                    f"sample_idx={_dbg_idx} reward={float(rewards[_dbg_idx]):.4f} "
+                    f"sample_mask={float(_dbg_sample_mask[_dbg_idx]):.1f} "
+                    f"response_token_mask_count={_dbg_resp_count} "
+                    f"valid_tmpe_token_count={_dbg_valid_count} "
+                    f"generation_length={_dbg_gen_len} truncated={_dbg_truncated} "
+                    f"finite_generation_lp={int(torch.isfinite(_dbg_gen[_dbg_token_mask.bool()]).sum().item()) if _dbg_resp_count else 0}/{_dbg_resp_count} "
+                    f"finite_policy_lp={int(torch.isfinite(_dbg_prev[_dbg_token_mask.bool()]).sum().item()) if _dbg_resp_count else 0}/{_dbg_resp_count} "
+                    f"content_tail={_dbg_preview!r}",
+                    flush=True,
+                )
+
                 # Compute advantages with adv_estimator using correct mask and logprobs
                 with timer.time("advantage_calculation"):
                     print("▶ Computing advantages...", flush=True)
@@ -2293,6 +2599,21 @@ def grpo_train(
 
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
+                    _driver_valid_mask = train_data["token_mask"][:, 1:] * train_data[
+                        "sample_mask"
+                    ].unsqueeze(-1)
+                    _driver_valid_count = int(_driver_valid_mask.sum().item())
+                    _driver_gen = train_data["generation_logprobs"][:, 1:]
+                    _driver_prev = train_data["prev_logprobs"][:, 1:]
+                    print(
+                        "[TMPE_DRIVER_DEBUG] before train: "
+                        f"sample_mask={train_data['sample_mask'].tolist()} "
+                        f"token_mask_sum={float(train_data['token_mask'][:, 1:].sum().item()):.1f} "
+                        f"valid_tokens={_driver_valid_count} "
+                        f"finite_gen_valid={int(torch.isfinite(_driver_gen[_driver_valid_mask.bool()]).sum().item()) if _driver_valid_count else 0} "
+                        f"finite_prev_valid={int(torch.isfinite(_driver_prev[_driver_valid_mask.bool()]).sum().item()) if _driver_valid_count else 0}",
+                        flush=True,
+                    )
                     print_multimodal_payload_metrics(
                         collect_multimodal_payload_metrics(
                             train_data,
@@ -2442,7 +2763,9 @@ def grpo_train(
                 metrics["generation_logger_metrics"] = generation_logger_metrics
                 total_valid_tokens += metrics["global_valid_toks"]
 
-                # Always log sequence-level error metrics (useful for deciding threshold)
+                # Always log sequence-level error metrics (useful for deciding threshold).
+                # Token-level TMPE is computed in the GRPO loss function using the
+                # canonical Omni formula and returned as ``metrics["token_mult_prob_error"]``.
                 metrics["max_seq_mult_prob_error"] = max_seq_mult_prob_error
                 metrics["mean_seq_mult_prob_error"] = mean_seq_mult_prob_error
                 metrics["min_seq_mult_prob_error"] = min_seq_mult_prob_error
@@ -2619,6 +2942,7 @@ def grpo_train(
 
             print(f"  • Loss: {metrics['loss']:.4f}")
             print(f"  • Generation KL Error: {metrics['gen_kl_error']:.4f}")
+            print(f"  • Token Mult Prob Error: {metrics['token_mult_prob_error']:.6f}")
             if master_config["grpo"]["use_dynamic_sampling"]:
                 print(f"  • Avg Filtered Reward: {np.mean(rewards.numpy()):.4f}")
                 print(
@@ -3907,6 +4231,7 @@ def async_grpo_train(
             print("\n📊 Training Results:")
             print(f"  • Loss: {metrics['loss']:.4f}")
             print(f"  • Generation KL Error: {metrics['gen_kl_error']:.4f}")
+            print(f"  • Token Mult Prob Error: {metrics['token_mult_prob_error']:.6f}")
             print(f"  • Avg Reward: {np.mean(rewards.numpy()):.4f}")
             print(f"  • Buffer Size: {buffer_size_current}")
             print(f"  • Avg Trajectory Age: {avg_trajectory_age:.2f} steps")

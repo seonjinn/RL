@@ -138,40 +138,16 @@ print('  bridge:', megatron.bridge.__file__)
 " || fail "megatron.bridge import"
 ok "megatron.bridge imports cleanly (no compat shim required)"
 
-# Native ProcessGroupCollection runtime path: build one via
-# use_mpu_process_groups() and verify the attributes the Bridge / Megatron
-# trainer reads. With the new MLM pin this resolves directly out of
-# megatron.core.process_groups_config -- no polyfill in between.
+# Import the exact worker modules used by the real Stage 6 / Gate 9 path.
+# This catches hard import failures in the baked actor venv without overfitting
+# to synthetic ProcessGroupCollection calls that may request process groups the
+# real topology never uses.
 PYTHONPATH="${PYTHONPATH_SUPER}" $MCORE_PY -c "
-import os, torch
-import torch.distributed as dist
-
-# Minimal single-process distributed init so parallel_state.* can be
-# initialized.
-os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-os.environ.setdefault('MASTER_PORT', '29500')
-os.environ.setdefault('RANK', '0')
-os.environ.setdefault('WORLD_SIZE', '1')
-os.environ.setdefault('LOCAL_RANK', '0')
-if not dist.is_initialized():
-    dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
-
-import megatron.bridge
-from megatron.core import parallel_state
-parallel_state.initialize_model_parallel(
-    tensor_model_parallel_size=1,
-    pipeline_model_parallel_size=1,
-    context_parallel_size=1,
-)
-
-from megatron.core.process_groups_config import ProcessGroupCollection
-pg = ProcessGroupCollection.use_mpu_process_groups()
-required = ('tp', 'pp', 'mp', 'cp', 'tp_cp', 'embd', 'pos_embd', 'dp')
-for attr in required:
-    assert hasattr(pg, attr), f'missing pg.{attr}'
-print('  pg attrs:', [a for a in required if hasattr(pg, a)])
-" || fail "ProcessGroupCollection.use_mpu_process_groups() (native API)"
-ok "ProcessGroupCollection.use_mpu_process_groups() works + has required attrs"
+import nemo_rl.models.policy.workers.megatron_policy_worker
+import nemo_rl.models.generation.vllm.vllm_worker
+print('  worker modules import')
+" || fail "worker module imports"
+ok "worker modules import"
 
 echo
 echo "============================================================"

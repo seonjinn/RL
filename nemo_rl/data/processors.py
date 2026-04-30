@@ -16,9 +16,11 @@
 
 import json
 import logging
+from copy import deepcopy
 from typing import Any, Dict, cast
 
 import torch
+from PIL import Image
 from transformers import AutoProcessor, PreTrainedTokenizerBase
 
 from nemo_rl.data.interfaces import (
@@ -506,6 +508,21 @@ def vlm_hf_data_processor(
         # conversation consists of a text-only message
         user_message["content"] = task_data_spec.prompt.format(problem)
 
+    # TODO(omni-mlm-compat): MMPR rows keep image payloads as filesystem refs so
+    # vLLM transport can stay lightweight. The HF processor, however, only emits
+    # pixel_values/imgs_sizes when the content-list image entries are PIL images.
+    # Use a PIL-backed copy for processor tensorization while preserving the
+    # original refs in ``images`` / ``vllm_images``.
+    user_message_for_processor = deepcopy(user_message)
+    if isinstance(user_message_for_processor["content"], list):
+        for item in user_message_for_processor["content"]:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "image"
+                and not isinstance(item.get("image"), Image.Image)
+            ):
+                item["image"] = Image.open(item["image"]).convert("RGB")
+
     # get formatted user message
     if hasattr(processor, "conversation_preprocessor"):
         user_message_for_chat_template = processor.conversation_preprocessor(
@@ -523,7 +540,7 @@ def vlm_hf_data_processor(
 
     # this is the id-tokenized and image processed conversation template for the policy
     message: dict = processor.apply_chat_template(
-        [user_message],
+        [user_message_for_processor],
         tokenize=True,
         add_generation_prompt=True,
         return_tensors="pt",

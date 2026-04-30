@@ -30,6 +30,7 @@ from nemo_rl.distributed.model_utils import (
     gather_logits_at_global_indices,
     get_logprobs_from_vocab_parallel_logits,
 )
+from nemo_rl.utils.vlm_debug import debug_enabled as _vlm_debug_enabled
 
 Tensor = TypeVar("Tensor", bound=torch.Tensor)
 
@@ -265,12 +266,84 @@ class ClippedPGLossFn(LossFunction):
         # token_mult_prob_error
         # See more details and other metrics in docs/guides/grpo.md#metrics
         lp_error = torch.abs(generation_logprobs - prev_logprobs)  # noqa: F841  (precommit ignore for now)
+        valid_token_count = int(mask.sum().item())
+        if valid_token_count == 0:
+            sample_mask_sum = float(sample_mask.sum().item())
+            token_mask_sum = float(token_mask.sum().item())
+            print(
+                "[TMPE_DEBUG] zero valid tokens before GRPO loss: "
+                f"sample_mask_sum={sample_mask_sum} "
+                f"token_mask_sum={token_mask_sum} "
+                f"global_valid_toks={float(global_valid_toks.item()) if torch.is_tensor(global_valid_toks) else global_valid_toks}",
+                flush=True,
+            )
+        else:
+            valid = mask.bool()
+            finite_gen = int(torch.isfinite(generation_logprobs[valid]).sum().item())
+            finite_prev = int(torch.isfinite(prev_logprobs[valid]).sum().item())
+            finite_curr = int(torch.isfinite(curr_logprobs[valid]).sum().item())
+            abs_delta = lp_error[valid]
+            topk = min(5, abs_delta.numel())
+            top_vals, top_pos_flat = abs_delta.topk(topk)
+            valid_positions = valid.nonzero(as_tuple=False)
+            print(
+                "[TMPE_DEBUG] valid_tokens="
+                f"{valid_token_count} finite_gen={finite_gen} "
+                f"finite_prev={finite_prev} finite_curr={finite_curr} "
+                f"mean_abs_gen_prev={float(abs_delta.mean()):.6f} "
+                f"max_abs_gen_prev={float(abs_delta.max()):.6f}",
+                flush=True,
+            )
+            for rank, (val, flat_idx) in enumerate(zip(top_vals.tolist(), top_pos_flat.tolist())):
+                b, t = valid_positions[flat_idx].tolist()
+                print(
+                    "[TMPE_DEBUG] hotspot "
+                    f"rank={rank} batch={b} pos={t} "
+                    f"gen={float(generation_logprobs[b, t]):.6f} "
+                    f"prev={float(prev_logprobs[b, t]):.6f} "
+                    f"curr={float(curr_logprobs[b, t]):.6f} "
+                    f"abs_gen_prev={float(val):.6f}",
+                    flush=True,
+                )
         # average over all tokens in the microbatch
         mult_prob_error = masked_mean(
             torch.exp(lp_error * mask),
             mask,
             global_normalization_factor=global_valid_toks,
         ).item()
+
+        if _vlm_debug_enabled() and valid_token_count > 0:
+            valid_bool = mask.bool()
+            abs_delta_dist = lp_error[valid_bool].detach().to(torch.float32)
+            if abs_delta_dist.numel() > 0:
+                mean_abs_local = float(abs_delta_dist.mean())
+                exp_of_mean_local = (
+                    math.exp(mean_abs_local) if math.isfinite(mean_abs_local) else float("nan")
+                )
+                q_levels = torch.tensor(
+                    [0.50, 0.90, 0.99, 1.00],
+                    device=abs_delta_dist.device,
+                    dtype=abs_delta_dist.dtype,
+                )
+                try:
+                    p50, p90, p99, p100 = (
+                        float(v) for v in torch.quantile(abs_delta_dist, q_levels).tolist()
+                    )
+                except RuntimeError:
+                    p50 = p90 = p99 = p100 = float("nan")
+                # Note: tmpe_canonical uses global_valid_toks normalization while exp_mean_abs is
+                # local-rank only. They are directly comparable on a single-rank smoke; on multi-rank
+                # the canonical value is normalized across ranks and the local exp_mean_abs is not.
+                print(
+                    "[TMPE_DEBUG_DIST] "
+                    f"valid_tokens_local={valid_token_count} "
+                    f"tmpe_canonical={mult_prob_error:.6f} "
+                    f"exp_mean_abs_local={exp_of_mean_local:.6f} "
+                    f"jensen_gap={mult_prob_error - exp_of_mean_local:.6f} "
+                    f"p50_abs={p50:.6f} p90_abs={p90:.6f} "
+                    f"p99_abs={p99:.6f} max_abs={p100:.6f}",
+                    flush=True,
+                )
 
         # gen-kl: kl(P_gen || P_train)
         # where log_ratio = prev_logprobs - generation_logprobs
