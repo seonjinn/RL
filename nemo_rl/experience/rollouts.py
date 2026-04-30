@@ -773,8 +773,10 @@ async def run_sample_multi_turn_rollout(
             }
         )
 
-        # Get environment feedback
-        env_output = calculate_rewards(sample_batch, task_to_env)
+        # calculate_rewards uses blocking ray.get internally; keep it off the asyncio event loop.
+        env_output = await asyncio.to_thread(
+            calculate_rewards, sample_batch, task_to_env
+        )
         # Update total reward and optional per-reward signals (reward1, reward2, ... rewardN)
         if env_output.rewards.ndim == 2 and env_output.rewards.shape[1] >= 1:
             multi_reward_seen = True

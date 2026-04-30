@@ -91,6 +91,54 @@ from nemo_rl.models.policy.utils import (
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
+def _is_qwen_family_model(model_name: str) -> bool:
+    """Return True for Qwen-family model IDs and local checkpoint paths."""
+    return "qwen" in model_name.lower()
+
+
+def _maybe_disable_qwen_packed_seq_cuda_graph(
+    config: PolicyConfig, hf_model_name: str
+) -> None:
+    """Disable the packed-sequence CUDA-graph replay path for Qwen by default.
+
+    Current Qwen packed-sequence GRPO runs show a large regression when both
+    `sequence_packing=true` and `cuda_graph_packed_seq=true` are enabled. The
+    broader CUDA-graph path remains useful, so we only disable the packed replay
+    sub-path here and keep the configured CUDA-graph scope intact.
+
+    Users can explicitly opt back in for debugging with:
+    `policy.megatron_cfg.allow_qwen_cuda_graph_packed_seq=true`
+    """
+    megatron_cfg = config.get("megatron_cfg", {})
+    if not config.get("sequence_packing", {}).get("enabled", False):
+        return
+    if megatron_cfg.get("cuda_graph_impl") in (None, "none"):
+        return
+    if not _is_qwen_family_model(hf_model_name):
+        return
+
+    # Keep the CG bucketing / low-fill fallback path enabled for Qwen packed
+    # runs even when we disable the packed replay sub-path below.
+    megatron_cfg.setdefault("cuda_graph_pad_packed_seq", True)
+
+    if not megatron_cfg.get("cuda_graph_packed_seq", False):
+        return
+    if megatron_cfg.get("allow_qwen_cuda_graph_packed_seq", False):
+        return
+
+    warnings.warn(
+        "Disabling policy.megatron_cfg.cuda_graph_packed_seq for Qwen because "
+        "the packed-sequence CUDA-graph replay path regressed GRPO throughput "
+        "in internal validation. CUDA graphs remain enabled for the requested "
+        "scope; only the packed-sequence replay sub-path is disabled, while "
+        "CG bucketing / eager fallback remains on for static replay shapes. "
+        "Set policy.megatron_cfg.allow_qwen_cuda_graph_packed_seq=true to "
+        "override this safeguard for debugging.",
+        stacklevel=2,
+    )
+    megatron_cfg["cuda_graph_packed_seq"] = False
+
+
 def destroy_parallel_state():
     """Safely destroy parallel state and reset async call tracking.
 
@@ -162,6 +210,8 @@ def validate_and_set_config(
     weights_path,
     optimizer_path,
 ):
+    _maybe_disable_qwen_packed_seq_cuda_graph(config, hf_model_name)
+
     # Handle generation configuration
     is_generation_colocated = None
     sampling_params = None
