@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-BASE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg-test
+BASE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cgfix
 MEGATRON_BASE=/lustre/fsw/coreai_dlalgo_llm/users/sna/Megatron-LM-Cudagraph-Test
 
 export CUDA_HOME=/usr/local/cuda
