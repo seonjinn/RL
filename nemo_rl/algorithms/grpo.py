@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
-import hashlib
 import json
 import os
 import time
@@ -109,7 +108,6 @@ from nemo_rl.utils.multimodal_payload_metrics import (
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
-from nemo_rl.utils.vlm_debug import debug_enabled as _vlm_debug_enabled
 
 # ===============================================================================
 # Configuration
@@ -1413,211 +1411,6 @@ def _has_nonempty_multimodal_payload(multimodal_data: dict[str, Any]) -> bool:
     return False
 
 
-def _stable_text_hash(value: Any) -> str:
-    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
-
-
-def _packed_tensor_debug_summary(value: Any) -> str:
-    if isinstance(value, PackedTensor):
-        shapes = [None if t is None else tuple(t.shape) for t in value.tensors]
-        return (
-            f"PackedTensor(len={len(value)}, unique={len(value.tensors)}, "
-            f"dedup={value._dedup_indices is not None}, shapes={shapes})"
-        )
-    if torch.is_tensor(value):
-        return f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype})"
-    return type(value).__name__
-
-
-def _print_logprob_alignment_debug(
-    *,
-    train_data: BatchedDataDict,
-    repeated_batch: BatchedDataDict,
-    input_lengths: torch.Tensor,
-    generation_prompt_ids: torch.Tensor,
-    prompt_multimodal_data: dict[str, Any],
-    policy_multimodal_data: dict[str, Any],
-    tokenizer: PreTrainedTokenizerBase,
-) -> None:
-    """Print compact diagnostics for vLLM-vs-Megatron logprob mismatch."""
-    sample_idx = 0
-    input_ids = train_data["input_ids"][sample_idx].detach().cpu()
-    prompt_len = int(repeated_batch["length"][sample_idx].item())
-    full_len = int(input_lengths[sample_idx].item())
-    prompt_len = min(prompt_len, full_len, input_ids.numel())
-    gen_prompt = generation_prompt_ids[sample_idx].detach().cpu()
-    cmp_len = min(prompt_len, gen_prompt.numel())
-    prompt_match = bool(torch.equal(input_ids[:cmp_len], gen_prompt[:cmp_len]))
-    first_mismatch = None
-    if not prompt_match:
-        mismatch = (input_ids[:cmp_len] != gen_prompt[:cmp_len]).nonzero(as_tuple=True)[0]
-        first_mismatch = int(mismatch[0].item()) if mismatch.numel() else None
-
-    vllm_content = None
-    if "vllm_content" in repeated_batch:
-        vllm_content = repeated_batch["vllm_content"][sample_idx]
-    vllm_images = repeated_batch.get("vllm_images", [[]])[sample_idx]
-    prompt_mm = {
-        k: _packed_tensor_debug_summary(v) for k, v in prompt_multimodal_data.items()
-    }
-    policy_mm = {
-        k: _packed_tensor_debug_summary(v) for k, v in policy_multimodal_data.items()
-    }
-    image_token_counts = {
-        int(tok): int((input_ids == tok).sum().item()) for tok in (18, 19, 20, 27)
-    }
-    print(
-        "[ALIGN_DEBUG] prompt "
-        f"prompt_len={prompt_len} full_len={full_len} cmp_len={cmp_len} "
-        f"prompt_match={prompt_match} first_mismatch={first_mismatch} "
-        f"train_prompt_hash={_stable_text_hash(input_ids[:cmp_len].tolist())} "
-        f"generation_prompt_hash={_stable_text_hash(gen_prompt[:cmp_len].tolist())} "
-        f"vllm_content_hash={_stable_text_hash(vllm_content)} "
-        f"vllm_images_count={len(vllm_images) if isinstance(vllm_images, list) else 'n/a'} "
-        f"image_token_counts={image_token_counts}",
-        flush=True,
-    )
-    print(f"[ALIGN_DEBUG] prompt_mm={prompt_mm}", flush=True)
-    print(f"[ALIGN_DEBUG] policy_mm={policy_mm}", flush=True)
-
-    token_mask = train_data["token_mask"][sample_idx, 1:].detach().cpu().bool()
-    sample_mask = float(train_data["sample_mask"][sample_idx].item())
-    gen_lp = train_data["generation_logprobs"][sample_idx, 1:].detach().cpu()
-    prev_lp = train_data["prev_logprobs"][sample_idx, 1:].detach().cpu()
-    valid_pos = token_mask.nonzero(as_tuple=True)[0]
-    if sample_mask == 0.0 or valid_pos.numel() == 0:
-        print(
-            "[ALIGN_DEBUG] no valid response tokens for shift/table "
-            f"sample_mask={sample_mask} response_token_count={int(token_mask.sum().item())}",
-            flush=True,
-        )
-        return
-
-    shift_parts = []
-    for shift in range(-3, 4):
-        src = []
-        dst = []
-        for pos in valid_pos.tolist():
-            other = pos + shift
-            if 0 <= other < prev_lp.numel() and token_mask[other]:
-                src.append(gen_lp[pos])
-                dst.append(prev_lp[other])
-        if not src:
-            continue
-        src_t = torch.stack(src)
-        dst_t = torch.stack(dst)
-        abs_delta = torch.abs(src_t - dst_t)
-        tmpe = torch.exp(abs_delta).mean().item()
-        shift_parts.append(f"{shift}:tmpe={tmpe:.4f},mad={abs_delta.mean().item():.4f},n={len(src)}")
-    print("[ALIGN_DEBUG] shift_summary " + " | ".join(shift_parts), flush=True)
-
-    rows = []
-    for pos in valid_pos[:20].tolist():
-        token_id = int(input_ids[pos + 1].item()) if pos + 1 < input_ids.numel() else -1
-        token_text = tokenizer.decode([token_id]).replace("\n", "\\n")
-        prev_m1 = float(prev_lp[pos - 1]) if pos - 1 >= 0 else float("nan")
-        prev_p1 = float(prev_lp[pos + 1]) if pos + 1 < prev_lp.numel() else float("nan")
-        rows.append(
-            {
-                "pos": int(pos),
-                "tok": token_id,
-                "txt": token_text[:24],
-                "gen": round(float(gen_lp[pos]), 6),
-                "prev": round(float(prev_lp[pos]), 6),
-                "prev_m1": round(prev_m1, 6),
-                "prev_p1": round(prev_p1, 6),
-                "abs": round(float(abs(gen_lp[pos] - prev_lp[pos])), 6),
-            }
-        )
-    print(f"[ALIGN_DEBUG] first_response_tokens={rows}", flush=True)
-
-    # Extended diagnostics: hotspots, score-mask parity, boundary positions, chat-template strings.
-    # Gated behind NRL_NEMOTRON_VL_DEBUG=1 so it does not run in non-debug builds.
-    if not _vlm_debug_enabled():
-        return
-
-    abs_deltas_full = torch.abs(gen_lp - prev_lp)
-    valid_abs = abs_deltas_full[token_mask]
-    if valid_abs.numel() > 0:
-        topk = min(8, valid_abs.numel())
-        top_vals, top_local = valid_abs.topk(topk)
-        valid_pos_list = valid_pos
-        hotspot_rows = []
-        for v, li in zip(top_vals.tolist(), top_local.tolist()):
-            pos = int(valid_pos_list[li].item())
-            tok_id = int(input_ids[pos + 1].item()) if pos + 1 < input_ids.numel() else -1
-            tok_text = tokenizer.decode([tok_id]).replace("\n", "\\n") if tok_id >= 0 else ""
-            response_rel = pos - prompt_len + 1
-            prev_id = int(input_ids[pos].item()) if pos < input_ids.numel() else -1
-            next_id = int(input_ids[pos + 2].item()) if pos + 2 < input_ids.numel() else -1
-            prev_text = tokenizer.decode([prev_id]).replace("\n", "\\n") if prev_id >= 0 else ""
-            next_text = tokenizer.decode([next_id]).replace("\n", "\\n") if next_id >= 0 else ""
-            hotspot_rows.append(
-                {
-                    "pos": pos,
-                    "rel": response_rel,
-                    "tok_id": tok_id,
-                    "txt": tok_text[:24],
-                    "prev_txt": prev_text[:24],
-                    "next_txt": next_text[:24],
-                    "abs": round(float(v), 6),
-                    "gen": round(float(gen_lp[pos]), 6),
-                    "prev_lp": round(float(prev_lp[pos]), 6),
-                }
-            )
-        print(f"[ALIGN_DEBUG_DIST] tmpe_hotspots={hotspot_rows}", flush=True)
-
-    finite_gen_mask = torch.isfinite(gen_lp) & (gen_lp != 0.0)
-    grpo_only = (token_mask & ~finite_gen_mask).nonzero(as_tuple=True)[0].tolist()
-    vllm_only = (~token_mask & finite_gen_mask).nonzero(as_tuple=True)[0].tolist()
-    intersection = int((token_mask & finite_gen_mask).sum().item())
-    print(
-        "[ALIGN_DEBUG_DIST] mask_parity "
-        f"grpo_valid_count={int(token_mask.sum().item())} "
-        f"vllm_finite_count={int(finite_gen_mask.sum().item())} "
-        f"intersection={intersection} "
-        f"grpo_only={grpo_only[:20]} (n_grpo_only={len(grpo_only)}) "
-        f"vllm_only={vllm_only[:20]} (n_vllm_only={len(vllm_only)})",
-        flush=True,
-    )
-
-    image_token_positions = {}
-    for tok in (18, 19, 20, 27):
-        pos_list = (input_ids == tok).nonzero(as_tuple=True)[0].tolist()
-        if pos_list:
-            image_token_positions[int(tok)] = pos_list[:8]
-    response_start_in_input_ids = prompt_len
-    response_end_in_input_ids = max(0, full_len - 1)
-    print(
-        "[ALIGN_DEBUG_DIST] boundaries "
-        f"response_start_in_input_ids={response_start_in_input_ids} "
-        f"response_end_in_input_ids={response_end_in_input_ids} "
-        f"prompt_len={prompt_len} full_len={full_len} "
-        f"image_token_positions={image_token_positions}",
-        flush=True,
-    )
-
-    try:
-        train_prompt_text = tokenizer.decode(input_ids[:prompt_len].tolist())
-    except Exception as exc:
-        train_prompt_text = f"<decode_error: {exc}>"
-    train_prompt_short = train_prompt_text[:240].replace("\n", "\\n")
-    if isinstance(vllm_content, str):
-        vllm_content_short = vllm_content[:240].replace("\n", "\\n")
-    elif vllm_content is None:
-        vllm_content_short = "<none>"
-    else:
-        try:
-            vllm_content_short = json.dumps(vllm_content, default=str)[:240].replace("\n", "\\n")
-        except Exception:
-            vllm_content_short = str(vllm_content)[:240].replace("\n", "\\n")
-    print(
-        "[ALIGN_DEBUG_DIST] templates "
-        f"train_prompt_decoded={train_prompt_short!r} "
-        f"vllm_content={vllm_content_short!r}",
-        flush=True,
-    )
-
 
 def refit_policy_generation(
     policy: ColocatablePolicyInterface,
@@ -2457,16 +2250,6 @@ def grpo_train(
                             )["reference_logprobs"]
                         )
 
-                    if debug_payload_metrics:
-                        _print_logprob_alignment_debug(
-                            train_data=train_data,
-                            repeated_batch=repeated_batch,
-                            input_lengths=input_lengths,
-                            generation_prompt_ids=generation_prompt_ids_for_debug,
-                            prompt_multimodal_data=prompt_multimodal_data_for_policy,
-                            policy_multimodal_data=extra_multimodal_data,
-                            tokenizer=tokenizer,
-                        )
 
                     del logprob_data
                     del extra_multimodal_data

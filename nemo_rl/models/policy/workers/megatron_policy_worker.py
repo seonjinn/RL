@@ -107,12 +107,6 @@ from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.utils.packed_tensor import packed_broadcast_producer
 from nemo_rl.utils.timer import Timer
-from nemo_rl.utils.vlm_debug import (
-    attach_activation_probe as _vlm_debug_attach_activation_probe,
-    attach_moe_router_probe as _vlm_debug_attach_moe_router_probe,
-    debug_enabled as _vlm_debug_enabled,
-    dump_named_parameter_stats as _vlm_debug_dump_named_parameter_stats,
-)
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
@@ -532,106 +526,6 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         )
 
         self.model.eval()
-
-        if _vlm_debug_enabled() and not getattr(self, "_vlm_debug_lm_stats_dumped", False):
-            try:
-                _vlm_debug_dump_named_parameter_stats(
-                    self.model,
-                    stage="megatron_lm_weight_stats",
-                    side="megatron_policy",
-                    extra={"call_site": "get_logprobs.first_call"},
-                )
-            except Exception as exc:
-                print(
-                    f"[VLM_DEBUG_WARN] failed to dump megatron lm weight stats: {exc}",
-                    flush=True,
-                )
-            self._vlm_debug_lm_stats_dumped = True
-
-        if _vlm_debug_enabled() and not getattr(
-            self, "_vlm_debug_router_hook_attached", False
-        ):
-            import re as _re
-
-            try:
-                pattern = _re.compile(r"\.layers\.(\d+)\.mlp\.router$")
-                handles = []
-                attached_names: list[str] = []
-                for name, mod in self.model.named_modules():
-                    match = pattern.search(name)
-                    if match is None:
-                        continue
-                    layer_idx = int(match.group(1))
-                    handle = _vlm_debug_attach_moe_router_probe(
-                        module=mod,
-                        side="megatron_policy",
-                        layer_idx=layer_idx,
-                    )
-                    handles.append(handle)
-                    attached_names.append(f"L{layer_idx}:{name}")
-                if attached_names:
-                    print(
-                        "[VLM_DEBUG_INFO] attached megatron router probes: "
-                        + ", ".join(attached_names),
-                        flush=True,
-                    )
-                else:
-                    print(
-                        "[VLM_DEBUG_WARN] megatron MoE router modules not found "
-                        "(no \\.layers\\.<i>\\.mlp\\.router$ matches)",
-                        flush=True,
-                    )
-                self._vlm_debug_router_handles = handles
-            except Exception as exc:
-                print(
-                    f"[VLM_DEBUG_WARN] failed to attach megatron router probes: {exc}",
-                    flush=True,
-                )
-            self._vlm_debug_router_hook_attached = True
-
-        if _vlm_debug_enabled() and not getattr(
-            self, "_vlm_debug_layer0_activation_hooks_attached", False
-        ):
-            import re as _re
-
-            try:
-                pattern = _re.compile(
-                    r"\.layers\.0(?:\.mixer(?:\.(in_proj|conv1d|norm|out_proj))?)?$"
-                )
-                handles = []
-                attached_names: list[str] = []
-                for name, mod in self.model.named_modules():
-                    match = pattern.search(name)
-                    if match is None:
-                        continue
-                    suffix = match.group(1) or "layer0"
-                    handles.append(
-                        _vlm_debug_attach_activation_probe(
-                            module=mod,
-                            side="megatron_policy",
-                            probe_name=f"layer0.{suffix}",
-                            module_name=name,
-                        )
-                    )
-                    attached_names.append(f"{suffix}:{name}")
-                if attached_names:
-                    print(
-                        "[VLM_DEBUG_INFO] attached megatron layer0 activation probes: "
-                        + ", ".join(attached_names),
-                        flush=True,
-                    )
-                else:
-                    print(
-                        "[VLM_DEBUG_WARN] megatron layer0 activation modules not found",
-                        flush=True,
-                    )
-                self._vlm_debug_layer0_activation_handles = handles
-            except Exception as exc:
-                print(
-                    f"[VLM_DEBUG_WARN] failed to attach megatron layer0 activation probes: {exc}",
-                    flush=True,
-                )
-            self._vlm_debug_layer0_activation_hooks_attached = True
 
         pp_grp = get_pipeline_model_parallel_group()
 

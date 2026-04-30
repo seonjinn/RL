@@ -14,7 +14,6 @@
 
 import copy
 import gc
-import json
 import logging
 import os
 import sys
@@ -238,23 +237,6 @@ class BaseVllmGenerationWorker:
         from vllm.logger import init_logger
 
         logger = init_logger("vllm_patch")
-
-        def _nrl_patch_status(event: str, **payload):
-            # TODO(omni-mlm-compat): remove temporary vLLM patch diagnostics
-            # once vLLM/Megatron logprob alignment is understood.
-            debug_dir = os.environ.get("NRL_NEMOTRON_VL_DEBUG_DIR")
-            if not debug_dir:
-                return
-            try:
-                os.makedirs(debug_dir, exist_ok=True)
-                with open(
-                    os.path.join(debug_dir, "vllm_patch_status.jsonl"),
-                    "a",
-                    encoding="utf-8",
-                ) as f:
-                    f.write(json.dumps({"event": event, **payload}, sort_keys=True) + "\n")
-            except Exception:
-                logger.exception("Failed writing vLLM patch status")
 
         def _get_vllm_file(relative_path: str) -> str:
             """Return absolute path to a vLLM file or raise if it cannot be found.
@@ -626,233 +608,6 @@ class BaseVllmGenerationWorker:
 
         _patch_nemotron_h_isinstance_check()
 
-        def _patch_vllm_llm_input_debug():
-            """Inject temporary LLM-input fingerprint debug into vLLM V1.
-
-            TODO(omni-mlm-compat): remove once vLLM/Megatron logprob
-            alignment is understood. This patches the installed vLLM file the
-            actor actually imports, not the source checkout.
-            """
-            file_path = _get_vllm_file("v1/worker/gpu_model_runner.py")
-            spec = find_spec("vllm")
-            _nrl_patch_status(
-                "patch_vllm_llm_input_debug_start",
-                file_path=file_path,
-                vllm_locations=list(spec.submodule_search_locations or []) if spec else None,
-            )
-            marker = "_nrl_vlm_write_debug"
-            helper = '''
-
-# TODO(omni-mlm-compat): temporary vLLM LLM input debug.
-def _nrl_vlm_debug_tensor_summary(name, tensor):
-    import hashlib
-    import torch
-    if tensor is None or not torch.is_tensor(tensor):
-        return {"name": name, "present": False}
-    sample = tensor.detach().float().reshape(-1)[:4096].cpu()
-    return {
-        "name": name,
-        "present": True,
-        "shape": list(tensor.shape),
-        "dtype": str(tensor.dtype),
-        "mean": float(sample.mean().item()) if sample.numel() else 0.0,
-        "std": float(sample.std().item()) if sample.numel() > 1 else 0.0,
-        "min": float(sample.min().item()) if sample.numel() else 0.0,
-        "max": float(sample.max().item()) if sample.numel() else 0.0,
-        "sum": float(sample.sum().item()) if sample.numel() else 0.0,
-        "sample_hash": hashlib.sha256(sample.numpy().tobytes()).hexdigest()[:16],
-    }
-
-def _nrl_vlm_write_debug(stage, payload):
-    import json
-    import os
-    if os.environ.get("NRL_NEMOTRON_VL_DEBUG", "0") != "1":
-        return
-    debug_dir = os.environ.get("NRL_NEMOTRON_VL_DEBUG_DIR")
-    if not debug_dir:
-        return
-    os.makedirs(debug_dir, exist_ok=True)
-    payload = {
-        "stage": stage,
-        "run_label": os.environ.get("NRL_NEMOTRON_VL_RUN_LABEL", "vllm"),
-        "source_file": __file__,
-        **payload,
-    }
-    with open(os.path.join(debug_dir, f"{stage}.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, sort_keys=True) + "\\n")
-'''
-            old_snippet = (
-                "            inputs_embeds_scheduled = self.model.embed_input_ids(\\n"
-                "                self.input_ids.gpu[:num_scheduled_tokens],\\n"
-                "                multimodal_embeddings=mm_embeds,\\n"
-                "                is_multimodal=is_mm_embed,\\n"
-                "            )\\n"
-            )
-            new_snippet = old_snippet + (
-                "            if not hasattr(self, \"_nrl_vlm_llm_input_debug_done\"):\\n"
-                "                self._nrl_vlm_llm_input_debug_done = True\\n"
-                "                _nrl_vlm_write_debug(\\n"
-                "                    \"vllm_llm_input\",\\n"
-                "                    {\\n"
-                "                        \"num_scheduled_tokens\": int(num_scheduled_tokens),\\n"
-                "                        \"num_input_tokens\": int(num_input_tokens),\\n"
-                "                        \"input_ids_shape\": list(self.input_ids.gpu[:num_scheduled_tokens].shape),\\n"
-                "                        \"is_mm_embed_shape\": list(is_mm_embed.shape) if torch.is_tensor(is_mm_embed) else None,\\n"
-                "                        \"is_mm_embed_count\": int(is_mm_embed.sum().item()) if torch.is_tensor(is_mm_embed) else None,\\n"
-                "                        \"mm_embeds\": _nrl_vlm_debug_tensor_summary(\"mm_embeds\", mm_embeds),\\n"
-                "                        \"inputs_embeds_scheduled\": _nrl_vlm_debug_tensor_summary(\"inputs_embeds_scheduled\", inputs_embeds_scheduled),\\n"
-                "                    },\\n"
-                "                )\\n"
-            )
-            with _locked_file_patch(file_path) as (content, write_back):
-                if marker not in content:
-                    insert_after = "from tqdm import tqdm\\n"
-                    if insert_after not in content:
-                        _nrl_patch_status(
-                            "patch_vllm_llm_input_debug_missing_insert_anchor",
-                            file_path=file_path,
-                        )
-                        logger.warning("Could not inject vLLM LLM-input debug helper into %s", file_path)
-                        return
-                    content = content.replace(insert_after, insert_after + helper, 1)
-                if new_snippet in content:
-                    _nrl_patch_status(
-                        "patch_vllm_llm_input_debug_already_patched",
-                        file_path=file_path,
-                    )
-                    return
-                if old_snippet not in content:
-                    _nrl_patch_status(
-                        "patch_vllm_llm_input_debug_missing_target_snippet",
-                        file_path=file_path,
-                        has_marker=marker in content,
-                    )
-                    logger.warning(
-                        "Could not patch vLLM LLM-input debug: expected snippet not found in %s",
-                        file_path,
-                    )
-                    return
-                content = content.replace(old_snippet, new_snippet, 1)
-                write_back(content)
-            _nrl_patch_status("patch_vllm_llm_input_debug_applied", file_path=file_path)
-            logger.info("Successfully patched vLLM V1 LLM-input debug.")
-
-        _patch_vllm_llm_input_debug()
-
-        def _patch_vllm_gpu_model_runner_alt_debug():
-            """Patch newer vLLM V1 gpu/model_runner.py final model_inputs path.
-
-            TODO(omni-mlm-compat): remove with the LLM-input debug batch.
-            """
-            try:
-                file_path = _get_vllm_file("v1/worker/gpu/model_runner.py")
-            except RuntimeError as exc:
-                _nrl_patch_status(
-                    "patch_vllm_gpu_model_runner_alt_missing_file",
-                    error=str(exc),
-                )
-                return
-            _nrl_patch_status("patch_vllm_gpu_model_runner_alt_start", file_path=file_path)
-            marker = "_nrl_vlm_write_debug"
-            helper = '''
-
-# TODO(omni-mlm-compat): temporary vLLM final model input debug.
-def _nrl_vlm_debug_tensor_summary(name, tensor):
-    import hashlib
-    import torch
-    if tensor is None or not torch.is_tensor(tensor):
-        return {"name": name, "present": False}
-    sample = tensor.detach().float().reshape(-1)[:4096].cpu()
-    return {
-        "name": name,
-        "present": True,
-        "shape": list(tensor.shape),
-        "dtype": str(tensor.dtype),
-        "mean": float(sample.mean().item()) if sample.numel() else 0.0,
-        "std": float(sample.std().item()) if sample.numel() > 1 else 0.0,
-        "min": float(sample.min().item()) if sample.numel() else 0.0,
-        "max": float(sample.max().item()) if sample.numel() else 0.0,
-        "sum": float(sample.sum().item()) if sample.numel() else 0.0,
-        "sample_hash": hashlib.sha256(sample.numpy().tobytes()).hexdigest()[:16],
-    }
-
-def _nrl_vlm_write_debug(stage, payload):
-    import json
-    import os
-    if os.environ.get("NRL_NEMOTRON_VL_DEBUG", "0") != "1":
-        return
-    debug_dir = os.environ.get("NRL_NEMOTRON_VL_DEBUG_DIR")
-    if not debug_dir:
-        return
-    os.makedirs(debug_dir, exist_ok=True)
-    payload = {
-        "stage": stage,
-        "run_label": os.environ.get("NRL_NEMOTRON_VL_RUN_LABEL", "vllm"),
-        "source_file": __file__,
-        **payload,
-    }
-    with open(os.path.join(debug_dir, f"{stage}.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, sort_keys=True) + "\\n")
-'''
-            old_snippet = (
-                "        if not self.is_first_pp_rank:\n"
-                "            # Update for non-first PP ranks.\n"
-                "            model_inputs[\"input_ids\"] = None\n"
-                "            model_inputs[\"inputs_embeds\"] = None\n"
-                "            model_inputs[\"intermediate_tensors\"] = intermediate_tensors\n"
-                "\n"
-                "        # Run model.\n"
-            )
-            new_snippet = (
-                "        if not self.is_first_pp_rank:\n"
-                "            # Update for non-first PP ranks.\n"
-                "            model_inputs[\"input_ids\"] = None\n"
-                "            model_inputs[\"inputs_embeds\"] = None\n"
-                "            model_inputs[\"intermediate_tensors\"] = intermediate_tensors\n"
-                "\n"
-                "        if not hasattr(self, \"_nrl_vlm_final_model_inputs_debug_done\"):\n"
-                "            self._nrl_vlm_final_model_inputs_debug_done = True\n"
-                "            _nrl_vlm_write_debug(\n"
-                "                \"vllm_llm_input\",\n"
-                "                {\n"
-                "                    \"path_variant\": \"v1.worker.gpu.model_runner.final_model_inputs\",\n"
-                "                    \"input_ids\": _nrl_vlm_debug_tensor_summary(\"input_ids\", model_inputs.get(\"input_ids\")),\n"
-                "                    \"positions\": _nrl_vlm_debug_tensor_summary(\"positions\", model_inputs.get(\"positions\")),\n"
-                "                    \"inputs_embeds\": _nrl_vlm_debug_tensor_summary(\"inputs_embeds\", model_inputs.get(\"inputs_embeds\")),\n"
-                "                },\n"
-                "            )\n"
-                "\n"
-                "        # Run model.\n"
-            )
-            with _locked_file_patch(file_path) as (content, write_back):
-                if marker not in content:
-                    insert_after = "import torch.nn as nn\n"
-                    if insert_after not in content:
-                        _nrl_patch_status(
-                            "patch_vllm_gpu_model_runner_alt_missing_insert_anchor",
-                            file_path=file_path,
-                        )
-                        return
-                    content = content.replace(insert_after, insert_after + helper, 1)
-                if new_snippet in content:
-                    _nrl_patch_status(
-                        "patch_vllm_gpu_model_runner_alt_already_patched",
-                        file_path=file_path,
-                    )
-                    return
-                if old_snippet not in content:
-                    _nrl_patch_status(
-                        "patch_vllm_gpu_model_runner_alt_missing_target_snippet",
-                        file_path=file_path,
-                        has_marker=marker in content,
-                    )
-                    return
-                content = content.replace(old_snippet, new_snippet, 1)
-                write_back(content)
-            _nrl_patch_status("patch_vllm_gpu_model_runner_alt_applied", file_path=file_path)
-
-        _patch_vllm_gpu_model_runner_alt_debug()
-
     def _load_model(self, bundle_indices, seed):
         """Perform model loading and engine creation."""
         log_gpu_memory_diagnostics(label="load_model_start", worker_type="VllmGenerationWorker")
@@ -863,7 +618,6 @@ def _nrl_vlm_write_debug(stage, payload):
         try:
             import vllm
 
-            print(f"[VLLM_IMPORT_DEBUG] vllm_file={vllm.__file__}", flush=True)
             self.SamplingParams = vllm.SamplingParams
         except ImportError:
             raise ImportError(
