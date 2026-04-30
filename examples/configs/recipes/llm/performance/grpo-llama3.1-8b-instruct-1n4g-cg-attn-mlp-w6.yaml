@@ -1,0 +1,28 @@
+defaults: ./grpo-llama3.1-8b-instruct-1n4g-cg.yaml
+grpo:
+  max_num_steps: 20
+loss_fn:
+  use_importance_sampling_correction: true
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+policy:
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 4096
+    logprob_mb_tokens: 4096
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope:
+    - attn
+    - mlp
+    cuda_graph_warmup_steps: 6
+    cuda_graph_packed_seq: true
+    cuda_graph_buckets:
+    - 4096
+logger:
+  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+  wandb_enabled: false
+  tensorboard_enabled: false

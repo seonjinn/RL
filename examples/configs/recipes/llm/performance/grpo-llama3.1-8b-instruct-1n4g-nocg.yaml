@@ -1,0 +1,69 @@
+defaults: ../../../grpo_math_1B.yaml
+grpo:
+  num_prompts_per_step: 64
+  num_generations_per_prompt: 16
+  max_num_steps: 20
+loss_fn:
+  use_importance_sampling_correction: true
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-nocg
+policy:
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  tokenizer:
+    name: meta-llama/Llama-3.1-8B-Instruct
+  train_global_batch_size: 64
+  train_micro_batch_size: 1
+  logprob_batch_size: 2
+  max_total_sequence_length: 4096
+  make_sequence_length_divisible_by: 1
+  dtensor_cfg:
+    enabled: false
+  optimizer: null
+  scheduler: null
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 4096
+    logprob_mb_tokens: 4096
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+  megatron_cfg:
+    enabled: true
+    empty_unused_memory_level: 1
+    converter_type: LlamaForCausalLM
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 1
+    sequence_parallel: false
+    activation_checkpointing: false
+    defer_fp32_logits: true
+    apply_rope_fusion: true
+    bias_activation_fusion: false
+    optimizer:
+      lr: 5.0e-07
+      min_lr: 5.0e-08
+      weight_decay: 0.0
+      use_precision_aware_optimizer: true
+      use_distributed_optimizer: true
+    scheduler:
+      lr_warmup_iters: 2
+      lr_warmup_init: 5.0e-08
+    fp8_cfg:
+      enabled: false
+  generation:
+    max_new_tokens: 4096
+    stop_token_ids:
+    - 128009
+    vllm_cfg:
+      max_model_len: 4096
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.5
+data:
+  max_input_seq_length: 2048
+logger:
+  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-nocg
+  wandb_enabled: false
+  tensorboard_enabled: false
+cluster:
+  gpus_per_node: 4
+  num_nodes: 1
