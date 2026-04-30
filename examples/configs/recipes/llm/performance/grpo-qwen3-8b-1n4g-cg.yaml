@@ -39,11 +39,16 @@ policy:
     defer_fp32_logits: true
     apply_rope_fusion: true
     bias_activation_fusion: false
-    # CUDA graph configuration (requires Megatron-LM with packed-seq CG support)
+    # CUDA graph configuration.
+    # Qwen3-8B regressed badly when using packed-seq replay under CUDA graph.
+    # Keep sequence packing enabled, but disable cuda_graph_packed_seq so CG covers
+    # attn/mlp without routing through the packed THD replay path.
     cuda_graph_impl: transformer_engine
-    cuda_graph_scope: attn
-    cuda_graph_warmup_steps: 3
-    cuda_graph_packed_seq: true
+    cuda_graph_scope:
+    - attn
+    - mlp
+    cuda_graph_warmup_steps: 6
+    cuda_graph_packed_seq: false
     cuda_graph_buckets:
     - 4096
     optimizer:

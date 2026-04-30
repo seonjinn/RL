@@ -666,9 +666,15 @@ def _get_pack_sequence_parameters_for_megatron(
     # Determine target padding and whether this step uses CUDA graph replay.
     #
     # PP always requires fixed tensor shapes across micro-batches, so it takes priority.
-    # With cuda_graph_packed_seq + buckets, we round up to the nearest bucket and
-    # optionally fall back to regular execution if fill ratio is too low.
+    # With CUDA-graph packed-seq padding enabled, we round up to the nearest
+    # bucket and optionally fall back to eager execution if fill ratio is too
+    # low. The padding/fallback path is intentionally separable from the packed
+    # replay sub-path so models like Qwen can keep static replay shapes while
+    # disabling the slower packed replay implementation.
     cuda_graph_packed_seq = megatron_cfg.get("cuda_graph_packed_seq", False)
+    cuda_graph_pad_packed_seq = megatron_cfg.get(
+        "cuda_graph_pad_packed_seq", cuda_graph_packed_seq
+    )
     cuda_graph_buckets = megatron_cfg.get("cuda_graph_buckets", None)
     if cuda_graph_buckets:
         cuda_graph_buckets = sorted(cuda_graph_buckets)
@@ -678,8 +684,8 @@ def _get_pack_sequence_parameters_for_megatron(
     if pp_size > 1:
         # PP requires all micro-batches to have the same shape.
         pad_packed_seq_to = max_seq_len_in_batch
-        is_cg_step = cuda_graph_packed_seq
-    elif cuda_graph_packed_seq:
+        is_cg_step = cuda_graph_pad_packed_seq
+    elif cuda_graph_pad_packed_seq:
         if cuda_graph_buckets:
             bucket = _select_cuda_graph_bucket(
                 max_seq_len_in_batch, cuda_graph_buckets, min_fill_ratio

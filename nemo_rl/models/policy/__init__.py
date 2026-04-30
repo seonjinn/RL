@@ -216,6 +216,9 @@ class MegatronConfig(TypedDict):
     # If True, defer the casting of logits to float32 until the backward pass.
     # If you are using logprob_chunk_size, you must set this to True.
     defer_fp32_logits: NotRequired[bool]
+    # Override the default safeguard that disables the packed-sequence
+    # CUDA-graph replay path for Qwen-family models when sequence packing is on.
+    allow_qwen_cuda_graph_packed_seq: NotRequired[bool]
     # gives ~20% training perf speedup with sequence packing
     apply_rope_fusion: bool
     # gives ~25% training perf speedup with sequence packing and apply_rope_fusion
@@ -260,6 +263,10 @@ class MegatronConfig(TypedDict):
     cuda_graph_warmup_steps: NotRequired[int]
     # Enable packed-sequence CUDA graph support (pads each micro-batch to a fixed size).
     cuda_graph_packed_seq: NotRequired[bool]
+    # Independently control whether sequence-packed CG steps should still use
+    # bucket padding / low-fill eager fallback to enforce static replay shapes.
+    # Defaults to cuda_graph_packed_seq when unset.
+    cuda_graph_pad_packed_seq: NotRequired[bool]
     # Maximum number of packed sequences per micro-batch (for static buffer sizing).
     cuda_graph_max_packed_seqs: NotRequired[int]
     # Sequence length buckets for CUDA graph replay. Each entry is a target packed length;
