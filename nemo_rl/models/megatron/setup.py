@@ -416,6 +416,18 @@ def setup_model_config(
     if "layernorm_epsilon" in config["megatron_cfg"]:
         model_cfg.layernorm_epsilon = config["megatron_cfg"]["layernorm_epsilon"]
 
+    # Optional RADIO ViT eval-mode flags. These gate the random CPE crop
+    # (apply_pos_enc) and can otherwise be silently ignored because the
+    # provider object is hydrated from the saved checkpoint config, not
+    # from the user's YAML. Forwarding them here lets the YAML override
+    # (e.g. `policy.megatron_cfg.radio_force_cpe_eval_mode: true`) actually
+    # take effect on RADIOViTModel. Without this, train()-mode forwards
+    # see a different positional encoding than eval()-mode forwards on the
+    # same image, breaking get_logprobs/train parity.
+    for _radio_key in ("radio_force_cpe_eval_mode", "radio_force_eval_mode"):
+        if _radio_key in config["megatron_cfg"] and hasattr(model_cfg, _radio_key):
+            setattr(model_cfg, _radio_key, config["megatron_cfg"][_radio_key])
+
     # Validate chunking configuration
     _validate_chunking_config(config)
 
