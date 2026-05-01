@@ -18,18 +18,24 @@ set -eou pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(realpath "$SCRIPT_DIR/..")"
 
+mkdir -p "$REPO_ROOT/.cache/uv" "$REPO_ROOT/.tmp"
+export UV_CACHE_DIR="$REPO_ROOT/.cache/uv"
+export TMPDIR="$REPO_ROOT/.tmp"
+export UV_LINK_MODE=copy
 
 # Parse command line arguments
-GIT_URL=${1:-https://github.com/TomerBN-Nvidia/vllm.git}
-GIT_REF=${2:-ultra-rl-v0.17}
+GIT_URL=${1:-https://github.com/collinmccarthy/vllm.git}
+# Pin to the exact merge commit on collinmccarthy/vllm:feature/nemotron-3-vl-conv3d-extra
+# that includes the RADIO ViT LayerScale (ls1/ls2) ones-init fix
+# (collinmccarthy/vllm PR #6). Bump together when picking up new feature
+# work on that branch.
+GIT_REF=${2:-74706bff7ece9ad1a880fce46079c4718d865b64}
 # NOTE: VLLM_USE_PRECOMPILED=1 didn't always seem to work since the wheels were sometimes built against an incompatible torch/cuda combo.
 # You need to export VLLM_PRECOMPILED_WHEEL_LOCATION to the full path of the wheel file.
 if [[ -n "${3:-}" ]]; then
   VLLM_PRECOMPILED_WHEEL_LOCATION="$3"
-elif [[ "$(uname -m)" == "aarch64" ]]; then
-  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_aarch64.whl"
 else
-  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0-cp38-abi3-manylinux_2_31_x86_64.whl"
+  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.18.0/vllm-0.18.0-cp38-abi3-manylinux_2_31_x86_64.whl"
 fi
 export VLLM_PRECOMPILED_WHEEL_LOCATION
 
