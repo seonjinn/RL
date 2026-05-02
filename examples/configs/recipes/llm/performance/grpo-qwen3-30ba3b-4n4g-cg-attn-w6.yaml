@@ -1,0 +1,18 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-nocg.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-cg-attn-w6
+policy:
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope: attn
+    cuda_graph_warmup_steps: 6
+    cuda_graph_packed_seq: false
+    cuda_graph_buckets:
+    - 4096
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-cg-attn-w6
+  wandb_enabled: false
+  tensorboard_enabled: false
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-cg-attn-w6

@@ -1,0 +1,20 @@
+defaults: ./grpo-llama3.1-8b-instruct-1n4g-nocg-nopack.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3-nopack
+policy:
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope:
+      - attn
+      - mlp
+    cuda_graph_warmup_steps: 3
+    cuda_graph_packed_seq: false
+    cuda_graph_buckets:
+    - 4096
+logger:
+  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3-nopack
+  wandb_enabled: false
+  tensorboard_enabled: false
+  wandb:
+    name: grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3-nopack

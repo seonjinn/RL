@@ -1,0 +1,10 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-cg-attn-moe
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-cg-attn-moe
+  wandb_enabled: false
+  tensorboard_enabled: false
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-cg-attn-moe

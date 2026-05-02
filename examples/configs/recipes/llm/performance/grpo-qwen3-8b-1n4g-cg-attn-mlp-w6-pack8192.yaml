@@ -1,0 +1,17 @@
+defaults: ./grpo-qwen3-8b-1n4g-cg-attn-mlp-w6.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack8192
+policy:
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 8192
+    logprob_mb_tokens: 8192
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+logger:
+  log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack8192
+  wandb_enabled: false
+  tensorboard_enabled: false
+  wandb:
+    name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack8192
