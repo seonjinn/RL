@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional, Tuple
@@ -526,6 +527,53 @@ def _pack_sequences_for_megatron(
         cu_seqlens,
         cu_seqlens_padded,
     )
+
+
+def _select_cuda_graph_bucket(
+    actual_seq_len: int,
+    buckets: list[int],
+    min_fill_ratio: float,
+) -> Optional[int]:
+    """Pick the smallest bucket that fits the packed length, or fall back.
+
+    Returns the first bucket >= ``actual_seq_len``. If ``min_fill_ratio`` is
+    set and the packed sequence under-fills the bucket, return ``None`` so the
+    caller can skip CUDA-graph replay for that step.
+    """
+    bucket = next((b for b in buckets if b >= actual_seq_len), None)
+    rank0 = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+
+    if bucket is None:
+        if rank0:
+            logging.debug(
+                "[CG] actual_packed=%d > max_bucket=%d -> EAGER FALLBACK (overflow)",
+                actual_seq_len,
+                buckets[-1],
+            )
+        return None
+
+    fill = actual_seq_len / bucket
+    if min_fill_ratio > 0.0 and fill < min_fill_ratio:
+        if rank0:
+            logging.debug(
+                "[CG] actual_packed=%d, bucket=%d, fill=%.3f < min_fill=%.2f -> EAGER FALLBACK (low fill)",
+                actual_seq_len,
+                bucket,
+                fill,
+                min_fill_ratio,
+            )
+        return None
+
+    if rank0:
+        logging.debug(
+            "[CG] actual_packed=%d, bucket=%d, fill=%.3f (padding +%d tokens, min_fill=%.2f) -> CG STEP",
+            actual_seq_len,
+            bucket,
+            fill,
+            bucket - actual_seq_len,
+            min_fill_ratio,
+        )
+    return bucket
 
 
 def _get_pack_sequence_parameters_for_megatron(
