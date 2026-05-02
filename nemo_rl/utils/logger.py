@@ -405,7 +405,13 @@ class WandbLogger(LoggerInterface):
         Args:
             params: Dict of hyperparameters to log
         """
-        self.run.config.update(params)
+        # When resuming an existing run, the master_config typically
+        # differs in expected ways: nemo-rl auto-bumps logger.log_dir
+        # to a new exp_NNN suffix, and the launcher injects
+        # logger.wandb.{id,resume}. Allow those to overwrite without
+        # tripping wandb's strict-by-default config guard. Fresh runs
+        # keep the original strict behavior.
+        self.run.config.update(params, allow_val_change=bool(self.run.resumed))
 
     def log_plot(self, figure: plt.Figure, step: int, name: str) -> None:
         """Log a plot to wandb.

@@ -22,6 +22,41 @@ Options:
 Environment variable overrides (DEBUG_PORT, NUM_NODES, GPUS_PER_NODE, ...) still
 apply. Pass --debug when running on an interactive compute node so you can
 attach Cursor's "Python: Attach to SLURM Node" configuration to this host.
+
+------------------------------------------------------------------------------
+Gate 9 dedup-end-to-end-validation recipe
+------------------------------------------------------------------------------
+
+This launcher emits driver-side multimodal payload metrics at all sync-rollout
+boundaries (driver_to_vllm_generation, driver_to_policy_get_logprobs,
+driver_to_policy_train, plus reference / FP8-calibration boundaries when
+those features are enabled). The metrics are lines of the form
+
+    ▶ [PAYLOAD] payload_bytes/<boundary>/tensor_mm=<N>, ...
+
+To verify that grpo.deduplicate_multimodal_data actually compacts the
+multimodal payload Ray ships between the driver, vLLM workers, and the
+Megatron policy worker, run the launcher twice with everything held fixed
+except the dedup flag, then diff the [PAYLOAD] lines:
+
+    # Dedup OFF (baseline)
+    DEDUPLICATE_MULTIMODAL_DATA=false NUM_GENERATIONS_PER_PROMPT=16 \\
+      bash run_interactive_step_3_nanov3_vision_rl.sh
+
+    # Dedup ON
+    DEDUPLICATE_MULTIMODAL_DATA=true  NUM_GENERATIONS_PER_PROMPT=16 \\
+      bash run_interactive_step_3_nanov3_vision_rl.sh
+
+    # Compare
+    rg '\[PAYLOAD\]' results/<dedup-false-job>/run.log
+    rg '\[PAYLOAD\]' results/<dedup-true-job>/run.log
+
+Acceptance (per the runbook's Gate 9 dedup verification methodology):
+  - logical_rows must MATCH between the two runs at every boundary
+  - with dedup ON, unique_prompts < logical_rows and tensor_mm bytes drop by
+    roughly 1/NUM_GENERATIONS_PER_PROMPT for the multimodal payload
+  - finite metrics (loss, rewards, logprobs, KL, token_mult_prob_error) agree
+    between the two runs to within deterministic-generation tolerance
 EOF
 }
 
@@ -57,12 +92,6 @@ DATASET_ROOT="${DATASET_ROOT:-${OMNI_SHARED_ROOT}/data/mmpr_miniscule/processed}
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${OMNI_SHARED_ROOT}/checkpoints}"
 CONFIG_PATH="${CONFIG_PATH:-examples/configs/nanov3_vision_rl_truncated.yaml}"
 
-JOB_NAME_BASE="${JOB_NAME_BASE:-interactive-vllm018-tmpe-smoke}"
-RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
-JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
-RESULTS_ROOT="${RESULTS_ROOT:-${NEMORL}/results}"
-RESULTS_DIR="${RESULTS_DIR:-${RESULTS_ROOT}/${JOB_NAME}}"
-
 SEED="${SEED:-42}"
 NUM_NODES="${NUM_NODES:-1}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-1}"
@@ -70,18 +99,47 @@ CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-1}}"
 TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-1}"
 EXPERT_MODEL_PARALLEL_SIZE="${EXPERT_MODEL_PARALLEL_SIZE:-1}"
 VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-1}"
-TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-1}"
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-1}"
-NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-1}"
+# Default = 16 rollouts/prompt so the Gate 9 dedup pair shows a clean 16x
+# tensor_mm savings between dedup-on and dedup-off. Bump up/down as needed.
+NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-16}"
+# GRPO requires train_global_batch_size == num_prompts_per_step * num_generations_per_prompt.
+# Auto-compute when the caller doesn't override it so changing rollout shape doesn't
+# silently trip the consistency assertion.
+TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-$((NUM_PROMPTS_PER_STEP * NUM_GENERATIONS_PER_PROMPT))}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-64}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 OVERLONG_FILTERING="${OVERLONG_FILTERING:-false}"
+# Auto-enable sequence packing when CP>1 because nemo-rl asserts the
+# conjunction at nemo_rl/models/megatron/setup.py:
+#     assert config["sequence_packing"]["enabled"], (
+#         "Sequence Packing must be enabled to use Context Parallelism with MCore"
+#     )
+# Mirror that here so callers don't waste a job to discover the constraint.
+# The caller can still force packing off explicitly by passing
+# SEQUENCE_PACKING_ENABLED=false; that will fail at startup when CP>1, which
+# is the intended behaviour.
+if [[ -z "${SEQUENCE_PACKING_ENABLED+x}" ]] && [[ "${CONTEXT_PARALLEL_SIZE}" -gt 1 ]]; then
+  SEQUENCE_PACKING_ENABLED=true
+fi
 SEQUENCE_PACKING_ENABLED="${SEQUENCE_PACKING_ENABLED:-false}"
 BAD_WORDS="${BAD_WORDS:-[]}"
 DEDUPLICATE_MULTIMODAL_DATA="${DEDUPLICATE_MULTIMODAL_DATA:-false}"
+# Driver-side multimodal payload metrics are gated by grpo.debug_payload_metrics.
+# The truncated YAML already sets it to true; expose it here as well so the
+# launcher is self-documenting and so it can be flipped without editing the YAML.
+DEBUG_PAYLOAD_METRICS="${DEBUG_PAYLOAD_METRICS:-true}"
 MODEL_NAME="${MODEL_NAME:-${CHECKPOINT_ROOT}/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-truncated}"
 WANDB_PROJECT="${WANDB_PROJECT:-grpo-nanov3vl}"
+
+# Job name embeds the dedup state and the rollouts-per-prompt so back-to-back
+# runs of the Gate 9 dedup pair land in distinguishable result directories.
+JOB_NAME_BASE="${JOB_NAME_BASE:-interactive-vllm018-smoke-gens${NUM_GENERATIONS_PER_PROMPT}-dedup${DEDUPLICATE_MULTIMODAL_DATA}}"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
+JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
+RESULTS_ROOT="${RESULTS_ROOT:-${NEMORL}/results}"
+RESULTS_DIR="${RESULTS_DIR:-${RESULTS_ROOT}/${JOB_NAME}}"
 
 export CACHE_ROOT="${CACHE_ROOT:-${USER_ROOT}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
@@ -111,6 +169,20 @@ echo "  model_name=${MODEL_NAME}"
 echo "  dataset_root=${DATASET_ROOT}"
 echo "  results_dir=${RESULTS_DIR}"
 echo "  seed=${SEED}"
+echo "  num_prompts_per_step=${NUM_PROMPTS_PER_STEP}"
+echo "  num_generations_per_prompt=${NUM_GENERATIONS_PER_PROMPT}"
+echo "  context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
+echo "  sequence_packing_enabled=${SEQUENCE_PACKING_ENABLED}"
+echo "  deduplicate_multimodal_data=${DEDUPLICATE_MULTIMODAL_DATA}"
+echo "  debug_payload_metrics=${DEBUG_PAYLOAD_METRICS}"
+if [[ "${NUM_GENERATIONS_PER_PROMPT}" -lt 2 && "${DEDUPLICATE_MULTIMODAL_DATA}" == "true" ]]; then
+  echo "  [WARN] dedup is on but NUM_GENERATIONS_PER_PROMPT=${NUM_GENERATIONS_PER_PROMPT}; with no repeated prompts dedup will report"
+  echo "         logical_to_unique=1.0 and tensor_mm savings of zero. Set NUM_GENERATIONS_PER_PROMPT>=2 to actually exercise the path." >&2
+fi
+if [[ "${CONTEXT_PARALLEL_SIZE}" -gt 1 && "${SEQUENCE_PACKING_ENABLED}" != "true" ]]; then
+  echo "  [WARN] CONTEXT_PARALLEL_SIZE=${CONTEXT_PARALLEL_SIZE} requires SEQUENCE_PACKING_ENABLED=true; nemo-rl will assert" >&2
+  echo "         at startup. Either drop CP back to 1 or unset SEQUENCE_PACKING_ENABLED so the launcher auto-enables packing." >&2
+fi
 
 if [[ "${DEBUG_MODE}" -eq 1 ]]; then
   ATTACH_HOST="$(hostname -s 2>/dev/null || hostname)"
@@ -150,11 +222,13 @@ fi
   grpo.max_num_steps="${MAX_NUM_STEPS:-1}" \
   grpo.overlong_filtering="${OVERLONG_FILTERING}" \
   grpo.deduplicate_multimodal_data="${DEDUPLICATE_MULTIMODAL_DATA}" \
+  grpo.debug_payload_metrics="${DEBUG_PAYLOAD_METRICS}" \
   data.train.cache_dir="${DATASET_ROOT}" \
   policy.generation.max_new_tokens="${MAX_NEW_TOKENS}" \
   policy.generation.temperature="${TEMPERATURE}" \
   policy.generation.top_p="${TOP_P}" \
   policy.generation.bad_words="${BAD_WORDS}" \
+  +policy.generation.debug_payload_metrics="${DEBUG_PAYLOAD_METRICS}" \
   policy.megatron_cfg.scheduler.lr_warmup_iters="${LR_WARMUP_ITERS:-0}" \
   checkpointing.checkpoint_dir="${RESULTS_DIR}" \
   logger.log_dir="${RESULTS_DIR}" \
