@@ -35,6 +35,7 @@ maybe_gres_arg() {
     detected_gpus=$(
       sinfo -p $SLURM_JOB_PARTITION -h -o "%G" \
         | tr ',' '\n' \
+        | sed -E 's/\([^)]*\)//g' \
         | grep -oE 'gpu(:[^ ,]+)*:[0-9]+' \
         | grep -oE '[0-9]+$' \
         | sort -nu \
