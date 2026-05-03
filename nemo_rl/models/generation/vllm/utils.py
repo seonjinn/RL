@@ -355,6 +355,31 @@ def _build_mm_processor_kwargs(
     if max_num_patches is not None:
         mm_processor_kwargs["max_num_patches"] = max_num_patches
 
+    # Pass precomputed image dimensions from HF processing so vLLM resizes
+    # the raw PIL image to exactly the same dimensions the training side saw.
+    # This mirrors omni's vLLM input path and lets Stage 2 prove parity after
+    # vLLM's own image processor, not just at the raw PIL boundary.
+    imgs_sizes_packed = data.get("imgs_sizes", None)
+    if imgs_sizes_packed is not None:
+        from nemo_rl.data.multimodal_utils import PackedTensor
+
+        sample_sizes = None
+        if isinstance(imgs_sizes_packed, PackedTensor):
+            sample_idx = index
+            if imgs_sizes_packed._dedup_indices is not None:
+                sample_idx = imgs_sizes_packed._dedup_indices[index]
+            sample_sizes = imgs_sizes_packed.tensors[sample_idx]
+        elif hasattr(imgs_sizes_packed, "tolist"):
+            sample_sizes = imgs_sizes_packed
+
+        if sample_sizes is not None:
+            sizes_list = (
+                sample_sizes.tolist()
+                if hasattr(sample_sizes, "tolist")
+                else list(sample_sizes)
+            )
+            mm_processor_kwargs["precomputed_imgs_sizes"] = sizes_list
+
     return mm_processor_kwargs
 
 
