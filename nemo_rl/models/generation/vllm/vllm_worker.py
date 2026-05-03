@@ -940,6 +940,15 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         assert self.llm is not None, (
             "Attempting to generate with either an uninitialized vLLM or non-model-owner"
         )
+
+        # Reset vLLM's mm cache to keep the P0 sender and P1 receiver in
+        # sync across refit sleep/wake cycles and LRU evictions; otherwise
+        # the receiver can drop entries the sender still tracks, tripping
+        # `Expected a cached item for mm_hash=...` in vllm.multimodal.cache.
+        # Mirrors the Omni guard in nemo-rl-omni's vllm_worker.py.
+        if hasattr(self.llm, "reset_mm_cache"):
+            self.llm.reset_mm_cache()
+
         outputs = self.llm.generate(prompts, sampling_params)
 
         # Process the outputs - but preserve the original input padding structure
