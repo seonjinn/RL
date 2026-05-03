@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional, Tuple
@@ -542,10 +543,11 @@ def _select_cuda_graph_bucket(
     """
     bucket = next((b for b in buckets if b >= actual_seq_len), None)
     rank0 = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+    log_fn = logging.warning if os.environ.get("CG_COUNT_LOG", "0") == "1" else logging.debug
 
     if bucket is None:
         if rank0:
-            logging.debug(
+            log_fn(
                 "[CG] actual_packed=%d > max_bucket=%d -> EAGER FALLBACK (overflow)",
                 actual_seq_len,
                 buckets[-1],
@@ -555,7 +557,7 @@ def _select_cuda_graph_bucket(
     fill = actual_seq_len / bucket
     if min_fill_ratio > 0.0 and fill < min_fill_ratio:
         if rank0:
-            logging.debug(
+            log_fn(
                 "[CG] actual_packed=%d, bucket=%d, fill=%.3f < min_fill=%.2f -> EAGER FALLBACK (low fill)",
                 actual_seq_len,
                 bucket,
@@ -565,7 +567,7 @@ def _select_cuda_graph_bucket(
         return None
 
     if rank0:
-        logging.debug(
+        log_fn(
             "[CG] actual_packed=%d, bucket=%d, fill=%.3f (padding +%d tokens, min_fill=%.2f) -> CG STEP",
             actual_seq_len,
             bucket,
