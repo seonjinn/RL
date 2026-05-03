@@ -531,24 +531,51 @@ def vlm_hf_data_processor(
     else:
         user_message_for_chat_template = user_message
 
+    # Stage 1 parity fix (omni<->super): mirror omni's hf_data_processor by
+    # always prepending a system message before the user message. Even when
+    # task_data_spec.system_prompt is None/empty, the chat template emits a
+    # non-empty system header (e.g. 6 tokens for Nano v3 VL) that materially
+    # shifts the model's downstream generations. The Omni->Super processor
+    # port silently dropped this, which was a primary contributor to the
+    # production reward gap (recipes ~0.46 vs super ~0.15). Reference is
+    # nemo-rl-omni/examples/run_vlm_grpo.py:hf_data_processor.
+    system_prompt_value = task_data_spec.system_prompt or ""
+    system_message: dict[str, Any] = {
+        "role": "system",
+        "content": system_prompt_value,
+    }
+    # Tokenize the system message alone first so we know exactly how many
+    # tokens belong to the system header in the combined output below.
+    system_only: dict = processor.apply_chat_template(
+        [system_message],
+        tokenize=True,
+        add_generation_prompt=False,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    sys_len = system_only["input_ids"].shape[1]
+
     # this is the string-tokenized conversation template for the generation policy (for vllm)
     string_formatted_dialog = processor.apply_chat_template(
-        [user_message_for_chat_template],
+        [system_message, user_message_for_chat_template],
         tokenize=False,
         add_generation_prompt=True,
     )
 
     # this is the id-tokenized and image processed conversation template for the policy
     message: dict = processor.apply_chat_template(
-        [user_message_for_processor],
+        [system_message, user_message_for_processor],
         tokenize=True,
         add_generation_prompt=True,
         return_tensors="pt",
         return_dict=True,
     )
 
-    # add this for backward compatibility
-    user_message["token_ids"] = message["input_ids"][0]
+    # Split combined token ids into the system prefix and the user suffix so
+    # message_log keeps both as separate roles, matching omni's emit shape.
+    combined_ids = message["input_ids"][0]
+    system_message["token_ids"] = combined_ids[:sys_len]
+    user_message["token_ids"] = combined_ids[sys_len:]
     # add all keys and values to the user message, and the list of keys
     multimodal_keys = get_multimodal_keys_from_processor(processor)
     extra_multimodal_keys = {"pixel_values_flat", "image_num_patches"}
@@ -566,9 +593,12 @@ def vlm_hf_data_processor(
 
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
     if "token_type_ids" in message:
-        user_message["token_type_ids"] = message["token_type_ids"][0]
+        # Combined token_type_ids: split with the same sys_len boundary.
+        system_message["token_type_ids"] = message["token_type_ids"][0][:sys_len]
+        user_message["token_type_ids"] = message["token_type_ids"][0][sys_len:]
 
-    ### append to user message
+    ### append system message then user message (matches omni's emit order)
+    message_log.append(system_message)
     message_log.append(user_message)
 
     length = sum(len(m["token_ids"]) for m in message_log)
