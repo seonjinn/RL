@@ -355,10 +355,8 @@ def _build_mm_processor_kwargs(
     if max_num_patches is not None:
         mm_processor_kwargs["max_num_patches"] = max_num_patches
 
-    # Pass precomputed image dimensions from HF processing so vLLM resizes
-    # the raw PIL image to exactly the same dimensions the training side saw.
-    # This mirrors omni's vLLM input path and lets Stage 2 prove parity after
-    # vLLM's own image processor, not just at the raw PIL boundary.
+    # Reuse image dimensions produced during data processing so vLLM resizes
+    # raw PIL images consistently with the policy/training path.
     imgs_sizes_packed = data.get("imgs_sizes", None)
     if imgs_sizes_packed is not None:
         from nemo_rl.data.multimodal_utils import PackedTensor

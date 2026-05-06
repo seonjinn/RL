@@ -531,14 +531,10 @@ def vlm_hf_data_processor(
     else:
         user_message_for_chat_template = user_message
 
-    # Stage 1 parity fix (omni<->super): mirror omni's hf_data_processor by
-    # always prepending a system message before the user message. Even when
-    # task_data_spec.system_prompt is None/empty, the chat template emits a
-    # non-empty system header (e.g. 6 tokens for Nano v3 VL) that materially
-    # shifts the model's downstream generations. The Omni->Super processor
-    # port silently dropped this, which was a primary contributor to the
-    # production reward gap (recipes ~0.46 vs super ~0.15). Reference is
-    # nemo-rl-omni/examples/run_vlm_grpo.py:hf_data_processor.
+    # Always include the system message in the chat template. Some model
+    # templates emit a non-empty system header even for an empty prompt, so
+    # omitting it changes the token prefix seen by both generation and policy
+    # training.
     system_prompt_value = task_data_spec.system_prompt or ""
     system_message: dict[str, Any] = {
         "role": "system",
@@ -571,8 +567,8 @@ def vlm_hf_data_processor(
         return_dict=True,
     )
 
-    # Split combined token ids into the system prefix and the user suffix so
-    # message_log keeps both as separate roles, matching omni's emit shape.
+    # Split combined token ids into the system prefix and user suffix so
+    # message_log keeps both roles explicit.
     combined_ids = message["input_ids"][0]
     system_message["token_ids"] = combined_ids[:sys_len]
     user_message["token_ids"] = combined_ids[sys_len:]
@@ -597,7 +593,7 @@ def vlm_hf_data_processor(
         system_message["token_type_ids"] = message["token_type_ids"][0][:sys_len]
         user_message["token_type_ids"] = message["token_type_ids"][0][sys_len:]
 
-    ### append system message then user message (matches omni's emit order)
+    ### append system message then user message
     message_log.append(system_message)
     message_log.append(user_message)
 

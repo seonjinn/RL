@@ -14,6 +14,8 @@
 import contextlib
 import io
 import logging
+import sys
+import traceback
 from functools import partial
 from typing import Any, Callable, List, Optional, TypedDict
 
@@ -110,15 +112,19 @@ class VLMVerifyWorker:
         for response, ground_truth in zip(pred_responses, ground_truths):
             try:
                 with _mute_output():
-                    try:
-                        ret_score, _ = self.verify_func(ground_truth, response)
-                    except Exception as e:
-                        ret_score = 0.0
-                        print(f"Error in verify_func: {e}")
+                    ret_score, _ = self.verify_func(ground_truth, response)
                 results.append(float(ret_score))
-            except Exception as e:
-                print(f"Error in verify: {e}")
-                results.append(0.0)
+            except Exception as exc:
+                print(
+                    f"[VLMVerifyWorker] ERROR: reward evaluation failed with "
+                    f"{type(exc).__name__}: {exc}. "
+                    f"sys.executable={sys.executable} "
+                    f"gt_head={ground_truth[:100]!r} "
+                    f"resp_head={response[:100]!r}",
+                    flush=True,
+                )
+                traceback.print_exc()
+                raise
         return results
 
 
