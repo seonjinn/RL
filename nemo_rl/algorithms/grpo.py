@@ -2382,21 +2382,6 @@ def grpo_train(
 
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
-                    _driver_valid_mask = train_data["token_mask"][:, 1:] * train_data[
-                        "sample_mask"
-                    ].unsqueeze(-1)
-                    _driver_valid_count = int(_driver_valid_mask.sum().item())
-                    _driver_gen = train_data["generation_logprobs"][:, 1:]
-                    _driver_prev = train_data["prev_logprobs"][:, 1:]
-                    print(
-                        "[TMPE_DRIVER_DEBUG] before train: "
-                        f"sample_mask={train_data['sample_mask'].tolist()} "
-                        f"token_mask_sum={float(train_data['token_mask'][:, 1:].sum().item()):.1f} "
-                        f"valid_tokens={_driver_valid_count} "
-                        f"finite_gen_valid={int(torch.isfinite(_driver_gen[_driver_valid_mask.bool()]).sum().item()) if _driver_valid_count else 0} "
-                        f"finite_prev_valid={int(torch.isfinite(_driver_prev[_driver_valid_mask.bool()]).sum().item()) if _driver_valid_count else 0}",
-                        flush=True,
-                    )
                     print_multimodal_payload_metrics(
                         collect_multimodal_payload_metrics(
                             train_data,
