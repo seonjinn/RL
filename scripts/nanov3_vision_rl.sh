@@ -77,6 +77,7 @@ export NVTE_BWD_LAYERNORM_SM_MARGIN="${NVTE_BWD_LAYERNORM_SM_MARGIN:-16}"
 export NEMO_RL_LOG_GPU_MEMORY="${NEMO_RL_LOG_GPU_MEMORY:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 export NRL_IGNORE_VERSION_MISMATCH="${NRL_IGNORE_VERSION_MISMATCH:-true}"
+export SETUP_COMMAND="${SETUP_COMMAND:-/opt/nemo_rl_venv/bin/python3 -c 'import mathruler.grader' >/dev/null 2>&1 || /opt/nemo_rl_venv/bin/python3 -m pip install --quiet --disable-pip-version-check --no-input mathruler pylatexenc sympy}"
 
 # Provide auth credentials for the private flashinfer-cubin gitlab pypi
 # index if NRL_VENVS_TRUST_EXISTING is ever flipped off. Sourced from
