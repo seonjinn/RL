@@ -694,6 +694,10 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             assert request.temperature == generation_config["temperature"]
             assert request.top_p == generation_config["top_p"]
 
+            cfg_bad_words = generation_config.get("bad_words")
+            if cfg_bad_words and not request.bad_words:
+                request.bad_words = cfg_bad_words
+
             generator = await openai_serving_chat.create_chat_completion(
                 request, raw_request
             )
@@ -1177,6 +1181,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 stop_token_ids=self.cfg["stop_token_ids"],
                 stop=final_stop_strings,
                 include_stop_str_in_output=True,  # returning stop strings like hf
+                bad_words=self.cfg.get("bad_words") or None,
             )
 
             request_id = str(uuid.uuid4())

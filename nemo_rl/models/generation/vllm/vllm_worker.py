@@ -811,6 +811,7 @@ class BaseVllmGenerationWorker:
             stop_token_ids=self.cfg["stop_token_ids"],
             stop=stop_strings,
             include_stop_str_in_output=True,
+            bad_words=self.cfg.get("bad_words") or None,
         )
 
     def start_gpu_profiling(self) -> None:
@@ -1079,6 +1080,7 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             stop_token_ids=self.cfg["stop_token_ids"],
             stop=stop_strings,
             include_stop_str_in_output=True,  # returning stop strings like hf
+            bad_words=self.cfg.get("bad_words") or None,
         )
 
         # Generate outputs
