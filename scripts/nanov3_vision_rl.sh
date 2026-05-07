@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-#
-# Parity launcher: runs the SAME workload as
-# nemo-rl-recipes/scripts/nanov3_vision_rl.sh, but on the
-# nemo-rl-super-vllm0.18 codebase (vllm 0.18 + super container).
-#
-# Both launchers point at examples/omni/nanov3_vision_rl.yaml with the
-# identical Hydra override surface, identical scale (NUM_NODES=4,
-# GPUS_PER_NODE=8), and identical model / dataset (sourced from
-# IMAGE_GRPO_MODEL_NAME / IMAGE_GRPO_CACHE_DIR in NEMORL/.env).
-#
-# Wandb is enabled and forced to the same project as the recipes
-# baseline (nemo-rl-omni). JOB_NAME_BASE defaults to image-grpo-vllm018
-# so the two runs are easy to tell apart in the dashboard.
 
 set -euo pipefail
 
@@ -27,7 +14,7 @@ fi
 
 CONFIG_PATH="${CONFIG_PATH:-examples/omni/nanov3_vision_rl.yaml}"
 NUM_NODES="${NUM_NODES:-4}"
-JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm018}"
+JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
@@ -109,6 +96,17 @@ fi
 EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
+fi
+# vLLM 0.20's kernel-warmup phase autotunes FlashInfer's CUTLASS MoE kernels
+# on Hopper. Each tactic that fails activation-type validation (many do, on
+# the NemotronH MoE config) makes the C++ side dump an ~80-frame native
+# backtrace before the Python autotuner downgrades it to a "Skipping tactic"
+# warning. Ray echoes every line per actor, drowning the log. The autotuner
+# is harmless (selected tactics still work), so default to off here. Flip
+# ENABLE_FLASHINFER_AUTOTUNE=true to opt back in for prod runs that want the
+# autotuner-picked tactic.
+if [[ "${ENABLE_FLASHINFER_AUTOTUNE:-false}" != "true" ]]; then
+  EXTRA_OVERRIDES+=" ++policy.generation.vllm_kwargs.enable_flashinfer_autotune=false"
 fi
 # super-vllm0.18's grpo.py requires grpo.val_at_end (recipes' grpo.py doesn't
 # read this key). The recipes-derived omni YAML doesn't define it, so inject
