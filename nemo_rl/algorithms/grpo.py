@@ -1824,32 +1824,7 @@ def grpo_train(
                             pad_value_dict={"token_ids": tokenizer.pad_token_id},
                         )
                         input_ids = batched_flat["token_ids"]
-                        generation_prompt_ids_for_debug = input_ids.detach().cpu().clone()
-                        # TODO(omni-mlm-compat): preserve the original prompt
-                        # multimodal payload for downstream policy logprob/train
-                        # scoring. The sync rollout path may append assistant /
-                        # environment messages in a way that leaves the
-                        # post-rollout flattened message log with image tokens
-                        # but empty PackedTensor payloads. Images are prompt
-                        # data and do not change across turns, so the original
-                        # prompt payload is the correct fallback.
-                        prompt_multimodal_data_for_policy = (
-                            batched_flat.get_multimodal_dict(
-                                as_tensors=False,
-                                pixel_dtype=(
-                                    torch.bfloat16
-                                    if deduplicate_multimodal_data
-                                    else None
-                                ),
-                            )
-                        )
-                        if deduplicate_multimodal_data:
-                            prompt_indices = repeated_batch["_dedup_prompt_idx"]
-                            for key, val in prompt_multimodal_data_for_policy.items():
-                                if isinstance(val, PackedTensor):
-                                    prompt_multimodal_data_for_policy[key] = (
-                                        val.deduplicate(prompt_indices)
-                                    )
+                        del batched_flat
 
                 # Generate responses - this updates the LLMMessageLogType in repeated_batch
                 memory_tracker.snapshot_start_of_stage("Generation", dir())
@@ -2153,22 +2128,8 @@ def grpo_train(
                                     extra_multimodal_data[key] = val.deduplicate(
                                         prompt_indices
                                     )
-                        if (
-                            not _has_nonempty_multimodal_payload(extra_multimodal_data)
-                            and _has_nonempty_multimodal_payload(
-                                prompt_multimodal_data_for_policy
-                            )
-                        ):
-                            warnings.warn(
-                                "Post-rollout message log lost multimodal payloads; "
-                                "falling back to the original prompt multimodal data "
-                                "for policy logprob/train scoring."
-                            )
-                            extra_multimodal_data = dict(prompt_multimodal_data_for_policy)
                         train_data.update(extra_multimodal_data)
                         train_data.to("cpu")
-
-                    metrics_logging_data["content"] = flat_messages["content"]
 
                 # Driver-side multimodal payload-bytes / prompt-count
                 # instrumentation. ``unique_prompts_for_policy`` is computed

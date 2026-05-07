@@ -38,6 +38,31 @@ except ImportError:
 
 
 class VllmInternalWorkerExtension:
+    def _process_weights_after_loading(
+        self,
+        model: "torch.nn.Module",
+        model_config: Any,
+        device: "torch.device",
+    ) -> None:
+        """Wrap vLLM's ``process_weights_after_loading`` in the active vLLM config.
+
+        In vLLM >= 0.20, ``UnquantizedFusedMoEMethod.process_weights_after_loading``
+        re-builds the FlashInfer/CUTLASS MoE kernel, whose ``__init__`` reads
+        ``get_current_vllm_config().compilation_config.max_cudagraph_capture_size``.
+        That assertion fires unless we're inside a ``set_current_vllm_config``
+        context. vLLM's own initial-load path is wrapped in that context, but
+        nemo-rl's refit path (``update_weights_via_ipc_zmq`` /
+        ``update_weights_from_collective`` / ``_maybe_process_*``) is not, so we
+        re-establish the context here.
+        """
+        from vllm.config import set_current_vllm_config
+        from vllm.model_executor.model_loader.utils import (
+            process_weights_after_loading,
+        )
+
+        with set_current_vllm_config(self.model_runner.vllm_config):
+            process_weights_after_loading(model, model_config, device)
+
     def bind_numa(self) -> bool:
         """Pin this TP worker to the NUMA-local CPUs of its GPU."""
         from nemo_rl.distributed.numa_utils import bind_to_gpu_numa
@@ -113,16 +138,9 @@ class VllmInternalWorkerExtension:
         if not use_fp8_kv_cache:
             return
 
-        # FP8 KV cache: process KV scales after weight loading
-        from vllm.model_executor.model_loader.utils import (
-            process_weights_after_loading,
-        )
-
-        # Get target device for processing
         target_device = next(self.model_runner.model.parameters()).device
 
-        # Call process_weights_after_loading to handle KV scales
-        process_weights_after_loading(
+        self._process_weights_after_loading(
             self.model_runner.model,
             self.model_runner.model_config,
             target_device,
@@ -145,16 +163,10 @@ class VllmInternalWorkerExtension:
                 payload = self.zmq_socket.recv_pyobj()
 
                 if payload == IPCProtocol.COMPLETE:
-                    # means the update is done
-                    from vllm.model_executor.model_loader.utils import (
-                        process_weights_after_loading,
-                    )
-
-                    process_weights_after_loading(
+                    self._process_weights_after_loading(
                         self.model_runner.model, self.model_config, self.device
                     )
 
-                    # Also process weights after loading for drafter model (MTP) if present
                     self._maybe_process_drafter_weights_after_loading()
 
                     self.zmq_socket.send(IPCProtocol.ACK.value.encode())
@@ -264,15 +276,9 @@ class VllmInternalWorkerExtension:
                 post_unpack_func=load_model_weight_func,
             )
 
-            # Also process weights after loading for drafter model (MTP) if present
             self._maybe_process_drafter_weights_after_loading()
 
-            # Process weights after loading for FP8 KV cache
-            from vllm.model_executor.model_loader.utils import (
-                process_weights_after_loading,
-            )
-
-            process_weights_after_loading(
+            self._process_weights_after_loading(
                 self.model_runner.model, self.model_config, self.device
             )
             self._maybe_process_fp8_kv_cache()
@@ -325,12 +331,10 @@ class VllmInternalWorkerExtension:
         if drafter_model is None:
             return
 
-        from vllm.model_executor.model_loader.utils import process_weights_after_loading
-
         spec_config = getattr(self.model_runner.vllm_config, "speculative_config", None)
         drafter_model_config = getattr(spec_config, "draft_model_config", None) or self.model_config
 
-        process_weights_after_loading(drafter_model, drafter_model_config, self.device)
+        self._process_weights_after_loading(drafter_model, drafter_model_config, self.device)
 
     def cleanup(self) -> None:
         """Shutdown and cleanup resources."""
