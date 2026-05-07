@@ -24,18 +24,14 @@ export TMPDIR="$REPO_ROOT/.tmp"
 export UV_LINK_MODE=copy
 
 # Parse command line arguments
-GIT_URL=${1:-https://github.com/collinmccarthy/vllm.git}
-# Pin to the exact merge commit on collinmccarthy/vllm:feature/nemotron-3-vl-conv3d-extra
-# that includes the RADIO ViT LayerScale (ls1/ls2) ones-init fix
-# (collinmccarthy/vllm PR #6). Bump together when picking up new feature
-# work on that branch.
-GIT_REF=${2:-74706bff7ece9ad1a880fce46079c4718d865b64}
+GIT_URL=${1:-https://github.com/vllm-project/vllm.git}
+GIT_REF=${2:-v0.20.1}
 # NOTE: VLLM_USE_PRECOMPILED=1 didn't always seem to work since the wheels were sometimes built against an incompatible torch/cuda combo.
 # You need to export VLLM_PRECOMPILED_WHEEL_LOCATION to the full path of the wheel file.
 if [[ -n "${3:-}" ]]; then
   VLLM_PRECOMPILED_WHEEL_LOCATION="$3"
 else
-  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.18.0/vllm-0.18.0-cp38-abi3-manylinux_2_31_x86_64.whl"
+  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.20.1/vllm-0.20.1%2Bcu129-cp38-abi3-manylinux_2_31_x86_64.whl"
 fi
 export VLLM_PRECOMPILED_WHEEL_LOCATION
 
@@ -81,7 +77,7 @@ uv run --no-project use_existing_torch.py
 echo "Installing dependencies..."
 uv pip install --upgrade pip
 uv pip install numpy setuptools setuptools_scm
-uv pip install torch==2.10.0 --torch-backend=cu129
+uv pip install torch==2.11.0 --torch-backend=cu129
 
 # Install vLLM using precompiled wheel
 echo "Installing vLLM with precompiled wheel..."
@@ -173,7 +169,7 @@ PY
 # Ensure build deps and re-lock
 uv pip install setuptools_scm
 uv pip install numpy
-uv pip install torch==2.10.0 --torch-backend=cu129
+uv pip install torch==2.11.0 --torch-backend=cu129
 uv lock
 
 # Write to a file that a docker build will use to set the necessary env vars

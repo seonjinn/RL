@@ -15,6 +15,6 @@
 	shallow = true
 [submodule "3rdparty/Gym-workspace/Gym"]
 	path = 3rdparty/Gym-workspace/Gym
-	url = ssh://git@gitlab-master.nvidia.com:12051/bxyu/nemo-gym.git
-	branch = ultra-v3-posttraining
+	url = https://github.com/DanialTaheri/Gym.git
+	branch = aroshanghias/vllm-v20-torch-2.11
 	shallow = true

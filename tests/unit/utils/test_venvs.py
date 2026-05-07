@@ -184,7 +184,7 @@ def test_prepare_uv_bootstrap_packages_adds_vllm_build_tools():
     assert packages == [
         "setuptools",
         "setuptools_scm",
-        "torch==2.10.0",
+        "torch==2.11.0",
         "cmake>=3.26.1",
         "ninja",
     ]
@@ -198,5 +198,5 @@ def test_prepare_uv_bootstrap_packages_keeps_base_packages_for_non_vllm():
     assert packages == [
         "setuptools",
         "setuptools_scm",
-        "torch==2.10.0",
+        "torch==2.11.0",
     ]

@@ -91,7 +91,7 @@ def _prepare_uv_environment_commands(
     # which causes resolution failures when extras have legitimate version
     # conflicts that overrides exist to resolve, e.g. Super's
     # ``transformer-engine==2.12.0`` overriding Bridge's ``<2.10.0`` constraint,
-    # or ``torch==2.10.0`` overriding sglang's ``2.9.1``. Mirrors the Omni
+    # or ``torch==2.11.0`` overriding sglang's ``2.9.1``. Mirrors the Omni
     # ``nemo-rl-omni/nemo_rl/utils/venvs.py:create_local_venv`` flow.
     install_cmd = ["uv", "sync", "--directory", project_path]
     if config_file is not None:
@@ -149,7 +149,7 @@ def _prepare_uv_install_env(
 
 def _prepare_uv_bootstrap_packages(py_executable: str) -> list[str]:
     """Prepare seed packages for a fresh uv worker environment."""
-    packages = ["setuptools", "setuptools_scm", "torch==2.10.0"]
+    packages = ["setuptools", "setuptools_scm", "torch==2.11.0"]
     if _py_executable_requests_extra(py_executable, "vllm"):
         packages.extend(["cmake>=3.26.1", "ninja"])
     return packages

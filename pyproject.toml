@@ -19,7 +19,7 @@ dependencies = [
   "setuptools",
   "pip",                                                                                                              # Required for frozen environments; uv venv --seed may not reliably install pip
   "ninja",                                                                                                            # for flash-attn parallel build
-  "torch==2.10.0",
+  "torch==2.11.0",
   "triton; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "colored==2.2.3",
   "ray[default]==2.55.0",
@@ -43,7 +43,7 @@ dependencies = [
   "plotly",
   "sympy>=1.14.0",
   "pillow>=11.3.0",
-  "torchvision==0.25.0",
+  "torchvision==0.26.0",
   "num2words>=0.5.14",                                                                                                # for SmolVLM
   "mlflow>=3.5.0,<3.6.0",
   "nvidia-nvshmem-cu12; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')", # for deep_ep build
@@ -134,7 +134,7 @@ nemo_gym = ["nemo_gym"]
 # This is a default group so that we install these even with bare `uv sync`
 build = [
   # Build requirement for TE
-  "torch==2.10.0",
+  "torch==2.11.0",
   # Build requirement for TE
   "setuptools",
   "packaging",
@@ -285,9 +285,9 @@ override-dependencies = [
   # NeMo RL needs av>=17 for Omni media handling; this intentionally wins over
   # the older Megatron-LM dev extra constraint.
   "av>=17.0.0",
-  # sglang requires torch 2.9.1, but we need 2.10.0
-  "torch==2.10.0",
-  "torchaudio==2.10.0",
+  # sglang requires torch 2.9.1, but we need 2.11.0
+  "torch==2.11.0",
+  "torchaudio==2.11.0",
   # sglang has conflicting llguidance versions than vllm, so enforcing vllm's version since it's newer
   "llguidance>=1.3.0,<1.4.0",
   "flashinfer-python",
