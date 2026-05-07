@@ -59,6 +59,7 @@ dependencies = [
   "soundfile>=0.13.1",
   "av>=17.0.0",
   "mathruler",                                                                                                        # for verl_geo3k_reward (MMPR-Tiny grading); imported lazily in nemo_rl/environments/rewards.py
+  "pylatexenc>=2.10",
 ]
 
 [project.optional-dependencies]
