@@ -270,6 +270,63 @@ def _patch_nsight_file():
 _patch_nsight_file()
 
 
+def _patch_torch_config_module_pickle() -> None:
+    """Make ``torch.utils._config_module.ConfigModule`` picklable by reference.
+
+    Background
+    ----------
+    PyTorch installs ``torch._dynamo.config``, ``torch._inductor.config``,
+    ``torch.compiler.config``, ``torch._functorch.config``, etc. via
+    ``install_config_module(...)``, which creates a function-local subclass
+    of ``ModuleType``::
+
+        class ConfigModule(ModuleType): ...
+        def install_config_module(module):
+            class ConfigModuleInstance(ConfigModule):
+                ...
+
+    Cloudpickle's ``Pickler._dispatch_table[types.ModuleType] = _module_reduce``
+    is keyed by *exact* type identity, so subclass instances miss the dispatch
+    and fall through to default pickle, which can't reconstruct the dynamic
+    nested class. Result::
+
+        TypeError: cannot pickle 'ConfigModuleInstance' object
+
+    This is cloudpickle issue #405. It surfaces under torch >= 2.10 whenever
+    something in a Ray actor's pickled closure transitively reaches one of the
+    config modules in ``sys.modules`` (e.g. via vllm or megatron-bridge import
+    chains).
+
+    Fix
+    ---
+    Install ``__reduce__`` on the *base* ``ConfigModule`` so all dynamically
+    created subclass instances inherit a sane reducer. The reducer pickles by
+    ``importlib.import_module(self.__name__)`` -- the same thing cloudpickle's
+    own ``_module_reduce`` does for plain ``ModuleType`` instances.
+
+    No-op on torch versions that don't expose ``ConfigModule``; idempotent.
+    """
+    try:
+        import importlib
+
+        from torch.utils._config_module import ConfigModule
+    except Exception:
+        return
+
+    if getattr(ConfigModule, "_nrl_pickle_patched", False):
+        return
+
+    def _reduce(self):
+        return (importlib.import_module, (self.__name__,))
+
+    ConfigModule.__reduce__ = _reduce
+    ConfigModule.__reduce_ex__ = lambda self, protocol: _reduce(self)
+    ConfigModule._nrl_pickle_patched = True
+
+
+_patch_torch_config_module_pickle()
+
+
 # Need to set PYTHONPATH to include transformers downloaded modules.
 # Assuming the cache directory is the same cross venvs.
 def patch_transformers_module_dir(env_vars: dict[str, str]):
