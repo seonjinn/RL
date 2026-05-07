@@ -50,7 +50,7 @@ export NUM_NODES
 # Container + mounts. Default to the super-omni-rl image that ships
 # pre-built /opt/ray_venvs and the vllm-0.18 wheel. Overridable via .env.
 CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/coreai/users/aroshanghias/containers}"
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260501-vllm0.18.sqsh}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-vllm-v20-20260506-eb05256}"
 export MOUNTS="${MOUNTS:-/lustre:/lustre}"
 
 # Trust the baked /opt/ray_venvs/<actor>/ in the container so
