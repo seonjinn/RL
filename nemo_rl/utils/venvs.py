@@ -90,7 +90,7 @@ def _prepare_uv_environment_commands(
     # ``uv pip install`` ignores override-dependencies by design (per uv docs),
     # which causes resolution failures when extras have legitimate version
     # conflicts that overrides exist to resolve, e.g. Super's
-    # ``transformer-engine==2.12.0`` overriding Bridge's ``<2.10.0`` constraint,
+    # ``transformer-engine==2.14.1`` overriding Bridge's ``<2.10.0`` constraint,
     # or ``torch==2.11.0`` overriding sglang's ``2.9.1``. Mirrors the Omni
     # ``nemo-rl-omni/nemo_rl/utils/venvs.py:create_local_venv`` flow.
     install_cmd = ["uv", "sync", "--directory", project_path]
@@ -260,7 +260,7 @@ def create_local_venv(
     # no-build-isolation mode does not set ``sys.path`` correctly for the
     # ``build_tools`` package, and the build sandbox is missing CUDA
     # headers). For that reason ``pyproject.toml`` pins bare
-    # ``transformer-engine==2.12.0`` (no ``[pytorch]`` extra) in the
+    # ``transformer-engine==2.14.1`` (no ``[pytorch]`` extra) in the
     # ``mcore`` / ``automodel`` extras and ``override-dependencies``, so
     # the workspace ``uv sync`` below does not try to pull
     # ``transformer-engine-torch`` through the broken uv build path.
@@ -278,7 +278,7 @@ def create_local_venv(
     #
     # Mirrors the Omni branch's
     # ``nemo-rl-omni/nemo_rl/utils/venvs.py:create_local_venv`` (which
-    # uses the 2.9.0 line; we are pinned to 2.12.0).
+    # uses the 2.9.0 line; we are pinned to 2.14.1).
     needs_te = _py_executable_requests_extra(
         py_executable, "mcore"
     ) or _py_executable_requests_extra(py_executable, "automodel")
@@ -293,7 +293,7 @@ def create_local_venv(
     # with ``\`torch\` was declared as an extra build dependency with
     # \`match-runtime = true\`, but was not found in the resolution``
     # because ``--no-deps`` excludes torch from the graph. ``uv sync``
-    # below pulls bare ``transformer-engine==2.12.0`` via the project's
+    # below pulls bare ``transformer-engine==2.14.1`` via the project's
     # ``override-dependencies`` and resolves torch normally.
 
     if build_cmd:
@@ -311,7 +311,7 @@ def create_local_venv(
         subprocess.run(
             [
                 venv_python, "-m", "pip", "install",
-                "transformer-engine-cu12==2.12.0",
+                "transformer-engine-cu12==2.14.1",
                 "--no-deps",
             ],
             env=uv_env,
@@ -320,7 +320,7 @@ def create_local_venv(
         subprocess.run(
             [
                 venv_python, "-m", "pip", "install",
-                "transformer-engine-torch==2.12.0",
+                "transformer-engine-torch==2.14.1",
                 "--no-build-isolation",
                 "--no-deps",
             ],
