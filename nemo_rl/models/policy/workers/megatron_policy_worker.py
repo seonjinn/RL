@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import logging
 import os
 import re
 import warnings
@@ -22,6 +23,10 @@ from typing import Any, Iterator, Optional, TypeVar, cast
 
 import ray
 import torch
+
+logging.getLogger("megatron.core.distributed.param_and_grad_buffer").setLevel(
+    logging.WARNING
+)
 from megatron.bridge.training.checkpointing import (
     maybe_finalize_async_save,
     save_checkpoint,

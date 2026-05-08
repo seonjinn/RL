@@ -23,6 +23,19 @@ from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
 
+# Silence FlashInfer's autotuner. It runs once during vLLM warmup and tries
+# many CUTLASS MoE tactics that legitimately fail on the NemotronH MoE config
+# ("Invalid activation type"). Each failure is logged at WARNING and inlines
+# the C++ exception text, which TensorRT-LLM (in fused_moe_90.so) builds with
+# glibc backtrace() / backtrace_symbols() — there's no env knob to turn that
+# C++ backtrace off (we checked: no TLLM_*BACKTRACE / *STACKTRACE strings in
+# the .so, and tvm_ffi's TVM_TRACEBACK_LIMIT only affects its own File-style
+# traces, not TRT-LLM's). One ~80-frame dump per skipped tactic × ~16 ranks
+# = ~70k log lines per autotune. Setting the logger to ERROR drops both the
+# "Skipping tactic" warnings and their backtraces; the autotuner still runs
+# and still picks the best working tactic — we just stop logging the misses.
+logging.getLogger("flashinfer.jit").setLevel(logging.ERROR)
+
 import ray
 import torch
 from transformers import AutoConfig

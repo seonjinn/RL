@@ -162,6 +162,10 @@ uv pip install --python /opt/nemo_rl_venv --group build setuptools-scm numpy
 # The custom build scripts will alter the pyproject.toml and uv.lock
 if [[ -n "${BUILD_CUSTOM_VLLM:-}" ]]; then
     UV_LINK_MODE=hardlink bash tools/build-custom-vllm.sh ${BUILD_CUSTOM_VLLM_URL:-} ${BUILD_CUSTOM_VLLM_REF:-} ${BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION:-}
+fi
+if [[ -f 3rdparty/vllm/nemo-rl.env ]]; then
+    # Use the precompiled wheel recorded by tools/build-custom-vllm.sh when
+    # vLLM was vendored before the Docker build.
     source 3rdparty/vllm/nemo-rl.env
 fi
 if [[ -n "${BUILD_CUSTOM_FLASHINFER:-}" ]]; then
