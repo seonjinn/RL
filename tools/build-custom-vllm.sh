@@ -23,9 +23,10 @@ export UV_CACHE_DIR="$REPO_ROOT/.cache/uv"
 export TMPDIR="$REPO_ROOT/.tmp"
 export UV_LINK_MODE=copy
 
-# Parse command line arguments
-GIT_URL=${1:-https://github.com/vllm-project/vllm.git}
-GIT_REF=${2:-v0.20.1}
+# Parse command line arguments. Default to the Super v3 Omni vLLM fork branch
+# pinned by commit for reproducible container rebuilds.
+GIT_URL=${1:-https://github.com/aroshanghias-nvd/vllm.git}
+GIT_REF=${2:-cd27945fb31f174da96c0c9b931af4959a1365e3}
 # NOTE: VLLM_USE_PRECOMPILED=1 didn't always seem to work since the wheels were sometimes built against an incompatible torch/cuda combo.
 # You need to export VLLM_PRECOMPILED_WHEEL_LOCATION to the full path of the wheel file.
 if [[ -n "${3:-}" ]]; then
