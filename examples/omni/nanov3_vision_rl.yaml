@@ -177,17 +177,18 @@ policy:
       tensor_parallel_size: 2
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.7
+      gpu_memory_utilization: 0.75
       max_model_len: ${policy.max_total_sequence_length}
       use_deep_gemm: False
       num_last_layers_in_bf16: 0
       num_first_layers_in_bf16: 0
       skip_tokenizer_init: False
-      enforce_eager: true
+      enforce_eager: false
     vllm_kwargs:
       limit_mm_per_prompt: {"image": 2}
-      max_num_batched_tokens: 16384
+      max_num_batched_tokens: 32768
       mamba_ssm_cache_dtype: "float32"
+      max_num_seqs: 512  # required so Mamba block count >= max_num_seqs
     colocated:
       enabled: true
       resources:
