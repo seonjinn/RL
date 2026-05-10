@@ -31,6 +31,7 @@ from nemo_rl.environments.interfaces import (
 from nemo_rl.environments.metrics import (
     calculate_pass_rate_per_prompt,
 )
+from nemo_rl.environments.mmpr_filtered_reward import mmpr_filtered_reward
 from nemo_rl.environments.rewards import (
     bbox_giou_reward,
     combine_reward_functions,
