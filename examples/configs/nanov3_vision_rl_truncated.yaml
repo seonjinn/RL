@@ -134,10 +134,10 @@ policy:
     bias_activation_fusion: false  # VLM: must be false for Nano v3 VL
     defer_fp32_logits: true
     radio_force_cpe_eval_mode: true
-    freeze_vision_encoder: false
-    freeze_vision_projector: false
-    freeze_audio_encoder: true
-    freeze_audio_projector: true
+    freeze_vision_model: false
+    freeze_vision_projection: false
+    freeze_sound_encoder: true
+    freeze_sound_projection: true
 
     optimizer:
       optimizer: adam

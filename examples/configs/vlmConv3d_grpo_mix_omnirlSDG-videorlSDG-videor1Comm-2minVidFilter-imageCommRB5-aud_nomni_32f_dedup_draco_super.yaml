@@ -1,14 +1,15 @@
-# GRPO training for Nemotron Nano v3 VL on MMPR-Tiny
 grpo:
-  num_prompts_per_step: 512
+  num_prompts_per_step: 256
   num_generations_per_prompt: 16
   max_rollout_turns: 1
   max_num_epochs: 1
   max_num_steps: 1000000
+  dynamic_format_reward: true
   normalize_rewards: true
   use_leave_one_out_baseline: true
-  val_period: 10
+  val_period: 0
   val_at_start: false
+  val_at_end: false
   overlong_filtering: true
   zero_variance_prompt_filtering: false
   max_val_samples: 256
@@ -17,7 +18,6 @@ grpo:
   seq_logprob_error_threshold: 2
   use_dynamic_sampling: false
   batch_multiplier: 1
-  deduplicate_multimodal_data: true
   reward_shaping:
     enabled: false
     overlong_buffer_length: 512
@@ -32,7 +32,8 @@ grpo:
   async_grpo:
     enabled: false
     max_trajectory_age_steps: 1
-  debug_snapshot_error_threshold: 1000000  # Save token_mult_prob_error repro snapshots
+  debug_snapshot_error_threshold: 1000000
+  deduplicate_multimodal_data: true
 
 loss_fn:
   reference_policy_kl_penalty: 0.0
@@ -40,7 +41,7 @@ loss_fn:
   kl_input_clamp_value: null
   kl_output_clamp_value: null
   ratio_clip_min: 0.2
-  ratio_clip_max: 0.28  # Clip-Higher, ref: DAPO, JustRL
+  ratio_clip_max: 0.28
   ratio_clip_c: null
   use_on_policy_kl_approximation: true
   use_importance_sampling_correction: false
@@ -51,22 +52,21 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/nanov3-image-grpo"
-  metric_name: "val:accuracy"
+  checkpoint_dir: "results/grpo_nanov3omni_conv3d"
+  metric_name: "val:reward"
   higher_is_better: true
   keep_top_k: 1000000
   save_period: 10
   checkpoint_must_save_by: "00:03:45:00"
 
 policy:
-  # Keep this key in YAML (OmegaConf struct mode); launcher/CLI overrides it.
   model_name: "REPLACE_WITH_MODEL_OR_CHECKPOINT_PATH"
   tokenizer:
     name: ${policy.model_name}
   train_global_batch_size: 2048
   train_micro_batch_size: 1
   logprob_batch_size: 1
-  max_total_sequence_length: 8192
+  max_total_sequence_length: 16000
   precision: "bfloat16"
   logprob_chunk_size: 1024
   offload_optimizer_for_logprob: false
@@ -81,7 +81,7 @@ policy:
   max_grad_norm: 1.0
 
   sequence_packing:
-    enabled: true
+    enabled: false
     train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
     logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
     algorithm: "modified_first_fit_decreasing"
@@ -90,11 +90,21 @@ policy:
   optimizer: null
   scheduler: null
 
+  hf_config_overrides:
+    dynamic_resolution: ${data.default.use_dynamic_resolution}
+    vision_config:
+      video_temporal_patch_size: ${data.default.video_temporal_patch_size}
+      video_target_num_patches: ${data.default.video_target_num_patches}
+    sound_config:
+      max_audio_duration: ${data.default.max_audio_duration}
+      sound_clip_duration: ${data.default.sound_clip_duration}
+      sound_clip_min_duration: ${data.default.sound_clip_min_duration}
+
   megatron_cfg:
     enabled: true
     empty_unused_memory_level: 2
     activation_checkpointing: true
-    tensor_model_parallel_size: 8
+    tensor_model_parallel_size: 4
     expert_model_parallel_size: 16
     expert_tensor_parallel_size: 1
     pipeline_model_parallel_size: 1
@@ -103,6 +113,7 @@ policy:
     context_parallel_size: 1
     pipeline_dtype: ${policy.precision}
     sequence_parallel: true
+    dynamic_resolution: ${data.default.use_dynamic_resolution}
     freeze_moe_router: true
     moe_router_dtype: "fp32"
     moe_router_load_balancing_type: "none"
@@ -116,13 +127,13 @@ policy:
     track_moe_metrics: true
     moe_per_layer_logging: false
     apply_rope_fusion: true
-    bias_activation_fusion: false  # VLM: must be false for Nano v3 VL
+    bias_activation_fusion: false
     defer_fp32_logits: true
     radio_force_cpe_eval_mode: true
-    freeze_vision_model: false
+    freeze_vision_model: true
     freeze_vision_projection: false
     freeze_sound_encoder: true
-    freeze_sound_projection: true
+    freeze_sound_projection: false
 
     optimizer:
       optimizer: "adam"
@@ -177,18 +188,24 @@ policy:
       tensor_parallel_size: 2
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.75
+      gpu_memory_utilization: 0.6
       max_model_len: ${policy.max_total_sequence_length}
-      use_deep_gemm: False
+      enforce_eager: false
+      use_deep_gemm: false
       num_last_layers_in_bf16: 0
       num_first_layers_in_bf16: 0
-      skip_tokenizer_init: False
-      enforce_eager: false
+      skip_tokenizer_init: false
     vllm_kwargs:
-      limit_mm_per_prompt: {"image": 2}
-      max_num_batched_tokens: 32768
+      limit_mm_per_prompt:
+        video:
+          count: 1
+          num_frames: ${data.default.num_frames}
+        image: ${data.default.max_images_per_prompt}
+        audio: 1
+      skip_mm_profiling: false
+      max_num_batched_tokens: ${policy.max_total_sequence_length}
       mamba_ssm_cache_dtype: "float32"
-      max_num_seqs: 512  # required so Mamba block count >= max_num_seqs
+      mm_processor_cache_gb: 16
     colocated:
       enabled: true
       resources:
@@ -197,45 +214,61 @@ policy:
 
 data:
   max_input_seq_length: ${policy.max_total_sequence_length}
-  shuffle: true
+  shuffle: false
   num_workers: 1
   train:
-    dataset_name: "mmpr_tiny"
+    dataset_name: "omni_dataset"
+    train_data_path: "REPLACE_WITH_OMNI_GRPO_TRAIN_DATA_PATH"
+    env_name: "blend_v1"
     split: "train"
-    env_name: "mmpr_tiny"
-    val_size: 500
-    cache_dir: "REPLACE_WITH_MMPR_TINY_CACHE_DIR"
+    val_size: 0
   default:
     prompt_file: null
     system_prompt_file: null
     processor: vlm_hf_data_processor
-    env_name: "mmpr_tiny"
+    env_name: "blend_v1"
+    num_frames: 32
+    use_tiling: false
+    use_dynamic_resolution: true
+    max_num_tiles: null
+    max_num_patches: null
+    max_images_per_prompt: 32
+    video_target_num_patches: 1024
+    video_temporal_patch_size: 2
+    video_maintain_aspect_ratio: true
+    use_audio: true
+    max_audio_duration: 300
+    sound_clip_duration: 30.0
+    sound_clip_min_duration: 0.1
+    min_generation_tokens: 2000
 
 env:
-  mmpr_tiny:
+  blend_v1:
     num_workers: 8
     reward_functions:
-      - name: verl_geo3k
+      - name: mmpr_filtered
         weight: 1.0
         kwargs:
-          format_score: 0.1
+          format_weight: 0.1
+          asr_reward_min: -1.0
 
 logger:
   log_dir: "logs"
   num_val_samples_to_print: 0
-  wandb_enabled: true
+  wandb_enabled: false
   tensorboard_enabled: false
   mlflow_enabled: false
   swanlab_enabled: false
   monitor_gpus: true
   wandb:
-    project: "nemo-rl-omni"
-    name: "step-3-nanov3-vision-rl"
+    project: "Nemotron-omni-RL"
+    name: "grpo-omniSDG-RB5"
   tensorboard: {}
   gpu_monitoring:
     collection_interval: 10
     flush_interval: 10
+  debug_payload_metrics: true
 
 cluster:
   gpus_per_node: 8
-  num_nodes: 1
+  num_nodes: 8

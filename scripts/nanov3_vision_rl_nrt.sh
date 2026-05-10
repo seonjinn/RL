@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+#
+# Parity launcher: runs the SAME workload as
+# nemo-rl-recipes/scripts/nanov3_vision_rl.sh, but on the
+# nemo-rl-super-vllm0.18 codebase (vllm 0.18 + super container).
+#
+# Both launchers point at examples/omni/nanov3_vision_rl.yaml with the
+# identical Hydra override surface, identical scale (NUM_NODES=4,
+# GPUS_PER_NODE=8), and identical model / dataset (sourced from
+# IMAGE_GRPO_MODEL_NAME / IMAGE_GRPO_CACHE_DIR in NEMORL/.env).
+#
+# Wandb is enabled and forced to the same project as the recipes
+# baseline (nemo-rl-omni). JOB_NAME_BASE defaults to image-grpo-vllm018
+# so the two runs are easy to tell apart in the dashboard.
 
 set -euo pipefail
 
@@ -14,7 +27,7 @@ fi
 
 CONFIG_PATH="${CONFIG_PATH:-examples/omni/nanov3_vision_rl.yaml}"
 NUM_NODES="${NUM_NODES:-4}"
-JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20}"
+JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm018}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
@@ -36,11 +49,9 @@ export NUM_NODES
 
 # Container + mounts. Default to the super-omni-rl image that ships
 # pre-built /opt/ray_venvs and the vllm-0.18 wheel. Overridable via .env.
-CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/coreai/users/aroshanghias/containers}"
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-vllm-v20-20260506-eb05256}"
+CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/rl/images}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260501-vllm0.18.sqsh}"
 export MOUNTS="${MOUNTS:-/lustre:/lustre}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-
 
 # Trust the baked /opt/ray_venvs/<actor>/ in the container so
 # create_local_venv() short-circuits and we don't re-resolve nemo-rl
@@ -48,14 +59,9 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 export NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-false}"
 export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR:-/opt/ray_venvs}"
 export NRL_VENVS_TRUST_EXISTING="${NRL_VENVS_TRUST_EXISTING:-1}"
-
 # flashinfer-jit-cache=0.6.5+cu129 vs flashinfer=0.6.9 ships in the
 # image; the strict version assert is harmless for this workload.
 export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
-
-# vLLM 0.20 dumps the entire SchedulerOutput (including multimodal pixel
-# tensors) on engine errors, which floods the log on a single failed step.
-export VLLM_LOG_DUMP_INPUT_ON_ENGINE_ERROR="${VLLM_LOG_DUMP_INPUT_ON_ENGINE_ERROR:-0}"
 
 export CACHE_ROOT="${CACHE_ROOT:-${NEMORL}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
@@ -71,9 +77,10 @@ export NVTE_BWD_LAYERNORM_SM_MARGIN="${NVTE_BWD_LAYERNORM_SM_MARGIN:-16}"
 export NEMO_RL_LOG_GPU_MEMORY="${NEMO_RL_LOG_GPU_MEMORY:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 export NRL_IGNORE_VERSION_MISMATCH="${NRL_IGNORE_VERSION_MISMATCH:-true}"
-
-# Auth for the private flashinfer-cubin index, only used if NRL_VENVS_TRUST_EXISTING=0.
-if [[ -z "${GITLAB_FLASHINFER_TOKEN:-}" && -f "${HOME}/.config/glab-cli/config.yml" ]]; then
+# Provide auth credentials for the private flashinfer-cubin gitlab pypi
+# index if NRL_VENVS_TRUST_EXISTING is ever flipped off. Sourced from
+# the user's glab CLI config (no token literal in the script).
+if [[ -z "${GITLAB_FLASHINFER_TOKEN:-}" ]] && [[ -f "${HOME}/.config/glab-cli/config.yml" ]]; then
   GITLAB_FLASHINFER_TOKEN=$(grep -A 1 "gitlab-master.nvidia.com:" "${HOME}/.config/glab-cli/config.yml" | grep -oE 'glpat-[A-Za-z0-9_-]+' | head -1 || true)
 fi
 if [[ -n "${GITLAB_FLASHINFER_TOKEN:-}" ]]; then
@@ -101,15 +108,17 @@ EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
 fi
-# FlashInfer fused-MoE autotuner is noisy but ~2x faster on NemotronH MoE.
-# Set ENABLE_FLASHINFER_AUTOTUNE=false to opt out for cleaner logs.
-[[ "${ENABLE_FLASHINFER_AUTOTUNE:-true}" != "true" ]] && \
-  EXTRA_OVERRIDES+=" ++policy.generation.vllm_kwargs.enable_flashinfer_autotune=false"
-# Required by super-side grpo.py, missing from the recipes-derived omni YAML.
+# super-vllm0.18's grpo.py requires grpo.val_at_end (recipes' grpo.py doesn't
+# read this key). The recipes-derived omni YAML doesn't define it, so inject
+# the super-side default (false) here so the run reaches Step 1.
 EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
-# Set WANDB_RUN_ID (and WANDB_RESUME) to chain runs into one wandb entry.
-[[ -n "${WANDB_RUN_ID:-}" ]] && \
+# Resume the same wandb run instead of starting a new one when WANDB_RUN_ID
+# is set. Use Hydra's `+` so the keys are added (they aren't in the YAML).
+# Pair WANDB_RESUME=allow with a pre-chosen id to chain a fresh run + N
+# continuations under one wandb run (first to start creates, rest attach).
+if [[ -n "${WANDB_RUN_ID:-}" ]]; then
   EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
+fi
 
 PYTHONPATH_ROOTS="${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
 if [[ "${USE_REPO_VLLM:-0}" == "1" ]]; then
