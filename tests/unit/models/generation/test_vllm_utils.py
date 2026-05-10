@@ -14,6 +14,7 @@
 
 import math
 
+import numpy as np
 import pytest
 import torch
 from PIL import Image
@@ -116,7 +117,7 @@ def test_vllm_utils_vlm_loads_local_image_paths(tmp_path):
     assert image_payload.size == (10, 12)
 
 
-def test_vllm_utils_vlm_only_adds_supported_mm_processor_kwargs_from_packed_imgs_sizes():
+def test_vllm_utils_vlm_forwards_parity_mm_processor_kwargs_from_packed_imgs_sizes():
     input_ids, input_lengths = _mk_inputs()
     data = BatchedDataDict(
         {
@@ -138,11 +139,17 @@ def test_vllm_utils_vlm_only_adds_supported_mm_processor_kwargs_from_packed_imgs
 
     prompts = format_prompt_for_vllm_generation(data)
 
-    assert prompts[0]["mm_processor_kwargs"] == {"max_num_tiles": 12}
-    assert prompts[1]["mm_processor_kwargs"] == {"max_num_patches": 256}
+    assert prompts[0]["mm_processor_kwargs"] == {
+        "max_num_tiles": 12,
+        "precomputed_imgs_sizes": [[4, 5]],
+    }
+    assert prompts[1]["mm_processor_kwargs"] == {
+        "max_num_patches": 256,
+        "precomputed_imgs_sizes": [[6, 4], [8, 8]],
+    }
 
 
-def test_vllm_utils_vlm_does_not_forward_imgs_sizes_from_list_form():
+def test_vllm_utils_vlm_forwards_imgs_sizes_from_list_form():
     input_ids, input_lengths = _mk_inputs(batch_size=1)
     data = BatchedDataDict(
         {
@@ -156,7 +163,52 @@ def test_vllm_utils_vlm_does_not_forward_imgs_sizes_from_list_form():
 
     prompt = format_prompt_for_vllm_generation(data, sample_idx=0)
 
-    assert "mm_processor_kwargs" not in prompt
+    assert prompt["mm_processor_kwargs"] == {"precomputed_imgs_sizes": [[10, 12]]}
+
+
+def test_vllm_utils_omni_video_as_images_rewrites_prompt_and_forwards_sizes(
+    monkeypatch,
+):
+    input_ids, input_lengths = _mk_inputs(batch_size=1)
+
+    def fake_load_video_frames(video_path, num_frames=8, temporal_patch_size=1):
+        assert video_path == "video.mp4"
+        assert num_frames == 2
+        assert temporal_patch_size == 1
+        return np.zeros((2, 12, 10, 3), dtype=np.uint8)
+
+    monkeypatch.setenv("NRL_VLLM_VIDEO_AS_IMAGES", "1")
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.utils.load_video_frames",
+        fake_load_video_frames,
+    )
+
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths[:1],
+            "vllm_content": ["prefix <video> suffix"],
+            "vllm_images": [[]],
+            "vllm_videos": [["video.mp4"]],
+            "vllm_num_frames": [2],
+            "vllm_temporal_patch_size": [1],
+            "imgs_sizes": [[[12, 10], [12, 10]]],
+        }
+    )
+
+    prompt = format_prompt_for_vllm_generation(data, sample_idx=0)
+
+    assert prompt["prompt"] == "prefix <image><image> suffix"
+    image_payload = prompt["multi_modal_data"]["image"]
+    assert isinstance(image_payload, list)
+    assert len(image_payload) == 2
+    assert all(isinstance(image, Image.Image) for image in image_payload)
+    assert "video" not in prompt["multi_modal_data"]
+    assert prompt["mm_processor_kwargs"] == {
+        "max_num_tiles": 1,
+        "video_as_images": True,
+        "precomputed_imgs_sizes": [[12, 10], [12, 10]],
+    }
 
 
 def test_vllm_utils_vlm_compact_payload_matches_raw_prompt_format_for_local_paths(

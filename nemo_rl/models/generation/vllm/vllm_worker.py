@@ -48,7 +48,10 @@ from nemo_rl.models.generation.interfaces import (
     verify_right_padding,
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
-from nemo_rl.models.generation.vllm.utils import format_prompt_for_vllm_generation
+from nemo_rl.models.generation.vllm.utils import (
+    _extract_hw_pairs,
+    format_prompt_for_vllm_generation,
+)
 from nemo_rl.models.huggingface.common import ModelFlag
 from nemo_rl.models.policy.utils import is_vllm_v1_engine_enabled
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
@@ -937,20 +940,12 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         input_ids = data["input_ids"]
         input_lengths = data["input_lengths"]
         batch_stop_strings: list[list[str]] = data.get("stop_strings", [])
-        stop_strings = self._merge_stop_strings(batch_stop_strings)
-        sampling_params = self._build_sampling_params(
-            greedy=greedy,
-            stop_strings=stop_strings,
-        )
 
         # verify inputs have correct padding
         verify_right_padding(data, pad_value=self.cfg["_pad_token_id"])
 
         # Original input length with padding
         padded_input_length = input_ids.size(1)
-
-        # Convert inputs to vLLM format
-        prompts = format_prompt_for_vllm_generation(data)
 
         # Generate outputs
         assert self.llm is not None, (
@@ -965,7 +960,174 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         if hasattr(self.llm, "reset_mm_cache"):
             self.llm.reset_mm_cache()
 
-        outputs = self.llm.generate(prompts, sampling_params)
+        max_model_len = int(
+            getattr(
+                self.llm.llm_engine.model_config,
+                "max_model_len",
+                self.cfg["vllm_cfg"]["max_model_len"],
+            )
+        )
+        sampling_params = []
+        prompt_indices = []
+        skipped_indices = []
+        for sample_idx, input_length in enumerate(input_lengths.tolist()):
+            remaining_ctx = max_model_len - int(input_length)
+            if remaining_ctx <= 0:
+                skipped_indices.append(sample_idx)
+                continue
+
+            per_sample_stop_strings = (
+                batch_stop_strings[sample_idx]
+                if sample_idx < len(batch_stop_strings)
+                else None
+            )
+            stop_strings = self._merge_stop_strings(
+                [per_sample_stop_strings] if per_sample_stop_strings else None
+            )
+            sampling_params.append(
+                self._build_sampling_params(
+                    greedy=greedy,
+                    stop_strings=stop_strings,
+                    max_new_tokens=min(self.cfg["max_new_tokens"], remaining_ctx),
+                )
+            )
+            prompt_indices.append(sample_idx)
+
+        if len(prompt_indices) == len(input_lengths):
+            prompts = format_prompt_for_vllm_generation(data)
+        else:
+            prompts = [
+                format_prompt_for_vllm_generation(data, sample_idx)
+                for sample_idx in prompt_indices
+            ]
+
+        def _prompt_pil_hw(prompt: dict[str, Any]) -> list[tuple[int, int]]:
+            mm_data = prompt.get("multi_modal_data")
+            if not isinstance(mm_data, dict):
+                return []
+
+            mm_images = mm_data.get("image")
+            if mm_images is None:
+                return []
+
+            image_list = mm_images if isinstance(mm_images, list) else [mm_images]
+            pil_hw: list[tuple[int, int]] = []
+            for image in image_list:
+                height = getattr(image, "height", None)
+                width = getattr(image, "width", None)
+                if height is None or width is None:
+                    size = getattr(image, "size", None)
+                    if isinstance(size, tuple) and len(size) >= 2:
+                        width, height = size[0], size[1]
+                if height is None or width is None:
+                    continue
+                pil_hw.append((int(height), int(width)))
+            return pil_hw
+
+        def _prompt_precomputed_hw(prompt: dict[str, Any]) -> list[tuple[int, int]]:
+            mm_kwargs = prompt.get("mm_processor_kwargs", {})
+            if not isinstance(mm_kwargs, dict):
+                return []
+            return _extract_hw_pairs(mm_kwargs.get("precomputed_imgs_sizes"))
+
+        def _shape_counts_profile(
+            shapes: list[tuple[int, int]],
+        ) -> tuple[tuple[int, int, int], ...]:
+            counts: dict[tuple[int, int], int] = {}
+            for shape in shapes:
+                counts[shape] = counts.get(shape, 0) + 1
+            return tuple(
+                (shape[0], shape[1], count) for shape, count in sorted(counts.items())
+            )
+
+        def _bucket_key(prompt: Any, prompt_idx: int) -> str:
+            if not isinstance(prompt, dict):
+                return f"non_dict_prompt:{prompt_idx}"
+
+            pil_hw = _prompt_pil_hw(prompt)
+            if not pil_hw:
+                return "no_image_mm"
+
+            pre_hw = _prompt_precomputed_hw(prompt)
+            if not pre_hw or len(pre_hw) != len(pil_hw):
+                return f"image_no_stable_size_profile:{prompt_idx}"
+
+            mm_kwargs = prompt.get("mm_processor_kwargs", {})
+            max_num_tiles = (
+                mm_kwargs.get("max_num_tiles") if isinstance(mm_kwargs, dict) else None
+            )
+            max_num_patches = (
+                mm_kwargs.get("max_num_patches") if isinstance(mm_kwargs, dict) else None
+            )
+            video_as_images = (
+                mm_kwargs.get("video_as_images") if isinstance(mm_kwargs, dict) else None
+            )
+            if video_as_images:
+                return (
+                    f"video_as_images_single:{prompt_idx};"
+                    f"precomputed={_shape_counts_profile(pre_hw)};"
+                    f"max_num_tiles={max_num_tiles};"
+                    f"max_num_patches={max_num_patches}"
+                )
+            return (
+                f"precomputed={_shape_counts_profile(pre_hw)};"
+                f"max_num_tiles={max_num_tiles};"
+                f"max_num_patches={max_num_patches};"
+                f"video_as_images={video_as_images}"
+            )
+
+        if prompts:
+            bucket_to_positions: dict[str, list[int]] = {}
+            for prompt_pos, prompt in enumerate(prompts):
+                bucket_to_positions.setdefault(_bucket_key(prompt, prompt_pos), []).append(
+                    prompt_pos
+                )
+
+            if os.environ.get("NRL_DEBUG", "0") == "1" and len(bucket_to_positions) > 1:
+                print(
+                    "[VLLM_MM_SHAPE_BUCKET] "
+                    f"num_buckets={len(bucket_to_positions)} "
+                    f"sizes={{"
+                    + ", ".join(
+                        f"{key}: {len(indices)}"
+                        for key, indices in list(bucket_to_positions.items())[:8]
+                    )
+                    + "}",
+                    flush=True,
+                )
+
+            bucketed_outputs: list[Optional[Any]] = [None] * len(prompts)
+            for key, positions in bucket_to_positions.items():
+                sub_prompts = [prompts[pos] for pos in positions]
+                sub_sampling_params = [sampling_params[pos] for pos in positions]
+                sub_outputs = self.llm.generate(sub_prompts, sub_sampling_params)
+                if len(sub_outputs) != len(positions):
+                    raise RuntimeError(
+                        "[VLLM_MM_SHAPE_BUCKET] output length mismatch "
+                        f"bucket={key} expected={len(positions)} got={len(sub_outputs)}"
+                    )
+                for out_pos, prompt_pos in enumerate(positions):
+                    bucketed_outputs[prompt_pos] = sub_outputs[out_pos]
+
+            missing_outputs = [
+                pos for pos, output in enumerate(bucketed_outputs) if output is None
+            ]
+            if missing_outputs:
+                raise RuntimeError(
+                    "[VLLM_MM_SHAPE_BUCKET] failed to collect outputs "
+                    f"for prompt positions={missing_outputs[:16]}"
+                )
+            outputs = cast(list[Any], bucketed_outputs)
+        else:
+            outputs = []
+        outputs_by_index = dict(zip(prompt_indices, outputs))
+
+        if skipped_indices:
+            print(
+                f"▶ vLLM generation skipped {len(skipped_indices)}/{len(input_lengths)} "
+                f"samples with input length >= max_model_len ({max_model_len})",
+                flush=True,
+            )
 
         # Process the outputs - but preserve the original input padding structure
         output_ids_list = []
@@ -977,11 +1139,15 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         for output in outputs:
             max_length = max(max_length, len(output.outputs[0].token_ids))
 
-        for i, output in enumerate(outputs):
-            # Extract generated tokens
+        for i in range(len(input_lengths)):
+            output = outputs_by_index.get(i)
             sequence_length = input_lengths[i]
-            generation = output.outputs[0]
-            generated_tokens = list(generation.token_ids)
+            if output is None:
+                generation = None
+                generated_tokens = []
+            else:
+                generation = output.outputs[0]
+                generated_tokens = list(generation.token_ids)
 
             # Calculate total sequence length (original input length + generated tokens)
             total_length = padded_input_length + max_length
@@ -1001,7 +1167,11 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
 
             output_ids_list.append(full_output)
             full_logprobs = torch.zeros(total_length, dtype=torch.float32)
-            if hasattr(generation, "logprobs") and generation.logprobs:
+            if (
+                generation is not None
+                and hasattr(generation, "logprobs")
+                and generation.logprobs
+            ):
                 try:
                     for idx, logprob_dict in enumerate(generation.logprobs):
                         if logprob_dict:
@@ -1021,7 +1191,9 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             unpadded_sequence_lengths.append(response_length)
 
             # Check if response was truncated (hit max_tokens length limit)
-            is_truncated = generation.finish_reason == "length"
+            is_truncated = (
+                generation is not None and generation.finish_reason == "length"
+            )
             truncated_list.append(is_truncated)
 
             assert response_length <= self.llm.llm_engine.model_config.max_model_len, (

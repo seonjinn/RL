@@ -169,6 +169,116 @@ def test_run_multi_turn_rollout_skip_generation_multimodal_tensors():
     assert rollout_metrics["mean_gen_tokens_per_sample"] == 1.0
 
 
+def test_run_async_multi_turn_rollout_preserves_vllm_side_channels():
+    class DummyTokenizer:
+        pad_token_id = 0
+
+        def __call__(self, text, return_tensors="pt", add_special_tokens=False):
+            if text:
+                return SimpleNamespace(
+                    input_ids=torch.tensor([[9]], dtype=torch.int64)
+                )
+            return SimpleNamespace(input_ids=torch.zeros((1, 0), dtype=torch.int64))
+
+    tokenizer = DummyTokenizer()
+    input_batch = BatchedDataDict[DatumSpec](
+        {
+            "message_log": [
+                [
+                    {
+                        "role": "user",
+                        "content": "look and listen",
+                        "token_ids": torch.tensor([1, 2, 3], dtype=torch.int64),
+                        "pixel_values": PackedTensor(
+                            [torch.ones((1, 3, 2, 2), dtype=torch.float32)],
+                            dim_to_pack=0,
+                        ),
+                        "imgs_sizes": PackedTensor(
+                            [torch.tensor([[4, 5]], dtype=torch.int32)],
+                            dim_to_pack=0,
+                        ),
+                    }
+                ]
+            ],
+            "extra_env_info": [{}],
+            "loss_multiplier": torch.tensor([1.0]),
+            "idx": [0],
+            "task_name": ["math"],
+            "vllm_content": ["prompt-with-omni-media"],
+            "vllm_images": [["img1"]],
+            "vllm_videos": [["vid1.mp4"]],
+            "vllm_num_frames": [32],
+            "vllm_temporal_patch_size": [2],
+            "vllm_audio_paths": [["aud1.wav"]],
+            "vllm_max_audio_duration": [300.0],
+            "vllm_max_num_tiles": [None],
+            "vllm_max_num_patches": [1024],
+        }
+    )
+
+    captured: dict[str, BatchedDataDict] = {}
+
+    async def fake_generate_responses_async(
+        policy_generation,
+        generation_input_data,
+        batch,
+        tokenizer,
+        input_lengths,
+        include_logprobs=True,
+        greedy=False,
+    ):
+        captured["generation_input_data"] = generation_input_data
+        batch["message_log"][0].append(
+            {
+                "role": "assistant",
+                "content": "done",
+                "token_ids": torch.tensor([7], dtype=torch.int64),
+            }
+        )
+        return batch, [torch.tensor([7], dtype=torch.int64)], {
+            "mean_generation_length": 1.0,
+            "total_generated_tokens": 1,
+        }
+
+    env_output = EnvironmentReturn(
+        observations=[{"role": "environment", "content": ""}],
+        metadata=[None],
+        next_stop_strings=[None],
+        rewards=torch.tensor([1.0]),
+        terminateds=torch.tensor([True]),
+        answers=[None],
+    )
+
+    with patch(
+        "nemo_rl.experience.rollouts.generate_responses_async",
+        side_effect=fake_generate_responses_async,
+    ), patch(
+        "nemo_rl.experience.rollouts.calculate_rewards", return_value=env_output
+    ):
+        final_batch, rollout_metrics = run_async_multi_turn_rollout(
+            policy_generation=MagicMock(),
+            input_batch=input_batch,
+            tokenizer=tokenizer,
+            task_to_env={"math": MagicMock()},
+            max_seq_len=32,
+            max_rollout_turns=1,
+        )
+
+    generation_input_data = captured["generation_input_data"]
+    assert "pixel_values" in generation_input_data
+    assert "imgs_sizes" in generation_input_data
+    assert generation_input_data["vllm_content"] == ["prompt-with-omni-media"]
+    assert generation_input_data["vllm_images"] == [["img1"]]
+    assert generation_input_data["vllm_videos"] == [["vid1.mp4"]]
+    assert generation_input_data["vllm_num_frames"] == [32]
+    assert generation_input_data["vllm_temporal_patch_size"] == [2]
+    assert generation_input_data["vllm_audio_paths"] == [["aud1.wav"]]
+    assert generation_input_data["vllm_max_audio_duration"] == [300.0]
+    assert generation_input_data["vllm_max_num_patches"] == [1024]
+    assert final_batch["total_reward"][0].item() == 1.0
+    assert rollout_metrics["mean_gen_tokens_per_sample"] == 1.0
+
+
 class TestCalculateSingleMetric:
     """Unit tests for _calculate_single_metric function."""
 

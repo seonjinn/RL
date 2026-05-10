@@ -55,6 +55,27 @@ import numpy as np
 
 TokenizerType = PreTrainedTokenizerBase
 
+_VLLM_GENERATION_SIDE_CHANNEL_KEYS = (
+    "vllm_content",
+    "vllm_images",
+    "vllm_videos",
+    "vllm_num_frames",
+    "vllm_temporal_patch_size",
+    "vllm_audio_paths",
+    "vllm_audio_waveforms",
+    "vllm_max_audio_duration",
+    "vllm_max_num_tiles",
+    "vllm_max_num_patches",
+)
+
+
+def _select_single_sample_value(value: Any, index: int) -> Any:
+    if torch.is_tensor(value):
+        return value[index]
+    if isinstance(value, list):
+        return value[index]
+    return value
+
 
 def generate_responses(
     policy_generation: GenerationInterface,
@@ -440,6 +461,26 @@ def run_multi_turn_rollout(
             generation_input_data["vllm_images"] = active_batch["vllm_images"]
         if "vllm_videos" in active_batch:
             generation_input_data["vllm_videos"] = active_batch["vllm_videos"]
+        if "vllm_num_frames" in active_batch:
+            generation_input_data["vllm_num_frames"] = active_batch[
+                "vllm_num_frames"
+            ]
+        if "vllm_temporal_patch_size" in active_batch:
+            generation_input_data["vllm_temporal_patch_size"] = active_batch[
+                "vllm_temporal_patch_size"
+            ]
+        if "vllm_audio_paths" in active_batch:
+            generation_input_data["vllm_audio_paths"] = active_batch[
+                "vllm_audio_paths"
+            ]
+        if "vllm_audio_waveforms" in active_batch:
+            generation_input_data["vllm_audio_waveforms"] = active_batch[
+                "vllm_audio_waveforms"
+            ]
+        if "vllm_max_audio_duration" in active_batch:
+            generation_input_data["vllm_max_audio_duration"] = active_batch[
+                "vllm_max_audio_duration"
+            ]
         if "vllm_max_num_tiles" in active_batch:
             generation_input_data["vllm_max_num_tiles"] = active_batch[
                 "vllm_max_num_tiles"
@@ -588,6 +629,8 @@ async def async_generate_response_for_sample_turn(
     tokenizer: TokenizerType,
     max_seq_len: int,
     greedy: bool = False,
+    generation_side_channels: Optional[dict[str, Any]] = None,
+    skip_generation_multimodal_tensors: bool = False,
 ) -> tuple[list[dict], torch.Tensor, torch.Tensor, dict[str, float]]:
     """Generate a response for a single sample's turn using async generation.
 
@@ -598,6 +641,10 @@ async def async_generate_response_for_sample_turn(
         tokenizer: Tokenizer to use
         max_seq_len: Maximum sequence length
         greedy: Whether to use greedy decoding
+        generation_side_channels: Per-sample vLLM multimodal fields copied
+            from the original batch.
+        skip_generation_multimodal_tensors: If True, omit packed tensors from
+            generation input while preserving lightweight vLLM side channels.
 
     Returns:
         Tuple of (updated_message_log, generated_tokens, input_lengths, generation_metrics)
@@ -621,6 +668,17 @@ async def async_generate_response_for_sample_turn(
             "stop_strings": [sample_stop_strings],
         }
     )
+    if not skip_generation_multimodal_tensors:
+        generation_input_data.update(flat_messages.get_multimodal_dict(as_tensors=False))
+    else:
+        imgs_sizes = flat_messages.data.get("imgs_sizes")
+        if imgs_sizes is not None:
+            generation_input_data["imgs_sizes"] = imgs_sizes
+
+    if generation_side_channels is not None:
+        for key in _VLLM_GENERATION_SIDE_CHANNEL_KEYS:
+            if key in generation_side_channels:
+                generation_input_data[key] = [generation_side_channels[key]]
 
     # Create a dummy batch for generate_responses_async
     dummy_batch = BatchedDataDict[DatumSpec](
@@ -657,6 +715,7 @@ async def run_sample_multi_turn_rollout(
     max_seq_len: int,
     max_rollout_turns: int = 999999,
     greedy: bool = False,
+    skip_generation_multimodal_tensors: bool = False,
 ) -> tuple[dict, dict[str, Any]]:
     """Run a multi-turn rollout for a single sample.
 
@@ -681,6 +740,11 @@ async def run_sample_multi_turn_rollout(
     current_extra_env_info = copy.deepcopy(initial_sample_state["extra_env_info"])
     current_stop_strings = initial_sample_state.get("stop_strings", None)
     task_name = initial_sample_state["task_name"]
+    generation_side_channels = {
+        key: copy.deepcopy(initial_sample_state[key])
+        for key in _VLLM_GENERATION_SIDE_CHANNEL_KEYS
+        if key in initial_sample_state
+    }
 
     # Sample-level metrics
     total_reward = 0.0
@@ -719,6 +783,8 @@ async def run_sample_multi_turn_rollout(
                 tokenizer,
                 max_seq_len,
                 greedy=greedy,
+                generation_side_channels=generation_side_channels,
+                skip_generation_multimodal_tensors=skip_generation_multimodal_tensors,
             )
             current_message_log = updated_message_log
 
@@ -840,6 +906,7 @@ def run_async_multi_turn_rollout(
     max_seq_len: int,
     max_rollout_turns: int = 999999,
     greedy: bool = False,
+    skip_generation_multimodal_tensors: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], dict[str, Any]]:
     """Run multi-turn rollouts with sample-level processing.
 
@@ -854,6 +921,8 @@ def run_async_multi_turn_rollout(
         max_seq_len: Maximum sequence length allowed
         max_rollout_turns: Maximum number of agent-environment interaction turns
         greedy: Whether to use greedy decoding
+        skip_generation_multimodal_tensors: If True, omit packed tensors from
+            generation input while preserving lightweight vLLM side channels.
 
     Returns:
         Tuple containing:
@@ -875,6 +944,9 @@ def run_async_multi_turn_rollout(
                 "stop_strings": input_batch.get("stop_strings", [None] * batch_size)[i],
                 "idx": input_batch.get("idx", list(range(batch_size)))[i],
             }
+            for key in _VLLM_GENERATION_SIDE_CHANNEL_KEYS:
+                if key in input_batch:
+                    sample_state[key] = _select_single_sample_value(input_batch[key], i)
             sample_initial_states.append(sample_state)
 
         # Run all samples concurrently
@@ -890,6 +962,7 @@ def run_async_multi_turn_rollout(
                     max_seq_len=max_seq_len,
                     max_rollout_turns=max_rollout_turns,
                     greedy=greedy,
+                    skip_generation_multimodal_tensors=skip_generation_multimodal_tensors,
                 )
                 return result
             except Exception as e:
