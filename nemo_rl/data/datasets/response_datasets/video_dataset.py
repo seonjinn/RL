@@ -35,7 +35,8 @@ import random
 import re
 from typing import Any, Optional
 
-_DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
+_DATASET_DEBUG = os.environ.get("NRL_DATASET_DEBUG", "0") == "1"
+_FORMAT_DEBUG = os.environ.get("NRL_DATASET_FORMAT_DEBUG", "0") == "1"
 
 from datasets import Dataset, Features, Sequence, Value
 
@@ -58,14 +59,19 @@ class VideoDataset(RawDataset):
     def __init__(
         self,
         train_data_path: Optional[str] = None,
+        data_path: Optional[str] = None,
         prompt_file: Optional[str] = None,
         val_size: int = 0,
+        split_validation_size: float = 0,
+        seed: int = 42,
+        task_name: str = "video_dataset",
         **kwargs,
     ):
-        self.task_name = "video_dataset"
-        if not train_data_path:
+        self.task_name = task_name
+        path = train_data_path or data_path
+        if not path:
             raise ValueError("VideoDataset requires a JSONL path")
-        full_dataset = self._load_jsonl(train_data_path)
+        full_dataset = self._load_jsonl(path)
         if val_size > 0 and len(full_dataset) > val_size:
             cutoff = len(full_dataset) - val_size
             val_dataset = full_dataset.select(range(cutoff, len(full_dataset)))
@@ -73,10 +79,10 @@ class VideoDataset(RawDataset):
         else:
             train_dataset = full_dataset
             val_dataset = None
-        self.formatted_ds = {
-            "train": train_dataset,
-            "validation": val_dataset,
-        }
+        self.dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.split_train_validation(split_validation_size, seed)
+        self.formatted_ds = {"train": self.dataset, "validation": self.val_dataset}
         self.task_spec = TaskDataSpec(task_name=self.task_name, prompt_file=prompt_file)
 
     def set_task_spec(self, data_config: dict):
@@ -86,13 +92,14 @@ class VideoDataset(RawDataset):
         self.task_spec.max_num_patches = data_config.get("max_num_patches", None)
         self.task_spec.use_audio = data_config.get("use_audio", False)
         self.task_spec.max_audio_duration = data_config.get("max_audio_duration", None)
-        print(
-            f"[VideoDataset] task={self.task_name} num_frames={self.task_spec.num_frames} "
-            f"max_num_tiles={self.task_spec.max_num_tiles} "
-            f"max_num_patches={self.task_spec.max_num_patches} "
-            f"use_audio={self.task_spec.use_audio} "
-            f"max_audio_duration={self.task_spec.max_audio_duration}"
-        )
+        if _DATASET_DEBUG:
+            print(
+                f"[VideoDataset] task={self.task_name} num_frames={self.task_spec.num_frames} "
+                f"max_num_tiles={self.task_spec.max_num_tiles} "
+                f"max_num_patches={self.task_spec.max_num_patches} "
+                f"use_audio={self.task_spec.use_audio} "
+                f"max_audio_duration={self.task_spec.max_audio_duration}"
+            )
 
     def _load_jsonl(self, path: str) -> Dataset:
         """Load a JSONL with video/image paths and conversations into a Dataset."""
@@ -198,11 +205,11 @@ def format_video_dataset(example: dict[str, Any]) -> dict[str, Any]:
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": assistant_content},
         ],
-        "task_name": "video_dataset",
+        "task_name": example.get("task_name", "video_dataset"),
         "load_audio_flag": example.get("load_audio_flag", False),
     }
 
-    if _DEBUG:
+    if _FORMAT_DEBUG:
         _dbg_vids = example.get("videos", [])
         _dbg_imgs = example.get("images", [])
         print(f"[FMT_VIDEO_DEBUG] videos={_dbg_vids}")
@@ -310,3 +317,11 @@ def format_video_mpo_dataset(
             },
         ],
     }
+
+
+class OmniVideoDataset(VideoDataset):
+    """Video dataset alias whose rows keep task_name='omni_video_dataset'."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("task_name", "omni_video_dataset")
+        super().__init__(*args, **kwargs)

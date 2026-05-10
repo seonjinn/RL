@@ -46,16 +46,32 @@ def rl_collate_fn(data_batch: list[DatumSpec]) -> BatchedDataDict[Any]:
     # Extract stop_strings if present
     stop_strings = [datum.get("stop_strings", None) for datum in data_batch]
 
-    # check if any of the data batch has vllm content and images
+    # Preserve lightweight vLLM multimodal references. These are logical
+    # per-row refs and must not be deduplicated with PackedTensor payloads.
     extra_args = {}
-    if any(
-        [datum_spec.get("vllm_content", None) is not None for datum_spec in data_batch]
-    ):
+    if any(["vllm_content" in datum_spec for datum_spec in data_batch]):
         vllm_content = [
             datum_spec.get("vllm_content", None) for datum_spec in data_batch
         ]
         vllm_images = [datum_spec.get("vllm_images", []) for datum_spec in data_batch]
         vllm_videos = [datum_spec.get("vllm_videos", []) for datum_spec in data_batch]
+        vllm_num_frames = [
+            datum_spec.get("vllm_num_frames", None) for datum_spec in data_batch
+        ]
+        vllm_temporal_patch_size = [
+            datum_spec.get("vllm_temporal_patch_size", None)
+            for datum_spec in data_batch
+        ]
+        vllm_audio_paths = [
+            datum_spec.get("vllm_audio_paths", []) for datum_spec in data_batch
+        ]
+        vllm_audio_waveforms = [
+            datum_spec.get("vllm_audio_waveforms", []) for datum_spec in data_batch
+        ]
+        vllm_max_audio_duration = [
+            datum_spec.get("vllm_max_audio_duration", None)
+            for datum_spec in data_batch
+        ]
         vllm_max_num_tiles = [
             datum_spec.get("vllm_max_num_tiles", None) for datum_spec in data_batch
         ]
@@ -65,8 +81,24 @@ def rl_collate_fn(data_batch: list[DatumSpec]) -> BatchedDataDict[Any]:
         extra_args["vllm_content"] = vllm_content
         extra_args["vllm_images"] = vllm_images
         extra_args["vllm_videos"] = vllm_videos
+        extra_args["vllm_num_frames"] = vllm_num_frames
+        extra_args["vllm_temporal_patch_size"] = vllm_temporal_patch_size
+        extra_args["vllm_audio_paths"] = vllm_audio_paths
+        extra_args["vllm_audio_waveforms"] = vllm_audio_waveforms
+        extra_args["vllm_max_audio_duration"] = vllm_max_audio_duration
         extra_args["vllm_max_num_tiles"] = vllm_max_num_tiles
         extra_args["vllm_max_num_patches"] = vllm_max_num_patches
+
+    if any(["vision_expansion" in datum_spec for datum_spec in data_batch]):
+        extra_args["vision_expansion"] = torch.tensor(
+            [datum_spec.get("vision_expansion", 0) for datum_spec in data_batch],
+            dtype=torch.int32,
+        )
+    if any(["collapse_savings" in datum_spec for datum_spec in data_batch]):
+        extra_args["collapse_savings"] = torch.tensor(
+            [datum_spec.get("collapse_savings", 0) for datum_spec in data_batch],
+            dtype=torch.int32,
+        )
 
     output: BatchedDataDict[Any] = BatchedDataDict(
         message_log=message_log,

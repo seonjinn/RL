@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NotRequired, Optional, Protocol, TypedDict, Union
 
 import torch
@@ -52,7 +52,10 @@ class PreferenceDatumSpec(TypedDict):
     idx: int
 
 
-@dataclass
+_UNSET = object()
+
+
+@dataclass(init=False)
 class TaskDataSpec:
     task_name: Optional[str] = None
     # prompt
@@ -60,36 +63,99 @@ class TaskDataSpec:
 
     system_prompt_file: Optional[PathLike] = None
 
-    # Image/video processing -- optional overrides of model vision_config defaults.
-    # When None, the processor falls back to the model's vision_config values.
+    # Image/video processing overrides. None means the processor/model default
+    # remains authoritative.
     num_frames: int = 8
-    use_tiling: bool = False  # False = simple resize (1 tile); True = InternVL multi-tile splitting
-    use_dynamic_resolution: Optional[bool] = None  # None = auto-detect from model; True/False = explicit override
-    max_num_tiles: Optional[int] = None  # only used when use_tiling=True; controls tile count
-    max_num_patches: Optional[int] = None  # None = vision_config default; set = override per-image patch cap
-    video_target_num_patches: Optional[int] = None  # fixed per-frame patch budget for video (mirrors Megatron's --video-target-num-patches)
+    use_tiling: bool = False
+    use_dynamic_resolution: Optional[bool] = None
+    max_num_tiles: Optional[int] = None
+    max_num_patches: Optional[int] = None
+    video_target_num_patches: Optional[int] = None
 
-    # conv3d temporal compression -- when > 1, every T consecutive video
-    # frames are grouped into one tubelet by the RADIO vision encoder.
-    # Placeholder tokens are only emitted for primary frames (every T-th).
+    # Conv3D video tubelet grouping.
     video_temporal_patch_size: int = 1
-
-    # When True the video target resolution preserves the source aspect
-    # ratio (matching Megatron SFT's --video-maintain-aspect-ratio).
     video_maintain_aspect_ratio: bool = True
 
-    # audio processing -- when True the data processor extracts audio from
-    # videos and includes it as audio content alongside vision frames.
+    # Audio processing controls.
     use_audio: bool = False
-    max_audio_duration: Optional[float] = None  # seconds; clip audio longer than this
-    sound_clip_duration: float = 30.0  # seconds; max clip length for audio splitting (matches SFT --sound-clip-duration)
-    sound_clip_min_duration: float = 0.1  # seconds; minimum tail clip length after splitting
+    max_audio_duration: Optional[float] = None
+    sound_clip_duration: float = 30.0
+    sound_clip_min_duration: float = 0.1
 
-    # Budget-aware vision resolution: minimum tokens reserved for generation
-    # when auto-computing max_num_patches from max_seq_length.
+    # Minimum prompt-side budget reserved for generation when dynamic
+    # resolution computes image/video patch budgets from max_seq_length.
     min_generation_tokens: int = 2000
 
-    def __post_init__(self) -> None:
+    prompt: Optional[str] = None
+    system_prompt: Optional[str] = None
+    _explicit_fields: set[str] = field(default_factory=set, repr=False, compare=False)
+
+    _DEFAULTS = {
+        "num_frames": 8,
+        "use_tiling": False,
+        "use_dynamic_resolution": None,
+        "max_num_tiles": None,
+        "max_num_patches": None,
+        "video_target_num_patches": None,
+        "video_temporal_patch_size": 1,
+        "video_maintain_aspect_ratio": True,
+        "use_audio": False,
+        "max_audio_duration": None,
+        "sound_clip_duration": 30.0,
+        "sound_clip_min_duration": 0.1,
+        "min_generation_tokens": 2000,
+    }
+
+    def __init__(
+        self,
+        task_name: Optional[str] = None,
+        prompt_file: Optional[PathLike] = None,
+        system_prompt_file: Optional[PathLike] = None,
+        *,
+        num_frames: Any = _UNSET,
+        use_tiling: Any = _UNSET,
+        use_dynamic_resolution: Any = _UNSET,
+        max_num_tiles: Any = _UNSET,
+        max_num_patches: Any = _UNSET,
+        video_target_num_patches: Any = _UNSET,
+        video_temporal_patch_size: Any = _UNSET,
+        video_maintain_aspect_ratio: Any = _UNSET,
+        use_audio: Any = _UNSET,
+        max_audio_duration: Any = _UNSET,
+        sound_clip_duration: Any = _UNSET,
+        sound_clip_min_duration: Any = _UNSET,
+        min_generation_tokens: Any = _UNSET,
+    ) -> None:
+        self.task_name = task_name
+        self.prompt_file = prompt_file
+        self.system_prompt_file = system_prompt_file
+        self._explicit_fields = set()
+        if prompt_file is not None:
+            self._explicit_fields.add("prompt")
+        if system_prompt_file is not None:
+            self._explicit_fields.add("system_prompt")
+
+        field_values = {
+            "num_frames": num_frames,
+            "use_tiling": use_tiling,
+            "use_dynamic_resolution": use_dynamic_resolution,
+            "max_num_tiles": max_num_tiles,
+            "max_num_patches": max_num_patches,
+            "video_target_num_patches": video_target_num_patches,
+            "video_temporal_patch_size": video_temporal_patch_size,
+            "video_maintain_aspect_ratio": video_maintain_aspect_ratio,
+            "use_audio": use_audio,
+            "max_audio_duration": max_audio_duration,
+            "sound_clip_duration": sound_clip_duration,
+            "sound_clip_min_duration": sound_clip_min_duration,
+            "min_generation_tokens": min_generation_tokens,
+        }
+        for field_name, value in field_values.items():
+            if value is _UNSET:
+                setattr(self, field_name, self._DEFAULTS[field_name])
+            else:
+                setattr(self, field_name, value)
+                self._explicit_fields.add(field_name)
         def load_prompt_file(
             prompt_file: Optional[PathLike],
         ) -> Optional[str]:
@@ -107,14 +173,34 @@ class TaskDataSpec:
         self.prompt = load_prompt_file(self.prompt_file)
 
     def copy_defaults(self, from_spec: "TaskDataSpec") -> None:
-        """Apply default values from another Task instance for any None attributes."""
+        """Apply defaults from another task spec when fields are unset.
+
+        Concrete Omni fields can legitimately be set to their class defaults
+        (for example ``num_frames=8``).  Track constructor-provided fields so
+        default-copy inheritance does not overwrite those explicit values.
+        """
         default_attrs = {
             "system_prompt": from_spec.system_prompt,
             "prompt": from_spec.prompt,
+            "num_frames": from_spec.num_frames,
+            "use_tiling": from_spec.use_tiling,
+            "use_dynamic_resolution": from_spec.use_dynamic_resolution,
+            "max_num_tiles": from_spec.max_num_tiles,
+            "max_num_patches": from_spec.max_num_patches,
+            "video_target_num_patches": from_spec.video_target_num_patches,
+            "video_temporal_patch_size": from_spec.video_temporal_patch_size,
+            "video_maintain_aspect_ratio": from_spec.video_maintain_aspect_ratio,
+            "use_audio": from_spec.use_audio,
+            "max_audio_duration": from_spec.max_audio_duration,
+            "sound_clip_duration": from_spec.sound_clip_duration,
+            "sound_clip_min_duration": from_spec.sound_clip_min_duration,
+            "min_generation_tokens": from_spec.min_generation_tokens,
         }
 
         for attr_name, default_value in default_attrs.items():
-            if getattr(self, attr_name) is None:
+            if attr_name in self._explicit_fields:
+                continue
+            if attr_name in self._DEFAULTS or getattr(self, attr_name) is None:
                 setattr(self, attr_name, default_value)
 
 
