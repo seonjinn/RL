@@ -79,6 +79,34 @@ from nemo_rl.models.policy.utils import (
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
+_VLM_CONFIG_ALIASES = {
+    "freeze_vision_encoder": "freeze_vision_model",
+    "freeze_vision_projector": "freeze_vision_projection",
+    "freeze_audio_encoder": "freeze_sound_encoder",
+    "freeze_audio_projector": "freeze_sound_projection",
+}
+
+
+def _iter_vlm_config_overrides(megatron_cfg: dict[str, Any]):
+    keys = (
+        "radio_force_cpe_eval_mode",
+        "radio_force_eval_mode",
+        "radio_interpolate_only_cpe",
+        "radio_cpe_aspect_ratio_select",
+        "radio_disable_cpe",
+        "dynamic_resolution",
+        "freeze_vision_model",
+        "freeze_vision_projection",
+        "freeze_sound_encoder",
+        "freeze_sound_projection",
+    )
+    for key in keys:
+        if key in megatron_cfg:
+            yield key, megatron_cfg[key]
+    for old_key, new_key in _VLM_CONFIG_ALIASES.items():
+        if old_key in megatron_cfg and new_key not in megatron_cfg:
+            yield new_key, megatron_cfg[old_key]
+
 
 def _use_mpu_process_groups_compat() -> ProcessGroupCollection:
     """Build a ProcessGroupCollection across Super/Omni MLM API drift.
@@ -416,7 +444,7 @@ def setup_model_config(
     if "layernorm_epsilon" in config["megatron_cfg"]:
         model_cfg.layernorm_epsilon = config["megatron_cfg"]["layernorm_epsilon"]
 
-    # Optional RADIO ViT eval-mode flags. These gate the random CPE crop
+    # Optional VLM provider flags. RADIO eval-mode flags gate the random CPE crop
     # (apply_pos_enc) and can otherwise be silently ignored because the
     # provider object is hydrated from the saved checkpoint config, not
     # from the user's YAML. Forwarding them here lets the YAML override
@@ -424,9 +452,11 @@ def setup_model_config(
     # take effect on RADIOViTModel. Without this, train()-mode forwards
     # see a different positional encoding than eval()-mode forwards on the
     # same image, breaking get_logprobs/train parity.
-    for _radio_key in ("radio_force_cpe_eval_mode", "radio_force_eval_mode"):
-        if _radio_key in config["megatron_cfg"] and hasattr(model_cfg, _radio_key):
-            setattr(model_cfg, _radio_key, config["megatron_cfg"][_radio_key])
+    # Source-era freeze names are translated to the current Megatron-Bridge
+    # provider names so launcher overrides do not silently miss.
+    for _vlm_key, _vlm_value in _iter_vlm_config_overrides(config["megatron_cfg"]):
+        if hasattr(model_cfg, _vlm_key):
+            setattr(model_cfg, _vlm_key, _vlm_value)
 
     # Validate chunking configuration
     _validate_chunking_config(config)
@@ -759,6 +789,54 @@ def _validate_training_config(config: PolicyConfig, model_cfg: Any) -> None:
     )
 
 
+def _get_inner_vlm_model(model: Any) -> Optional[Any]:
+    inner = model
+    while hasattr(inner, "module"):
+        inner = inner.module
+    if hasattr(inner, "llava_model"):
+        inner = inner.llava_model
+    if any(
+        hasattr(inner, attr)
+        for attr in (
+            "vision_model",
+            "img_start_token_id",
+            "img_end_token_id",
+            "image_token_index",
+        )
+    ):
+        return inner
+    return None
+
+
+def _apply_runtime_vlm_overrides(model: Any, policy_cfg: PolicyConfig) -> None:
+    """Apply VLM runtime attributes consumed outside the provider config."""
+    inner = _get_inner_vlm_model(model)
+    if inner is None:
+        return
+
+    hf_overrides = policy_cfg.get("hf_config_overrides", {}) or {}
+    vision_config = hf_overrides.get("vision_config", {}) or {}
+    video_temporal_patch_size = vision_config.get("video_temporal_patch_size")
+    if video_temporal_patch_size is not None:
+        temporal_patch_size = int(video_temporal_patch_size)
+        setattr(inner, "_video_temporal_patch_size", temporal_patch_size)
+        vision_model = getattr(inner, "vision_model", None)
+        if vision_model is not None:
+            for attr_name in ("temporal_patch_dim", "_video_temporal_patch_size"):
+                if hasattr(vision_model, attr_name):
+                    setattr(vision_model, attr_name, temporal_patch_size)
+
+    dynamic_resolution = policy_cfg["megatron_cfg"].get(
+        "dynamic_resolution", hf_overrides.get("dynamic_resolution")
+    )
+    if dynamic_resolution is not None:
+        dynamic_resolution = bool(dynamic_resolution)
+        setattr(inner, "_dynamic_resolution", dynamic_resolution)
+        vision_model = getattr(inner, "vision_model", None)
+        if vision_model is not None and hasattr(vision_model, "dynamic_resolution"):
+            setattr(vision_model, "dynamic_resolution", dynamic_resolution)
+
+
 def _validate_dtype_config(
     dtype: torch.dtype, model_cfg: Any, optimizer_cfg: Any
 ) -> None:
@@ -1054,6 +1132,7 @@ def setup_model_and_optimizer(
 
     # Get the first model from the list
     model = model[0]
+    _apply_runtime_vlm_overrides(model, policy_cfg)
 
     return ModelAndOptimizerState(
         state,
@@ -1150,6 +1229,7 @@ def setup_reference_model_state(
             skip_load_to_model_and_opt=HAVE_FSDP2 and megatron_cfg.dist.use_torch_fsdp2,
         )
         reference_model = reference_model[0]
+        _apply_runtime_vlm_overrides(reference_model, config)
         reference_model.eval()
 
         # Store reference state dict on CPU

@@ -49,7 +49,7 @@ def _packed_tensor_shapes(packed_tensor: PackedTensor) -> list[list[int] | None]
     ]
 
 
-class SequencePackingArgs(TypedDict):
+class SequencePackingArgs(TypedDict, total=False):
     """Configuration settings for sequence packing.
 
     Pass this to 'shard_by_batch_size()' to preprocess batches for sequence packing.
@@ -61,6 +61,9 @@ class SequencePackingArgs(TypedDict):
     algorithm: str
     sequence_length_pad_multiple: (
         int  # pad each sequence to a multiple of this value (for CP/TP alignment)
+    )
+    expanded_lengths_key: (
+        str  # optional key to use for packing weights when expanded length differs from token length
     )
 
 
@@ -87,8 +90,6 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         "imgs_sizes",  # dynamic-resolution VLMs: [num_images, 2] with (H, W) per image
         "image_num_patches",  # static InternVL tiling: number of patches per image
         "num_frames",  # temporal grouping metadata for image/video batches
-        "sound_clip_duration",  # audio clip splitting max duration in seconds
-        "sound_clip_min_duration",  # audio clip splitting min tail duration in seconds
     ]
     # ``PackedTensor`` keys for which ``get_multimodal_dict(pixel_dtype=...)``
     # eagerly casts the underlying tensors before serialization. Used by the
@@ -527,6 +528,13 @@ class BatchedDataDict(UserDict, Generic[DictT]):
             if not isinstance(input_lens, torch.Tensor):
                 input_lens = torch.tensor(input_lens)
 
+            expanded_lengths_key = sequence_packing_args.get("expanded_lengths_key")
+            packing_lens = input_lens
+            if expanded_lengths_key is not None and expanded_lengths_key in self.data:
+                packing_lens = self.data[expanded_lengths_key]
+                if not isinstance(packing_lens, torch.Tensor):
+                    packing_lens = torch.tensor(packing_lens)
+
             pad_multiple = sequence_packing_args["sequence_length_pad_multiple"]
 
             def _get_padded_seqlen(seqlen: int) -> int:
@@ -541,7 +549,7 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 chunk_end = (chunk_idx + 1) * batch_size
 
                 # Get sequence lengths for this chunk
-                chunk_seqlens = input_lens[chunk_start:chunk_end]
+                chunk_seqlens = packing_lens[chunk_start:chunk_end]
                 chunk_padded_seqlens_list = [
                     _get_padded_seqlen(seq_len.item()) for seq_len in chunk_seqlens
                 ]

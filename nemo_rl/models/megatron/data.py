@@ -167,6 +167,14 @@ def make_processed_microbatch_iterator(
             data_dict = collapse_multimodal_tokens(data_dict, model)
 
         tokens_removed_per_sample = data_dict.pop("tokens_removed_per_sample", None)
+        vision_expansion_per_sample = data_dict.pop(
+            "vision_expansion_per_sample", None
+        )
+        expansion_per_sample = (
+            vision_expansion_per_sample
+            if vision_expansion_per_sample is not None
+            else tokens_removed_per_sample
+        )
 
         processed_inputs = process_microbatch(
             data_dict=data_dict,
@@ -176,7 +184,7 @@ def make_processed_microbatch_iterator(
             pad_full_seq_to=pad_full_seq_to,
             pack_sequences=pack_sequences,
             straggler_timer=straggler_timer,
-            tokens_removed_per_sample=tokens_removed_per_sample,
+            tokens_removed_per_sample=expansion_per_sample,
             use_llava_handoff=use_llava_handoff,
             policy_cfg=cfg,
             original_input_ids=original_input_ids,
