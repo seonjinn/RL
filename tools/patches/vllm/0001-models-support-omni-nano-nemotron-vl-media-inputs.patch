@@ -1,0 +1,429 @@
+diff --git a/vllm/model_executor/models/nano_nemotron_vl.py b/vllm/model_executor/models/nano_nemotron_vl.py
+index 994b52606..eed1b9513 100644
+--- a/vllm/model_executor/models/nano_nemotron_vl.py
++++ b/vllm/model_executor/models/nano_nemotron_vl.py
+@@ -10,0 +11 @@ import math
++import os
+@@ -378 +379,10 @@ class NanoNemotronVLMultiModalProcessor(
+-        if self.info.is_dynamic_tiler:
++        dynamic_tiler = getattr(
++            self,
++            "is_dynamic_tiler",
++            getattr(
++                self.info,
++                "is_dynamic_tiler",
++                getattr(self, "dynamic_resolution", False),
++            ),
++        )
++        if dynamic_tiler and "num_tokens_per_image" in hf_inputs:
+@@ -381,0 +392,3 @@ class NanoNemotronVLMultiModalProcessor(
++            # Static video-as-images uses zero patch counts for secondary frame
++            # placeholders; flat_from_sizes groups each primary frame with its
++            # temporal partner and gives secondary placeholders an empty slice.
+@@ -437,0 +451,10 @@ class NanoNemotronVLMultiModalProcessor(
++        def get_mm_item_value(name: str, item_idx: int) -> object | None:
++            values = out_mm_data.get(name)
++            if values is None:
++                return None
++            if torch.is_tensor(values):
++                if values.ndim == 0:
++                    return values
++                return values[item_idx]
++            return values[item_idx]
++
+@@ -455 +478 @@ class NanoNemotronVLMultiModalProcessor(
+-            elif self.info.is_dynamic_tiler:
++            elif "num_tokens_per_image" in out_mm_data:
+@@ -456,0 +480,35 @@ class NanoNemotronVLMultiModalProcessor(
++            elif "image_num_patches" in out_mm_data or "num_patches" in out_mm_data:
++                patch_count = get_mm_item_value("image_num_patches", item_idx)
++                if patch_count is None:
++                    patch_count = get_mm_item_value("num_patches", item_idx)
++                assert patch_count is not None
++                if torch.is_tensor(patch_count):
++                    patch_count = int(patch_count.item())
++                else:
++                    patch_count = int(patch_count)
++
++                if patch_count == 0:
++                    feature_size = 0
++                elif "imgs_sizes" in out_mm_data:
++                    imgs_size = get_mm_item_value("imgs_sizes", item_idx)
++                    assert imgs_size is not None
++                    target_h, target_w = imgs_size
++                    patch_size = int(getattr(hf_processor.config, "patch_size", 16))
++                    downsample_ratio = float(
++                        getattr(hf_processor.config, "downsample_ratio", 0.5)
++                    )
++                    feature_size = int(
++                        (int(target_h) // patch_size)
++                        * downsample_ratio
++                        * (int(target_w) // patch_size)
++                        * downsample_ratio
++                    )
++                else:
++                    image_size = images.get_image_size(item_idx)
++                    max_num_tiles = hf_processor.max_num_tiles
++                    tokens_per_patch = hf_processor.get_num_image_tokens(
++                        image_width=image_size.width,
++                        image_height=image_size.height,
++                        max_num_tiles=max_num_tiles,
++                    )
++                    feature_size = int(patch_count * tokens_per_patch)
+@@ -474,0 +533,5 @@ class NanoNemotronVLMultiModalProcessor(
++            if torch.is_tensor(feature_size):
++                feature_size = int(feature_size.item())
++            else:
++                feature_size = int(feature_size)
++
+@@ -1118,4 +1181,7 @@ class NemotronH_Nano_VL_V2(
+-        if self.dynamic_resolution:
+-            pixel_values_flat = DynamicResolutionImageTiler.stack(
+-                pixel_values_flat, self.patch_size
+-            )
++        has_dynamic = "imgs_sizes" in kwargs and "num_tokens_per_image" in kwargs
++        has_static = "image_num_patches" in kwargs
++        if has_dynamic:
++            if not torch.is_tensor(pixel_values_flat) or pixel_values_flat.ndim == 4:
++                pixel_values_flat = DynamicResolutionImageTiler.stack(
++                    pixel_values_flat, self.patch_size
++                )
+@@ -1125,5 +1191,6 @@ class NemotronH_Nano_VL_V2(
+-        else:
+-            return NanoNemotronVLImagePixelInputs(
+-                pixel_values_flat=pixel_values_flat,
+-                num_patches=kwargs.pop("image_num_patches"),
+-                **kwargs,
++
++        if not has_static:
++            raise ValueError(
++                "Expected either dynamic image keys "
++                "(imgs_sizes, num_tokens_per_image) or static image_num_patches, "
++                f"got keys={sorted(kwargs.keys())}"
+@@ -1131,0 +1199,7 @@ class NemotronH_Nano_VL_V2(
++        kwargs.pop("imgs_sizes", None)
++        return NanoNemotronVLImagePixelInputs(
++            pixel_values_flat=pixel_values_flat,
++            num_patches=kwargs.pop("image_num_patches"),
++            **kwargs,
++        )
++
+@@ -1149 +1223 @@ class NemotronH_Nano_VL_V2(
+-        image_embeds = self.extract_feature(image_input["pixel_values_flat"])
++        pixel_values = image_input["pixel_values_flat"]
+@@ -1150,0 +1225,98 @@ class NemotronH_Nano_VL_V2(
++        hidden_size = self.config.text_config.hidden_size
++        temporal_patch_size = self.video_temporal_patch_size
++
++        if (
++            temporal_patch_size > 1
++            and num_patches.numel() > 0
++            and ((num_patches == 0).any() or (num_patches == temporal_patch_size).all())
++        ):
++            if not torch.is_tensor(pixel_values):
++                flattened_pixels: list[torch.Tensor] = []
++
++                def append_pixels(item: object) -> None:
++                    if torch.is_tensor(item):
++                        if item.numel() == 0:
++                            return
++                        flattened_pixels.append(
++                            item if item.ndim == 4 else item.unsqueeze(0)
++                        )
++                        return
++                    if isinstance(item, (list, tuple)):
++                        for child in item:
++                            append_pixels(child)
++                        return
++                    raise TypeError(
++                        "Expected tensor or nested tensor list for "
++                        f"pixel_values_flat, got {type(item)}"
++                    )
++
++                append_pixels(pixel_values)
++                if not flattened_pixels:
++                    device = num_patches.device
++                    pixel_values = torch.empty(
++                        0, 3, 0, 0, device=device, dtype=torch.bfloat16
++                    )
++                else:
++                    pixel_values = torch.cat(flattened_pixels, dim=0)
++
++            total_requested_frames = int(num_patches.sum().item())
++            available_frames = int(pixel_values.shape[0])
++            if available_frames < total_requested_frames:
++                raise ValueError(
++                    "Static video-as-images received too few frame tensors for "
++                    "temporal tubelets: "
++                    f"available={available_frames}, requested={total_requested_frames}, "
++                    f"num_patches={num_patches.tolist()}. "
++                    "Check that pixel_values_flat uses flat_from_sizes with "
++                    "image_num_patches."
++                )
++
++            if os.environ.get("NRL_DEBUG", "0") == "1":
++                print(
++                    "[VLLM_VIDEO_AS_IMAGES_EMBED] "
++                    f"items={num_patches.numel()} "
++                    f"available_frames={available_frames} "
++                    f"requested_frames={total_requested_frames} "
++                    f"num_patches_head={num_patches[:8].tolist()}",
++                    flush=True,
++                )
++
++            nonzero_items = int((num_patches > 0).sum().item())
++            video_embeds = self.extract_feature(
++                pixel_values[:total_requested_frames],
++                num_frames=total_requested_frames,
++            ).view(-1, hidden_size)
++            if nonzero_items == 0:
++                feature_size = 0
++            elif video_embeds.shape[0] % nonzero_items != 0:
++                raise ValueError(
++                    "Static video-as-images produced an embedding count that "
++                    "cannot be split across temporal tubelets: "
++                    f"embeds={video_embeds.shape[0]}, items={nonzero_items}, "
++                    f"num_patches={num_patches.tolist()}"
++                )
++            else:
++                feature_size = video_embeds.shape[0] // nonzero_items
++
++            results: list[torch.Tensor] = []
++            embed_offset = 0
++            for patch_count_tensor in num_patches:
++                patch_count = int(patch_count_tensor.item())
++                if patch_count == 0:
++                    results.append(
++                        torch.empty(
++                            0,
++                            hidden_size,
++                            device=pixel_values.device,
++                            dtype=torch.bfloat16,
++                        )
++                    )
++                    continue
++
++                item_embeds = video_embeds[embed_offset : embed_offset + feature_size]
++                embed_offset += feature_size
++                results.append(item_embeds)
++
++            return tuple(results)
++
++        image_embeds = self.extract_feature(pixel_values)
+@@ -1154 +1326 @@ class NemotronH_Nano_VL_V2(
+-            return (image_embeds.view(-1, self.config.text_config.hidden_size),)
++            return (image_embeds.view(-1, hidden_size),)
+@@ -1159 +1331 @@ class NemotronH_Nano_VL_V2(
+-        image_embeds = image_embeds.view(-1, self.config.text_config.hidden_size)
++        image_embeds = image_embeds.view(-1, hidden_size)
+@@ -1447,2 +1619 @@ class NemotronH_Nano_VL_V2(
+-                elif self.dynamic_resolution:
+-                    assert image_input["type"] == "pixel_values_dynamic"
++                elif image_input["type"] == "pixel_values_dynamic":
+@@ -1450,0 +1622 @@ class NemotronH_Nano_VL_V2(
++                    assert image_input["type"] == "pixel_values"
+diff --git a/vllm/transformers_utils/processors/nano_nemotron_vl.py b/vllm/transformers_utils/processors/nano_nemotron_vl.py
+index 76b73d216..38df3a418 100644
+--- a/vllm/transformers_utils/processors/nano_nemotron_vl.py
++++ b/vllm/transformers_utils/processors/nano_nemotron_vl.py
+@@ -10,0 +11 @@ import math
++import os
+@@ -685 +686,5 @@ class BaseNanoNemotronVLProcessor(ABC):
+-        max_num_tiles: int,
++        max_num_tiles: int | None,
++        use_fast_preprocessing: bool | None = None,
++        max_num_patches: int | None = None,
++        precomputed_imgs_sizes: list[list[int]] | None = None,
++        video_as_images: bool | None = None,
+@@ -691 +696,2 @@ class BaseNanoNemotronVLProcessor(ABC):
+-        if tiler := self.dynamic_tiler:
++        tiler = None if max_num_tiles is not None else self.dynamic_tiler
++        if tiler:
+@@ -696,6 +702,46 @@ class BaseNanoNemotronVLProcessor(ABC):
+-            pixel_values_lst, num_tokens_per_image = tiler._images_to_pixel_values_lst(
+-                text_prompt_length=text_prompt_length,
+-                images=images,
+-                dtype=self.dtype,
+-            )
+-            imgs_sizes = [(pv.shape[-2], pv.shape[-1]) for pv in pixel_values_lst]
++            if precomputed_imgs_sizes is not None and len(precomputed_imgs_sizes) == len(
++                images
++            ):
++                pixel_values_lst = []
++                num_tokens_per_image = []
++                imgs_sizes = []
++                for image, (target_h, target_w) in zip(
++                    images, precomputed_imgs_sizes, strict=True
++                ):
++                    target_h, target_w = int(target_h), int(target_w)
++                    resized = _bicubic_resize_and_normalize(
++                        _pil_to_nhwc_tensor(image),
++                        size=(target_h, target_w),
++                        norm_mean=self.norm_mean,
++                        norm_std=self.norm_std,
++                        dtype=self.dtype,
++                    )
++                    pixel_values_lst.extend(list(resized))
++                    imgs_sizes.append((target_h, target_w))
++                    num_tokens_per_image.append(
++                        tiler._get_num_embeddings(target_w, target_h)
++                    )
++                if os.environ.get("NRL_DEBUG", "0") == "1":
++                    print(
++                        "[VLLM_PRECOMPUTED_PATH] "
++                        f"using {len(imgs_sizes)} HF-resolved image sizes; "
++                        f"first_sizes={imgs_sizes[:3]}",
++                        flush=True,
++                    )
++            else:
++                old_max_num_patches = tiler._max_num_patches
++                if max_num_patches is not None:
++                    tiler._max_num_patches = (
++                        max_num_patches if max_num_patches > 0 else float("inf")
++                    )
++                try:
++                    pixel_values_lst, num_tokens_per_image = (
++                        tiler._images_to_pixel_values_lst(
++                            text_prompt_length=text_prompt_length,
++                            images=images,
++                            dtype=self.dtype,
++                        )
++                    )
++                finally:
++                    tiler._max_num_patches = old_max_num_patches
++                imgs_sizes = [(pv.shape[-2], pv.shape[-1]) for pv in pixel_values_lst]
+@@ -707,0 +754,93 @@ class BaseNanoNemotronVLProcessor(ABC):
++        elif (
++            max_num_tiles == 1
++            and getattr(self, "video_target_num_patches", None) is not None
++            and len(images) > 1
++            and bool(video_as_images)
++        ):
++            temporal_patch_size = self.video_temporal_patch_size
++            num_images = len(images)
++            num_tubelets = math.ceil(num_images / temporal_patch_size)
++            num_padded = num_tubelets * temporal_patch_size
++            if num_padded > num_images:
++                images = list(images) + [images[-1]] * (num_padded - num_images)
++            patch_size = self.config.patch_size
++            downsample_ratio = self.config.downsample_ratio
++            target_patches = self.video_target_num_patches
++            orig_w, orig_h = images[0].width, images[0].height
++
++            if precomputed_imgs_sizes is not None and len(precomputed_imgs_sizes) > 0:
++                if len(precomputed_imgs_sizes) != num_images:
++                    raise ValueError(
++                        "video_as_images expected one precomputed target per "
++                        f"unpadded frame, got len(precomputed_imgs_sizes)="
++                        f"{len(precomputed_imgs_sizes)} for num_images={num_images}"
++                    )
++                unique_sizes = {
++                    (int(height), int(width))
++                    for height, width in precomputed_imgs_sizes
++                }
++                if len(unique_sizes) != 1:
++                    raise ValueError(
++                        "video_as_images expects one resize target across frames, "
++                        f"got {sorted(unique_sizes)}"
++                    )
++                target_h, target_w = next(iter(unique_sizes))
++            elif self.video_maintain_aspect_ratio:
++                target_w, target_h = _compute_aspect_preserving_size(
++                    orig_w=orig_w,
++                    orig_h=orig_h,
++                    target_num_patches=target_patches,
++                    patch_size=patch_size,
++                    downsample_ratio=downsample_ratio,
++                )
++            else:
++                reduction_factor = int(round(1 / downsample_ratio))
++                side = int(math.sqrt(target_patches))
++                side = max(
++                    reduction_factor,
++                    (side // reduction_factor) * reduction_factor,
++                )
++                target_w = side * patch_size
++                target_h = side * patch_size
++
++            frame_tensors = []
++            for image in images:
++                resized = _bicubic_resize_and_normalize(
++                    _pil_to_nhwc_tensor(image),
++                    size=(target_h, target_w),
++                    norm_mean=self.norm_mean,
++                    norm_std=self.norm_std,
++                    dtype=self.dtype,
++                )
++                frame_tensors.extend(list(resized))
++            pixel_values_flat = torch.stack(frame_tensors)
++            image_num_patches = torch.tensor(
++                [
++                    temporal_patch_size if i % temporal_patch_size == 0 else 0
++                    for i in range(num_images)
++                ]
++            )
++            tokens_per_tubelet = int(
++                (target_h // patch_size)
++                * downsample_ratio
++                * (target_w // patch_size)
++                * downsample_ratio
++            )
++            num_tokens_per_image = [
++                tokens_per_tubelet if i % temporal_patch_size == 0 else 0
++                for i in range(num_images)
++            ]
++            image_inputs = {
++                "pixel_values_flat": pixel_values_flat,
++                "image_num_patches": image_num_patches,
++                "imgs_sizes": [(target_h, target_w)] * num_images,
++            }
++            if os.environ.get("NRL_DEBUG", "0") == "1":
++                print(
++                    "[VLLM_VIDEO_AS_IMAGES] "
++                    f"orig=({orig_w}x{orig_h}) target=({target_w}x{target_h}) "
++                    f"frames={num_images} T={temporal_patch_size} "
++                    f"tokens_per_tubelet={tokens_per_tubelet} "
++                    f"num_tokens_per_image={num_tokens_per_image[:8]}",
++                    flush=True,
++                )
+@@ -708,0 +848 @@ class BaseNanoNemotronVLProcessor(ABC):
++            max_num_tiles = max_num_tiles or self.max_num_tiles
+@@ -734,3 +874,6 @@ class BaseNanoNemotronVLProcessor(ABC):
+-        for i, (feature_size, num_patches) in enumerate(
+-            zip(num_tokens_per_image, image_num_patches, strict=True)
+-        ):
++        image_idx = 0
++        for part_idx, part in enumerate(parts):
++            if part != "<image>":
++                continue
++            feature_size = num_tokens_per_image[image_idx]
++            num_patches = image_num_patches[image_idx]
+@@ -738 +881,2 @@ class BaseNanoNemotronVLProcessor(ABC):
+-            parts[i] = parts[i].replace("<image>", image_repl.full)
++            parts[part_idx] = image_repl.full
++            image_idx += 1
+@@ -779,0 +924 @@ class NanoNemotronVLProcessor(BaseNanoNemotronVLProcessor):
++        **kwargs: object,
+@@ -1025,0 +1171,4 @@ class NanoNemotronVLProcessor(BaseNanoNemotronVLProcessor):
++        use_fast_preprocessing: bool | None = None,
++        max_num_patches: int | None = None,
++        precomputed_imgs_sizes: list[list[int]] | None = None,
++        video_as_images: bool | None = None,
+@@ -1028,4 +1176,0 @@ class NanoNemotronVLProcessor(BaseNanoNemotronVLProcessor):
+-        # Use default if not provided
+-        if max_num_tiles is None:
+-            max_num_tiles = self.max_num_tiles
+-
+@@ -1040,0 +1186,4 @@ class NanoNemotronVLProcessor(BaseNanoNemotronVLProcessor):
++            use_fast_preprocessing=use_fast_preprocessing,
++            max_num_patches=max_num_patches,
++            precomputed_imgs_sizes=precomputed_imgs_sizes,
++            video_as_images=video_as_images,
+@@ -1086,0 +1236,7 @@ class NanoNemotronVLProcessor(BaseNanoNemotronVLProcessor):
++        # VLLM_ZERO_IMAGE_REPL_WRAPPER: keep a wrapper-only placeholder so
++        # vLLM's multimodal item accounting still sees secondary video frames.
++        if feature_size == 0:
++            patch_count = 0 if num_patches is None else int(num_patches)
++            if patch_count == 0:
++                return PromptUpdateDetails.select_text(IMG_START + IMG_END, IMG_CONTEXT)
++

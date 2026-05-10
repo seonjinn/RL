@@ -27,6 +27,7 @@ export UV_LINK_MODE=copy
 # pinned by commit for reproducible container rebuilds.
 GIT_URL=${1:-https://github.com/aroshanghias-nvd/vllm.git}
 GIT_REF=${2:-cd27945fb31f174da96c0c9b931af4959a1365e3}
+APPLY_OMNI_PATCH=${NRL_APPLY_OMNI_VLLM_PATCH:-1}
 # NOTE: VLLM_USE_PRECOMPILED=1 didn't always seem to work since the wheels were sometimes built against an incompatible torch/cuda combo.
 # You need to export VLLM_PRECOMPILED_WHEEL_LOCATION to the full path of the wheel file.
 if [[ -n "${3:-}" ]]; then
@@ -51,12 +52,18 @@ echo "Building vLLM from:"
 echo "  Vllm Git URL: $GIT_URL"
 echo "  Vllm Git ref: $GIT_REF"
 echo "  Vllm Wheel location: $VLLM_PRECOMPILED_WHEEL_LOCATION"
+echo "  Apply Omni vLLM patch: $APPLY_OMNI_PATCH"
 
 # Clone the repository
 echo "Cloning repository..."
 git clone "$GIT_URL" "$BUILD_DIR"
 cd "$BUILD_DIR"
 git checkout "$GIT_REF"
+if [[ "$APPLY_OMNI_PATCH" == "1" ]]; then
+  OMNI_PATCH="$REPO_ROOT/tools/patches/vllm/0001-models-support-omni-nano-nemotron-vl-media-inputs.patch"
+  echo "Applying Omni vLLM patch: $OMNI_PATCH"
+  git apply --unidiff-zero "$OMNI_PATCH"
+fi
 
 # Create a new Python environment using uv
 echo "Creating Python environment..."
