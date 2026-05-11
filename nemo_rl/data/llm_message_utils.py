@@ -32,6 +32,30 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 Tensor = torch.Tensor
 TokenizerType = PreTrainedTokenizerBase
 
+_MESSAGE_TENSOR_DTYPES: dict[str, torch.dtype] = {
+    "token_ids": torch.int64,
+    "token_type_ids": torch.int64,
+    "token_loss_mask": torch.int64,
+    "generation_logprobs": torch.float32,
+    "advantages": torch.float32,
+}
+
+
+def _normalize_message_tensor_dtype(key: str, tensor: Tensor) -> Tensor:
+    """Normalize well-known per-token message fields before concatenation."""
+    expected_dtype = _MESSAGE_TENSOR_DTYPES.get(key)
+    if expected_dtype is None or tensor.dtype == expected_dtype:
+        return tensor
+
+    if key in {"token_ids", "token_type_ids"} and tensor.is_floating_point():
+        if tensor.numel() > 0 and not torch.equal(tensor, tensor.round()):
+            raise RuntimeError(
+                f"cannot cast non-integral tensor for {key=} from "
+                f"{tensor.dtype} to {expected_dtype}"
+            )
+
+    return tensor.to(dtype=expected_dtype)
+
 
 def message_log_to_flat_messages(
     message_log: LLMMessageLogType,
@@ -103,12 +127,17 @@ def message_log_to_flat_messages(
     concat: FlatMessagesType = {}
     for key in result:
         if result[key] and isinstance(result[key][0], Tensor):
+            tensor_values = [
+                _normalize_message_tensor_dtype(key, cast(Tensor, v))
+                for v in result[key]
+            ]
             try:
-                concat[key] = torch.cat(result[key])
+                concat[key] = torch.cat(tensor_values)
             except RuntimeError as e:
                 if "same number of dimensions" in str(e):
                     raise RuntimeError(
-                        f"tensors for {key=} must have same number of dimensions: {[t.shape for t in result[key]]}"
+                        f"tensors for {key=} must have same number of dimensions: "
+                        f"{[t.shape for t in tensor_values]}"
                     ) from e
                 raise
         elif result[key] and isinstance(result[key][0], PackedTensor):
@@ -207,7 +236,7 @@ def _pad_tensor(
     )
 
 
-def _validate_tensor_consistency(tensors: list[Tensor]) -> None:
+def _validate_tensor_consistency(tensors: list[Tensor], key: str | None = None) -> None:
     """Validate that all tensors have consistent dtypes and devices.
 
     Args:
@@ -221,12 +250,15 @@ def _validate_tensor_consistency(tensors: list[Tensor]) -> None:
 
     first = tensors[0]
     if not all(t is None or t.dtype == first.dtype for t in tensors):
+        key_suffix = f" for {key=}" if key is not None else ""
         raise RuntimeError(
-            f"expected consistent types but got: {[t.dtype for t in tensors]}"
+            f"expected consistent types{key_suffix} but got: {[t.dtype for t in tensors]}"
         )
     if not all(t is None or t.device == first.device for t in tensors):
+        key_suffix = f" for {key=}" if key is not None else ""
         raise RuntimeError(
-            f"expected tensors on the same device but got: {[t.device for t in tensors]}"
+            f"expected tensors on the same device{key_suffix} but got: "
+            f"{[t.device for t in tensors]}"
         )
 
 
@@ -369,8 +401,12 @@ def batched_message_log_to_flat_message(
 
         # Filter out None values and validate consistency
         values: list[Tensor | None] = cast(list[Tensor | None], values)
+        values = [
+            _normalize_message_tensor_dtype(key, v) if v is not None else None
+            for v in values
+        ]
         tensors = cast(list[Tensor], [t for t in values if t is not None])
-        _validate_tensor_consistency(tensors)
+        _validate_tensor_consistency(tensors, key=key)
 
         # Create zero tensors for None values
         filled_values: list[Tensor] = [
