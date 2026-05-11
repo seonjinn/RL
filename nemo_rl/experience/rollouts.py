@@ -1455,10 +1455,9 @@ def run_async_nemo_gym_rollout(
                 for m in all_sample_metrics
             )
             / batch_size,
-            "truncation_rate": sum(m["hit_max_tokens"] for m in all_sample_metrics)
-            / batch_size,
-            "policy_max_length_truncation_rate": sum(
-                m["truncated_for_policy_max_length"] for m in all_sample_metrics
+            "truncation_rate": sum(
+                m["hit_max_tokens"] or m["truncated_for_policy_max_length"]
+                for m in all_sample_metrics
             )
             / batch_size,
             # TODO enable this metric. We don't have a clear handle on which tokens are user or tool role.
