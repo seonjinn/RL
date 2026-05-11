@@ -229,6 +229,7 @@ Depending on your data shape, you may want to change these values."""
         tokenizer: PreTrainedTokenizerBase,
         timer_prefix: str,
         original_message_logs: Optional[list[list[dict]]] = None,
+        max_total_tokens_per_sample: Optional[int] = None,
     ) -> list[dict]:
         from nemo_rl.utils.fastokens import maybe_patch_fastokens
 
