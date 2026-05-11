@@ -739,7 +739,7 @@ def nemo_gym_data_processor(
         from nemo_rl.environments.nemo_gym import nemo_gym_example_to_nemo_rl_datum_spec
 
         datum = nemo_gym_example_to_nemo_rl_datum_spec(
-            extra_env_info, idx, processor=tokenizer
+            extra_env_info, idx, processor=tokenizer, max_seq_length=max_seq_length,
         )
         # Honor the dataset's task_name rather than the hardcoded "nemo_gym" default.
         datum["task_name"] = datum_dict["task_name"]

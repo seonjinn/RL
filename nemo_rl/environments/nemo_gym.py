@@ -11,10 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import base64
+import copy
+import io
+import json
 import os
 import subprocess
-import base64
-import io
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -106,6 +108,195 @@ def encode_images_in_examples(nemo_gym_examples: list[dict]) -> list[dict]:
                 # Local filesystem path — encode as data URL
                 part["image_url"] = image_to_data_url(resolve_to_image(url))
     return nemo_gym_examples
+
+
+def _normalize_image_placeholders(text: str, replacement: str) -> str:
+    text = text.replace("<img>", "")
+    text = text.replace("</img>", "")
+    text = text.replace("<image>", replacement)
+    return text
+
+
+def _count_image_payloads(nemo_gym_example: dict) -> int:
+    count = 0
+    input_items = nemo_gym_example.get("responses_create_params", {}).get("input", [])
+    for item in input_items:
+        content = item.get("content", "")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in ("input_image", "image", "image_url"):
+                count += 1
+                continue
+            if part.get("image_url") is not None or part.get("image") is not None:
+                count += 1
+    return count
+
+
+def _count_text_image_placeholders(nemo_gym_example: dict) -> int:
+    count = 0
+    input_items = nemo_gym_example.get("responses_create_params", {}).get("input", [])
+    for item in input_items:
+        content = item.get("content", "")
+        if isinstance(content, str):
+            count += content.count("<image>")
+            continue
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, str):
+                count += part.count("<image>")
+                continue
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text", "")
+            if isinstance(text, str):
+                count += text.count("<image>")
+    return count
+
+
+def _example_has_image_payload(nemo_gym_example: dict) -> bool:
+    return _count_image_payloads(nemo_gym_example) > 0
+
+
+def sanitize_nemo_gym_example_image_placeholders(nemo_gym_example: dict) -> dict:
+    """Normalize literal image placeholders in text fields.
+
+    For well-formed multimodal rows, preserve literal `<image>` anchors in the
+    text so the chat template expands image blocks at the dataset-authored
+    positions. For text-only rows, replace `<image>` with `image` so special
+    image tokens do not enter a prompt without image payloads. For malformed
+    multimodal rows whose literal anchors do not match the image payload count,
+    strip the anchors and let the chat template place the available images.
+    """
+    image_payload_count = _count_image_payloads(nemo_gym_example)
+    placeholder_count = _count_text_image_placeholders(nemo_gym_example)
+    sanitized = copy.deepcopy(nemo_gym_example)
+    if image_payload_count > 0 and placeholder_count == image_payload_count:
+        return sanitized
+
+    replacement = "" if image_payload_count > 0 else "image"
+    input_items = sanitized.get("responses_create_params", {}).get("input", [])
+    for item in input_items:
+        content = item.get("content", "")
+        if isinstance(content, str):
+            item["content"] = _normalize_image_placeholders(content, replacement)
+            continue
+        if not isinstance(content, list):
+            continue
+        for idx, part in enumerate(content):
+            if isinstance(part, str):
+                content[idx] = _normalize_image_placeholders(part, replacement)
+                continue
+            if not isinstance(part, dict):
+                continue
+            text_value = part.get("text")
+            if isinstance(text_value, str):
+                part["text"] = _normalize_image_placeholders(text_value, replacement)
+    return sanitized
+
+
+def _make_overlength_filtered_nemo_gym_example(nemo_gym_example: dict) -> dict:
+    """Replace the rollout request with a tiny text-only fallback.
+
+    NeMo-Gym uses ``extra_env_info`` as the source-of-truth request payload during
+    rollout, so setting ``loss_multiplier=0`` alone is not enough to prevent the
+    original oversized prompt from reaching vLLM. For filtered samples we preserve
+    the example metadata, but swap the model input with a minimal user message.
+    """
+    filtered = copy.deepcopy(nemo_gym_example)
+    filtered.setdefault("responses_create_params", {})
+    filtered["responses_create_params"]["input"] = [
+        {
+            "role": "user",
+            "type": "message",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Discarded overlength sample.",
+                }
+            ],
+        }
+    ]
+    return filtered
+
+
+def _deep_merge_dict(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _normalise_precomputed_img_sizes(imgs_sizes: Any) -> list[list[int]]:
+    if imgs_sizes is None:
+        return []
+
+    sizes = imgs_sizes.detach().cpu().tolist() if torch.is_tensor(imgs_sizes) else imgs_sizes
+    if isinstance(sizes, tuple):
+        sizes = list(sizes)
+    if not isinstance(sizes, list):
+        return []
+
+    if len(sizes) == 2 and not isinstance(sizes[0], (list, tuple)):
+        sizes = [sizes]
+
+    precomputed_sizes = []
+    for size_pair in sizes:
+        if torch.is_tensor(size_pair):
+            size_pair = size_pair.detach().cpu().tolist()
+        if isinstance(size_pair, tuple):
+            size_pair = list(size_pair)
+        if not isinstance(size_pair, list) or len(size_pair) < 2:
+            continue
+        precomputed_sizes.append([int(size_pair[0]), int(size_pair[1])])
+    return precomputed_sizes
+
+
+def _merge_vllm_mm_processor_kwargs(
+    nemo_gym_example: dict, mm_processor_kwargs: dict
+) -> None:
+    responses_create_params = nemo_gym_example.setdefault("responses_create_params", {})
+    if not isinstance(responses_create_params, dict):
+        raise TypeError(
+            "responses_create_params must be a dict to set vLLM extra_body"
+        )
+
+    metadata = responses_create_params.get("metadata")
+    if metadata is None:
+        metadata = {}
+        responses_create_params["metadata"] = metadata
+    if not isinstance(metadata, dict):
+        raise TypeError("responses_create_params.metadata must be a dict")
+
+    existing_extra_body = metadata.get("extra_body", "{}")
+    if existing_extra_body is None:
+        extra_body = {}
+    elif isinstance(existing_extra_body, str):
+        extra_body = json.loads(existing_extra_body.strip() or "{}")
+    elif isinstance(existing_extra_body, dict):
+        extra_body = copy.deepcopy(existing_extra_body)
+    else:
+        raise TypeError(
+            "responses_create_params.metadata.extra_body must be a JSON string "
+            f"or dict, got {type(existing_extra_body).__name__}"
+        )
+    if not isinstance(extra_body, dict):
+        raise TypeError(
+            "responses_create_params.metadata.extra_body must decode to a dict"
+        )
+
+    extra_body = _deep_merge_dict(
+        extra_body,
+        {"mm_processor_kwargs": mm_processor_kwargs},
+    )
+    metadata["extra_body"] = json.dumps(extra_body)
 
 
 class NemoGymConfig(TypedDict):
@@ -265,6 +456,8 @@ Depending on your data shape, you may want to change these values."""
                         nemo_gym_result,
                         tokenizer,
                         original_message_log=original_message_log,
+                        max_total_tokens_per_sample=max_total_tokens_per_sample,
+                        rowidx=rowidx,
                     )
 
                 nemo_rl_rowidxs.append(rowidx)
@@ -309,6 +502,8 @@ Depending on your data shape, you may want to change these values."""
         nemo_gym_result: dict,
         tokenizer: PreTrainedTokenizerBase,
         original_message_log: Optional[list[dict]] = None,
+        max_total_tokens_per_sample: Optional[int] = None,
+        rowidx: Optional[int] = None,
     ) -> dict:
         assert isinstance(nemo_gym_result, dict), (
             f"Hit a non-successful response when querying NeMo Gym for rollouts: {nemo_gym_result}"
@@ -316,6 +511,11 @@ Depending on your data shape, you may want to change these values."""
 
         nemo_rl_message_log = []
         seen_token_ids = torch.tensor([], dtype=torch.int64)
+        # Track cumulative token count across turns to enforce the policy token
+        # budget (max_total_tokens_per_sample). If a turn would push us past the
+        # budget, we truncate the assistant tokens and flag the sample.
+        current_policy_token_count = 0
+        truncated_for_policy_max_length = False
 
         # Extract multimodal data (pixel_values, imgs_sizes, etc.) from the original
         # message_log. The original message_log was created by the HF processor and
@@ -370,9 +570,45 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
             # ids (without wrappers) so the prefix assertion above stays valid across
             # multi-turn rollouts.
             if multimodal_data and not nemo_rl_message_log and original_message_log:
-                user_token_ids = torch.cat(
+                hf_token_ids = torch.cat(
                     [msg["token_ids"] for msg in original_message_log], dim=0
                 )
+                # Opt-in debug: when HF-rendered prompt tokens diverge from vLLM's,
+                # print the first mismatch window so we can spot tokenizer/template
+                # drift early. Disabled by default; set NRL_DEBUG_PROMPT_TOKENS=1.
+                if os.environ.get("NRL_DEBUG_PROMPT_TOKENS", "0") == "1":
+                    hf_prompt_token_ids = hf_token_ids.tolist()
+                    vllm_prompt_token_ids = new_prompt_token_ids.tolist()
+                    min_len = min(len(hf_prompt_token_ids), len(vllm_prompt_token_ids))
+                    first_diff_idx = next(
+                        (
+                            idx
+                            for idx in range(min_len)
+                            if hf_prompt_token_ids[idx] != vllm_prompt_token_ids[idx]
+                        ),
+                        None,
+                    )
+                    has_mismatch = (
+                        first_diff_idx is not None
+                        or len(hf_prompt_token_ids) != len(vllm_prompt_token_ids)
+                    )
+                    if has_mismatch:
+                        window_start = max(0, (first_diff_idx or min_len) - 5)
+                        window_end = min(
+                            max(len(hf_prompt_token_ids), len(vllm_prompt_token_ids)),
+                            (first_diff_idx or min_len) + 6,
+                        )
+                        print(
+                            "[NEMO_GYM_PROMPT_TOKEN_MISMATCH] "
+                            f"rowidx={rowidx} "
+                            f"len_hf={len(hf_prompt_token_ids)} "
+                            f"len_vllm={len(vllm_prompt_token_ids)} "
+                            f"first_diff={first_diff_idx} "
+                            f"hf_window={hf_prompt_token_ids[window_start:window_end]} "
+                            f"vllm_window={vllm_prompt_token_ids[window_start:window_end]}",
+                            flush=True,
+                        )
+                user_token_ids = hf_token_ids
             else:
                 user_token_ids = new_prompt_token_ids
 
@@ -385,6 +621,27 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
             # image input from the original DatumSpec).
             if multimodal_data and len(nemo_rl_message_log) == 0:
                 user_message.update(multimodal_data)
+
+            # Policy token-budget enforcement: if appending this turn's assistant
+            # tokens would push us past `max_total_tokens_per_sample`, truncate them
+            # and flag the sample so downstream metrics can distinguish vLLM
+            # max-tokens truncation from policy-budget truncation.
+            if max_total_tokens_per_sample is not None:
+                remaining_assistant_tokens = max(
+                    0,
+                    max_total_tokens_per_sample
+                    - current_policy_token_count
+                    - len(user_token_ids),
+                )
+                if len(generation_token_ids) > remaining_assistant_tokens:
+                    generation_token_ids = generation_token_ids[
+                        :remaining_assistant_tokens
+                    ]
+                    generation_logprobs = generation_logprobs[
+                        :remaining_assistant_tokens
+                    ]
+                    truncated_for_policy_max_length = True
+
             nemo_rl_message_log.append(user_message)
 
             # Valid tool calls go through the structured API (tool_calls field) and get
@@ -418,6 +675,9 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
                     "is_invalid_tool_call": is_invalid_tool_call,
                 }
             )
+            current_policy_token_count += len(user_token_ids) + len(
+                assistant_token_ids
+            )
 
             seen_token_ids = torch.cat(
                 [seen_token_ids, new_prompt_token_ids, generation_token_ids]
@@ -438,6 +698,11 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
                     generation_token_ids_for_decode,
                 )
             )
+
+            # Stop processing further turns once the policy budget has been hit —
+            # any remaining output_items would only contribute discarded tokens.
+            if truncated_for_policy_max_length:
+                break
 
         if batch_decode_items:
             prompt_token_ids_batch = [item[1] for item in batch_decode_items]
@@ -470,6 +735,7 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
             "message_log": nemo_rl_message_log,
             "input_message_log": nemo_rl_message_log[:1],
             "full_result": nemo_gym_result,
+            "truncated_for_policy_max_length": truncated_for_policy_max_length,
         }
 
     def shutdown(self) -> None:
@@ -508,8 +774,13 @@ def setup_nemo_gym_config(config, tokenizer) -> None:
 
 # We do some light preprocessing here to make our data format compatible with nemo rl format
 def nemo_gym_example_to_nemo_rl_datum_spec(
-    nemo_gym_example: dict, idx: int, processor: Optional[Any] = None
+    nemo_gym_example: dict,
+    idx: int,
+    processor: Optional[Any] = None,
+    max_seq_length: Optional[int] = None,
 ) -> DatumSpec:
+    nemo_gym_example = sanitize_nemo_gym_example_image_placeholders(nemo_gym_example)
+
     if processor is None:
         return DatumSpec(
             message_log=[
@@ -579,19 +850,53 @@ def nemo_gym_example_to_nemo_rl_datum_spec(
             )
 
     if "imgs_sizes" in message_both:
-        user_message["imgs_sizes"] = PackedTensor(message_both["imgs_sizes"], dim_to_pack=0)
+        imgs_sizes = message_both["imgs_sizes"].to(dtype=torch.int32)
+        user_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
+        precomputed_imgs_sizes = _normalise_precomputed_img_sizes(imgs_sizes)
+        if precomputed_imgs_sizes:
+            _merge_vllm_mm_processor_kwargs(
+                nemo_gym_example,
+                {"precomputed_imgs_sizes": precomputed_imgs_sizes},
+            )
 
     if "token_type_ids" in message_both:
         user_message["token_type_ids"] = message_both["token_type_ids"][0]
 
     message_log = [user_message]
     length = sum(len(m["token_ids"]) for m in message_log)
+    loss_multiplier = 1.0
+    extra_env_info = nemo_gym_example
+
+    if max_seq_length is not None and length >= max_seq_length:
+        print(f"Discarding sample with length {length} >= {max_seq_length}")
+
+        tokenizer = processor.tokenizer
+        image_token_ids = [
+            tokenizer.convert_tokens_to_ids(token)
+            for token in ("<img>", "<image>", "</img>")
+        ]
+        image_token_ids = [token_id for token_id in image_token_ids if token_id is not None]
+
+        for chat_message in message_log:
+            token_ids = chat_message["token_ids"][
+                : min(4, max_seq_length // len(message_log))
+            ]
+            for img_token_id in image_token_ids:
+                token_ids = token_ids[token_ids != img_token_id]
+            chat_message["token_ids"] = token_ids
+            for key, value in chat_message.items():
+                if isinstance(value, PackedTensor):
+                    chat_message[key] = PackedTensor.empty_like(value)
+
+        loss_multiplier = 0.0
+        length = sum(len(m["token_ids"]) for m in message_log)
+        extra_env_info = _make_overlength_filtered_nemo_gym_example(nemo_gym_example)
 
     return DatumSpec(
         message_log=message_log,
         length=length,
-        extra_env_info=nemo_gym_example,
-        loss_multiplier=1.0,
+        extra_env_info=extra_env_info,
+        loss_multiplier=loss_multiplier,
         idx=idx,
         task_name="nemo_gym",
         stop_strings=None,
