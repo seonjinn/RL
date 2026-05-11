@@ -92,7 +92,7 @@ export TORCH_FR_BUFFER_SIZE="${TORCH_FR_BUFFER_SIZE:-1000}"
 export NRL_DEBUG="${NRL_DEBUG:-0}"
 export USE_REPO_VLLM="${USE_REPO_VLLM:-0}"
 export NRL_PATCH_CONTAINER_VLLM="${NRL_PATCH_CONTAINER_VLLM:-1}"
-export NRL_VLLM_VIDEO_AS_IMAGES="${NRL_VLLM_VIDEO_AS_IMAGES:-1}"
+export NRL_VLLM_VIDEO_AS_IMAGES="${NRL_VLLM_VIDEO_AS_IMAGES:-0}"
 
 SEED="${SEED:-$(printf '%s' "train:${JOB_NAME}" | openssl dgst -md5 -binary | od -An -tu4 -N4 | xargs)}"
 WANDB_PROJECT="${WANDB_PROJECT:-Nemotron-omni-RL}"
