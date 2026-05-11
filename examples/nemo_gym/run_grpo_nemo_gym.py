@@ -314,6 +314,7 @@ The validation set you pass in will directly be used for validation with no addi
             checkpointer,
             grpo_state,
             master_config,
+            processor,
         )
 
 
