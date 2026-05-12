@@ -95,6 +95,7 @@ policy:
     vision_config:
       video_temporal_patch_size: ${data.default.video_temporal_patch_size}
       video_target_num_patches: ${data.default.video_target_num_patches}
+      video_maintain_aspect_ratio: ${data.default.video_maintain_aspect_ratio}
     sound_config:
       max_audio_duration: ${data.default.max_audio_duration}
       sound_clip_duration: ${data.default.sound_clip_duration}

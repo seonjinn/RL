@@ -211,6 +211,50 @@ def test_vllm_utils_omni_video_as_images_rewrites_prompt_and_forwards_sizes(
     }
 
 
+def test_vllm_utils_omni_native_video_keeps_video_payload(monkeypatch):
+    input_ids, input_lengths = _mk_inputs(batch_size=1)
+
+    def fake_load_video_frames_with_metadata(
+        video_path, num_frames=8, temporal_patch_size=1
+    ):
+        assert video_path == "video.mp4"
+        assert num_frames == 2
+        assert temporal_patch_size == 2
+        return np.zeros((2, 12, 10, 3), dtype=np.uint8), {
+            "fps": 2.0,
+            "frames_indices": [0, 1],
+            "do_sample_frames": False,
+        }
+
+    monkeypatch.delenv("NRL_VLLM_VIDEO_AS_IMAGES", raising=False)
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.utils.load_video_frames_with_metadata",
+        fake_load_video_frames_with_metadata,
+    )
+
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": input_lengths[:1],
+            "vllm_content": ["prefix <video> suffix"],
+            "vllm_videos": [["video.mp4"]],
+            "vllm_num_frames": [2],
+            "vllm_temporal_patch_size": [2],
+            "vllm_max_num_patches": [1008],
+        }
+    )
+
+    prompt = format_prompt_for_vllm_generation(data, sample_idx=0)
+
+    assert prompt["prompt"] == "prefix <video> suffix"
+    assert "image" not in prompt["multi_modal_data"]
+    video_payload = prompt["multi_modal_data"]["video"]
+    frames, metadata = video_payload
+    assert frames.shape == (2, 12, 10, 3)
+    assert metadata["frames_indices"] == [0, 1]
+    assert prompt["mm_processor_kwargs"] == {"max_num_patches": 1008}
+
+
 def test_vllm_utils_vlm_compact_payload_matches_raw_prompt_format_for_local_paths(
     tmp_path,
 ):

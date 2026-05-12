@@ -135,7 +135,11 @@ def _propagate_omni_runtime_config(config: dict) -> None:
     vision_config = _setdefault_nested(hf_overrides, "vision_config")
     sound_config = _setdefault_nested(hf_overrides, "sound_config")
 
-    for key in ("video_temporal_patch_size", "video_target_num_patches"):
+    for key in (
+        "video_temporal_patch_size",
+        "video_target_num_patches",
+        "video_maintain_aspect_ratio",
+    ):
         value = data_settings.get(key)
         if value is not None:
             vision_config.setdefault(key, value)

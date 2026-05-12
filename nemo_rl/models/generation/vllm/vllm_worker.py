@@ -565,6 +565,491 @@ class BaseVllmGenerationWorker:
                 content = content.replace(old_snippet, new_snippet)
                 write_back(content)
 
+        def _patch_nano_nemotron_vl_video_processing():
+            """Patch the installed Nano-Nemotron VL model for native video.
+
+            The job-level setup command patches /opt/nemo-rl before Ray workers
+            start, but vLLM also imports this model from an inspection subprocess
+            inside the model-owner actor. Applying the same critical patches here
+            ensures that subprocess sees an importable model file and the
+            no-frame-separator video prompt replacement.
+            """
+            try:
+                file_path = _get_vllm_file("model_executor/models/nano_nemotron_vl.py")
+            except RuntimeError as exc:
+                logger.warning(
+                    "Skipping nano_nemotron_vl native-video patch: %s",
+                    exc,
+                )
+                return
+
+            old_prompt_update_import = (
+                "    PromptReplacement,\n"
+                "    PromptUpdate,\n"
+                ")\n"
+            )
+            new_prompt_update_import = (
+                "    PromptReplacement,\n"
+                "    PromptUpdateDetails,\n"
+                "    PromptUpdate,\n"
+                ")\n"
+            )
+
+            base_mm_processor_code = """class NanoNemotronBaseVLMultiModalProcessor(BaseMultiModalProcessor):
+    def _get_mm_fields_config(
+        self,
+        hf_inputs: BatchFeature,
+        hf_processor_mm_kwargs: Mapping[str, object],
+    ) -> Mapping[str, MultiModalFieldConfig]:
+        dynamic_tiler = getattr(
+            self,
+            "is_dynamic_tiler",
+            getattr(
+                self.info,
+                "is_dynamic_tiler",
+                getattr(self, "dynamic_resolution", False),
+            ),
+        )
+        if dynamic_tiler and "num_tokens_per_image" in hf_inputs:
+            pixel_values_flat = MultiModalFieldConfig.batched("image")
+        else:
+            pixel_values_flat = MultiModalFieldConfig.flat_from_sizes(
+                "image", hf_inputs.get("image_num_patches", torch.empty(0))
+            )
+
+        fields = dict(
+            pixel_values_flat=pixel_values_flat,
+            image_num_patches=MultiModalFieldConfig.batched("image"),
+            image_embeds=MultiModalFieldConfig.batched("image"),
+            num_tokens_per_image=MultiModalFieldConfig.batched("image"),
+            imgs_sizes=MultiModalFieldConfig.batched("image"),
+        )
+        for key, config in list(fields.items()):
+            if isinstance(config, tuple):
+                if len(config) != 1:
+                    raise TypeError(
+                        "Expected single field config tuple for "
+                        f"{key}, got len={len(config)}"
+                    )
+                fields[key] = config[0]
+
+        return fields
+
+    def _get_prompt_repl_image(
+        self,
+        mm_items,
+        hf_processor,
+        out_mm_data,
+    ):
+        def get_mm_item_value(name: str, item_idx: int) -> object | None:
+            values = out_mm_data.get(name)
+            if values is None:
+                return None
+            if torch.is_tensor(values):
+                if values.ndim == 0:
+                    return values
+                return values[item_idx]
+            return values[item_idx]
+
+        if "image_num_patches" in out_mm_data:
+            image_num_patches = out_mm_data["image_num_patches"]
+            assert isinstance(image_num_patches, torch.Tensor)
+            image_num_patches = image_num_patches.tolist()
+        elif "image_embeds" in out_mm_data:
+            image_num_patches = [None] * len(out_mm_data["image_embeds"])
+        else:
+            image_num_patches = []
+
+        def get_image_replacement(item_idx: int):
+            images = mm_items.get_items(
+                "image", (ImageEmbeddingItems, ImageProcessorItems)
+            )
+
+            if isinstance(images, ImageEmbeddingItems):
+                feature_size = images.get_feature_size(item_idx)
+            elif "num_tokens_per_image" in out_mm_data:
+                feature_size = out_mm_data["num_tokens_per_image"][item_idx]
+            elif "image_num_patches" in out_mm_data or "num_patches" in out_mm_data:
+                patch_count = get_mm_item_value("image_num_patches", item_idx)
+                if patch_count is None:
+                    patch_count = get_mm_item_value("num_patches", item_idx)
+                assert patch_count is not None
+                if torch.is_tensor(patch_count):
+                    patch_count = int(patch_count.item())
+                else:
+                    patch_count = int(patch_count)
+
+                if patch_count == 0:
+                    feature_size = 0
+                elif "imgs_sizes" in out_mm_data:
+                    imgs_size = get_mm_item_value("imgs_sizes", item_idx)
+                    assert imgs_size is not None
+                    target_h, target_w = imgs_size
+                    patch_size = int(getattr(hf_processor.config, "patch_size", 16))
+                    downsample_ratio = float(
+                        getattr(hf_processor.config, "downsample_ratio", 0.5)
+                    )
+                    feature_size = int(
+                        (int(target_h) // patch_size)
+                        * downsample_ratio
+                        * (int(target_w) // patch_size)
+                        * downsample_ratio
+                    )
+                else:
+                    image_size = images.get_image_size(item_idx)
+                    max_num_tiles = hf_processor.max_num_tiles
+                    tokens_per_patch = hf_processor.get_num_image_tokens(
+                        image_width=image_size.width,
+                        image_height=image_size.height,
+                        max_num_tiles=max_num_tiles,
+                    )
+                    feature_size = int(patch_count * tokens_per_patch)
+            else:
+                image_size = images.get_image_size(item_idx)
+                max_num_tiles = hf_processor.max_num_tiles
+                feature_size = hf_processor.get_num_image_tokens(
+                    image_width=image_size.width,
+                    image_height=image_size.height,
+                    max_num_tiles=max_num_tiles,
+                )
+
+            num_patches = None
+            local_image_num_patches = image_num_patches
+            if isinstance(local_image_num_patches, torch.Tensor):
+                local_image_num_patches = local_image_num_patches.tolist()
+            if isinstance(local_image_num_patches, (list, tuple)) and item_idx < len(
+                local_image_num_patches
+            ):
+                num_patches = int(local_image_num_patches[item_idx])
+
+            if torch.is_tensor(feature_size):
+                feature_size = int(feature_size.item())
+            else:
+                feature_size = int(feature_size)
+
+            return hf_processor.get_image_repl(feature_size, num_patches)
+
+        return PromptReplacement(
+            modality="image",
+            target="<image>",
+            replacement=get_image_replacement,
+        )
+
+    def _get_prompt_updates(
+        self,
+        mm_items,
+        hf_processor_mm_kwargs,
+        out_mm_kwargs,
+    ):
+        hf_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
+        out_mm_data = out_mm_kwargs.get_data()
+        return [
+            self._get_prompt_repl_image(mm_items, hf_processor, out_mm_data),
+        ]
+
+"""
+            patch_base_processor = (
+                os.environ.get("NRL_PATCH_NANO_BASE_PROCESSOR", "0")
+                .strip()
+                .lower()
+                in ("1", "true", "yes", "on")
+            )
+
+            old_video_repl_return = """            frame_duration_ms = int(1000 / metadata["fps"])
+            return hf_processor.get_video_repl(
+                tokens_per_frame=tokens_per_frame,
+                frames_indices=metadata["frames_indices"],
+                frame_duration_ms=frame_duration_ms,
+                tokenizer=hf_processor.tokenizer,
+                img_start_token_ids=hf_processor._img_start_token_ids,
+                img_end_token_ids=hf_processor._img_end_token_ids,
+                img_context_token_ids=hf_processor._img_context_token_ids,
+                video_temporal_patch_size=T,
+            )
+"""
+            new_video_repl_return = """            frame_duration_ms = int(1000 / metadata["fps"])
+            use_frame_separators = (
+                os.environ.get("NRL_VLLM_VIDEO_FRAME_SEPARATORS", "0")
+                .strip()
+                .lower()
+                in ("1", "true", "yes", "on")
+            )
+            if not use_frame_separators:
+                img_context_token_ids = list(hf_processor._img_context_token_ids)
+                all_token_ids: list[int] = []
+                for num_tokens in tokens_per_frame:
+                    all_token_ids.extend(hf_processor._img_start_token_ids)
+                    all_token_ids.extend(img_context_token_ids * num_tokens)
+                    all_token_ids.extend(hf_processor._img_end_token_ids)
+
+                def is_embed(tokenizer, full):
+                    token_ids = (
+                        full
+                        if isinstance(full, list)
+                        else tokenizer.encode(full, add_special_tokens=False)
+                    )
+                    return torch.isin(
+                        torch.tensor(token_ids),
+                        torch.tensor(img_context_token_ids),
+                    )
+
+                embed_token_count = sum(tokens_per_frame) * len(img_context_token_ids)
+                if os.environ.get("NRL_DEBUG", "0") == "1":
+                    print(
+                        "[VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN] "
+                        "frame_separators=0 "
+                        f"full_tokens={len(all_token_ids)} "
+                        f"embed_tokens={embed_token_count} "
+                        f"text_tokens={len(all_token_ids) - embed_token_count} "
+                        f"tubelets={len(tokens_per_frame)} T={T}",
+                        flush=True,
+                    )
+
+                return PromptUpdateDetails(
+                    full=all_token_ids,
+                    is_embed=is_embed,
+                )
+
+            video_repl = hf_processor.get_video_repl(
+                tokens_per_frame=tokens_per_frame,
+                frames_indices=metadata["frames_indices"],
+                frame_duration_ms=frame_duration_ms,
+                tokenizer=hf_processor.tokenizer,
+                img_start_token_ids=hf_processor._img_start_token_ids,
+                img_end_token_ids=hf_processor._img_end_token_ids,
+                img_context_token_ids=hf_processor._img_context_token_ids,
+                video_temporal_patch_size=T,
+            )
+            if video_repl.is_embed is None:
+                img_context_token_ids = list(hf_processor._img_context_token_ids)
+
+                def is_embed(tokenizer, full):
+                    token_ids = (
+                        full
+                        if isinstance(full, list)
+                        else tokenizer.encode(full, add_special_tokens=False)
+                    )
+                    return torch.isin(
+                        torch.tensor(token_ids),
+                        torch.tensor(img_context_token_ids),
+                    )
+
+                video_repl = PromptUpdateDetails(
+                    full=video_repl.full,
+                    is_embed=is_embed,
+                )
+                if os.environ.get("NRL_DEBUG", "0") == "1":
+                    print(
+                        "[VLLM_NATIVE_VIDEO_REPL_GUARD] "
+                        "added context-token embed mask "
+                        f"full_tokens={len(video_repl.full)} "
+                        f"embed_token_ids={img_context_token_ids}",
+                        flush=True,
+                    )
+
+            return video_repl
+"""
+            old_video_repl_call = """            frame_duration_ms = int(1000 / metadata["fps"])
+            video_repl = hf_processor.get_video_repl(
+"""
+            new_video_repl_call = """            frame_duration_ms = int(1000 / metadata["fps"])
+            use_frame_separators = (
+                os.environ.get("NRL_VLLM_VIDEO_FRAME_SEPARATORS", "0")
+                .strip()
+                .lower()
+                in ("1", "true", "yes", "on")
+            )
+            if not use_frame_separators:
+                img_context_token_ids = list(hf_processor._img_context_token_ids)
+                all_token_ids: list[int] = []
+                for num_tokens in tokens_per_frame:
+                    all_token_ids.extend(hf_processor._img_start_token_ids)
+                    all_token_ids.extend(img_context_token_ids * num_tokens)
+                    all_token_ids.extend(hf_processor._img_end_token_ids)
+
+                def is_embed(tokenizer, full):
+                    token_ids = (
+                        full
+                        if isinstance(full, list)
+                        else tokenizer.encode(full, add_special_tokens=False)
+                    )
+                    return torch.isin(
+                        torch.tensor(token_ids),
+                        torch.tensor(img_context_token_ids),
+                    )
+
+                embed_token_count = sum(tokens_per_frame) * len(img_context_token_ids)
+                if os.environ.get("NRL_DEBUG", "0") == "1":
+                    print(
+                        "[VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN] "
+                        "frame_separators=0 "
+                        f"full_tokens={len(all_token_ids)} "
+                        f"embed_tokens={embed_token_count} "
+                        f"text_tokens={len(all_token_ids) - embed_token_count} "
+                        f"tubelets={len(tokens_per_frame)} T={T}",
+                        flush=True,
+                    )
+
+                return PromptUpdateDetails(
+                    full=all_token_ids,
+                    is_embed=is_embed,
+                )
+
+            video_repl = hf_processor.get_video_repl(
+"""
+
+            with _locked_file_patch(file_path) as (content, write_back):
+                original = content
+
+                if old_prompt_update_import in content:
+                    content = content.replace(
+                        old_prompt_update_import,
+                        new_prompt_update_import,
+                        1,
+                    )
+                elif "PromptUpdateDetails" not in content:
+                    logger.warning(
+                        "Could not add PromptUpdateDetails import in %s: "
+                        "expected import block not found.",
+                        file_path,
+                    )
+
+                if "import os\n" not in content:
+                    if "import math\n" in content:
+                        content = content.replace(
+                            "import math\n",
+                            "import math\nimport os\n",
+                            1,
+                        )
+                    else:
+                        logger.warning(
+                            "Could not add os import in %s: import math not found.",
+                            file_path,
+                        )
+
+                if patch_base_processor:
+                    content = content.replace(
+                        "NanoNemotronBaseVLMultiModalProcessor"
+                        "[NanoNemotronVLProcessingInfo]",
+                        "NanoNemotronBaseVLMultiModalProcessor",
+                    )
+
+                if (
+                    patch_base_processor
+                    and (
+                    "NanoNemotronBaseVLMultiModalProcessor = "
+                    "BaseMultiModalProcessor\n"
+                    )
+                    in content
+                ):
+                    content = content.replace(
+                        "NanoNemotronBaseVLMultiModalProcessor = "
+                        "BaseMultiModalProcessor\n",
+                        base_mm_processor_code,
+                        1,
+                    )
+
+                base_class_pos = content.find(
+                    "class NanoNemotronBaseVLMultiModalProcessor("
+                )
+                base_alias_pos = content.find(
+                    "NanoNemotronBaseVLMultiModalProcessor = "
+                    "BaseMultiModalProcessor\n"
+                )
+                subclass_pos = content.find("class NanoNemotronVLMultiModalProcessor")
+                if (
+                    patch_base_processor
+                    and
+                    "NanoNemotronBaseVLMultiModalProcessor" in content
+                    and subclass_pos != -1
+                    and (base_class_pos == -1 or base_class_pos > subclass_pos)
+                ):
+                    content = (
+                        content[:subclass_pos]
+                        + base_mm_processor_code
+                        + content[subclass_pos:]
+                    )
+                elif (
+                    not patch_base_processor
+                    and "NanoNemotronBaseVLMultiModalProcessor" in content
+                    and subclass_pos != -1
+                    and (base_class_pos == -1 or base_class_pos > subclass_pos)
+                    and (base_alias_pos == -1 or base_alias_pos > subclass_pos)
+                ):
+                    content = (
+                        content[:subclass_pos]
+                        + (
+                            "NanoNemotronBaseVLMultiModalProcessor = "
+                            "BaseMultiModalProcessor\n\n"
+                        )
+                        + content[subclass_pos:]
+                    )
+
+                if os.environ.get("NRL_DEBUG", "0") == "1":
+                    base_class_pos = content.find(
+                        "class NanoNemotronBaseVLMultiModalProcessor("
+                    )
+                    base_alias_pos = content.find(
+                        "NanoNemotronBaseVLMultiModalProcessor = "
+                        "BaseMultiModalProcessor\n"
+                    )
+                    subclass_pos = content.find(
+                        "class NanoNemotronVLMultiModalProcessor"
+                    )
+                    logger.info(
+                        "[NRL_PATCH_VLLM_WORKER] base multimodal processor "
+                        "real_class=%s alias=%s base_pos=%s alias_pos=%s "
+                        "subclass_pos=%s",
+                        "class NanoNemotronBaseVLMultiModalProcessor(" in content,
+                        (
+                            "NanoNemotronBaseVLMultiModalProcessor = "
+                            "BaseMultiModalProcessor"
+                        )
+                        in content,
+                        base_class_pos,
+                        base_alias_pos,
+                        subclass_pos,
+                    )
+
+                if old_video_repl_return in content:
+                    content = content.replace(
+                        old_video_repl_return,
+                        new_video_repl_return,
+                        1,
+                    )
+                elif (
+                    "VLLM_NATIVE_VIDEO_REPL_GUARD" in content
+                    and "VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN" not in content
+                ):
+                    if old_video_repl_call in content:
+                        content = content.replace(
+                            old_video_repl_call,
+                            new_video_repl_call,
+                            1,
+                        )
+                    else:
+                        logger.warning(
+                            "Could not add no-separator video replacement in %s: "
+                            "video replacement call not found.",
+                            file_path,
+                        )
+                elif "VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN" not in content:
+                    logger.warning(
+                        "Could not add no-separator video replacement in %s: "
+                        "known video replacement blocks not found.",
+                        file_path,
+                    )
+
+                if content == original:
+                    logger.info("nano_nemotron_vl native-video patch already applied.")
+                    return
+
+                write_back(content)
+
+            logger.info(
+                "Successfully patched nano_nemotron_vl.py for native video loading."
+            )
+
         _patch_vllm_init_workers_ray()
         logger.info("Successfully patched vllm _init_workers_ray.")
 
@@ -572,6 +1057,8 @@ class BaseVllmGenerationWorker:
 
         _patch_flashinfer_mnnvl_cluster_uuid()
         logger.info("Successfully patched flashinfer mnnvl clusterUuid guard.")
+
+        _patch_nano_nemotron_vl_video_processing()
 
         def _patch_nemotron_h_isinstance_check():
             """Remove the no-op isinstance branch in NemotronHModel.forward.

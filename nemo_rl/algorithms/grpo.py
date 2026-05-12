@@ -1835,6 +1835,59 @@ def _debug_print_seq_error_by_modality(
         )
 
 
+def _debug_print_pretrain_logprob_summary(
+    *,
+    train_data: BatchedDataDict,
+    rewards: torch.Tensor,
+) -> None:
+    if os.environ.get("NRL_DEBUG", "0") != "1":
+        return
+
+    token_mask = train_data["token_mask"][:, 1:]
+    sample_mask = train_data["sample_mask"]
+    valid_mask = token_mask * sample_mask.unsqueeze(-1)
+    valid_tokens = int(valid_mask.sum().item())
+    active_samples = int(sample_mask.sum().item())
+
+    if valid_tokens > 0:
+        generation_logprobs = train_data["generation_logprobs"][:, 1:]
+        prev_logprobs = train_data["prev_logprobs"][:, 1:]
+        lp_error = torch.abs(generation_logprobs - prev_logprobs)
+        token_mult_prob_error = (
+            (torch.exp(lp_error * valid_mask) * valid_mask).sum()
+            / valid_mask.sum().clamp(min=1)
+        ).item()
+        valid_bool = valid_mask.bool()
+        finite_generation_lp = int(
+            torch.isfinite(generation_logprobs[valid_bool]).sum().item()
+        )
+        finite_policy_lp = int(
+            torch.isfinite(prev_logprobs[valid_bool]).sum().item()
+        )
+    else:
+        token_mult_prob_error = 0.0
+        finite_generation_lp = 0
+        finite_policy_lp = 0
+
+    if active_samples > 0:
+        active_rewards = rewards.view(-1)[sample_mask.bool()]
+        active_avg_reward = float(active_rewards.float().mean().item())
+    else:
+        active_avg_reward = 0.0
+
+    print(
+        "[PRETRAIN_LOGPROB_DEBUG] "
+        f"token_mult_prob_error={token_mult_prob_error:.6f} "
+        f"avg_reward={float(rewards.float().mean().item()):.4f} "
+        f"active_avg_reward={active_avg_reward:.4f} "
+        f"active_samples={active_samples} "
+        f"valid_tokens={valid_tokens} "
+        f"finite_generation_lp={finite_generation_lp}/{valid_tokens} "
+        f"finite_policy_lp={finite_policy_lp}/{valid_tokens}",
+        flush=True,
+    )
+
+
 def _get_processor_vision_attr(
     processor: AutoProcessor,
     attr_name: str,
@@ -2621,6 +2674,10 @@ def grpo_train(
                         seq_error_result=seq_error_result,
                         repeated_batch=repeated_batch,
                         threshold=seq_logprob_error_threshold,
+                    )
+                    _debug_print_pretrain_logprob_summary(
+                        train_data=train_data,
+                        rewards=rewards,
                     )
 
                     if (
@@ -4006,6 +4063,10 @@ def async_grpo_train(
                         seq_error_result=seq_error_result,
                         repeated_batch=repeated_batch,
                         threshold=seq_logprob_error_threshold,
+                    )
+                    _debug_print_pretrain_logprob_summary(
+                        train_data=train_data,
+                        rewards=rewards,
                     )
 
                     if (
