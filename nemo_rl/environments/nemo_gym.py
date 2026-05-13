@@ -117,6 +117,10 @@ def _normalize_image_placeholders(text: str, replacement: str) -> str:
     return text
 
 
+def _strip_image_placeholders(text: str) -> str:
+    return _normalize_image_placeholders(text, "")
+
+
 def _count_image_payloads(nemo_gym_example: dict) -> int:
     count = 0
     input_items = nemo_gym_example.get("responses_create_params", {}).get("input", [])
@@ -160,6 +164,31 @@ def _count_text_image_placeholders(nemo_gym_example: dict) -> int:
 
 def _example_has_image_payload(nemo_gym_example: dict) -> bool:
     return _count_image_payloads(nemo_gym_example) > 0
+
+
+def _strip_text_image_placeholders_in_example(nemo_gym_example: dict) -> dict:
+    sanitized = copy.deepcopy(nemo_gym_example)
+    input_items = sanitized.get("responses_create_params", {}).get("input", [])
+    for item in input_items:
+        content = item.get("content", "")
+        if isinstance(content, str):
+            item["content"] = _strip_image_placeholders(content)
+            continue
+        if not isinstance(content, list):
+            continue
+        for idx, part in enumerate(content):
+            if isinstance(part, str):
+                content[idx] = _strip_image_placeholders(part)
+                continue
+            if not isinstance(part, dict):
+                continue
+            text_value = part.get("text")
+            if isinstance(text_value, str) and part.get("type") in (
+                "input_text",
+                "text",
+            ):
+                part["text"] = _strip_image_placeholders(text_value)
+    return sanitized
 
 
 def sanitize_nemo_gym_example_image_placeholders(nemo_gym_example: dict) -> dict:
@@ -820,7 +849,9 @@ def nemo_gym_example_to_nemo_rl_datum_spec(
             if url:
                 pil_image = resolve_to_image(url)
                 user_message_with_images["content"].append({"type": "image", "image": pil_image})
-        elif item.get("type") == "input_text":
+        elif item.get("type") in ("input_text", "text"):
+            # Keep literal <image> anchors for the HF processor. They are stripped
+            # only from extra_env_info before sending the prompt to NemoGYM/vLLM.
             user_message_with_images["content"].append({"type": "text", "text": item.get("text", "")})
         else:
             user_message_with_images["content"].append(item)
@@ -849,23 +880,27 @@ def nemo_gym_example_to_nemo_rl_datum_spec(
                 dim_to_pack=get_dim_to_pack_along(processor, key)
             )
 
-    if "imgs_sizes" in message_both:
-        imgs_sizes = message_both["imgs_sizes"].to(dtype=torch.int32)
-        user_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
-        precomputed_imgs_sizes = _normalise_precomputed_img_sizes(imgs_sizes)
-        if precomputed_imgs_sizes:
-            _merge_vllm_mm_processor_kwargs(
-                nemo_gym_example,
-                {"precomputed_imgs_sizes": precomputed_imgs_sizes},
-            )
-
     if "token_type_ids" in message_both:
         user_message["token_type_ids"] = message_both["token_type_ids"][0]
 
     message_log = [user_message]
     length = sum(len(m["token_ids"]) for m in message_log)
     loss_multiplier = 1.0
-    extra_env_info = nemo_gym_example
+    extra_env_info = (
+        _strip_text_image_placeholders_in_example(nemo_gym_example)
+        if _example_has_image_payload(nemo_gym_example)
+        else copy.deepcopy(nemo_gym_example)
+    )
+
+    if "imgs_sizes" in message_both:
+        imgs_sizes = message_both["imgs_sizes"].to(dtype=torch.int32)
+        user_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
+        precomputed_imgs_sizes = _normalise_precomputed_img_sizes(imgs_sizes)
+        if precomputed_imgs_sizes:
+            _merge_vllm_mm_processor_kwargs(
+                extra_env_info,
+                {"precomputed_imgs_sizes": precomputed_imgs_sizes},
+            )
 
     if max_seq_length is not None and length >= max_seq_length:
         print(f"Discarding sample with length {length} >= {max_seq_length}")
