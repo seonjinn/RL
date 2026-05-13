@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
+import os
 from typing import Any, NotRequired, Optional, TypedDict, TypeVar
 
 import torch
@@ -20,6 +21,11 @@ import torch.distributed
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
 from nemo_rl.algorithms.utils import calculate_kl, masked_mean
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+# Debug flag used by MPOLossFn (ported from Nemo-RL-Super-Omni). Set NRL_DEBUG=1 to
+# enable verbose per-step diagnostics inside _compute_token_logprobs / __call__.
+_DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
+
 from nemo_rl.distributed.model_utils import (
     ChunkedDistributedEntropy,
     ChunkedDistributedGatherLogprob,
@@ -1451,3 +1457,329 @@ class DistillationLossFn(LossFunction):
         }
 
         return kl_loss, metrics
+
+# =============================================================================
+# MPO (Mixed Preference Optimization) loss - ported from Nemo-RL-Omni
+# =============================================================================
+class MPOLossConfig(TypedDict):
+    reference_policy_kl_penalty: float
+    preference_loss_weight: float
+    sft_loss_weight: float
+    preference_average_log_probs: bool
+    sft_average_log_probs: bool
+    bco_loss_weight: float
+    quality_average_log_probs: bool
+
+    reward_shift_momentum: float
+    reward_shift: float
+
+
+
+class MPOLossFn(PreferenceLoss):
+    """
+    Mixed Preference Optimization (MPO) loss.
+
+    Combines (this class inherits from PreferenceLoss, not DPOLossFn):
+      - DPO-style preference loss (same sigmoid-of-logratio formula as DPO)
+      - BCO quality loss (this class)
+      - SFT generation loss (same per-token NLL helper used by DPOLossFn)
+
+    Expects config keys:
+      - reference_policy_kl_penalty (beta used by DPO & BCO)
+      - preference_loss_weight (w_p)
+      - sft_loss_weight (w_g)         # generation loss weight (paper calls w_g; earlier code uses sft)
+      - quality_loss_weight (w_q)     # weight for BCO quality loss
+      - preference_average_log_probs (bool)
+      - sft_average_log_probs (bool)
+      - quality_average_log_probs (bool)  # whether to average logprobs for BCO
+      - reward_shift_momentum (float in [0,1))  # EMA momentum for reward shift δ (default 0.99)
+    """
+
+    def __init__(self, cfg: MPOLossConfig):
+        self.reference_policy_kl_penalty = cfg["reference_policy_kl_penalty"]
+        self.preference_loss_weight = cfg["preference_loss_weight"]
+        self.sft_loss_weight = cfg["sft_loss_weight"]
+        self.preference_average_log_probs = cfg["preference_average_log_probs"]
+        self.sft_average_log_probs = cfg["sft_average_log_probs"]
+
+        self.loss_type = LossType.SEQUENCE_LEVEL
+        # additional MPO-specific params
+        self.quality_loss_weight = float(cfg.get("bco_loss_weight", cfg.get("quality_loss_weight", 1.0)))
+        self.quality_average_log_probs = bool(cfg.get("quality_average_log_probs", False))
+        self.reward_shift_momentum = float(cfg.get("reward_shift_momentum", 0.99))
+
+        # Initialize reward shift (δ) as zero scalar on cpu; will move to device when used
+        self.registered_device = None
+        self.reward_shift = torch.tensor(0.0)  # δ moving average
+
+        # sanity
+        if not (0.0 <= self.reward_shift_momentum < 1.0):
+            raise ValueError("reward_shift_momentum must be in [0,1)")
+
+    def _ensure_device_for_reward_shift(self, device: torch.device):
+        if self.registered_device != device:
+            self.reward_shift = self.reward_shift.to(device)
+            self.registered_device = device
+
+    def _compute_token_logprobs(
+        self,
+        next_token_logits: Tensor,
+        data: BatchedDataDict[DPOLossDataDict],
+        vocab_parallel_rank: Optional[int] = None,
+        vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+        context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    ) -> Tensor:
+        """Compute token logprobs from logits. This is the expensive operation that should only be done once."""
+        if _DEBUG:
+            print(
+                f"[MPO_LOGPROB_DEBUG] _compute_token_logprobs: "
+                f"logits_shape={tuple(next_token_logits.shape)} "
+                f"input_ids_shape={tuple(data['input_ids'].shape)} "
+                f"shapes_aligned={next_token_logits.shape[1] == data['input_ids'].shape[1]}",
+                flush=True,
+            )
+        seq_index = data.get("seq_index", None)
+
+        if vocab_parallel_group is not None:
+            assert vocab_parallel_rank is not None, (
+                "vocab_parallel_rank must be provided when vocab_parallel_group is provided"
+            )
+            token_logprobs = from_parallel_logits_to_logprobs(
+                next_token_logits,
+                data["input_ids"],
+                vocab_start_index=vocab_parallel_rank * next_token_logits.shape[-1],
+                vocab_end_index=(vocab_parallel_rank + 1) * next_token_logits.shape[-1],
+                tp_group=vocab_parallel_group,
+                inference_only=False,
+                cp_group=context_parallel_group,
+            )
+            # slice off to the correct length to remove potential CP padding
+            token_logprobs = token_logprobs[:, : data["input_ids"].shape[1] - 1]
+        elif isinstance(next_token_logits, torch.distributed.tensor.DTensor):
+            token_logprobs = get_logprobs_from_vocab_parallel_logits(
+                next_token_logits, data["input_ids"], seq_index=seq_index
+            )
+        else:
+            next_tokens = data["input_ids"][:, 1:].cuda()  # Skip first token
+            next_token_logits = next_token_logits.to(torch.float32)
+            next_token_logprobs = torch.nn.functional.log_softmax(
+                next_token_logits, dim=-1
+            )
+            logprobs = next_token_logprobs[:, :-1]  # Remove last position's logits
+            token_logprobs = logprobs.gather(
+                dim=-1, index=next_tokens.unsqueeze(-1)
+            ).squeeze(-1)
+
+        return token_logprobs
+
+    def _compute_logratio_from_token_logprobs(
+        self,
+        token_logprobs: Tensor,
+        data: BatchedDataDict[DPOLossDataDict],
+    ) -> Tensor:
+        """Compute sequence log-ratios from pre-computed token logprobs."""
+        token_mask = data["token_mask"][:, 1:]
+        ref_logprobs = data["reference_policy_logprobs"][:, :-1]
+
+        if _DEBUG:
+            _valid = token_mask.bool()
+            _n_valid = int(_valid.sum().item())
+            if _n_valid > 0:
+                _mean_policy = float(token_logprobs[_valid].mean())
+                _mean_ref = float(ref_logprobs[_valid].mean())
+                _mean_abs_diff = float((token_logprobs - ref_logprobs).abs()[_valid].mean())
+                print(
+                    f"[LOGRATIO_DEBUG] _compute_logratio: "
+                    f"token_logprobs={tuple(token_logprobs.shape)} "
+                    f"ref_logprobs={tuple(ref_logprobs.shape)} "
+                    f"token_mask={tuple(token_mask.shape)} "
+                    f"n_valid_tokens={_n_valid} "
+                    f"mean_policy_logprob={_mean_policy:.4f} "
+                    f"mean_ref_logprob={_mean_ref:.4f} "
+                    f"mean_abs_logratio_per_token={_mean_abs_diff:.4f}",
+                    flush=True,
+                )
+
+        diff = (token_logprobs - ref_logprobs) * token_mask
+
+        rewards = diff.sum(-1)
+        if self.preference_average_log_probs:
+            rewards = rewards / token_mask.sum(-1).clamp(min=1)
+
+        return rewards
+
+    def _sft_loss_from_token_logprobs(
+        self,
+        token_logprobs: Tensor,
+        data: BatchedDataDict[DPOLossDataDict],
+        global_valid_seqs: Tensor,
+        global_valid_toks: Tensor,
+    ) -> Tensor:
+        """Compute SFT loss from pre-computed token logprobs (for chosen samples only)."""
+        token_mask = data["token_mask"][:, 1:]
+        sample_mask = data["sample_mask"]
+        mask = token_mask * sample_mask.unsqueeze(-1)
+
+        # shape: [batch_size]
+        num_unmasked_tokens = torch.sum(mask, -1)
+        # multiply by sample_mask to zero out invalid samples
+        loss = -torch.sum(token_logprobs * mask, dim=-1)
+        if self.sft_average_log_probs:
+            loss = loss / num_unmasked_tokens.clamp(min=1)
+
+        # Take only chosen samples (even indices) and compute masked mean
+        sft_loss_chosen, _ = self.split_output_tensor(loss)
+        sft_loss_chosen = masked_mean(
+            sft_loss_chosen,
+            data["sample_mask"][::2],
+            global_normalization_factor=global_valid_seqs / 2,
+        )
+
+        return sft_loss_chosen
+
+    def _quality_loss_bco(
+        self,
+        seq_logratio: Tensor,
+        sample_mask: Tensor,
+        global_valid_seqs: Tensor,
+        beta: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Compute BCO quality loss (Eq. 6 & 7 in paper):
+          Lq = L+_q + L-_q
+        where:
+          L+_q = - log σ( beta * logratio_chosen - δ )
+          L-_q = - log σ( - ( beta * logratio_rejected - δ ) )
+
+        Returns:
+          quality_loss (scalar), acc_like (fraction where chosen reward > rejected reward),
+          mean_logratio_chosen, mean_logratio_rejected
+        """
+        # seq_logratio is interleaved [c0, r0, c1, r1, ...]
+        chosen_logratio, rejected_logratio = self.split_output_tensor(seq_logratio)
+        mask_chosen, mask_rejected = self.split_output_tensor(sample_mask)
+
+        # ensure reward_shift is a scalar tensor on correct device
+        device = seq_logratio.device
+        self._ensure_device_for_reward_shift(device)
+        delta = self.reward_shift.to(device)
+
+        # compute logits for BCO
+        z_chosen = beta * chosen_logratio - delta
+        z_rejected = beta * rejected_logratio - delta
+
+        # chosen: -log σ(z_chosen), rejected: -log σ(-z_rejected)
+        L_plus = -torch.nn.functional.logsigmoid(z_chosen) * mask_chosen
+        L_minus = -torch.nn.functional.logsigmoid(-z_rejected) * mask_rejected
+
+        # average them properly (paper sums L+ and L-)
+        # Use global_normalization_factor consistent with PreferenceLoss (global_valid_seqs/2)
+        denom = (global_valid_seqs / 2.0).clamp(min=1.0)
+
+        L_plus_mean = masked_mean(L_plus, mask_chosen, global_normalization_factor=denom)
+        L_minus_mean = masked_mean(L_minus, mask_rejected, global_normalization_factor=denom)
+
+        quality_loss = L_plus_mean + L_minus_mean
+
+        # mean logratio for diagnostics
+        mean_chosen = masked_mean(chosen_logratio, mask_chosen, global_normalization_factor=denom)
+        mean_rejected = masked_mean(rejected_logratio, mask_rejected, global_normalization_factor=denom)
+
+        return quality_loss, mean_chosen, mean_rejected
+
+    def __call__(
+        self,
+        next_token_logits: Tensor,
+        data: dict,
+        global_valid_seqs: Tensor,
+        global_valid_toks: Optional[Tensor],
+        vocab_parallel_rank: Optional[int] = None,
+        vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+        context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """
+        Returns:
+          - scalar MPO loss
+          - diagnostics dict:
+              loss, sft_loss, preference_loss, quality_loss, accuracy (from DPO),
+              q_accuracy (from BCO), rewards_chosen_mean, rewards_rejected_mean,
+              q_chosen_mean, q_rejected_mean, num_valid_samples
+        """
+        device = next_token_logits.device
+        sft_loss_chosen = torch.tensor(0.0, device=device)
+
+        # === Compute token logprobs ONCE (expensive operation) ===
+        # This saves ~17GB of memory by avoiding duplicate softmax computations
+        token_logprobs = self._compute_token_logprobs(
+            next_token_logits,
+            data,
+            vocab_parallel_rank=vocab_parallel_rank,
+            vocab_parallel_group=vocab_parallel_group,
+            context_parallel_group=context_parallel_group,
+        )
+
+        # === SFT generation loss (L_g) - reuse token_logprobs ===
+        if self.sft_loss_weight > 0:
+            assert global_valid_toks is not None, "global_valid_toks must be provided for SFT loss"
+            sft_loss_chosen = self._sft_loss_from_token_logprobs(
+                token_logprobs,
+                data,
+                global_valid_seqs=global_valid_seqs,
+                global_valid_toks=global_valid_toks,
+            )
+
+        # === Preference loss (L_p) - reuse token_logprobs ===
+        seq_logratio = self._compute_logratio_from_token_logprobs(token_logprobs, data)
+        preference_loss, dpo_accuracy, rewards_chosen_mean, rewards_rejected_mean = self._preference_loss(
+            seq_logratio,
+            data["sample_mask"],
+            global_valid_seqs,
+            beta=self.reference_policy_kl_penalty,
+        )
+        quality_loss, q_chosen_mean, q_rejected_mean = self._quality_loss_bco(
+            seq_logratio, data["sample_mask"], global_valid_seqs, beta=self.reference_policy_kl_penalty
+        )
+
+        # update reward_shift (δ) as EMA of β * chosen_logratio? The paper uses moving average of previous rewards.
+        # We'll use EMA on the mean chosen logratio (not multiplied by beta to match formula delta is used as shift).
+        # Move to device and update
+        self._ensure_device_for_reward_shift(device)
+        # compute mean chosen logratio used to update delta: use q_chosen_mean (already masked_mean)
+        delta_update = q_chosen_mean.detach()  # scalar tensor
+        # EMA: new_delta = momentum * old_delta + (1 - momentum) * delta_update
+        self.reward_shift = self.reward_shift * self.reward_shift_momentum + (1.0 - self.reward_shift_momentum) * delta_update
+
+        # combine losses with weights (MPO formula)
+        total_loss = (
+            self.preference_loss_weight * preference_loss
+            + self.quality_loss_weight * quality_loss
+            + self.sft_loss_weight * sft_loss_chosen
+        )
+
+        # number of valid preference pairs
+        num_valid_samples = data["sample_mask"].sum() / 2.0
+
+        info = {
+            "loss": float(total_loss.item()),
+            "sft_loss": float(sft_loss_chosen.item()) if isinstance(sft_loss_chosen, torch.Tensor) else float(sft_loss_chosen),
+            "preference_loss": float(preference_loss.item()),
+            "bco_loss": float(quality_loss.item()),
+            "accuracy": float(dpo_accuracy.item()),
+            "rewards_chosen_mean": float(rewards_chosen_mean.item()),
+            "rewards_rejected_mean": float(rewards_rejected_mean.item()),
+            "num_valid_samples": float(num_valid_samples.item()),
+            "global_valid_seqs": float(global_valid_seqs.item()),
+            "global_valid_toks": float(global_valid_toks.item()) if global_valid_toks is not None else 0.0,
+        }
+
+        if _DEBUG:
+            token_mask = data["token_mask"][:, 1:]
+            sample_mask = data["sample_mask"]
+            mask = token_mask * sample_mask.unsqueeze(-1)
+            masked_toks = mask.sum().clamp(min=1)
+            ref_lp = data["reference_policy_logprobs"][:, :-1]
+            info["mean_token_logprob"] = float(((token_logprobs * mask).sum() / masked_toks).item())
+            info["mean_ref_logprob"] = float(((ref_lp * mask).sum() / masked_toks).item())
+            info["mean_abs_logratio_per_token"] = float((((token_logprobs - ref_lp) * mask).abs().sum() / masked_toks).item())
+
+        return total_loss, info

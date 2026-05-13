@@ -7,6 +7,21 @@ import numpy as np
 from mathruler.grader import grade_answer
 
 
+# Keywords that indicate a question asks the model to produce a reasoning trace.
+# Used by video_dataset.py / blend_v1.py (ported from Nemo-RL-Super-Omni for MPO-VLM).
+REASONING_KEYWORDS = [
+    "step by step", "step-by-step", "first perform reasoning",
+    "reasoning before", "explain your reasoning", "show your work",
+    "let's think", "think carefully", "<think>",
+]
+
+
+def question_asks_for_reasoning(question: str) -> bool:
+    """Check whether a question prompt asks the model to produce a reasoning trace."""
+    q_lower = question.lower()
+    return any(kw in q_lower for kw in REASONING_KEYWORDS)
+
+
 # mmpr-1.2-ai2d_train_12k_en_20240410_extracted_pairs_vqa_correctness_rules
 # mmpr-1.2-ai2d_train_12k_en_20240410_extracted_pairs_vqa_format_rules
 # mmpr-1.2-ai2d_train_12k_en_20240410_extracted_prefix_pair_sr0.0_with_image

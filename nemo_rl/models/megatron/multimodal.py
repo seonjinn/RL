@@ -12,12 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional
+import math
+import os
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 from einops import rearrange
-from megatron.core.packed_seq_params import PackedSeqParams
+
 from nemo_rl.data.multimodal_utils import PackedTensor
+
+# Lazy-imported on the worker side; the driver baked venv does not ship
+# `megatron.core` (only the worker [mcore] venv does), so importing this at
+# module load would break `nemo_rl.algorithms.mpo` import on the driver.
+if TYPE_CHECKING:
+    from megatron.core.packed_seq_params import PackedSeqParams
+
+_DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
 
 
 def is_llava_model(model) -> bool:
@@ -326,8 +336,9 @@ def _patchify_for_dynamic_resolution(
     images: torch.Tensor,
     imgs_sizes: torch.Tensor,
     patch_dim: int,
-) -> tuple[torch.Tensor, torch.Tensor, PackedSeqParams]:
+) -> tuple[torch.Tensor, torch.Tensor, "PackedSeqParams"]:
     """Convert images to packed patches for dynamic resolution RADIO vision encoder."""
+    from megatron.core.packed_seq_params import PackedSeqParams
 
     def to_patches(img: torch.Tensor, h: int, w: int) -> torch.Tensor:
         img = img[:, :h, :w]
@@ -354,3 +365,475 @@ def _patchify_for_dynamic_resolution(
             max_seqlen_kv=torch.tensor(max_seqlen, dtype=torch.int32, device=images.device),
         ),
     )
+
+
+# =============================================================================
+# Omni-only helpers ported from Nemo-RL-Omni for MPO-VLM (truncate_for_expanded_budget
+# is imported by nemo_rl.algorithms.mpo).
+# =============================================================================
+
+def _get_num_embeddings_from_sizes(
+    imgs_sizes: torch.Tensor,
+    patch_dim: int,
+    downsample_ratio: float,
+    class_token_len: int = 0,
+) -> torch.Tensor:
+    """Compute number of embeddings per image from pixel sizes.
+
+    Matches Megatron LLaVA's formula (llava_model.py _preprocess_data):
+        img_seq_len = torch.prod(imgs_sizes // patch_dim, dim=-1) + class_token_len
+        if pixel_shuffle: img_seq_len = (img_seq_len * (0.5**2)).int()
+        if conv_merging:  img_seq_len = (img_seq_len * (0.5**2)).int()
+
+    Here downsample_ratio encodes all spatial reductions:
+        pixel_shuffle only             -> downsample_ratio = 0.5  (4x reduction)
+        pixel_shuffle + conv_merging   -> downsample_ratio = 0.25 (16x reduction)
+    """
+    patches_per_image = (imgs_sizes[:, 0] // patch_dim) * (imgs_sizes[:, 1] // patch_dim)
+    seq_len = patches_per_image + class_token_len
+    return (seq_len * (downsample_ratio ** 2)).int()
+
+
+def _get_model_config(model) -> tuple:
+    """Extract vision config from nested model structure."""
+    inner = model
+    while hasattr(inner, "module"):
+        inner = inner.module
+    if hasattr(inner, "llava_model"):
+        inner = inner.llava_model
+
+    patch_dim = getattr(getattr(inner, "vision_model", None), "patch_dim", 16)
+
+    # HF-based models (InternVL, Nano VL) have downsample_ratio as a config attribute.
+    # Megatron LLaVA does not — derive from _pixel_shuffle and _use_conv_merging flags.
+    # Currently pixel_shuffle=True, conv_merging=False for Nemotron Omni, giving 0.5.
+    downsample_ratio = getattr(inner, "downsample_ratio", None)
+    if downsample_ratio is None:
+        pixel_shuffle = getattr(inner, "_pixel_shuffle", False)
+        conv_merging = getattr(inner, "_use_conv_merging", False)
+        downsample_ratio = 1.0
+        if pixel_shuffle:
+            downsample_ratio *= 0.5
+        if conv_merging:
+            downsample_ratio *= 0.5
+        if not pixel_shuffle and not conv_merging:
+            downsample_ratio = 0.5  # legacy default
+
+    drop_vision_class_token = getattr(inner, "_drop_vision_class_token", True)
+    class_token_len = 0 if drop_vision_class_token else getattr(inner, "_class_token_len", 1)
+
+    image_token_index = getattr(inner, "image_token_index", None)
+    if image_token_index is None:
+        image_token_index = getattr(getattr(inner, "config", None), "image_token_index", None)
+
+    dynamic_resolution = getattr(inner, "_dynamic_resolution", False)
+    static_img_seq_len = getattr(inner, "img_seq_len", None) if not dynamic_resolution else None
+
+    return patch_dim, downsample_ratio, image_token_index, class_token_len, dynamic_resolution, static_img_seq_len
+
+
+def compute_vision_expansion(
+    imgs_sizes_per_sample: list,
+    num_image_placeholders_per_sample: list[int],
+    patch_dim: int,
+    downsample_ratio: float,
+    class_token_len: int = 0,
+    num_frames_per_sample: Optional[list] = None,
+    temporal_patch_size: int = 1,
+) -> list[int]:
+    """Compute per-sample vision token expansion (extra tokens after model expansion).
+
+    Each image placeholder in collapsed input_ids expands to N vision embeddings
+    during the Megatron forward pass.  The "expansion" for a sample is:
+        total_vision_embeds - num_image_placeholders
+    which equals the number of extra tokens the model produces beyond the
+    collapsed sequence length.
+
+    When ``temporal_patch_size > 1`` (conv3d), RADIO groups T consecutive
+    video frames into one tubelet.  imgs_sizes still has one entry per raw
+    frame, but the model produces ``num_frames / T`` tubelet embeddings per
+    video.  The ``num_frames_per_sample`` list tells this function how many
+    raw frames each sample has so the embedding count can be divided by T.
+    """
+    expansions = []
+    for b_idx, (b_imgs_sizes, n_placeholders) in enumerate(zip(
+        imgs_sizes_per_sample, num_image_placeholders_per_sample
+    )):
+        if b_imgs_sizes is None or n_placeholders == 0:
+            expansions.append(0)
+            continue
+        if not isinstance(b_imgs_sizes, torch.Tensor):
+            b_imgs_sizes = torch.tensor(b_imgs_sizes, dtype=torch.int32)
+        if b_imgs_sizes.numel() == 0:
+            expansions.append(0)
+            continue
+        embeds = _get_num_embeddings_from_sizes(
+            b_imgs_sizes, patch_dim, downsample_ratio, class_token_len
+        )
+        total_embeds = int(embeds.sum().item())
+        # With conv3d temporal compression, RADIO merges T consecutive video
+        # frames into one tubelet, reducing total embeddings.  num_frames
+        # has one entry per media item: 1 for regular images, N for a video
+        # with N frames.  RADIO only groups frames when num_frames > 1, so
+        # temporal reduction only applies to video entries (nf > 1).
+        # When all entries are 1 (each frame treated as an independent
+        # image), RADIO does NOT compress and total_embeds stays unchanged.
+        if temporal_patch_size > 1 and num_frames_per_sample is not None:
+            b_num_frames = num_frames_per_sample[b_idx]
+            if b_num_frames is not None:
+                if not isinstance(b_num_frames, torch.Tensor):
+                    b_num_frames = torch.tensor(b_num_frames, dtype=torch.int32)
+                # Only apply temporal reduction for video entries (nf > 1).
+                # RADIO's _apply_temporal_grouping: nf==1 -> single image
+                # (no grouping), nf>1 -> group into ceil(nf/T) tubelets.
+                has_video = (b_num_frames > 1).any().item() if b_num_frames.numel() > 0 else False
+                if has_video:
+                    _pre_reduce = total_embeds
+                    per_item_nf = b_num_frames.tolist()
+                    per_item_embeds = embeds.tolist()
+                    reduced_total = 0
+                    frame_offset = 0
+                    _nondiv_count = 0
+                    for nf in per_item_nf:
+                        item_embeds = sum(per_item_embeds[frame_offset:frame_offset + nf])
+                        if nf > 1:
+                            num_tubelets = math.ceil(nf / temporal_patch_size)
+                            if item_embeds % nf != 0:
+                                _nondiv_count += 1
+                            per_frame_embeds = item_embeds // nf
+                            reduced_total += per_frame_embeds * num_tubelets
+                        else:
+                            reduced_total += item_embeds
+                        frame_offset += nf
+                    total_embeds = reduced_total
+                    if _DEBUG and _nondiv_count > 0:
+                        print(
+                            f"[CONV3D_WARN] compute_vision_expansion sample[{b_idx}]: "
+                            f"{_nondiv_count} video items with non-divisible embeds/nf",
+                            flush=True,
+                        )
+        expansions.append(max(0, total_embeds - n_placeholders))
+
+    if _DEBUG:
+        _nonzero = [(i, e) for i, e in enumerate(expansions) if e > 0]
+        if _nonzero:
+            print(
+                f"[CONV3D_FIX] compute_vision_expansion: "
+                f"batch_size={len(expansions)} "
+                f"samples_with_expansion={len(_nonzero)} "
+                f"total_expansion={sum(e for _, e in _nonzero)} "
+                f"max_expansion={max(e for _, e in _nonzero)}",
+                flush=True,
+            )
+    return expansions
+
+
+def compute_expanded_lengths(
+    input_ids: torch.Tensor,
+    input_lengths: torch.Tensor,
+    imgs_sizes,
+    image_token_id: Optional[int],
+    patch_dim: int = 16,
+    downsample_ratio: float = 0.5,
+    class_token_len: int = 0,
+    num_frames=None,
+    temporal_patch_size: int = 1,
+    max_length: Optional[int] = None,
+    img_start_token_id: Optional[int] = None,
+) -> torch.Tensor:
+    """Return per-sample expanded length for vision-expansion-aware packing.
+
+    The expanded length accounts for the difference between vLLM image
+    placeholder tokens and actual Megatron vision embeddings::
+
+        expanded_len = input_len + vision_expansion
+
+    where ``vision_expansion`` is computed by :func:`compute_vision_expansion`.
+    The result is clamped to *max_length* when provided so that it never
+    exceeds the bin-packer capacity.
+
+    When *imgs_sizes* is ``None`` or *image_token_id* is ``None`` (text-only
+    data), the function returns a clone of *input_lengths* unchanged.
+    """
+    batch_size = input_ids.shape[0]
+    expanded = input_lengths.clone().to(torch.int64)
+
+    if image_token_id is None or imgs_sizes is None:
+        if max_length is not None:
+            expanded.clamp_(max=max_length)
+        return expanded
+
+    if hasattr(imgs_sizes, "tensors"):
+        if getattr(imgs_sizes, "_dedup_indices", None) is not None:
+            imgs_sizes_per_sample = [imgs_sizes.tensors[j] for j in imgs_sizes._dedup_indices]
+            if _DEBUG:
+                print(
+                    f"[DEDUP_DEBUG] compute_expanded_lengths: using _dedup_indices: "
+                    f"indices={list(imgs_sizes._dedup_indices[:8])} "
+                    f"unique_tensors={len(imgs_sizes.tensors)} "
+                    f"total_samples={batch_size}",
+                    flush=True,
+                )
+        else:
+            imgs_sizes_per_sample = imgs_sizes.tensors
+    elif isinstance(imgs_sizes, torch.Tensor):
+        if imgs_sizes.dim() == 2:
+            imgs_sizes_per_sample = [imgs_sizes[b] for b in range(batch_size)]
+        else:
+            imgs_sizes_per_sample = [None] * batch_size
+    else:
+        imgs_sizes_per_sample = [None] * batch_size
+
+    if img_start_token_id is not None:
+        num_image_placeholders = [
+            int((input_ids[b] == img_start_token_id).sum().item())
+            for b in range(batch_size)
+        ]
+    else:
+        num_image_placeholders = [
+            int((input_ids[b] == image_token_id).sum().item())
+            for b in range(batch_size)
+        ]
+
+    # Compute tokens removed by collapse (same as truncate_for_expanded_budget)
+    _cel_collapse_savings = [0] * batch_size
+    if img_start_token_id is not None:
+        for b in range(batch_size):
+            raw_image_count = int((input_ids[b] == image_token_id).sum().item())
+            _cel_collapse_savings[b] = max(0, raw_image_count - num_image_placeholders[b])
+
+    if num_frames is not None:
+        if hasattr(num_frames, "tensors"):
+            if getattr(num_frames, "_dedup_indices", None) is not None:
+                nf_per_sample = [num_frames.tensors[j] for j in num_frames._dedup_indices]
+            else:
+                nf_per_sample = num_frames.tensors
+        elif isinstance(num_frames, torch.Tensor):
+            nf_per_sample = [num_frames[b] for b in range(batch_size)]
+        else:
+            nf_per_sample = [None] * batch_size
+    else:
+        nf_per_sample = None
+
+    expansions = compute_vision_expansion(
+        imgs_sizes_per_sample,
+        num_image_placeholders,
+        patch_dim,
+        downsample_ratio,
+        class_token_len,
+        num_frames_per_sample=nf_per_sample,
+        temporal_patch_size=temporal_patch_size,
+    )
+
+    for b in range(batch_size):
+        expanded[b] = int(input_lengths[b].item()) - _cel_collapse_savings[b] + expansions[b]
+
+    if max_length is not None:
+        expanded.clamp_(max=max_length)
+
+    return expanded
+
+
+def truncate_for_expanded_budget(
+    data_dict: dict,
+    max_seq_length: int,
+    patch_dim: int = 16,
+    downsample_ratio: float = 0.5,
+    class_token_len: int = 0,
+    pad_token_id: int = 0,
+    image_token_id: Optional[int] = None,
+    img_start_token_id: Optional[int] = None,
+    temporal_patch_size: int = 1,
+) -> tuple[dict, torch.Tensor]:
+    """Truncate collapsed sequences so the expanded (post-vision) length fits the budget.
+
+    Mirrors Megatron's ``_truncate_to_decoder_seq_len``: the expanded sequence
+    length is ``collapsed_len - num_images + total_vision_embeds``, and this must
+    be <= ``max_seq_length``.  When a sample exceeds the budget, text tokens are
+    removed from the right (response side).
+
+    Args:
+        data_dict: Training batch with ``input_ids``, ``input_lengths``, and
+            optionally ``imgs_sizes`` (PackedTensor), ``token_mask``,
+            ``advantages``, ``generation_logprobs``, ``sample_mask``.
+        max_seq_length: Maximum allowed **expanded** sequence length.
+        patch_dim: Vision patch dimension (must match model).
+        downsample_ratio: Pixel-shuffle downsample ratio (must match model).
+        class_token_len: Number of class tokens per image (usually 0).
+        pad_token_id: Token ID used for padding.
+        image_token_id: The image placeholder token ID.  If ``None``, no
+            truncation is performed (text-only data).
+        img_start_token_id: The ``<img>`` token ID.  When provided, counts
+            ``<img>`` groups (post-collapse placeholders) instead of raw
+            ``<image>`` tokens for expansion calculation.  Required for
+            Conv3D where each ``<img>...<image>*N...</img>`` group collapses
+            to a single placeholder.
+        temporal_patch_size: Conv3d temporal patch size (T).  When > 1,
+            video frame embeddings are reduced by factor T.
+
+    Returns:
+        (data_dict, truncated_mask) where ``truncated_mask`` is a bool tensor
+        of shape ``(batch_size,)`` indicating which samples were truncated.
+    """
+    input_ids = data_dict["input_ids"]
+    input_lengths = data_dict.get("input_lengths")
+    batch_size = input_ids.shape[0]
+    truncated_mask = torch.zeros(batch_size, dtype=torch.bool)
+
+    if image_token_id is None or input_lengths is None:
+        return data_dict, truncated_mask
+
+    imgs_sizes = data_dict.get("imgs_sizes")
+    has_imgs = imgs_sizes is not None
+
+    # Resolve per-sample imgs_sizes from PackedTensor or plain tensor
+    if has_imgs and hasattr(imgs_sizes, "tensors"):
+        if getattr(imgs_sizes, "_dedup_indices", None) is not None:
+            imgs_sizes_per_sample = [imgs_sizes.tensors[j] for j in imgs_sizes._dedup_indices]
+        else:
+            imgs_sizes_per_sample = imgs_sizes.tensors
+    elif has_imgs and isinstance(imgs_sizes, torch.Tensor):
+        # Flat tensor — need to split by image count per sample
+        imgs_sizes_per_sample = []
+        idx = 0
+        for b in range(batch_size):
+            n = int((input_ids[b] == image_token_id).sum().item())
+            if n > 0 and idx + n <= imgs_sizes.shape[0]:
+                imgs_sizes_per_sample.append(imgs_sizes[idx : idx + n])
+                idx += n
+            else:
+                imgs_sizes_per_sample.append(None)
+    else:
+        imgs_sizes_per_sample = [None] * batch_size
+
+    # Post-collapse, each <img>...<image>*N...</img> group becomes 1 placeholder.
+    # Use <img> count (= group count) when available, otherwise raw <image> count.
+    if img_start_token_id is not None:
+        num_image_placeholders = [
+            int((input_ids[b] == img_start_token_id).sum().item()) for b in range(batch_size)
+        ]
+    else:
+        num_image_placeholders = [
+            int((input_ids[b] == image_token_id).sum().item()) for b in range(batch_size)
+        ]
+
+    # Resolve per-sample num_frames for temporal compression
+    num_frames = data_dict.get("num_frames")
+    num_frames_per_sample: Optional[list] = None
+    if temporal_patch_size > 1 and num_frames is not None:
+        if hasattr(num_frames, "tensors"):
+            if getattr(num_frames, "_dedup_indices", None) is not None:
+                num_frames_per_sample = [num_frames.tensors[j] for j in num_frames._dedup_indices]
+            else:
+                num_frames_per_sample = num_frames.tensors
+        elif isinstance(num_frames, torch.Tensor):
+            num_frames_per_sample = [num_frames] * batch_size
+        elif isinstance(num_frames, list):
+            num_frames_per_sample = num_frames
+
+    expansions = compute_vision_expansion(
+        imgs_sizes_per_sample,
+        num_image_placeholders,
+        patch_dim,
+        downsample_ratio,
+        class_token_len,
+        num_frames_per_sample=num_frames_per_sample,
+        temporal_patch_size=temporal_patch_size,
+    )
+
+    # Compute tokens removed by collapse: collapse_multimodal_tokens replaces
+    # each <img><image>*N</img> group with <img><image></img> (3 tokens).
+    # The raw <image> count minus the group count gives the tokens removed.
+    collapse_savings = [0] * batch_size
+    if img_start_token_id is not None:
+        for b in range(batch_size):
+            raw_image_count = int((input_ids[b] == image_token_id).sum().item())
+            collapse_savings[b] = max(0, raw_image_count - num_image_placeholders[b])
+
+    if _DEBUG:
+        _exp_nonzero = [(b, expansions[b]) for b in range(batch_size) if expansions[b] > 0]
+        _max_exp = max(expansions) if expansions else 0
+        _max_valid = max(int(input_lengths[b].item()) for b in range(batch_size))
+        _max_expanded = max(int(input_lengths[b].item()) - collapse_savings[b] + expansions[b] for b in range(batch_size))
+        _n_over = sum(1 for b in range(batch_size) if int(input_lengths[b].item()) - collapse_savings[b] + expansions[b] > max_seq_length)
+        print(
+            f"[VISION_BUDGET_DEBUG] truncate_for_expanded_budget: "
+            f"batch_size={batch_size} max_seq_length={max_seq_length} "
+            f"patch_dim={patch_dim} downsample_ratio={downsample_ratio} "
+            f"image_token_id={image_token_id} "
+            f"samples_with_expansion={len(_exp_nonzero)}/{batch_size} "
+            f"max_expansion={_max_exp} "
+            f"max_collapsed_valid_len={_max_valid} "
+            f"max_expanded_len={_max_expanded} "
+            f"samples_over_budget={_n_over}",
+            flush=True,
+        )
+        if len(_exp_nonzero) > 0 and len(_exp_nonzero) <= 10:
+            print(
+                f"[VISION_BUDGET_DEBUG]   per-sample expansions (non-zero): {_exp_nonzero}",
+                flush=True,
+            )
+
+    # First pass: identify which samples need truncation.
+    # The true expanded length accounts for collapse removing tokens:
+    #   expanded = (valid_len - collapse_savings) + expansion
+    # To fit within budget: valid_len - collapse_savings + expansion <= max_seq_length
+    # => valid_len <= max_seq_length - expansion + collapse_savings
+    samples_to_truncate = []
+    for b in range(batch_size):
+        valid_len = int(input_lengths[b].item())
+        expanded_len = valid_len - collapse_savings[b] + expansions[b]
+        if expanded_len > max_seq_length:
+            max_collapsed_len = max(0, max_seq_length - expansions[b] + collapse_savings[b])
+            if max_collapsed_len < valid_len:
+                samples_to_truncate.append((b, valid_len, max_collapsed_len, expansions[b], expanded_len))
+
+    if not samples_to_truncate:
+        return data_dict, truncated_mask
+
+    # Clone tensors before mutation
+    new_data_dict = data_dict.copy()
+    new_data_dict["input_ids"] = new_data_dict["input_ids"].clone()
+    new_data_dict["input_lengths"] = new_data_dict["input_lengths"].clone()
+    for key in ("token_mask", "advantages", "generation_logprobs"):
+        if key in new_data_dict and new_data_dict[key].dim() >= 2:
+            new_data_dict[key] = new_data_dict[key].clone()
+
+    for b, valid_len, max_collapsed_len, expansion, expanded_len in samples_to_truncate:
+        truncated_mask[b] = True
+        new_data_dict["input_ids"][b, max_collapsed_len:] = pad_token_id
+        new_data_dict["input_lengths"][b] = max_collapsed_len
+
+        for key in ("token_mask", "advantages", "generation_logprobs"):
+            if key in new_data_dict and new_data_dict[key].dim() >= 2:
+                new_data_dict[key][b, max_collapsed_len:] = 0
+
+        if _DEBUG:
+            print(
+                f"[VISION_BUDGET] sample[{b}]: truncated collapsed seq "
+                f"{valid_len} -> {max_collapsed_len} "
+                f"(vision_expansion={expansion}, "
+                f"expanded_was={expanded_len}, budget={max_seq_length})",
+                flush=True,
+            )
+
+    if _DEBUG:
+        n_trunc = int(truncated_mask.sum().item())
+        print(
+            f"[VISION_BUDGET] Truncated {n_trunc}/{batch_size} samples "
+            f"to fit expanded budget of {max_seq_length}",
+            flush=True,
+        )
+
+    return new_data_dict, truncated_mask
+
+
+def _get_image_token_index(model) -> Optional[int]:
+    """Extract the image placeholder token index (e.g. -200) from Megatron model."""
+    inner = model
+    while hasattr(inner, "module"):
+        inner = inner.module
+    if hasattr(inner, "llava_model"):
+        inner = inner.llava_model
+    return getattr(inner, "image_token_index", None)
+
