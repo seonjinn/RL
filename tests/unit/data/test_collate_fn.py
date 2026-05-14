@@ -170,6 +170,9 @@ def test_rl_collate_fn_preserves_vllm_processor_overrides():
                 vllm_images=["img1"],
                 vllm_max_num_tiles=8,
                 vllm_max_num_patches=256,
+                vllm_video_prompt_style="sft_v2_grouped",
+                vllm_video_frame_indices=[[10, 20, 30, 40]],
+                vllm_video_fps=[5.0],
             )
         ]
     )
@@ -178,3 +181,6 @@ def test_rl_collate_fn_preserves_vllm_processor_overrides():
     assert batch["vllm_images"] == [["img1"]]
     assert batch["vllm_max_num_tiles"] == [8]
     assert batch["vllm_max_num_patches"] == [256]
+    assert batch["vllm_video_prompt_style"] == ["sft_v2_grouped"]
+    assert batch["vllm_video_frame_indices"] == [[[10, 20, 30, 40]]]
+    assert batch["vllm_video_fps"] == [[5.0]]

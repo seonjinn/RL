@@ -50,12 +50,24 @@ from nemo_rl.models.generation.interfaces import (
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.utils import (
     _extract_hw_pairs,
+    extract_sampled_token_logprob,
     format_prompt_for_vllm_generation,
 )
 from nemo_rl.models.huggingface.common import ModelFlag
-from nemo_rl.models.policy.utils import is_vllm_v1_engine_enabled
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
+
+
+_VLLM20_STALE_ENV_VARS = (
+    "VLLM_PRECOMPILED_WHEEL_LOCATION",
+    "VLLM_USE_V1",
+)
+
+
+def _clear_stale_vllm20_env_vars() -> None:
+    """Remove legacy vLLM env vars before importing vLLM20."""
+    for env_var in _VLLM20_STALE_ENV_VARS:
+        os.environ.pop(env_var, None)
 
 
 # Use a base class to share some functions to avoid code duplication.
@@ -496,10 +508,11 @@ class BaseVllmGenerationWorker:
                     return
 
                 if old_init_snippet not in content:
-                    logger.warning(
-                        "Could not apply hermes tool parser thread-safety patch: "
+                    logger.debug(
+                        "Skipping hermes tool parser thread-safety patch: "
                         "expected code snippet not found in %s. "
-                        "The vLLM version may have changed.",
+                        "The installed vLLM version may already contain the fix "
+                        "or may no longer need this workaround.",
                         file_to_patch,
                     )
                     return
@@ -773,6 +786,10 @@ class BaseVllmGenerationWorker:
                 .strip()
                 .lower()
                 in ("1", "true", "yes", "on")
+                or os.environ.get(
+                    "NRL_VIDEO_PROMPT_STYLE", "sft_v2_grouped"
+                ).strip().lower()
+                == "sft_v2_grouped"
             )
             if not use_frame_separators:
                 img_context_token_ids = list(hf_processor._img_context_token_ids)
@@ -858,6 +875,10 @@ class BaseVllmGenerationWorker:
                 .strip()
                 .lower()
                 in ("1", "true", "yes", "on")
+                or os.environ.get(
+                    "NRL_VIDEO_PROMPT_STYLE", "sft_v2_grouped"
+                ).strip().lower()
+                == "sft_v2_grouped"
             )
             if not use_frame_separators:
                 img_context_token_ids = list(hf_processor._img_context_token_ids)
@@ -896,6 +917,48 @@ class BaseVllmGenerationWorker:
                 )
 
             video_repl = hf_processor.get_video_repl(
+"""
+            old_audio_repl = """        def get_audio_replacement(item_idx: int):
+            audios = mm_items.get_items("audio", AudioProcessorItems)
+            return hf_processor.get_audio_repl(audios.get(item_idx))
+"""
+            new_audio_repl = """        def get_audio_replacement(item_idx: int):
+            audios = mm_items.get_items("audio", AudioProcessorItems)
+            audio = audios.get(item_idx)
+            audio_repl = hf_processor.get_audio_repl(audio)
+            if os.environ.get("NRL_DEBUG", "0") == "1":
+                extractor = getattr(hf_processor, "audio_extractor", None)
+                clip_sizes = (
+                    extractor._clip_sizes(len(audio))
+                    if extractor is not None
+                    else []
+                )
+                sampling_rate = (
+                    getattr(getattr(extractor, "config", None), "sampling_rate", None)
+                    if extractor is not None
+                    else None
+                )
+                repl_full = audio_repl.full
+                context_tokens = (
+                    repl_full.count(AUDIO_CONTEXT)
+                    if isinstance(repl_full, str)
+                    else len(repl_full)
+                )
+                duration_s = (
+                    len(audio) / float(sampling_rate) if sampling_rate else None
+                )
+                print(
+                    "[VLLM_AUDIO_REPL_MODEL] "
+                    f"item_idx={item_idx} "
+                    f"audio_len={len(audio)} "
+                    f"duration_s={duration_s} "
+                    f"sampling_rate={sampling_rate} "
+                    f"num_clips={len(clip_sizes)} "
+                    f"clip_samples={clip_sizes} "
+                    f"context_tokens={context_tokens}",
+                    flush=True,
+                )
+            return audio_repl
 """
 
             with _locked_file_patch(file_path) as (content, write_back):
@@ -1040,6 +1103,19 @@ class BaseVllmGenerationWorker:
                         file_path,
                     )
 
+                if old_audio_repl in content:
+                    content = content.replace(
+                        old_audio_repl,
+                        new_audio_repl,
+                        1,
+                    )
+                elif "VLLM_AUDIO_REPL_MODEL" not in content:
+                    logger.debug(
+                        "Skipping optional audio replacement debug patch in %s: "
+                        "audio replacement block not found.",
+                        file_path,
+                    )
+
                 if content == original:
                     logger.info("nano_nemotron_vl native-video patch already applied.")
                     return
@@ -1095,11 +1171,16 @@ class BaseVllmGenerationWorker:
             )
 
             with _locked_file_patch(file_path) as (content, write_back):
+                if new_snippet in content:
+                    logger.info("nemotron_h isinstance patch already applied.")
+                    return
+
                 if old_snippet not in content:
-                    logger.warning(
-                        "Could not apply nemotron_h isinstance patch: "
+                    logger.debug(
+                        "Skipping nemotron_h isinstance patch: "
                         "expected code snippet not found in %s. "
-                        "The vLLM version may not contain this change.",
+                        "The installed vLLM version may not contain this workaround "
+                        "target anymore.",
                         file_path,
                     )
                     return
@@ -1113,6 +1194,7 @@ class BaseVllmGenerationWorker:
 
     def _load_model(self, bundle_indices, seed):
         """Perform model loading and engine creation."""
+        _clear_stale_vllm20_env_vars()
         log_gpu_memory_diagnostics(label="load_model_start", worker_type="VllmGenerationWorker")
         from vllm.logger import init_logger
 
@@ -1156,7 +1238,6 @@ class BaseVllmGenerationWorker:
             # For non-parallel mode, explicitly set executor to None to avoid Ray issues
             vllm_kwargs["distributed_executor_backend"] = None
 
-        os.environ["VLLM_USE_V1"] = "1" if is_vllm_v1_engine_enabled() else "0"
         os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
         # We should use vLLM DP if ep_size > tp_size since EP_SIZE = DP_SIZE * TP_SIZE in vLLM.
@@ -1622,6 +1703,7 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         generation_lengths = []
         unpadded_sequence_lengths = []
         truncated_list = []  # Track if response was truncated (hit max_tokens)
+        missing_sampled_logprobs = 0
         max_length = 0
         for output in outputs:
             max_length = max(max_length, len(output.outputs[0].token_ids))
@@ -1661,11 +1743,16 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             ):
                 try:
                     for idx, logprob_dict in enumerate(generation.logprobs):
-                        if logprob_dict:
+                        if logprob_dict and idx < len(generated_tokens):
                             position = sequence_length + idx
-                            full_logprobs[position] = next(iter(logprob_dict.items()))[
-                                1
-                            ].logprob
+                            sampled_logprob = extract_sampled_token_logprob(
+                                logprob_dict,
+                                int(generated_tokens[idx]),
+                            )
+                            if sampled_logprob is not None:
+                                full_logprobs[position] = sampled_logprob
+                            else:
+                                missing_sampled_logprobs += 1
                 except Exception:
                     import traceback
 
@@ -1690,6 +1777,12 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         # Create return data conforming to GenerationOutputSpec
         output_ids = torch.stack(output_ids_list)
         logprobs = torch.stack(logprobs_list)
+        if missing_sampled_logprobs and os.environ.get("NRL_DEBUG", "0") == "1":
+            print(
+                "[VLLM_LOGPROB_DEBUG] "
+                f"missing_sampled_token_logprobs={missing_sampled_logprobs}",
+                flush=True,
+            )
 
         return_data = BatchedDataDict[GenerationOutputSpec](
             {

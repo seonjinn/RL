@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Parity launcher: runs the SAME workload as
-# nemo-rl-recipes/scripts/nanov3_vision_rl.sh, but on the
-# nemo-rl-super-vllm0.18 codebase (vllm 0.18 + super container).
+# nemo-rl-recipes/scripts/nanov3_vision_rl.sh, but on the nemo-rl-super
+# codebase with the current vLLM20 super container.
 #
 # Both launchers point at examples/omni/nanov3_vision_rl.yaml with the
 # identical Hydra override surface, identical scale (NUM_NODES=4,
@@ -10,7 +10,7 @@
 # IMAGE_GRPO_MODEL_NAME / IMAGE_GRPO_CACHE_DIR in NEMORL/.env).
 #
 # Wandb is enabled and forced to the same project as the recipes
-# baseline (nemo-rl-omni). JOB_NAME_BASE defaults to image-grpo-vllm018
+# baseline (nemo-rl-omni). JOB_NAME_BASE defaults to image-grpo-vllm20
 # so the two runs are easy to tell apart in the dashboard.
 
 set -euo pipefail
@@ -27,7 +27,7 @@ fi
 
 CONFIG_PATH="${CONFIG_PATH:-examples/omni/nanov3_vision_rl.yaml}"
 NUM_NODES="${NUM_NODES:-4}"
-JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm018}"
+JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
@@ -47,10 +47,10 @@ export GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 # default and trips the "GPUS_PER_NODE doesn't match cluster GRES" check.
 export NUM_NODES
 
-# Container + mounts. Default to the super-omni-rl image that ships
-# pre-built /opt/ray_venvs and the vllm-0.18 wheel. Overridable via .env.
+# Container + mounts. Default to the current super-omni-vllm20 image that ships
+# pre-built /opt/ray_venvs. Overridable via .env.
 CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/rl/images}"
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-20260501-vllm0.18.sqsh}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-vllm20-super-vlm2-20260507-0905b74.sqsh}"
 export MOUNTS="${MOUNTS:-/lustre:/lustre}"
 
 # Trust the baked /opt/ray_venvs/<actor>/ in the container so
@@ -108,7 +108,7 @@ EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
 fi
-# super-vllm0.18's grpo.py requires grpo.val_at_end (recipes' grpo.py doesn't
+# This repo's grpo.py requires grpo.val_at_end (recipes' grpo.py doesn't
 # read this key). The recipes-derived omni YAML doesn't define it, so inject
 # the super-side default (false) here so the run reaches Step 1.
 EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"

@@ -90,6 +90,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         "imgs_sizes",  # dynamic-resolution VLMs: [num_images, 2] with (H, W) per image
         "image_num_patches",  # static InternVL tiling: number of patches per image
         "num_frames",  # temporal grouping metadata for image/video batches
+        "sound_clip_duration",  # audio clip split duration, in seconds
+        "sound_clip_min_duration",  # minimum tail audio clip duration, in seconds
     ]
     # ``PackedTensor`` keys for which ``get_multimodal_dict(pixel_dtype=...)``
     # eagerly casts the underlying tensors before serialization. Used by the

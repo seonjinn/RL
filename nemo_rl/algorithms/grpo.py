@@ -1761,11 +1761,188 @@ def _row_has_nonempty_media(values: Any, index: int) -> bool:
     return True
 
 
+def _row_modality_category(batch: BatchedDataDict, index: int) -> str:
+    has_image = _row_has_nonempty_media(batch.get("vllm_images"), index)
+    has_video = _row_has_nonempty_media(batch.get("vllm_videos"), index)
+    has_audio = _row_has_nonempty_media(batch.get("vllm_audio_paths"), index)
+    if has_image and has_video and has_audio:
+        return "image_video_audio"
+    if has_image and has_video:
+        return "image_video"
+    if has_image and has_audio:
+        return "image_audio"
+    if has_video and has_audio:
+        return "video_audio"
+    if has_image:
+        return "image_only"
+    if has_video:
+        return "video_only"
+    if has_audio:
+        return "audio_only"
+    return "text_only"
+
+
+def _debug_tensor_value(values: Any, index: int) -> Any:
+    if values is None:
+        return None
+    try:
+        value = values[index]
+    except Exception:
+        return None
+    if torch.is_tensor(value):
+        if value.numel() == 1:
+            return value.item()
+        return value.detach().cpu().tolist()
+    return value
+
+
+def _debug_float_value(values: Any, index: int) -> Optional[float]:
+    value = _debug_tensor_value(values, index)
+    if value is None or isinstance(value, (list, tuple)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _debug_sample_basenames(values: Any, index: int) -> list[str]:
+    value = _debug_tensor_value(values, index)
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        value = [value]
+    basenames = []
+    for item in value:
+        if item in (None, "__noimage__"):
+            continue
+        basenames.append(os.path.basename(str(item)))
+    return basenames
+
+
+def _debug_decode_token(
+    tokenizer: Optional[PreTrainedTokenizerBase],
+    token_id: int,
+) -> str:
+    if tokenizer is None:
+        return ""
+    try:
+        return repr(tokenizer.decode([int(token_id)])).replace("\n", "\\n")
+    except Exception:
+        return ""
+
+
+def _debug_print_length_reward_by_modality(
+    *,
+    repeated_batch: BatchedDataDict,
+    train_data: BatchedDataDict,
+    rewards: torch.Tensor,
+) -> None:
+    if os.environ.get("NRL_DEBUG", "0") != "1":
+        return
+
+    sample_mask = train_data.get("sample_mask")
+    token_mask = train_data.get("token_mask")
+    generation_lengths = train_data.get("generation_lengths")
+    prompt_lengths = repeated_batch.get("length", repeated_batch.get("input_lengths"))
+    expanded_lengths = train_data.get("expanded_lengths")
+    vision_expansion = repeated_batch.get("vision_expansion")
+    collapse_savings = repeated_batch.get("collapse_savings")
+    truncated = repeated_batch.get("truncated")
+    if sample_mask is None:
+        return
+
+    sample_mask_cpu = sample_mask.detach().float().cpu()
+    rewards_cpu = rewards.detach().float().cpu().view(-1)
+    response_token_counts = None
+    if torch.is_tensor(token_mask) and token_mask.ndim >= 2:
+        response_token_counts = token_mask[:, 1:].detach().float().cpu().sum(dim=-1)
+
+    categories: dict[str, list[int]] = {}
+    for idx in range(sample_mask_cpu.numel()):
+        categories.setdefault(_row_modality_category(repeated_batch, idx), []).append(
+            idx
+        )
+
+    print(
+        "[ROLLOUT_MODALITY_LENGTH_DEBUG] length/reward/truncation by modality:",
+        flush=True,
+    )
+    for category, indices in sorted(categories.items()):
+        kept = [idx for idx in indices if sample_mask_cpu[idx] > 0]
+        prompt_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(prompt_lengths, idx)) is not None
+        ]
+        gen_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(generation_lengths, idx)) is not None
+        ]
+        response_vals = (
+            [float(response_token_counts[idx].item()) for idx in indices]
+            if response_token_counts is not None
+            else []
+        )
+        expanded_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(expanded_lengths, idx)) is not None
+        ]
+        vision_expansion_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(vision_expansion, idx)) is not None
+        ]
+        collapse_savings_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(collapse_savings, idx)) is not None
+        ]
+        reward_vals = [
+            float(rewards_cpu[idx].item())
+            for idx in indices
+            if idx < rewards_cpu.numel()
+        ]
+        truncated_count = 0
+        if truncated is not None:
+            for idx in indices:
+                value = _debug_tensor_value(truncated, idx)
+                truncated_count += int(bool(value)) if value is not None else 0
+
+        def _mean(vals: list[float]) -> float:
+            return float(sum(vals) / len(vals)) if vals else 0.0
+
+        print(
+            "  "
+            f"{category}: count={len(indices)} kept={len(kept)} "
+            f"prompt_mean={_mean(prompt_vals):.1f} "
+            f"prompt_max={max(prompt_vals) if prompt_vals else 0:.0f} "
+            f"generation_mean={_mean(gen_vals):.1f} "
+            f"generation_max={max(gen_vals) if gen_vals else 0:.0f} "
+            f"response_tokens_mean={_mean(response_vals):.1f} "
+            f"response_tokens_max={max(response_vals) if response_vals else 0:.0f} "
+            f"expanded_mean={_mean(expanded_vals):.1f} "
+            f"expanded_max={max(expanded_vals) if expanded_vals else 0:.0f} "
+            f"vision_expansion_mean={_mean(vision_expansion_vals):.1f} "
+            f"vision_expansion_max={max(vision_expansion_vals) if vision_expansion_vals else 0:.0f} "
+            f"collapse_savings_mean={_mean(collapse_savings_vals):.1f} "
+            f"collapse_savings_max={max(collapse_savings_vals) if collapse_savings_vals else 0:.0f} "
+            f"truncated={truncated_count} "
+            f"reward_mean={_mean(reward_vals):.4f}",
+            flush=True,
+        )
+
+
 def _debug_print_seq_error_by_modality(
     *,
     seq_error_result: dict[str, Any],
     repeated_batch: BatchedDataDict,
+    train_data: BatchedDataDict,
+    rewards: torch.Tensor,
     threshold: Optional[float],
+    tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ) -> None:
     if os.environ.get("NRL_DEBUG", "0") != "1":
         return
@@ -1784,26 +1961,14 @@ def _debug_print_seq_error_by_modality(
     for idx in range(errors.numel()):
         if not bool(active[idx]):
             continue
-        has_image = _row_has_nonempty_media(repeated_batch.get("vllm_images"), idx)
-        has_video = _row_has_nonempty_media(repeated_batch.get("vllm_videos"), idx)
-        has_audio = _row_has_nonempty_media(repeated_batch.get("vllm_audio_paths"), idx)
-        if has_image and has_video and has_audio:
-            category = "image_video_audio"
-        elif has_image and has_video:
-            category = "image_video"
-        elif has_image and has_audio:
-            category = "image_audio"
-        elif has_video and has_audio:
-            category = "video_audio"
-        elif has_image:
-            category = "image_only"
-        elif has_video:
-            category = "video_only"
-        elif has_audio:
-            category = "audio_only"
-        else:
-            category = "text_only"
+        category = _row_modality_category(repeated_batch, idx)
         categories.setdefault(category, []).append(idx)
+
+    _debug_print_length_reward_by_modality(
+        repeated_batch=repeated_batch,
+        train_data=train_data,
+        rewards=rewards,
+    )
 
     print("[SEQ_LOGPROB_MODALITY_DEBUG] active sequence error by modality:", flush=True)
     for category, indices in sorted(categories.items()):
@@ -1833,6 +1998,82 @@ def _debug_print_seq_error_by_modality(
             ),
             flush=True,
         )
+
+        lp_error = seq_error_result.get("lp_error")
+        if lp_error is not None and "token_mask" in train_data:
+            lp_error_cpu = lp_error.detach().float().cpu()
+            token_mask_cpu = train_data["token_mask"][:, 1:].detach().float().cpu()
+            input_ids_cpu = train_data["input_ids"].detach().cpu()
+            generation_logprobs_cpu = (
+                train_data["generation_logprobs"][:, 1:].detach().float().cpu()
+            )
+            prev_logprobs_cpu = train_data["prev_logprobs"][:, 1:].detach().float().cpu()
+            sample_mask = train_data.get("sample_mask")
+            sample_mask_cpu = (
+                sample_mask.detach().float().cpu()
+                if torch.is_tensor(sample_mask)
+                else torch.ones_like(errors)
+            )
+            rewards_cpu = rewards.detach().float().cpu().view(-1)
+            source_indices = repeated_batch.get("idx")
+            print(
+                "[SEQ_LOGPROB_TOKEN_DEBUG] top token deltas for highest-error rows:",
+                flush=True,
+            )
+            for value, row_idx_tensor in zip(top_values, top_indices):
+                row_idx = int(row_idx_tensor.item())
+                if row_idx >= lp_error_cpu.shape[0]:
+                    continue
+                row_mask = token_mask_cpu[row_idx] > 0
+                if not bool(row_mask.any()):
+                    continue
+                masked_error = lp_error_cpu[row_idx].masked_fill(~row_mask, -1.0)
+                token_values, shifted_positions = torch.topk(
+                    masked_error, k=min(3, int(row_mask.sum().item()))
+                )
+                source_idx = _debug_tensor_value(source_indices, row_idx)
+                modality = _row_modality_category(repeated_batch, row_idx)
+                media_bits = []
+                for label, key in (
+                    ("audio", "vllm_audio_paths"),
+                    ("video", "vllm_videos"),
+                    ("image", "vllm_images"),
+                ):
+                    names = _debug_sample_basenames(repeated_batch.get(key), row_idx)
+                    if names:
+                        media_bits.append(f"{label}={names[:3]}")
+                reward = (
+                    float(rewards_cpu[row_idx].item())
+                    if row_idx < rewards_cpu.numel()
+                    else 0.0
+                )
+                top_token_bits = []
+                for token_value, shifted_pos_tensor in zip(
+                    token_values, shifted_positions
+                ):
+                    shifted_pos = int(shifted_pos_tensor.item())
+                    token_pos = shifted_pos + 1
+                    if token_pos >= input_ids_cpu.shape[1]:
+                        continue
+                    token_id = int(input_ids_cpu[row_idx, token_pos].item())
+                    decoded = _debug_decode_token(tokenizer, token_id)
+                    top_token_bits.append(
+                        "pos="
+                        f"{token_pos} token={token_id} text={decoded} "
+                        f"diff={float(token_value):.6f} "
+                        f"gen_lp={float(generation_logprobs_cpu[row_idx, shifted_pos]):.6f} "
+                        f"policy_lp={float(prev_logprobs_cpu[row_idx, shifted_pos]):.6f}"
+                    )
+                print(
+                    "  "
+                    f"idx={row_idx} source_idx={source_idx} modality={modality} "
+                    f"err={float(value):.6f} "
+                    f"sample_mask={float(sample_mask_cpu[row_idx].item()):.1f} "
+                    f"reward={reward:.4f} "
+                    f"{' '.join(media_bits)} "
+                    f"top_tokens=[{'; '.join(top_token_bits)}]",
+                    flush=True,
+                )
 
 
 def _debug_print_pretrain_logprob_summary(
@@ -2673,7 +2914,10 @@ def grpo_train(
                     _debug_print_seq_error_by_modality(
                         seq_error_result=seq_error_result,
                         repeated_batch=repeated_batch,
+                        train_data=train_data,
+                        rewards=rewards,
                         threshold=seq_logprob_error_threshold,
+                        tokenizer=tokenizer,
                     )
                     _debug_print_pretrain_logprob_summary(
                         train_data=train_data,
@@ -4062,7 +4306,10 @@ def async_grpo_train(
                     _debug_print_seq_error_by_modality(
                         seq_error_result=seq_error_result,
                         repeated_batch=repeated_batch,
+                        train_data=train_data,
+                        rewards=rewards,
                         threshold=seq_logprob_error_threshold,
+                        tokenizer=tokenizer,
                     )
                     _debug_print_pretrain_logprob_summary(
                         train_data=train_data,

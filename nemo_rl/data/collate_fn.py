@@ -62,6 +62,17 @@ def rl_collate_fn(data_batch: list[DatumSpec]) -> BatchedDataDict[Any]:
             datum_spec.get("vllm_temporal_patch_size", None)
             for datum_spec in data_batch
         ]
+        vllm_video_prompt_style = [
+            datum_spec.get("vllm_video_prompt_style", None)
+            for datum_spec in data_batch
+        ]
+        vllm_video_frame_indices = [
+            datum_spec.get("vllm_video_frame_indices", [])
+            for datum_spec in data_batch
+        ]
+        vllm_video_fps = [
+            datum_spec.get("vllm_video_fps", []) for datum_spec in data_batch
+        ]
         vllm_audio_paths = [
             datum_spec.get("vllm_audio_paths", []) for datum_spec in data_batch
         ]
@@ -83,6 +94,9 @@ def rl_collate_fn(data_batch: list[DatumSpec]) -> BatchedDataDict[Any]:
         extra_args["vllm_videos"] = vllm_videos
         extra_args["vllm_num_frames"] = vllm_num_frames
         extra_args["vllm_temporal_patch_size"] = vllm_temporal_patch_size
+        extra_args["vllm_video_prompt_style"] = vllm_video_prompt_style
+        extra_args["vllm_video_frame_indices"] = vllm_video_frame_indices
+        extra_args["vllm_video_fps"] = vllm_video_fps
         extra_args["vllm_audio_paths"] = vllm_audio_paths
         extra_args["vllm_audio_waveforms"] = vllm_audio_waveforms
         extra_args["vllm_max_audio_duration"] = vllm_max_audio_duration

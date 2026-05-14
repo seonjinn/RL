@@ -34,6 +34,46 @@ from nemo_rl.utils.venvs import (
     create_local_venv_on_each_node,
 )
 
+_WORKER_ENV_VARS_TO_DROP = frozenset(
+    {
+        # Ray-specific process state must be owned by each worker process.
+        "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
+        "RAY_CLIENT_MODE",
+        "RAY_JOB_ID",
+        "RAY_LD_PRELOAD",
+        "RAY_RAYLET_PID",
+        "RAY_USAGE_STATS_ENABLED",
+        # Build-time / legacy vLLM knobs. vLLM20 warns when these keys are
+        # present, even if their values are empty.
+        "VLLM_PRECOMPILED_WHEEL_LOCATION",
+        "VLLM_USE_V1",
+    }
+)
+_WORKER_ENV_VARS_TO_CLEAR = frozenset(
+    {
+        # Launcher/bootstrap payloads can be very large because ray.sub stores
+        # shell and setup scripts in env vars. Ray worker processes may inherit
+        # the raylet environment, so overwrite these instead of only omitting
+        # them from runtime_env.
+        "COMMAND",
+        "SETUP_COMMAND",
+        "SETUP_COMMAND_FILE",
+        "DRIVER_COMMAND_FILE",
+    }
+)
+
+
+def _sanitize_worker_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
+    for key in _WORKER_ENV_VARS_TO_DROP:
+        env_vars.pop(key, None)
+    for key in _WORKER_ENV_VARS_TO_CLEAR:
+        if key in env_vars:
+            env_vars[key] = ""
+    for key in list(env_vars):
+        if key.startswith("BASH_FUNC_"):
+            env_vars[key] = ""
+    return env_vars
+
 
 @dataclass
 class MultiWorkerFuture:
@@ -455,8 +495,10 @@ class RayWorkerGroup:
         self.world_size = sum(len(indices) for _, indices in bundle_indices_list)
         global_rank = 0
 
-        # Collect all async creation calls
-        worker_futures = []
+        # Collect worker creation specs. By default these are submitted all at
+        # once to preserve existing behavior. For large jobs, set
+        # NRL_WORKER_CREATE_BATCH_SIZE to force actor startup in smaller waves.
+        worker_specs = []
         worker_info = []  # Store metadata for each worker
 
         # Get all placement groups
@@ -530,13 +572,7 @@ class RayWorkerGroup:
                         "AVAILABLE_PORT_LIST": str(available_ports),
                     }
                 )
-                # Remove Ray-specific environment variables, let the worker itself set them.
-                worker_env_vars.pop("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", None)
-                worker_env_vars.pop("RAY_CLIENT_MODE", None)
-                worker_env_vars.pop("RAY_JOB_ID", None)
-                worker_env_vars.pop("RAY_LD_PRELOAD", None)
-                worker_env_vars.pop("RAY_RAYLET_PID", None)
-                worker_env_vars.pop("RAY_USAGE_STATS_ENABLED", None)
+                _sanitize_worker_env_vars(worker_env_vars)
 
                 # Only the first worker in each group gets bundle_indices
                 # This ensures only one worker per group is the model owner
@@ -569,19 +605,19 @@ class RayWorkerGroup:
 
                 extra_options = {"runtime_env": runtime_env, "name": name}
 
-                # Reuse the pooled initializer for this pg_idx
-                initializer = self._initializer_pool[pg_idx]
-                worker_future = initializer.create_worker.remote(
-                    pg,
-                    bundle_idx,
-                    num_gpus,
-                    worker_bundle_indices,
-                    **extra_options,
-                )
-
                 # Store the future and metadata
-                worker_idx = len(worker_futures)
-                worker_futures.append(worker_future)
+                worker_idx = len(worker_specs)
+                worker_specs.append(
+                    {
+                        "worker_idx": worker_idx,
+                        "initializer": self._initializer_pool[pg_idx],
+                        "placement_group": pg,
+                        "bundle_idx": bundle_idx,
+                        "num_gpus": num_gpus,
+                        "worker_bundle_indices": worker_bundle_indices,
+                        "extra_options": extra_options,
+                    }
+                )
                 worker_info.append(
                     {
                         "group_idx": group_idx,
@@ -599,32 +635,107 @@ class RayWorkerGroup:
                 global_rank += 1
 
         # Wait for all workers to initialize with timing and progress bar
-        num_workers = len(worker_futures)
-        worker_refs = worker_futures
+        num_workers = len(worker_specs)
 
         start_time = time.perf_counter()
 
-        # Use ray.wait() to track individual worker completion times
-        remaining_refs = worker_refs.copy()
+        def _env_int(name: str, default: int = 0) -> int:
+            raw = os.getenv(name, "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
 
-        with tqdm(
-            total=num_workers,
-            desc=f"Initializing {self.name_prefix} workers",
-            unit="worker",
-            disable=False,
-        ) as pbar:
-            while remaining_refs:
-                # Wait for at least one worker to complete
-                ready_refs, remaining_refs = ray.wait(
-                    remaining_refs, num_returns=1, timeout=None
-                )
+        def _env_float(name: str, default: float = 0.0) -> float:
+            raw = os.getenv(name, "").strip()
+            if not raw:
+                return default
+            try:
+                return float(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be a float, got {raw!r}") from exc
 
-                # Update progress bar for each ready worker
-                for _ in ready_refs:
-                    pbar.update(1)
+        create_batch_size = _env_int("NRL_WORKER_CREATE_BATCH_SIZE", 0)
+        create_batch_sleep_s = _env_float("NRL_WORKER_CREATE_BATCH_SLEEP_S", 0.0)
+        ready_method_name = os.getenv("NRL_WORKER_READY_METHOD", "is_alive").strip()
+        ready_timeout_s = _env_float("NRL_WORKER_READY_TIMEOUT_S", 0.0)
 
-        # Get all worker results
-        workers = ray.get(worker_refs)
+        def _submit_worker(spec):
+            return spec["initializer"].create_worker.remote(
+                spec["placement_group"],
+                spec["bundle_idx"],
+                spec["num_gpus"],
+                spec["worker_bundle_indices"],
+                **spec["extra_options"],
+            )
+
+        def _wait_for_actor_readiness(workers: list[ray.actor.ActorHandle]) -> None:
+            if not ready_method_name:
+                return
+            ready_futures = [
+                getattr(worker, ready_method_name).remote() for worker in workers
+            ]
+            if ready_timeout_s > 0:
+                ray.get(ready_futures, timeout=ready_timeout_s)
+            else:
+                ray.get(ready_futures)
+
+        if create_batch_size > 0:
+            workers: list[ray.actor.ActorHandle | None] = [None] * num_workers
+            print(
+                f"  Creating {num_workers} {self.name_prefix} workers in batches "
+                f"of {create_batch_size} with readiness={ready_method_name or 'off'}",
+                flush=True,
+            )
+            with tqdm(
+                total=num_workers,
+                desc=f"Initializing {self.name_prefix} workers",
+                unit="worker",
+                disable=False,
+            ) as pbar:
+                for start in range(0, num_workers, create_batch_size):
+                    batch_specs = worker_specs[start : start + create_batch_size]
+                    batch_futures = [_submit_worker(spec) for spec in batch_specs]
+                    batch_workers = ray.get(batch_futures)
+                    _wait_for_actor_readiness(batch_workers)
+                    for spec, worker in zip(batch_specs, batch_workers):
+                        workers[spec["worker_idx"]] = worker
+                    pbar.update(len(batch_specs))
+                    if create_batch_sleep_s > 0:
+                        time.sleep(create_batch_sleep_s)
+
+            assert all(worker is not None for worker in workers)
+            workers = [worker for worker in workers if worker is not None]
+        else:
+            worker_refs = [_submit_worker(spec) for spec in worker_specs]
+
+            # Use ray.wait() to track individual worker completion times
+            remaining_refs = worker_refs.copy()
+
+            with tqdm(
+                total=num_workers,
+                desc=f"Initializing {self.name_prefix} workers",
+                unit="worker",
+                disable=False,
+            ) as pbar:
+                while remaining_refs:
+                    # Wait for at least one worker to complete
+                    ready_refs, remaining_refs = ray.wait(
+                        remaining_refs, num_returns=1, timeout=None
+                    )
+
+                    # Update progress bar for each ready worker
+                    for _ in ready_refs:
+                        pbar.update(1)
+
+            # Get all worker handles. This preserves previous behavior: actor
+            # handles may resolve before actor __init__ has fully completed.
+            workers = ray.get(worker_refs)
+            if os.getenv("NRL_WORKER_READY_CHECK_AFTER_CREATE", "0") == "1":
+                _wait_for_actor_readiness(workers)
+
         total_init_time = time.perf_counter() - start_time
 
         print(

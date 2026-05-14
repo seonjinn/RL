@@ -33,8 +33,10 @@ from nemo_rl.models.megatron.multimodal import (  # noqa: E402
     _get_image_token_ids,
     _patchify_for_dynamic_resolution,
     collapse_multimodal_tokens,
+    compute_vision_expansion,
     is_llava_model,
     prepare_multimodal_data,
+    split_audio_into_clips,
 )
 
 
@@ -42,6 +44,50 @@ IMG_START_ID = 19
 IMG_END_ID = 20
 IMG_CONTEXT_ID = 18
 PATCH_DIM = 16
+
+
+class TestSplitAudioIntoClips:
+    def test_short_audio_stays_one_clip(self):
+        waveform = torch.arange(10, dtype=torch.float32)
+
+        clips = split_audio_into_clips(
+            waveform,
+            sampling_rate=10,
+            clip_duration_s=3.0,
+            clip_min_duration_s=0.5,
+        )
+
+        assert [clip.numel() for clip in clips] == [10]
+        assert clips[0].tolist() == waveform.tolist()
+
+    def test_long_audio_splits_like_vllm_parakeet(self):
+        waveform = torch.arange(75, dtype=torch.float32)
+
+        clips = split_audio_into_clips(
+            waveform,
+            sampling_rate=10,
+            clip_duration_s=3.0,
+            clip_min_duration_s=0.5,
+        )
+
+        assert [clip.numel() for clip in clips] == [30, 30, 15]
+        assert clips[0].tolist() == list(range(30))
+        assert clips[1].tolist() == list(range(30, 60))
+        assert clips[2].tolist() == list(range(60, 75))
+
+    def test_tiny_tail_is_padded_to_minimum_tail(self):
+        waveform = torch.arange(62, dtype=torch.float32)
+
+        clips = split_audio_into_clips(
+            waveform,
+            sampling_rate=10,
+            clip_duration_s=3.0,
+            clip_min_duration_s=0.5,
+        )
+
+        assert [clip.numel() for clip in clips] == [30, 30, 5]
+        assert clips[2][:2].tolist() == [60.0, 61.0]
+        assert clips[2][2:].tolist() == [0.0, 0.0, 0.0]
 
 
 def _make_dynamic_model(*, video_temporal_patch_size: int = 1) -> SimpleNamespace:
@@ -202,6 +248,60 @@ class TestCollapseMultimodalTokens:
         # this tensor in expansion space.
         assert out["tokens_removed_per_sample"].tolist() == [1 * (static_img_seq_len - 1)]
 
+    def test_conv3d_video_expansion_uses_tubelets_not_raw_frames(self):
+        imgs_sizes = torch.tensor([[32, 32]] * 32, dtype=torch.int32)
+
+        expansion = compute_vision_expansion(
+            imgs_sizes_per_sample=[imgs_sizes],
+            num_image_placeholders_per_sample=[16],
+            patch_dim=PATCH_DIM,
+            downsample_ratio=0.5,
+            num_frames_per_sample=[torch.tensor([32], dtype=torch.int32)],
+            temporal_patch_size=2,
+        )
+        raw_frame_expansion = compute_vision_expansion(
+            imgs_sizes_per_sample=[imgs_sizes],
+            num_image_placeholders_per_sample=[16],
+            patch_dim=PATCH_DIM,
+            downsample_ratio=0.5,
+            temporal_patch_size=1,
+        )
+
+        # Each 32x32 frame produces one embedding, but Conv3D T=2 groups 32
+        # frames into 16 tubelets. The collapsed policy sequence therefore has
+        # no additional vision expansion beyond its 16 kept placeholders.
+        assert expansion == [0]
+        assert raw_frame_expansion == [16]
+
+    def test_conv3d_video_expansion_keeps_trailing_non_video_media(self):
+        imgs_sizes = torch.tensor(
+            [[32, 32]] * 32 + [[64, 64]],
+            dtype=torch.int32,
+        )
+
+        expansion = compute_vision_expansion(
+            imgs_sizes_per_sample=[imgs_sizes],
+            num_image_placeholders_per_sample=[17],
+            patch_dim=PATCH_DIM,
+            downsample_ratio=0.5,
+            num_frames_per_sample=[torch.tensor([32], dtype=torch.int32)],
+            temporal_patch_size=2,
+        )
+        explicit_media_expansion = compute_vision_expansion(
+            imgs_sizes_per_sample=[imgs_sizes],
+            num_image_placeholders_per_sample=[17],
+            patch_dim=PATCH_DIM,
+            downsample_ratio=0.5,
+            num_frames_per_sample=[torch.tensor([32, 1], dtype=torch.int32)],
+            temporal_patch_size=2,
+        )
+
+        # The 32 video frames collapse into 16 tubelets. The trailing image
+        # contributes 4 embeddings, so there are 3 expansion tokens beyond the
+        # 17 collapsed placeholders.
+        assert expansion == [3]
+        assert explicit_media_expansion == [3]
+
     def test_unmatched_img_start_raises(self):
         model = _make_dynamic_model()
         # img_start without a matching img_end
@@ -254,6 +354,18 @@ class TestPrepareMultimodalData:
         assert mm["images"].numel() == 0
         assert mm["imgs_sizes"].shape == (0, 2)
         assert mm["num_image_tiles"].numel() == 0
+
+    def test_sound_clip_metadata_is_consumed_without_audio(self):
+        model = _make_dynamic_model()
+        device = torch.device("cpu")
+        mm: dict = {
+            "sound_clip_duration": torch.tensor([30.0]),
+            "sound_clip_min_duration": torch.tensor([0.1]),
+        }
+        prepare_multimodal_data(mm, model, device)
+        assert "sound_clip_duration" not in mm
+        assert "sound_clip_min_duration" not in mm
+        assert mm["images"].numel() == 0
 
     def test_dynamic_resolution_image_only(self):
         model = _make_dynamic_model()

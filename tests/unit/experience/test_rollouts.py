@@ -106,7 +106,16 @@ def test_run_multi_turn_rollout_skip_generation_multimodal_tensors():
             "task_name": ["math"],
             "vllm_content": ["prompt-with-image"],
             "vllm_images": [["img1"]],
+            "vllm_videos": [["vid1.mp4"]],
+            "vllm_num_frames": [32],
+            "vllm_temporal_patch_size": [2],
+            "vllm_video_prompt_style": ["sft_v2_grouped"],
+            "vllm_video_frame_indices": [[[10, 20, 30, 40]]],
+            "vllm_video_fps": [[5.0]],
+            "vllm_audio_paths": [["aud1.wav"]],
+            "vllm_max_audio_duration": [300.0],
             "vllm_max_num_tiles": [8],
+            "vllm_max_num_patches": [1024],
         }
     )
 
@@ -164,7 +173,16 @@ def test_run_multi_turn_rollout_skip_generation_multimodal_tensors():
     assert "imgs_sizes" in generation_input_data
     assert generation_input_data["vllm_content"] == ["prompt-with-image"]
     assert generation_input_data["vllm_images"] == [["img1"]]
+    assert generation_input_data["vllm_videos"] == [["vid1.mp4"]]
+    assert generation_input_data["vllm_num_frames"] == [32]
+    assert generation_input_data["vllm_temporal_patch_size"] == [2]
+    assert generation_input_data["vllm_video_prompt_style"] == ["sft_v2_grouped"]
+    assert generation_input_data["vllm_video_frame_indices"] == [[[10, 20, 30, 40]]]
+    assert generation_input_data["vllm_video_fps"] == [[5.0]]
+    assert generation_input_data["vllm_audio_paths"] == [["aud1.wav"]]
+    assert generation_input_data["vllm_max_audio_duration"] == [300.0]
     assert generation_input_data["vllm_max_num_tiles"] == [8]
+    assert generation_input_data["vllm_max_num_patches"] == [1024]
     assert final_batch["total_reward"][0].item() == 1.0
     assert rollout_metrics["mean_gen_tokens_per_sample"] == 1.0
 
@@ -209,6 +227,9 @@ def test_run_async_multi_turn_rollout_preserves_vllm_side_channels():
             "vllm_videos": [["vid1.mp4"]],
             "vllm_num_frames": [32],
             "vllm_temporal_patch_size": [2],
+            "vllm_video_prompt_style": ["sft_v2_grouped"],
+            "vllm_video_frame_indices": [[[10, 20, 30, 40]]],
+            "vllm_video_fps": [[5.0]],
             "vllm_audio_paths": [["aud1.wav"]],
             "vllm_max_audio_duration": [300.0],
             "vllm_max_num_tiles": [None],
@@ -272,6 +293,9 @@ def test_run_async_multi_turn_rollout_preserves_vllm_side_channels():
     assert generation_input_data["vllm_videos"] == [["vid1.mp4"]]
     assert generation_input_data["vllm_num_frames"] == [32]
     assert generation_input_data["vllm_temporal_patch_size"] == [2]
+    assert generation_input_data["vllm_video_prompt_style"] == ["sft_v2_grouped"]
+    assert generation_input_data["vllm_video_frame_indices"] == [[[10, 20, 30, 40]]]
+    assert generation_input_data["vllm_video_fps"] == [[5.0]]
     assert generation_input_data["vllm_audio_paths"] == [["aud1.wav"]]
     assert generation_input_data["vllm_max_audio_duration"] == [300.0]
     assert generation_input_data["vllm_max_num_patches"] == [1024]

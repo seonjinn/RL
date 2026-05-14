@@ -61,6 +61,9 @@ _VLLM_GENERATION_SIDE_CHANNEL_KEYS = (
     "vllm_videos",
     "vllm_num_frames",
     "vllm_temporal_patch_size",
+    "vllm_video_prompt_style",
+    "vllm_video_frame_indices",
+    "vllm_video_fps",
     "vllm_audio_paths",
     "vllm_audio_waveforms",
     "vllm_max_audio_duration",
@@ -454,41 +457,9 @@ def run_multi_turn_rollout(
             if imgs_sizes is not None:
                 generation_input_data["imgs_sizes"] = imgs_sizes
 
-        # keep message log for generation
-        if "vllm_content" in active_batch:
-            generation_input_data["vllm_content"] = active_batch["vllm_content"]
-        if "vllm_images" in active_batch:
-            generation_input_data["vllm_images"] = active_batch["vllm_images"]
-        if "vllm_videos" in active_batch:
-            generation_input_data["vllm_videos"] = active_batch["vllm_videos"]
-        if "vllm_num_frames" in active_batch:
-            generation_input_data["vllm_num_frames"] = active_batch[
-                "vllm_num_frames"
-            ]
-        if "vllm_temporal_patch_size" in active_batch:
-            generation_input_data["vllm_temporal_patch_size"] = active_batch[
-                "vllm_temporal_patch_size"
-            ]
-        if "vllm_audio_paths" in active_batch:
-            generation_input_data["vllm_audio_paths"] = active_batch[
-                "vllm_audio_paths"
-            ]
-        if "vllm_audio_waveforms" in active_batch:
-            generation_input_data["vllm_audio_waveforms"] = active_batch[
-                "vllm_audio_waveforms"
-            ]
-        if "vllm_max_audio_duration" in active_batch:
-            generation_input_data["vllm_max_audio_duration"] = active_batch[
-                "vllm_max_audio_duration"
-            ]
-        if "vllm_max_num_tiles" in active_batch:
-            generation_input_data["vllm_max_num_tiles"] = active_batch[
-                "vllm_max_num_tiles"
-            ]
-        if "vllm_max_num_patches" in active_batch:
-            generation_input_data["vllm_max_num_patches"] = active_batch[
-                "vllm_max_num_patches"
-            ]
+        for key in _VLLM_GENERATION_SIDE_CHANNEL_KEYS:
+            if key in active_batch:
+                generation_input_data[key] = active_batch[key]
 
         # generate_responses updates active_batch["message_log"] in-place
         active_batch, generated_ids, gen_metrics = generate_responses(

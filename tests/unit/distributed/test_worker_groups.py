@@ -47,6 +47,9 @@ class MyTestActor:
     def get_pid(self):
         return self.pid
 
+    def is_alive(self):
+        return True
+
     def get_init_args_kwargs(self):
         return self.init_args, self.init_kwargs
 
@@ -288,6 +291,29 @@ def test_basic_worker_creation_and_method_calls(register_test_actor, virtual_clu
     worker_group.shutdown(force=True)
 
 
+def test_batched_worker_creation_waits_for_actor_readiness(
+    register_test_actor, virtual_cluster, monkeypatch
+):
+    monkeypatch.setenv("NRL_WORKER_CREATE_BATCH_SIZE", "1")
+    monkeypatch.setenv("NRL_WORKER_CREATE_BATCH_SLEEP_S", "0")
+    monkeypatch.setenv("NRL_WORKER_READY_TIMEOUT_S", "30")
+
+    actor_fqn = register_test_actor
+    builder = RayWorkerBuilder(actor_fqn)
+
+    worker_group = RayWorkerGroup(
+        cluster=virtual_cluster, remote_worker_builder=builder, workers_per_node=None
+    )
+
+    assert len(worker_group.workers) == 2
+    assert ray.get([worker.is_alive.remote() for worker in worker_group.workers]) == [
+        True,
+        True,
+    ]
+
+    worker_group.shutdown(force=True)
+
+
 def test_actor_initialization_with_args_kwargs(register_test_actor, virtual_cluster):
     actor_fqn = register_test_actor
     init_args = ("arg1", 123)
@@ -440,6 +466,49 @@ def test_custom_environment_variables_override_existing(
     assert custom_value == "overridden_value", (
         f"Expected CUSTOM_OVERRIDE=overridden_value, got {custom_value}"
     )
+
+    worker_group.shutdown(force=True)
+
+
+def test_launcher_payload_environment_variables_are_cleared(
+    register_test_actor, virtual_cluster, monkeypatch
+):
+    actor_fqn = register_test_actor
+    builder = RayWorkerBuilder(actor_fqn)
+
+    monkeypatch.setenv("SETUP_COMMAND", "python - <<'PY'\n" + "x" * 4096)
+    monkeypatch.setenv("COMMAND", "uv run examples/run_vlm_grpo.py " + "y" * 4096)
+    monkeypatch.setenv("DRIVER_COMMAND_FILE", "/tmp/driver_command.sh")
+    monkeypatch.setenv(
+        "VLLM_PRECOMPILED_WHEEL_LOCATION",
+        "https://example.invalid/vllm.whl",
+    )
+    monkeypatch.setenv("KEEP_TEST_VAR", "system_value")
+
+    worker_group = RayWorkerGroup(
+        cluster=virtual_cluster,
+        remote_worker_builder=builder,
+        workers_per_node=1,
+        env_vars={
+            "SETUP_COMMAND_FILE": "/tmp/setup_command.sh",
+            "CUSTOM_KEEP_VAR": "custom_value",
+            "VLLM_USE_V1": "1",
+        },
+    )
+
+    worker = worker_group.workers[0]
+    for var_name in (
+        "SETUP_COMMAND",
+        "COMMAND",
+        "DRIVER_COMMAND_FILE",
+        "SETUP_COMMAND_FILE",
+    ):
+        assert ray.get(worker.get_env_var.remote(var_name)) == ""
+    for var_name in ("VLLM_PRECOMPILED_WHEEL_LOCATION", "VLLM_USE_V1"):
+        assert ray.get(worker.get_env_var.remote(var_name)) is None
+
+    assert ray.get(worker.get_env_var.remote("KEEP_TEST_VAR")) == "system_value"
+    assert ray.get(worker.get_env_var.remote("CUSTOM_KEEP_VAR")) == "custom_value"
 
     worker_group.shutdown(force=True)
 
