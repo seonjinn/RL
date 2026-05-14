@@ -517,8 +517,6 @@ def test_get_multimodal_dict_mixed_content_and_device_move():
         {
             "pixel_values": packed,
             "token_type_ids": token_type_ids,
-            "sound_clip_duration": [[30.0], [30.0]],
-            "sound_clip_min_duration": [[0.1], [0.1]],
             "regular_tensor": regular,
             "labels": [0, 1],
         }
@@ -526,12 +524,7 @@ def test_get_multimodal_dict_mixed_content_and_device_move():
 
     # as tensors
     mm_dict_t = batch.get_multimodal_dict(as_tensors=True)
-    assert set(mm_dict_t.keys()) == {
-        "pixel_values",
-        "token_type_ids",
-        "sound_clip_duration",
-        "sound_clip_min_duration",
-    }
+    assert set(mm_dict_t.keys()) == {"pixel_values", "token_type_ids"}
     assert (
         torch.is_tensor(mm_dict_t["pixel_values"])
         and mm_dict_t["pixel_values"].shape[0] == 3
@@ -543,8 +536,6 @@ def test_get_multimodal_dict_mixed_content_and_device_move():
     # as packed
     mm_dict_p = batch.get_multimodal_dict(as_tensors=False)
     assert isinstance(mm_dict_p["pixel_values"], PackedTensor)
-    assert mm_dict_p["sound_clip_duration"] == [[30.0], [30.0]]
-    assert mm_dict_p["sound_clip_min_duration"] == [[0.1], [0.1]]
 
     # move device
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -25,7 +25,6 @@ from nemo_rl.algorithms.advantage_estimator import (
 )
 from nemo_rl.algorithms.grpo import (
     _default_grpo_save_state,
-    _debug_print_length_reward_by_modality,
     async_grpo_train,
     compute_and_apply_seq_logprob_error_masking,
     dynamic_sampling,
@@ -2128,58 +2127,6 @@ class TestValidateFunction:
 # ============================================================================
 # Tests for compute_and_apply_seq_logprob_error_masking function
 # ============================================================================
-
-
-def test_debug_print_length_reward_by_modality(monkeypatch, capsys):
-    monkeypatch.setenv("NRL_DEBUG", "1")
-    repeated_batch = BatchedDataDict(
-        {
-            "vllm_images": [["image.png"], [], [], []],
-            "vllm_videos": [[], ["video.mp4"], ["video-audio.mp4"], []],
-            "vllm_audio_paths": [[], [], ["video-audio.mp4"], ["audio.wav"]],
-            "length": torch.tensor([10, 20, 30, 40]),
-            "vision_expansion": torch.tensor([100, 200, 300, 400]),
-            "collapse_savings": torch.tensor([1, 2, 3, 4]),
-            "truncated": torch.tensor([False, True, False, False]),
-        }
-    )
-    train_data = BatchedDataDict(
-        {
-            "sample_mask": torch.tensor([1.0, 0.0, 1.0, 1.0]),
-            "token_mask": torch.tensor(
-                [
-                    [0, 1, 1, 0],
-                    [0, 1, 0, 0],
-                    [0, 1, 1, 1],
-                    [0, 0, 1, 0],
-                ],
-                dtype=torch.float32,
-            ),
-            "generation_lengths": torch.tensor([4, 5, 6, 7]),
-            "expanded_lengths": torch.tensor([110, 220, 330, 440]),
-        }
-    )
-    rewards = torch.tensor([1.0, 0.0, 0.5, 0.25])
-
-    _debug_print_length_reward_by_modality(
-        repeated_batch=repeated_batch,
-        train_data=train_data,
-        rewards=rewards,
-    )
-
-    captured = capsys.readouterr().out
-    assert "[ROLLOUT_MODALITY_LENGTH_DEBUG]" in captured
-    assert "image_only: count=1 kept=1" in captured
-    assert "video_only: count=1 kept=0" in captured
-    assert "video_audio: count=1 kept=1" in captured
-    assert "audio_only: count=1 kept=1" in captured
-    assert "prompt_mean=30.0" in captured
-    assert "generation_mean=6.0" in captured
-    assert "response_tokens_mean=3.0" in captured
-    assert "expanded_mean=330.0" in captured
-    assert "vision_expansion_mean=300.0" in captured
-    assert "collapse_savings_mean=3.0" in captured
-    assert "truncated=1" in captured
 
 
 class TestComputeAndApplySeqLogprobErrorMasking:
