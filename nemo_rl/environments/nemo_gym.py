@@ -14,7 +14,6 @@
 import base64
 import copy
 import io
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -140,28 +139,6 @@ def _count_image_payloads(nemo_gym_example: dict) -> int:
     return count
 
 
-def _count_text_image_placeholders(nemo_gym_example: dict) -> int:
-    count = 0
-    input_items = nemo_gym_example.get("responses_create_params", {}).get("input", [])
-    for item in input_items:
-        content = item.get("content", "")
-        if isinstance(content, str):
-            count += content.count("<image>")
-            continue
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            if isinstance(part, str):
-                count += part.count("<image>")
-                continue
-            if not isinstance(part, dict):
-                continue
-            text = part.get("text", "")
-            if isinstance(text, str):
-                count += text.count("<image>")
-    return count
-
-
 def _example_has_image_payload(nemo_gym_example: dict) -> bool:
     return _count_image_payloads(nemo_gym_example) > 0
 
@@ -194,18 +171,16 @@ def _strip_text_image_placeholders_in_example(nemo_gym_example: dict) -> dict:
 def sanitize_nemo_gym_example_image_placeholders(nemo_gym_example: dict) -> dict:
     """Normalize literal image placeholders in text fields.
 
-    For well-formed multimodal rows, preserve literal `<image>` anchors in the
-    text so the chat template expands image blocks at the dataset-authored
-    positions. For text-only rows, replace `<image>` with `image` so special
-    image tokens do not enter a prompt without image payloads. For malformed
-    multimodal rows whose literal anchors do not match the image payload count,
-    strip the anchors and let the chat template place the available images.
+    The OpenAI-style content list already carries images as structured
+    ``input_image`` items. The HF processor turns those items into image
+    blocks, so literal ``<image>`` strings in adjacent text would double-count
+    images and can trip the dynamic-resolution placeholder assertion. For
+    multimodal rows, strip the literal anchors and let the structured image
+    items drive placement. For text-only rows, replace ``<image>`` with the word
+    ``image`` so special image tokens do not enter a prompt without payloads.
     """
     image_payload_count = _count_image_payloads(nemo_gym_example)
-    placeholder_count = _count_text_image_placeholders(nemo_gym_example)
     sanitized = copy.deepcopy(nemo_gym_example)
-    if image_payload_count > 0 and placeholder_count == image_payload_count:
-        return sanitized
 
     replacement = "" if image_payload_count > 0 else "image"
     input_items = sanitized.get("responses_create_params", {}).get("input", [])
@@ -251,81 +226,6 @@ def _make_overlength_filtered_nemo_gym_example(nemo_gym_example: dict) -> dict:
         }
     ]
     return filtered
-
-
-def _deep_merge_dict(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
-    merged = copy.deepcopy(base)
-    for key, value in update.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge_dict(merged[key], value)
-        else:
-            merged[key] = copy.deepcopy(value)
-    return merged
-
-
-def _normalise_precomputed_img_sizes(imgs_sizes: Any) -> list[list[int]]:
-    if imgs_sizes is None:
-        return []
-
-    sizes = imgs_sizes.detach().cpu().tolist() if torch.is_tensor(imgs_sizes) else imgs_sizes
-    if isinstance(sizes, tuple):
-        sizes = list(sizes)
-    if not isinstance(sizes, list):
-        return []
-
-    if len(sizes) == 2 and not isinstance(sizes[0], (list, tuple)):
-        sizes = [sizes]
-
-    precomputed_sizes = []
-    for size_pair in sizes:
-        if torch.is_tensor(size_pair):
-            size_pair = size_pair.detach().cpu().tolist()
-        if isinstance(size_pair, tuple):
-            size_pair = list(size_pair)
-        if not isinstance(size_pair, list) or len(size_pair) < 2:
-            continue
-        precomputed_sizes.append([int(size_pair[0]), int(size_pair[1])])
-    return precomputed_sizes
-
-
-def _merge_vllm_mm_processor_kwargs(
-    nemo_gym_example: dict, mm_processor_kwargs: dict
-) -> None:
-    responses_create_params = nemo_gym_example.setdefault("responses_create_params", {})
-    if not isinstance(responses_create_params, dict):
-        raise TypeError(
-            "responses_create_params must be a dict to set vLLM extra_body"
-        )
-
-    metadata = responses_create_params.get("metadata")
-    if metadata is None:
-        metadata = {}
-        responses_create_params["metadata"] = metadata
-    if not isinstance(metadata, dict):
-        raise TypeError("responses_create_params.metadata must be a dict")
-
-    existing_extra_body = metadata.get("extra_body", "{}")
-    if existing_extra_body is None:
-        extra_body = {}
-    elif isinstance(existing_extra_body, str):
-        extra_body = json.loads(existing_extra_body.strip() or "{}")
-    elif isinstance(existing_extra_body, dict):
-        extra_body = copy.deepcopy(existing_extra_body)
-    else:
-        raise TypeError(
-            "responses_create_params.metadata.extra_body must be a JSON string "
-            f"or dict, got {type(existing_extra_body).__name__}"
-        )
-    if not isinstance(extra_body, dict):
-        raise TypeError(
-            "responses_create_params.metadata.extra_body must decode to a dict"
-        )
-
-    extra_body = _deep_merge_dict(
-        extra_body,
-        {"mm_processor_kwargs": mm_processor_kwargs},
-    )
-    metadata["extra_body"] = json.dumps(extra_body)
 
 
 class NemoGymConfig(TypedDict):
@@ -705,7 +605,7 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
                 }
             )
             current_policy_token_count += len(user_token_ids) + len(
-                assistant_token_ids
+                generation_token_ids
             )
 
             seen_token_ids = torch.cat(
@@ -850,8 +750,6 @@ def nemo_gym_example_to_nemo_rl_datum_spec(
                 pil_image = resolve_to_image(url)
                 user_message_with_images["content"].append({"type": "image", "image": pil_image})
         elif item.get("type") in ("input_text", "text"):
-            # Keep literal <image> anchors for the HF processor. They are stripped
-            # only from extra_env_info before sending the prompt to NemoGYM/vLLM.
             user_message_with_images["content"].append({"type": "text", "text": item.get("text", "")})
         else:
             user_message_with_images["content"].append(item)
@@ -871,9 +769,18 @@ def nemo_gym_example_to_nemo_rl_datum_spec(
     # to drop pixel_values and either crash or compute logprobs without image context.
     user_message["token_ids"] = message_both["input_ids"][0]
 
-    # Extract multimodal keys (pixel_values, etc.)
+    # Extract multimodal keys (pixel_values, etc.). NanoV3-style processors
+    # return flattened tiles under these extra keys, which are not always listed
+    # in processor.model_input_names.
     multimodal_keys = get_multimodal_keys_from_processor(processor)
-    for key in multimodal_keys:
+    extra_multimodal_keys = {"pixel_values_flat", "image_num_patches"}
+    all_multimodal_keys = list(
+        dict.fromkeys(
+            list(multimodal_keys)
+            + [key for key in extra_multimodal_keys if key in message_both]
+        )
+    )
+    for key in all_multimodal_keys:
         if key in message_both:
             user_message[key] = PackedTensor(
                 message_both[key],
@@ -895,12 +802,6 @@ def nemo_gym_example_to_nemo_rl_datum_spec(
     if "imgs_sizes" in message_both:
         imgs_sizes = message_both["imgs_sizes"].to(dtype=torch.int32)
         user_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
-        precomputed_imgs_sizes = _normalise_precomputed_img_sizes(imgs_sizes)
-        if precomputed_imgs_sizes:
-            _merge_vllm_mm_processor_kwargs(
-                extra_env_info,
-                {"precomputed_imgs_sizes": precomputed_imgs_sizes},
-            )
 
     if max_seq_length is not None and length >= max_seq_length:
         print(f"Discarding sample with length {length} >= {max_seq_length}")
