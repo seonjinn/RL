@@ -734,8 +734,13 @@ def nemo_gym_data_processor(
     """
     extra_env_info = json.loads(datum_dict["extra_env_info"])
 
-    # VLM mode is signalled by the caller passing an AutoProcessor (image_processor attr).
-    if hasattr(tokenizer, "image_processor"):
+    # VLM mode is signalled by the caller passing an AutoProcessor or a local
+    # processor wrapper. Some Omni wrappers intentionally expose the tokenizer
+    # and chat-template API without an `image_processor` attribute.
+    is_multimodal_processor = hasattr(tokenizer, "image_processor") or (
+        hasattr(tokenizer, "tokenizer") and hasattr(tokenizer, "apply_chat_template")
+    )
+    if is_multimodal_processor:
         from nemo_rl.environments.nemo_gym import nemo_gym_example_to_nemo_rl_datum_spec
 
         datum = nemo_gym_example_to_nemo_rl_datum_spec(
