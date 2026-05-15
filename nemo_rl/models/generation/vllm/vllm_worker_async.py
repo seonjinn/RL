@@ -449,6 +449,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
     # ruff: noqa
     def _setup_vllm_openai_api_server(self, app: FastAPI) -> FastAPI:
         from copy import deepcopy
+        from inspect import signature
         from logging import Filter as LoggingFilter
         from logging import LogRecord
         from typing import List, Optional, Union
@@ -465,6 +466,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         from vllm.entrypoints.openai.engine.protocol import ErrorResponse
         from vllm.entrypoints.openai.models.protocol import BaseModelPath
         from vllm.entrypoints.openai.models.serving import OpenAIServingModels
+        from vllm.entrypoints.serve.render.serving import OpenAIServingRender
         from vllm.entrypoints.serve.tokenize.protocol import (
             TokenizeChatRequest,
             TokenizeCompletionRequest,
@@ -673,6 +675,33 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             from vllm.reasoning.abs_reasoning_parsers import ReasoningParserManager
             ReasoningParserManager.import_reasoning_parser(reasoning_parser_plugin)
 
+        openai_serving_render = None
+        if "openai_serving_render" in signature(OpenAIServingChat.__init__).parameters:
+            openai_serving_render = OpenAIServingRender(
+                model_config=engine_client.model_config,
+                renderer=engine_client.renderer,
+                model_registry=openai_serving_models.registry,
+                request_logger=serving_chat_kwargs["request_logger"],
+                chat_template=serving_chat_kwargs["chat_template"],
+                chat_template_content_format=serving_chat_kwargs[
+                    "chat_template_content_format"
+                ],
+                trust_request_chat_template=serving_chat_kwargs.get(
+                    "trust_request_chat_template", False
+                ),
+                enable_auto_tools=serving_chat_kwargs.get("enable_auto_tools", False),
+                exclude_tools_when_tool_choice_none=serving_chat_kwargs.get(
+                    "exclude_tools_when_tool_choice_none", False
+                ),
+                tool_parser=serving_chat_kwargs.get("tool_parser"),
+                reasoning_parser=serving_chat_kwargs.get("reasoning_parser") or None,
+                default_chat_template_kwargs=serving_chat_kwargs.get(
+                    "default_chat_template_kwargs"
+                ),
+                log_error_stack=serving_chat_kwargs.get("log_error_stack", False),
+            )
+            serving_chat_kwargs["openai_serving_render"] = openai_serving_render
+
         openai_serving_chat = NeMoRLOpenAIServingChat(**serving_chat_kwargs)
 
         generation_config = self.cfg
@@ -741,6 +770,12 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             engine_client=serving_chat_kwargs["engine_client"],
             models=serving_chat_kwargs["models"],
         )
+        if (
+            openai_serving_render is not None
+            and "openai_serving_render"
+            in signature(OpenAIServingTokenization.__init__).parameters
+        ):
+            serving_tokenization_kwargs["openai_serving_render"] = openai_serving_render
         openai_serving_tokenization = NeMoRLOpenAIServingTokenization(
             **serving_tokenization_kwargs
         )
