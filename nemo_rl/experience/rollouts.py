@@ -1032,6 +1032,46 @@ def _tensorize_by_key(message_logs: list, key: str):
         m[key] = _normalize_message_tensor_dtype(key, tensor)
 
 
+def _extract_multimodal_payload(message_log: Optional[list[dict]]) -> dict[str, Any]:
+    if not message_log:
+        return {}
+
+    multimodal_payload = {}
+    non_multimodal_keys = {
+        "role",
+        "content",
+        "token_ids",
+        "token_loss_mask",
+        "generation_logprobs",
+    }
+    for message in message_log:
+        if message.get("role") != "user":
+            continue
+        for key, value in message.items():
+            if key not in non_multimodal_keys:
+                multimodal_payload[key] = value
+    return multimodal_payload
+
+
+def _reattach_multimodal_payloads(
+    results: list[dict], original_message_logs: Optional[list[list[dict]]]
+) -> None:
+    if not original_message_logs:
+        return
+
+    for rowidx, result in enumerate(results):
+        if rowidx >= len(original_message_logs):
+            break
+        multimodal_payload = _extract_multimodal_payload(original_message_logs[rowidx])
+        if not multimodal_payload:
+            continue
+
+        for message in result.get("message_log", []):
+            if message.get("role") == "user":
+                message.update(multimodal_payload)
+                break
+
+
 @dataclass
 class AsyncNemoGymRolloutResult:
     input_ids: torch.Tensor
@@ -1334,6 +1374,8 @@ def run_async_nemo_gym_rollout(
                 [m for m in r["message_log"] if m["role"] == "assistant"],
                 "generation_logprobs",
             )
+
+        _reattach_multimodal_payloads(results, input_batch.get("message_log"))
 
     # for effort level
     len_reward_low = []
