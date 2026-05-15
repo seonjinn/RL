@@ -39,6 +39,7 @@ from nemo_rl.environments.rewards import (
     math_expression_reward,
     verl_geo3k_reward,
 )
+from nemo_rl.environments.mmpr_filtered_reward import mmpr_filtered_reward
 from nemo_rl.environments.utils import chunk_list_to_workers
 
 
@@ -81,6 +82,8 @@ class VLMVerifyWorker:
                 reward_func = bbox_giou_reward
             elif reward_func_name == "verl_geo3k":
                 reward_func = verl_geo3k_reward
+            elif reward_func_name == "mmpr_filtered":
+                reward_func = mmpr_filtered_reward
             else:
                 raise ValueError(f"Invalid reward function: {reward_func_name}")
 

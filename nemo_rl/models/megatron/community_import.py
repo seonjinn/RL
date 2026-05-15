@@ -13,11 +13,47 @@
 # limitations under the License.
 
 import os
+import json
 from typing import Any, Optional
 
 from megatron.bridge import AutoBridge
 
 from nemo_rl.models.policy import MegatronConfig
+
+
+def _apply_local_hf_llm_config(model_provider, hf_model_name: str) -> None:
+    """Apply local HF LLM dimensions that some bridge provider defaults miss."""
+    if not os.path.isdir(hf_model_name):
+        return
+
+    config_path = os.path.join(hf_model_name, "config.json")
+    if not os.path.exists(config_path):
+        return
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        hf_config = json.load(f)
+
+    llm_config = hf_config.get("llm_config") or {}
+    field_map = {
+        "intermediate_size": "ffn_hidden_size",
+        "num_key_value_heads": "num_query_groups",
+        "head_dim": "kv_channels",
+        "mamba_head_dim": "mamba_head_dim",
+        "mamba_num_heads": "mamba_num_heads",
+        "n_groups": "mamba_num_groups",
+        "mamba_n_groups": "mamba_num_groups",
+        "ssm_state_size": "mamba_state_dim",
+        "n_routed_experts": "num_moe_experts",
+        "moe_intermediate_size": "moe_ffn_hidden_size",
+        "moe_shared_expert_intermediate_size": "moe_shared_expert_intermediate_size",
+        "moe_latent_size": "moe_latent_size",
+        "num_experts_per_tok": "moe_router_topk",
+        "routed_scaling_factor": "moe_router_topk_scaling_factor",
+    }
+
+    for hf_key, provider_key in field_map.items():
+        if hf_key in llm_config and hasattr(model_provider, provider_key):
+            setattr(model_provider, provider_key, llm_config[hf_key])
 
 
 def import_model_from_hf_name(
@@ -38,6 +74,7 @@ def import_model_from_hf_name(
     )
 
     model_provider = bridge.to_megatron_provider(load_weights=True)
+    _apply_local_hf_llm_config(model_provider, hf_model_name)
 
     # Keep track of defaults so can restore them to the config after loading the model
     orig_tensor_model_parallel_size = model_provider.tensor_model_parallel_size

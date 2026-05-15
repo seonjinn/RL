@@ -448,6 +448,7 @@ def vlm_hf_data_processor(
     idx: int,
 ) -> DatumSpec:
     """Process a datum dictionary (directly loaded from response_datasets/<dataset_name>.py) into a DatumSpec for the VLM Environment."""
+    from nemo_rl.data.datasets.response_datasets.blend import format_blend_dataset
     from nemo_rl.data.datasets.response_datasets.clevr import (
         format_clevr_cogent_dataset,
     )
@@ -473,6 +474,8 @@ def vlm_hf_data_processor(
         datum_dict = format_geometry3k_dataset(datum_dict)
     elif datum_dict["task_name"] == "mmpr_tiny":
         datum_dict = format_mmpr_tiny_dataset(datum_dict)
+    elif datum_dict["task_name"] == "blend":
+        datum_dict = format_blend_dataset(datum_dict)
     else:
         raise ValueError(f"No data processor for task {datum_dict['task_name']}")
 

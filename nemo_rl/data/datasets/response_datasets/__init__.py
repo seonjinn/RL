@@ -14,6 +14,7 @@
 
 from nemo_rl.data import ResponseDatasetConfig
 from nemo_rl.data.datasets.response_datasets.aime24 import AIME2024Dataset
+from nemo_rl.data.datasets.response_datasets.blend import BlendDataset
 from nemo_rl.data.datasets.response_datasets.clevr import CLEVRCoGenTDataset
 from nemo_rl.data.datasets.response_datasets.dapo_math import (
     DAPOMath17KDataset,
@@ -39,6 +40,7 @@ from nemo_rl.data.datasets.response_datasets.tulu3 import Tulu3SftMixtureDataset
 DATASET_REGISTRY = {
     # built-in datasets
     "AIME2024": AIME2024Dataset,
+    "blend": BlendDataset,
     "clevr-cogent": CLEVRCoGenTDataset,
     "DAPOMath17K": DAPOMath17KDataset,
     "DAPOMathAIME2024": DAPOMathAIME2024Dataset,
