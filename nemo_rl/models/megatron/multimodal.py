@@ -14,11 +14,9 @@
 
 from typing import Any, Optional
 import math
-import os
 
 import torch
 from einops import rearrange
-from megatron.core.packed_seq_params import PackedSeqParams
 from nemo_rl.data.multimodal_utils import PackedTensor
 
 
@@ -566,7 +564,14 @@ def collapse_multimodal_tokens(data_dict: Any, model: Any) -> Any:
     IDs, so only content region gets collapsed while padding is preserved.
     """
     image_token_ids = _get_image_token_ids(model)
-    if image_token_ids is None or "pixel_values" not in data_dict:
+    image_payload_keys = (
+        "pixel_values",
+        "pixel_values_flat",
+        "image_num_patches",
+        "imgs_sizes",
+    )
+    has_image_payload = any(key in data_dict for key in image_payload_keys)
+    if image_token_ids is None or not has_image_payload:
         return data_dict
 
     input_ids = data_dict["input_ids"]
@@ -574,16 +579,15 @@ def collapse_multimodal_tokens(data_dict: Any, model: Any) -> Any:
     img_start_id, img_end_id = image_token_ids
     batch_size = input_ids.shape[0]
 
-    # Check if pixel_values key exists without image tokens. This happens when
+    # Check if image payload exists without image tokens. This happens when
     # all samples in a micro-batch were discarded (overlong).
     img_start_count = (input_ids == img_start_id).sum().item()
     img_end_count = (input_ids == img_end_id).sum().item()
 
-    if img_start_count == 0 and img_end_count == 0 and "pixel_values" in data_dict:
+    if img_start_count == 0 and img_end_count == 0 and has_image_payload:
         # Drop the stale multimodal keys and treat the batch as text-only.
-        del data_dict["pixel_values"]
-        if "imgs_sizes" in data_dict:
-            del data_dict["imgs_sizes"]
+        for key in image_payload_keys:
+            data_dict.pop(key, None)
         return data_dict
 
     original_seq_len = input_ids.shape[1]
@@ -733,6 +737,20 @@ def prepare_multimodal_data(multimodal_data: dict, model, device: torch.device) 
 
 def _prepare_image_data(multimodal_data: dict, model, device: torch.device) -> None:
     """Prepare pixel_values for Megatron forward (patchification for dynamic resolution)."""
+    if "pixel_values" not in multimodal_data and "pixel_values_flat" in multimodal_data:
+        images = multimodal_data.pop("pixel_values_flat").to(torch.bfloat16)
+        num_tiles = multimodal_data.pop("image_num_patches", None)
+        if num_tiles is None:
+            num_tiles = torch.ones(images.shape[0], dtype=torch.int, device=device)
+        elif not isinstance(num_tiles, torch.Tensor):
+            num_tiles = torch.tensor(num_tiles, dtype=torch.int, device=device)
+        else:
+            num_tiles = num_tiles.to(device=device, dtype=torch.int)
+
+        multimodal_data["images"] = images
+        multimodal_data["num_image_tiles"] = num_tiles
+        return
+
     if "pixel_values" not in multimodal_data:
         # LLaVAModel requires images, imgs_sizes, and num_image_tiles; pass empty tensors
         # num_image_tiles must be empty to match images count, even if input_ids has image tokens
@@ -835,8 +853,9 @@ def _patchify_for_dynamic_resolution(
     images: torch.Tensor,
     imgs_sizes: torch.Tensor,
     patch_dim: int,
-) -> tuple[torch.Tensor, torch.Tensor, PackedSeqParams]:
+) -> tuple[torch.Tensor, torch.Tensor, Any]:
     """Convert images to packed patches for dynamic resolution RADIO vision encoder."""
+    from megatron.core.packed_seq_params import PackedSeqParams
 
     def to_patches(img: torch.Tensor, h: int, w: int) -> torch.Tensor:
         img = img[:, :h, :w]
