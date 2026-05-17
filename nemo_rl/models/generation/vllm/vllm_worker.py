@@ -205,7 +205,12 @@ class BaseVllmGenerationWorker:
 
             additional_env_vars = set(RayDistributedExecutor.ADDITIONAL_ENV_VARS)
             additional_env_vars.update(
-                {"NCCL_CUMEM_ENABLE", "NCCL_NVLS_ENABLE", "RAY_ENABLE_UV_RUN_RUNTIME_ENV"}
+                {
+                    "NCCL_CUMEM_ENABLE",
+                    "NCCL_NVLS_ENABLE",
+                    "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
+                    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+                }
             )
             RayDistributedExecutor.ADDITIONAL_ENV_VARS = additional_env_vars
 

@@ -276,6 +276,12 @@ log-sync-sidecar &
 # Patch nsight.py before starting Ray head
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
+if [[ "${NRL_PATCH_CONTAINER_VLLM_FROM_REPO:-false}" == "true" ]]; then
+  cp "$SLURM_SUBMIT_DIR/3rdparty/vllm/vllm/model_executor/models/nano_nemotron_vl.py" \
+     /opt/nemo-rl/3rdparty/vllm/vllm/model_executor/models/nano_nemotron_vl.py
+  python3 -m py_compile /opt/nemo-rl/3rdparty/vllm/vllm/model_executor/models/nano_nemotron_vl.py
+fi
+
 cat <<EOFINNER | tee /launch-head.sh
 ray start --head \
     --disable-usage-stats \
@@ -383,6 +389,12 @@ log-sync-sidecar &
 
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
+
+if [[ "${NRL_PATCH_CONTAINER_VLLM_FROM_REPO:-false}" == "true" ]]; then
+  cp "$SLURM_SUBMIT_DIR/3rdparty/vllm/vllm/model_executor/models/nano_nemotron_vl.py" \
+     /opt/nemo-rl/3rdparty/vllm/vllm/model_executor/models/nano_nemotron_vl.py
+  python3 -m py_compile /opt/nemo-rl/3rdparty/vllm/vllm/model_executor/models/nano_nemotron_vl.py
+fi
 
 cat <<EOFINNER | tee /launch-worker.sh
 ray start --address "$ip_head" \
