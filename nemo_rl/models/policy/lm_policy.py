@@ -253,6 +253,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.use_sequence_packing = False
 
         self.cfg = config
+        self.use_hybrid_cp = bool(
+            config.get("hybrid_cp", {}).get("enabled", False)
+            and self.use_sequence_packing
+            and cp_size > 1
+        )
 
     def init_collective(
         self, ip: str, port: int, world_size: int, *, train_world_size: int
@@ -268,6 +273,108 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         # this function should co-work with vllm, so we should wait for all futures to complete outside
         return futures
 
+    def _build_hcp_scheduler(
+        self,
+        data: BatchedDataDict[Any],
+        token_budget_scale: int = 1,
+    ):
+        from nemo_rl.models.policy.hybrid_cp_config import HybridCPConfig
+        from nemo_rl.models.policy.hybrid_cp_scheduler import HeadNodeHCPScheduler
+
+        cp_size = self.cfg["megatron_cfg"]["context_parallel_size"]
+        dp_size = self.sharding_annotations.get_axis_size("data_parallel")
+        max_seq_len = int(data["input_lengths"].max().item())
+        max_seqlen_per_dp_cp_rank = self.cfg.get("hybrid_cp", {}).get(
+            "max_seqlen_per_dp_cp_rank", None
+        )
+        if max_seqlen_per_dp_cp_rank is None:
+            max_seqlen_per_dp_cp_rank = max_seq_len // cp_size
+        max_seqlen_per_dp_cp_rank *= token_budget_scale
+
+        return HeadNodeHCPScheduler(
+            hcp_config=HybridCPConfig(
+                enabled=True,
+                max_seqlen_per_dp_cp_rank=max_seqlen_per_dp_cp_rank,
+                scheduling_strategy=self.cfg.get("hybrid_cp", {}).get(
+                    "scheduling_strategy", "dp"
+                ),
+                balance_slack=self.cfg.get("hybrid_cp", {}).get(
+                    "balance_slack", 0.05
+                ),
+                eps_bucket=self.cfg.get("hybrid_cp", {}).get("eps_bucket", 0.10),
+                force_full_cp=self.cfg.get("hybrid_cp", {}).get(
+                    "force_full_cp", False
+                ),
+            ),
+            dp_size=dp_size,
+            cp_size=cp_size,
+            max_seq_len=max_seq_len,
+        )
+
+    def _get_sharding_axes(self) -> tuple[list[str], list[str], list[str]]:
+        if self.use_hybrid_cp:
+            return (
+                ["data_parallel", "context_parallel"],
+                ["tensor_parallel", "pipeline_parallel"],
+                ["tensor_parallel", "pipeline_parallel"],
+            )
+        return (
+            ["data_parallel"],
+            ["context_parallel", "tensor_parallel", "pipeline_parallel"],
+            ["context_parallel", "tensor_parallel", "pipeline_parallel"],
+        )
+
+    def _deduplicate_hcp_results(
+        self, worker_results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        if not self.use_hybrid_cp:
+            return worker_results
+
+        per_sample: dict[int, dict[str, Any]] = {}
+        for result in worker_results:
+            if "_hcp_sample_ids" not in result:
+                continue
+            sample_ids = result["_hcp_sample_ids"]
+            for idx, sample_id in enumerate(sample_ids):
+                if sample_id in per_sample:
+                    continue
+                sample: dict[str, Any] = {}
+                for key, value in result.items():
+                    if key == "_hcp_sample_ids":
+                        continue
+                    if torch.is_tensor(value):
+                        sample[key] = value[idx : idx + 1]
+                    elif hasattr(value, "slice"):
+                        sample[key] = value.slice([idx])
+                    elif isinstance(value, list):
+                        sample[key] = [value[idx]]
+                    else:
+                        sample[key] = value
+                per_sample[sample_id] = sample
+
+        return [per_sample[sample_id] for sample_id in sorted(per_sample)]
+
+    def _nest_hcp_shards(
+        self, sharded_data: list[SlicedDataDict]
+    ) -> list[list[SlicedDataDict]]:
+        """Reshape flat DPxCP HCP shards for worker-group axis indexing."""
+        if not self.use_hybrid_cp:
+            raise RuntimeError("_nest_hcp_shards should only be called when hybrid CP is enabled")
+
+        dp_size = self.sharding_annotations.get_axis_size("data_parallel")
+        cp_size = self.sharding_annotations.get_axis_size("context_parallel")
+        expected = dp_size * cp_size
+        if len(sharded_data) != expected:
+            raise ValueError(
+                f"Expected {expected} HCP shards for DPxCP layout ({dp_size}x{cp_size}), "
+                f"got {len(sharded_data)}"
+            )
+
+        return [
+            sharded_data[dp_rank * cp_size : (dp_rank + 1) * cp_size]
+            for dp_rank in range(dp_size)
+        ]
+
     def get_logprobs(
         self, data: BatchedDataDict[GenerationDatumSpec]
     ) -> BatchedDataDict[LogprobOutputSpec]:
@@ -282,7 +389,17 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         sharded_data: list[SlicedDataDict]
         unsorted_data_indices: list[int]
 
-        if self.use_dynamic_batches:
+        if self.use_hybrid_cp:
+            hcp_scheduler = self._build_hcp_scheduler(
+                data,
+                token_budget_scale=max(1, self.cfg["logprob_batch_size"]),
+            )
+            sharded_data = hcp_scheduler.schedule_and_shard(
+                data, seq_length_key="input_lengths"
+            )
+            nested_sharded_data = self._nest_hcp_shards(sharded_data)
+            unsorted_data_indices = list(range(data.size))
+        elif self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
             ]["logprob_mb_tokens"]
@@ -307,28 +424,22 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=None,
             )
 
+        in_sharded_axes, replicate_on_axes, output_is_replicated = self._get_sharding_axes()
         futures = self.worker_group.run_all_workers_sharded_data(
             "get_logprobs",
-            data=sharded_data,
-            in_sharded_axes=["data_parallel"],
-            replicate_on_axes=[
-                "context_parallel",
-                "tensor_parallel",
-                "pipeline_parallel",
-            ],
-            output_is_replicated=[
-                "context_parallel",
-                "tensor_parallel",
-                "pipeline_parallel",
-            ],
+            data=nested_sharded_data if self.use_hybrid_cp else sharded_data,
+            in_sharded_axes=in_sharded_axes,
+            replicate_on_axes=replicate_on_axes,
+            output_is_replicated=output_is_replicated,
         )
-        logprobs: BatchedDataDict[LogprobOutputSpec] = BatchedDataDict.from_batches(
-            self.worker_group.get_all_worker_results(futures)
-        )
+        worker_results = self.worker_group.get_all_worker_results(futures)
+        if self.use_hybrid_cp:
+            worker_results = self._deduplicate_hcp_results(worker_results)
+        logprobs: BatchedDataDict[LogprobOutputSpec] = BatchedDataDict.from_batches(worker_results)
 
         # dynamic batching sorts the inputs by sequence length to improve load balancing,
         # so change it back here
-        if self.use_dynamic_batches or self.use_sequence_packing:
+        if self.use_dynamic_batches or (self.use_sequence_packing and not self.use_hybrid_cp):
             logprobs.reorder_data(unsorted_data_indices)
 
         return logprobs
@@ -345,7 +456,20 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         dp_size = self.sharding_annotations.get_axis_size("data_parallel")
         sharded_data: list[SlicedDataDict]
         unsorted_data_indices: list[int]
-        if self.use_dynamic_batches:
+        if self.use_hybrid_cp:
+            hcp_scheduler = self._build_hcp_scheduler(
+                data,
+                token_budget_scale=max(
+                    1,
+                    micro_batch_size if micro_batch_size is not None else self.cfg["logprob_batch_size"],
+                ),
+            )
+            sharded_data = hcp_scheduler.schedule_and_shard(
+                data, seq_length_key="input_lengths"
+            )
+            nested_sharded_data = self._nest_hcp_shards(sharded_data)
+            unsorted_data_indices = list(range(data.size))
+        elif self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
             ]["logprob_mb_tokens"]
@@ -369,31 +493,25 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=None,
             )
 
+        in_sharded_axes, replicate_on_axes, output_is_replicated = self._get_sharding_axes()
         futures = self.worker_group.run_all_workers_sharded_data(
             "get_reference_policy_logprobs",
-            data=sharded_data,
-            in_sharded_axes=["data_parallel"],
-            replicate_on_axes=[
-                "context_parallel",
-                "tensor_parallel",
-                "pipeline_parallel",
-            ],
-            output_is_replicated=[
-                "context_parallel",
-                "tensor_parallel",
-                "pipeline_parallel",
-            ],
+            data=nested_sharded_data if self.use_hybrid_cp else sharded_data,
+            in_sharded_axes=in_sharded_axes,
+            replicate_on_axes=replicate_on_axes,
+            output_is_replicated=output_is_replicated,
             common_kwargs={"micro_batch_size": micro_batch_size},
         )
-        logprobs: BatchedDataDict[ReferenceLogprobOutputSpec] = (
-            BatchedDataDict.from_batches(
-                self.worker_group.get_all_worker_results(futures)
-            )
+        worker_results = self.worker_group.get_all_worker_results(futures)
+        if self.use_hybrid_cp:
+            worker_results = self._deduplicate_hcp_results(worker_results)
+        logprobs: BatchedDataDict[ReferenceLogprobOutputSpec] = BatchedDataDict.from_batches(
+            worker_results
         )
 
         # dynamic batching sorts the inputs by sequence length to improve load balancing,
         # so change it back here
-        if self.use_dynamic_batches or self.use_sequence_packing:
+        if self.use_dynamic_batches or (self.use_sequence_packing and not self.use_hybrid_cp):
             logprobs.reorder_data(unsorted_data_indices)
 
         return logprobs
@@ -408,7 +526,20 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         dp_size = self.sharding_annotations.get_axis_size("data_parallel")
         sharded_data: list[SlicedDataDict]
         unsorted_data_indices: list[int]
-        if self.use_dynamic_batches:
+        if self.use_hybrid_cp:
+            hcp_scheduler = self._build_hcp_scheduler(
+                data,
+                token_budget_scale=max(
+                    1,
+                    micro_batch_size if micro_batch_size is not None else self.cfg["logprob_batch_size"],
+                ),
+            )
+            sharded_data = hcp_scheduler.schedule_and_shard(
+                data, seq_length_key="input_lengths"
+            )
+            nested_sharded_data = self._nest_hcp_shards(sharded_data)
+            unsorted_data_indices = list(range(data.size))
+        elif self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
             ]["logprob_mb_tokens"]
@@ -433,25 +564,19 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=None,
             )
 
+        in_sharded_axes, replicate_on_axes, output_is_replicated = self._get_sharding_axes()
         futures = self.worker_group.run_all_workers_sharded_data(
             "get_topk_logits",
-            data=sharded_data,
-            in_sharded_axes=["data_parallel"],
-            replicate_on_axes=[
-                "context_parallel",
-                "tensor_parallel",
-                "pipeline_parallel",
-            ],
-            output_is_replicated=[
-                "context_parallel",
-                "tensor_parallel",
-                "pipeline_parallel",
-            ],
+            data=nested_sharded_data if self.use_hybrid_cp else sharded_data,
+            in_sharded_axes=in_sharded_axes,
+            replicate_on_axes=replicate_on_axes,
+            output_is_replicated=output_is_replicated,
             common_kwargs={"k": k, "micro_batch_size": micro_batch_size},
         )
 
-        # Avoid BatchedDataDict.from_batches here because it flattens rows for tensors with ndim>2 ([B,S,k] -> [B,S*k]).
         worker_batches = self.worker_group.get_all_worker_results(futures)
+        if self.use_hybrid_cp:
+            worker_batches = self._deduplicate_hcp_results(worker_batches)
         all_topk_logits = [wb["topk_logits"] for wb in worker_batches]
         all_topk_indices = [wb["topk_indices"] for wb in worker_batches]
 
@@ -459,7 +584,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         stacked["topk_logits"] = torch.cat(all_topk_logits, dim=0)
         stacked["topk_indices"] = torch.cat(all_topk_indices, dim=0)
 
-        if self.use_dynamic_batches or self.use_sequence_packing:
+        if self.use_dynamic_batches or (self.use_sequence_packing and not self.use_hybrid_cp):
             stacked.reorder_data(unsorted_data_indices)
 
         return stacked
@@ -477,7 +602,90 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         micro_batch_size = mbs or self.cfg["train_micro_batch_size"]
         # Shard and replicate the batch
         dp_size = self.sharding_annotations.get_axis_size("data_parallel")
-        if self.use_dynamic_batches:
+        if self.use_hybrid_cp:
+            num_global_batches = data.size // batch_size
+            if num_global_batches == 0:
+                raise ValueError(
+                    f"HCP requires data.size ({data.size}) >= train_global_batch_size ({batch_size})"
+                )
+
+            hcp_scheduler = self._build_hcp_scheduler(data)
+            in_sharded_axes, replicate_on_axes, output_is_replicated = self._get_sharding_axes()
+            all_batch_results = []
+
+            if self.flops_tracker is not None:
+                self.flops_tracker.reset()
+
+            for batch_idx in range(num_global_batches):
+                batch_data = data.slice(batch_idx * batch_size, (batch_idx + 1) * batch_size)
+                sharded_data = hcp_scheduler.schedule_and_shard(
+                    batch_data, seq_length_key="input_lengths"
+                )
+                nested_sharded_data = self._nest_hcp_shards(sharded_data)
+                if self.flops_tracker is not None:
+                    for shard in sharded_data:
+                        if shard.size > 0 and "input_lengths" in shard:
+                            self.flops_tracker.track_batch(shard["input_lengths"].tolist())
+
+                futures = self.worker_group.run_all_workers_sharded_data(
+                    "train",
+                    data=nested_sharded_data,
+                    in_sharded_axes=in_sharded_axes,
+                    replicate_on_axes=replicate_on_axes,
+                    output_is_replicated=output_is_replicated,
+                    common_kwargs={
+                        "loss_fn": loss_fn,
+                        "eval_mode": eval_mode,
+                        "gbs": batch_size,
+                        "mbs": micro_batch_size,
+                    },
+                )
+                batch_results = self.worker_group.get_all_worker_results(futures)
+                primary_result = dict(batch_results[0])
+                merged_mb_metrics: dict[str, list[Any]] = defaultdict(list)
+                for worker_result in batch_results:
+                    for key, values in worker_result.get("all_mb_metrics", {}).items():
+                        merged_mb_metrics[key].extend(values)
+                primary_result["all_mb_metrics"] = dict(merged_mb_metrics)
+                all_batch_results.append(primary_result)
+
+            result = dict(all_batch_results[-1])
+            result["global_loss"] = torch.cat(
+                [batch_result["global_loss"] for batch_result in all_batch_results]
+            )
+            result["grad_norm"] = torch.stack(
+                [batch_result["grad_norm"] for batch_result in all_batch_results]
+            ).max(dim=0).values
+            if "moe_metrics" in all_batch_results[0]:
+                num_groups_list = [batch_result["hcp_num_groups"] for batch_result in all_batch_results]
+                total_groups = sum(num_groups_list)
+                result["moe_metrics"] = {
+                    key: (
+                        sum(
+                            batch_result["moe_metrics"][key] * num_groups
+                            for batch_result, num_groups in zip(
+                                all_batch_results, num_groups_list
+                            )
+                        )
+                        / total_groups
+                    )
+                    for key in all_batch_results[0]["moe_metrics"]
+                }
+
+            result["loss"] = result["global_loss"]
+            result["batch_size"] = batch_size
+            result["micro_batch_size"] = micro_batch_size
+            if self.flops_tracker is not None:
+                tracked_flops = self.flops_tracker.get_flops()
+                result["tracked_tflops"] = tracked_flops
+                result["theoretical_tflops"] = get_theoretical_tflops(
+                    result["tracked_tflops"],
+                    result["batch_size"],
+                    result["micro_batch_size"],
+                    self.worker_group.num_workers,
+                )
+            return result
+        elif self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
             ]["train_mb_tokens"]

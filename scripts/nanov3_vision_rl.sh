@@ -19,6 +19,14 @@ JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
+HYBRID_CP_ENABLED="${HYBRID_CP_ENABLED:-false}"
+HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK="${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK:-}"
+HYBRID_CP_SCHEDULING_STRATEGY="${HYBRID_CP_SCHEDULING_STRATEGY:-}"
+HYBRID_CP_BALANCE_SLACK="${HYBRID_CP_BALANCE_SLACK:-}"
+HYBRID_CP_EPS_BUCKET="${HYBRID_CP_EPS_BUCKET:-}"
+HYBRID_CP_FORCE_FULL_CP="${HYBRID_CP_FORCE_FULL_CP:-}"
+HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER="${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER:-}"
+CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-}"
 MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-}}"
 CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-}}"
 : "${MODEL_NAME:?Set IMAGE_GRPO_MODEL_NAME or MODEL_NAME, or define it in ${NEMORL}/.env}"
@@ -68,6 +76,38 @@ fi
 EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
+fi
+
+if [[ "${HYBRID_CP_ENABLED}" == "true" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.enabled=true"
+fi
+
+if [[ -n "${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.max_seqlen_per_dp_cp_rank=${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK}"
+fi
+
+if [[ -n "${HYBRID_CP_SCHEDULING_STRATEGY}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.scheduling_strategy=${HYBRID_CP_SCHEDULING_STRATEGY}"
+fi
+
+if [[ -n "${HYBRID_CP_BALANCE_SLACK}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.balance_slack=${HYBRID_CP_BALANCE_SLACK}"
+fi
+
+if [[ -n "${HYBRID_CP_EPS_BUCKET}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.eps_bucket=${HYBRID_CP_EPS_BUCKET}"
+fi
+
+if [[ -n "${HYBRID_CP_FORCE_FULL_CP}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.force_full_cp=${HYBRID_CP_FORCE_FULL_CP}"
+fi
+
+if [[ -n "${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.microbatch_budget_multiplier=${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER}"
+fi
+
+if [[ -n "${CONFIG_OVERRIDES}" ]]; then
+  EXTRA_OVERRIDES+=" ${CONFIG_OVERRIDES}"
 fi
 
 export COMMAND="\
