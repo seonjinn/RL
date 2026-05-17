@@ -183,6 +183,14 @@ class MegatronConfig(TypedDict):
     # Force overwrite of the initial checkpoint even if it exists (default: False)
     force_overwrite_initial_ckpt: NotRequired[bool]
     moe_per_layer_logging: bool
+    moe_enable_deepep: NotRequired[bool]
+    moe_token_dispatcher_type: NotRequired[str]
+    moe_shared_expert_overlap: NotRequired[bool]
+    # HybridEP settings for MoE expert parallelism (requires moe_token_dispatcher_type="flex").
+    moe_flex_dispatcher_backend: NotRequired[str]
+    moe_hybridep_num_sms: NotRequired[int]
+    hybridep_num_ranks_per_nvlink_domain: NotRequired[int]
+    hybridep_use_mnnvl: NotRequired[bool]
     optimizer: MegatronOptimizerConfig
     scheduler: MegatronSchedulerConfig
     distributed_data_parallel_config: MegatronDDPConfig

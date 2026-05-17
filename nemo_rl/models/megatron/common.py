@@ -361,7 +361,6 @@ def _get_pack_sequence_parameters_for_megatron(
     )
     fp8_cfg = megatron_cfg.get("fp8_cfg", None) or {}
     use_fp8 = fp8_cfg.get("enabled", False)
-    use_blockwise_fp8 = fp8_cfg.get("fp8_recipe", None) == "blockwise"
 
     # individual sequence needs to be splitted to CP domain, and to TP domain when SP is enabled.
     pad_individual_seqs_to_multiple_of = 1
@@ -370,9 +369,23 @@ def _get_pack_sequence_parameters_for_megatron(
     if tp_size > 1 and sp:
         pad_individual_seqs_to_multiple_of *= tp_size
 
-    # packed sequence length, after splitted to TP and CP domains, needs to be divisible by 128 if using blockwise FP8, and divisible by 16 if using other FP8 recipes.
+    # packed sequence length after TP/CP sharding needs recipe/backend-specific alignment.
+    # HybridEP JIT kernels require MAX_NUM_OF_TOKENS_PER_RANK to be divisible by 128.
+    divisor = 1
     if use_fp8:
-        divisor = 128 if use_blockwise_fp8 else 16
+        fp8_recipe = fp8_cfg.get("fp8_recipe", None)
+        if fp8_recipe == "blockwise":
+            divisor = max(divisor, 128)
+        elif fp8_recipe == "mxfp8":
+            divisor = max(divisor, 32)
+        else:
+            divisor = max(divisor, 16)
+    if (
+        megatron_cfg.get("moe_token_dispatcher_type") == "flex"
+        and megatron_cfg.get("moe_flex_dispatcher_backend") == "hybridep"
+    ):
+        divisor = max(divisor, 128)
+    if divisor > 1:
         pad_packed_seq_to_multiple_of = divisor
         if cp_size > 1:
             pad_packed_seq_to_multiple_of *= cp_size * 2

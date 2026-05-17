@@ -121,6 +121,9 @@ policy:
     moe_enable_deepep: false
     moe_token_dispatcher_type: "alltoall"
     moe_shared_expert_overlap: true
+    moe_flex_dispatcher_backend: "deepep"
+    moe_hybridep_num_sms: 16
+    hybridep_use_mnnvl: false
     moe_aux_loss_coeff: 0.0
     track_moe_metrics: true
     moe_per_layer_logging: false

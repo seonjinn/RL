@@ -833,6 +833,42 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             "moe_router_bias_update_rate"
         ]
 
+        megatron_cfg = self.cfg["megatron_cfg"]
+        model_cfg.moe_enable_deepep = megatron_cfg.get(
+            "moe_enable_deepep", getattr(model_cfg, "moe_enable_deepep", False)
+        )
+        model_cfg.moe_token_dispatcher_type = megatron_cfg.get(
+            "moe_token_dispatcher_type",
+            getattr(model_cfg, "moe_token_dispatcher_type", "alltoall"),
+        )
+        model_cfg.moe_shared_expert_overlap = megatron_cfg.get(
+            "moe_shared_expert_overlap",
+            getattr(model_cfg, "moe_shared_expert_overlap", False),
+        )
+        if "moe_flex_dispatcher_backend" in megatron_cfg:
+            model_cfg.moe_flex_dispatcher_backend = megatron_cfg[
+                "moe_flex_dispatcher_backend"
+            ]
+        if "moe_hybridep_num_sms" in megatron_cfg:
+            model_cfg.moe_hybridep_num_sms = megatron_cfg["moe_hybridep_num_sms"]
+
+        if megatron_cfg.get("moe_flex_dispatcher_backend") == "hybridep":
+            ep_size = model_cfg.expert_model_parallel_size
+            if "hybridep_num_ranks_per_nvlink_domain" in megatron_cfg:
+                os.environ["NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN"] = str(
+                    megatron_cfg["hybridep_num_ranks_per_nvlink_domain"]
+                )
+            elif "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN" not in os.environ:
+                default_val = min(ep_size, 64)
+                os.environ["NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN"] = str(default_val)
+                warnings.warn(
+                    "HybridEP: NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN was not set; "
+                    f"defaulting to min(expert_model_parallel_size={ep_size}, 64)={default_val}.",
+                    stacklevel=2,
+                )
+            if "hybridep_use_mnnvl" in megatron_cfg:
+                os.environ["USE_MNNVL"] = str(int(megatron_cfg["hybridep_use_mnnvl"]))
+
         model_cfg.moe_permute_fusion = self.cfg["megatron_cfg"]["moe_permute_fusion"]
         if "layernorm_epsilon" in self.cfg["megatron_cfg"]:
             model_cfg.layernorm_epsilon = self.cfg["megatron_cfg"]["layernorm_epsilon"]
