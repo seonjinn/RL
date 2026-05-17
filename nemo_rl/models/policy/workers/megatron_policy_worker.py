@@ -851,6 +851,15 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             ]
         if "moe_hybridep_num_sms" in megatron_cfg:
             model_cfg.moe_hybridep_num_sms = megatron_cfg["moe_hybridep_num_sms"]
+        if (
+            model_cfg.moe_token_dispatcher_type == "flex"
+            and model_cfg.moe_shared_expert_overlap
+        ):
+            raise ValueError(
+                "Flex MoE dispatcher does not support moe_shared_expert_overlap. "
+                "Set policy.megatron_cfg.moe_shared_expert_overlap=false when using "
+                "HybridEP or DeepEP flex dispatch."
+            )
 
         if megatron_cfg.get("moe_flex_dispatcher_backend") == "hybridep":
             ep_size = model_cfg.expert_model_parallel_size
