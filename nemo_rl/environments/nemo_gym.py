@@ -492,52 +492,23 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
                 output_item_dict["generation_log_probs"], dtype=torch.float32
             )
 
-            # On the first multimodal turn, override the user's token_ids with the HF
-            # processor's version (including <img>/<image>×N/</img> wrappers) so that
-            # Megatron's collapse_multimodal_tokens() can identify image regions and
-            # honor pixel_values. seen_token_ids continues to track the original vLLM
-            # ids (without wrappers) so the prefix assertion above stays valid across
-            # multi-turn rollouts.
+            # On the first multimodal turn, keep Megatron on the exact vLLM
+            # rollout prompt when vLLM already returned image wrappers. Fall
+            # back to the HF processor tokens only for older vLLM paths that do
+            # not include <img>/<image>/</img> IDs in prompt_token_ids.
             if multimodal_data and not nemo_rl_message_log and original_message_log:
                 hf_token_ids = torch.cat(
                     [msg["token_ids"] for msg in original_message_log], dim=0
                 )
-                # Opt-in debug: when HF-rendered prompt tokens diverge from vLLM's,
-                # print the first mismatch window so we can spot tokenizer/template
-                # drift early. Disabled by default; set NRL_DEBUG_PROMPT_TOKENS=1.
-                if os.environ.get("NRL_DEBUG_PROMPT_TOKENS", "0") == "1":
-                    hf_prompt_token_ids = hf_token_ids.tolist()
-                    vllm_prompt_token_ids = new_prompt_token_ids.tolist()
-                    min_len = min(len(hf_prompt_token_ids), len(vllm_prompt_token_ids))
-                    first_diff_idx = next(
-                        (
-                            idx
-                            for idx in range(min_len)
-                            if hf_prompt_token_ids[idx] != vllm_prompt_token_ids[idx]
-                        ),
-                        None,
-                    )
-                    has_mismatch = (
-                        first_diff_idx is not None
-                        or len(hf_prompt_token_ids) != len(vllm_prompt_token_ids)
-                    )
-                    if has_mismatch:
-                        window_start = max(0, (first_diff_idx or min_len) - 5)
-                        window_end = min(
-                            max(len(hf_prompt_token_ids), len(vllm_prompt_token_ids)),
-                            (first_diff_idx or min_len) + 6,
-                        )
-                        print(
-                            "[NEMO_GYM_PROMPT_TOKEN_MISMATCH] "
-                            f"rowidx={rowidx} "
-                            f"len_hf={len(hf_prompt_token_ids)} "
-                            f"len_vllm={len(vllm_prompt_token_ids)} "
-                            f"first_diff={first_diff_idx} "
-                            f"hf_window={hf_prompt_token_ids[window_start:window_end]} "
-                            f"vllm_window={vllm_prompt_token_ids[window_start:window_end]}",
-                            flush=True,
-                        )
-                user_token_ids = hf_token_ids
+                img_start_id = tokenizer.convert_tokens_to_ids("<img>")
+                img_end_id = tokenizer.convert_tokens_to_ids("</img>")
+                vllm_prompt_ids = set(new_prompt_token_ids.tolist())
+                vllm_has_image_wrappers = (
+                    img_start_id in vllm_prompt_ids and img_end_id in vllm_prompt_ids
+                )
+                user_token_ids = (
+                    new_prompt_token_ids if vllm_has_image_wrappers else hf_token_ids
+                )
             else:
                 user_token_ids = new_prompt_token_ids
 
