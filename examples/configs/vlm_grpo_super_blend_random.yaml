@@ -65,6 +65,7 @@ policy:
   model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/dev/nemo-rl-rebase/results/mpo-nanov3vl-v1365-text-mmpr-filt-curric-16k-lr8e-7-0206/tp_1_hf/step_1000/mcore_to_hf"
   tokenizer:
     name: ${policy.model_name}
+    chat_template: /lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16/chat_template.json
   train_global_batch_size: 1024  # 4 updates/step (3-off-policy)
   train_micro_batch_size: 1  # megatron dynamic resolution only works for mbz=1
   logprob_batch_size: 1  # megatron dynamic resolution only works for mbz=1
