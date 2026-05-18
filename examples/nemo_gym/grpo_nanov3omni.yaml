@@ -196,6 +196,7 @@ policy:
       skip_tokenizer_init: false
       expose_http_server: true
       http_server_serving_chat_kwargs:
+        chat_template: ${policy.tokenizer.chat_template}
         chat_template_content_format: openai
         enable_auto_tools: true
         tool_parser: qwen3_coder
