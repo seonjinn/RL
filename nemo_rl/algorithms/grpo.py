@@ -834,6 +834,29 @@ def setup(
         generation_config["vllm_cfg"]["hf_overrides"] = policy_config.get(
             "hf_config_overrides", {}
         )
+        tokenizer_config = policy_config.get("tokenizer", {})
+        chat_template = tokenizer_config.get("chat_template")
+        if chat_template and str(chat_template).lower() != "default":
+            vllm_chat_template = chat_template
+            chat_template_path = Path(str(chat_template))
+            if str(chat_template).endswith(".jinja") and chat_template_path.is_file():
+                vllm_chat_template = chat_template_path.read_text()
+            serving_chat_kwargs = generation_config["vllm_cfg"].setdefault(
+                "http_server_serving_chat_kwargs", {}
+            )
+            if serving_chat_kwargs.get("chat_template") is None:
+                serving_chat_kwargs["chat_template"] = vllm_chat_template
+                if (
+                    policy_config.get("is_vlm", False)
+                    and serving_chat_kwargs.get("chat_template_content_format", "auto")
+                    == "auto"
+                ):
+                    serving_chat_kwargs["chat_template_content_format"] = "openai"
+                print(
+                    "  ✓ vLLM HTTP server chat_template set from "
+                    f"policy.tokenizer.chat_template: {chat_template}",
+                    flush=True,
+                )
 
         # ---- NeMo Gym: pre-compute vLLM server URLs for overlapped init ----
         # When NeMo Gym is enabled, we do a lightweight deferred VllmGeneration

@@ -34,6 +34,7 @@ JOB_NAME="${JOB_NAME:-grpo-nanov3omni-gym-super-branch-v6-w-gui-test}"
 SEED="${SEED:-$(echo -n "train:${JOB_NAME}" | openssl dgst -md5 -binary | od -An -tu4 -N4 | xargs)}"
 
 MODEL_NAME="${MODEL_NAME:-/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_sft/users/pjin/checkpoints/nano-v3-vl-mpo_sft_mmlongbench_txt_0403_2200-iter-200-rl-20260407-step-50-hf}"
+POLICY_CHAT_TEMPLATE="${POLICY_CHAT_TEMPLATE:-/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16/chat_template.jinja}"
 DATA_PATH="${DATA_PATH:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/random_blend_v6_w_gui_mmlongbench_gym.jsonl}"
 
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-32}"
@@ -45,6 +46,7 @@ POLICY_TP="${POLICY_TP:-8}"
 POLICY_EP="${POLICY_EP:-8}"
 POLICY_CP="${POLICY_CP:-1}"
 VLLM_TP="${VLLM_TP:-2}"
+POLICY_VLLM_LOAD_FORMAT="${POLICY_VLLM_LOAD_FORMAT:-}"
 if [[ -z "${SEQUENCE_PACKING_ENABLED+x}" && "${POLICY_CP}" -gt 1 ]]; then
   SEQUENCE_PACKING_ENABLED=true
 fi
@@ -148,10 +150,12 @@ cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
 policy.model_name=${MODEL_NAME} \
 policy.megatron_cfg.tensor_model_parallel_size=${POLICY_TP} \
+policy.tokenizer.chat_template=${POLICY_CHAT_TEMPLATE} \
 policy.megatron_cfg.expert_model_parallel_size=${POLICY_EP} \
 policy.megatron_cfg.context_parallel_size=${POLICY_CP} \
 policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP} \
 +policy.generation.vllm_cfg.logprobs_mode=raw_logprobs \
+${POLICY_VLLM_LOAD_FORMAT:+policy.generation.vllm_cfg.load_format=${POLICY_VLLM_LOAD_FORMAT}} \
 +policy.generation.vllm_kwargs.mm_processor_cache_gb=0 \
 policy.sequence_packing.enabled=${SEQUENCE_PACKING_ENABLED} \
 grpo.seed=${SEED} \
@@ -178,8 +182,10 @@ echo "  nodes=${NUM_NODES}"
 echo "  gpus_per_node=${GPUS_PER_NODE}"
 echo "  model=${MODEL_NAME}"
 echo "  data=${DATA_PATH}"
+echo "  chat_template=${POLICY_CHAT_TEMPLATE}"
 echo "  policy_tp=${POLICY_TP} policy_ep=${POLICY_EP} policy_cp=${POLICY_CP} vllm_tp=${VLLM_TP}"
 echo "  prompts=${NUM_PROMPTS_PER_STEP} generations=${NUM_GENERATIONS_PER_PROMPT} train_gbs=${TRAIN_GLOBAL_BATCH_SIZE}"
+echo "  vllm_load_format=${POLICY_VLLM_LOAD_FORMAT:-yaml default}"
 echo "  max_steps=${GRPO_MAX_NUM_STEPS}"
 echo "  sequence_packing=${SEQUENCE_PACKING_ENABLED}"
 

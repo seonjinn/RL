@@ -188,6 +188,7 @@ policy:
       expert_parallel_size: 1
       gpu_memory_utilization: 0.7
       max_model_len: ${policy.max_total_sequence_length}
+      load_format: auto
       enforce_eager: false
       use_deep_gemm: false
       num_last_layers_in_bf16: 0
@@ -195,6 +196,7 @@ policy:
       skip_tokenizer_init: false
       expose_http_server: true
       http_server_serving_chat_kwargs:
+        chat_template_content_format: openai
         enable_auto_tools: true
         tool_parser: qwen3_coder
         reasoning_parser: deepseek_r1
