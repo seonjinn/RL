@@ -85,7 +85,6 @@ def collect_trajectories(
 
     log_filename = "trajectory_collection.jsonl"
 
-    print("\n🔍 Running trajectory collection...", flush=True)
     generation_config = master_config["policy"]["generation"]
     for val_batch in val_dataloader:
         nemo_gym_rollout_result = run_async_nemo_gym_rollout(
@@ -154,16 +153,28 @@ def main() -> None:
 
     # setup tokenizer
     with rl_init_timer.time("tokenizer"):
-        tokenizer = get_tokenizer(config["policy"]["tokenizer"])
+        is_vlm = config["policy"].get("is_vlm", False)
+        if is_vlm:
+            processor = get_tokenizer(config["policy"]["tokenizer"], get_processor=True)
+            tokenizer = processor.tokenizer
+        else:
+            processor = None
+            tokenizer = get_tokenizer(config["policy"]["tokenizer"])
         assert config["policy"]["generation"] is not None, (
             "A generation config is required for GRPO"
         )
         config["policy"]["generation"] = configure_generation_config(
             config["policy"]["generation"], tokenizer
         )
+        if is_vlm and "vllm_cfg" in config["policy"]["generation"]:
+            assert not config["policy"]["generation"]["vllm_cfg"]["skip_tokenizer_init"], (
+                "VLMs require skip_tokenizer_init=False"
+        )
 
         # NeMo-Gym specific config setup.
         setup_nemo_gym_config(config, tokenizer)
+
+
 
     # We assert here since this is right after the final config has been materialized.
     assert _should_use_nemo_gym(config)
@@ -173,7 +184,7 @@ def main() -> None:
     with rl_init_timer.time("data"):
         print("\n▶ Setting up data...")
         train_dataset, val_dataset = setup_response_data(
-            tokenizer, config["data"], env_configs=None
+            processor if is_vlm else tokenizer, config["data"], env_configs=None
         )
 
         if config["grpo"]["max_val_samples"] is not None:
@@ -216,7 +227,7 @@ The validation set you pass in will directly be used for validation with no addi
             checkpointer,
             grpo_state,
             master_config,
-        ) = setup(config, tokenizer, train_dataset, val_dataset)
+        ) = setup(config, tokenizer, train_dataset, val_dataset, processor=processor)
 
     rl_init_timer.record("total", time.perf_counter() - main_start)
 
@@ -303,6 +314,7 @@ The validation set you pass in will directly be used for validation with no addi
             checkpointer,
             grpo_state,
             master_config,
+            processor,
         )
 
 

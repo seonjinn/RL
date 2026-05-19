@@ -726,10 +726,36 @@ def nemo_gym_data_processor(
     max_seq_length: int | None,
     idx: int,
 ) -> DatumSpec:
-    """Process a datum dictionary (directly loaded from dataset) into a DatumSpec for Nemo Gym."""
+    """Process a datum dictionary (directly loaded from dataset) into a DatumSpec for Nemo Gym.
+
+    In text mode (3rd arg is a tokenizer) the message_log is a placeholder because
+    NeMo-Gym builds the real prompt server-side from `responses_create_params`.
+    In VLM mode (3rd arg is an AutoProcessor) we delegate to
+    `nemo_gym_example_to_nemo_rl_datum_spec` so the first-turn user message carries
+    the HF-processor token layout (<img>/<image>×N/</img>) and multimodal data
+    (pixel_values, imgs_sizes, ...) that Megatron needs to identify image regions.
+    """
+    extra_env_info = json.loads(datum_dict["extra_env_info"])
+
+    # VLM mode is signalled by the caller passing an AutoProcessor or a local
+    # processor wrapper. Some Omni wrappers intentionally expose the tokenizer
+    # and chat-template API without an `image_processor` attribute.
+    is_multimodal_processor = hasattr(tokenizer, "image_processor") or (
+        hasattr(tokenizer, "tokenizer") and hasattr(tokenizer, "apply_chat_template")
+    )
+    if is_multimodal_processor:
+        from nemo_rl.environments.nemo_gym import nemo_gym_example_to_nemo_rl_datum_spec
+
+        datum = nemo_gym_example_to_nemo_rl_datum_spec(
+            extra_env_info, idx, processor=tokenizer, max_seq_length=max_seq_length,
+        )
+        # Honor the dataset's task_name rather than the hardcoded "nemo_gym" default.
+        datum["task_name"] = datum_dict["task_name"]
+        return datum
+
     output: DatumSpec = {
         # load to dict format here since `Dataset` cannot handle nested structure well in `NemoGymDataset`
-        "extra_env_info": json.loads(datum_dict["extra_env_info"]),
+        "extra_env_info": extra_env_info,
         "loss_multiplier": 1.0,
         "idx": idx,
         "task_name": datum_dict["task_name"],

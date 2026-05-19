@@ -834,6 +834,29 @@ def setup(
         generation_config["vllm_cfg"]["hf_overrides"] = policy_config.get(
             "hf_config_overrides", {}
         )
+        tokenizer_config = policy_config.get("tokenizer", {})
+        chat_template = tokenizer_config.get("chat_template")
+        if chat_template and str(chat_template).lower() != "default":
+            vllm_chat_template = chat_template
+            chat_template_path = Path(str(chat_template))
+            if str(chat_template).endswith(".jinja") and chat_template_path.is_file():
+                vllm_chat_template = chat_template_path.read_text()
+            serving_chat_kwargs = generation_config["vllm_cfg"].setdefault(
+                "http_server_serving_chat_kwargs", {}
+            )
+            if serving_chat_kwargs.get("chat_template") is None:
+                serving_chat_kwargs["chat_template"] = vllm_chat_template
+                if (
+                    policy_config.get("is_vlm", False)
+                    and serving_chat_kwargs.get("chat_template_content_format", "auto")
+                    == "auto"
+                ):
+                    serving_chat_kwargs["chat_template_content_format"] = "openai"
+                print(
+                    "  ✓ vLLM HTTP server chat_template set from "
+                    f"policy.tokenizer.chat_template: {chat_template}",
+                    flush=True,
+                )
 
         # ---- NeMo Gym: pre-compute vLLM server URLs for overlapped init ----
         # When NeMo Gym is enabled, we do a lightweight deferred VllmGeneration
@@ -1685,6 +1708,7 @@ def grpo_train(
     checkpointer: CheckpointManager,
     grpo_save_state: GRPOSaveState,
     master_config: MasterConfig,
+    processor: Optional[AutoProcessor] = None,
 ) -> None:
     """Run GRPO training algorithm."""
     timer = Timer(context={"worker": "driver"})
@@ -2159,6 +2183,72 @@ def grpo_train(
                     warnings.warn(
                         "force_on_policy_ratio=True but seq_logprob_error_threshold is set. "
                         "Computing prev_logprobs anyway for seq-level error masking."
+                    )
+
+                # Vision-budget truncation: shrink samples whose vision-expanded
+                # length would exceed max_total_sequence_length. Needs to run
+                # regardless of skip_prev_logprobs because train_data flows to
+                # grpo_step too, not just to the (skippable) prev_logprob compute.
+                if (
+                    "imgs_sizes" in train_data
+                    and processor is None
+                    and not getattr(grpo_train, "_warned_mm_no_processor", False)
+                ):
+                    # Fail loud when the entrypoint forgot to forward `processor`:
+                    # silently skipping this block caused job 4110086 to crash in
+                    # the packer with "Sequence length N exceeds bin capacity".
+                    grpo_train._warned_mm_no_processor = True
+                    print(
+                        "[VISION_BUDGET] WARNING: train_data contains "
+                        "'imgs_sizes' but processor is None — vision-budget "
+                        "truncation is DISABLED. Multimodal samples whose "
+                        "HF-rendered length exceeds max_total_sequence_length "
+                        "will crash the packer in get_logprobs.",
+                        flush=True,
+                    )
+
+                if "imgs_sizes" in train_data and processor is not None:
+                    _patch_dim = getattr(processor, "patch_size", 16)
+                    _ds_ratio = getattr(processor, "downsample_ratio", 0.5)
+                    _img_tok_id = tokenizer.convert_tokens_to_ids("<image>")
+                    _img_start_tok_id = tokenizer.convert_tokens_to_ids("<img>")
+                    _max_seq = master_config["policy"]["max_total_sequence_length"]
+                    _vision_cfg = getattr(getattr(processor, "config", None), "vision_config", None)
+                    _T_trunc = getattr(_vision_cfg, "video_temporal_patch_size", 1)
+
+                    from nemo_rl.models.megatron.multimodal import truncate_for_expanded_budget
+
+                    train_data, vision_truncated = truncate_for_expanded_budget(
+                        train_data,
+                        max_seq_length=_max_seq,
+                        patch_dim=_patch_dim,
+                        downsample_ratio=_ds_ratio,
+                        pad_token_id=tokenizer.pad_token_id,
+                        image_token_id=_img_tok_id,
+                        img_start_token_id=_img_start_tok_id,
+                        temporal_patch_size=_T_trunc,
+                    )
+                    if vision_truncated.any():
+                        n_vt = int(vision_truncated.sum().item())
+                        print(
+                            f"✂ Vision-budget truncation: {n_vt}/{len(vision_truncated)} "
+                            f"samples truncated to fit expanded budget of {_max_seq}",
+                            flush=True,
+                        )
+
+                    from nemo_rl.models.megatron.multimodal import compute_expanded_lengths
+
+                    train_data["expanded_lengths"] = compute_expanded_lengths(
+                        train_data["input_ids"],
+                        train_data["input_lengths"],
+                        train_data.get("imgs_sizes"),
+                        image_token_id=_img_tok_id,
+                        patch_dim=_patch_dim,
+                        downsample_ratio=_ds_ratio,
+                        num_frames=train_data.get("num_frames"),
+                        max_length=_max_seq,
+                        img_start_token_id=_img_start_tok_id,
+                        temporal_patch_size=_T_trunc,
                     )
 
                 if skip_prev_logprobs:

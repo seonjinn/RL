@@ -767,7 +767,9 @@ class BaseVllmGenerationWorker:
             enable_sleep_mode=True,
             # Set disable_log_stats=False so that self.llm.get_metrics() works.
             disable_log_stats=False,
-            logprobs_mode="processed_logprobs",
+            logprobs_mode=self.cfg["vllm_cfg"].get(
+                "logprobs_mode", "processed_logprobs"
+            ),
             **vllm_kwargs,
         )
 

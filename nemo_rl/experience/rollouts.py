@@ -35,6 +35,7 @@ from nemo_rl.data.interfaces import (
     LLMMessageLogType,
 )
 from nemo_rl.data.llm_message_utils import (
+    _normalize_message_tensor_dtype,
     batched_message_log_to_flat_message,
     get_keys_from_message_log,
 )
@@ -1024,7 +1025,51 @@ def _tensorize_by_key(message_logs: list, key: str):
         return
 
     for m in message_logs:
-        m[key] = torch.tensor(m[key])
+        if torch.is_tensor(m[key]):
+            tensor = m[key]
+        else:
+            tensor = torch.tensor(m[key])
+        m[key] = _normalize_message_tensor_dtype(key, tensor)
+
+
+def _extract_multimodal_payload(message_log: Optional[list[dict]]) -> dict[str, Any]:
+    if not message_log:
+        return {}
+
+    multimodal_payload = {}
+    non_multimodal_keys = {
+        "role",
+        "content",
+        "token_ids",
+        "token_loss_mask",
+        "generation_logprobs",
+    }
+    for message in message_log:
+        if message.get("role") != "user":
+            continue
+        for key, value in message.items():
+            if key not in non_multimodal_keys:
+                multimodal_payload[key] = value
+    return multimodal_payload
+
+
+def _reattach_multimodal_payloads(
+    results: list[dict], original_message_logs: Optional[list[list[dict]]]
+) -> None:
+    if not original_message_logs:
+        return
+
+    for rowidx, result in enumerate(results):
+        if rowidx >= len(original_message_logs):
+            break
+        multimodal_payload = _extract_multimodal_payload(original_message_logs[rowidx])
+        if not multimodal_payload:
+            continue
+
+        for message in result.get("message_log", []):
+            if message.get("role") == "user":
+                message.update(multimodal_payload)
+                break
 
 
 @dataclass
@@ -1257,7 +1302,6 @@ def run_async_nemo_gym_rollout(
     assert max_rollout_turns is None, (
         "`max_rollout_turns` is not supported in NeMo-Gym path!"
     )
-    assert max_seq_len is None, "`max_seq_len` is not supported in NeMo-Gym path!"
     # We don't use these stop criteria
     assert not generation_config["stop_strings"], (
         "Stop strings is not supported in the generation config in NeMo-Gym path!"
@@ -1273,27 +1317,52 @@ def run_async_nemo_gym_rollout(
     timer = Timer(context={"worker": "rollout"})
     timer_prefix = "timing/rollout"
     timer.start(f"{timer_prefix}/total")
+    max_total_tokens_per_sample = (
+        max_seq_len
+        if max_seq_len is not None
+        else policy_generation.cfg["vllm_cfg"]["max_model_len"]
+    )
 
     for rowidx, row in enumerate(nemo_gym_rows):
-        # We may need better handling here. The max tokens set here would be the max new generated tokens, not the total max tokens.
-        # Currently, we just rely on the underlying vLLM engine to do the truncation for us using the max model seq len set in the config.
-        # row["max_tokens"] = max_seq_len
-
         responses_create_params = row["responses_create_params"]
         responses_create_params["temperature"] = generation_config["temperature"]
         responses_create_params["top_p"] = generation_config["top_p"]
 
-        # Max new tokens, just like max_seq_len above is ignored and we rely on the underlying vLLM engine for truncation.
-        # generation_config["max_new_tokens"]
+        # Clamp per-sample max_output_tokens to what's left in the policy context
+        # window (max_total_tokens_per_sample - prompt_len). vLLM's engine-level
+        # truncation isn't enough — without this clamp, long-prompt samples
+        # overflow the training context and break the packer downstream.
+        if "length" in input_batch:
+            prompt_len = int(input_batch["length"][rowidx])
+            remaining_output_tokens = max(1, max_total_tokens_per_sample - prompt_len)
+            requested_max_output_tokens = responses_create_params.get(
+                "max_output_tokens",
+                generation_config["max_new_tokens"],
+            )
+            if requested_max_output_tokens is None:
+                requested_max_output_tokens = generation_config["max_new_tokens"]
+            responses_create_params["max_output_tokens"] = min(
+                requested_max_output_tokens,
+                remaining_output_tokens,
+            )
 
         row["_rowidx"] = rowidx
 
 
     with timer.time(f"{timer_prefix}/run_rollouts"):
         nemo_gym_environment = task_to_env["nemo_gym"]
+        # Pass the original DatumSpec message_logs (built by nemo_gym_data_processor)
+        # so the gym side can carry forward multimodal data (pixel_values, etc.) and the
+        # HF-processor token layout (<img>/<image>×N/</img>) onto the first-turn user
+        # message in each result. For text-only runs each message_log is a placeholder
+        # with no multimodal keys, so this is a no-op.
         results, rollout_loop_timing_metrics = ray.get(
             nemo_gym_environment.run_rollouts.remote(
-                nemo_gym_rows, tokenizer, timer_prefix
+                nemo_gym_rows,
+                tokenizer,
+                timer_prefix,
+                original_message_logs=input_batch.get("message_log"),
+                max_total_tokens_per_sample=max_total_tokens_per_sample,
             )
         )
 
@@ -1305,6 +1374,8 @@ def run_async_nemo_gym_rollout(
                 [m for m in r["message_log"] if m["role"] == "assistant"],
                 "generation_logprobs",
             )
+
+        _reattach_multimodal_payloads(results, input_batch.get("message_log"))
 
     # for effort level
     len_reward_low = []
@@ -1347,7 +1418,6 @@ def run_async_nemo_gym_rollout(
     # Prepare for the rollout metrics calculation below. Not strictly necessary here, but good to have parity with `run_async_multi_turn_rollout`
     with timer.time(f"{timer_prefix}/prepare_for_metrics_calculation"):
         batch_size = len(nemo_gym_rows)
-        max_total_tokens_per_sample = policy_generation.cfg["vllm_cfg"]["max_model_len"]
         all_sample_metrics = [
             {
                 "total_reward": r["full_result"]["reward"],
@@ -1359,7 +1429,11 @@ def run_async_nemo_gym_rollout(
                 "total_tokens": sum(len(m["token_ids"]) for m in r["message_log"]),
                 "turn_count": sum(1 for m in r["message_log"] if m["role"] == "user"),
                 "hit_max_tokens": sum(len(m["token_ids"]) for m in r["message_log"])
-                == max_total_tokens_per_sample,
+                == max_total_tokens_per_sample
+                and not r.get("truncated_for_policy_max_length", False),
+                "truncated_for_policy_max_length": r.get(
+                    "truncated_for_policy_max_length", False
+                ),
                 # max_gen_tokens_per_turn: Diagnostic for long single generations
                 "max_gen_tokens_per_turn": max(
                     (
@@ -1418,10 +1492,15 @@ def run_async_nemo_gym_rollout(
                 "total_reward",
             ),
             "natural_termination_rate": sum(
-                not m["hit_max_tokens"] for m in all_sample_metrics
+                not m["hit_max_tokens"]
+                and not m["truncated_for_policy_max_length"]
+                for m in all_sample_metrics
             )
             / batch_size,
-            "truncation_rate": sum(m["hit_max_tokens"] for m in all_sample_metrics)
+            "truncation_rate": sum(
+                m["hit_max_tokens"] or m["truncated_for_policy_max_length"]
+                for m in all_sample_metrics
+            )
             / batch_size,
             # TODO enable this metric. We don't have a clear handle on which tokens are user or tool role.
             # We would probably need to re-tokenize the messages post-hoc to kind of figure this out.
