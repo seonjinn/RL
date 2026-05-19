@@ -4,7 +4,11 @@ import re
 import warnings
 
 import numpy as np
-from mathruler.grader import grade_answer
+
+# `mathruler` (and its `pylatexenc` transitive dep) is intentionally NOT
+# imported at module load time. The driver baked venv lacks `pylatexenc`
+# while reward-verification worker venvs have it. `grade_answer` is imported
+# lazily inside `grade_math()` below.
 
 
 # Keywords that indicate a question asks the model to produce a reasoning trace.
@@ -456,6 +460,9 @@ def grade_math(gt_answer: str, pred_answer: str) -> float:
     """Mathematical equality verifier.
     Binary 0/1 via mathruler symbolic equivalence.
     """
+    # Lazy import: keeps driver baked venv (which lacks pylatexenc) import-safe.
+    from mathruler.grader import grade_answer
+
     pred_answer = _normalize_unicode_math(pred_answer)
     gt_answer = _normalize_unicode_math(gt_answer)
     pred_answer = _normalize_ratio(pred_answer)
