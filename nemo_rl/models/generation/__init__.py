@@ -41,7 +41,7 @@ def configure_generation_config(
     if config["backend"] == "vllm":
         config = cast(VllmConfig, config)
         # set load_format unless it was explicitly configured
-        config["vllm_cfg"].setdefault("load_format", "auto" if is_eval else "dummy")
+        config["vllm_cfg"].setdefault("load_format", "auto")
 
         # Respect the skip_tokenizer_init setting from the config. VLMs for example, require this to be False.
         if "skip_tokenizer_init" not in config["vllm_cfg"]:
