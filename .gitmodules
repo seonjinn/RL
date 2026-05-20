@@ -20,5 +20,5 @@
 	shallow = true
 [submodule "3rdparty/vllm"]
 	path = 3rdparty/vllm
-	url = https://github.com/aroshanghias-nvd/vllm.git
-	branch = nano-v3-vl
+	url = git@github.com:seonjinn/vllm.git
+	branch = sj/nano-v3-omni-vllm-image-token-fix
