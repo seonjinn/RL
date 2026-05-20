@@ -208,6 +208,7 @@ guides/nemotron-3-nano.md
 adding-new-models.md
 guides/sft.md
 guides/dpo.md
+guides/mpo-vlm.md
 guides/dapo.md
 guides/prorlv2.md
 guides/grpo.md

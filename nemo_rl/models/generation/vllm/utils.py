@@ -322,6 +322,7 @@ def _emit_prompt_debug(
             "image_count": 0 if images is None else len(images),
             "image_sizes": [] if images is None else _get_debug_image_sizes(images),
             "mm_processor_kwargs": mm_kwargs or None,
+            "has_precomputed_imgs_sizes": "precomputed_imgs_sizes" in mm_kwargs,
             "fallback_reason": fallback_reason,
         },
     )
@@ -633,3 +634,275 @@ def compute_spec_decode_metrics(
                 )
 
     return spec_metrics
+
+
+# =============================================================================
+# Video frame loaders ported from Nemo-RL-Omni for MPO-VLM (load_video_frames
+# is imported by examples/run_vlm_mpo.py).
+#
+# All heavy backends (av, decord) are lazy-imported inside the function bodies
+# so this stays driver-safe.
+# =============================================================================
+
+def _compute_video_timestamps(
+    total_duration: float, num_frames: int, total_frames_in_file: int,
+    original_num_frames: int, temporal_patch_size: int, video_path: str,
+) -> tuple[int, list[float]]:
+    """Compute segment-midpoint timestamps matching SFT get_seq_frames_v3.
+
+    Returns ``(final_num_frames, timestamps_in_seconds)``.
+    """
+    num_frames = min(num_frames, total_frames_in_file)
+
+    if temporal_patch_size > 1:
+        pre_round = num_frames
+        rounded_down = (num_frames // temporal_patch_size) * temporal_patch_size
+        rounded_up = rounded_down + temporal_patch_size
+        if rounded_up <= total_frames_in_file and rounded_up <= original_num_frames:
+            num_frames = rounded_up
+        else:
+            num_frames = max(temporal_patch_size, rounded_down)
+        if os.environ.get("NRL_DEBUG", "0") == "1":
+            print(
+                f"[FRAME_SAMPLE_FIX] load_video_frames: T={temporal_patch_size} "
+                f"pre_round={pre_round} -> post_round={num_frames} "
+                f"(rounded_down={rounded_down} rounded_up={rounded_up} "
+                f"original_requested={original_num_frames}) "
+                f"total_frames={total_frames_in_file} video={video_path.split('/')[-1]}",
+                flush=True,
+            )
+
+    if num_frames == 1:
+        timestamps_s = [total_duration / 2.0]
+    else:
+        effective_span = max(total_duration - 1, 0)
+        seg_size = effective_span / num_frames
+        timestamps_s = [seg_size * (i + 0.5) for i in range(num_frames)]
+
+    return num_frames, timestamps_s
+
+
+
+
+def _load_video_frames_pyav(video_path: str, num_frames: int = 8, temporal_patch_size: int = 1) -> np.ndarray:
+    """Load video frames using PyAV, matching SFT's AVDecoder.get_clips().
+
+    PyAV (the Python binding for FFmpeg) is the same backend that SFT's
+    Megatron-Energon ``AVDecoder`` uses internally.  This function replicates
+    the AVDecoder's seek-then-decode-forward strategy:
+
+    1. Seek once to the keyframe before the *first* target timestamp.
+    2. Decode forward through the stream, collecting frames as each target
+       PTS is reached (single-pass, no redundant re-seeking).
+    3. Convert to rgb24 numpy array.
+
+    This avoids the frame-index truncation issue in the decord path where
+    ``int(timestamp * fps)`` can select an adjacent frame.
+    """
+    import av
+
+    try:
+        container = av.open(video_path)
+    except av.error.InvalidDataError as e:
+        raise ValueError(f"Cannot open video (corrupt/unreadable): {video_path}") from e
+
+    stream = container.streams.video[0]
+    stream.codec_context.thread_type = "NONE"
+
+    fps = float(stream.average_rate) if stream.average_rate else 0.0
+    if fps <= 0:
+        container.close()
+        raise ValueError(f"Video has invalid fps ({fps}): {video_path}")
+
+    # Prefer stream.frames; fall back to duration-based estimate to avoid
+    # decoding the entire file just to count frames.
+    total_frames = stream.frames
+    if total_frames <= 0:
+        if stream.duration and stream.time_base:
+            total_duration_est = float(stream.duration * stream.time_base)
+        elif container.duration:
+            total_duration_est = container.duration / av.time_base
+        else:
+            total_duration_est = 0.0
+        total_frames = max(1, int(total_duration_est * fps))
+    total_duration = total_frames / fps
+
+    original_num_frames = num_frames
+    num_frames, timestamps_s = _compute_video_timestamps(
+        total_duration, num_frames, total_frames, original_num_frames,
+        temporal_patch_size, video_path,
+    )
+
+    time_base = float(stream.time_base) if stream.time_base else 1.0 / fps
+    target_pts_list = [int(ts / time_base) for ts in timestamps_s]
+
+    _debug = os.environ.get("NRL_DEBUG", "0") == "1"
+
+    # Single-pass decode matching SFT's FastseekReaderByPts.seek_read():
+    # A frame is selected when its display interval *covers* the target PTS,
+    # i.e. target_pts < frame.pts + frame.duration (not frame.pts >= target).
+    frames: list[np.ndarray] = []
+    _collected_pts: list = []
+    _pts_none_count = 0
+    target_idx_at_loop_end = 0
+    try:
+        first_pts = max(0, target_pts_list[0]) if target_pts_list else 0
+        container.seek(first_pts, stream=stream, any_frame=False)
+
+        target_idx = 0
+        best_frame = None
+        frame_counter = 0
+
+        for frame in container.decode(video=0):
+            if target_idx >= len(target_pts_list):
+                break
+
+            best_frame = frame
+
+            if frame.pts is None:
+                _pts_none_count += 1
+                frame_counter += 1
+                while target_idx < len(target_pts_list) and frame_counter >= target_idx + 1:
+                    frames.append(frame.reformat(format="rgb24").to_ndarray())
+                    _collected_pts.append(None)
+                    target_idx += 1
+                continue
+
+            frame_counter += 1
+            frame_end = frame.pts + (frame.duration if frame.duration else 1)
+
+            while target_idx < len(target_pts_list):
+                target_pts = target_pts_list[target_idx]
+                if target_pts < frame_end:
+                    frames.append(frame.reformat(format="rgb24").to_ndarray())
+                    _collected_pts.append(frame.pts)
+                    target_idx += 1
+                else:
+                    break
+
+        target_idx_at_loop_end = target_idx
+        if best_frame is not None:
+            last_arr = best_frame.reformat(format="rgb24").to_ndarray()
+            while len(frames) < len(target_pts_list):
+                frames.append(last_arr.copy())
+                _collected_pts.append("filled")
+    except (av.error.InvalidDataError, av.error.EOFError) as e:
+        if _debug:
+            print(
+                f"[PYAV_WARN] Decode error at frame {len(frames)}/{len(target_pts_list)} "
+                f"for {video_path}: {e}",
+                flush=True,
+            )
+        if frames:
+            while len(frames) < len(target_pts_list):
+                frames.append(frames[-1].copy())
+                _collected_pts.append("error_filled")
+
+    container.close()
+
+    if not frames:
+        raise ValueError(f"Failed to extract any frames from video: {video_path}")
+
+    if _pts_none_count > 0 and _debug:
+        print(
+            f"[PYAV_PTS_WARN] {_pts_none_count} frames had pts=None in {video_path.split('/')[-1]}, "
+            f"used sequential fallback",
+            flush=True,
+        )
+
+    frames_nd = np.stack(frames)
+
+    if _debug:
+        print(
+            f"[PYAV_FRAME_SELECTION] _load_video_frames_pyav: "
+            f"targets={len(target_pts_list)} collected={len(frames)} "
+            f"filled={len(frames) - target_idx_at_loop_end} "
+            f"pts_none_frames={_pts_none_count} "
+            f"frame_selection='display_interval' "
+            f"first3_target_pts={target_pts_list[:3]} "
+            f"first3_frame_pts={_collected_pts[:3]} "
+            f"timestamps_s(first 5)={[f'{t:.4f}' for t in timestamps_s[:5]]} "
+            f"total_frames={total_frames} num_frames={num_frames} "
+            f"fps={fps:.2f} total_duration={total_duration:.4f}s "
+            f"video={video_path.split('/')[-1]}",
+            flush=True,
+        )
+
+    return frames_nd
+
+
+
+
+def _load_video_frames_decord(video_path: str, num_frames: int = 8, temporal_patch_size: int = 1) -> np.ndarray:
+    """Load video frames using decord (legacy path, kept as fallback)."""
+    from decord import VideoReader, cpu as _decord_cpu
+
+    vr = VideoReader(video_path, ctx=_decord_cpu(), num_threads=1)
+    total_frames = len(vr)
+    if total_frames <= 0:
+        raise ValueError(f"Video has no frames: {video_path}")
+
+    fps = vr.get_avg_fps()
+    if fps <= 0:
+        raise ValueError(f"Video has invalid fps ({fps}): {video_path}")
+    total_duration = total_frames / fps
+
+    original_num_frames = num_frames
+    num_frames, timestamps_s = _compute_video_timestamps(
+        total_duration, num_frames, total_frames, original_num_frames,
+        temporal_patch_size, video_path,
+    )
+
+    frame_indices = [max(0, min(int(t * fps), total_frames - 1)) for t in timestamps_s]
+
+    if os.environ.get("NRL_DEBUG", "0") == "1":
+        if total_duration < 1.0:
+            print(
+                f"[SHORT_VIDEO_WARN] decord load_video_frames: total_duration={total_duration:.4f}s < 1.0s, "
+                f"video={video_path.split('/')[-1]}",
+                flush=True,
+            )
+        print(
+            f"[FRAME_SAMPLE_FIX] decord timestamp-based indices (first 5): "
+            f"{frame_indices[:5]} timestamps_s(first 5)={[f'{t:.4f}' for t in timestamps_s[:5]]} "
+            f"total_frames={total_frames} num_frames={num_frames} "
+            f"fps={fps:.2f} total_duration={total_duration:.4f}s",
+            flush=True,
+        )
+
+    frames_nd = vr.get_batch(frame_indices).asnumpy()
+
+    if frames_nd.shape[0] == 0:
+        raise ValueError(f"Failed to extract any frames from video: {video_path}")
+
+    return frames_nd
+
+
+# NRL_VIDEO_BACKEND controls which decoder to use.
+#   "pyav"   - PyAV (default, matches SFT's AVDecoder)
+#   "decord" - decord VideoReader (legacy)
+_VIDEO_BACKEND = os.environ.get("NRL_VIDEO_BACKEND", "pyav")
+
+
+
+
+def load_video_frames(video_path: str, num_frames: int = 8, temporal_patch_size: int = 1) -> np.ndarray:
+    """Load a video and return uniformly sampled frames as a numpy array.
+
+    Uses PyAV by default to match SFT's ``AVDecoder.get_clips(video_unit="seconds")``
+    which seeks to the nearest keyframe then decodes forward to the target
+    timestamp.  Set ``NRL_VIDEO_BACKEND=decord`` to use the legacy decord path.
+
+    Args:
+        video_path: Path to video file.
+        num_frames: Number of frames to sample.
+        temporal_patch_size: Conv3D tubelet size T. Frame count is rounded to
+            a multiple of T (matching SFT ``video_to_frames``).
+
+    Returns:
+        numpy array of shape (num_frames, height, width, 3) with RGB values.
+    """
+    if _VIDEO_BACKEND == "decord":
+        return _load_video_frames_decord(video_path, num_frames, temporal_patch_size)
+    return _load_video_frames_pyav(video_path, num_frames, temporal_patch_size)
+

@@ -458,6 +458,17 @@ def get_first_index_that_differs(str1: str, str2: str) -> int:
     return min(len(str1), len(str2))
 
 
+def strip_image_tokens_from_text(text: str) -> str:
+    """Remove image and video placeholder tokens from text.
+
+    Ported from Nemo-RL-Omni for MPO-VLM compatibility (used by mmpr/blend_v1
+    response datasets and the run_vlm_mpo example).
+    """
+    for token in ("<image>", "<img>", "</img>", "<video>"):
+        text = text.replace(token, "")
+    return text
+
+
 def get_images_from_message(message: dict[str, Any]) -> list[Any]:
     """Get all images from a message log item."""
     # Handle None or missing content (e.g., assistant messages with only tool_calls)
@@ -484,6 +495,14 @@ def get_formatted_message_log(
     add_eos_token: bool = True,
     add_generation_prompt: bool = False,
     tools: Optional[list[dict[str, Any]]] = None,
+    # NOTE: Accepted for Omni-style caller compatibility (e.g. examples/run_vlm_mpo.py).
+    # The Omni variant of this function uses `max_seq_length` to derive a vision
+    # token budget (see `task_data_spec.max_num_patches` / `min_generation_tokens`).
+    # Super-Omni's pristine pipeline expects the caller to pre-compute and set
+    # `task_data_spec.max_num_patches` directly, so this argument is currently a
+    # no-op here. If image OOM/truncation turns out to be a problem under MPO-VLM,
+    # port the `_vision_budget` block from Nemo-RL-Omni's get_formatted_message_log.
+    max_seq_length: Optional[int] = None,
 ) -> LLMMessageLogType:
     """Format and tokenize chat messages using the specified template.
 
