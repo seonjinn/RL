@@ -153,6 +153,7 @@ export RAY_gcs_server_request_timeout_seconds="${RAY_gcs_server_request_timeout_
 #   slightly stale task status during init — acceptable tradeoff.
 export RAY_raylet_report_resources_period_milliseconds="${RAY_raylet_report_resources_period_milliseconds:-500}"
 export RAY_task_events_report_interval_ms="${RAY_task_events_report_interval_ms:-5000}"
+export RAY_INCLUDE_DASHBOARD="${RAY_INCLUDE_DASHBOARD:-True}"
 
 # --- Resource broadcast batching ---
 # gcs_resource_broadcast_max_batch_size (default 1 = disabled): GCS broadcasts
@@ -839,7 +840,7 @@ ray start --head \
     --ray-client-server-port=${RAY_CLIENT_SERVER_PORT} \
     --dashboard-port=${DASHBOARD_PORT} \
     --dashboard-host="$HEAD_NODE_IP" \
-    --include-dashboard=True \
+    --include-dashboard=${RAY_INCLUDE_DASHBOARD} \
     --min-worker-port=${MIN_WORKER_PORT} \
     --max-worker-port=${MAX_WORKER_PORT} \
     \

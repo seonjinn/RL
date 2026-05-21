@@ -1,47 +1,65 @@
 #!/usr/bin/env bash
 #
-# Parity launcher: runs the SAME workload as
-# nemo-rl-recipes/scripts/nanov3_vision_rl.sh, but on the nemo-rl-super
-# codebase with the current vLLM20 super container.
+# Parity launcher: runs the DFW nanov3 vision RL workload on the current
+# NRT nemo-rl-super codebase, container, and repo vLLM checkout.
 #
 # Both launchers point at examples/omni/nanov3_vision_rl.yaml with the
-# identical Hydra override surface, identical scale (NUM_NODES=4,
-# GPUS_PER_NODE=8), and identical model / dataset (sourced from
-# IMAGE_GRPO_MODEL_NAME / IMAGE_GRPO_CACHE_DIR in NEMORL/.env).
+# same 4-node scale, same logical model / MMPR-Tiny data, and DFW's vLLM
+# engine settings.
 #
 # Wandb is enabled and forced to the same project as the recipes
-# baseline (nemo-rl-omni). JOB_NAME_BASE defaults to image-grpo-vllm20
-# so the two runs are easy to tell apart in the dashboard.
+# baseline (nemo-rl-omni). JOB_NAME_BASE defaults to a full4h name so
+# validation runs are easy to tell apart in the dashboard.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NEMORL="${NEMORL:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+SOURCE_NEMORL="${NEMORL:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+SOURCE_NEMORL="$(cd "${SOURCE_NEMORL}" && pwd)"
+NEMORL="${SOURCE_NEMORL}"
 
-if [[ -f "${NEMORL}/.env" ]]; then
+if [[ -f "${SOURCE_NEMORL}/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
-  source "${NEMORL}/.env"
+  source "${SOURCE_NEMORL}/.env"
   set +a
 fi
 
 CONFIG_PATH="${CONFIG_PATH:-examples/omni/nanov3_vision_rl.yaml}"
 NUM_NODES="${NUM_NODES:-4}"
-JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20}"
+SNAPSHOT_CODE="${SNAPSHOT_CODE:-1}"
+JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20-nrt-full4h}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
-MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-}}"
-CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-}}"
+MODEL_NAME="/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/checkpoints/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-0303/step_400"
+CACHE_DIR="${SOURCE_NEMORL}/.cache/mmpr_tiny"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-omni}"
-: "${MODEL_NAME:?Set IMAGE_GRPO_MODEL_NAME or MODEL_NAME, or define it in ${NEMORL}/.env}"
-: "${CACHE_DIR:?Set IMAGE_GRPO_CACHE_DIR or CACHE_DIR, or define it in ${NEMORL}/.env}"
-RESULTS_ROOT="${RESULTS_ROOT:-${NEMORL}/results}"
+RESULTS_ROOT="${RESULTS_ROOT:-${SOURCE_NEMORL}/../jobs}"
 RESULTS_DIR="${RESULTS_ROOT}/${JOB_NAME}"
+LOGS_DIR="${LOGS_DIR:-${RESULTS_DIR}/logs}"
+mkdir -p "${LOGS_DIR}" "${RESULTS_DIR}"
+export BASE_LOG_DIR="${BASE_LOG_DIR:-${LOGS_DIR}}"
 
-SBATCH_ACCOUNT="${SBATCH_ACCOUNT:?Set SBATCH_ACCOUNT or define it in ${NEMORL}/.env}"
-SBATCH_PARTITION="${SBATCH_PARTITION:-${PARTITION:-batch}}"
+SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-llmservice_fm_vision}"
+# Full validation run default. Override SBATCH_TIME from the environment for
+# shorter probes.
 SBATCH_TIME="${SBATCH_TIME:-4:00:00}"
+if [[ -z "${SBATCH_PARTITION:-}" ]]; then
+  if [[ -n "${PARTITION:-}" ]]; then
+    SBATCH_PARTITION="${PARTITION}"
+  elif [[ "$(hostname)" == *"draco-oci"* ]]; then
+    SBATCH_PARTITION="batch_block1,batch_block3,batch_block4,backfill_block1,backfill_block2,backfill_block3,backfill_block4"
+  elif [[ "$(hostname)" == *"cw-dfw"* ]]; then
+    SBATCH_PARTITION="batch,backfill,batch_short"
+  elif [[ "$(hostname)" == *"cs-oci-ord"* ]]; then
+    SBATCH_PARTITION="backfill_block1,grizzly,polar,polar3,polar4"
+  elif [[ "$(hostname)" == *"oci-nrt"* ]]; then
+    SBATCH_PARTITION="batch_block1"
+  else
+    SBATCH_PARTITION="batch,batch_large,batch_large_long,batch_long"
+  fi
+fi
 export GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 # ray.sub only sees exported vars; without this it falls back to its own
 # default and trips the "GPUS_PER_NODE doesn't match cluster GRES" check.
@@ -51,7 +69,7 @@ export NUM_NODES
 # pre-built /opt/ray_venvs. Overridable via .env.
 CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/rl/images}"
 export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-vllm20-super-vlm2-20260507-0905b74.sqsh}"
-export MOUNTS="${MOUNTS:-/lustre:/lustre}"
+export MOUNTS="${MOUNTS:-/lustre:/lustre,/home}"
 
 # Trust the baked /opt/ray_venvs/<actor>/ in the container so
 # create_local_venv() short-circuits and we don't re-resolve nemo-rl
@@ -63,11 +81,13 @@ export NRL_VENVS_TRUST_EXISTING="${NRL_VENVS_TRUST_EXISTING:-1}"
 # image; the strict version assert is harmless for this workload.
 export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
 
-export CACHE_ROOT="${CACHE_ROOT:-${NEMORL}/.cache}"
+export CACHE_ROOT="${CACHE_ROOT:-${SOURCE_NEMORL}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
 export HF_MODULES_CACHE="${HF_MODULES_CACHE:-${HF_HOME}/modules}"
 export NRL_MEGATRON_CHECKPOINT_DIR="${NRL_MEGATRON_CHECKPOINT_DIR:-${HF_HOME}/nemo_rl}"
-export TMPDIR="${TMPDIR:-/tmp/nrl-${RUN_ID}}"
+TMP_RUN_ID="${RUN_ID//[^A-Za-z0-9]/}"
+TMP_RUN_ID="${TMP_RUN_ID:0:18}"
+export TMPDIR="${TMPDIR:-/tmp/nrl-${TMP_RUN_ID:-run}}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR}/triton}"
 export NEMO_RL_TRAIN_STEP_MEM_DIAG="${NEMO_RL_TRAIN_STEP_MEM_DIAG:-1}"
 
@@ -77,6 +97,17 @@ export NVTE_BWD_LAYERNORM_SM_MARGIN="${NVTE_BWD_LAYERNORM_SM_MARGIN:-16}"
 export NEMO_RL_LOG_GPU_MEMORY="${NEMO_RL_LOG_GPU_MEMORY:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 export NRL_IGNORE_VERSION_MISMATCH="${NRL_IGNORE_VERSION_MISMATCH:-true}"
+export RAY_INCLUDE_DASHBOARD="${RAY_INCLUDE_DASHBOARD:-False}"
+export NCCL_TIMEOUT="${NCCL_TIMEOUT:-1800000}"
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC="${TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC:-1800}"
+export TORCH_FR_BUFFER_SIZE="${TORCH_FR_BUFFER_SIZE:-1000}"
+export NRL_DEBUG="${NRL_DEBUG:-0}"
+export NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES="${NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES:-0}"
+export NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES="${NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES:-0}"
+export NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT="${NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT:-0}"
+export USE_REPO_VLLM="${USE_REPO_VLLM:-1}"
+SOURCE_VLLM_DIR="${SOURCE_VLLM_DIR:-${SOURCE_NEMORL}/3rdparty/vllm}"
+SOURCE_VLLM_DIR="$(cd "${SOURCE_VLLM_DIR}" && pwd)"
 # Provide auth credentials for the private flashinfer-cubin gitlab pypi
 # index if NRL_VENVS_TRUST_EXISTING is ever flipped off. Sourced from
 # the user's glab CLI config (no token literal in the script).
@@ -88,15 +119,15 @@ if [[ -n "${GITLAB_FLASHINFER_TOKEN:-}" ]]; then
   export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD="${GITLAB_FLASHINFER_TOKEN}"
 fi
 
-if [[ ! -f "${NEMORL}/ray.sub" ]]; then
-  echo "ray.sub not found under NEMORL=${NEMORL}" >&2
+if [[ ! -f "${SOURCE_NEMORL}/ray.sub" ]]; then
+  echo "ray.sub not found under NEMORL=${SOURCE_NEMORL}" >&2
   exit 1
 fi
 
 if [[ "${CONFIG_PATH}" = /* ]]; then
   CONFIG_ABS_PATH="${CONFIG_PATH}"
 else
-  CONFIG_ABS_PATH="${NEMORL}/${CONFIG_PATH}"
+  CONFIG_ABS_PATH="${SOURCE_NEMORL}/${CONFIG_PATH}"
 fi
 
 if [[ ! -f "${CONFIG_ABS_PATH}" ]]; then
@@ -104,9 +135,90 @@ if [[ ! -f "${CONFIG_ABS_PATH}" ]]; then
   exit 1
 fi
 
+SNAPSHOT_CODE_LOWER="${SNAPSHOT_CODE,,}"
+if [[ "${SNAPSHOT_CODE_LOWER}" == "1" || "${SNAPSHOT_CODE_LOWER}" == "true" || "${SNAPSHOT_CODE_LOWER}" == "yes" ]]; then
+  SNAPSHOT_NEMORL="${SNAPSHOT_NEMORL:-${RESULTS_DIR}/code}"
+  mkdir -p "${SNAPSHOT_NEMORL}"
+  SNAPSHOT_NEMORL="$(cd "${SNAPSHOT_NEMORL}" && pwd)"
+  if [[ "${SNAPSHOT_NEMORL}" == "${SOURCE_NEMORL}" || "${SNAPSHOT_NEMORL}/" == "${SOURCE_NEMORL}/"* ]]; then
+    echo "[ERROR] SNAPSHOT_NEMORL must be outside SOURCE_NEMORL to avoid recursive rsync: ${SNAPSHOT_NEMORL}" >&2
+    exit 1
+  fi
+
+  echo "Snapshotting code from ${SOURCE_NEMORL} to ${SNAPSHOT_NEMORL}"
+  RSYNC_EXCLUDES=(
+    --exclude='.git/'
+    --exclude='.env'
+    --exclude='.venv/'
+    --exclude='.cache/'
+    --exclude='.tmp/'
+    --exclude='.pytest_cache/'
+    --exclude='.mypy_cache/'
+    --exclude='.ruff_cache/'
+    --exclude='__pycache__/'
+    --exclude='*.pyc'
+    --exclude='*.pyo'
+    --exclude='*.out'
+    --exclude='slurm-*.out'
+    --exclude='wandb/'
+    --exclude='logs/'
+    --exclude='results/'
+    --exclude='jobs/'
+    --exclude='checkpoints/'
+    --exclude='build/'
+    --exclude='*.o'
+    --exclude='*.a'
+    --exclude='*.egg-info/'
+    --exclude='scripts/omnirl_scripts/tmp_docs/'
+  )
+  rsync -a --delete "${RSYNC_EXCLUDES[@]}" "${SOURCE_NEMORL}/" "${SNAPSHOT_NEMORL}/"
+  {
+    echo "source_nemorl=${SOURCE_NEMORL}"
+    echo "source_vllm_dir=${SOURCE_VLLM_DIR}"
+    echo "snapshot_nemorl=${SNAPSHOT_NEMORL}"
+    echo "job_name=${JOB_NAME}"
+    echo "created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "${SNAPSHOT_NEMORL}/.nemo_rl_snapshot_info"
+  NEMORL="${SNAPSHOT_NEMORL}"
+else
+  NEMORL="${SOURCE_NEMORL}"
+fi
+export NEMORL
+
+if [[ "${USE_REPO_VLLM}" != "1" ]]; then
+  echo "[ERROR] USE_REPO_VLLM=0 is no longer supported by this launcher; container vLLM patching has been removed." >&2
+  echo "[ERROR] Run tools/build-custom-vllm.sh and use the repo vLLM checkout at 3rdparty/vllm." >&2
+  exit 1
+fi
+if [[ "${SOURCE_VLLM_DIR}" == "${SOURCE_NEMORL}/3rdparty/vllm" ]]; then
+  RUNTIME_VLLM_DIR="${NEMORL}/3rdparty/vllm"
+else
+  RUNTIME_VLLM_DIR="${SOURCE_VLLM_DIR}"
+fi
+if [[ ! -f "${RUNTIME_VLLM_DIR}/vllm/__init__.py" ]]; then
+  echo "[ERROR] repo vLLM checkout missing at ${RUNTIME_VLLM_DIR}." >&2
+  echo "[ERROR] Run tools/build-custom-vllm.sh before launching this job." >&2
+  exit 1
+fi
+if [[ -f "${RUNTIME_VLLM_DIR}/nemo-rl.env" ]]; then
+  # shellcheck disable=SC1091
+  source "${RUNTIME_VLLM_DIR}/nemo-rl.env"
+fi
+# The precompiled wheel location is build-time metadata from build-custom-vllm.sh.
+# Do not leak it into vLLM20 runtime, where it is reported as an unknown env var.
+unset VLLM_PRECOMPILED_WHEEL_LOCATION
+export SETUP_COMMAND
+
 EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
+fi
+# Match DFW's vLLM runtime settings while keeping current NRT code/infra.
+EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.enforce_eager=${VLLM_ENFORCE_EAGER:-true}"
+EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING:-false}"
+EXTRA_OVERRIDES+=" policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS:-16384}"
+if [[ -n "${VLLM_LOAD_FORMAT:-}" ]]; then
+  EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.load_format=${VLLM_LOAD_FORMAT}"
 fi
 # This repo's grpo.py requires grpo.val_at_end (recipes' grpo.py doesn't
 # read this key). The recipes-derived omni YAML doesn't define it, so inject
@@ -120,15 +232,12 @@ if [[ -n "${WANDB_RUN_ID:-}" ]]; then
   EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
 fi
 
-PYTHONPATH_ROOTS="${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
-if [[ "${USE_REPO_VLLM:-0}" == "1" ]]; then
-  PYTHONPATH_ROOTS="${NEMORL}/3rdparty/vllm:${PYTHONPATH_ROOTS}"
-fi
+PYTHONPATH_ROOTS="${RUNTIME_VLLM_DIR}:${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
 
 # Match recipes' Hydra override surface 1:1 and explicitly enable wandb
 # against the same project so the two runs land side-by-side.
 export COMMAND="\
-mkdir -p '${HF_HOME}' '${HF_MODULES_CACHE}' '${NRL_MEGATRON_CHECKPOINT_DIR}' '${TRITON_CACHE_DIR}' '${TMPDIR}' '${RESULTS_DIR}' && \
+mkdir -p '${HF_HOME}' '${HF_MODULES_CACHE}' '${NRL_MEGATRON_CHECKPOINT_DIR}' '${TRITON_CACHE_DIR}' '${TMPDIR}' '${RESULTS_DIR}' '${CACHE_DIR}' && \
 export PYTHONPATH=${PYTHONPATH_ROOTS}\${PYTHONPATH:+:\$PYTHONPATH} && \
 uv run --no-sync examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
 cluster.num_nodes=${NUM_NODES} \
@@ -151,4 +260,5 @@ sbatch \
     --partition=${SBATCH_PARTITION} \
     --time=${SBATCH_TIME} \
     --gres=gpu:${GPUS_PER_NODE} \
+    --output="${LOGS_DIR}/%x_%j.log" \
     ray.sub

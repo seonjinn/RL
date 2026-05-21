@@ -28,10 +28,8 @@ GLOBAL_TRAIN_BATCH_SIZE="${GLOBAL_TRAIN_BATCH_SIZE:-$((NUM_NODES * GRADIENT_ACCU
 JOB_NAME="${JOB_NAME:-${EXP_NAME}_n${NUM_NODES}_bs${GLOBAL_TRAIN_BATCH_SIZE}_ga${GRADIENT_ACCUMULATION_STEPS}_j${RUN_ID}}"
 JOB_HASH="${JOB_HASH:-$(printf '%s' "${JOB_NAME}" | openssl dgst -sha1 -binary | od -An -tx1 | tr -d ' \n' | cut -c1-12)}"
 
-MODEL_NAME="${OMNI_GRPO_MODEL_NAME:-${MODEL_NAME:-}}"
-TRAIN_DATA_PATH="${OMNI_GRPO_TRAIN_DATA_PATH:-${TRAIN_DATA_PATH:-}}"
-: "${MODEL_NAME:?Set OMNI_GRPO_MODEL_NAME or MODEL_NAME, or define it in ${NEMORL}/.env}"
-: "${TRAIN_DATA_PATH:?Set OMNI_GRPO_TRAIN_DATA_PATH or TRAIN_DATA_PATH, or define it in ${NEMORL}/.env}"
+MODEL_NAME="/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/grpo_vision_mpo_sft_iter_2200_mpo_200_rl_50_20260407_blend_v6/iter_125"
+TRAIN_DATA_PATH="/lustre/fsw/portfolios/llmservice/users/hanrongy/dataset/nemotron_omni_data/rl/comboGRPO_v3_gaIRL-Filtered/comboV3_gaFiltered-allImgV8_wOCR_wUnans_NRT_20260419_084620.jsonl"
 
 RESULTS_ROOT="${RESULTS_ROOT:-${SOURCE_NEMORL}/../jobs}"
 RESULTS_DIR="${RESULTS_DIR:-${RESULTS_ROOT}/${JOB_NAME}}"
@@ -94,8 +92,6 @@ export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC="${TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC:-180
 export TORCH_FR_BUFFER_SIZE="${TORCH_FR_BUFFER_SIZE:-1000}"
 export NRL_DEBUG="${NRL_DEBUG:-0}"
 export USE_REPO_VLLM="${USE_REPO_VLLM:-1}"
-export NRL_VLLM_VIDEO_AS_IMAGES="${NRL_VLLM_VIDEO_AS_IMAGES:-0}"
-export NRL_VLLM_VIDEO_FRAME_SEPARATORS="${NRL_VLLM_VIDEO_FRAME_SEPARATORS:-0}"
 export NRL_VIDEO_PROMPT_STYLE="${NRL_VIDEO_PROMPT_STYLE:-sft_v2_grouped}"
 export NRL_VIDEO_SAMPLING_STYLE="${NRL_VIDEO_SAMPLING_STYLE:-sft_v2_duration}"
 export NRL_VIDEO_SFT_MIN_FRAMES="${NRL_VIDEO_SFT_MIN_FRAMES:-8}"

@@ -16,9 +16,6 @@ import copy
 import gc
 import logging
 import os
-import sys
-from contextlib import contextmanager
-from importlib.util import find_spec
 from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
@@ -50,6 +47,7 @@ from nemo_rl.models.generation.interfaces import (
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.utils import (
     _extract_hw_pairs,
+    dump_vllm_request_boundary,
     extract_sampled_token_logprob,
     format_prompt_for_vllm_generation,
 )
@@ -62,6 +60,16 @@ _VLLM20_STALE_ENV_VARS = (
     "VLLM_PRECOMPILED_WHEEL_LOCATION",
     "VLLM_USE_V1",
 )
+_CAP_MAX_TOKENS_TO_CONTEXT_ENV = "NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT"
+
+
+def _cap_max_tokens_to_context_enabled() -> bool:
+    return os.environ.get(_CAP_MAX_TOKENS_TO_CONTEXT_ENV, "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _clear_stale_vllm20_env_vars() -> None:
@@ -238,11 +246,6 @@ class BaseVllmGenerationWorker:
         self.fraction_of_gpus = fraction_of_gpus
         self.is_model_owner = bundle_indices is not None
 
-        # Store the Python executable being used by this worker
-        self.py_executable = sys.executable
-
-        self._apply_vllm_patches()
-
         if not self.is_model_owner:
             self.llm = None
             self.tokenizer = None
@@ -254,943 +257,6 @@ class BaseVllmGenerationWorker:
         # vLLM handles the parallelism internally through Ray
         self.rank = 0
         self.world_size = 1
-
-    def _apply_vllm_patches(self):
-        """Apply file-on-disk patches to vLLM and flashinfer source files.
-
-        These patches are idempotent (check before writing) and applied
-        early during ``_init_config`` so that **all** workers -- including
-        non-model-owners -- see the patched files before any vLLM import.
-        """
-        from vllm.logger import init_logger
-
-        logger = init_logger("vllm_patch")
-
-        def _get_vllm_file(relative_path: str) -> str:
-            """Return absolute path to a vLLM file or raise if it cannot be found.
-
-            The relative_path should be a POSIX-style path under the vllm
-            package root, e.g. "v1/executor/ray_executor.py" or
-            "attention/layer.py".
-            """
-            spec = find_spec("vllm")
-            if spec is None or not spec.submodule_search_locations:
-                raise RuntimeError(
-                    "vLLM package not found while attempting to patch "
-                    f"'{relative_path}'. Ensure vLLM is installed and "
-                    "available in this environment."
-                )
-
-            base_dir = next(iter(spec.submodule_search_locations))
-            file_path = os.path.join(base_dir, *relative_path.split("/"))
-
-            if not os.path.exists(file_path):
-                raise RuntimeError(
-                    "Failed to locate expected vLLM file to patch. "
-                    f"Looked for '{relative_path}' at '{file_path}'. "
-                    "This likely indicates an unexpected vLLM installation "
-                    "layout or version mismatch."
-                )
-
-            return file_path
-
-        @contextmanager
-        def _locked_file_patch(file_path: str):
-            """Yield (content, writer) under an exclusive file lock.
-
-            Multiple workers on the same node call _apply_vllm_patches
-            concurrently.  Without a lock, one worker's ``open(path, "w")``
-            truncates the file while another is reading it, causing spurious
-            "expected code snippet not found" warnings.
-
-            Usage::
-
-                with _locked_file_patch(path) as (content, write_back):
-                    if already_patched(content):
-                        return
-                    content = content.replace(old, new)
-                    write_back(content)
-            """
-            import fcntl
-
-            lock_path = file_path + ".patch_lock"
-            lock_fd = open(lock_path, "w")
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
-
-                with open(file_path, "r") as f:
-                    content = f.read()
-
-                def write_back(new_content: str):
-                    with open(file_path, "w") as f:
-                        f.write(new_content)
-
-                yield content, write_back
-            finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                lock_fd.close()
-
-        def _patch_vllm_init_workers_ray():
-            """Patch the vLLM ray_distributed_executor.py file.
-
-            1. Pass custom runtime_env in _init_workers_ray call.
-                - This allows passing custom py_executable to worker initialization.
-            2. Add NCCL_CUMEM_ENABLE and NCCL_NVLS_ENABLE to vLLM ADDITIONAL_ENV_VARS.
-                - This is a workaround to fix async vllm in some scenarios.
-                - See https://github.com/NVIDIA-NeMo/RL/pull/898 for more details.
-            3. Wrap the TP rendezvous RPC chain (init_worker + init_device) in an
-               EADDRINUSE retry loop.
-                - vLLM's _get_open_port() closes the socket before TCPStore.bind(),
-                  leaving a TOCTOU window where another process can grab the port.
-                - On EADDRINUSE we regenerate distributed_init_method with a fresh
-                  port and retry. load_model stays outside the retry (non-network).
-            """
-            file_to_patch = _get_vllm_file("v1/executor/ray_executor.py")
-
-            old_init_rpc_block = (
-                '        self.collective_rpc("init_worker", args=(all_kwargs,))\n'
-                "\n"
-                "        is_eep_new_worker = envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH\n"
-                "        if not is_eep_new_worker:\n"
-                '            self.collective_rpc("init_device")\n'
-                '            self.collective_rpc("load_model")\n'
-            )
-
-            new_init_rpc_block = (
-                "        is_eep_new_worker = envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH\n"
-                "        for _nrl_attempt in range(5):\n"
-                "            try:\n"
-                '                self.collective_rpc("init_worker", args=(all_kwargs,))\n'
-                "                if not is_eep_new_worker:\n"
-                '                    self.collective_rpc("init_device")\n'
-                "                break\n"
-                "            except Exception as _nrl_e:\n"
-                '                if "EADDRINUSE" not in repr(_nrl_e) or _nrl_attempt == 4:\n'
-                "                    raise\n"
-                "                logger.warning(\n"
-                '                    "nemo-rl: TP rendezvous EADDRINUSE on %s (attempt %d/5); regenerating distributed_init_method",\n'
-                "                    distributed_init_method, _nrl_attempt + 1,\n"
-                "                )\n"
-                "                distributed_init_method = get_distributed_init_method(driver_ip, get_open_port())\n"
-                "                for _kw in all_kwargs:\n"
-                '                    _kw["distributed_init_method"] = distributed_init_method\n'
-                "        if not is_eep_new_worker:\n"
-                '            self.collective_rpc("load_model")\n'
-            )
-
-            replacements = [
-                (
-                    "self._init_workers_ray(placement_group)",
-                    f'self._init_workers_ray(placement_group, runtime_env={{"py_executable": "{self.py_executable}"}})',
-                ),
-                (
-                    'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}',
-                    'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "NCCL_CUMEM_ENABLE", "NCCL_NVLS_ENABLE", "RAY_ENABLE_UV_RUN_RUNTIME_ENV"}',
-                ),
-                (old_init_rpc_block, new_init_rpc_block),
-            ]
-
-            with _locked_file_patch(file_to_patch) as (content, write_back):
-                need_replace = False
-                for old, new in replacements:
-                    if new in content or old not in content:
-                        continue
-                    content = content.replace(old, new)
-                    need_replace = True
-
-                if need_replace:
-                    write_back(content)
-
- 
-        def _patch_vllm_hermes_tool_parser_thread_safety():
-            """Patch Hermes2ProToolParser.__init__ to cache tokenizer calls.
-
-            The HuggingFace tokenizer's Rust backend does not support concurrent
-            access. When multiple async requests call _preprocess_chat concurrently,
-            each one constructs a new Hermes2ProToolParser which calls
-            tokenizer.encode() and tokenizer.decode() in __init__, causing
-            "RuntimeError: Already borrowed".
-
-            This patch caches the encode/decode results so only the first
-            instantiation (protected by a lock) touches the tokenizer. All
-            subsequent instantiations read from cache without any tokenizer
-            access.
-
-            Related:
-            - https://github.com/vllm-project/vllm/pull/30264
-            - https://github.com/huggingface/tokenizers/issues/537
-            - https://github.com/PrimeIntellect-ai/prime-rl/pull/1837
-            """
-            file_to_patch = _get_vllm_file("tool_parsers/hermes_tool_parser.py")
-
-            old_import = (
-                "import json\n"
-                "from collections.abc import Sequence"
-            )
-            new_import = (
-                "import json\n"
-                "import threading\n"
-                "from collections.abc import Sequence"
-            )
-
-            old_class_line = "class Hermes2ProToolParser(ToolParser):"
-            new_class_line = (
-                "class Hermes2ProToolParser(ToolParser):\n"
-                "    _tokenizer_lock = threading.Lock()\n"
-                "    _tokenizer_cache = {}"
-            )
-
-            old_init_snippet = (
-                "        self.tool_call_start_token_ids = self.model_tokenizer.encode(\n"
-                "            self.tool_call_start_token, add_special_tokens=False\n"
-                "        )\n"
-                "        self.tool_call_end_token_ids = self.model_tokenizer.encode(\n"
-                "            self.tool_call_end_token, add_special_tokens=False\n"
-                "        )\n"
-                "\n"
-                "        self.tool_call_start_token_array = [\n"
-                "            self.model_tokenizer.decode([token_id])\n"
-                "            for token_id in self.tool_call_start_token_ids\n"
-                "        ]\n"
-                "\n"
-                "        self.tool_call_end_token_array = [\n"
-                "            self.model_tokenizer.decode([token_id])\n"
-                "            for token_id in self.tool_call_end_token_ids\n"
-                "        ]"
-            )
-
-            new_init_snippet = (
-                "        _tid = id(self.model_tokenizer)\n"
-                "        if _tid in Hermes2ProToolParser._tokenizer_cache:\n"
-                "            _cached = Hermes2ProToolParser._tokenizer_cache[_tid]\n"
-                "            self.tool_call_start_token_ids = _cached['start_ids']\n"
-                "            self.tool_call_end_token_ids = _cached['end_ids']\n"
-                "            self.tool_call_start_token_array = _cached['start_array']\n"
-                "            self.tool_call_end_token_array = _cached['end_array']\n"
-                "        else:\n"
-                "            with Hermes2ProToolParser._tokenizer_lock:\n"
-                "                if _tid in Hermes2ProToolParser._tokenizer_cache:\n"
-                "                    _cached = Hermes2ProToolParser._tokenizer_cache[_tid]\n"
-                "                    self.tool_call_start_token_ids = _cached['start_ids']\n"
-                "                    self.tool_call_end_token_ids = _cached['end_ids']\n"
-                "                    self.tool_call_start_token_array = _cached['start_array']\n"
-                "                    self.tool_call_end_token_array = _cached['end_array']\n"
-                "                else:\n"
-                "                    self.tool_call_start_token_ids = "
-                "self.model_tokenizer.encode(\n"
-                "                        self.tool_call_start_token, "
-                "add_special_tokens=False\n"
-                "                    )\n"
-                "                    self.tool_call_end_token_ids = "
-                "self.model_tokenizer.encode(\n"
-                "                        self.tool_call_end_token, "
-                "add_special_tokens=False\n"
-                "                    )\n"
-                "                    self.tool_call_start_token_array = [\n"
-                "                        self.model_tokenizer.decode([token_id])\n"
-                "                        for token_id in self.tool_call_start_token_ids\n"
-                "                    ]\n"
-                "                    self.tool_call_end_token_array = [\n"
-                "                        self.model_tokenizer.decode([token_id])\n"
-                "                        for token_id in self.tool_call_end_token_ids\n"
-                "                    ]\n"
-                "                    Hermes2ProToolParser._tokenizer_cache[_tid] = {\n"
-                "                        'start_ids': self.tool_call_start_token_ids,\n"
-                "                        'end_ids': self.tool_call_end_token_ids,\n"
-                "                        'start_array': self.tool_call_start_token_array,\n"
-                "                        'end_array': self.tool_call_end_token_array,\n"
-                "                    }"
-            )
-
-            with _locked_file_patch(file_to_patch) as (content, write_back):
-                if "_tokenizer_cache" in content:
-                    logger.info("Hermes tool parser thread-safety patch already applied.")
-                    return
-
-                if old_init_snippet not in content:
-                    logger.debug(
-                        "Skipping hermes tool parser thread-safety patch: "
-                        "expected code snippet not found in %s. "
-                        "The installed vLLM version may already contain the fix "
-                        "or may no longer need this workaround.",
-                        file_to_patch,
-                    )
-                    return
-
-                content = content.replace(old_import, new_import, 1)
-                content = content.replace(old_class_line, new_class_line, 1)
-                content = content.replace(old_init_snippet, new_init_snippet, 1)
-                write_back(content)
-
-            logger.info("Successfully patched hermes tool parser for thread-safety.")
-
-        def _patch_flashinfer_mnnvl_cluster_uuid():
-            """Patch flashinfer mnnvl.py to guard against empty/undecodable clusterUuid.
-
-            On single-node NVSwitch clusters, clusterUuid is all-zero bytes
-            (no multi-node NVLink domain). ctypes truncates at the first null
-            byte, producing an empty string — then ``clusterUuid[0]`` raises
-            ``IndexError``. On some hardware the raw bytes are not valid UTF-8,
-            causing ``UnicodeDecodeError`` in pynvml's ``__getattribute__``
-            before the index is even reached.
-
-            Fix: wrap the clusterUuid access in a try/except so that either
-            failure safely returns ``False`` (falling back to
-            PosixFDHandleExchanger for single-node topologies).
-
-            Upstream fix: https://github.com/flashinfer-ai/flashinfer/pull/2626
-            Related issue: https://github.com/flashinfer-ai/flashinfer/issues/2633
-            """
-            spec = find_spec("flashinfer")
-            if spec is None or not spec.submodule_search_locations:
-                return
-
-            base_dir = next(iter(spec.submodule_search_locations))
-            file_path = os.path.join(base_dir, "comm", "mnnvl.py")
-
-            if not os.path.exists(file_path):
-                return
-
-            old_snippet = (
-                "        if (\n"
-                "            fabric_info.state >= pynvml.NVML_GPU_FABRIC_STATE_COMPLETED\n"
-                "            and fabric_info.clusterUuid[0] != 0\n"
-                "        ):\n"
-                "            return True\n"
-                "        return False\n"
-            )
-
-            new_snippet = (
-                "        try:\n"
-                "            return (\n"
-                "                fabric_info.state >= pynvml.NVML_GPU_FABRIC_STATE_COMPLETED\n"
-                "                and fabric_info.clusterUuid\n"
-                "                and fabric_info.clusterUuid[0] != 0\n"
-                "            )\n"
-                "        except (UnicodeDecodeError, IndexError):\n"
-                "            return False\n"
-            )
-
-            with _locked_file_patch(file_path) as (content, write_back):
-                if new_snippet in content or old_snippet not in content:
-                    return
-
-                content = content.replace(old_snippet, new_snippet)
-                write_back(content)
-
-        def _patch_nano_nemotron_vl_video_processing():
-            """Patch the installed Nano-Nemotron VL model for native video.
-
-            The job-level setup command patches /opt/nemo-rl before Ray workers
-            start, but vLLM also imports this model from an inspection subprocess
-            inside the model-owner actor. Applying the same critical patches here
-            ensures that subprocess sees an importable model file and the
-            no-frame-separator video prompt replacement.
-            """
-            try:
-                file_path = _get_vllm_file("model_executor/models/nano_nemotron_vl.py")
-            except RuntimeError as exc:
-                logger.warning(
-                    "Skipping nano_nemotron_vl native-video patch: %s",
-                    exc,
-                )
-                return
-
-            old_prompt_update_import = (
-                "    PromptReplacement,\n"
-                "    PromptUpdate,\n"
-                ")\n"
-            )
-            new_prompt_update_import = (
-                "    PromptReplacement,\n"
-                "    PromptUpdateDetails,\n"
-                "    PromptUpdate,\n"
-                ")\n"
-            )
-
-            base_mm_processor_code = """class NanoNemotronBaseVLMultiModalProcessor(BaseMultiModalProcessor):
-    def _get_mm_fields_config(
-        self,
-        hf_inputs: BatchFeature,
-        hf_processor_mm_kwargs: Mapping[str, object],
-    ) -> Mapping[str, MultiModalFieldConfig]:
-        dynamic_tiler = getattr(
-            self,
-            "is_dynamic_tiler",
-            getattr(
-                self.info,
-                "is_dynamic_tiler",
-                getattr(self, "dynamic_resolution", False),
-            ),
-        )
-        if dynamic_tiler and "num_tokens_per_image" in hf_inputs:
-            pixel_values_flat = MultiModalFieldConfig.batched("image")
-        else:
-            pixel_values_flat = MultiModalFieldConfig.flat_from_sizes(
-                "image", hf_inputs.get("image_num_patches", torch.empty(0))
-            )
-
-        fields = dict(
-            pixel_values_flat=pixel_values_flat,
-            image_num_patches=MultiModalFieldConfig.batched("image"),
-            image_embeds=MultiModalFieldConfig.batched("image"),
-            num_tokens_per_image=MultiModalFieldConfig.batched("image"),
-            imgs_sizes=MultiModalFieldConfig.batched("image"),
-        )
-        for key, config in list(fields.items()):
-            if isinstance(config, tuple):
-                if len(config) != 1:
-                    raise TypeError(
-                        "Expected single field config tuple for "
-                        f"{key}, got len={len(config)}"
-                    )
-                fields[key] = config[0]
-
-        return fields
-
-    def _get_prompt_repl_image(
-        self,
-        mm_items,
-        hf_processor,
-        out_mm_data,
-    ):
-        def get_mm_item_value(name: str, item_idx: int) -> object | None:
-            values = out_mm_data.get(name)
-            if values is None:
-                return None
-            if torch.is_tensor(values):
-                if values.ndim == 0:
-                    return values
-                return values[item_idx]
-            return values[item_idx]
-
-        if "image_num_patches" in out_mm_data:
-            image_num_patches = out_mm_data["image_num_patches"]
-            assert isinstance(image_num_patches, torch.Tensor)
-            image_num_patches = image_num_patches.tolist()
-        elif "image_embeds" in out_mm_data:
-            image_num_patches = [None] * len(out_mm_data["image_embeds"])
-        else:
-            image_num_patches = []
-
-        def get_image_replacement(item_idx: int):
-            images = mm_items.get_items(
-                "image", (ImageEmbeddingItems, ImageProcessorItems)
-            )
-
-            if isinstance(images, ImageEmbeddingItems):
-                feature_size = images.get_feature_size(item_idx)
-            elif "num_tokens_per_image" in out_mm_data:
-                feature_size = out_mm_data["num_tokens_per_image"][item_idx]
-            elif "image_num_patches" in out_mm_data or "num_patches" in out_mm_data:
-                patch_count = get_mm_item_value("image_num_patches", item_idx)
-                if patch_count is None:
-                    patch_count = get_mm_item_value("num_patches", item_idx)
-                assert patch_count is not None
-                if torch.is_tensor(patch_count):
-                    patch_count = int(patch_count.item())
-                else:
-                    patch_count = int(patch_count)
-
-                if patch_count == 0:
-                    feature_size = 0
-                elif "imgs_sizes" in out_mm_data:
-                    imgs_size = get_mm_item_value("imgs_sizes", item_idx)
-                    assert imgs_size is not None
-                    target_h, target_w = imgs_size
-                    patch_size = int(getattr(hf_processor.config, "patch_size", 16))
-                    downsample_ratio = float(
-                        getattr(hf_processor.config, "downsample_ratio", 0.5)
-                    )
-                    feature_size = int(
-                        (int(target_h) // patch_size)
-                        * downsample_ratio
-                        * (int(target_w) // patch_size)
-                        * downsample_ratio
-                    )
-                else:
-                    image_size = images.get_image_size(item_idx)
-                    max_num_tiles = hf_processor.max_num_tiles
-                    tokens_per_patch = hf_processor.get_num_image_tokens(
-                        image_width=image_size.width,
-                        image_height=image_size.height,
-                        max_num_tiles=max_num_tiles,
-                    )
-                    feature_size = int(patch_count * tokens_per_patch)
-            else:
-                image_size = images.get_image_size(item_idx)
-                max_num_tiles = hf_processor.max_num_tiles
-                feature_size = hf_processor.get_num_image_tokens(
-                    image_width=image_size.width,
-                    image_height=image_size.height,
-                    max_num_tiles=max_num_tiles,
-                )
-
-            num_patches = None
-            local_image_num_patches = image_num_patches
-            if isinstance(local_image_num_patches, torch.Tensor):
-                local_image_num_patches = local_image_num_patches.tolist()
-            if isinstance(local_image_num_patches, (list, tuple)) and item_idx < len(
-                local_image_num_patches
-            ):
-                num_patches = int(local_image_num_patches[item_idx])
-
-            if torch.is_tensor(feature_size):
-                feature_size = int(feature_size.item())
-            else:
-                feature_size = int(feature_size)
-
-            return hf_processor.get_image_repl(feature_size, num_patches)
-
-        return PromptReplacement(
-            modality="image",
-            target="<image>",
-            replacement=get_image_replacement,
-        )
-
-    def _get_prompt_updates(
-        self,
-        mm_items,
-        hf_processor_mm_kwargs,
-        out_mm_kwargs,
-    ):
-        hf_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
-        out_mm_data = out_mm_kwargs.get_data()
-        return [
-            self._get_prompt_repl_image(mm_items, hf_processor, out_mm_data),
-        ]
-
-"""
-            patch_base_processor = (
-                os.environ.get("NRL_PATCH_NANO_BASE_PROCESSOR", "0")
-                .strip()
-                .lower()
-                in ("1", "true", "yes", "on")
-            )
-
-            old_video_repl_return = """            frame_duration_ms = int(1000 / metadata["fps"])
-            return hf_processor.get_video_repl(
-                tokens_per_frame=tokens_per_frame,
-                frames_indices=metadata["frames_indices"],
-                frame_duration_ms=frame_duration_ms,
-                tokenizer=hf_processor.tokenizer,
-                img_start_token_ids=hf_processor._img_start_token_ids,
-                img_end_token_ids=hf_processor._img_end_token_ids,
-                img_context_token_ids=hf_processor._img_context_token_ids,
-                video_temporal_patch_size=T,
-            )
-"""
-            new_video_repl_return = """            frame_duration_ms = int(1000 / metadata["fps"])
-            use_frame_separators = (
-                os.environ.get("NRL_VLLM_VIDEO_FRAME_SEPARATORS", "0")
-                .strip()
-                .lower()
-                in ("1", "true", "yes", "on")
-                or os.environ.get(
-                    "NRL_VIDEO_PROMPT_STYLE", "sft_v2_grouped"
-                ).strip().lower()
-                == "sft_v2_grouped"
-            )
-            if not use_frame_separators:
-                img_context_token_ids = list(hf_processor._img_context_token_ids)
-                all_token_ids: list[int] = []
-                for num_tokens in tokens_per_frame:
-                    all_token_ids.extend(hf_processor._img_start_token_ids)
-                    all_token_ids.extend(img_context_token_ids * num_tokens)
-                    all_token_ids.extend(hf_processor._img_end_token_ids)
-
-                def is_embed(tokenizer, full):
-                    token_ids = (
-                        full
-                        if isinstance(full, list)
-                        else tokenizer.encode(full, add_special_tokens=False)
-                    )
-                    return torch.isin(
-                        torch.tensor(token_ids),
-                        torch.tensor(img_context_token_ids),
-                    )
-
-                embed_token_count = sum(tokens_per_frame) * len(img_context_token_ids)
-                if os.environ.get("NRL_DEBUG", "0") == "1":
-                    print(
-                        "[VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN] "
-                        "frame_separators=0 "
-                        f"full_tokens={len(all_token_ids)} "
-                        f"embed_tokens={embed_token_count} "
-                        f"text_tokens={len(all_token_ids) - embed_token_count} "
-                        f"tubelets={len(tokens_per_frame)} T={T}",
-                        flush=True,
-                    )
-
-                return PromptUpdateDetails(
-                    full=all_token_ids,
-                    is_embed=is_embed,
-                )
-
-            video_repl = hf_processor.get_video_repl(
-                tokens_per_frame=tokens_per_frame,
-                frames_indices=metadata["frames_indices"],
-                frame_duration_ms=frame_duration_ms,
-                tokenizer=hf_processor.tokenizer,
-                img_start_token_ids=hf_processor._img_start_token_ids,
-                img_end_token_ids=hf_processor._img_end_token_ids,
-                img_context_token_ids=hf_processor._img_context_token_ids,
-                video_temporal_patch_size=T,
-            )
-            if video_repl.is_embed is None:
-                img_context_token_ids = list(hf_processor._img_context_token_ids)
-
-                def is_embed(tokenizer, full):
-                    token_ids = (
-                        full
-                        if isinstance(full, list)
-                        else tokenizer.encode(full, add_special_tokens=False)
-                    )
-                    return torch.isin(
-                        torch.tensor(token_ids),
-                        torch.tensor(img_context_token_ids),
-                    )
-
-                video_repl = PromptUpdateDetails(
-                    full=video_repl.full,
-                    is_embed=is_embed,
-                )
-                if os.environ.get("NRL_DEBUG", "0") == "1":
-                    print(
-                        "[VLLM_NATIVE_VIDEO_REPL_GUARD] "
-                        "added context-token embed mask "
-                        f"full_tokens={len(video_repl.full)} "
-                        f"embed_token_ids={img_context_token_ids}",
-                        flush=True,
-                    )
-
-            return video_repl
-"""
-            old_video_repl_call = """            frame_duration_ms = int(1000 / metadata["fps"])
-            video_repl = hf_processor.get_video_repl(
-"""
-            new_video_repl_call = """            frame_duration_ms = int(1000 / metadata["fps"])
-            use_frame_separators = (
-                os.environ.get("NRL_VLLM_VIDEO_FRAME_SEPARATORS", "0")
-                .strip()
-                .lower()
-                in ("1", "true", "yes", "on")
-                or os.environ.get(
-                    "NRL_VIDEO_PROMPT_STYLE", "sft_v2_grouped"
-                ).strip().lower()
-                == "sft_v2_grouped"
-            )
-            if not use_frame_separators:
-                img_context_token_ids = list(hf_processor._img_context_token_ids)
-                all_token_ids: list[int] = []
-                for num_tokens in tokens_per_frame:
-                    all_token_ids.extend(hf_processor._img_start_token_ids)
-                    all_token_ids.extend(img_context_token_ids * num_tokens)
-                    all_token_ids.extend(hf_processor._img_end_token_ids)
-
-                def is_embed(tokenizer, full):
-                    token_ids = (
-                        full
-                        if isinstance(full, list)
-                        else tokenizer.encode(full, add_special_tokens=False)
-                    )
-                    return torch.isin(
-                        torch.tensor(token_ids),
-                        torch.tensor(img_context_token_ids),
-                    )
-
-                embed_token_count = sum(tokens_per_frame) * len(img_context_token_ids)
-                if os.environ.get("NRL_DEBUG", "0") == "1":
-                    print(
-                        "[VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN] "
-                        "frame_separators=0 "
-                        f"full_tokens={len(all_token_ids)} "
-                        f"embed_tokens={embed_token_count} "
-                        f"text_tokens={len(all_token_ids) - embed_token_count} "
-                        f"tubelets={len(tokens_per_frame)} T={T}",
-                        flush=True,
-                    )
-
-                return PromptUpdateDetails(
-                    full=all_token_ids,
-                    is_embed=is_embed,
-                )
-
-            video_repl = hf_processor.get_video_repl(
-"""
-            old_audio_repl = """        def get_audio_replacement(item_idx: int):
-            audios = mm_items.get_items("audio", AudioProcessorItems)
-            return hf_processor.get_audio_repl(audios.get(item_idx))
-"""
-            new_audio_repl = """        def get_audio_replacement(item_idx: int):
-            audios = mm_items.get_items("audio", AudioProcessorItems)
-            audio = audios.get(item_idx)
-            audio_repl = hf_processor.get_audio_repl(audio)
-            if os.environ.get("NRL_DEBUG", "0") == "1":
-                extractor = getattr(hf_processor, "audio_extractor", None)
-                clip_sizes = (
-                    extractor._clip_sizes(len(audio))
-                    if extractor is not None
-                    else []
-                )
-                sampling_rate = (
-                    getattr(getattr(extractor, "config", None), "sampling_rate", None)
-                    if extractor is not None
-                    else None
-                )
-                repl_full = audio_repl.full
-                context_tokens = (
-                    repl_full.count(AUDIO_CONTEXT)
-                    if isinstance(repl_full, str)
-                    else len(repl_full)
-                )
-                duration_s = (
-                    len(audio) / float(sampling_rate) if sampling_rate else None
-                )
-                print(
-                    "[VLLM_AUDIO_REPL_MODEL] "
-                    f"item_idx={item_idx} "
-                    f"audio_len={len(audio)} "
-                    f"duration_s={duration_s} "
-                    f"sampling_rate={sampling_rate} "
-                    f"num_clips={len(clip_sizes)} "
-                    f"clip_samples={clip_sizes} "
-                    f"context_tokens={context_tokens}",
-                    flush=True,
-                )
-            return audio_repl
-"""
-
-            with _locked_file_patch(file_path) as (content, write_back):
-                original = content
-
-                if old_prompt_update_import in content:
-                    content = content.replace(
-                        old_prompt_update_import,
-                        new_prompt_update_import,
-                        1,
-                    )
-                elif "PromptUpdateDetails" not in content:
-                    logger.warning(
-                        "Could not add PromptUpdateDetails import in %s: "
-                        "expected import block not found.",
-                        file_path,
-                    )
-
-                if "import os\n" not in content:
-                    if "import math\n" in content:
-                        content = content.replace(
-                            "import math\n",
-                            "import math\nimport os\n",
-                            1,
-                        )
-                    else:
-                        logger.warning(
-                            "Could not add os import in %s: import math not found.",
-                            file_path,
-                        )
-
-                if patch_base_processor:
-                    content = content.replace(
-                        "NanoNemotronBaseVLMultiModalProcessor"
-                        "[NanoNemotronVLProcessingInfo]",
-                        "NanoNemotronBaseVLMultiModalProcessor",
-                    )
-
-                if (
-                    patch_base_processor
-                    and (
-                    "NanoNemotronBaseVLMultiModalProcessor = "
-                    "BaseMultiModalProcessor\n"
-                    )
-                    in content
-                ):
-                    content = content.replace(
-                        "NanoNemotronBaseVLMultiModalProcessor = "
-                        "BaseMultiModalProcessor\n",
-                        base_mm_processor_code,
-                        1,
-                    )
-
-                base_class_pos = content.find(
-                    "class NanoNemotronBaseVLMultiModalProcessor("
-                )
-                base_alias_pos = content.find(
-                    "NanoNemotronBaseVLMultiModalProcessor = "
-                    "BaseMultiModalProcessor\n"
-                )
-                subclass_pos = content.find("class NanoNemotronVLMultiModalProcessor")
-                if (
-                    patch_base_processor
-                    and
-                    "NanoNemotronBaseVLMultiModalProcessor" in content
-                    and subclass_pos != -1
-                    and (base_class_pos == -1 or base_class_pos > subclass_pos)
-                ):
-                    content = (
-                        content[:subclass_pos]
-                        + base_mm_processor_code
-                        + content[subclass_pos:]
-                    )
-                elif (
-                    not patch_base_processor
-                    and "NanoNemotronBaseVLMultiModalProcessor" in content
-                    and subclass_pos != -1
-                    and (base_class_pos == -1 or base_class_pos > subclass_pos)
-                    and (base_alias_pos == -1 or base_alias_pos > subclass_pos)
-                ):
-                    content = (
-                        content[:subclass_pos]
-                        + (
-                            "NanoNemotronBaseVLMultiModalProcessor = "
-                            "BaseMultiModalProcessor\n\n"
-                        )
-                        + content[subclass_pos:]
-                    )
-
-                if os.environ.get("NRL_DEBUG", "0") == "1":
-                    base_class_pos = content.find(
-                        "class NanoNemotronBaseVLMultiModalProcessor("
-                    )
-                    base_alias_pos = content.find(
-                        "NanoNemotronBaseVLMultiModalProcessor = "
-                        "BaseMultiModalProcessor\n"
-                    )
-                    subclass_pos = content.find(
-                        "class NanoNemotronVLMultiModalProcessor"
-                    )
-                    logger.info(
-                        "[NRL_PATCH_VLLM_WORKER] base multimodal processor "
-                        "real_class=%s alias=%s base_pos=%s alias_pos=%s "
-                        "subclass_pos=%s",
-                        "class NanoNemotronBaseVLMultiModalProcessor(" in content,
-                        (
-                            "NanoNemotronBaseVLMultiModalProcessor = "
-                            "BaseMultiModalProcessor"
-                        )
-                        in content,
-                        base_class_pos,
-                        base_alias_pos,
-                        subclass_pos,
-                    )
-
-                if old_video_repl_return in content:
-                    content = content.replace(
-                        old_video_repl_return,
-                        new_video_repl_return,
-                        1,
-                    )
-                elif (
-                    "VLLM_NATIVE_VIDEO_REPL_GUARD" in content
-                    and "VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN" not in content
-                ):
-                    if old_video_repl_call in content:
-                        content = content.replace(
-                            old_video_repl_call,
-                            new_video_repl_call,
-                            1,
-                        )
-                    else:
-                        logger.warning(
-                            "Could not add no-separator video replacement in %s: "
-                            "video replacement call not found.",
-                            file_path,
-                        )
-                elif "VLLM_NATIVE_VIDEO_REPL_MODEL_PLAIN" not in content:
-                    logger.warning(
-                        "Could not add no-separator video replacement in %s: "
-                        "known video replacement blocks not found.",
-                        file_path,
-                    )
-
-                if old_audio_repl in content:
-                    content = content.replace(
-                        old_audio_repl,
-                        new_audio_repl,
-                        1,
-                    )
-                elif "VLLM_AUDIO_REPL_MODEL" not in content:
-                    logger.debug(
-                        "Skipping optional audio replacement debug patch in %s: "
-                        "audio replacement block not found.",
-                        file_path,
-                    )
-
-                if content == original:
-                    logger.info("nano_nemotron_vl native-video patch already applied.")
-                    return
-
-                write_back(content)
-
-            logger.info(
-                "Successfully patched nano_nemotron_vl.py for native video loading."
-            )
-
-        _patch_vllm_init_workers_ray()
-        logger.info("Successfully patched vllm _init_workers_ray.")
-
-        _patch_vllm_hermes_tool_parser_thread_safety()
-
-        _patch_flashinfer_mnnvl_cluster_uuid()
-        logger.info("Successfully patched flashinfer mnnvl clusterUuid guard.")
-
-        _patch_nano_nemotron_vl_video_processing()
-
-        def _patch_nemotron_h_isinstance_check():
-            """Remove the no-op isinstance branch in NemotronHModel.forward.
-
-            Tomer's vLLM fork added an ``isinstance(layer, NemotronHMoEDecoderLayer)``
-            check inside the layer loop where both branches are identical.  This
-            confuses torch.compile graph tracing on Blackwell GPUs, causing Triton
-            to fail with ``KeyError: "Unknown key: 'cubin'"`` during autotuning of
-            the Mamba SSM kernels.  Reverting to the original simple loop fixes it.
-            """
-            file_path = _get_vllm_file("model_executor/models/nemotron_h.py")
-
-            old_snippet = (
-                "            if isinstance(layer, NemotronHMoEDecoderLayer):\n"
-                "                hidden_states, residual = layer(\n"
-                "                    positions=positions,\n"
-                "                    hidden_states=hidden_states,\n"
-                "                    residual=residual,\n"
-                "                )\n"
-                "            else:\n"
-                "                hidden_states, residual = layer(\n"
-                "                    positions=positions,\n"
-                "                    hidden_states=hidden_states,\n"
-                "                    residual=residual,\n"
-                "                )"
-            )
-
-            new_snippet = (
-                "            hidden_states, residual = layer(\n"
-                "                positions=positions,\n"
-                "                hidden_states=hidden_states,\n"
-                "                residual=residual,\n"
-                "            )"
-            )
-
-            with _locked_file_patch(file_path) as (content, write_back):
-                if new_snippet in content:
-                    logger.info("nemotron_h isinstance patch already applied.")
-                    return
-
-                if old_snippet not in content:
-                    logger.debug(
-                        "Skipping nemotron_h isinstance patch: "
-                        "expected code snippet not found in %s. "
-                        "The installed vLLM version may not contain this workaround "
-                        "target anymore.",
-                        file_path,
-                    )
-                    return
-
-                content = content.replace(old_snippet, new_snippet, 1)
-                write_back(content)
-
-            logger.info("Successfully patched nemotron_h.py: removed isinstance branch.")
-
-        _patch_nemotron_h_isinstance_check()
 
     def _load_model(self, bundle_indices, seed):
         """Perform model loading and engine creation."""
@@ -1206,8 +272,8 @@ class BaseVllmGenerationWorker:
             self.SamplingParams = vllm.SamplingParams
         except ImportError:
             raise ImportError(
-                "vLLM is not installed. Please check that the py_executable in the runtime_env of VllmGenerationWorker "
-                "covers the vllm dependency. You may have to update nemo_rl/distributed/ray_actor_environment_registry.py. "
+                "vLLM is not installed in the worker environment. Please check "
+                "nemo_rl/distributed/ray_actor_environment_registry.py. "
                 "This error can also happen if the venv creation was aborted or errored out in the middle. In that case, "
                 "please run at least once with the environment variable NRL_FORCE_REBUILD_VENVS=true set to force the rebuild of the environment."
             )
@@ -1528,6 +594,7 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         if hasattr(self.llm, "reset_mm_cache"):
             self.llm.reset_mm_cache()
 
+        cap_max_tokens_to_context = _cap_max_tokens_to_context_enabled()
         max_model_len = int(
             getattr(
                 self.llm.llm_engine.model_config,
@@ -1535,39 +602,58 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
                 self.cfg["vllm_cfg"]["max_model_len"],
             )
         )
-        sampling_params = []
-        prompt_indices = []
         skipped_indices = []
-        for sample_idx, input_length in enumerate(input_lengths.tolist()):
-            remaining_ctx = max_model_len - int(input_length)
-            if remaining_ctx <= 0:
-                skipped_indices.append(sample_idx)
-                continue
+        if cap_max_tokens_to_context:
+            sampling_params_by_prompt = []
+            prompt_indices = []
+            for sample_idx, input_length in enumerate(input_lengths.tolist()):
+                remaining_ctx = max_model_len - int(input_length)
+                if remaining_ctx <= 0:
+                    skipped_indices.append(sample_idx)
+                    continue
 
-            per_sample_stop_strings = (
-                batch_stop_strings[sample_idx]
-                if sample_idx < len(batch_stop_strings)
-                else None
-            )
-            stop_strings = self._merge_stop_strings(
-                [per_sample_stop_strings] if per_sample_stop_strings else None
-            )
-            sampling_params.append(
-                self._build_sampling_params(
-                    greedy=greedy,
-                    stop_strings=stop_strings,
-                    max_new_tokens=min(self.cfg["max_new_tokens"], remaining_ctx),
+                per_sample_stop_strings = (
+                    batch_stop_strings[sample_idx]
+                    if sample_idx < len(batch_stop_strings)
+                    else None
                 )
-            )
-            prompt_indices.append(sample_idx)
+                stop_strings = self._merge_stop_strings(
+                    [per_sample_stop_strings] if per_sample_stop_strings else None
+                )
+                sampling_params_by_prompt.append(
+                    self._build_sampling_params(
+                        greedy=greedy,
+                        stop_strings=stop_strings,
+                        max_new_tokens=min(self.cfg["max_new_tokens"], remaining_ctx),
+                    )
+                )
+                prompt_indices.append(sample_idx)
 
-        if len(prompt_indices) == len(input_lengths):
-            prompts = format_prompt_for_vllm_generation(data)
+            if len(prompt_indices) == len(input_lengths):
+                prompts = format_prompt_for_vllm_generation(data)
+            else:
+                prompts = [
+                    format_prompt_for_vllm_generation(data, sample_idx)
+                    for sample_idx in prompt_indices
+                ]
         else:
-            prompts = [
-                format_prompt_for_vllm_generation(data, sample_idx)
-                for sample_idx in prompt_indices
-            ]
+            stop_strings = self._merge_stop_strings(batch_stop_strings)
+            sampling_params = self._build_sampling_params(
+                greedy=greedy,
+                stop_strings=stop_strings,
+            )
+            prompt_indices = list(range(len(input_lengths)))
+            prompts = format_prompt_for_vllm_generation(data)
+            sampling_params_by_prompt = [sampling_params] * len(prompts)
+
+        for prompt_pos, prompt in enumerate(prompts):
+            dump_vllm_request_boundary(
+                data,
+                prompt,
+                sampling_params_by_prompt[prompt_pos],
+                source_index=prompt_indices[prompt_pos],
+                prompt_position=prompt_pos,
+            )
 
         def _prompt_pil_hw(prompt: dict[str, Any]) -> list[tuple[int, int]]:
             mm_data = prompt.get("multi_modal_data")
@@ -1616,10 +702,6 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             if not pil_hw:
                 return "no_image_mm"
 
-            pre_hw = _prompt_precomputed_hw(prompt)
-            if not pre_hw or len(pre_hw) != len(pil_hw):
-                return f"image_no_stable_size_profile:{prompt_idx}"
-
             mm_kwargs = prompt.get("mm_processor_kwargs", {})
             max_num_tiles = (
                 mm_kwargs.get("max_num_tiles") if isinstance(mm_kwargs, dict) else None
@@ -1627,21 +709,19 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             max_num_patches = (
                 mm_kwargs.get("max_num_patches") if isinstance(mm_kwargs, dict) else None
             )
-            video_as_images = (
-                mm_kwargs.get("video_as_images") if isinstance(mm_kwargs, dict) else None
-            )
-            if video_as_images:
+
+            pre_hw = _prompt_precomputed_hw(prompt)
+            if not pre_hw or len(pre_hw) != len(pil_hw):
                 return (
-                    f"video_as_images_single:{prompt_idx};"
-                    f"precomputed={_shape_counts_profile(pre_hw)};"
+                    f"dynamic_image_count={len(pil_hw)};"
                     f"max_num_tiles={max_num_tiles};"
                     f"max_num_patches={max_num_patches}"
                 )
+
             return (
                 f"precomputed={_shape_counts_profile(pre_hw)};"
                 f"max_num_tiles={max_num_tiles};"
-                f"max_num_patches={max_num_patches};"
-                f"video_as_images={video_as_images}"
+                f"max_num_patches={max_num_patches}"
             )
 
         if prompts:
@@ -1667,7 +747,11 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             bucketed_outputs: list[Optional[Any]] = [None] * len(prompts)
             for key, positions in bucket_to_positions.items():
                 sub_prompts = [prompts[pos] for pos in positions]
-                sub_sampling_params = [sampling_params[pos] for pos in positions]
+                sub_sampling_params = (
+                    [sampling_params_by_prompt[pos] for pos in positions]
+                    if cap_max_tokens_to_context
+                    else sampling_params_by_prompt[positions[0]]
+                )
                 sub_outputs = self.llm.generate(sub_prompts, sub_sampling_params)
                 if len(sub_outputs) != len(positions):
                     raise RuntimeError(
