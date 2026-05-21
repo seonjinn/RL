@@ -268,7 +268,6 @@ logger:
   gpu_monitoring:
     collection_interval: 10
     flush_interval: 10
-  debug_payload_metrics: true
 
 cluster:
   gpus_per_node: 8
