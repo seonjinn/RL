@@ -33,7 +33,7 @@ GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 JOB_NAME="${JOB_NAME:-grpo-nanov3omni-gym-super-branch-v6-w-gui-test}"
 SEED="${SEED:-$(echo -n "train:${JOB_NAME}" | openssl dgst -md5 -binary | od -An -tu4 -N4 | xargs)}"
 
-MODEL_NAME="${MODEL_NAME:-/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_sft/users/pjin/checkpoints/nano-v3-vl-mpo_sft_mmlongbench_txt_0403_2200-iter-200-rl-20260407-step-50-hf}"
+MODEL_NAME="${MODEL_NAME:-/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/nano-v3-vl-mpo_sft_mmlongbench_txt_0403_2200-iter-200-rl-20260407-step-50-hf}"
 POLICY_CHAT_TEMPLATE="${POLICY_CHAT_TEMPLATE:-/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16/chat_template.jinja}"
 VLLM_CHAT_TEMPLATE="${VLLM_CHAT_TEMPLATE:-${POLICY_CHAT_TEMPLATE}}"
 DATA_PATH="${DATA_PATH:-/lustre/fsw/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/random_blend_v6_w_gui_mmlongbench_gym.jsonl}"
