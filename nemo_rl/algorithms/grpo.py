@@ -94,6 +94,7 @@ from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
+from nemo_rl.utils.debug_snapshot import DebugSnapshotSaver
 from nemo_rl.utils.logger import (
     Logger,
     LoggerConfig,
@@ -202,6 +203,9 @@ class GRPOConfig(TypedDict):
     # Advantage estimator configuration (grpo or reinforce_plus_plus)
     adv_estimator: NotRequired[AdvEstimatorConfig]
     deduplicate_multimodal_data: NotRequired[bool]
+    dynamic_format_reward: NotRequired[bool]
+    zero_variance_prompt_filtering: NotRequired[bool]
+    debug_snapshot_error_threshold: NotRequired[float]
     # Emit driver-side multimodal payload-bytes / prompt-count metrics at the
     # four sync-rollout boundaries (driver-to-vllm-generation, -to-policy-
     # get-logprobs, -to-policy-train, post-train kv-scale recompute). Used by
@@ -230,6 +234,48 @@ def _default_grpo_save_state() -> GRPOSaveState:
         "total_steps": 0,
         "total_valid_tokens": 0,
         "val_reward": -99999999.0,
+    }
+
+
+def _count_valid_train_data(train_data: BatchedDataDict[Any]) -> tuple[int, int]:
+    sample_mask = train_data["sample_mask"]
+    token_mask = train_data["token_mask"][:, 1:]
+    valid_token_mask = token_mask * sample_mask.unsqueeze(-1)
+    return int(sample_mask.sum().item()), int(valid_token_mask.sum().item())
+
+
+def _skipped_policy_train_results(
+    valid_samples: int,
+    valid_tokens: int,
+) -> dict[str, Any]:
+    # Match the metric shape returned by Policy.train so downstream logging can
+    # finish the step without entering a no-op forward/backward pass.
+    return {
+        "loss": torch.tensor([0.0]),
+        "grad_norm": torch.tensor([0.0]),
+        "all_mb_metrics": {
+            "loss": [0.0],
+            "probs_ratio": [0.0],
+            "probs_ratio_clamped": [0.0],
+            "probs_ratio_min": [float("inf")],
+            "probs_ratio_max": [float("-inf")],
+            "probs_ratio_clamped_min": [float("inf")],
+            "probs_ratio_clamped_max": [float("-inf")],
+            "kl_penalty": [0.0],
+            "token_mult_prob_error": [0.0],
+            "gen_kl_error": [0.0],
+            "policy_kl_error": [0.0],
+            "js_divergence_error": [0.0],
+            "sampling_importance_ratio": [0.0],
+            "tis_clipped_fraction": [0.0],
+            "num_valid_samples": [float(valid_samples)],
+            "approx_entropy": [0.0],
+            "lr": [0.0],
+            "wd": [0.0],
+            "global_valid_seqs": [float(valid_samples)],
+            "global_valid_toks": [float(valid_tokens)],
+            "policy_train_skipped_no_valid_data": [1.0],
+        },
     }
 
 
@@ -1562,6 +1608,7 @@ def compute_and_apply_seq_logprob_error_masking(
     train_data: BatchedDataDict,
     rewards: torch.Tensor,
     seq_logprob_error_threshold: Optional[float],
+    return_debug_tensors: bool = False,
 ) -> dict:
     """Compute sequence-level logprob error metrics and optionally mask high-error sequences.
 
@@ -1576,6 +1623,8 @@ def compute_and_apply_seq_logprob_error_masking(
         rewards: Reward tensor for computing statistics on masked sequences.
         seq_logprob_error_threshold: If set, mask sequences with mult_prob_error
                                     exceeding this threshold. If None, only compute metrics.
+        return_debug_tensors: If True, include seq_mult_prob_error and lp_error
+                              tensors in the returned dict for debug snapshotting.
 
     Returns:
         Dict with keys: max_seq_mult_prob_error, mean_seq_mult_prob_error,
@@ -1677,7 +1726,7 @@ def compute_and_apply_seq_logprob_error_masking(
                 flush=True,
             )
 
-    return {
+    result = {
         "max_seq_mult_prob_error": max_seq_mult_prob_error,
         "mean_seq_mult_prob_error": mean_seq_mult_prob_error,
         "min_seq_mult_prob_error": min_seq_mult_prob_error,
@@ -1688,6 +1737,494 @@ def compute_and_apply_seq_logprob_error_masking(
         "masked_correct_pct": masked_correct_pct,
         "updated_sample_mask": updated_sample_mask,
     }
+    if return_debug_tensors:
+        result["seq_mult_prob_error"] = seq_mult_prob_error
+        result["lp_error"] = lp_error
+    return result
+
+
+def _row_has_nonempty_media(values: Any, index: int) -> bool:
+    if values is None:
+        return False
+    try:
+        if index >= len(values):
+            return False
+        row = values[index]
+    except Exception:
+        return False
+    if row is None:
+        return False
+    if isinstance(row, (list, tuple)):
+        return any(item not in (None, "__noimage__") for item in row)
+    if isinstance(row, str):
+        return row != "__noimage__"
+    return True
+
+
+def _row_modality_category(batch: BatchedDataDict, index: int) -> str:
+    has_image = _row_has_nonempty_media(batch.get("vllm_images"), index)
+    has_video = _row_has_nonempty_media(batch.get("vllm_videos"), index)
+    has_audio = _row_has_nonempty_media(batch.get("vllm_audio_paths"), index)
+    if has_image and has_video and has_audio:
+        return "image_video_audio"
+    if has_image and has_video:
+        return "image_video"
+    if has_image and has_audio:
+        return "image_audio"
+    if has_video and has_audio:
+        return "video_audio"
+    if has_image:
+        return "image_only"
+    if has_video:
+        return "video_only"
+    if has_audio:
+        return "audio_only"
+    return "text_only"
+
+
+def _debug_tensor_value(values: Any, index: int) -> Any:
+    if values is None:
+        return None
+    try:
+        value = values[index]
+    except Exception:
+        return None
+    if torch.is_tensor(value):
+        if value.numel() == 1:
+            return value.item()
+        return value.detach().cpu().tolist()
+    return value
+
+
+def _debug_float_value(values: Any, index: int) -> Optional[float]:
+    value = _debug_tensor_value(values, index)
+    if value is None or isinstance(value, (list, tuple)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _debug_sample_basenames(values: Any, index: int) -> list[str]:
+    value = _debug_tensor_value(values, index)
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        value = [value]
+    basenames = []
+    for item in value:
+        if item in (None, "__noimage__"):
+            continue
+        basenames.append(os.path.basename(str(item)))
+    return basenames
+
+
+def _debug_decode_token(
+    tokenizer: Optional[PreTrainedTokenizerBase],
+    token_id: int,
+) -> str:
+    if tokenizer is None:
+        return ""
+    try:
+        return repr(tokenizer.decode([int(token_id)])).replace("\n", "\\n")
+    except Exception:
+        return ""
+
+
+def _debug_print_length_reward_by_modality(
+    *,
+    repeated_batch: BatchedDataDict,
+    train_data: BatchedDataDict,
+    rewards: torch.Tensor,
+) -> None:
+    if os.environ.get("NRL_DEBUG", "0") != "1":
+        return
+
+    sample_mask = train_data.get("sample_mask")
+    token_mask = train_data.get("token_mask")
+    generation_lengths = train_data.get("generation_lengths")
+    prompt_lengths = repeated_batch.get("length", repeated_batch.get("input_lengths"))
+    expanded_lengths = train_data.get("expanded_lengths")
+    vision_expansion = repeated_batch.get("vision_expansion")
+    collapse_savings = repeated_batch.get("collapse_savings")
+    truncated = repeated_batch.get("truncated")
+    if sample_mask is None:
+        return
+
+    sample_mask_cpu = sample_mask.detach().float().cpu()
+    rewards_cpu = rewards.detach().float().cpu().view(-1)
+    response_token_counts = None
+    if torch.is_tensor(token_mask) and token_mask.ndim >= 2:
+        response_token_counts = token_mask[:, 1:].detach().float().cpu().sum(dim=-1)
+
+    categories: dict[str, list[int]] = {}
+    for idx in range(sample_mask_cpu.numel()):
+        categories.setdefault(_row_modality_category(repeated_batch, idx), []).append(
+            idx
+        )
+
+    print(
+        "[ROLLOUT_MODALITY_LENGTH_DEBUG] length/reward/truncation by modality:",
+        flush=True,
+    )
+    for category, indices in sorted(categories.items()):
+        kept = [idx for idx in indices if sample_mask_cpu[idx] > 0]
+        prompt_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(prompt_lengths, idx)) is not None
+        ]
+        gen_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(generation_lengths, idx)) is not None
+        ]
+        response_vals = (
+            [float(response_token_counts[idx].item()) for idx in indices]
+            if response_token_counts is not None
+            else []
+        )
+        expanded_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(expanded_lengths, idx)) is not None
+        ]
+        vision_expansion_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(vision_expansion, idx)) is not None
+        ]
+        collapse_savings_vals = [
+            value
+            for idx in indices
+            if (value := _debug_float_value(collapse_savings, idx)) is not None
+        ]
+        reward_vals = [
+            float(rewards_cpu[idx].item())
+            for idx in indices
+            if idx < rewards_cpu.numel()
+        ]
+        truncated_count = 0
+        if truncated is not None:
+            for idx in indices:
+                value = _debug_tensor_value(truncated, idx)
+                truncated_count += int(bool(value)) if value is not None else 0
+
+        def _mean(vals: list[float]) -> float:
+            return float(sum(vals) / len(vals)) if vals else 0.0
+
+        print(
+            "  "
+            f"{category}: count={len(indices)} kept={len(kept)} "
+            f"prompt_mean={_mean(prompt_vals):.1f} "
+            f"prompt_max={max(prompt_vals) if prompt_vals else 0:.0f} "
+            f"generation_mean={_mean(gen_vals):.1f} "
+            f"generation_max={max(gen_vals) if gen_vals else 0:.0f} "
+            f"response_tokens_mean={_mean(response_vals):.1f} "
+            f"response_tokens_max={max(response_vals) if response_vals else 0:.0f} "
+            f"expanded_mean={_mean(expanded_vals):.1f} "
+            f"expanded_max={max(expanded_vals) if expanded_vals else 0:.0f} "
+            f"vision_expansion_mean={_mean(vision_expansion_vals):.1f} "
+            f"vision_expansion_max={max(vision_expansion_vals) if vision_expansion_vals else 0:.0f} "
+            f"collapse_savings_mean={_mean(collapse_savings_vals):.1f} "
+            f"collapse_savings_max={max(collapse_savings_vals) if collapse_savings_vals else 0:.0f} "
+            f"truncated={truncated_count} "
+            f"reward_mean={_mean(reward_vals):.4f}",
+            flush=True,
+        )
+
+
+def _debug_print_seq_error_by_modality(
+    *,
+    seq_error_result: dict[str, Any],
+    repeated_batch: BatchedDataDict,
+    train_data: BatchedDataDict,
+    rewards: torch.Tensor,
+    threshold: Optional[float],
+    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+) -> None:
+    if os.environ.get("NRL_DEBUG", "0") != "1":
+        return
+    seq_errors = seq_error_result.get("seq_mult_prob_error")
+    if seq_errors is None:
+        return
+
+    errors = seq_errors.detach().float().cpu()
+    original_mask = repeated_batch.get("loss_multiplier")
+    if torch.is_tensor(original_mask):
+        active = original_mask.detach().float().cpu() > 0
+    else:
+        active = torch.ones_like(errors, dtype=torch.bool)
+
+    categories: dict[str, list[int]] = {}
+    for idx in range(errors.numel()):
+        if not bool(active[idx]):
+            continue
+        category = _row_modality_category(repeated_batch, idx)
+        categories.setdefault(category, []).append(idx)
+
+    _debug_print_length_reward_by_modality(
+        repeated_batch=repeated_batch,
+        train_data=train_data,
+        rewards=rewards,
+    )
+
+    print("[SEQ_LOGPROB_MODALITY_DEBUG] active sequence error by modality:", flush=True)
+    for category, indices in sorted(categories.items()):
+        category_errors = errors[indices]
+        over_threshold = (
+            int((category_errors > threshold).sum().item())
+            if threshold is not None
+            else 0
+        )
+        print(
+            "  "
+            f"{category}: count={len(indices)} "
+            f"masked_by_threshold={over_threshold} "
+            f"mean={float(category_errors.mean()):.6f} "
+            f"max={float(category_errors.max()):.6f} "
+            f"min={float(category_errors.min()):.6f}",
+            flush=True,
+        )
+
+    if errors.numel() > 0:
+        top_values, top_indices = torch.topk(errors, k=min(5, errors.numel()))
+        print(
+            "[SEQ_LOGPROB_MODALITY_DEBUG] top_errors="
+            + ", ".join(
+                f"idx={int(idx)} err={float(val):.6f}"
+                for val, idx in zip(top_values, top_indices)
+            ),
+            flush=True,
+        )
+
+        lp_error = seq_error_result.get("lp_error")
+        if lp_error is not None and "token_mask" in train_data:
+            lp_error_cpu = lp_error.detach().float().cpu()
+            token_mask_cpu = train_data["token_mask"][:, 1:].detach().float().cpu()
+            input_ids_cpu = train_data["input_ids"].detach().cpu()
+            generation_logprobs_cpu = (
+                train_data["generation_logprobs"][:, 1:].detach().float().cpu()
+            )
+            prev_logprobs_cpu = train_data["prev_logprobs"][:, 1:].detach().float().cpu()
+            sample_mask = train_data.get("sample_mask")
+            sample_mask_cpu = (
+                sample_mask.detach().float().cpu()
+                if torch.is_tensor(sample_mask)
+                else torch.ones_like(errors)
+            )
+            rewards_cpu = rewards.detach().float().cpu().view(-1)
+            source_indices = repeated_batch.get("idx")
+            print(
+                "[SEQ_LOGPROB_TOKEN_DEBUG] top token deltas for highest-error rows:",
+                flush=True,
+            )
+            for value, row_idx_tensor in zip(top_values, top_indices):
+                row_idx = int(row_idx_tensor.item())
+                if row_idx >= lp_error_cpu.shape[0]:
+                    continue
+                row_mask = token_mask_cpu[row_idx] > 0
+                if not bool(row_mask.any()):
+                    continue
+                masked_error = lp_error_cpu[row_idx].masked_fill(~row_mask, -1.0)
+                token_values, shifted_positions = torch.topk(
+                    masked_error, k=min(3, int(row_mask.sum().item()))
+                )
+                source_idx = _debug_tensor_value(source_indices, row_idx)
+                modality = _row_modality_category(repeated_batch, row_idx)
+                media_bits = []
+                for label, key in (
+                    ("audio", "vllm_audio_paths"),
+                    ("video", "vllm_videos"),
+                    ("image", "vllm_images"),
+                ):
+                    names = _debug_sample_basenames(repeated_batch.get(key), row_idx)
+                    if names:
+                        media_bits.append(f"{label}={names[:3]}")
+                reward = (
+                    float(rewards_cpu[row_idx].item())
+                    if row_idx < rewards_cpu.numel()
+                    else 0.0
+                )
+                top_token_bits = []
+                for token_value, shifted_pos_tensor in zip(
+                    token_values, shifted_positions
+                ):
+                    shifted_pos = int(shifted_pos_tensor.item())
+                    token_pos = shifted_pos + 1
+                    if token_pos >= input_ids_cpu.shape[1]:
+                        continue
+                    token_id = int(input_ids_cpu[row_idx, token_pos].item())
+                    decoded = _debug_decode_token(tokenizer, token_id)
+                    top_token_bits.append(
+                        "pos="
+                        f"{token_pos} token={token_id} text={decoded} "
+                        f"diff={float(token_value):.6f} "
+                        f"gen_lp={float(generation_logprobs_cpu[row_idx, shifted_pos]):.6f} "
+                        f"policy_lp={float(prev_logprobs_cpu[row_idx, shifted_pos]):.6f}"
+                    )
+                print(
+                    "  "
+                    f"idx={row_idx} source_idx={source_idx} modality={modality} "
+                    f"err={float(value):.6f} "
+                    f"sample_mask={float(sample_mask_cpu[row_idx].item()):.1f} "
+                    f"reward={reward:.4f} "
+                    f"{' '.join(media_bits)} "
+                    f"top_tokens=[{'; '.join(top_token_bits)}]",
+                    flush=True,
+                )
+
+
+def _debug_print_pretrain_logprob_summary(
+    *,
+    train_data: BatchedDataDict,
+    rewards: torch.Tensor,
+) -> None:
+    if os.environ.get("NRL_DEBUG", "0") != "1":
+        return
+
+    token_mask = train_data["token_mask"][:, 1:]
+    sample_mask = train_data["sample_mask"]
+    valid_mask = token_mask * sample_mask.unsqueeze(-1)
+    valid_tokens = int(valid_mask.sum().item())
+    active_samples = int(sample_mask.sum().item())
+
+    if valid_tokens > 0:
+        generation_logprobs = train_data["generation_logprobs"][:, 1:]
+        prev_logprobs = train_data["prev_logprobs"][:, 1:]
+        lp_error = torch.abs(generation_logprobs - prev_logprobs)
+        token_mult_prob_error = (
+            (torch.exp(lp_error * valid_mask) * valid_mask).sum()
+            / valid_mask.sum().clamp(min=1)
+        ).item()
+        valid_bool = valid_mask.bool()
+        finite_generation_lp = int(
+            torch.isfinite(generation_logprobs[valid_bool]).sum().item()
+        )
+        finite_policy_lp = int(
+            torch.isfinite(prev_logprobs[valid_bool]).sum().item()
+        )
+    else:
+        token_mult_prob_error = 0.0
+        finite_generation_lp = 0
+        finite_policy_lp = 0
+
+    if active_samples > 0:
+        active_rewards = rewards.view(-1)[sample_mask.bool()]
+        active_avg_reward = float(active_rewards.float().mean().item())
+    else:
+        active_avg_reward = 0.0
+
+    print(
+        "[PRETRAIN_LOGPROB_DEBUG] "
+        f"token_mult_prob_error={token_mult_prob_error:.6f} "
+        f"avg_reward={float(rewards.float().mean().item()):.4f} "
+        f"active_avg_reward={active_avg_reward:.4f} "
+        f"active_samples={active_samples} "
+        f"valid_tokens={valid_tokens} "
+        f"finite_generation_lp={finite_generation_lp}/{valid_tokens} "
+        f"finite_policy_lp={finite_policy_lp}/{valid_tokens}",
+        flush=True,
+    )
+
+
+def _get_processor_vision_attr(
+    processor: AutoProcessor,
+    attr_name: str,
+    default: Any,
+) -> Any:
+    vision_config = getattr(getattr(processor, "config", None), "vision_config", None)
+    return getattr(vision_config, attr_name, default)
+
+
+def _convert_token_to_id_if_known(
+    tokenizer: TokenizerType,
+    token: str,
+) -> Optional[int]:
+    token_id = tokenizer.convert_tokens_to_ids(token)
+    if token_id is None:
+        return None
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+    if unk_token_id is not None and token_id == unk_token_id:
+        get_vocab = getattr(tokenizer, "get_vocab", None)
+        if get_vocab is not None and token not in get_vocab():
+            return None
+    return int(token_id)
+
+
+def _apply_vision_budget_guard(
+    train_data: BatchedDataDict,
+    tokenizer: TokenizerType,
+    processor: Optional[AutoProcessor],
+    master_config: MasterConfig,
+    *,
+    label: str = "",
+) -> BatchedDataDict:
+    """Clamp multimodal train batches to the expanded Megatron sequence budget."""
+    if "imgs_sizes" not in train_data:
+        return train_data
+
+    if processor is None:
+        if not getattr(_apply_vision_budget_guard, "_warned_no_processor", False):
+            _apply_vision_budget_guard._warned_no_processor = True
+            print(
+                "[VISION_BUDGET] WARNING: train_data contains 'imgs_sizes' but "
+                "processor is None; expanded-length truncation is disabled.",
+                flush=True,
+            )
+        return train_data
+
+    image_token_id = _convert_token_to_id_if_known(tokenizer, "<image>")
+    img_start_token_id = _convert_token_to_id_if_known(tokenizer, "<img>")
+    max_seq_length = master_config["policy"]["max_total_sequence_length"]
+    data_default = master_config["data"].get("default") or {}
+    if data_default.get("video_temporal_patch_size") is not None:
+        temporal_patch_size = data_default["video_temporal_patch_size"]
+    else:
+        temporal_patch_size = _get_processor_vision_attr(
+            processor,
+            "video_temporal_patch_size",
+            1,
+        )
+
+    from nemo_rl.models.megatron.multimodal import (
+        compute_expanded_lengths,
+        truncate_for_expanded_budget,
+    )
+
+    train_data, vision_truncated = truncate_for_expanded_budget(
+        train_data,
+        max_seq_length=max_seq_length,
+        patch_dim=int(getattr(processor, "patch_size", 16)),
+        downsample_ratio=float(getattr(processor, "downsample_ratio", 0.5)),
+        pad_token_id=tokenizer.pad_token_id,
+        image_token_id=image_token_id,
+        img_start_token_id=img_start_token_id,
+        temporal_patch_size=int(temporal_patch_size),
+    )
+    if vision_truncated.any():
+        suffix = f" ({label})" if label else ""
+        print(
+            f"▶ Vision-budget truncation{suffix}: "
+            f"{int(vision_truncated.sum().item())}/{len(vision_truncated)} "
+            f"samples truncated to fit expanded budget of {max_seq_length}",
+            flush=True,
+        )
+
+    train_data["expanded_lengths"] = compute_expanded_lengths(
+        train_data["input_ids"],
+        train_data["input_lengths"],
+        train_data.get("imgs_sizes"),
+        image_token_id=image_token_id,
+        patch_dim=int(getattr(processor, "patch_size", 16)),
+        downsample_ratio=float(getattr(processor, "downsample_ratio", 0.5)),
+        num_frames=train_data.get("num_frames"),
+        max_length=max_seq_length,
+        img_start_token_id=img_start_token_id,
+        temporal_patch_size=int(temporal_patch_size),
+    )
+    return train_data
 
 
 # ===============================================================================
@@ -1720,6 +2257,14 @@ def grpo_train(
     memory_tracker = MemoryTracker()
 
     kv_scales_cache = None  # Cache reused for computed kv scales
+    debug_snapshot_threshold = master_config["grpo"].get(
+        "debug_snapshot_error_threshold"
+    )
+    snapshot_saver = (
+        DebugSnapshotSaver(os.path.join(logger.base_log_dir, "debug_snapshots"))
+        if debug_snapshot_threshold is not None
+        else None
+    )
     NEED_REFIT = True
     # If policy_generation is None, use the policy as the generation interface (megatron framework backend)
     if policy_generation is None:
@@ -2068,17 +2613,6 @@ def grpo_train(
                     # Save baseline for logging (before deletion)
                     baseline_for_log = baseline.clone()
 
-                    # Extract prompt-only messages for advantage estimation
-                    prompt_only_message_logs = _extract_prompt_only_messages(
-                        repeated_batch["message_log"]
-                    )
-                    prompt_batched_flat, _ = batched_message_log_to_flat_message(
-                        prompt_only_message_logs,
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                    )
-                    prompt_ids_for_adv = prompt_batched_flat["token_ids"]
-                    del prompt_only_message_logs
-                    del prompt_batched_flat
                     del input_ids
                     del baseline
                     del std
@@ -2095,6 +2629,20 @@ def grpo_train(
 
                             loss_multiplier[truncated] = 0
                             repeated_batch["loss_multiplier"] = loss_multiplier
+
+                    with timer.time("prompt_id_extraction"):
+                        # Extract prompt-only messages for advantage estimation after
+                        # filtering so prompt ids stay aligned with rewards.
+                        prompt_only_message_logs = _extract_prompt_only_messages(
+                            repeated_batch["message_log"]
+                        )
+                        prompt_batched_flat, _ = batched_message_log_to_flat_message(
+                            prompt_only_message_logs,
+                            pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                        )
+                        prompt_ids_for_adv = prompt_batched_flat["token_ids"]
+                        del prompt_only_message_logs
+                        del prompt_batched_flat
 
                     with timer.time("add_loss_mask"):
                         for i, message_log in enumerate(repeated_batch["message_log"]):
@@ -2154,6 +2702,20 @@ def grpo_train(
                                     )
                         train_data.update(extra_multimodal_data)
                         train_data.to("cpu")
+                        train_data = _apply_vision_budget_guard(
+                            train_data,
+                            tokenizer,
+                            processor,
+                            master_config,
+                        )
+                        extra_multimodal_data = train_data.get_multimodal_dict(
+                            as_tensors=False,
+                            pixel_dtype=(
+                                torch.bfloat16
+                                if deduplicate_multimodal_data
+                                else None
+                            ),
+                        )
 
                 # Driver-side multimodal payload-bytes / prompt-count
                 # instrumentation. ``unique_prompts_for_policy`` is computed
@@ -2172,17 +2734,21 @@ def grpo_train(
 
                 memory_tracker.snapshot_start_of_stage("Computing logprobs", dir())
                 # Skip prev_logprobs computation when force_on_policy_ratio=True
-                # unless seq_logprob_error_threshold is set (which requires prev_logprobs)
+                # unless sequence-error masking or snapshots need real prev_logprobs.
                 seq_logprob_error_threshold = master_config["grpo"].get(
                     "seq_logprob_error_threshold", None
                 )
                 force_on_policy_ratio = master_config["loss_fn"].get("force_on_policy_ratio", False)
-                skip_prev_logprobs = force_on_policy_ratio and seq_logprob_error_threshold is None
+                needs_seq_error_metrics = (
+                    seq_logprob_error_threshold is not None
+                    or snapshot_saver is not None
+                )
+                skip_prev_logprobs = force_on_policy_ratio and not needs_seq_error_metrics
                 # todo @jiaqi: is there a better way to skip prev_logprobs computation while still computing the seq-level error metrics?
-                if force_on_policy_ratio and seq_logprob_error_threshold is not None:
+                if force_on_policy_ratio and needs_seq_error_metrics:
                     warnings.warn(
-                        "force_on_policy_ratio=True but seq_logprob_error_threshold is set. "
-                        "Computing prev_logprobs anyway for seq-level error masking."
+                        "force_on_policy_ratio=True but seq-level error metrics are enabled. "
+                        "Computing prev_logprobs anyway for sequence-error diagnostics."
                     )
 
                 # Vision-budget truncation: shrink samples whose vision-expanded
@@ -2268,6 +2834,10 @@ def grpo_train(
                             **extra_multimodal_data,
                         }
                     )
+                    if "expanded_lengths" in train_data:
+                        logprob_data["expanded_lengths"] = train_data[
+                            "expanded_lengths"
+                        ]
                     if not skip_prev_logprobs:
                         print_multimodal_payload_metrics(
                             collect_multimodal_payload_metrics(
@@ -2321,6 +2891,8 @@ def grpo_train(
                         train_data=train_data,
                         rewards=rewards,
                         seq_logprob_error_threshold=seq_logprob_error_threshold,
+                        return_debug_tensors=snapshot_saver is not None
+                        or os.environ.get("NRL_DEBUG", "0") == "1",
                     )
                     max_seq_mult_prob_error = seq_error_result["max_seq_mult_prob_error"]
                     mean_seq_mult_prob_error = seq_error_result["mean_seq_mult_prob_error"]
@@ -2334,6 +2906,37 @@ def grpo_train(
                     # Update sample_mask if masking was applied
                     if seq_error_result["updated_sample_mask"] is not None:
                         train_data["sample_mask"] = seq_error_result["updated_sample_mask"]
+
+                    _debug_print_seq_error_by_modality(
+                        seq_error_result=seq_error_result,
+                        repeated_batch=repeated_batch,
+                        train_data=train_data,
+                        rewards=rewards,
+                        threshold=seq_logprob_error_threshold,
+                        tokenizer=tokenizer,
+                    )
+                    _debug_print_pretrain_logprob_summary(
+                        train_data=train_data,
+                        rewards=rewards,
+                    )
+
+                    if (
+                        snapshot_saver is not None
+                        and debug_snapshot_threshold is not None
+                        and max_seq_mult_prob_error > debug_snapshot_threshold
+                    ):
+                        snapshot_saver.save(
+                            step=total_steps + 1,
+                            seq_mult_prob_error=seq_error_result[
+                                "seq_mult_prob_error"
+                            ],
+                            lp_error=seq_error_result["lp_error"],
+                            train_data=train_data,
+                            prompt_lengths=repeated_batch["length"],
+                            vllm_images=repeated_batch.get("vllm_images"),
+                            vllm_videos=repeated_batch.get("vllm_videos"),
+                            vllm_audio_paths=repeated_batch.get("vllm_audio_paths"),
+                        )
 
                 # Compact per-step sample/logprob diagnostics. This is printed
                 # regardless of logger backend so smoke runs surface whether we
@@ -2425,30 +3028,50 @@ def grpo_train(
                                     train_data["advantages"][i, token_offset:token_offset + msg_len] = invalid_neg_adv
                                 token_offset += msg_len
 
-                memory_tracker.snapshot_start_of_stage("Policy train", dir())
-                print("▶ Preparing for training...", flush=True)
-                with timer.time("training_prep"):
-                    policy.prepare_for_training()  # set model train and reload optim to GPU
-                    POLICY_GENERATION_STALE = True
+                valid_train_samples, valid_train_tokens = _count_valid_train_data(
+                    train_data
+                )
+                did_train_policy = valid_train_samples > 0 and valid_train_tokens > 0
 
-                print("▶ Training policy...", flush=True)
-                with timer.time("policy_training"):
-                    print_multimodal_payload_metrics(
-                        collect_multimodal_payload_metrics(
+                memory_tracker.snapshot_start_of_stage("Policy train", dir())
+                if did_train_policy:
+                    print("▶ Preparing for training...", flush=True)
+                    with timer.time("training_prep"):
+                        policy.prepare_for_training()  # set model train and reload optim to GPU
+                        POLICY_GENERATION_STALE = True
+
+                    print("▶ Training policy...", flush=True)
+                    with timer.time("policy_training"):
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                train_data,
+                                boundary="driver_to_policy_train",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
+                        )
+                        train_results = policy.train(
                             train_data,
-                            boundary="driver_to_policy_train",
-                            unique_prompts=unique_prompts_for_policy,
-                        ),
-                        enabled=debug_payload_metrics,
+                            loss_fn,
+                            timer=timer,
+                        )
+                else:
+                    print(
+                        "[POLICY_TRAIN_SKIP] Skipping policy train because "
+                        f"valid_train_samples={valid_train_samples} "
+                        f"valid_train_tokens={valid_train_tokens} after masking.",
+                        flush=True,
                     )
-                    train_results = policy.train(
-                        train_data,
-                        loss_fn,
-                        timer=timer,
-                    )
+                    with timer.time("training_prep"):
+                        pass
+                    with timer.time("policy_training"):
+                        train_results = _skipped_policy_train_results(
+                            valid_train_samples,
+                            valid_train_tokens,
+                        )
 
                 # Recompute KV scales after policy training if needed
-                if sync_kv_scales:
+                if sync_kv_scales and did_train_policy:
                     with timer.time("recompute_kv_scales"):
                         print(
                             "▶ Recomputing KV cache scales after policy update...",
@@ -3041,6 +3664,7 @@ def async_grpo_train(
     grpo_save_state: GRPOSaveState,
     master_config: MasterConfig,
     max_trajectory_age_steps: int = 1,
+    processor: Optional[AutoProcessor] = None,
 ) -> None:
     """Run asynchronous GRPO training with replay buffer.
 
@@ -3058,6 +3682,7 @@ def async_grpo_train(
         grpo_save_state: Training state
         master_config: Master configuration
         max_trajectory_age_steps: Maximum age (in training steps) for trajectories to be used in training
+        processor: Optional HF processor for VLM expanded-length truncation
     """
     # Ensure we are running with a compatible async generation backend
     assert _should_use_async_rollouts(master_config), (
@@ -3067,6 +3692,13 @@ def async_grpo_train(
     assert master_config["loss_fn"]["use_importance_sampling_correction"] is True, (
         "Importance sampling correction must be enabled for async GRPO for good convergence due to off-policy samples!"
     )
+
+    if master_config["grpo"].get("deduplicate_multimodal_data", False):
+        raise ValueError(
+            "grpo.deduplicate_multimodal_data does not support async GRPO "
+            "collector/replay. Use sync GRPO or set "
+            "grpo.deduplicate_multimodal_data=false."
+        )
 
     if master_config["grpo"]["async_grpo"]["max_trajectory_age_steps"] > 1:
         if not master_config["grpo"]["async_grpo"].get(
@@ -3087,6 +3719,14 @@ def async_grpo_train(
         fit_last_save_time=True,
     )
     timeout.start_iterations()
+    debug_snapshot_threshold = master_config["grpo"].get(
+        "debug_snapshot_error_threshold"
+    )
+    snapshot_saver = (
+        DebugSnapshotSaver(os.path.join(logger.base_log_dir, "debug_snapshots"))
+        if debug_snapshot_threshold is not None
+        else None
+    )
     NEED_REFIT = True
 
     # Setup generation interface
@@ -3571,22 +4211,34 @@ def async_grpo_train(
                             "sample_mask": repeated_batch["loss_multiplier"],
                         }
                     )
+                    train_data.update(flat_messages.get_multimodal_dict(as_tensors=False))
                     train_data.to("cpu")
+                    train_data = _apply_vision_budget_guard(
+                        train_data,
+                        tokenizer,
+                        processor,
+                        master_config,
+                        label="async",
+                    )
 
                 # Training phase (same as sync version)
                 # Skip prev_logprobs computation when force_on_policy_ratio=True
-                # unless seq_logprob_error_threshold is set (which requires prev_logprobs)
+                # unless sequence-error masking or snapshots need real prev_logprobs.
                 seq_logprob_error_threshold = master_config["grpo"].get(
                     "seq_logprob_error_threshold", None
                 )
                 force_on_policy_ratio = master_config["loss_fn"].get("force_on_policy_ratio", False)
-                skip_prev_logprobs = force_on_policy_ratio and seq_logprob_error_threshold is None
+                needs_seq_error_metrics = (
+                    seq_logprob_error_threshold is not None
+                    or snapshot_saver is not None
+                )
+                skip_prev_logprobs = force_on_policy_ratio and not needs_seq_error_metrics
 
                 # todo @jiaqi: is there a better way to skip prev_logprobs computation while still computing the seq-level error metrics?
-                if force_on_policy_ratio and seq_logprob_error_threshold is not None:
+                if force_on_policy_ratio and needs_seq_error_metrics:
                     warnings.warn(
-                        "force_on_policy_ratio=True but seq_logprob_error_threshold is set. "
-                        "Computing prev_logprobs anyway for seq-level error masking."
+                        "force_on_policy_ratio=True but seq-level error metrics are enabled. "
+                        "Computing prev_logprobs anyway for sequence-error diagnostics."
                     )
 
                 if skip_prev_logprobs:
@@ -3631,6 +4283,8 @@ def async_grpo_train(
                         train_data=train_data,
                         rewards=rewards,
                         seq_logprob_error_threshold=seq_logprob_error_threshold,
+                        return_debug_tensors=snapshot_saver is not None
+                        or os.environ.get("NRL_DEBUG", "0") == "1",
                     )
                     max_seq_mult_prob_error = seq_error_result["max_seq_mult_prob_error"]
                     mean_seq_mult_prob_error = seq_error_result["mean_seq_mult_prob_error"]
@@ -3644,6 +4298,37 @@ def async_grpo_train(
                     # Update sample_mask if masking was applied
                     if seq_error_result["updated_sample_mask"] is not None:
                         train_data["sample_mask"] = seq_error_result["updated_sample_mask"]
+
+                    _debug_print_seq_error_by_modality(
+                        seq_error_result=seq_error_result,
+                        repeated_batch=repeated_batch,
+                        train_data=train_data,
+                        rewards=rewards,
+                        threshold=seq_logprob_error_threshold,
+                        tokenizer=tokenizer,
+                    )
+                    _debug_print_pretrain_logprob_summary(
+                        train_data=train_data,
+                        rewards=rewards,
+                    )
+
+                    if (
+                        snapshot_saver is not None
+                        and debug_snapshot_threshold is not None
+                        and max_seq_mult_prob_error > debug_snapshot_threshold
+                    ):
+                        snapshot_saver.save(
+                            step=step + 1,
+                            seq_mult_prob_error=seq_error_result[
+                                "seq_mult_prob_error"
+                            ],
+                            lp_error=seq_error_result["lp_error"],
+                            train_data=train_data,
+                            prompt_lengths=repeated_batch["length"],
+                            vllm_images=repeated_batch.get("vllm_images"),
+                            vllm_videos=repeated_batch.get("vllm_videos"),
+                            vllm_audio_paths=repeated_batch.get("vllm_audio_paths"),
+                        )
 
                 # Compute advantages with adv_estimator using correct mask and logprobs
                 with timer.time("advantage_calculation"):
@@ -3697,22 +4382,42 @@ def async_grpo_train(
                                     train_data["advantages"][i, token_offset:token_offset + msg_len] = invalid_neg_adv
                                 token_offset += msg_len
 
-                print("▶ Preparing for training...")
-                with timer.time("training_prep"):
-                    policy.prepare_for_training()
-                    POLICY_GENERATION_STALE = True
+                valid_train_samples, valid_train_tokens = _count_valid_train_data(
+                    train_data
+                )
+                did_train_policy = valid_train_samples > 0 and valid_train_tokens > 0
 
-                print("▶ Training policy...")
-                with timer.time("policy_training"):
-                    train_results = policy.train(
-                        train_data,
-                        loss_fn,
-                        timer=timer,
+                if did_train_policy:
+                    print("▶ Preparing for training...")
+                    with timer.time("training_prep"):
+                        policy.prepare_for_training()
+                        POLICY_GENERATION_STALE = True
+
+                    print("▶ Training policy...")
+                    with timer.time("policy_training"):
+                        train_results = policy.train(
+                            train_data,
+                            loss_fn,
+                            timer=timer,
+                        )
+                else:
+                    print(
+                        "[POLICY_TRAIN_SKIP] Skipping policy train because "
+                        f"valid_train_samples={valid_train_samples} "
+                        f"valid_train_tokens={valid_train_tokens} after masking.",
+                        flush=True,
                     )
+                    with timer.time("training_prep"):
+                        pass
+                    with timer.time("policy_training"):
+                        train_results = _skipped_policy_train_results(
+                            valid_train_samples,
+                            valid_train_tokens,
+                        )
 
-                print("🔄 Synchronizing policy weights to trajectory collector…")
                 generation_logger_metrics = None
-                if NEED_REFIT:
+                if NEED_REFIT and did_train_policy:
+                    print("🔄 Synchronizing policy weights to trajectory collector…")
                     timer.start("idle/refit_bubble")
 
                     # Measure pending-generation wait as exposed_generation time
@@ -3741,9 +4446,15 @@ def async_grpo_train(
                         trajectory_collector.resume_after_refit.remote()
 
                     timer.stop("idle/refit_bubble")
+                elif NEED_REFIT:
+                    print(
+                        "[POLICY_TRAIN_SKIP] Skipping policy-generation refit because "
+                        "policy weights were not updated.",
+                        flush=True,
+                    )
 
                 # Clear logger metrics after each refit (weight sync), starting a new logging cycle
-                if policy_generation is not None:
+                if did_train_policy and policy_generation is not None:
                     policy_generation.clear_logger_metrics()
 
                 # Validation

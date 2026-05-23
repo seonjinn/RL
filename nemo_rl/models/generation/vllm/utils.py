@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import json
 import os
+import threading
+import time
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,12 +32,134 @@ from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 from nemo_rl.utils.vlm_debug import debug_enabled, write_stage
 
 
+_PRECOMPUTED_IMG_SIZES_ENV = "NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES"
+_DUMP_VLLM_REQUESTS_ENV = "NEMO_RL_DUMP_VLLM_REQUESTS"
+_DUMP_VLLM_REQUESTS_LIMIT_ENV = "NEMO_RL_DUMP_VLLM_REQUESTS_LIMIT"
+_DUMP_VLLM_REQUESTS_DEFAULT_LIMIT = 16
+_DUMP_LOCK = threading.Lock()
+_DUMP_REQUEST_COUNT = 0
+
+
 class AudioLoadError(RuntimeError):
     """Raised when audio cannot be loaded from a file path."""
 
     def __init__(self, path: str, reason: str = "unknown"):
         self.path = path
         super().__init__(f"Failed to load audio from {path}: {reason}")
+
+
+def extract_sampled_token_logprob(
+    logprob_dict: Any,
+    sampled_token_id: int,
+) -> Optional[float]:
+    """Return the vLLM logprob for the sampled token, not the first top-logprob."""
+    if not logprob_dict:
+        return None
+
+    token_logprob = None
+    try:
+        token_logprob = logprob_dict.get(sampled_token_id)
+    except AttributeError:
+        token_logprob = None
+
+    if token_logprob is None:
+        try:
+            items = logprob_dict.items()
+        except AttributeError:
+            items = ()
+        for token_id, candidate_logprob in items:
+            try:
+                token_id_matches = int(token_id) == int(sampled_token_id)
+            except (TypeError, ValueError):
+                token_id_matches = token_id == sampled_token_id
+            if token_id_matches:
+                token_logprob = candidate_logprob
+                break
+
+    if token_logprob is None:
+        return None
+
+    value = getattr(token_logprob, "logprob", token_logprob)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+_VIDEO_SAMPLING_STYLE_ENV = "NRL_VIDEO_SAMPLING_STYLE"
+_VIDEO_SAMPLING_STYLE_CURRENT = "current_fixed"
+_VIDEO_SAMPLING_STYLE_SFT_V2_DURATION = "sft_v2_duration"
+_VIDEO_SAMPLING_STYLE_DEFAULT = _VIDEO_SAMPLING_STYLE_SFT_V2_DURATION
+_SUPPORTED_VIDEO_SAMPLING_STYLES = {
+    _VIDEO_SAMPLING_STYLE_CURRENT,
+    _VIDEO_SAMPLING_STYLE_SFT_V2_DURATION,
+}
+
+
+def _get_video_sampling_style() -> str:
+    style = os.environ.get(_VIDEO_SAMPLING_STYLE_ENV, _VIDEO_SAMPLING_STYLE_DEFAULT)
+    style = style.strip().lower()
+    if style not in _SUPPORTED_VIDEO_SAMPLING_STYLES:
+        supported = ", ".join(sorted(_SUPPORTED_VIDEO_SAMPLING_STYLES))
+        raise ValueError(
+            f"Unsupported {_VIDEO_SAMPLING_STYLE_ENV}={style!r}; supported: {supported}"
+        )
+    return style
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    value = int(os.environ.get(name, default))
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+    return value
+
+
+def _round_video_frame_count(
+    num_frames: int,
+    *,
+    total_frames_in_file: int,
+    max_frames: int,
+    temporal_patch_size: int,
+) -> int:
+    num_frames = min(num_frames, total_frames_in_file)
+    if temporal_patch_size > 1 and num_frames % temporal_patch_size != 0:
+        rounded_down = (num_frames // temporal_patch_size) * temporal_patch_size
+        rounded_up = rounded_down + temporal_patch_size
+        if rounded_up <= total_frames_in_file and rounded_up <= max_frames:
+            num_frames = rounded_up
+        else:
+            num_frames = max(temporal_patch_size, rounded_down)
+    return num_frames
+
+
+def _select_video_frame_count(
+    *,
+    total_duration: float,
+    requested_num_frames: int,
+    total_frames_in_file: int,
+    temporal_patch_size: int,
+) -> int:
+    requested_num_frames = max(1, int(requested_num_frames))
+    sampling_style = _get_video_sampling_style()
+    if sampling_style == _VIDEO_SAMPLING_STYLE_SFT_V2_DURATION:
+        min_frames = _get_positive_int_env("NRL_VIDEO_SFT_MIN_FRAMES", 8)
+        sft_max_frames = _get_positive_int_env("NRL_VIDEO_SFT_MAX_FRAMES", 256)
+        default_fps = _get_positive_int_env("NRL_VIDEO_SFT_DEFAULT_FPS", 2)
+        if total_frames_in_file < min_frames:
+            num_frames = total_frames_in_file
+        else:
+            default_frames = int(default_fps * total_duration)
+            num_frames = min(max(default_frames, min_frames), sft_max_frames)
+        num_frames = min(num_frames, requested_num_frames)
+    else:
+        num_frames = requested_num_frames
+
+    return _round_video_frame_count(
+        num_frames,
+        total_frames_in_file=total_frames_in_file,
+        max_frames=requested_num_frames,
+        temporal_patch_size=temporal_patch_size,
+    )
 
 
 def _load_audio_pyav(
@@ -182,6 +309,187 @@ def load_audio_waveform(
     return waveform
 
 
+def _compute_video_timestamps(
+    total_duration: float,
+    num_frames: int,
+    total_frames_in_file: int,
+    original_num_frames: int,
+    temporal_patch_size: int,
+) -> tuple[int, list[float]]:
+    num_frames = _select_video_frame_count(
+        total_duration=total_duration,
+        requested_num_frames=original_num_frames,
+        total_frames_in_file=total_frames_in_file,
+        temporal_patch_size=temporal_patch_size,
+    )
+
+    if num_frames <= 1:
+        return 1, [total_duration / 2.0]
+
+    effective_span = max(total_duration - 1, 0)
+    segment_size = effective_span / num_frames
+    return num_frames, [segment_size * (i + 0.5) for i in range(num_frames)]
+
+
+def _build_video_metadata(
+    *,
+    fps: float,
+    total_frames: int,
+    sampled_indices: list[int],
+    backend: str,
+) -> dict[str, Any]:
+    return {
+        "fps": fps,
+        "duration": total_frames / fps,
+        "total_num_frames": total_frames,
+        "frames_indices": sampled_indices,
+        "video_backend": backend,
+        "video_sampling_style": _get_video_sampling_style(),
+        "do_sample_frames": False,
+    }
+
+
+def _load_video_frames_pyav_with_metadata(
+    video_path: str,
+    num_frames: int = 8,
+    temporal_patch_size: int = 1,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    import av
+
+    try:
+        container = av.open(video_path)
+    except Exception as exc:
+        raise ValueError(f"Cannot open video: {video_path}") from exc
+
+    if not container.streams.video:
+        container.close()
+        raise ValueError(f"No video stream in {video_path}")
+
+    stream = container.streams.video[0]
+    stream.codec_context.thread_type = "NONE"
+    fps = float(stream.average_rate) if stream.average_rate else 0.0
+    if fps <= 0:
+        container.close()
+        raise ValueError(f"Video has invalid fps ({fps}): {video_path}")
+
+    total_frames = stream.frames
+    if total_frames <= 0:
+        if stream.duration and stream.time_base:
+            duration_est = float(stream.duration * stream.time_base)
+        elif container.duration:
+            duration_est = container.duration / av.time_base
+        else:
+            duration_est = 0.0
+        total_frames = max(1, int(duration_est * fps))
+    total_duration = total_frames / fps
+
+    original_num_frames = num_frames
+    num_frames, timestamps_s = _compute_video_timestamps(
+        total_duration,
+        num_frames,
+        total_frames,
+        original_num_frames,
+        temporal_patch_size,
+    )
+    time_base = float(stream.time_base) if stream.time_base else 1.0 / fps
+    target_pts_list = [int(ts / time_base) for ts in timestamps_s]
+    sampled_indices = [
+        max(0, min(int(ts * fps), total_frames - 1)) for ts in timestamps_s
+    ]
+
+    frames: list[np.ndarray] = []
+    try:
+        if target_pts_list:
+            container.seek(max(0, target_pts_list[0]), stream=stream, any_frame=False)
+        target_idx = 0
+        best_frame = None
+        frame_counter = 0
+        for frame in container.decode(video=0):
+            if target_idx >= len(target_pts_list):
+                break
+            best_frame = frame
+            frame_counter += 1
+            if frame.pts is None:
+                while (
+                    target_idx < len(target_pts_list)
+                    and frame_counter >= target_idx + 1
+                ):
+                    frames.append(frame.reformat(format="rgb24").to_ndarray())
+                    target_idx += 1
+                continue
+            frame_end = frame.pts + (frame.duration if frame.duration else 1)
+            while target_idx < len(target_pts_list):
+                if target_pts_list[target_idx] < frame_end:
+                    frames.append(frame.reformat(format="rgb24").to_ndarray())
+                    target_idx += 1
+                else:
+                    break
+        if best_frame is not None:
+            last_arr = best_frame.reformat(format="rgb24").to_ndarray()
+            while len(frames) < len(target_pts_list):
+                frames.append(last_arr.copy())
+    finally:
+        container.close()
+
+    if not frames:
+        raise ValueError(f"Failed to extract any frames from video: {video_path}")
+    metadata = _build_video_metadata(
+        fps=fps,
+        total_frames=total_frames,
+        sampled_indices=sampled_indices,
+        backend="pyav",
+    )
+    return np.stack(frames), metadata
+
+
+def _load_video_frames_decord_with_metadata(
+    video_path: str,
+    num_frames: int = 8,
+    temporal_patch_size: int = 1,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    from decord import VideoReader
+    from decord import cpu as decord_cpu
+
+    vr = VideoReader(video_path, ctx=decord_cpu(), num_threads=1)
+    total_frames = len(vr)
+    if total_frames <= 0:
+        raise ValueError(f"Video has no frames: {video_path}")
+    fps = vr.get_avg_fps()
+    if fps <= 0:
+        raise ValueError(f"Video has invalid fps ({fps}): {video_path}")
+
+    num_frames, timestamps_s = _compute_video_timestamps(
+        total_frames / fps,
+        num_frames,
+        total_frames,
+        num_frames,
+        temporal_patch_size,
+    )
+    indices = [max(0, min(int(ts * fps), total_frames - 1)) for ts in timestamps_s]
+    metadata = _build_video_metadata(
+        fps=fps,
+        total_frames=total_frames,
+        sampled_indices=indices,
+        backend="decord",
+    )
+    return vr.get_batch(indices).asnumpy(), metadata
+
+
+def load_video_frames_with_metadata(
+    video_path: str,
+    num_frames: int = 8,
+    temporal_patch_size: int = 1,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Load sampled RGB frames plus vLLM native-video metadata."""
+    if os.environ.get("NRL_VIDEO_BACKEND", "pyav") == "decord":
+        return _load_video_frames_decord_with_metadata(
+            video_path, num_frames, temporal_patch_size
+        )
+    return _load_video_frames_pyav_with_metadata(
+        video_path, num_frames, temporal_patch_size
+    )
+
+
 def _get_regular_prompt(
     input_ids: torch.Tensor, input_lengths: torch.Tensor, index: int
 ) -> dict[str, Any]:
@@ -216,6 +524,21 @@ def _coerce_hw_pair_list(value: Any) -> list[list[int]] | None:
             continue
         pairs.append([int(v) for v in item])
     return pairs
+
+
+def _extract_hw_pairs(values: Any) -> list[tuple[int, int]]:
+    """Normalize nested image-size payloads into ``(h, w)`` pairs."""
+    pairs = _coerce_hw_pair_list(values)
+    if pairs is None:
+        return []
+    normalized: list[tuple[int, int]] = []
+    for pair in pairs:
+        if len(pair) < 2:
+            continue
+        h, w = int(pair[0]), int(pair[1])
+        if h > 0 and w > 0:
+            normalized.append((h, w))
+    return normalized
 
 
 def _resolve_sample_imgs_sizes(
@@ -269,6 +592,24 @@ def _get_sample_images(
     return [sample_images]
 
 
+def _get_sample_list(
+    data: BatchedDataDict[GenerationDatumSpec],
+    key: str,
+    index: int,
+) -> list[Any]:
+    values = data.get(key, None)
+    if values is None or index >= len(values):
+        return []
+    sample_values = values[index]
+    if sample_values is None:
+        return []
+    if isinstance(sample_values, list):
+        return sample_values
+    if isinstance(sample_values, tuple):
+        return list(sample_values)
+    return [sample_values]
+
+
 def _coerce_vllm_image(
     image: Any, image_cache: dict[str, Image.Image] | None = None
 ) -> Any:
@@ -304,34 +645,357 @@ def _get_debug_image_sizes(images: list[Any]) -> list[list[int] | None]:
     return debug_sizes
 
 
+def _prompt_debug_enabled() -> bool:
+    return debug_enabled() or os.environ.get("NRL_DEBUG", "0") == "1"
+
+
+def _emit_audio_payload_debug(
+    *,
+    index: int,
+    audio_index: int,
+    audio_path: str,
+    waveform: np.ndarray,
+    max_audio_duration: Any,
+    cached: bool,
+) -> None:
+    if not _prompt_debug_enabled():
+        return
+    sample_rate = 16000
+    payload = {
+        "sample_index": index,
+        "audio_index": audio_index,
+        "path": audio_path,
+        "basename": os.path.basename(audio_path),
+        "waveform_len": int(len(waveform)),
+        "duration_s": float(len(waveform) / sample_rate),
+        "sample_rate": sample_rate,
+        "max_audio_duration": max_audio_duration,
+        "cached": cached,
+    }
+    if debug_enabled():
+        write_stage("vllm_audio_payload", payload)
+    if os.environ.get("NRL_DEBUG", "0") == "1":
+        print(
+            "[VLLM_AUDIO_PAYLOAD_DEBUG] "
+            f"sample={index} audio_index={audio_index} "
+            f"path={os.path.basename(audio_path)} "
+            f"waveform_len={payload['waveform_len']} "
+            f"duration_s={payload['duration_s']:.6f} "
+            f"sample_rate={sample_rate} "
+            f"max_audio_duration={max_audio_duration} "
+            f"cached={cached}",
+            flush=True,
+        )
+
+
 def _emit_prompt_debug(
     index: int,
     prompt_type: str,
+    prompt_text: str | None = None,
     images: list[Any] | None = None,
+    videos: list[Any] | None = None,
+    audio_count: int = 0,
     mm_processor_kwargs: dict[str, Any] | None = None,
     fallback_reason: str | None = None,
+    precomputed_count: int | None = None,
+    expected_precomputed_count: int | None = None,
+    native_video: bool = False,
 ) -> None:
-    if not debug_enabled():
+    if not _prompt_debug_enabled():
         return
     mm_kwargs = mm_processor_kwargs or {}
-    write_stage(
-        "vllm_prompt_format",
-        {
-            "sample_index": index,
-            "prompt_type": prompt_type,
-            "image_count": 0 if images is None else len(images),
-            "image_sizes": [] if images is None else _get_debug_image_sizes(images),
-            "mm_processor_kwargs": mm_kwargs or None,
-            "has_precomputed_imgs_sizes": "precomputed_imgs_sizes" in mm_kwargs,
-            "fallback_reason": fallback_reason,
-        },
-    )
+    image_count = 0 if images is None else len(images)
+    video_count = 0 if videos is None else len(videos)
+    image_tag_count = prompt_text.count("<image>") if isinstance(prompt_text, str) else 0
+    video_tag_count = prompt_text.count("<video>") if isinstance(prompt_text, str) else 0
+    debug_payload = {
+        "sample_index": index,
+        "prompt_type": prompt_type,
+        "image_count": image_count,
+        "video_count": video_count,
+        "audio_count": audio_count,
+        "image_sizes": [] if images is None else _get_debug_image_sizes(images),
+        "mm_processor_kwargs": mm_kwargs or None,
+        "has_precomputed_imgs_sizes": "precomputed_imgs_sizes" in mm_kwargs,
+        "fallback_reason": fallback_reason,
+        "precomputed_count": precomputed_count,
+        "expected_precomputed_count": expected_precomputed_count,
+        "native_video": native_video,
+        "text_image_tags": image_tag_count,
+        "text_video_tags": video_tag_count,
+    }
+    if debug_enabled():
+        write_stage("vllm_prompt_format", debug_payload)
+    if os.environ.get("NRL_DEBUG", "0") == "1":
+        print(
+            "[VLLM_PARITY_DEBUG] "
+            f"sample={index} type={prompt_type} "
+            f"images={image_count} videos={video_count} audio={audio_count} "
+            f"native_video={native_video} "
+            f"text_image_tags={image_tag_count} text_video_tags={video_tag_count} "
+            f"precomputed={precomputed_count}/{expected_precomputed_count} "
+            f"mm_kwargs={mm_kwargs or {}} "
+            f"fallback={fallback_reason}",
+            flush=True,
+        )
 
 
-def _get_row_scalar(values: Any, index: int) -> Any:
-    if values is None or index >= len(values):
+def _coerce_mm_scalar(value: Any) -> Any:
+    if torch.is_tensor(value):
+        if value.numel() == 1:
+            return value.item()
+        return value.tolist()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
+def _env_enabled(name: str, default: str = "1") -> bool:
+    return os.environ.get(name, default).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _precomputed_img_sizes_enabled() -> bool:
+    return _env_enabled(_PRECOMPUTED_IMG_SIZES_ENV, "0")
+
+
+def _hash_local_file(path: Any) -> str | None:
+    if isinstance(path, os.PathLike):
+        path = os.fspath(path)
+    if not isinstance(path, str):
         return None
-    return values[index]
+    local_path = path.removeprefix("file://")
+    if path.startswith(("http://", "https://", "data:")):
+        return None
+    if not os.path.exists(local_path) or not os.path.isfile(local_path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(local_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if np.isnan(value):
+            return "nan"
+        if np.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        return value
+    if torch.is_tensor(value):
+        return value.tolist()
+    if isinstance(value, Image.Image):
+        return {
+            "type": "PIL.Image",
+            "mode": value.mode,
+            "size": list(value.size),
+        }
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if hasattr(value, "tolist"):
+        try:
+            return _jsonable(value.tolist())
+        except Exception:
+            pass
+    return str(value)
+
+
+def _row_value(
+    data: BatchedDataDict[GenerationDatumSpec], key: str, index: int
+) -> Any:
+    values = data.get(key, None)
+    if values is None:
+        return None
+    if torch.is_tensor(values):
+        return (
+            values[index]
+            if values.ndim > 0 and index < values.shape[0]
+            else values
+        )
+    try:
+        return values[index]
+    except Exception:
+        return None
+
+
+def _image_debug_records(
+    image_refs: list[Any],
+    image_payload: Any,
+) -> list[dict[str, Any]]:
+    images = image_payload if isinstance(image_payload, list) else [image_payload]
+    records: list[dict[str, Any]] = []
+    for image_index, image in enumerate(images):
+        ref = image_refs[image_index] if image_index < len(image_refs) else None
+        size = getattr(image, "size", None)
+        records.append(
+            {
+                "index": image_index,
+                "ref": str(ref) if ref is not None else None,
+                "ref_sha256": _hash_local_file(ref),
+                "mode": getattr(image, "mode", None),
+                "size_wh": list(size) if isinstance(size, tuple) else None,
+            }
+        )
+    return records
+
+
+def _sampling_params_summary(sampling_params: Any) -> dict[str, Any] | None:
+    if sampling_params is None:
+        return None
+    summary: dict[str, Any] = {}
+    for attr in (
+        "temperature",
+        "top_p",
+        "top_k",
+        "max_tokens",
+        "min_tokens",
+        "stop",
+        "stop_token_ids",
+        "bad_words",
+        "include_stop_str_in_output",
+        "skip_special_tokens",
+        "spaces_between_special_tokens",
+    ):
+        if hasattr(sampling_params, attr):
+            summary[attr] = _jsonable(getattr(sampling_params, attr))
+    return summary
+
+
+def dump_vllm_request_boundary(
+    data: BatchedDataDict[GenerationDatumSpec],
+    prompt: dict[str, Any],
+    sampling_params: Any,
+    *,
+    source_index: int,
+    prompt_position: int,
+) -> None:
+    """Optionally append a compact vLLM request-boundary record.
+
+    Set ``NEMO_RL_DUMP_VLLM_REQUESTS=/path/to/dump.jsonl`` to enable. The dump
+    is intentionally bounded and records hashes/previews rather than full token
+    arrays or image bytes.
+    """
+    global _DUMP_REQUEST_COUNT
+
+    output_path = os.environ.get(_DUMP_VLLM_REQUESTS_ENV)
+    if not output_path:
+        return
+
+    try:
+        limit = int(
+            os.environ.get(
+                _DUMP_VLLM_REQUESTS_LIMIT_ENV,
+                str(_DUMP_VLLM_REQUESTS_DEFAULT_LIMIT),
+            )
+        )
+    except ValueError:
+        limit = _DUMP_VLLM_REQUESTS_DEFAULT_LIMIT
+    if limit <= 0:
+        return
+
+    with _DUMP_LOCK:
+        if _DUMP_REQUEST_COUNT >= limit:
+            return
+        _DUMP_REQUEST_COUNT += 1
+
+    input_ids = data.get("input_ids")
+    input_lengths = data.get("input_lengths")
+    token_ids: list[int] = []
+    input_length = None
+    if torch.is_tensor(input_ids) and torch.is_tensor(input_lengths):
+        input_length = int(input_lengths[source_index].item())
+        token_ids = input_ids[source_index, :input_length].tolist()
+
+    mm_data = prompt.get("multi_modal_data", {})
+    image_payload = mm_data.get("image") if isinstance(mm_data, dict) else None
+    image_refs = _get_sample_list(data, "vllm_images", source_index)
+    prompt_text = prompt.get("prompt")
+    prompt_token_ids = prompt.get("prompt_token_ids")
+
+    record = {
+        "timestamp_ms": int(time.time() * 1000),
+        "pid": os.getpid(),
+        "source_index": source_index,
+        "prompt_position": prompt_position,
+        "dataset_idx": _jsonable(_row_value(data, "idx", source_index)),
+        "task_name": _jsonable(_row_value(data, "task_name", source_index)),
+        "prompt_keys": sorted(prompt.keys()),
+        "multi_modal_keys": (
+            sorted(mm_data.keys()) if isinstance(mm_data, dict) else []
+        ),
+        "prompt_text_len": len(prompt_text) if isinstance(prompt_text, str) else None,
+        "prompt_text_sha256": (
+            hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+            if isinstance(prompt_text, str)
+            else None
+        ),
+        "prompt_text_preview": (
+            prompt_text[:512] if isinstance(prompt_text, str) else None
+        ),
+        "prompt_token_ids_len": (
+            len(prompt_token_ids) if isinstance(prompt_token_ids, list) else None
+        ),
+        "input_length": input_length,
+        "input_token_ids_first64": token_ids[:64],
+        "input_token_ids_last64": token_ids[-64:] if token_ids else [],
+        "input_token_ids_sha256": (
+            hashlib.sha256(
+                json.dumps(token_ids, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            if token_ids
+            else None
+        ),
+        "image_records": (
+            _image_debug_records(image_refs, image_payload)
+            if image_payload is not None
+            else []
+        ),
+        "source_imgs_sizes": _jsonable(
+            _resolve_sample_imgs_sizes(data, source_index)
+        ),
+        "precomputed_img_sizes_enabled": _precomputed_img_sizes_enabled(),
+        "mm_processor_kwargs": _jsonable(prompt.get("mm_processor_kwargs")),
+        "sampling_params": _sampling_params_summary(sampling_params),
+    }
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        line = json.dumps(_jsonable(record), sort_keys=True, separators=(",", ":"))
+        with open(output_path, "a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.write("\n")
+    except Exception as exc:
+        if os.environ.get("NRL_DEBUG", "0") == "1":
+            print(
+                f"[VLLM_REQUEST_DUMP] failed to write {output_path}: {exc}",
+                flush=True,
+            )
+
+
+_VIDEO_PROMPT_STYLE_ENV = "NRL_VIDEO_PROMPT_STYLE"
+_VIDEO_PROMPT_STYLE_SFT_V2_GROUPED = "sft_v2_grouped"
+_VIDEO_PROMPT_STYLE_DEFAULT = _VIDEO_PROMPT_STYLE_SFT_V2_GROUPED
+
+
+def _is_sft_v2_grouped_video_prompt(style: Any) -> bool:
+    if style is None:
+        style = os.environ.get(_VIDEO_PROMPT_STYLE_ENV, _VIDEO_PROMPT_STYLE_DEFAULT)
+    return str(style).strip().lower() == _VIDEO_PROMPT_STYLE_SFT_V2_GROUPED
 
 
 def _build_mm_processor_kwargs(
@@ -340,22 +1004,76 @@ def _build_mm_processor_kwargs(
     *,
     max_num_tiles: Any = None,
     max_num_patches: Any = None,
-) -> dict[str, Any]:
+    include_precomputed_sizes: bool = False,
+    expected_precomputed_count: int | None = None,
+) -> tuple[dict[str, Any], int | None, bool | None]:
     mm_processor_kwargs: dict[str, Any] = {}
 
     if max_num_tiles is None:
         max_num_tiles_values = data.get("vllm_max_num_tiles", None)
         max_num_tiles = _get_row_scalar(max_num_tiles_values, index)
     if max_num_tiles is not None:
-        mm_processor_kwargs["max_num_tiles"] = max_num_tiles
+        mm_processor_kwargs["max_num_tiles"] = _coerce_mm_scalar(max_num_tiles)
 
     if max_num_patches is None:
         max_num_patches_values = data.get("vllm_max_num_patches", None)
         max_num_patches = _get_row_scalar(max_num_patches_values, index)
     if max_num_patches is not None:
-        mm_processor_kwargs["max_num_patches"] = max_num_patches
+        mm_processor_kwargs["max_num_patches"] = _coerce_mm_scalar(max_num_patches)
 
-    return mm_processor_kwargs
+    precomputed_count: int | None = None
+    precomputed_matches: bool | None = None
+    if include_precomputed_sizes and _precomputed_img_sizes_enabled():
+        sample_sizes = _resolve_sample_imgs_sizes(data, index)
+        if sample_sizes is not None:
+            precomputed_count = len(sample_sizes)
+            precomputed_matches = (
+                expected_precomputed_count is None
+                or precomputed_count == expected_precomputed_count
+            )
+            if precomputed_matches:
+                mm_processor_kwargs["precomputed_imgs_sizes"] = sample_sizes
+            elif os.environ.get("NRL_DEBUG", "0") == "1":
+                print(
+                    "[VLLM_PRECOMPUTED_SIZES] "
+                    f"sample={index} skipped because count mismatch: "
+                    f"precomputed={precomputed_count} "
+                    f"expected={expected_precomputed_count}",
+                    flush=True,
+                )
+
+    return mm_processor_kwargs, precomputed_count, precomputed_matches
+
+
+def _maybe_attach_mm_processor_kwargs(
+    prompt_dict: dict[str, Any],
+    data: BatchedDataDict[GenerationDatumSpec],
+    index: int,
+    *,
+    max_num_tiles: Any = None,
+    max_num_patches: Any = None,
+    include_precomputed_sizes: bool = False,
+    expected_precomputed_count: int | None = None,
+) -> tuple[dict[str, Any], int | None, bool | None]:
+    mm_processor_kwargs, precomputed_count, precomputed_matches = (
+        _build_mm_processor_kwargs(
+            data,
+            index,
+            max_num_tiles=max_num_tiles,
+            max_num_patches=max_num_patches,
+            include_precomputed_sizes=include_precomputed_sizes,
+            expected_precomputed_count=expected_precomputed_count,
+        )
+    )
+    if mm_processor_kwargs:
+        prompt_dict["mm_processor_kwargs"] = mm_processor_kwargs
+    return mm_processor_kwargs, precomputed_count, precomputed_matches
+
+
+def _get_row_scalar(values: Any, index: int) -> Any:
+    if values is None or index >= len(values):
+        return None
+    return values[index]
 
 
 def _build_multimodal_prompt(
@@ -376,20 +1094,149 @@ def _build_multimodal_prompt(
         "image": resolved_images[0] if len(resolved_images) == 1 else resolved_images
     }
 
-    mm_processor_kwargs = _build_mm_processor_kwargs(
+    mm_processor_kwargs, precomputed_count, _ = _maybe_attach_mm_processor_kwargs(
+        prompt_dict,
         data,
         index,
         max_num_tiles=max_num_tiles,
         max_num_patches=max_num_patches,
+        include_precomputed_sizes=True,
+        expected_precomputed_count=len(resolved_images),
     )
-    if mm_processor_kwargs:
-        prompt_dict["mm_processor_kwargs"] = mm_processor_kwargs
 
     _emit_prompt_debug(
         index,
         prompt_type="multimodal_prompt",
+        prompt_text=prompt_text,
         images=resolved_images,
         mm_processor_kwargs=mm_processor_kwargs,
+        precomputed_count=precomputed_count,
+        expected_precomputed_count=len(resolved_images),
+    )
+    return prompt_dict
+
+
+def _build_omni_multimodal_prompt(
+    data: BatchedDataDict[GenerationDatumSpec],
+    index: int,
+    prompt_text: str,
+    *,
+    image_cache: dict[str, Image.Image] | None = None,
+) -> dict[str, Any]:
+    images = _get_sample_list(data, "vllm_images", index)
+    videos = _get_sample_list(data, "vllm_videos", index)
+    audio_paths = _get_sample_list(data, "vllm_audio_paths", index)
+    cached_waveforms = _get_sample_list(data, "vllm_audio_waveforms", index)
+
+    resolved_images = [
+        _coerce_vllm_image(image, image_cache=image_cache) for image in images
+    ]
+    video_items: list[tuple[np.ndarray, dict[str, Any]]] = []
+    num_frames = _get_row_scalar(data.get("vllm_num_frames", None), index) or 8
+    temporal_patch_size = (
+        _get_row_scalar(data.get("vllm_temporal_patch_size", None), index) or 1
+    )
+    video_prompt_style = _get_row_scalar(
+        data.get("vllm_video_prompt_style", None), index
+    )
+    use_sft_v2_grouped_video_prompt = _is_sft_v2_grouped_video_prompt(
+        video_prompt_style
+    )
+    if not use_sft_v2_grouped_video_prompt and videos:
+        raise ValueError(
+            "Native vLLM video generation only supports "
+            f"{_VIDEO_PROMPT_STYLE_ENV}={_VIDEO_PROMPT_STYLE_SFT_V2_GROUPED!r}; "
+            f"got {video_prompt_style!r}."
+        )
+    video_frame_indices = _get_sample_list(data, "vllm_video_frame_indices", index)
+    video_fps = _get_sample_list(data, "vllm_video_fps", index)
+    for video_index, video_path in enumerate(videos):
+        frames, metadata = load_video_frames_with_metadata(
+            video_path,
+            num_frames=int(num_frames),
+            temporal_patch_size=int(temporal_patch_size),
+        )
+        if video_index < len(video_frame_indices):
+            frame_indices = video_frame_indices[video_index]
+            if torch.is_tensor(frame_indices):
+                frame_indices = frame_indices.tolist()
+            if isinstance(frame_indices, (list, tuple)) and frame_indices:
+                metadata["frames_indices"] = [
+                    int(frame_index) for frame_index in frame_indices
+                ]
+        if video_index < len(video_fps):
+            fps = video_fps[video_index]
+            if torch.is_tensor(fps):
+                fps = fps.item()
+            if fps:
+                metadata["fps"] = float(fps)
+        video_items.append((frames, metadata))
+
+    max_audio_duration = _get_row_scalar(
+        data.get("vllm_max_audio_duration", None), index
+    )
+    audio_waveforms: list[np.ndarray] = []
+    for audio_index, audio_path in enumerate(audio_paths):
+        cached = cached_waveforms[audio_index] if audio_index < len(cached_waveforms) else None
+        if isinstance(cached, np.ndarray):
+            waveform = cached
+            used_cached = True
+        else:
+            waveform = load_audio_waveform(
+                audio_path,
+                max_duration=max_audio_duration,
+                raise_on_failure=True,
+            )
+            used_cached = False
+        if waveform is None:
+            raise AudioLoadError(audio_path, reason="empty waveform")
+        _emit_audio_payload_debug(
+            index=index,
+            audio_index=audio_index,
+            audio_path=audio_path,
+            waveform=waveform,
+            max_audio_duration=max_audio_duration,
+            cached=used_cached,
+        )
+        audio_waveforms.append(waveform)
+
+    image_payload = resolved_images
+    if not image_payload and not video_items and not audio_waveforms:
+        return _get_regular_prompt(data["input_ids"], data["input_lengths"], index)
+
+    prompt_dict: dict[str, Any] = {"prompt": prompt_text, "multi_modal_data": {}}
+    if image_payload:
+        prompt_dict["multi_modal_data"]["image"] = (
+            image_payload[0] if len(image_payload) == 1 else image_payload
+        )
+    if video_items:
+        prompt_dict["multi_modal_data"]["video"] = (
+            video_items[0] if len(video_items) == 1 else video_items
+        )
+    if audio_waveforms:
+        prompt_dict["multi_modal_data"]["audio"] = (
+            audio_waveforms[0] if len(audio_waveforms) == 1 else audio_waveforms
+        )
+
+    mm_processor_kwargs, precomputed_count, _ = _maybe_attach_mm_processor_kwargs(
+        prompt_dict,
+        data,
+        index,
+        include_precomputed_sizes=bool(image_payload),
+        expected_precomputed_count=len(image_payload) if image_payload else None,
+    )
+
+    _emit_prompt_debug(
+        index,
+        prompt_type="omni_multimodal_prompt",
+        prompt_text=prompt_text,
+        images=image_payload,
+        videos=video_items,
+        audio_count=len(audio_waveforms),
+        mm_processor_kwargs=mm_processor_kwargs,
+        precomputed_count=precomputed_count,
+        expected_precomputed_count=len(image_payload) if image_payload else None,
+        native_video=bool(video_items),
     )
     return prompt_dict
 
@@ -505,6 +1352,19 @@ def format_prompt_for_vllm_generation(
                     fallback_reason="missing_vllm_content",
                 )
                 prompts.append(prompt)
+                continue
+
+            sample_videos = _get_sample_list(data, "vllm_videos", i)
+            sample_audio_paths = _get_sample_list(data, "vllm_audio_paths", i)
+            if sample_videos or sample_audio_paths:
+                prompts.append(
+                    _build_omni_multimodal_prompt(
+                        data,
+                        i,
+                        msg,
+                        image_cache=image_cache,
+                    )
+                )
                 continue
 
             sample_images = _get_sample_images(data, i)
@@ -905,4 +1765,3 @@ def load_video_frames(video_path: str, num_frames: int = 8, temporal_patch_size:
     if _VIDEO_BACKEND == "decord":
         return _load_video_frames_decord(video_path, num_frames, temporal_patch_size)
     return _load_video_frames_pyav(video_path, num_frames, temporal_patch_size)
-

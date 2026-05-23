@@ -265,6 +265,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 "algorithm": config["sequence_packing"]["algorithm"],
                 "input_key": "input_ids",
                 "input_lengths_key": "input_lengths",
+                "expanded_lengths_key": "expanded_lengths",
                 "sequence_length_pad_multiple": sequence_length_pad_multiple,
             }
             assert not config["dynamic_batching"]["enabled"], (

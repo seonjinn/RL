@@ -57,7 +57,8 @@ from nemo_rl.data.datasets.response_datasets.blend_v1 import (
 from nemo_rl.data.datasets.response_datasets.video_dataset import VideoDataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
-_DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
+_DATASET_DEBUG = os.environ.get("NRL_DATASET_DEBUG", "0") == "1"
+_FORMAT_DEBUG = os.environ.get("NRL_DATASET_FORMAT_DEBUG", "0") == "1"
 
 _MEDIA_PLACEHOLDER_TOKENS = (
     "<image>",
@@ -176,8 +177,9 @@ def _build_omni_row(row: dict[str, Any], task_name: str) -> Optional[dict[str, A
     audios = _normalize_path_list(row, "audios", "audio")
     enable_thinking = _parse_bool(row["enable_thinking"]) if row.get("enable_thinking") is not None else True
     has_preference_pair = row.get("context") is not None and row.get("completions") is not None
+    has_text_prompt = row.get("question") is not None
 
-    if not videos and not images and not audios and not has_preference_pair:
+    if not videos and not images and not audios and not has_preference_pair and not has_text_prompt:
         return None
 
     question = ""
@@ -225,15 +227,19 @@ class OmniDataset(VideoDataset):
     def __init__(
         self,
         train_data_path: Optional[str] = None,
+        data_path: Optional[str] = None,
         prompt_file: Optional[str] = None,
         val_size: int = 0,
+        split_validation_size: float = 0,
+        seed: int = 42,
         **kwargs,
     ):
         self.task_name = "omni_dataset"
-        if not train_data_path:
+        path = train_data_path or data_path
+        if not path:
             raise ValueError("OmniDataset requires a JSONL path")
 
-        full_dataset = self._load_jsonl(train_data_path)
+        full_dataset = self._load_jsonl(path)
         if val_size > 0 and len(full_dataset) > val_size:
             cutoff = len(full_dataset) - val_size
             val_dataset = full_dataset.select(range(cutoff, len(full_dataset)))
@@ -242,10 +248,10 @@ class OmniDataset(VideoDataset):
             train_dataset = full_dataset
             val_dataset = None
 
-        self.formatted_ds = {
-            "train": train_dataset,
-            "validation": val_dataset,
-        }
+        self.dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.split_train_validation(split_validation_size, seed)
+        self.formatted_ds = {"train": self.dataset, "validation": self.val_dataset}
         self.task_spec = TaskDataSpec(task_name=self.task_name, prompt_file=prompt_file)
 
     def set_task_spec(self, data_config: dict):
@@ -255,13 +261,14 @@ class OmniDataset(VideoDataset):
         self.task_spec.max_num_patches = data_config.get("max_num_patches", None)
         self.task_spec.use_audio = data_config.get("use_audio", True)
         self.task_spec.max_audio_duration = data_config.get("max_audio_duration", None)
-        print(
-            f"[OmniDataset] task={self.task_name} num_frames={self.task_spec.num_frames} "
-            f"max_num_tiles={self.task_spec.max_num_tiles} "
-            f"max_num_patches={self.task_spec.max_num_patches} "
-            f"use_audio={self.task_spec.use_audio} "
-            f"max_audio_duration={self.task_spec.max_audio_duration}"
-        )
+        if _DATASET_DEBUG:
+            print(
+                f"[OmniDataset] task={self.task_name} num_frames={self.task_spec.num_frames} "
+                f"max_num_tiles={self.task_spec.max_num_tiles} "
+                f"max_num_patches={self.task_spec.max_num_patches} "
+                f"use_audio={self.task_spec.use_audio} "
+                f"max_audio_duration={self.task_spec.max_audio_duration}"
+            )
 
     def _load_jsonl(self, path: str) -> Dataset:
         """Load a JSONL with image/video/audio paths and QA into a Dataset."""
@@ -323,7 +330,7 @@ def format_omni_dataset(example: dict[str, Any]) -> dict[str, Any]:
         "enable_thinking": enable_thinking,
     }
 
-    if _DEBUG:
+    if _FORMAT_DEBUG:
         print(f"[FMT_OMNI_DEBUG] videos={example.get('videos', [])}")
         print(f"[FMT_OMNI_DEBUG] images={example.get('images', [])}")
         print(f"[FMT_OMNI_DEBUG] audios={example.get('audios', [])}")

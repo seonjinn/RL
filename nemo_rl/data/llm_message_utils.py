@@ -392,10 +392,18 @@ def batched_message_log_to_flat_message(
     for key in all_keys:
         values = [seq.get(key) for seq in sequenced_lists]
         # if the values are PackedTensors, create a new PackedTensor from the list of values
-        if values and isinstance(values[0], PackedTensor):
-            result[key] = PackedTensor.flattened_concat(values)
+        if values and any(isinstance(value, PackedTensor) for value in values):
+            template = next(
+                value for value in values if isinstance(value, PackedTensor)
+            )
+            result[key] = PackedTensor.flattened_concat(
+                [
+                    value if isinstance(value, PackedTensor) else PackedTensor.empty_like(template)
+                    for value in values
+                ]
+            )
             continue
-        if not values or not isinstance(values[0], Tensor):
+        if not values or not any(isinstance(value, Tensor) for value in values):
             result[key] = values
             continue
 

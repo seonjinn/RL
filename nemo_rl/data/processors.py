@@ -16,9 +16,11 @@
 
 import json
 import logging
-from copy import deepcopy
+import math
+import os
 from typing import Any, Dict, cast
 
+import numpy as np
 import torch
 from PIL import Image
 from transformers import AutoProcessor, PreTrainedTokenizerBase
@@ -34,6 +36,17 @@ from nemo_rl.data.interfaces import (
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
 
 TokenizerType = PreTrainedTokenizerBase
+logger = logging.getLogger(__name__)
+_DERIVE_VLLM_MAX_NUM_PATCHES_ENV = "NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES"
+
+
+def _env_enabled(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def helpsteer3_data_processor(
@@ -440,6 +453,445 @@ def math_hf_data_processor(
     return output
 
 
+_MEDIA_PLACEHOLDER_TOKENS = (
+    "<image>",
+    "<video>",
+    "<audio>",
+    "<so_embedding>",
+    "<so_start>",
+    "<so_end>",
+)
+
+_VIDEO_PROMPT_STYLE_ENV = "NRL_VIDEO_PROMPT_STYLE"
+_VIDEO_PROMPT_STYLE_SFT_V2_GROUPED = "sft_v2_grouped"
+_VIDEO_PROMPT_STYLE_DEFAULT = _VIDEO_PROMPT_STYLE_SFT_V2_GROUPED
+_SUPPORTED_VIDEO_PROMPT_STYLES = {
+    _VIDEO_PROMPT_STYLE_SFT_V2_GROUPED,
+}
+
+
+def _get_video_prompt_style() -> str:
+    style = os.environ.get(_VIDEO_PROMPT_STYLE_ENV, _VIDEO_PROMPT_STYLE_DEFAULT)
+    style = style.strip().lower()
+    if style not in _SUPPORTED_VIDEO_PROMPT_STYLES:
+        supported = ", ".join(sorted(_SUPPORTED_VIDEO_PROMPT_STYLES))
+        raise ValueError(
+            f"Unsupported {_VIDEO_PROMPT_STYLE_ENV}={style!r}; supported: {supported}"
+        )
+    return style
+
+
+def _timestamps_from_video_metadata(
+    metadata: dict[str, Any] | None,
+    num_frames: int,
+) -> list[float]:
+    if num_frames <= 0:
+        return []
+    if metadata is None:
+        return [float(i) for i in range(num_frames)]
+
+    frames_indices = metadata.get("frames_indices")
+    if torch.is_tensor(frames_indices):
+        frames_indices = frames_indices.tolist()
+    elif hasattr(frames_indices, "tolist") and not isinstance(
+        frames_indices, (list, tuple)
+    ):
+        frames_indices = frames_indices.tolist()
+
+    fps = float(metadata.get("fps") or 0.0)
+    if isinstance(frames_indices, (list, tuple)) and fps > 0:
+        frame_duration_ms = int(1000 / fps)
+        return [
+            int(frames_indices[i]) * frame_duration_ms / 1000.0
+            for i in range(min(num_frames, len(frames_indices)))
+        ]
+
+    duration = float(metadata.get("duration") or 0.0)
+    if duration > 0:
+        if num_frames == 1:
+            return [duration / 2.0]
+        effective_span = max(duration - 1.0, 0.0)
+        segment_size = effective_span / num_frames
+        return [segment_size * (i + 0.5) for i in range(num_frames)]
+
+    return [float(i) for i in range(num_frames)]
+
+
+def _format_sft_v2_grouped_video_line(
+    frame_start_index: int,
+    timestamps: list[float],
+) -> str:
+    group_frames = []
+    for offset, timestamp in enumerate(timestamps):
+        frame_number = frame_start_index + offset + 1
+        frame_label = "Frame" if offset == 0 else "frame"
+        group_frames.append(
+            f"{frame_label} {frame_number} sampled at {timestamp:.2f} seconds"
+        )
+    return " and ".join(group_frames) + ": "
+
+
+def _append_sft_v2_grouped_video_content(
+    *,
+    user_content: list[dict[str, Any]],
+    vllm_content: list[dict[str, Any]],
+    video_path: str,
+    frames: list[Image.Image],
+    timestamps: list[float],
+    temporal_patch_size: int,
+) -> None:
+    """Append SFT-v2 grouped video prompt text for policy and native-vLLM paths."""
+    temporal_patch_size = max(1, int(temporal_patch_size))
+    user_content.append({"type": "text", "text": "This is a video:\n"})
+    vllm_content.append({"type": "text", "text": "This is a video:"})
+    vllm_content.append({"type": "video", "video": video_path})
+
+    for frame_start in range(0, len(frames), temporal_patch_size):
+        group_frames = frames[frame_start : frame_start + temporal_patch_size]
+        group_timestamps = timestamps[frame_start : frame_start + len(group_frames)]
+        if len(group_timestamps) < len(group_frames):
+            group_timestamps.extend(
+                float(frame_start + i)
+                for i in range(len(group_timestamps), len(group_frames))
+            )
+        user_content.append(
+            {
+                "type": "text",
+                "text": _format_sft_v2_grouped_video_line(
+                    frame_start, group_timestamps
+                ),
+            }
+        )
+        for frame in group_frames:
+            user_content.append(
+                {"type": "image", "image": frame, "_is_video_frame": True}
+            )
+        user_content.append({"type": "text", "text": "\n"})
+
+
+def _video_metadata_frame_indices(metadata: dict[str, Any] | None) -> list[int]:
+    if metadata is None:
+        return []
+    frames_indices = metadata.get("frames_indices")
+    if torch.is_tensor(frames_indices):
+        frames_indices = frames_indices.tolist()
+    elif hasattr(frames_indices, "tolist") and not isinstance(
+        frames_indices, (list, tuple)
+    ):
+        frames_indices = frames_indices.tolist()
+    if not isinstance(frames_indices, (list, tuple)):
+        return []
+    return [int(index) for index in frames_indices]
+
+
+def _collapse_video_frame_token_wrappers(
+    user_ids: torch.Tensor,
+    *,
+    video_flags: list[bool],
+    temporal_patch_size: int,
+    img_start_id: int | None,
+    img_end_id: int | None,
+) -> torch.Tensor:
+    if temporal_patch_size <= 1 or img_start_id is None or img_end_id is None:
+        return user_ids
+
+    keep = torch.ones(len(user_ids), dtype=torch.bool, device=user_ids.device)
+    image_idx = 0
+    video_frame_idx = 0
+    for start in (user_ids == img_start_id).nonzero(as_tuple=True)[0]:
+        end_matches = (user_ids[start:] == img_end_id).nonzero(as_tuple=True)[0]
+        if len(end_matches) == 0:
+            break
+        end = start + end_matches[0].item()
+        is_video_frame = image_idx < len(video_flags) and video_flags[image_idx]
+        if is_video_frame:
+            if video_frame_idx % temporal_patch_size != 0:
+                keep[start : end + 1] = False
+            video_frame_idx += 1
+        else:
+            video_frame_idx = 0
+        image_idx += 1
+    return user_ids[keep]
+
+
+def _strip_media_tokens_from_text(text: str) -> str:
+    for token in _MEDIA_PLACEHOLDER_TOKENS:
+        text = text.replace(token, "")
+    return text
+
+
+def _flatten_multimodal_message(message: dict[str, Any]) -> dict[str, Any]:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return message
+
+    parts: list[str] = []
+    for item in content:
+        item_type = item.get("type")
+        if item_type == "text":
+            parts.append(item.get("text", ""))
+        elif item_type == "image":
+            parts.append("<image>")
+        elif item_type == "video":
+            parts.append("<video>")
+        elif item_type == "audio":
+            parts.append("<so_embedding>")
+    return {**message, "content": "\n".join(part for part in parts if part)}
+
+
+def _message_for_chat_template(
+    processor: AutoProcessor,
+    message: dict[str, Any],
+    *,
+    force_flatten: bool = False,
+) -> dict[str, Any]:
+    if not force_flatten and hasattr(processor, "conversation_preprocessor"):
+        return processor.conversation_preprocessor(message)
+    return _flatten_multimodal_message(message)
+
+
+def _apply_chat_template_compat(processor: AutoProcessor, messages: list[dict[str, Any]], **kwargs):
+    try:
+        return processor.apply_chat_template(messages, **kwargs)
+    except TypeError:
+        if "enable_thinking" not in kwargs:
+            raise
+        kwargs = dict(kwargs)
+        kwargs.pop("enable_thinking", None)
+        return processor.apply_chat_template(messages, **kwargs)
+
+
+def _get_audio_duration_seconds(audio_path: str) -> float:
+    ext = os.path.splitext(audio_path)[1].lower()
+    video_extensions = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".ts"}
+
+    if ext not in video_extensions:
+        try:
+            import soundfile as sf
+
+            info = sf.info(audio_path)
+            if info.duration > 0:
+                return float(info.duration)
+        except Exception:
+            pass
+
+    try:
+        from decord import VideoReader
+        from decord import cpu as decord_cpu
+
+        vr = VideoReader(audio_path, ctx=decord_cpu(), num_threads=1)
+        fps = vr.get_avg_fps()
+        if fps > 0 and len(vr) > 0:
+            return float(len(vr) / fps)
+    except Exception:
+        pass
+
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(audio_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            n_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            cap.release()
+            if fps > 0 and n_frames > 0:
+                return float(n_frames / fps)
+        cap.release()
+    except Exception:
+        pass
+
+    return 30.0
+
+
+def _derive_vllm_max_num_patches(
+    message: dict[str, Any],
+    processor: AutoProcessor,
+    task_data_spec: TaskDataSpec,
+    mm_kwargs: dict[str, Any],
+) -> int | None:
+    explicit_max_num_patches = task_data_spec.max_num_patches or mm_kwargs.get(
+        "max_num_patches"
+    )
+    if explicit_max_num_patches is not None:
+        return int(explicit_max_num_patches)
+
+    if _env_enabled(_DERIVE_VLLM_MAX_NUM_PATCHES_ENV, "0") and "imgs_sizes" in message:
+        patch_size = int(getattr(processor, "patch_size", 16))
+        sizes = (
+            message["imgs_sizes"].tolist()
+            if hasattr(message["imgs_sizes"], "tolist")
+            else list(message["imgs_sizes"])
+        )
+        if sizes:
+            return max((int(h) // patch_size) * (int(w) // patch_size) for h, w in sizes)
+    return None
+
+
+def _compute_vision_expansion_from_processor(
+    message: dict[str, Any],
+    processor: AutoProcessor,
+    media_num_frames: list[int],
+    num_post_collapse_placeholders: int,
+    temporal_patch_size: int,
+) -> int:
+    if "imgs_sizes" not in message or num_post_collapse_placeholders == 0:
+        return 0
+
+    imgs_sizes = message["imgs_sizes"]
+    sizes = imgs_sizes.tolist() if hasattr(imgs_sizes, "tolist") else list(imgs_sizes)
+    if not sizes:
+        return 0
+
+    if hasattr(processor, "compute_num_embeddings"):
+        per_frame_embeds = [
+            int(processor.compute_num_embeddings(int(h), int(w))) for h, w in sizes
+        ]
+    else:
+        patch_size = int(getattr(processor, "patch_size", 16))
+        downsample_ratio = float(getattr(processor, "downsample_ratio", 0.5))
+        reduction_factor = max(1, int(round(1 / downsample_ratio)))
+        per_frame_embeds = [
+            (int(h) // patch_size) * (int(w) // patch_size) // (reduction_factor**2)
+            for h, w in sizes
+        ]
+
+    if temporal_patch_size > 1 and media_num_frames:
+        total_embeds = 0
+        offset = 0
+        for num_frames in media_num_frames:
+            frame_embeds = per_frame_embeds[offset : offset + num_frames]
+            offset += num_frames
+            if not frame_embeds:
+                continue
+            if num_frames > 1:
+                per_tubelet = sum(frame_embeds) // max(num_frames, 1)
+                total_embeds += per_tubelet * math.ceil(num_frames / temporal_patch_size)
+            else:
+                total_embeds += sum(frame_embeds)
+        if offset < len(per_frame_embeds):
+            total_embeds += sum(per_frame_embeds[offset:])
+    else:
+        total_embeds = sum(per_frame_embeds)
+
+    return max(0, int(total_embeds) - int(num_post_collapse_placeholders))
+
+
+def _extract_text_from_content_items(content_items: list[dict[str, Any]]) -> str:
+    text_parts = [
+        str(content.get("text", ""))
+        for content in content_items
+        if content.get("type") == "text"
+    ]
+    return "\n".join(part for part in text_parts if part).strip()
+
+
+def _build_masked_vlm_datum(
+    *,
+    datum_dict: dict[str, Any],
+    task_data_spec: TaskDataSpec,
+    processor: AutoProcessor,
+    max_seq_length: int | None,
+    idx: int,
+    task_name: str,
+    extra_env_info: dict[str, Any],
+    content_items: list[dict[str, Any]],
+    reason: str,
+    exc: Exception,
+) -> DatumSpec:
+    """Return a tiny masked DatumSpec for bad media rows."""
+    fallback_text = _extract_text_from_content_items(content_items)
+    if task_data_spec.prompt and fallback_text:
+        fallback_text = task_data_spec.prompt.format(fallback_text)
+    if not fallback_text:
+        fallback_text = "Skipped invalid multimodal sample."
+
+    chat_template_kwargs: dict[str, Any] = {}
+    if "enable_thinking" in datum_dict:
+        chat_template_kwargs["enable_thinking"] = bool(datum_dict["enable_thinking"])
+
+    system_message: dict[str, Any] = {
+        "role": "system",
+        "content": task_data_spec.system_prompt or "",
+    }
+    user_message: dict[str, Any] = {"role": "user", "content": fallback_text}
+    system_for_chat = _message_for_chat_template(processor, system_message, force_flatten=True)
+    user_for_chat = _message_for_chat_template(processor, user_message, force_flatten=True)
+
+    system_only: dict[str, Any] = _apply_chat_template_compat(
+        processor,
+        [system_for_chat],
+        tokenize=True,
+        add_generation_prompt=False,
+        return_tensors="pt",
+        return_dict=True,
+        **chat_template_kwargs,
+    )
+    message_both: dict[str, Any] = _apply_chat_template_compat(
+        processor,
+        [system_for_chat, user_for_chat],
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+        **chat_template_kwargs,
+    )
+    sys_len = system_only["input_ids"].shape[1]
+    system_token_ids = message_both["input_ids"][0][:sys_len]
+    user_token_ids = message_both["input_ids"][0][sys_len:]
+
+    if max_seq_length is not None:
+        token_limit = max(1, min(16, max_seq_length // 2))
+        system_token_ids = system_token_ids[:token_limit]
+        user_token_ids = user_token_ids[:token_limit]
+
+    if user_token_ids.numel() == 0:
+        pad_token_id = getattr(processor.tokenizer, "pad_token_id", None)
+        eos_token_id = getattr(processor.tokenizer, "eos_token_id", None)
+        token_id = eos_token_id if eos_token_id is not None else pad_token_id
+        if token_id is None:
+            token_id = 0
+        user_token_ids = torch.tensor([int(token_id)], dtype=torch.int64)
+
+    message_log: VLMMessageLogType = [
+        {**system_message, "token_ids": system_token_ids},
+        {**user_message, "token_ids": user_token_ids},
+    ]
+    length = sum(len(message["token_ids"]) for message in message_log)
+    logger.warning(
+        "Masking VLM sample idx=%s task=%s after media load failure (%s): %s",
+        idx,
+        task_name,
+        reason,
+        exc,
+    )
+
+    return {
+        "message_log": message_log,
+        "length": length,
+        "extra_env_info": extra_env_info,
+        "loss_multiplier": 0.0,
+        "idx": idx,
+        "task_name": task_name,
+        "vision_expansion": 0,
+        "collapse_savings": 0,
+        "vllm_content": None,
+        "vllm_images": [],
+        "vllm_videos": [],
+        "vllm_num_frames": task_data_spec.num_frames,
+        "vllm_temporal_patch_size": task_data_spec.video_temporal_patch_size,
+        "vllm_video_prompt_style": _get_video_prompt_style(),
+        "vllm_video_frame_indices": [],
+        "vllm_video_fps": [],
+        "vllm_audio_paths": [],
+        "vllm_audio_waveforms": [],
+        "vllm_max_audio_duration": task_data_spec.max_audio_duration,
+        "vllm_max_num_tiles": task_data_spec.max_num_tiles
+        if task_data_spec.use_tiling
+        else None,
+        "vllm_max_num_patches": task_data_spec.max_num_patches,
+    }
+
+
 def vlm_hf_data_processor(
     datum_dict: dict[str, Any],
     task_data_spec: TaskDataSpec,
@@ -447,8 +899,11 @@ def vlm_hf_data_processor(
     max_seq_length: int,
     idx: int,
 ) -> DatumSpec:
-    """Process a datum dictionary (directly loaded from response_datasets/<dataset_name>.py) into a DatumSpec for the VLM Environment."""
+    """Process image/video/audio/text VLM rows into a GRPO DatumSpec."""
     from nemo_rl.data.datasets.response_datasets.blend import format_blend_dataset
+    from nemo_rl.data.datasets.response_datasets.blend_v1 import (
+        format_blend_v1_dataset,
+    )
     from nemo_rl.data.datasets.response_datasets.clevr import (
         format_clevr_cogent_dataset,
     )
@@ -458,172 +913,521 @@ def vlm_hf_data_processor(
     from nemo_rl.data.datasets.response_datasets.mmpr_tiny import (
         format_mmpr_tiny_dataset,
     )
+    from nemo_rl.data.datasets.response_datasets.omni_dataset import (
+        format_omni_dataset,
+    )
     from nemo_rl.data.datasets.response_datasets.refcoco import format_refcoco_dataset
+    from nemo_rl.data.datasets.response_datasets.video_dataset import (
+        format_video_dataset,
+    )
     from nemo_rl.data.multimodal_utils import (
         PackedTensor,
         get_dim_to_pack_along,
         get_multimodal_keys_from_processor,
+        resolve_to_image,
+    )
+    from nemo_rl.models.generation.vllm.utils import (
+        load_audio_waveform,
+        load_video_frames_with_metadata,
     )
 
-    # depending on the task, format the data differently
-    if datum_dict["task_name"] == "clevr-cogent":
+    task_name = task_data_spec.task_name or datum_dict.get("task_name")
+    if task_name == "clevr-cogent":
         datum_dict = format_clevr_cogent_dataset(datum_dict)
-    elif datum_dict["task_name"] == "refcoco":
+    elif task_name == "refcoco":
         datum_dict = format_refcoco_dataset(datum_dict)
-    elif datum_dict["task_name"] == "geometry3k":
+    elif task_name == "geometry3k":
         datum_dict = format_geometry3k_dataset(datum_dict)
-    elif datum_dict["task_name"] == "mmpr_tiny":
+    elif task_name == "mmpr_tiny":
         datum_dict = format_mmpr_tiny_dataset(datum_dict)
-    elif datum_dict["task_name"] == "blend":
+    elif task_name == "blend":
         datum_dict = format_blend_dataset(datum_dict)
+    elif task_name == "blend_v1":
+        datum_dict = format_blend_v1_dataset(datum_dict)
+    elif task_name in ("video_dataset", "omni_video_dataset"):
+        datum_dict = format_video_dataset(datum_dict)
+    elif task_name == "omni_dataset":
+        datum_dict = format_omni_dataset(datum_dict)
     else:
-        raise ValueError(f"No data processor for task {datum_dict['task_name']}")
+        raise ValueError(f"No data processor for task {task_name}")
 
-    user_message = datum_dict["messages"]
-    problem = user_message[0]["content"]
-    extra_env_info = {"ground_truth": user_message[1]["content"]}
+    raw_messages = datum_dict["messages"]
+    problem = raw_messages[0]["content"]
+    extra_env_info = {"ground_truth": raw_messages[1]["content"]}
+    sample_load_audio = bool(datum_dict.get("load_audio_flag", False))
+    video_prompt_style = _get_video_prompt_style()
 
-    message_log: VLMMessageLogType = []
-    ### only one round of interaction is assumed, this can easily be extended to a conversational setting
-    user_message: dict[str, Any] = {"role": "user", "content": []}
-    #
-    images = []
-    if isinstance(problem, list):
-        for content in problem:
-            # for image, video, just append it
-            # for text, format the prompt to the problem
-            if content["type"] != "text":
-                user_message["content"].append(content)
-                if content["type"] == "image":
-                    images.append(content["image"])
-                else:
-                    raise ValueError(f"Unsupported content type: {content['type']}")
-            elif content["type"] == "text":
-                user_message["content"].append(
-                    {
-                        "type": "text",
-                        "text": task_data_spec.prompt.format(content["text"])
-                        if task_data_spec.prompt
-                        else content["text"],
-                    }
-                )
-    else:
-        # conversation consists of a text-only message
-        user_message["content"] = task_data_spec.prompt.format(problem)
+    chat_template_kwargs: dict[str, Any] = {}
+    if "enable_thinking" in datum_dict:
+        chat_template_kwargs["enable_thinking"] = bool(datum_dict["enable_thinking"])
 
-    # TODO(omni-mlm-compat): MMPR rows keep image payloads as filesystem refs so
-    # vLLM transport can stay lightweight. The HF processor, however, only emits
-    # pixel_values/imgs_sizes when the content-list image entries are PIL images.
-    # Use a PIL-backed copy for processor tensorization while preserving the
-    # original refs in ``images`` / ``vllm_images``.
-    user_message_for_processor = deepcopy(user_message)
-    if isinstance(user_message_for_processor["content"], list):
-        for item in user_message_for_processor["content"]:
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "image"
-                and not isinstance(item.get("image"), Image.Image)
-            ):
-                item["image"] = Image.open(item["image"]).convert("RGB")
-
-    # get formatted user message
-    if hasattr(processor, "conversation_preprocessor"):
-        user_message_for_chat_template = processor.conversation_preprocessor(
-            user_message
-        )
-    else:
-        user_message_for_chat_template = user_message
-
-    # Always include the system message in the chat template. Some model
-    # templates emit a non-empty system header even for an empty prompt, so
-    # omitting it changes the token prefix seen by both generation and policy
-    # training.
-    system_prompt_value = task_data_spec.system_prompt or ""
     system_message: dict[str, Any] = {
         "role": "system",
-        "content": system_prompt_value,
+        "content": task_data_spec.system_prompt or "",
     }
-    # Tokenize the system message alone first so we know exactly how many
-    # tokens belong to the system header in the combined output below.
-    system_only: dict = processor.apply_chat_template(
-        [system_message],
+    user_message: dict[str, Any] = {"role": "user", "content": []}
+    vllm_user_message: dict[str, Any] = {"role": "user", "content": []}
+
+    image_paths: list[Any] = []
+    video_paths: list[str] = []
+    video_frame_indices: list[list[int]] = []
+    video_fps: list[float] = []
+    media_num_frames: list[int] = []
+
+    content_items = problem if isinstance(problem, list) else [{"type": "text", "text": str(problem)}]
+    for content in content_items:
+        content_type = content.get("type")
+        if content_type == "image":
+            image_ref = content["image"]
+            image_paths.append(image_ref)
+            media_num_frames.append(1)
+            user_message["content"].append({"type": "image", "image": image_ref})
+            vllm_user_message["content"].append({"type": "image", "image": image_ref})
+        elif content_type == "video":
+            video_path = content["video"]
+            video_paths.append(video_path)
+            want_audio = task_data_spec.use_audio and sample_load_audio
+            cached_waveform = None
+            cached_duration = 0.0
+            video_metadata = None
+            if want_audio:
+                try:
+                    frames_np, video_metadata = load_video_frames_with_metadata(
+                        video_path,
+                        num_frames=task_data_spec.num_frames,
+                        temporal_patch_size=task_data_spec.video_temporal_patch_size,
+                    )
+                    cached_waveform = load_audio_waveform(
+                        video_path,
+                        target_sr=16000,
+                        max_duration=task_data_spec.max_audio_duration,
+                        force_pyav=True,
+                    )
+                    cached_duration = (
+                        0.0
+                        if cached_waveform is None
+                        else len(cached_waveform) / 16000.0
+                    )
+                except Exception as exc:
+                    return _build_masked_vlm_datum(
+                        datum_dict=datum_dict,
+                        task_data_spec=task_data_spec,
+                        processor=processor,
+                        max_seq_length=max_seq_length,
+                        idx=idx,
+                        task_name=task_name,
+                        extra_env_info=extra_env_info,
+                        content_items=content_items,
+                        reason=f"video+audio:{video_path}",
+                        exc=exc,
+                    )
+            else:
+                try:
+                    frames_np, video_metadata = load_video_frames_with_metadata(
+                        video_path,
+                        num_frames=task_data_spec.num_frames,
+                        temporal_patch_size=task_data_spec.video_temporal_patch_size,
+                    )
+                except Exception as exc:
+                    return _build_masked_vlm_datum(
+                        datum_dict=datum_dict,
+                        task_data_spec=task_data_spec,
+                        processor=processor,
+                        max_seq_length=max_seq_length,
+                        idx=idx,
+                        task_name=task_name,
+                        extra_env_info=extra_env_info,
+                        content_items=content_items,
+                        reason=f"video:{video_path}",
+                        exc=exc,
+                    )
+            frames = [Image.fromarray(frame) for frame in frames_np]
+            media_num_frames.append(len(frames))
+            video_frame_indices.append(_video_metadata_frame_indices(video_metadata))
+            video_fps.append(float((video_metadata or {}).get("fps") or 0.0))
+            _append_sft_v2_grouped_video_content(
+                user_content=user_message["content"],
+                vllm_content=vllm_user_message["content"],
+                video_path=video_path,
+                frames=frames,
+                timestamps=_timestamps_from_video_metadata(
+                    video_metadata, len(frames)
+                ),
+                temporal_patch_size=task_data_spec.video_temporal_patch_size,
+            )
+            if want_audio:
+                user_message["content"].append(
+                    {
+                        "type": "audio",
+                        "audio": video_path,
+                        "_cached_waveform": cached_waveform,
+                        "_cached_audio_duration": cached_duration,
+                    }
+                )
+                vllm_user_message["content"].append(
+                    {"type": "audio", "audio": video_path}
+                )
+        elif content_type == "audio":
+            audio_path = content["audio"]
+            try:
+                cached_waveform = load_audio_waveform(
+                    audio_path,
+                    target_sr=16000,
+                    max_duration=task_data_spec.max_audio_duration,
+                    raise_on_failure=True,
+                )
+            except Exception as exc:
+                return _build_masked_vlm_datum(
+                    datum_dict=datum_dict,
+                    task_data_spec=task_data_spec,
+                    processor=processor,
+                    max_seq_length=max_seq_length,
+                    idx=idx,
+                    task_name=task_name,
+                    extra_env_info=extra_env_info,
+                    content_items=content_items,
+                    reason=f"audio:{audio_path}",
+                    exc=exc,
+                )
+            cached_duration = (
+                float(cached_waveform.shape[-1] / 16000) if cached_waveform is not None else 0.0
+            )
+            user_message["content"].append(
+                {
+                    "type": "audio",
+                    "audio": audio_path,
+                    "_cached_waveform": cached_waveform,
+                    "_cached_audio_duration": cached_duration,
+                }
+            )
+            vllm_user_message["content"].append({"type": "audio", "audio": audio_path})
+        elif content_type == "text":
+            text = _strip_media_tokens_from_text(str(content.get("text", "")))
+            text_content = {
+                "type": "text",
+                "text": task_data_spec.prompt.format(text)
+                if task_data_spec.prompt
+                else text,
+            }
+            user_message["content"].append(text_content)
+            vllm_user_message["content"].append(text_content)
+        else:
+            raise ValueError(f"Unsupported content type: {content_type}")
+
+    native_video_prompt = bool(video_paths)
+    system_message_for_chat = _message_for_chat_template(
+        processor, system_message, force_flatten=native_video_prompt
+    )
+    user_message_for_chat = _message_for_chat_template(
+        processor, vllm_user_message, force_flatten=native_video_prompt
+    )
+
+    string_formatted_dialog = _apply_chat_template_compat(
+        processor,
+        [system_message_for_chat, user_message_for_chat],
+        tokenize=False,
+        add_generation_prompt=True,
+        **chat_template_kwargs,
+    )
+
+    audio_paths: list[str] = []
+    cached_audio_waveforms: list[Any] = []
+    cached_audio_durations: list[float] = []
+    content_without_audio: list[dict[str, Any]] = []
+    for content in user_message["content"]:
+        if content["type"] == "audio":
+            audio_paths.append(content["audio"])
+            cached_audio_waveforms.append(content.get("_cached_waveform"))
+            cached_audio_durations.append(float(content.get("_cached_audio_duration", 0.0) or 0.0))
+            content_without_audio.append({"type": "text", "text": "<so_embedding>"})
+        else:
+            content_without_audio.append(content)
+
+    resolved_processor_content: list[dict[str, Any]] = []
+    for content in content_without_audio:
+        if content["type"] != "image":
+            resolved_processor_content.append(content)
+            continue
+        try:
+            resolved_image = resolve_to_image(content["image"])
+        except Exception as exc:
+            return _build_masked_vlm_datum(
+                datum_dict=datum_dict,
+                task_data_spec=task_data_spec,
+                processor=processor,
+                max_seq_length=max_seq_length,
+                idx=idx,
+                task_name=task_name,
+                extra_env_info=extra_env_info,
+                content_items=content_items,
+                reason=f"image:{content['image']}",
+                exc=exc,
+            )
+        resolved_processor_content.append({**content, "image": resolved_image})
+
+    user_message_for_processor = {
+        "role": "user",
+        "content": resolved_processor_content,
+    }
+    system_message_for_processor = _flatten_multimodal_message(system_message)
+
+    mm_kwargs: dict[str, Any] = {}
+    if task_data_spec.use_tiling and task_data_spec.max_num_tiles is not None:
+        mm_kwargs["max_num_tiles"] = task_data_spec.max_num_tiles
+    if task_data_spec.max_num_patches is not None:
+        mm_kwargs["max_num_patches"] = task_data_spec.max_num_patches
+
+    video_flags = [
+        bool(content.get("_is_video_frame", False))
+        for content in user_message_for_processor["content"]
+        if content.get("type") == "image"
+    ]
+    if any(video_flags):
+        mm_kwargs["video_flags"] = video_flags
+        mm_kwargs["video_temporal_patch_size"] = task_data_spec.video_temporal_patch_size
+        if task_data_spec.video_target_num_patches is not None:
+            mm_kwargs["video_target_num_patches"] = task_data_spec.video_target_num_patches
+        mm_kwargs["video_maintain_aspect_ratio"] = task_data_spec.video_maintain_aspect_ratio
+
+    exact_audio_tokens = 0
+    if audio_paths and hasattr(processor, "estimate_audio_tokens"):
+        for audio_index, audio_path in enumerate(audio_paths):
+            cached_duration = cached_audio_durations[audio_index] if audio_index < len(cached_audio_durations) else 0.0
+            audio_duration = cached_duration if cached_duration > 0 else _get_audio_duration_seconds(audio_path)
+            exact_audio_tokens += int(
+                processor.estimate_audio_tokens(
+                    audio_duration,
+                    max_duration=task_data_spec.max_audio_duration,
+                )
+            ) + 2
+
+    if "max_num_patches" not in mm_kwargs:
+        text_estimate = 200
+        mm_kwargs["num_tokens_available"] = max(
+            1024,
+            max_seq_length
+            - exact_audio_tokens
+            - text_estimate
+            - task_data_spec.min_generation_tokens,
+        )
+
+    orig_max_num_tiles = None
+    if (
+        mm_kwargs.get("max_num_tiles") is not None
+        and hasattr(processor, "image_processor")
+        and hasattr(processor.image_processor, "max_num_tiles")
+    ):
+        orig_max_num_tiles = processor.image_processor.max_num_tiles
+        processor.image_processor.max_num_tiles = task_data_spec.max_num_tiles
+
+    system_only: dict[str, Any] = _apply_chat_template_compat(
+        processor,
+        [system_message_for_processor],
         tokenize=True,
         add_generation_prompt=False,
         return_tensors="pt",
         return_dict=True,
+        **chat_template_kwargs,
     )
-    sys_len = system_only["input_ids"].shape[1]
-
-    # this is the string-tokenized conversation template for the generation policy (for vllm)
-    string_formatted_dialog = processor.apply_chat_template(
-        [system_message, user_message_for_chat_template],
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-
-    # this is the id-tokenized and image processed conversation template for the policy
-    message: dict = processor.apply_chat_template(
-        [system_message, user_message_for_processor],
+    message_both: dict[str, Any] = _apply_chat_template_compat(
+        processor,
+        [system_message_for_processor, user_message_for_processor],
         tokenize=True,
         add_generation_prompt=True,
         return_tensors="pt",
         return_dict=True,
+        **chat_template_kwargs,
+        **mm_kwargs,
     )
+    if orig_max_num_tiles is not None:
+        processor.image_processor.max_num_tiles = orig_max_num_tiles
 
-    # Split combined token ids into the system prefix and user suffix so
-    # message_log keeps both roles explicit.
-    combined_ids = message["input_ids"][0]
-    system_message["token_ids"] = combined_ids[:sys_len]
-    user_message["token_ids"] = combined_ids[sys_len:]
-    # add all keys and values to the user message, and the list of keys
+    if audio_paths:
+        if not hasattr(processor, "expand_audio_tokens"):
+            raise ValueError(
+                f"Audio inputs are present for task {task_name}, but processor "
+                f"{type(processor).__name__} does not implement expand_audio_tokens()."
+            )
+        waveforms_to_pass = (
+            cached_audio_waveforms
+            if any(waveform is not None for waveform in cached_audio_waveforms)
+            else None
+        )
+        try:
+            message_both = processor.expand_audio_tokens(
+                message_both,
+                audio_paths,
+                audio_waveforms=waveforms_to_pass,
+                max_audio_duration=task_data_spec.max_audio_duration,
+                sound_clip_duration=task_data_spec.sound_clip_duration,
+                sound_clip_min_duration=task_data_spec.sound_clip_min_duration,
+            )
+        except Exception as exc:
+            return _build_masked_vlm_datum(
+                datum_dict=datum_dict,
+                task_data_spec=task_data_spec,
+                processor=processor,
+                max_seq_length=max_seq_length,
+                idx=idx,
+                task_name=task_name,
+                extra_env_info=extra_env_info,
+                content_items=content_items,
+                reason=f"audio_expand:{','.join(audio_paths)}",
+                exc=exc,
+            )
+
+    sys_len = system_only["input_ids"].shape[1]
+    system_message["token_ids"] = message_both["input_ids"][0][:sys_len]
+    user_message["token_ids"] = message_both["input_ids"][0][sys_len:]
+
+    if task_data_spec.video_temporal_patch_size > 1 and video_paths:
+        tokenizer = processor.tokenizer
+        img_start_id = tokenizer.convert_tokens_to_ids("<img>")
+        img_end_id = tokenizer.convert_tokens_to_ids("</img>")
+        user_message["token_ids"] = _collapse_video_frame_token_wrappers(
+            user_message["token_ids"],
+            video_flags=video_flags,
+            temporal_patch_size=task_data_spec.video_temporal_patch_size,
+            img_start_id=img_start_id,
+            img_end_id=img_end_id,
+        )
+
     multimodal_keys = get_multimodal_keys_from_processor(processor)
-    extra_multimodal_keys = {"pixel_values_flat", "image_num_patches"}
+    extra_multimodal_keys = {
+        "pixel_values_flat",
+        "image_num_patches",
+        "sound_clips",
+    }
     all_multimodal_keys = list(
         dict.fromkeys(
             list(multimodal_keys)
-            + [key for key in extra_multimodal_keys if key in message]
+            + [key for key in extra_multimodal_keys if key in message_both]
         )
     )
     for key in all_multimodal_keys:
-        if key in message:
+        if key not in message_both:
+            continue
+        if key == "sound_clips":
+            clips = message_both["sound_clips"]
+            clip_tensors = [
+                torch.from_numpy(clip).float()
+                if isinstance(clip, np.ndarray)
+                else torch.as_tensor(clip).float()
+                for clip in clips
+            ]
+            lengths = torch.tensor(
+                [clip.shape[0] for clip in clip_tensors], dtype=torch.int32
+            )
+            user_message["sound_clips"] = PackedTensor(clip_tensors, dim_to_pack=0)
+            user_message["sound_length"] = PackedTensor(lengths, dim_to_pack=0)
+            user_message["sound_clip_duration"] = task_data_spec.sound_clip_duration
+            user_message["sound_clip_min_duration"] = task_data_spec.sound_clip_min_duration
+        else:
             user_message[key] = PackedTensor(
-                message[key], dim_to_pack=get_dim_to_pack_along(processor, key)
+                message_both[key], dim_to_pack=get_dim_to_pack_along(processor, key)
             )
 
-    # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
-    if "token_type_ids" in message:
-        # Combined token_type_ids: split with the same sys_len boundary.
-        system_message["token_type_ids"] = message["token_type_ids"][0][:sys_len]
-        user_message["token_type_ids"] = message["token_type_ids"][0][sys_len:]
+    if "imgs_sizes" in message_both:
+        user_message["imgs_sizes"] = PackedTensor(message_both["imgs_sizes"], dim_to_pack=0)
+        if media_num_frames:
+            user_message["num_frames"] = PackedTensor(
+                torch.tensor(media_num_frames, dtype=torch.int32), dim_to_pack=0
+            )
 
-    ### append system message then user message
-    message_log.append(system_message)
-    message_log.append(user_message)
+    if "token_type_ids" in message_both:
+        system_message["token_type_ids"] = message_both["token_type_ids"][0][:sys_len]
+        user_message["token_type_ids"] = message_both["token_type_ids"][0][sys_len:]
 
+    for entry in user_message.get("content", []):
+        if entry.get("type") == "image" and isinstance(entry.get("image"), Image.Image):
+            entry["image"] = "__video_frame__"
+        entry.pop("_cached_waveform", None)
+        entry.pop("_cached_audio_duration", None)
+
+    message_log: VLMMessageLogType = [system_message, user_message]
     length = sum(len(m["token_ids"]) for m in message_log)
+
+    tokenizer = processor.tokenizer
+    image_token_id = tokenizer.convert_tokens_to_ids("<image>")
+    img_start_id = tokenizer.convert_tokens_to_ids("<img>")
+    num_vision_tokens = (
+        sum(int((m["token_ids"] == image_token_id).sum()) for m in message_log)
+        if image_token_id is not None
+        else 0
+    )
+    num_image_groups = (
+        sum(int((m["token_ids"] == img_start_id).sum()) for m in message_log)
+        if img_start_id is not None
+        else 0
+    )
+    post_collapse_placeholders = num_image_groups if num_image_groups > 0 else num_vision_tokens
+    collapse_savings = max(0, num_vision_tokens - post_collapse_placeholders)
+    vision_expansion = _compute_vision_expansion_from_processor(
+        message_both,
+        processor,
+        media_num_frames,
+        post_collapse_placeholders,
+        task_data_spec.video_temporal_patch_size,
+    )
+    expanded_length = length - collapse_savings + vision_expansion
+
+    vllm_max_num_tiles = task_data_spec.max_num_tiles if task_data_spec.use_tiling else None
+    vllm_max_num_patches = _derive_vllm_max_num_patches(
+        message_both, processor, task_data_spec, mm_kwargs
+    )
+
     loss_multiplier = 1.0
-    if length >= max_seq_length:
-        # Treat truncated messages as text only
+    if max_seq_length is not None and expanded_length >= max_seq_length:
         vllm_kwargs = {
             "vllm_content": None,
             "vllm_images": [],
+            "vllm_videos": [],
+            "vllm_num_frames": task_data_spec.num_frames,
+            "vllm_temporal_patch_size": task_data_spec.video_temporal_patch_size,
+            "vllm_video_prompt_style": video_prompt_style,
+            "vllm_video_frame_indices": [],
+            "vllm_video_fps": [],
+            "vllm_audio_paths": [],
+            "vllm_audio_waveforms": [],
+            "vllm_max_audio_duration": task_data_spec.max_audio_duration,
+            "vllm_max_num_tiles": vllm_max_num_tiles,
+            "vllm_max_num_patches": vllm_max_num_patches,
         }
-
-        # make smaller and mask out
+        image_token_ids = [
+            tokenizer.convert_tokens_to_ids(token)
+            for token in ("<img>", "<image>", "</img>")
+        ]
+        image_token_ids = [token_id for token_id in image_token_ids if token_id is not None]
         for chat_message in message_log:
-            chat_message["token_ids"] = chat_message["token_ids"][
-                : min(4, max_seq_length // len(message_log))
-            ]
-            for key, value in chat_message.items():
+            token_ids = chat_message["token_ids"][: min(4, max_seq_length // len(message_log))]
+            for image_token in image_token_ids:
+                token_ids = token_ids[token_ids != image_token]
+            chat_message["token_ids"] = token_ids
+            for key, value in list(chat_message.items()):
                 if isinstance(value, PackedTensor):
                     chat_message[key] = PackedTensor.empty_like(value)
+        length = sum(len(m["token_ids"]) for m in message_log)
         loss_multiplier = 0.0
     else:
-        # get the prompt content! (use this for vllm-backend that needs formatted dialog and list of images) for the entire conversation
-        # add images for vllm serving
+        cached_waveforms = (
+            cached_audio_waveforms
+            if any(waveform is not None for waveform in cached_audio_waveforms)
+            else []
+        )
         vllm_kwargs = {
             "vllm_content": string_formatted_dialog,
-            "vllm_images": images,
+            "vllm_images": image_paths,
+            "vllm_videos": video_paths,
+            "vllm_num_frames": task_data_spec.num_frames,
+            "vllm_temporal_patch_size": task_data_spec.video_temporal_patch_size,
+            "vllm_video_prompt_style": video_prompt_style,
+            "vllm_video_frame_indices": video_frame_indices,
+            "vllm_video_fps": video_fps,
+            "vllm_audio_paths": audio_paths,
+            "vllm_audio_waveforms": cached_waveforms,
+            "vllm_max_audio_duration": task_data_spec.max_audio_duration,
+            "vllm_max_num_tiles": vllm_max_num_tiles,
+            "vllm_max_num_patches": vllm_max_num_patches,
         }
 
     output: DatumSpec = {
@@ -632,8 +1436,10 @@ def vlm_hf_data_processor(
         "extra_env_info": extra_env_info,
         "loss_multiplier": loss_multiplier,
         "idx": idx,
-        "task_name": datum_dict["task_name"],
-        **vllm_kwargs,  # pyrefly: ignore[bad-unpacking]
+        "task_name": task_name,
+        "vision_expansion": vision_expansion,
+        "collapse_savings": collapse_savings,
+        **vllm_kwargs,
     }
     return output
 

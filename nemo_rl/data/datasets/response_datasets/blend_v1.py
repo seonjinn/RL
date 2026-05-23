@@ -83,16 +83,27 @@ class BlendV1Dataset(RawDataset):
     def __init__(
         self,
         train_data_path: Optional[str] = None,
+        data_path: Optional[str] = None,
         prompt_file: Optional[str] = None,
+        val_size: int = 0,
+        split_validation_size: float = 0,
+        seed: int = 42,
         **kwargs,
     ):
         self.task_name = "blend_v1"
-        if not train_data_path:
+        path = train_data_path or data_path
+        if not path:
             raise ValueError("BlendV1Dataset requires a JSONL path")
-        self.formatted_ds = {
-            "train": self._load_jsonl(train_data_path),
-            "validation": None,
-        }
+        full_dataset = self._load_jsonl(path)
+        if val_size > 0 and len(full_dataset) > val_size:
+            cutoff = len(full_dataset) - val_size
+            self.dataset = full_dataset.select(range(cutoff))
+            self.val_dataset = full_dataset.select(range(cutoff, len(full_dataset)))
+        else:
+            self.dataset = full_dataset
+            self.val_dataset = None
+        self.split_train_validation(split_validation_size, seed)
+        self.formatted_ds = {"train": self.dataset, "validation": self.val_dataset}
         self.task_spec = TaskDataSpec(task_name="blend_v1", prompt_file=prompt_file)
 
     def _load_jsonl(self, path: str) -> Dataset:

@@ -56,6 +56,8 @@ def _prepare_uv_environment_commands(
     extras: list[str] = []
     groups: list[str] = []
     config_file: str | None = None
+    locked = "--locked" in options
+    frozen = "--frozen" in options
 
     i = 0
     while i < len(options):
@@ -94,6 +96,10 @@ def _prepare_uv_environment_commands(
     # or ``torch==2.11.0`` overriding sglang's ``2.9.1``. Mirrors the Omni
     # ``nemo-rl-omni/nemo_rl/utils/venvs.py:create_local_venv`` flow.
     install_cmd = ["uv", "sync", "--directory", project_path]
+    if locked:
+        install_cmd.append("--locked")
+    if frozen:
+        install_cmd.append("--frozen")
     if config_file is not None:
         build_cmd.extend(["--config-file", config_file])
         install_cmd.extend(["--config-file", config_file])
@@ -345,7 +351,7 @@ def _env_builder(
     )
     venv_path = Path(NEMO_RL_VENV_DIR) / venv_name
     python_path = venv_path / "bin" / "python"
-    started_file = venv_path / "STARTED_ENV_BUILDER"
+    started_file = venv_path.parent / f".{venv_name}.STARTED_ENV_BUILDER"
 
     # Skip early return if force_rebuild is True
     if not force_rebuild and python_path.exists():
@@ -355,22 +361,33 @@ def _env_builder(
     # Sleep to stagger node startup
     time.sleep(1 * node_idx)
 
-    if started_file.exists():
+    try:
+        venv_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(started_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        owns_started_file = True
+    except FileExistsError:
+        owns_started_file = False
+
+    if not owns_started_file:
         # Another node is already building, wait for completion
         logger.info(
             f"Node {node_idx}: Another node is building {venv_name}, skipping..."
         )
         # Wait for the venv to be ready (check for python executable)
         python_path = venv_path / "bin" / "python"
-        while not python_path.exists():
+        while started_file.exists() or not python_path.exists():
+            if not started_file.exists() and not python_path.exists():
+                raise RuntimeError(
+                    f"Venv build for {venv_name} finished without creating "
+                    f"{python_path}"
+                )
             time.sleep(1)
         return str(python_path)
 
     # Create the venv directory if needed
     venv_path.mkdir(parents=True, exist_ok=True)
 
-    # Touch the started file to signal we're building
-    started_file.touch()
     try:
         # Create the virtual environment on this node
         return create_local_venv(py_executable, venv_name, force_rebuild=force_rebuild)

@@ -20,6 +20,34 @@ from megatron.bridge import AutoBridge
 
 from nemo_rl.models.policy import MegatronConfig
 
+_VLM_CONFIG_ALIASES = {
+    "freeze_vision_encoder": "freeze_vision_model",
+    "freeze_vision_projector": "freeze_vision_projection",
+    "freeze_audio_encoder": "freeze_sound_encoder",
+    "freeze_audio_projector": "freeze_sound_projection",
+}
+
+
+def _iter_vlm_config_overrides(megatron_config: MegatronConfig):
+    keys = (
+        "radio_force_eval_mode",
+        "radio_force_cpe_eval_mode",
+        "radio_interpolate_only_cpe",
+        "radio_cpe_aspect_ratio_select",
+        "radio_disable_cpe",
+        "dynamic_resolution",
+        "freeze_vision_model",
+        "freeze_vision_projection",
+        "freeze_sound_encoder",
+        "freeze_sound_projection",
+    )
+    for key in keys:
+        if key in megatron_config:
+            yield key, megatron_config[key]
+    for old_key, new_key in _VLM_CONFIG_ALIASES.items():
+        if old_key in megatron_config and new_key not in megatron_config:
+            yield new_key, megatron_config[old_key]
+
 
 def _apply_local_hf_llm_config(model_provider, hf_model_name: str) -> None:
     """Apply local HF LLM dimensions that some bridge provider defaults miss."""
@@ -89,6 +117,19 @@ def import_model_from_hf_name(
         model_provider.num_layers_in_last_pipeline_stage
     )
     orig_pipeline_dtype = model_provider.pipeline_dtype
+
+    if megatron_config is not None:
+        for key, value in _iter_vlm_config_overrides(megatron_config):
+            if hasattr(model_provider, key):
+                setattr(model_provider, key, value)
+
+    if megatron_config is None or "dynamic_resolution" not in megatron_config:
+        from transformers import AutoConfig
+
+        from nemo_rl.models.nano_v3_vl import is_dynamic_resolution_model
+
+        hf_config = AutoConfig.from_pretrained(hf_model_name, trust_remote_code=True)
+        setattr(model_provider, "dynamic_resolution", is_dynamic_resolution_model(hf_config))
 
     if megatron_config is not None:
         model_provider.tensor_model_parallel_size = megatron_config[

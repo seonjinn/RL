@@ -15,6 +15,7 @@
 import asyncio
 import copy
 import gc
+import os
 import threading
 import time
 import uuid
@@ -39,7 +40,10 @@ from nemo_rl.models.generation.interfaces import (
     GenerationOutputSpec,
     verify_right_padding,
 )
-from nemo_rl.models.generation.vllm.utils import format_prompt_for_vllm_generation
+from nemo_rl.models.generation.vllm.utils import (
+    extract_sampled_token_logprob,
+    format_prompt_for_vllm_generation,
+)
 from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
 
 
@@ -1091,16 +1095,18 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 dtype=torch.float32,
                 device=original_input_ids_single_row.device,
             )
+            missing_sampled_logprobs = 0
             if hasattr(generation_details, "logprobs") and generation_details.logprobs:
                 for idx, logprob_dict_per_token in enumerate(
                     generation_details.logprobs
                 ):
                     if logprob_dict_per_token and idx < len(generated_token_ids):
                         token_id_at_idx = generated_token_ids[idx]
-                        if token_id_at_idx in logprob_dict_per_token:
-                            logprob_value = logprob_dict_per_token[
-                                token_id_at_idx
-                            ].logprob
+                        logprob_value = extract_sampled_token_logprob(
+                            logprob_dict_per_token,
+                            int(token_id_at_idx),
+                        )
+                        if logprob_value is not None:
                             position_in_output_tensor = (
                                 current_input_actual_length + idx
                             )
@@ -1108,6 +1114,15 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                                 logprobs_single_item[0, position_in_output_tensor] = (
                                     logprob_value
                                 )
+                        else:
+                            missing_sampled_logprobs += 1
+            if missing_sampled_logprobs and os.environ.get("NRL_DEBUG", "0") == "1":
+                print(
+                    "[VLLM_LOGPROB_DEBUG] "
+                    f"request_id={request_id} "
+                    f"missing_sampled_token_logprobs={missing_sampled_logprobs}",
+                    flush=True,
+                )
 
             # Generation lengths
             generation_lengths_tensor = torch.tensor(

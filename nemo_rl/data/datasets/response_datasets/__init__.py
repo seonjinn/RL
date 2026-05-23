@@ -39,28 +39,31 @@ from nemo_rl.data.datasets.response_datasets.refcoco import RefCOCODataset
 from nemo_rl.data.datasets.response_datasets.response_dataset import ResponseDataset
 from nemo_rl.data.datasets.response_datasets.squad import SquadDataset
 from nemo_rl.data.datasets.response_datasets.tulu3 import Tulu3SftMixtureDataset
-from nemo_rl.data.datasets.response_datasets.video_dataset import VideoDataset
+from nemo_rl.data.datasets.response_datasets.video_dataset import (
+    OmniVideoDataset,
+    VideoDataset,
+)
 
 DATASET_REGISTRY = {
     # built-in datasets
     "AIME2024": AIME2024Dataset,
     "blend": BlendDataset,
+    "blend_v1": BlendV1Dataset,
     "clevr-cogent": CLEVRCoGenTDataset,
     "DAPOMath17K": DAPOMath17KDataset,
     "DAPOMathAIME2024": DAPOMathAIME2024Dataset,
     "DeepScaler": DeepScalerDataset,
     "geometry3k": Geometry3KDataset,
     "HelpSteer3": HelpSteer3Dataset,
+    "mmpr": MMPRDataset,
     "mmpr_tiny": MMPRTinyDataset,
+    "omni_dataset": OmniDataset,
+    "omni_video_dataset": OmniVideoDataset,
     "open_assistant": OasstDataset,
     "OpenMathInstruct-2": OpenMathInstruct2Dataset,
     "refcoco": RefCOCODataset,
     "squad": SquadDataset,
     "tulu3_sft_mixture": Tulu3SftMixtureDataset,
-    # MPO-VLM datasets ported from Nemo-RL-Omni
-    "mmpr": MMPRDataset,
-    "blend_v1": BlendV1Dataset,
-    "omni_dataset": OmniDataset,
     "video_dataset": VideoDataset,
     # load from local JSONL file or HuggingFace
     "openai_format": OpenAIFormatDataset,
@@ -107,8 +110,9 @@ __all__ = [
     "MMPRDataset",
     "MMPRTinyDataset",
     "NemoGymDataset",
-    "OasstDataset",
     "OmniDataset",
+    "OmniVideoDataset",
+    "OasstDataset",
     "OpenAIFormatDataset",
     "OpenMathInstruct2Dataset",
     "RefCOCODataset",

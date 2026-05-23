@@ -57,4 +57,31 @@ class RawDataset:
             task_name=self.task_name,
             prompt_file=prompt_file,
             system_prompt_file=system_prompt_file,
+            num_frames=int(self.data_config.get("num_frames", 8)),
+            use_tiling=bool(self.data_config.get("use_tiling", False)),
+            use_dynamic_resolution=self.data_config.get(
+                "use_dynamic_resolution", None
+            ),
+            max_num_tiles=self.data_config.get("max_num_tiles", None),
+            max_num_patches=self.data_config.get("max_num_patches", None),
+            video_target_num_patches=self.data_config.get(
+                "video_target_num_patches", None
+            ),
+            use_audio=bool(self.data_config.get("use_audio", False)),
+            max_audio_duration=self.data_config.get("max_audio_duration", None),
+            sound_clip_duration=float(
+                self.data_config.get("sound_clip_duration", 30.0)
+            ),
+            sound_clip_min_duration=float(
+                self.data_config.get("sound_clip_min_duration", 0.1)
+            ),
+            video_temporal_patch_size=int(
+                self.data_config.get("video_temporal_patch_size", 1)
+            ),
+            video_maintain_aspect_ratio=bool(
+                self.data_config.get("video_maintain_aspect_ratio", True)
+            ),
+            min_generation_tokens=int(
+                self.data_config.get("min_generation_tokens", 2000)
+            ),
         )

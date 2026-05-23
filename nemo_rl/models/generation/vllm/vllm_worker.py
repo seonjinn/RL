@@ -16,9 +16,6 @@ import copy
 import gc
 import logging
 import os
-import sys
-from contextlib import contextmanager
-from importlib.util import find_spec
 from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
@@ -48,11 +45,37 @@ from nemo_rl.models.generation.interfaces import (
     verify_right_padding,
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
-from nemo_rl.models.generation.vllm.utils import format_prompt_for_vllm_generation
+from nemo_rl.models.generation.vllm.utils import (
+    _extract_hw_pairs,
+    dump_vllm_request_boundary,
+    extract_sampled_token_logprob,
+    format_prompt_for_vllm_generation,
+)
 from nemo_rl.models.huggingface.common import ModelFlag
-from nemo_rl.models.policy.utils import is_vllm_v1_engine_enabled
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
+
+
+_VLLM20_STALE_ENV_VARS = (
+    "VLLM_PRECOMPILED_WHEEL_LOCATION",
+    "VLLM_USE_V1",
+)
+_CAP_MAX_TOKENS_TO_CONTEXT_ENV = "NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT"
+
+
+def _cap_max_tokens_to_context_enabled() -> bool:
+    return os.environ.get(_CAP_MAX_TOKENS_TO_CONTEXT_ENV, "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _clear_stale_vllm20_env_vars() -> None:
+    """Remove legacy vLLM env vars before importing vLLM20."""
+    for env_var in _VLLM20_STALE_ENV_VARS:
+        os.environ.pop(env_var, None)
 
 
 # Use a base class to share some functions to avoid code duplication.
@@ -223,11 +246,6 @@ class BaseVllmGenerationWorker:
         self.fraction_of_gpus = fraction_of_gpus
         self.is_model_owner = bundle_indices is not None
 
-        # Store the Python executable being used by this worker
-        self.py_executable = sys.executable
-
-        self._apply_vllm_patches()
-
         if not self.is_model_owner:
             self.llm = None
             self.tokenizer = None
@@ -240,389 +258,9 @@ class BaseVllmGenerationWorker:
         self.rank = 0
         self.world_size = 1
 
-    def _apply_vllm_patches(self):
-        """Apply file-on-disk patches to vLLM and flashinfer source files.
-
-        These patches are idempotent (check before writing) and applied
-        early during ``_init_config`` so that **all** workers -- including
-        non-model-owners -- see the patched files before any vLLM import.
-        """
-        from vllm.logger import init_logger
-
-        logger = init_logger("vllm_patch")
-
-        def _get_vllm_file(relative_path: str) -> str:
-            """Return absolute path to a vLLM file or raise if it cannot be found.
-
-            The relative_path should be a POSIX-style path under the vllm
-            package root, e.g. "v1/executor/ray_executor.py" or
-            "attention/layer.py".
-            """
-            spec = find_spec("vllm")
-            if spec is None or not spec.submodule_search_locations:
-                raise RuntimeError(
-                    "vLLM package not found while attempting to patch "
-                    f"'{relative_path}'. Ensure vLLM is installed and "
-                    "available in this environment."
-                )
-
-            base_dir = next(iter(spec.submodule_search_locations))
-            file_path = os.path.join(base_dir, *relative_path.split("/"))
-
-            if not os.path.exists(file_path):
-                raise RuntimeError(
-                    "Failed to locate expected vLLM file to patch. "
-                    f"Looked for '{relative_path}' at '{file_path}'. "
-                    "This likely indicates an unexpected vLLM installation "
-                    "layout or version mismatch."
-                )
-
-            return file_path
-
-        @contextmanager
-        def _locked_file_patch(file_path: str):
-            """Yield (content, writer) under an exclusive file lock.
-
-            Multiple workers on the same node call _apply_vllm_patches
-            concurrently.  Without a lock, one worker's ``open(path, "w")``
-            truncates the file while another is reading it, causing spurious
-            "expected code snippet not found" warnings.
-
-            Usage::
-
-                with _locked_file_patch(path) as (content, write_back):
-                    if already_patched(content):
-                        return
-                    content = content.replace(old, new)
-                    write_back(content)
-            """
-            import fcntl
-
-            lock_path = file_path + ".patch_lock"
-            lock_fd = open(lock_path, "w")
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
-
-                with open(file_path, "r") as f:
-                    content = f.read()
-
-                def write_back(new_content: str):
-                    with open(file_path, "w") as f:
-                        f.write(new_content)
-
-                yield content, write_back
-            finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                lock_fd.close()
-
-        def _patch_vllm_init_workers_ray():
-            """Patch the vLLM ray_distributed_executor.py file.
-
-            1. Pass custom runtime_env in _init_workers_ray call.
-                - This allows passing custom py_executable to worker initialization.
-            2. Add NCCL_CUMEM_ENABLE and NCCL_NVLS_ENABLE to vLLM ADDITIONAL_ENV_VARS.
-                - This is a workaround to fix async vllm in some scenarios.
-                - See https://github.com/NVIDIA-NeMo/RL/pull/898 for more details.
-            3. Wrap the TP rendezvous RPC chain (init_worker + init_device) in an
-               EADDRINUSE retry loop.
-                - vLLM's _get_open_port() closes the socket before TCPStore.bind(),
-                  leaving a TOCTOU window where another process can grab the port.
-                - On EADDRINUSE we regenerate distributed_init_method with a fresh
-                  port and retry. load_model stays outside the retry (non-network).
-            """
-            file_to_patch = _get_vllm_file("v1/executor/ray_executor.py")
-
-            old_init_rpc_block = (
-                '        self.collective_rpc("init_worker", args=(all_kwargs,))\n'
-                "\n"
-                "        is_eep_new_worker = envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH\n"
-                "        if not is_eep_new_worker:\n"
-                '            self.collective_rpc("init_device")\n'
-                '            self.collective_rpc("load_model")\n'
-            )
-
-            new_init_rpc_block = (
-                "        is_eep_new_worker = envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH\n"
-                "        for _nrl_attempt in range(5):\n"
-                "            try:\n"
-                '                self.collective_rpc("init_worker", args=(all_kwargs,))\n'
-                "                if not is_eep_new_worker:\n"
-                '                    self.collective_rpc("init_device")\n'
-                "                break\n"
-                "            except Exception as _nrl_e:\n"
-                '                if "EADDRINUSE" not in repr(_nrl_e) or _nrl_attempt == 4:\n'
-                "                    raise\n"
-                "                logger.warning(\n"
-                '                    "nemo-rl: TP rendezvous EADDRINUSE on %s (attempt %d/5); regenerating distributed_init_method",\n'
-                "                    distributed_init_method, _nrl_attempt + 1,\n"
-                "                )\n"
-                "                distributed_init_method = get_distributed_init_method(driver_ip, get_open_port())\n"
-                "                for _kw in all_kwargs:\n"
-                '                    _kw["distributed_init_method"] = distributed_init_method\n'
-                "        if not is_eep_new_worker:\n"
-                '            self.collective_rpc("load_model")\n'
-            )
-
-            replacements = [
-                (
-                    "self._init_workers_ray(placement_group)",
-                    f'self._init_workers_ray(placement_group, runtime_env={{"py_executable": "{self.py_executable}"}})',
-                ),
-                (
-                    'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}',
-                    'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "NCCL_CUMEM_ENABLE", "NCCL_NVLS_ENABLE", "RAY_ENABLE_UV_RUN_RUNTIME_ENV"}',
-                ),
-                (old_init_rpc_block, new_init_rpc_block),
-            ]
-
-            with _locked_file_patch(file_to_patch) as (content, write_back):
-                need_replace = False
-                for old, new in replacements:
-                    if new in content or old not in content:
-                        continue
-                    content = content.replace(old, new)
-                    need_replace = True
-
-                if need_replace:
-                    write_back(content)
-
- 
-        def _patch_vllm_hermes_tool_parser_thread_safety():
-            """Patch Hermes2ProToolParser.__init__ to cache tokenizer calls.
-
-            The HuggingFace tokenizer's Rust backend does not support concurrent
-            access. When multiple async requests call _preprocess_chat concurrently,
-            each one constructs a new Hermes2ProToolParser which calls
-            tokenizer.encode() and tokenizer.decode() in __init__, causing
-            "RuntimeError: Already borrowed".
-
-            This patch caches the encode/decode results so only the first
-            instantiation (protected by a lock) touches the tokenizer. All
-            subsequent instantiations read from cache without any tokenizer
-            access.
-
-            Related:
-            - https://github.com/vllm-project/vllm/pull/30264
-            - https://github.com/huggingface/tokenizers/issues/537
-            - https://github.com/PrimeIntellect-ai/prime-rl/pull/1837
-            """
-            file_to_patch = _get_vllm_file("tool_parsers/hermes_tool_parser.py")
-
-            old_import = (
-                "import json\n"
-                "from collections.abc import Sequence"
-            )
-            new_import = (
-                "import json\n"
-                "import threading\n"
-                "from collections.abc import Sequence"
-            )
-
-            old_class_line = "class Hermes2ProToolParser(ToolParser):"
-            new_class_line = (
-                "class Hermes2ProToolParser(ToolParser):\n"
-                "    _tokenizer_lock = threading.Lock()\n"
-                "    _tokenizer_cache = {}"
-            )
-
-            old_init_snippet = (
-                "        self.tool_call_start_token_ids = self.model_tokenizer.encode(\n"
-                "            self.tool_call_start_token, add_special_tokens=False\n"
-                "        )\n"
-                "        self.tool_call_end_token_ids = self.model_tokenizer.encode(\n"
-                "            self.tool_call_end_token, add_special_tokens=False\n"
-                "        )\n"
-                "\n"
-                "        self.tool_call_start_token_array = [\n"
-                "            self.model_tokenizer.decode([token_id])\n"
-                "            for token_id in self.tool_call_start_token_ids\n"
-                "        ]\n"
-                "\n"
-                "        self.tool_call_end_token_array = [\n"
-                "            self.model_tokenizer.decode([token_id])\n"
-                "            for token_id in self.tool_call_end_token_ids\n"
-                "        ]"
-            )
-
-            new_init_snippet = (
-                "        _tid = id(self.model_tokenizer)\n"
-                "        if _tid in Hermes2ProToolParser._tokenizer_cache:\n"
-                "            _cached = Hermes2ProToolParser._tokenizer_cache[_tid]\n"
-                "            self.tool_call_start_token_ids = _cached['start_ids']\n"
-                "            self.tool_call_end_token_ids = _cached['end_ids']\n"
-                "            self.tool_call_start_token_array = _cached['start_array']\n"
-                "            self.tool_call_end_token_array = _cached['end_array']\n"
-                "        else:\n"
-                "            with Hermes2ProToolParser._tokenizer_lock:\n"
-                "                if _tid in Hermes2ProToolParser._tokenizer_cache:\n"
-                "                    _cached = Hermes2ProToolParser._tokenizer_cache[_tid]\n"
-                "                    self.tool_call_start_token_ids = _cached['start_ids']\n"
-                "                    self.tool_call_end_token_ids = _cached['end_ids']\n"
-                "                    self.tool_call_start_token_array = _cached['start_array']\n"
-                "                    self.tool_call_end_token_array = _cached['end_array']\n"
-                "                else:\n"
-                "                    self.tool_call_start_token_ids = "
-                "self.model_tokenizer.encode(\n"
-                "                        self.tool_call_start_token, "
-                "add_special_tokens=False\n"
-                "                    )\n"
-                "                    self.tool_call_end_token_ids = "
-                "self.model_tokenizer.encode(\n"
-                "                        self.tool_call_end_token, "
-                "add_special_tokens=False\n"
-                "                    )\n"
-                "                    self.tool_call_start_token_array = [\n"
-                "                        self.model_tokenizer.decode([token_id])\n"
-                "                        for token_id in self.tool_call_start_token_ids\n"
-                "                    ]\n"
-                "                    self.tool_call_end_token_array = [\n"
-                "                        self.model_tokenizer.decode([token_id])\n"
-                "                        for token_id in self.tool_call_end_token_ids\n"
-                "                    ]\n"
-                "                    Hermes2ProToolParser._tokenizer_cache[_tid] = {\n"
-                "                        'start_ids': self.tool_call_start_token_ids,\n"
-                "                        'end_ids': self.tool_call_end_token_ids,\n"
-                "                        'start_array': self.tool_call_start_token_array,\n"
-                "                        'end_array': self.tool_call_end_token_array,\n"
-                "                    }"
-            )
-
-            with _locked_file_patch(file_to_patch) as (content, write_back):
-                if "_tokenizer_cache" in content:
-                    logger.info("Hermes tool parser thread-safety patch already applied.")
-                    return
-
-                if old_init_snippet not in content:
-                    logger.warning(
-                        "Could not apply hermes tool parser thread-safety patch: "
-                        "expected code snippet not found in %s. "
-                        "The vLLM version may have changed.",
-                        file_to_patch,
-                    )
-                    return
-
-                content = content.replace(old_import, new_import, 1)
-                content = content.replace(old_class_line, new_class_line, 1)
-                content = content.replace(old_init_snippet, new_init_snippet, 1)
-                write_back(content)
-
-            logger.info("Successfully patched hermes tool parser for thread-safety.")
-
-        def _patch_flashinfer_mnnvl_cluster_uuid():
-            """Patch flashinfer mnnvl.py to guard against empty/undecodable clusterUuid.
-
-            On single-node NVSwitch clusters, clusterUuid is all-zero bytes
-            (no multi-node NVLink domain). ctypes truncates at the first null
-            byte, producing an empty string — then ``clusterUuid[0]`` raises
-            ``IndexError``. On some hardware the raw bytes are not valid UTF-8,
-            causing ``UnicodeDecodeError`` in pynvml's ``__getattribute__``
-            before the index is even reached.
-
-            Fix: wrap the clusterUuid access in a try/except so that either
-            failure safely returns ``False`` (falling back to
-            PosixFDHandleExchanger for single-node topologies).
-
-            Upstream fix: https://github.com/flashinfer-ai/flashinfer/pull/2626
-            Related issue: https://github.com/flashinfer-ai/flashinfer/issues/2633
-            """
-            spec = find_spec("flashinfer")
-            if spec is None or not spec.submodule_search_locations:
-                return
-
-            base_dir = next(iter(spec.submodule_search_locations))
-            file_path = os.path.join(base_dir, "comm", "mnnvl.py")
-
-            if not os.path.exists(file_path):
-                return
-
-            old_snippet = (
-                "        if (\n"
-                "            fabric_info.state >= pynvml.NVML_GPU_FABRIC_STATE_COMPLETED\n"
-                "            and fabric_info.clusterUuid[0] != 0\n"
-                "        ):\n"
-                "            return True\n"
-                "        return False\n"
-            )
-
-            new_snippet = (
-                "        try:\n"
-                "            return (\n"
-                "                fabric_info.state >= pynvml.NVML_GPU_FABRIC_STATE_COMPLETED\n"
-                "                and fabric_info.clusterUuid\n"
-                "                and fabric_info.clusterUuid[0] != 0\n"
-                "            )\n"
-                "        except (UnicodeDecodeError, IndexError):\n"
-                "            return False\n"
-            )
-
-            with _locked_file_patch(file_path) as (content, write_back):
-                if new_snippet in content or old_snippet not in content:
-                    return
-
-                content = content.replace(old_snippet, new_snippet)
-                write_back(content)
-
-        _patch_vllm_init_workers_ray()
-        logger.info("Successfully patched vllm _init_workers_ray.")
-
-        _patch_vllm_hermes_tool_parser_thread_safety()
-
-        _patch_flashinfer_mnnvl_cluster_uuid()
-        logger.info("Successfully patched flashinfer mnnvl clusterUuid guard.")
-
-        def _patch_nemotron_h_isinstance_check():
-            """Remove the no-op isinstance branch in NemotronHModel.forward.
-
-            Tomer's vLLM fork added an ``isinstance(layer, NemotronHMoEDecoderLayer)``
-            check inside the layer loop where both branches are identical.  This
-            confuses torch.compile graph tracing on Blackwell GPUs, causing Triton
-            to fail with ``KeyError: "Unknown key: 'cubin'"`` during autotuning of
-            the Mamba SSM kernels.  Reverting to the original simple loop fixes it.
-            """
-            file_path = _get_vllm_file("model_executor/models/nemotron_h.py")
-
-            old_snippet = (
-                "            if isinstance(layer, NemotronHMoEDecoderLayer):\n"
-                "                hidden_states, residual = layer(\n"
-                "                    positions=positions,\n"
-                "                    hidden_states=hidden_states,\n"
-                "                    residual=residual,\n"
-                "                )\n"
-                "            else:\n"
-                "                hidden_states, residual = layer(\n"
-                "                    positions=positions,\n"
-                "                    hidden_states=hidden_states,\n"
-                "                    residual=residual,\n"
-                "                )"
-            )
-
-            new_snippet = (
-                "            hidden_states, residual = layer(\n"
-                "                positions=positions,\n"
-                "                hidden_states=hidden_states,\n"
-                "                residual=residual,\n"
-                "            )"
-            )
-
-            with _locked_file_patch(file_path) as (content, write_back):
-                if old_snippet not in content:
-                    logger.warning(
-                        "Could not apply nemotron_h isinstance patch: "
-                        "expected code snippet not found in %s. "
-                        "The vLLM version may not contain this change.",
-                        file_path,
-                    )
-                    return
-
-                content = content.replace(old_snippet, new_snippet, 1)
-                write_back(content)
-
-            logger.info("Successfully patched nemotron_h.py: removed isinstance branch.")
-
-        _patch_nemotron_h_isinstance_check()
-
     def _load_model(self, bundle_indices, seed):
         """Perform model loading and engine creation."""
+        _clear_stale_vllm20_env_vars()
         log_gpu_memory_diagnostics(label="load_model_start", worker_type="VllmGenerationWorker")
         from vllm.logger import init_logger
 
@@ -634,8 +272,8 @@ class BaseVllmGenerationWorker:
             self.SamplingParams = vllm.SamplingParams
         except ImportError:
             raise ImportError(
-                "vLLM is not installed. Please check that the py_executable in the runtime_env of VllmGenerationWorker "
-                "covers the vllm dependency. You may have to update nemo_rl/distributed/ray_actor_environment_registry.py. "
+                "vLLM is not installed in the worker environment. Please check "
+                "nemo_rl/distributed/ray_actor_environment_registry.py. "
                 "This error can also happen if the venv creation was aborted or errored out in the middle. In that case, "
                 "please run at least once with the environment variable NRL_FORCE_REBUILD_VENVS=true set to force the rebuild of the environment."
             )
@@ -666,7 +304,6 @@ class BaseVllmGenerationWorker:
             # For non-parallel mode, explicitly set executor to None to avoid Ray issues
             vllm_kwargs["distributed_executor_backend"] = None
 
-        os.environ["VLLM_USE_V1"] = "1" if is_vllm_v1_engine_enabled() else "0"
         os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
         # We should use vLLM DP if ep_size > tp_size since EP_SIZE = DP_SIZE * TP_SIZE in vLLM.
@@ -937,20 +574,12 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         input_ids = data["input_ids"]
         input_lengths = data["input_lengths"]
         batch_stop_strings: list[list[str]] = data.get("stop_strings", [])
-        stop_strings = self._merge_stop_strings(batch_stop_strings)
-        sampling_params = self._build_sampling_params(
-            greedy=greedy,
-            stop_strings=stop_strings,
-        )
 
         # verify inputs have correct padding
         verify_right_padding(data, pad_value=self.cfg["_pad_token_id"])
 
         # Original input length with padding
         padded_input_length = input_ids.size(1)
-
-        # Convert inputs to vLLM format
-        prompts = format_prompt_for_vllm_generation(data)
 
         # Generate outputs
         assert self.llm is not None, (
@@ -965,7 +594,192 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         if hasattr(self.llm, "reset_mm_cache"):
             self.llm.reset_mm_cache()
 
-        outputs = self.llm.generate(prompts, sampling_params)
+        cap_max_tokens_to_context = _cap_max_tokens_to_context_enabled()
+        max_model_len = int(
+            getattr(
+                self.llm.llm_engine.model_config,
+                "max_model_len",
+                self.cfg["vllm_cfg"]["max_model_len"],
+            )
+        )
+        skipped_indices = []
+        if cap_max_tokens_to_context:
+            sampling_params_by_prompt = []
+            prompt_indices = []
+            for sample_idx, input_length in enumerate(input_lengths.tolist()):
+                remaining_ctx = max_model_len - int(input_length)
+                if remaining_ctx <= 0:
+                    skipped_indices.append(sample_idx)
+                    continue
+
+                per_sample_stop_strings = (
+                    batch_stop_strings[sample_idx]
+                    if sample_idx < len(batch_stop_strings)
+                    else None
+                )
+                stop_strings = self._merge_stop_strings(
+                    [per_sample_stop_strings] if per_sample_stop_strings else None
+                )
+                sampling_params_by_prompt.append(
+                    self._build_sampling_params(
+                        greedy=greedy,
+                        stop_strings=stop_strings,
+                        max_new_tokens=min(self.cfg["max_new_tokens"], remaining_ctx),
+                    )
+                )
+                prompt_indices.append(sample_idx)
+
+            if len(prompt_indices) == len(input_lengths):
+                prompts = format_prompt_for_vllm_generation(data)
+            else:
+                prompts = [
+                    format_prompt_for_vllm_generation(data, sample_idx)
+                    for sample_idx in prompt_indices
+                ]
+        else:
+            stop_strings = self._merge_stop_strings(batch_stop_strings)
+            sampling_params = self._build_sampling_params(
+                greedy=greedy,
+                stop_strings=stop_strings,
+            )
+            prompt_indices = list(range(len(input_lengths)))
+            prompts = format_prompt_for_vllm_generation(data)
+            sampling_params_by_prompt = [sampling_params] * len(prompts)
+
+        for prompt_pos, prompt in enumerate(prompts):
+            dump_vllm_request_boundary(
+                data,
+                prompt,
+                sampling_params_by_prompt[prompt_pos],
+                source_index=prompt_indices[prompt_pos],
+                prompt_position=prompt_pos,
+            )
+
+        def _prompt_pil_hw(prompt: dict[str, Any]) -> list[tuple[int, int]]:
+            mm_data = prompt.get("multi_modal_data")
+            if not isinstance(mm_data, dict):
+                return []
+
+            mm_images = mm_data.get("image")
+            if mm_images is None:
+                return []
+
+            image_list = mm_images if isinstance(mm_images, list) else [mm_images]
+            pil_hw: list[tuple[int, int]] = []
+            for image in image_list:
+                height = getattr(image, "height", None)
+                width = getattr(image, "width", None)
+                if height is None or width is None:
+                    size = getattr(image, "size", None)
+                    if isinstance(size, tuple) and len(size) >= 2:
+                        width, height = size[0], size[1]
+                if height is None or width is None:
+                    continue
+                pil_hw.append((int(height), int(width)))
+            return pil_hw
+
+        def _prompt_precomputed_hw(prompt: dict[str, Any]) -> list[tuple[int, int]]:
+            mm_kwargs = prompt.get("mm_processor_kwargs", {})
+            if not isinstance(mm_kwargs, dict):
+                return []
+            return _extract_hw_pairs(mm_kwargs.get("precomputed_imgs_sizes"))
+
+        def _shape_counts_profile(
+            shapes: list[tuple[int, int]],
+        ) -> tuple[tuple[int, int, int], ...]:
+            counts: dict[tuple[int, int], int] = {}
+            for shape in shapes:
+                counts[shape] = counts.get(shape, 0) + 1
+            return tuple(
+                (shape[0], shape[1], count) for shape, count in sorted(counts.items())
+            )
+
+        def _bucket_key(prompt: Any, prompt_idx: int) -> str:
+            if not isinstance(prompt, dict):
+                return f"non_dict_prompt:{prompt_idx}"
+
+            pil_hw = _prompt_pil_hw(prompt)
+            if not pil_hw:
+                return "no_image_mm"
+
+            mm_kwargs = prompt.get("mm_processor_kwargs", {})
+            max_num_tiles = (
+                mm_kwargs.get("max_num_tiles") if isinstance(mm_kwargs, dict) else None
+            )
+            max_num_patches = (
+                mm_kwargs.get("max_num_patches") if isinstance(mm_kwargs, dict) else None
+            )
+
+            pre_hw = _prompt_precomputed_hw(prompt)
+            if not pre_hw or len(pre_hw) != len(pil_hw):
+                return (
+                    f"dynamic_image_count={len(pil_hw)};"
+                    f"max_num_tiles={max_num_tiles};"
+                    f"max_num_patches={max_num_patches}"
+                )
+
+            return (
+                f"precomputed={_shape_counts_profile(pre_hw)};"
+                f"max_num_tiles={max_num_tiles};"
+                f"max_num_patches={max_num_patches}"
+            )
+
+        if prompts:
+            bucket_to_positions: dict[str, list[int]] = {}
+            for prompt_pos, prompt in enumerate(prompts):
+                bucket_to_positions.setdefault(_bucket_key(prompt, prompt_pos), []).append(
+                    prompt_pos
+                )
+
+            if os.environ.get("NRL_DEBUG", "0") == "1" and len(bucket_to_positions) > 1:
+                print(
+                    "[VLLM_MM_SHAPE_BUCKET] "
+                    f"num_buckets={len(bucket_to_positions)} "
+                    f"sizes={{"
+                    + ", ".join(
+                        f"{key}: {len(indices)}"
+                        for key, indices in list(bucket_to_positions.items())[:8]
+                    )
+                    + "}",
+                    flush=True,
+                )
+
+            bucketed_outputs: list[Optional[Any]] = [None] * len(prompts)
+            for key, positions in bucket_to_positions.items():
+                sub_prompts = [prompts[pos] for pos in positions]
+                sub_sampling_params = (
+                    [sampling_params_by_prompt[pos] for pos in positions]
+                    if cap_max_tokens_to_context
+                    else sampling_params_by_prompt[positions[0]]
+                )
+                sub_outputs = self.llm.generate(sub_prompts, sub_sampling_params)
+                if len(sub_outputs) != len(positions):
+                    raise RuntimeError(
+                        "[VLLM_MM_SHAPE_BUCKET] output length mismatch "
+                        f"bucket={key} expected={len(positions)} got={len(sub_outputs)}"
+                    )
+                for out_pos, prompt_pos in enumerate(positions):
+                    bucketed_outputs[prompt_pos] = sub_outputs[out_pos]
+
+            missing_outputs = [
+                pos for pos, output in enumerate(bucketed_outputs) if output is None
+            ]
+            if missing_outputs:
+                raise RuntimeError(
+                    "[VLLM_MM_SHAPE_BUCKET] failed to collect outputs "
+                    f"for prompt positions={missing_outputs[:16]}"
+                )
+            outputs = cast(list[Any], bucketed_outputs)
+        else:
+            outputs = []
+        outputs_by_index = dict(zip(prompt_indices, outputs))
+
+        if skipped_indices:
+            print(
+                f"▶ vLLM generation skipped {len(skipped_indices)}/{len(input_lengths)} "
+                f"samples with input length >= max_model_len ({max_model_len})",
+                flush=True,
+            )
 
         # Process the outputs - but preserve the original input padding structure
         output_ids_list = []
@@ -973,15 +787,20 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         generation_lengths = []
         unpadded_sequence_lengths = []
         truncated_list = []  # Track if response was truncated (hit max_tokens)
+        missing_sampled_logprobs = 0
         max_length = 0
         for output in outputs:
             max_length = max(max_length, len(output.outputs[0].token_ids))
 
-        for i, output in enumerate(outputs):
-            # Extract generated tokens
+        for i in range(len(input_lengths)):
+            output = outputs_by_index.get(i)
             sequence_length = input_lengths[i]
-            generation = output.outputs[0]
-            generated_tokens = list(generation.token_ids)
+            if output is None:
+                generation = None
+                generated_tokens = []
+            else:
+                generation = output.outputs[0]
+                generated_tokens = list(generation.token_ids)
 
             # Calculate total sequence length (original input length + generated tokens)
             total_length = padded_input_length + max_length
@@ -1001,14 +820,23 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
 
             output_ids_list.append(full_output)
             full_logprobs = torch.zeros(total_length, dtype=torch.float32)
-            if hasattr(generation, "logprobs") and generation.logprobs:
+            if (
+                generation is not None
+                and hasattr(generation, "logprobs")
+                and generation.logprobs
+            ):
                 try:
                     for idx, logprob_dict in enumerate(generation.logprobs):
-                        if logprob_dict:
+                        if logprob_dict and idx < len(generated_tokens):
                             position = sequence_length + idx
-                            full_logprobs[position] = next(iter(logprob_dict.items()))[
-                                1
-                            ].logprob
+                            sampled_logprob = extract_sampled_token_logprob(
+                                logprob_dict,
+                                int(generated_tokens[idx]),
+                            )
+                            if sampled_logprob is not None:
+                                full_logprobs[position] = sampled_logprob
+                            else:
+                                missing_sampled_logprobs += 1
                 except Exception:
                     import traceback
 
@@ -1021,7 +849,9 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             unpadded_sequence_lengths.append(response_length)
 
             # Check if response was truncated (hit max_tokens length limit)
-            is_truncated = generation.finish_reason == "length"
+            is_truncated = (
+                generation is not None and generation.finish_reason == "length"
+            )
             truncated_list.append(is_truncated)
 
             assert response_length <= self.llm.llm_engine.model_config.max_model_len, (
@@ -1031,6 +861,12 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         # Create return data conforming to GenerationOutputSpec
         output_ids = torch.stack(output_ids_list)
         logprobs = torch.stack(logprobs_list)
+        if missing_sampled_logprobs and os.environ.get("NRL_DEBUG", "0") == "1":
+            print(
+                "[VLLM_LOGPROB_DEBUG] "
+                f"missing_sampled_token_logprobs={missing_sampled_logprobs}",
+                flush=True,
+            )
 
         return_data = BatchedDataDict[GenerationOutputSpec](
             {

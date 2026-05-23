@@ -1,9 +1,12 @@
 import ast
 import logging
+import os
 import re
 import warnings
 
 import numpy as np
+
+_REWARD_DEBUG = os.environ.get("NRL_REWARD_DEBUG", "0") == "1"
 
 # `mathruler` (and its `pylatexenc` transitive dep) is intentionally NOT
 # imported at module load time. The driver baked venv lacks `pylatexenc`
@@ -273,10 +276,56 @@ def mmpr_filtered_reward(
     ground_truth: str,
     response: str,
     format_weight: float = 0.1,
+    dynamic_format_reward: bool = False,
+    asr_reward_min: float | None = None,
 ):
     """Aggregate reward function for MMPR dataset.
     Partial reward for format compliance and accuracy; penalized for extra think/boxed blocks.
+
+    When ``dynamic_format_reward=True``, the ground_truth string may carry an
+    optional ``think:`` or ``nothink:`` prefix that controls whether ``<think>``
+    blocks are rewarded or penalized:
+      - ``think:verifier:answer``   -- reward exactly 1 think + 1 boxed
+      - ``nothink:verifier:answer`` -- penalize any think blocks; reward only clean boxed
+      - ``verifier:answer``         -- legacy format, treated as ``think:``
+
+    When ``dynamic_format_reward=False`` (default), any prefix is still stripped
+    to keep the verifier:answer split correct, but the format reward always uses
+    the legacy behavior (require think + boxed). ASR samples bypass the boxed/
+    thinking logic entirely and use raw-text ``1 - WER`` instead. When
+    ``asr_reward_min`` is set, ASR rewards are floored to that value.
     """
+    # Always strip the think/nothink prefix if present (keeps verifier:answer parsing safe)
+    require_think = True
+    if ground_truth.startswith("think:") or ground_truth.startswith("nothink:"):
+        flag, ground_truth = ground_truth.split(":", 1)
+        if dynamic_format_reward:
+            require_think = (flag == "think")
+
+    ground_truth_with_verifier = ground_truth
+    verifier, ground_truth = ground_truth.split(":", 1)
+    if verifier == "asr":
+        from nemo_rl.environments.asr_utils import asr_wer
+
+        wer = asr_wer([{"gt": ground_truth, "pred": response}]) / 100.0
+        reward = max(0.0, 1.0 - wer)
+        if asr_reward_min is not None:
+            reward = max(asr_reward_min, reward)
+        is_correct = wer == 0.0
+        if _REWARD_DEBUG:
+            think_mode = "think" if require_think else "nothink"
+            print(
+                f"[DEBUG mmpr_filtered_reward] dynamic_format_reward={dynamic_format_reward} mode={think_mode} "
+                f"verifier=asr wer={wer:.4f} reward={reward:.4f} is_correct={is_correct} "
+            )
+        return reward, is_correct
+
+    if verifier == "gui-coordinate":
+        if "</think>" in response and "<think>" not in response:
+            response = "<think>\n" + response
+        think_blocks = list(re.finditer(r"<think>.*?</think>", response, re.DOTALL))
+        return _grade_gui_response(ground_truth_with_verifier, response, think_blocks, format_weight)
+
     if "</think>" in response and "<think>" not in response:
         # XXX nano-v2 tokenizer adds <think> in reasoning mode, but that is omitted from prediction
         response = "<think>\n" + response
@@ -286,16 +335,15 @@ def mmpr_filtered_reward(
         # remove first think block
         response = response[think_blocks[0].end() :].strip()
 
-    verifier_name = ground_truth.split(":", 1)[0]
-    if verifier_name == "gui-coordinate":
-        return _grade_gui_response(ground_truth, response, think_blocks, format_weight)
-
     boxed_answers = extract_all_boxed(response)
-    format_reward_value = (
-        1.0 if len(think_blocks) == 1 and len(boxed_answers) == 1 else 0.0
-    )
-
-    verifier, ground_truth = ground_truth.split(":", 1)
+    if require_think:
+        format_reward_value = (
+            1.0 if len(think_blocks) == 1 and len(boxed_answers) == 1 else 0.0
+        )
+    else:
+        format_reward_value = (
+            1.0 if len(think_blocks) == 0 and len(boxed_answers) == 1 else 0.0
+        )
 
     # Accuracy check
     if boxed_answers:
@@ -319,6 +367,18 @@ def mmpr_filtered_reward(
     final_reward = (
         1.0 - format_weight
     ) * acc_reward_value + format_weight * format_reward_value
+
+    if _REWARD_DEBUG:
+        think_mode = "think" if require_think else "nothink"
+        penalized = not require_think and len(think_blocks) > 0
+        print(
+            f"[DEBUG mmpr_filtered_reward] dynamic_format_reward={dynamic_format_reward} mode={think_mode} "
+            f"think_blocks={len(think_blocks)} boxed_answers={len(boxed_answers)} "
+            f"format_reward={format_reward_value:.2f} acc_reward={acc_reward_value:.2f} "
+            f"final_reward={final_reward:.4f} penalized_think={penalized} "
+            f"verifier={verifier}"
+        )
+
     return final_reward, is_correct
 
 
@@ -366,66 +426,6 @@ def grade_mmpr(verifier: str, gt_answer: str, pred_answer: str) -> float:
         return 0.0
 
 
-def _grade_gui_response(ground_truth, response, think_blocks, format_weight):
-    """Reward for GUI coordinate samples using <point>[(x,y)]</point> format."""
-    _, gt_answer = ground_truth.split(":", 1)
-    gt_parts = gt_answer.split(",")
-    if len(gt_parts) != 2:
-        return 0.0, False
-    try:
-        gt_x, gt_y = float(gt_parts[0]), float(gt_parts[1])
-    except ValueError:
-        return 0.0, False
-
-    m = re.search(
-        r"<point>\s*\[\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]\s*</point>", response
-    )
-    if m:
-        pred_x = int(m.group(1)) / 1000.0
-        pred_y = int(m.group(2)) / 1000.0
-        dist = ((pred_x - gt_x) ** 2 + (pred_y - gt_y) ** 2) ** 0.5
-        acc_reward_value = (1.0 - dist / 0.15) ** 2 if dist < 0.15 else 0.0
-    else:
-        acc_reward_value = 0.0
-
-    point_tags = len(re.findall(r"<point>", response))
-    format_reward_value = (
-        1.0 if len(think_blocks) == 1 and point_tags == 1 else 0.0
-    )
-
-    extra_thinks = response.count("<think>") + response.count("</think>")
-    extra_points = max(0, point_tags - 1)
-    acc_reward_value = acc_reward_value * (0.9 ** (extra_thinks + extra_points))
-
-    final_reward = (
-        1.0 - format_weight
-    ) * acc_reward_value + format_weight * format_reward_value
-    is_correct = acc_reward_value > 0
-    return final_reward, is_correct
-
-
-def grade_gui_coordinate(gt_answer: str, pred_answer: str, max_dist: float = 0.15) -> float:
-    """GUI coordinate verifier: smooth quadratic reward based on Euclidean distance."""
-    gt_parts = gt_answer.split(",")
-    if len(gt_parts) != 2:
-        return 0.0
-    try:
-        gt_x, gt_y = float(gt_parts[0]), float(gt_parts[1])
-    except ValueError:
-        return 0.0
-
-    m = re.search(r"<point>\s*\[?\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]?\s*</point>", pred_answer)
-    if m:
-        pred_x, pred_y = int(m.group(1)) / 1000.0, int(m.group(2)) / 1000.0
-    else:
-        return 0.0
-
-    dist = ((pred_x - gt_x) ** 2 + (pred_y - gt_y) ** 2) ** 0.5
-    if dist >= max_dist:
-        return 0.0
-    return (1.0 - dist / max_dist) ** 2
-
-
 def _normalize_unicode_math(text: str) -> str:
     return (
         text
@@ -458,11 +458,8 @@ def _normalize_ratio(text: str) -> str:
 
 def grade_math(gt_answer: str, pred_answer: str) -> float:
     """Mathematical equality verifier.
-    Binary 0/1 via mathruler symbolic equivalence.
+    Binary 0/1 via mathruler symbolic equivalence, with a math_verify fallback.
     """
-    # Lazy import: keeps driver baked venv (which lacks pylatexenc) import-safe.
-    from mathruler.grader import grade_answer
-
     pred_answer = _normalize_unicode_math(pred_answer)
     gt_answer = _normalize_unicode_math(gt_answer)
     pred_answer = _normalize_ratio(pred_answer)
@@ -485,7 +482,35 @@ def grade_math(gt_answer: str, pred_answer: str) -> float:
             .replace("kg", "")
             .replace("克", "")
         )
-    return float(grade_answer(pred_answer, gt_answer))
+    try:
+        from mathruler.grader import grade_answer
+
+        return float(grade_answer(pred_answer, gt_answer))
+    except Exception as exc:
+        if _REWARD_DEBUG:
+            print(
+                f"[DEBUG mmpr_filtered_reward] mathruler unavailable/failed "
+                f"({type(exc).__name__}: {exc}); falling back to math_verify.",
+                flush=True,
+            )
+
+    try:
+        from nemo_rl.environments.rewards import boxed, math_verify_func
+
+        score, _ = math_verify_func([boxed(gt_answer)], [boxed(pred_answer)])
+        return float(score)
+    except Exception as exc:
+        if _REWARD_DEBUG:
+            print(
+                f"[DEBUG mmpr_filtered_reward] math_verify fallback failed "
+                f"({type(exc).__name__}: {exc}); using normalized exact match.",
+                flush=True,
+            )
+
+    return float(
+        gt_answer.strip().lower().replace(" ", "")
+        == pred_answer.strip().lower().replace(" ", "")
+    )
 
 
 def grade_multiple_choice(gt_answer: str, pred_answer: str) -> float:
@@ -701,3 +726,63 @@ def _normalize_states(text: str) -> str:
         .replace("wyoming", "WY")
     )
     return _normalize_lists(text)
+
+
+def _grade_gui_response(ground_truth, response, think_blocks, format_weight):
+    """Reward for GUI coordinate samples using <point>[(x,y)]</point> format."""
+    _, gt_answer = ground_truth.split(":", 1)
+    gt_parts = gt_answer.split(",")
+    if len(gt_parts) != 2:
+        return 0.0, False
+    try:
+        gt_x, gt_y = float(gt_parts[0]), float(gt_parts[1])
+    except ValueError:
+        return 0.0, False
+
+    m = re.search(
+        r"<point>\s*\[\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]\s*</point>", response
+    )
+    if m:
+        pred_x = int(m.group(1)) / 1000.0
+        pred_y = int(m.group(2)) / 1000.0
+        dist = ((pred_x - gt_x) ** 2 + (pred_y - gt_y) ** 2) ** 0.5
+        acc_reward_value = (1.0 - dist / 0.15) ** 2 if dist < 0.15 else 0.0
+    else:
+        acc_reward_value = 0.0
+
+    point_tags = len(re.findall(r"<point>", response))
+    format_reward_value = (
+        1.0 if len(think_blocks) == 1 and point_tags == 1 else 0.0
+    )
+
+    extra_thinks = response.count("<think>") + response.count("</think>")
+    extra_points = max(0, point_tags - 1)
+    acc_reward_value = acc_reward_value * (0.9 ** (extra_thinks + extra_points))
+
+    final_reward = (
+        1.0 - format_weight
+    ) * acc_reward_value + format_weight * format_reward_value
+    is_correct = acc_reward_value > 0
+    return final_reward, is_correct
+
+
+def grade_gui_coordinate(gt_answer: str, pred_answer: str, max_dist: float = 0.15) -> float:
+    """GUI coordinate verifier: smooth quadratic reward based on Euclidean distance."""
+    gt_parts = gt_answer.split(",")
+    if len(gt_parts) != 2:
+        return 0.0
+    try:
+        gt_x, gt_y = float(gt_parts[0]), float(gt_parts[1])
+    except ValueError:
+        return 0.0
+
+    m = re.search(r"<point>\s*\[?\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]?\s*</point>", pred_answer)
+    if m:
+        pred_x, pred_y = int(m.group(1)) / 1000.0, int(m.group(2)) / 1000.0
+    else:
+        return 0.0
+
+    dist = ((pred_x - gt_x) ** 2 + (pred_y - gt_y) ** 2) ** 0.5
+    if dist >= max_dist:
+        return 0.0
+    return (1.0 - dist / max_dist) ** 2

@@ -18,6 +18,7 @@ from typing import Literal, NotRequired, TypedDict
 class ResponseDatasetConfig(TypedDict):
     dataset_name: NotRequired[str]
     data_path: NotRequired[str]
+    train_data_path: NotRequired[str]
     input_key: NotRequired[str]
     output_key: NotRequired[str]
     subset: NotRequired[str | None]
@@ -29,8 +30,24 @@ class ResponseDatasetConfig(TypedDict):
     download_dir: NotRequired[str]
     # Size of the validation data
     split_validation_size: NotRequired[float]
+    val_size: NotRequired[int]
     # Seed for train/validation split when split_validation_size > 0
     seed: NotRequired[int]
+    # Omni / VLM media controls.
+    num_frames: NotRequired[int]
+    use_tiling: NotRequired[bool]
+    use_dynamic_resolution: NotRequired[bool | None]
+    max_num_tiles: NotRequired[int | None]
+    max_num_patches: NotRequired[int | None]
+    max_images_per_prompt: NotRequired[int]
+    video_target_num_patches: NotRequired[int | None]
+    use_audio: NotRequired[bool]
+    max_audio_duration: NotRequired[float | None]
+    sound_clip_duration: NotRequired[float]
+    sound_clip_min_duration: NotRequired[float]
+    video_temporal_patch_size: NotRequired[int]
+    video_maintain_aspect_ratio: NotRequired[bool]
+    min_generation_tokens: NotRequired[int]
 
 
 class PreferenceDatasetConfig(TypedDict):

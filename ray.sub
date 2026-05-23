@@ -153,6 +153,7 @@ export RAY_gcs_server_request_timeout_seconds="${RAY_gcs_server_request_timeout_
 #   slightly stale task status during init — acceptable tradeoff.
 export RAY_raylet_report_resources_period_milliseconds="${RAY_raylet_report_resources_period_milliseconds:-500}"
 export RAY_task_events_report_interval_ms="${RAY_task_events_report_interval_ms:-5000}"
+export RAY_INCLUDE_DASHBOARD="${RAY_INCLUDE_DASHBOARD:-True}"
 
 # --- Resource broadcast batching ---
 # gcs_resource_broadcast_max_batch_size (default 1 = disabled): GCS broadcasts
@@ -308,17 +309,29 @@ else
 fi
 
 COMMON_SRUN_ARGS="$GRES_ARG"
-COMMON_SRUN_ARGS+=" --mem=0"
+COMMON_SRUN_ARGS+=" --mem=${SRUN_MEM:-0}"
 COMMON_SRUN_ARGS+=" --no-container-mount-home"
 COMMON_SRUN_ARGS+=" --mpi=pmix"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"
 COMMON_SRUN_ARGS+=" --container-image=$CONTAINER"
 COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
-# TODO: delete these (just for debugging)
+# Keep nested srun calls on the same Slurm partition/account as the allocation.
 COMMON_SRUN_ARGS+=" -p $SLURM_JOB_PARTITION"
 COMMON_SRUN_ARGS+=" -A $SLURM_JOB_ACCOUNT"
 # Number of CPUs per worker node
 CPUS_PER_WORKER=${CPUS_PER_WORKER:-$((GPUS_PER_NODE * 16))}
+
+# Ray prestarts Python workers from the advertised CPU count, not from
+# RAY_num_workers_soft_limit. On high-core nodes that can create hundreds of
+# generic workers per node during startup and overload worker registration
+# before model actors are created. Keep the Slurm CPU allocation above, but
+# advertise a smaller CPU pool to Ray; placement groups in this repo need only
+# a few CPU slots per GPU bundle.
+RAY_NUM_CPUS_PER_NODE=${RAY_NUM_CPUS_PER_NODE:-$((GPUS_PER_NODE * 4))}
+if (( RAY_NUM_CPUS_PER_NODE < GPUS_PER_NODE )); then
+  RAY_NUM_CPUS_PER_NODE=$GPUS_PER_NODE
+fi
+echo "[INFO] Ray advertised CPUs per node: $RAY_NUM_CPUS_PER_NODE (Slurm CPUs per worker: $CPUS_PER_WORKER)"
 
 num_retries=3
 
@@ -345,34 +358,25 @@ nodes_array=($nodes)
 ip_addresses_array=()
 
 for node in $nodes; do
-    # Try multiple methods to get IP address - ENHANCED VERSION v2.0
-    echo "[DEBUG] Resolving hostname: $node using enhanced resolution methods"
+    # Try multiple methods to get IP address.
     ip_address=""
-    
+
     # Method 1: Try host command
-    echo "[DEBUG] Method 1: host command"
     ip_address=$(host $node 2>/dev/null | awk '/has address/ { print $4 }' | head -1 || true)
-    echo "[DEBUG] host result: '$ip_address'"
-    
+
     # Method 2: If host fails, try getent
     if [[ -z "$ip_address" ]]; then
-        echo "[DEBUG] Method 2: getent hosts"
         ip_address=$(getent hosts $node 2>/dev/null | awk '{ print $1 }' | head -1 || true)
-        echo "[DEBUG] getent result: '$ip_address'"
     fi
-    
+
     # Method 3: If getent fails, try nslookup
     if [[ -z "$ip_address" ]]; then
-        echo "[DEBUG] Method 3: nslookup"
         ip_address=$(nslookup $node 2>/dev/null | awk '/^Address: / { print $2 }' | head -1 || true)
-        echo "[DEBUG] nslookup result: '$ip_address'"
     fi
-    
+
     # Method 4: If all DNS methods fail, try ping to extract IP
     if [[ -z "$ip_address" ]]; then
-        echo "[DEBUG] Method 4: ping"
         ip_address=$(ping -c 1 $node 2>/dev/null | grep "PING" | sed 's/.*(\([^)]*\)).*/\1/' || true)
-        echo "[DEBUG] ping result: '$ip_address'"
     fi
     
     # If still no IP, use the hostname itself (might work if it's already an IP or resolvable)
@@ -515,6 +519,13 @@ export MIN_WORKER_PORT=$MIN_WORKER_PORT
 export MAX_WORKER_PORT=$MAX_WORKER_PORT
 export RAY_DEBUGGER_ARGS="$RAY_DEBUGGER_ARGS"
 export RAY_LOG_SYNC_FREQUENCY="$RAY_LOG_SYNC_FREQUENCY"
+export RAY_NUM_CPUS_PER_NODE=$RAY_NUM_CPUS_PER_NODE
+${RAY_DEDUP_LOGS:+export RAY_DEDUP_LOGS="$RAY_DEDUP_LOGS"}
+${NRL_WORKER_CREATE_BATCH_SIZE:+export NRL_WORKER_CREATE_BATCH_SIZE="$NRL_WORKER_CREATE_BATCH_SIZE"}
+${NRL_WORKER_CREATE_BATCH_SLEEP_S:+export NRL_WORKER_CREATE_BATCH_SLEEP_S="$NRL_WORKER_CREATE_BATCH_SLEEP_S"}
+${NRL_WORKER_READY_METHOD:+export NRL_WORKER_READY_METHOD="$NRL_WORKER_READY_METHOD"}
+${NRL_WORKER_READY_TIMEOUT_S:+export NRL_WORKER_READY_TIMEOUT_S="$NRL_WORKER_READY_TIMEOUT_S"}
+${NRL_WORKER_READY_CHECK_AFTER_CREATE:+export NRL_WORKER_READY_CHECK_AFTER_CREATE="$NRL_WORKER_READY_CHECK_AFTER_CREATE"}
 export SETUP_COMMAND_FILE="$SETUP_COMMAND_FILE"
 export GPUS_PER_NODE=$GPUS_PER_NODE
 export HEAD_NUM_RETRIES=$num_retries
@@ -621,19 +632,25 @@ log-sync-sidecar() {
   mkdir -p "$LOG_DIR/ray"
   while true; do
     sleep "$RAY_LOG_SYNC_FREQUENCY"
-    if ls /tmp/ray/session_[0-9]* > /dev/null 2>&1; then
-      for session_dir in /tmp/ray/session_[0-9]*/; do
-        if [[ -d "$session_dir/logs" ]]; then
-          session_name=$(basename "$session_dir")
-          mkdir -p "$LOG_DIR/ray/$session_name"
-          if command -v rsync > /dev/null 2>&1; then
-            rsync -ahP "$session_dir/logs/" "$LOG_DIR/ray/$session_name/logs/" 2>/dev/null || true
-          else
-            cp -r "$session_dir/logs" "$LOG_DIR/ray/$session_name/"
-          fi
-        fi
-      done
+    _ray_roots=("/tmp/ray")
+    if [[ -n "${TMPDIR:-}" && "${TMPDIR}/ray" != "/tmp/ray" ]]; then
+      _ray_roots+=("${TMPDIR}/ray")
     fi
+    for ray_root in "${_ray_roots[@]}"; do
+      if ls "$ray_root"/session_[0-9]* > /dev/null 2>&1; then
+        for session_dir in "$ray_root"/session_[0-9]*/; do
+          if [[ -d "$session_dir/logs" ]]; then
+            session_name=$(basename "$session_dir")
+            mkdir -p "$LOG_DIR/ray/$session_name"
+            if command -v rsync > /dev/null 2>&1; then
+              rsync -ahP "$session_dir/logs/" "$LOG_DIR/ray/$session_name/logs/" 2>/dev/null || true
+            else
+              cp -r "$session_dir/logs" "$LOG_DIR/ray/$session_name/"
+            fi
+          fi
+        done
+      fi
+    done
     if [[ -f "$LOG_DIR/ENDED" ]]; then
       echo "Log sync sidecar terminating..."
       break
@@ -817,12 +834,13 @@ while [[ $count -lt $HEAD_NUM_RETRIES ]]; do
 ray start --head \
     --disable-usage-stats \
     --resources="$RAY_RESOURCES" \
+    --num-cpus=${RAY_NUM_CPUS_PER_NODE} \
     --node-ip-address="$HEAD_NODE_IP" \
     --port=${PORT} \
     --ray-client-server-port=${RAY_CLIENT_SERVER_PORT} \
     --dashboard-port=${DASHBOARD_PORT} \
     --dashboard-host="$HEAD_NODE_IP" \
-    --include-dashboard=True \
+    --include-dashboard=${RAY_INCLUDE_DASHBOARD} \
     --min-worker-port=${MIN_WORKER_PORT} \
     --max-worker-port=${MAX_WORKER_PORT} \
     \
@@ -947,19 +965,25 @@ log-sync-sidecar() {
   mkdir -p "$LOG_DIR/ray/$SLURMD_NODENAME"
   while true; do
     sleep "$RAY_LOG_SYNC_FREQUENCY"
-    if ls /tmp/ray/session_[0-9]* > /dev/null 2>&1; then
-      for session_dir in /tmp/ray/session_[0-9]*/; do
-        if [[ -d "$session_dir/logs" ]]; then
-          session_name=$(basename "$session_dir")
-          mkdir -p "$LOG_DIR/ray/$SLURMD_NODENAME/$session_name"
-          if command -v rsync > /dev/null 2>&1; then
-            rsync -ahP "$session_dir/logs/" "$LOG_DIR/ray/$SLURMD_NODENAME/$session_name/logs/" 2>/dev/null || true
-          else
-            cp -r "$session_dir/logs" "$LOG_DIR/ray/$SLURMD_NODENAME/$session_name/"
-          fi
-        fi
-      done
+    _ray_roots=("/tmp/ray")
+    if [[ -n "${TMPDIR:-}" && "${TMPDIR}/ray" != "/tmp/ray" ]]; then
+      _ray_roots+=("${TMPDIR}/ray")
     fi
+    for ray_root in "${_ray_roots[@]}"; do
+      if ls "$ray_root"/session_[0-9]* > /dev/null 2>&1; then
+        for session_dir in "$ray_root"/session_[0-9]*/; do
+          if [[ -d "$session_dir/logs" ]]; then
+            session_name=$(basename "$session_dir")
+            mkdir -p "$LOG_DIR/ray/$SLURMD_NODENAME/$session_name"
+            if command -v rsync > /dev/null 2>&1; then
+              rsync -ahP "$session_dir/logs/" "$LOG_DIR/ray/$SLURMD_NODENAME/$session_name/logs/" 2>/dev/null || true
+            else
+              cp -r "$session_dir/logs" "$LOG_DIR/ray/$SLURMD_NODENAME/$session_name/"
+            fi
+          fi
+        done
+      fi
+    done
     if [[ -f "$LOG_DIR/ENDED" ]]; then
       echo "Log sync sidecar terminating..."
       break
@@ -1142,6 +1166,7 @@ while [[ $count -lt $WORKER_NUM_RETRIES ]]; do
 ray start --address "$IP_HEAD" \
           --disable-usage-stats \
           --resources="$RAY_RESOURCES" \
+          --num-cpus=${RAY_NUM_CPUS_PER_NODE} \
           --min-worker-port=${MIN_WORKER_PORT} \
           --max-worker-port=${MAX_WORKER_PORT} \
           \
@@ -1324,4 +1349,3 @@ EOF
   fi
   sleep infinity
 fi
-

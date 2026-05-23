@@ -43,6 +43,7 @@ checkpoints/
 results/
 code_snapshots*/
 .cache/
+scripts/omnirl_scripts/tmp_docs/
 
 # Runtime env
 .env

@@ -45,6 +45,115 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     return args, overrides
 
 
+def _first_train_data_config(data_cfg: dict) -> dict:
+    train_cfg = data_cfg.get("train", {})
+    if isinstance(train_cfg, list):
+        return train_cfg[0] if train_cfg else {}
+    return train_cfg or {}
+
+
+def _setdefault_nested(root: dict, key: str) -> dict:
+    value = root.setdefault(key, {})
+    if not isinstance(value, dict):
+        value = {}
+        root[key] = value
+    return value
+
+
+_MEGATRON_VLM_FREEZE_ALIASES = {
+    "freeze_vision_encoder": "freeze_vision_model",
+    "freeze_vision_projector": "freeze_vision_projection",
+    "freeze_audio_encoder": "freeze_sound_encoder",
+    "freeze_audio_projector": "freeze_sound_projection",
+}
+
+
+def _translate_megatron_vlm_aliases(megatron_cfg: dict) -> None:
+    for old_key, new_key in _MEGATRON_VLM_FREEZE_ALIASES.items():
+        if old_key in megatron_cfg and new_key not in megatron_cfg:
+            megatron_cfg[new_key] = megatron_cfg[old_key]
+
+
+def _propagate_omni_runtime_config(config: dict) -> None:
+    """Bridge current-schema Omni data keys into policy and generation config."""
+    data_cfg = config.get("data", {}) or {}
+    data_default = data_cfg.get("default", {}) or {}
+    data_train = _first_train_data_config(data_cfg)
+    data_settings = {**data_default, **data_train}
+
+    grpo_cfg = config.get("grpo", {}) or {}
+    if grpo_cfg.get("dynamic_format_reward") is not None:
+        for env_cfg in (config.get("env", {}) or {}).values():
+            if not isinstance(env_cfg, dict):
+                continue
+            for reward_cfg in env_cfg.get("reward_functions", []) or []:
+                if reward_cfg.get("name") == "mmpr_filtered":
+                    kwargs = reward_cfg.setdefault("kwargs", {})
+                    kwargs.setdefault(
+                        "dynamic_format_reward",
+                        bool(grpo_cfg["dynamic_format_reward"]),
+                    )
+
+    policy_cfg = config.get("policy", {}) or {}
+    _translate_megatron_vlm_aliases(_setdefault_nested(policy_cfg, "megatron_cfg"))
+    generation_cfg = policy_cfg.get("generation", {}) or {}
+    if generation_cfg.get("backend") == "vllm":
+        vllm_kwargs = _setdefault_nested(generation_cfg, "vllm_kwargs")
+        # vLLM passes top-level mm_processor_kwargs to the HF processor
+        # constructor at engine startup. NanoNemotron's processor only accepts
+        # constructor-level max_num_tiles; video sizing lives in hf_overrides
+        # and row-specific image budgets are attached to each prompt.
+        if data_settings.get("max_num_tiles") is not None:
+            mm_processor_kwargs = _setdefault_nested(
+                vllm_kwargs, "mm_processor_kwargs"
+            )
+            mm_processor_kwargs.setdefault(
+                "max_num_tiles", data_settings["max_num_tiles"]
+            )
+
+        limit_mm_per_prompt = _setdefault_nested(vllm_kwargs, "limit_mm_per_prompt")
+        if data_settings.get("num_frames") is not None:
+            num_frames = int(data_settings["num_frames"])
+            limit_mm_per_prompt.setdefault(
+                "video", {"count": 1, "num_frames": num_frames}
+            )
+        if data_settings.get("max_images_per_prompt") is not None:
+            limit_mm_per_prompt.setdefault(
+                "image", int(data_settings["max_images_per_prompt"])
+            )
+        if data_settings.get("use_audio"):
+            limit_mm_per_prompt.setdefault("audio", 1)
+
+    use_dynamic_resolution = data_settings.get("use_dynamic_resolution")
+    if use_dynamic_resolution is not None:
+        megatron_cfg = _setdefault_nested(policy_cfg, "megatron_cfg")
+        megatron_cfg.setdefault("dynamic_resolution", bool(use_dynamic_resolution))
+
+    hf_overrides = _setdefault_nested(policy_cfg, "hf_config_overrides")
+    if use_dynamic_resolution is not None:
+        hf_overrides.setdefault("dynamic_resolution", bool(use_dynamic_resolution))
+    vision_config = _setdefault_nested(hf_overrides, "vision_config")
+    sound_config = _setdefault_nested(hf_overrides, "sound_config")
+
+    for key in (
+        "video_temporal_patch_size",
+        "video_target_num_patches",
+        "video_maintain_aspect_ratio",
+    ):
+        value = data_settings.get(key)
+        if value is not None:
+            vision_config.setdefault(key, value)
+
+    for key in (
+        "max_audio_duration",
+        "sound_clip_duration",
+        "sound_clip_min_duration",
+    ):
+        value = data_settings.get(key)
+        if value is not None:
+            sound_config.setdefault(key, value)
+
+
 def main() -> None:
     """Main entry point."""
     main_start = time.perf_counter()
@@ -71,6 +180,7 @@ def main() -> None:
             config = parse_hydra_overrides(config, overrides)
 
         config: MasterConfig = OmegaConf.to_container(config, resolve=True)
+        _propagate_omni_runtime_config(config)
         print("Applied CLI overrides")
 
     # Print config

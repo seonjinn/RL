@@ -361,22 +361,18 @@ class DynamicResolutionProcessor(ProcessorMixin):
         ph, pw = max(1, ph), max(1, pw)
 
         required_divisor = 2 if pixel_shuffle else 1
-        over_target = ph * pw > video_target_num_patches
         if required_divisor > 1:
             rem_h = ph % required_divisor
-            if rem_h != 0:
-                if over_target:
-                    ph -= rem_h
-                else:
-                    ph += required_divisor - rem_h
             rem_w = pw % required_divisor
-            if rem_w != 0:
-                if over_target:
-                    pw -= rem_w
-                else:
-                    pw += required_divisor - rem_w
-            ph = max(required_divisor, ph)
-            pw = max(required_divisor, pw)
+            ph_up = ph + (required_divisor - rem_h if rem_h else 0)
+            ph_down = ph - rem_h
+            pw_up = pw + (required_divisor - rem_w if rem_w else 0)
+            pw_down = pw - rem_w
+            if ph_up * pw_up <= video_target_num_patches:
+                ph, pw = ph_up, pw_up
+            else:
+                ph = max(required_divisor, ph_down)
+                pw = max(required_divisor, pw_down)
 
         if _DEBUG:
             print(

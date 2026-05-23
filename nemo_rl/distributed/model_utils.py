@@ -555,9 +555,12 @@ def from_parallel_logits_to_logprobs(
     pad_len = 0
     # if cp_size > 1:
     # Pad the targets to local size * cp_size
-    pad_len = vocab_parallel_logits.shape[1] * cp_size - target.shape[1]
+    logits_seq_len = vocab_parallel_logits.shape[1] * cp_size
+    pad_len = logits_seq_len - target.shape[1]
     if pad_len > 0:
         target = torch.nn.functional.pad(target, (0, pad_len), value=0)
+    elif pad_len < 0:
+        target = target[:, :logits_seq_len]
 
     # Shard the targets by context parallelism
     cp_rank = torch.distributed.get_rank(cp_group)
