@@ -15,24 +15,25 @@ if [[ -f "${SOURCE_NEMORL}/.env" ]]; then
 fi
 
 CONFIG_PATH="${CONFIG_PATH:-examples/configs/vlmConv3d_grpo_mix_omnirlSDG-videorlSDG-videor1Comm-2minVidFilter-imageCommRB5-aud_nomni_32f_dedup_draco_super.yaml}"
-EXP_NAME="${EXP_NAME:-nomni_comboGRPO_v3_GA-SFT-MPO-TRL1-visG125-ckpt_GA-IRL-Filtered-AllImg3_nrt_fix0417}"
-RUN_ID="${RUN_ID:-20260418}"
-NUM_NODES="${NUM_NODES:-32}"
+EXP_NAME="${EXP_NAME:-nomni_videoGRPO_v3_GA-SFT-MPO-TRL1-ckpt_nrt_super_verify}"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%d-%H%M%S)}"
+NUM_NODES="${NUM_NODES:-16}"
 SNAPSHOT_CODE="${SNAPSHOT_CODE:-1}"
 export GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
-GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
 MICRO_BS="${MICRO_BS:-1}"
 LOGPROB_BS="${LOGPROB_BS:-1}"
-JOB_CYCLES="${JOB_CYCLES:-8}"
+JOB_CYCLES="${JOB_CYCLES:-0}"
 NUM_FRAMES="${NUM_FRAMES:-32}"
 export NRL_VIDEO_SFT_MIN_FRAMES="${NUM_FRAMES}"
 export NRL_VIDEO_SFT_MAX_FRAMES="${NUM_FRAMES}"
+GRPO_NUM_PROMPTS_PER_STEP="${GRPO_NUM_PROMPTS_PER_STEP:-64}"
 GLOBAL_TRAIN_BATCH_SIZE="${GLOBAL_TRAIN_BATCH_SIZE:-$((NUM_NODES * GRADIENT_ACCUMULATION_STEPS * MICRO_BS * GPUS_PER_NODE))}"
 JOB_NAME="${JOB_NAME:-${EXP_NAME}_n${NUM_NODES}_bs${GLOBAL_TRAIN_BATCH_SIZE}_ga${GRADIENT_ACCUMULATION_STEPS}_f${NUM_FRAMES}_j${RUN_ID}}"
 JOB_HASH="${JOB_HASH:-$(printf '%s' "${JOB_NAME}" | openssl dgst -sha1 -binary | od -An -tx1 | tr -d ' \n' | cut -c1-12)}"
 
-MODEL_NAME="/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/grpo_vision_mpo_sft_iter_2200_mpo_200_rl_50_20260407_blend_v6/iter_125"
-TRAIN_DATA_PATH="/lustre/fsw/portfolios/llmservice/users/hanrongy/dataset/nemotron_omni_data/rl/comboGRPO_v3_gaIRL-Filtered/comboV3_gaFiltered-allImgV8_wOCR_wUnans_NRT_20260419_084620.jsonl"
+MODEL_NAME="${MODEL_NAME:-/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_sft/users/pjin/checkpoints/nano-v3-vl-mpo_sft_mmlongbench_txt_0403_2200-iter-200-rl-20260407-step-50-hf}"
+TRAIN_DATA_PATH="${TRAIN_DATA_PATH:-/lustre/fsw/portfolios/llmservice/users/hanrongy/dataset/nemotron_omni_data/rl/video_rl_sdg/combined_video_rl_sdg_batch1_batch2_video0-120s.jsonl}"
 
 RESULTS_ROOT="${RESULTS_ROOT:-${SOURCE_NEMORL}/../jobs}"
 RESULTS_DIR="${RESULTS_DIR:-${RESULTS_ROOT}/${JOB_NAME}}"
@@ -198,7 +199,7 @@ uv run --no-sync examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
 grpo.seed=${SEED} \
-grpo.num_prompts_per_step=256 \
+grpo.num_prompts_per_step=${GRPO_NUM_PROMPTS_PER_STEP} \
 grpo.seq_logprob_error_threshold=50 \
 grpo.zero_variance_prompt_filtering=true \
 grpo.val_at_end=false \
@@ -220,6 +221,7 @@ policy.megatron_cfg.freeze_sound_encoder=true \
 		data.train.train_data_path='${TRAIN_DATA_PATH}' \
 	data.default.num_frames=${NUM_FRAMES} \
 	data.default.max_images_per_prompt=${NUM_FRAMES} \
+	data.default.use_audio=false \
 	policy.generation.vllm_kwargs.limit_mm_per_prompt.image=${NUM_FRAMES} \
 	checkpointing.checkpoint_dir='${RESULTS_DIR}/checkpoints' \
 checkpointing.save_period=5 \
@@ -252,6 +254,7 @@ fi
 echo "JOB_NAME=${JOB_NAME}"
 echo "NUM_NODES=${NUM_NODES}"
 echo "NUM_FRAMES=${NUM_FRAMES}"
+echo "GRPO_NUM_PROMPTS_PER_STEP=${GRPO_NUM_PROMPTS_PER_STEP}"
 echo "NRL_VIDEO_SFT_MIN_FRAMES=${NRL_VIDEO_SFT_MIN_FRAMES}"
 echo "NRL_VIDEO_SFT_MAX_FRAMES=${NRL_VIDEO_SFT_MAX_FRAMES}"
 echo "GLOBAL_TRAIN_BATCH_SIZE=${GLOBAL_TRAIN_BATCH_SIZE}"
