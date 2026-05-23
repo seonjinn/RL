@@ -26,7 +26,7 @@ export UV_LINK_MODE=copy
 # Parse command line arguments. Default to the Super v3 Omni vLLM fork branch
 # that carries the Omni support directly in the vLLM repo.
 GIT_URL=${1:-https://github.com/aroshanghias-nvd/vllm.git}
-GIT_REF=${2:-hanrongy/superomni_dev}
+GIT_REF=${2:-super-v3-omni}
 # NOTE: VLLM_USE_PRECOMPILED=1 didn't always seem to work since the wheels were sometimes built against an incompatible torch/cuda combo.
 # You need to export VLLM_PRECOMPILED_WHEEL_LOCATION to the full path of the wheel file.
 if [[ -n "${3:-}" ]]; then
