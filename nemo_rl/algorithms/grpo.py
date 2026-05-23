@@ -13,6 +13,7 @@
 # limitations under the License.
 import gc
 import json
+import math
 import os
 import time
 import warnings
@@ -2608,23 +2609,12 @@ def grpo_train(
                     gen_step_metrics = {}
                     if hasattr(policy_generation, "get_step_metrics"):
                         gen_step_metrics = policy_generation.get_step_metrics()
-                    advantages = (rewards - baseline).unsqueeze(-1)
+                    advantages = rewards - baseline
 
                     # Save baseline for logging (before deletion)
                     baseline_for_log = baseline.clone()
                     zero_var_mask = std == 0
 
-                    # Extract prompt-only messages for advantage estimation
-                    prompt_only_message_logs = _extract_prompt_only_messages(
-                        repeated_batch["message_log"]
-                    )
-                    prompt_batched_flat, _ = batched_message_log_to_flat_message(
-                        prompt_only_message_logs,
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                    )
-                    prompt_ids_for_adv = prompt_batched_flat["token_ids"]
-                    del prompt_only_message_logs
-                    del prompt_batched_flat
                     del input_ids
                     del baseline
                     del std
@@ -2647,6 +2637,74 @@ def grpo_train(
                             if use_zero_variance_prompt_filtering:
                                 loss_multiplier[zero_var_mask] = 0
                             repeated_batch["loss_multiplier"] = loss_multiplier
+
+                            if use_zero_variance_prompt_filtering:
+                                sample_mask = loss_multiplier > 0
+                                if torch.all(~sample_mask).item():
+                                    warnings.warn(
+                                        "All prompts were filtered out. Skipping training."
+                                    )
+                                    continue
+
+                                total_num_samples = len(sample_mask)
+                                train_gbs = master_config["policy"][
+                                    "train_global_batch_size"
+                                ]
+                                dp_size = policy.sharding_annotations.get_axis_size(
+                                    "data_parallel"
+                                )
+                                assert total_num_samples % train_gbs == 0, (
+                                    "total_num_samples must be divisible by train_gbs: "
+                                    f"{total_num_samples} % {train_gbs} = "
+                                    f"{total_num_samples % train_gbs}"
+                                )
+                                keep_fraction = sample_mask.float().mean().item()
+                                effective_gbs = (
+                                    math.ceil(train_gbs * keep_fraction / dp_size)
+                                    * dp_size
+                                )
+                                effective_num_samples = (
+                                    total_num_samples // train_gbs * effective_gbs
+                                )
+                                indices = torch.argsort((~sample_mask).int())
+                                dropped_adv = advantages[
+                                    indices[effective_num_samples:]
+                                ]
+                                dropped_mult = loss_multiplier[
+                                    indices[effective_num_samples:]
+                                ]
+                                assert (
+                                    (dropped_adv == 0) | (dropped_mult == 0)
+                                ).all().item(), (
+                                    "logic error in zero-variance filtering: dropped "
+                                    "samples with nonzero advantages AND nonzero "
+                                    "loss_multiplier"
+                                )
+                                indices = indices[:effective_num_samples].sort().values
+
+                                repeated_batch = repeated_batch.select_indices(indices)
+                                advantages = advantages[indices]
+                                rewards = rewards[indices]
+                                baseline_for_log = baseline_for_log[indices]
+                                print(
+                                    "Effective batch size "
+                                    f"{effective_num_samples // master_config['grpo']['num_generations_per_prompt']} "
+                                    f"prompts, {effective_num_samples} rollouts"
+                                )
+
+                    with timer.time("prompt_id_extraction"):
+                        # Extract prompt-only messages for advantage estimation after
+                        # filtering so prompt ids stay aligned with rewards.
+                        prompt_only_message_logs = _extract_prompt_only_messages(
+                            repeated_batch["message_log"]
+                        )
+                        prompt_batched_flat, _ = batched_message_log_to_flat_message(
+                            prompt_only_message_logs,
+                            pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                        )
+                        prompt_ids_for_adv = prompt_batched_flat["token_ids"]
+                        del prompt_only_message_logs
+                        del prompt_batched_flat
 
                     with timer.time("add_loss_mask"):
                         for i, message_log in enumerate(repeated_batch["message_log"]):
