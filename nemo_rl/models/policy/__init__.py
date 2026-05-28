@@ -251,6 +251,16 @@ class DynamicBatchingConfig(TypedDict):
     sequence_length_round: int
 
 
+class HybridCPPolicyConfig(TypedDict):
+    enabled: Literal[True]
+    max_seqlen_per_dp_cp_rank: NotRequired[int]
+    scheduling_strategy: NotRequired[Literal["dp", "pp"]]
+    balance_slack: NotRequired[float]
+    eps_bucket: NotRequired[float]
+    force_full_cp: NotRequired[bool]
+    microbatch_budget_multiplier: NotRequired[float]
+
+
 class PolicyConfig(TypedDict):
     model_name: str
     tokenizer: TokenizerConfig
@@ -272,6 +282,7 @@ class PolicyConfig(TypedDict):
     hf_config_overrides: NotRequired[dict[str, Any]]
     dynamic_batching: DynamicBatchingConfig | DynamicBatchingConfigDisabled
     sequence_packing: NotRequired[SequencePackingConfig | SequencePackingConfigDisabled]
+    hybrid_cp: NotRequired[HybridCPPolicyConfig]
     make_sequence_length_divisible_by: int
     max_total_sequence_length: int
     # This sets the clipping norm for the DTensorPolicyWorkers (Megatron's is called clip_grad)

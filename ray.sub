@@ -567,6 +567,8 @@ ${NEMO_RL_VENV_DIR:+export NEMO_RL_VENV_DIR="$NEMO_RL_VENV_DIR"}
 # requested extra doesn't directly use it.
 ${UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME:+export UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME="$UV_INDEX_FLASHINFER_INTERNAL_PYPI_USERNAME"}
 ${UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD:+export UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD="$UV_INDEX_FLASHINFER_INTERNAL_PYPI_PASSWORD"}
+${WANDB_API_KEY:+export WANDB_API_KEY="$WANDB_API_KEY"}
+${WANDB_BASE_URL:+export WANDB_BASE_URL="$WANDB_BASE_URL"}
 # Propagate GitLab private PyPI credentials into the Ray containers so that
 # runtime venv populates (e.g. NRL_FORCE_REBUILD_VENVS=true rebuilding the
 # mcore/vllm actor venv on lustre) can resolve flashinfer-jit-cache /
@@ -598,7 +600,7 @@ ENVEOF
 HEAD_BODY=$(cat <<'HEAD_BODY_EOF'
 set -oux pipefail
 
-env
+env | awk -F= 'BEGIN{IGNORECASE=1} $1 ~ /(KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL|AUTH)/ {print $1"=<redacted>"; next} {print}'
 
 exit-dramatically() {
     # Use SIGTERM to forcefully terminate the srun process
@@ -932,7 +934,7 @@ WORKER_BODY=$(cat <<'WORKER_BODY_EOF'
 set -oux pipefail
 
 echo "[INFO] Worker $SLURM_PROCID on node $SLURMD_NODENAME (SLURM_PROCID=$SLURM_PROCID)"
-env
+env | awk -F= 'BEGIN{IGNORECASE=1} $1 ~ /(KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL|AUTH)/ {print $1"=<redacted>"; next} {print}'
 
 exit-dramatically() {
     # Use SIGTERM to forcefully terminate the srun process

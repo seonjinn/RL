@@ -32,9 +32,10 @@ JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20-nrt-full4h}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
-MODEL_NAME="/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/checkpoints/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-0303/step_400"
-CACHE_DIR="${SOURCE_NEMORL}/.cache/mmpr_tiny"
-WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-omni}"
+MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/checkpoints/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-0303/step_400}}"
+CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-${SOURCE_NEMORL}/.cache/mmpr_tiny}}"
+WANDB_PROJECT="${WANDB_PROJECT:-sna-nemotron-omni-dynamiccp}"
+WANDB_ENABLED="${WANDB_ENABLED:-true}"
 RESULTS_ROOT="${RESULTS_ROOT:-${SOURCE_NEMORL}/../jobs}"
 RESULTS_DIR="${RESULTS_ROOT}/${JOB_NAME}"
 LOGS_DIR="${LOGS_DIR:-${RESULTS_DIR}/logs}"
@@ -213,6 +214,45 @@ EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
 fi
+if [[ -n "${POLICY_TP:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.megatron_cfg.tensor_model_parallel_size=${POLICY_TP}"
+fi
+if [[ -n "${POLICY_EP:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.megatron_cfg.expert_model_parallel_size=${POLICY_EP}"
+fi
+if [[ -n "${VLLM_TP:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP}"
+fi
+if [[ -n "${HYBRID_CP_ENABLED:-${DYNAMIC_CP_ENABLED:-}}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.enabled=${HYBRID_CP_ENABLED:-${DYNAMIC_CP_ENABLED}}"
+fi
+if [[ -n "${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.max_seqlen_per_dp_cp_rank=${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK}"
+fi
+if [[ -n "${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.microbatch_budget_multiplier=${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER}"
+fi
+if [[ -n "${HYBRID_CP_FORCE_FULL_CP:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.force_full_cp=${HYBRID_CP_FORCE_FULL_CP}"
+fi
+if [[ -n "${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.max_total_sequence_length=${POLICY_MAX_TOTAL_SEQUENCE_LENGTH}"
+fi
+if [[ -n "${GRPO_MAX_NUM_STEPS:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.max_num_steps=${GRPO_MAX_NUM_STEPS}"
+fi
+if [[ -n "${GRPO_NUM_PROMPTS_PER_STEP:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.num_prompts_per_step=${GRPO_NUM_PROMPTS_PER_STEP}"
+fi
+if [[ -n "${GRPO_NUM_GENERATIONS_PER_PROMPT:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.num_generations_per_prompt=${GRPO_NUM_GENERATIONS_PER_PROMPT}"
+fi
+if [[ -n "${POLICY_TRAIN_GLOBAL_BATCH_SIZE:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.train_global_batch_size=${POLICY_TRAIN_GLOBAL_BATCH_SIZE}"
+fi
+if [[ -n "${GRPO_VAL_PERIOD:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.val_period=${GRPO_VAL_PERIOD}"
+fi
 # Match DFW's vLLM runtime settings while keeping current NRT code/infra.
 EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.enforce_eager=${VLLM_ENFORCE_EAGER:-true}"
 EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING:-false}"
@@ -245,7 +285,7 @@ cluster.gpus_per_node=${GPUS_PER_NODE} \
 policy.model_name='${MODEL_NAME}' \
 checkpointing.checkpoint_dir='${RESULTS_DIR}' \
 logger.log_dir='${RESULTS_DIR}' \
-logger.wandb_enabled=true \
+logger.wandb_enabled=${WANDB_ENABLED} \
 logger.wandb.project='${WANDB_PROJECT}' \
 logger.wandb.name='${JOB_NAME}' \
 data.train.cache_dir='${CACHE_DIR}'\

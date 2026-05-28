@@ -18,6 +18,7 @@ from functools import partial
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 from megatron.core.models.gpt import GPTModel
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import (
@@ -42,7 +43,7 @@ from nemo_rl.distributed.model_utils import (
     from_parallel_logits_to_logprobs_packed_sequences,
     repack_original_tokens_for_vlm_logprobs,
 )
-from nemo_rl.models.megatron.data import ProcessedMicrobatch
+from nemo_rl.models.megatron.data import ProcessedMicrobatch, _strip_hcp_metadata_for_loss
 from nemo_rl.models.megatron.multimodal import prepare_multimodal_data
 from nemo_rl.models.policy import PolicyConfig
 
@@ -209,6 +210,8 @@ def forward_with_post_processing_fn(
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     use_llava_handoff = processed_mb.use_llava_handoff
+    local_cp_group = processed_mb.local_cp_group
+    local_cp_size = processed_mb.local_cp_size
 
     output_tensor = model_forward(
         model=model,
@@ -288,17 +291,22 @@ def forward_with_post_processing_fn(
             packed_seq_params=packed_seq_params,
             global_valid_seqs=global_valid_seqs,
             global_valid_toks=global_valid_toks,
+            local_cp_group=local_cp_group,
+            local_cp_size=local_cp_size,
         )
     elif isinstance(post_processing_fn, LogprobsPostProcessor):
         post_processing_fn_wrapped = post_processing_fn(
             data_dict=data_dict,
             input_ids=input_ids,
             cu_seqlens_padded=cu_seqlens_padded,
+            local_cp_group=local_cp_group,
         )
     elif isinstance(post_processing_fn, TopkLogitsPostProcessor):
         post_processing_fn_wrapped = post_processing_fn(
             data_dict=data_dict,
             cu_seqlens_padded=cu_seqlens_padded,
+            local_cp_group=local_cp_group,
+            local_cp_size=local_cp_size,
         )
     else:
         raise TypeError(
@@ -386,6 +394,8 @@ class LossPostProcessor:
         packed_seq_params: Optional[PackedSeqParams] = None,
         global_valid_seqs: Optional[torch.Tensor] = None,
         global_valid_toks: Optional[torch.Tensor] = None,
+        local_cp_group: Optional[dist.ProcessGroup] = None,
+        local_cp_size: Optional[int] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, Any]]]:
         """Create a loss post-processing function for training.
 
@@ -404,6 +414,13 @@ class LossPostProcessor:
         """
         loss_fn = self.loss_fn
         pack_sequences = self.cfg["sequence_packing"]["enabled"]
+        cp_size = int(local_cp_size or get_context_parallel_world_size())
+        cp_group = (
+            local_cp_group
+            if local_cp_group is not None
+            else get_context_parallel_group()
+        )
+        loss_data = _strip_hcp_metadata_for_loss(data_dict)
         if pack_sequences and packed_seq_params is not None:
             fuse_loss = self.cfg["sequence_packing"].get("fuse_loss", False)
             wrapper_cls = SequencePackingFusionLossWrapper if fuse_loss else SequencePackingLossWrapper
@@ -415,16 +432,15 @@ class LossPostProcessor:
 
         loss_fn_wrapped = partial(
             loss_fn,
-            data=data_dict,
+            data=loss_data,
             global_valid_seqs=global_valid_seqs,
             global_valid_toks=global_valid_toks,
             vocab_parallel_rank=get_tensor_model_parallel_rank(),
             vocab_parallel_group=get_tensor_model_parallel_group(),
-            context_parallel_group=get_context_parallel_group(),
+            context_parallel_group=cp_group,
         )
 
         if self.cp_normalize:
-            cp_size = get_context_parallel_world_size()
             prev_loss_fn = loss_fn_wrapped
 
             def _div_by_cp_size(*args, **kwargs):
@@ -435,7 +451,6 @@ class LossPostProcessor:
 
         # Counteract Megatron's default loss averaging in schedules.py,
         # which applies (* cp_size / num_microbatches) to the loss.
-        cp_size = get_context_parallel_world_size()
         num_microbatches = self.num_microbatches
         loss_fn_before_mcore_scaling = loss_fn_wrapped
 
@@ -457,6 +472,7 @@ class LogprobsPostProcessor:
         data_dict: BatchedDataDict[Any],
         input_ids: torch.Tensor,
         cu_seqlens_padded: torch.Tensor,
+        local_cp_group: Optional[dist.ProcessGroup] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """Create a post-processing function that computes token log probabilities.
 
@@ -481,6 +497,11 @@ class LogprobsPostProcessor:
         def processor_fn_inner(output_tensor):
             tp_grp = get_tensor_model_parallel_group()
             tp_rank = get_tensor_model_parallel_rank()
+            cp_group = (
+                local_cp_group
+                if local_cp_group is not None
+                else get_context_parallel_group()
+            )
             logprob_chunk_size = self.cfg.get("logprob_chunk_size", None)
             if self.cfg["sequence_packing"]["enabled"]:
                 token_logprobs = from_parallel_logits_to_logprobs_packed_sequences(
@@ -492,7 +513,7 @@ class LogprobsPostProcessor:
                     vocab_end_index=(tp_rank + 1) * output_tensor.shape[-1],
                     group=tp_grp,
                     inference_only=True,
-                    cp_group=get_context_parallel_group(),
+                    cp_group=cp_group,
                     chunk_size=logprob_chunk_size,
                 )
             else:
@@ -526,6 +547,8 @@ class TopkLogitsPostProcessor:
         self,
         data_dict: BatchedDataDict[Any],
         cu_seqlens_padded: torch.Tensor,
+        local_cp_group: Optional[dist.ProcessGroup] = None,
+        local_cp_size: Optional[int] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """Create a post-processing function that computes top-k logits and indices.
 
@@ -542,7 +565,7 @@ class TopkLogitsPostProcessor:
                       (dummy_loss, {"topk_logits": values, "topk_indices": indices})
         """
         pack = self.cfg["sequence_packing"]["enabled"]
-        cp_size = self.cfg["megatron_cfg"]["context_parallel_size"]
+        cp_size = int(local_cp_size or self.cfg["megatron_cfg"]["context_parallel_size"])
         unpacked_seqlen = data_dict["input_ids"].shape[1]
         seq_lengths = data_dict["input_lengths"]
 
@@ -565,8 +588,12 @@ class TopkLogitsPostProcessor:
                 chunk_size=chunk_size,
             )
 
-            if self.cfg["megatron_cfg"]["context_parallel_size"] > 1:
-                cp_grp = get_context_parallel_group()
+            if cp_size > 1:
+                cp_grp = (
+                    local_cp_group
+                    if local_cp_group is not None
+                    else get_context_parallel_group()
+                )
                 if pack:
                     # Per-sequence CP allgather following packed-sequence logic
                     batch_size = data_dict["input_ids"].shape[0]

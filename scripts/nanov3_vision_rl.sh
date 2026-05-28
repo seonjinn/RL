@@ -21,6 +21,7 @@ CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
 MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-}}"
 CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-}}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-omni}"
+WANDB_ENABLED="${WANDB_ENABLED:-true}"
 : "${MODEL_NAME:?Set IMAGE_GRPO_MODEL_NAME or MODEL_NAME, or define it in ${NEMORL}/.env}"
 : "${CACHE_DIR:?Set IMAGE_GRPO_CACHE_DIR or CACHE_DIR, or define it in ${NEMORL}/.env}"
 RESULTS_ROOT="${RESULTS_ROOT:-${NEMORL}/results}"
@@ -101,6 +102,24 @@ EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
 fi
+if [[ -n "${HYBRID_CP_ENABLED:-${DYNAMIC_CP_ENABLED:-}}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.enabled=${HYBRID_CP_ENABLED:-${DYNAMIC_CP_ENABLED}}"
+fi
+if [[ -n "${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.max_seqlen_per_dp_cp_rank=${HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK}"
+fi
+if [[ -n "${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.microbatch_budget_multiplier=${HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER}"
+fi
+if [[ -n "${HYBRID_CP_FORCE_FULL_CP:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.hybrid_cp.force_full_cp=${HYBRID_CP_FORCE_FULL_CP}"
+fi
+if [[ -n "${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.max_total_sequence_length=${POLICY_MAX_TOTAL_SEQUENCE_LENGTH}"
+fi
+if [[ -n "${GRPO_MAX_NUM_STEPS:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.max_num_steps=${GRPO_MAX_NUM_STEPS}"
+fi
 # FlashInfer fused-MoE autotuner is noisy but ~2x faster on NemotronH MoE.
 # Set ENABLE_FLASHINFER_AUTOTUNE=false to opt out for cleaner logs.
 [[ "${ENABLE_FLASHINFER_AUTOTUNE:-true}" != "true" ]] && \
@@ -127,7 +146,7 @@ cluster.gpus_per_node=${GPUS_PER_NODE} \
 policy.model_name='${MODEL_NAME}' \
 checkpointing.checkpoint_dir='${RESULTS_DIR}' \
 logger.log_dir='${RESULTS_DIR}' \
-logger.wandb_enabled=true \
+logger.wandb_enabled=${WANDB_ENABLED} \
 logger.wandb.project='${WANDB_PROJECT}' \
 logger.wandb.name='${JOB_NAME}' \
 data.train.cache_dir='${CACHE_DIR}'\

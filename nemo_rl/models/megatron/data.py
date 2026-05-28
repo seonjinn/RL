@@ -18,8 +18,10 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import (
+    get_context_parallel_group,
     get_context_parallel_rank,
     get_context_parallel_world_size,
 )
@@ -62,6 +64,8 @@ class ProcessedInputs:
     use_llava_handoff: bool = False
     original_input_ids: Optional[torch.Tensor] = None
     original_input_lengths: Optional[torch.Tensor] = None
+    local_cp_size: int = 1
+    local_cp_group: Optional[dist.ProcessGroup] = None
 
 
 @dataclass
@@ -103,6 +107,8 @@ class ProcessedMicrobatch:
     use_llava_handoff: bool = False
     original_input_ids: Optional[torch.Tensor] = None
     original_input_lengths: Optional[torch.Tensor] = None
+    local_cp_size: int = 1
+    local_cp_group: Optional[dist.ProcessGroup] = None
 
 
 def make_processed_microbatch_iterator(
@@ -203,6 +209,8 @@ def make_processed_microbatch_iterator(
             use_llava_handoff=processed_inputs.use_llava_handoff,
             original_input_ids=processed_inputs.original_input_ids,
             original_input_lengths=processed_inputs.original_input_lengths,
+            local_cp_size=processed_inputs.local_cp_size,
+            local_cp_group=processed_inputs.local_cp_group,
         )
 
 
@@ -328,6 +336,7 @@ def process_microbatch(
     ctx = straggler_timer(bdata=True) if straggler_timer is not None else nullcontext()
     with ctx:
         input_ids = data_dict["input_ids"]
+        local_cp_group, local_cp_size, local_cp_rank = _get_local_cp_group_info(data_dict)
         attention_mask = None
         position_ids = None
         packed_seq_params = None
@@ -350,6 +359,20 @@ def process_microbatch(
 
             # Get sequence lengths and context parallel size
             seq_lengths = data_dict[seq_length_key]
+            if data_dict.get("local_cp_size") is not None:
+                if policy_cfg is None:
+                    raise RuntimeError(
+                        "policy_cfg is required when using per-microbatch local CP size"
+                    )
+                (
+                    pad_individual_seqs_to_multiple_of,
+                    pad_packed_seq_to_multiple_of,
+                    pad_full_seq_to,
+                ) = _get_pack_sequence_parameters_for_megatron(
+                    policy_cfg["megatron_cfg"],
+                    int(seq_lengths.max().item()),
+                    effective_cp_size=local_cp_size,
+                )
 
             # Pack sequences
             (
@@ -364,8 +387,9 @@ def process_microbatch(
                 pad_individual_seqs_to_multiple_of,
                 pad_packed_seq_to_multiple_of,
                 pad_full_seq_to,
-                cp_rank=get_context_parallel_rank(),
-                cp_size=get_context_parallel_world_size(),
+                cp_rank=local_cp_rank,
+                cp_size=local_cp_size,
+                cp_group=local_cp_group,
                 tokens_removed_per_sample=tokens_removed_per_sample,
                 skip_local_cp_sharding=use_llava_handoff,
             )
@@ -420,8 +444,9 @@ def process_microbatch(
                     pad_individual_seqs_to_multiple_of,
                     pad_packed_seq_to_multiple_of,
                     pad_full_seq_to,
-                    cp_rank=get_context_parallel_rank(),
-                    cp_size=get_context_parallel_world_size(),
+                    cp_rank=local_cp_rank,
+                    cp_size=local_cp_size,
+                    cp_group=local_cp_group,
                 )
 
             # For packed sequences, position_ids and attention_mask are typically None
@@ -439,7 +464,7 @@ def process_microbatch(
                 megatron_cfg = policy_cfg.get("megatron_cfg", {}) or {}
                 sp = bool(megatron_cfg.get("sequence_parallel", False))
                 tp_size = int(megatron_cfg.get("tensor_model_parallel_size", 1))
-                cp_size = int(megatron_cfg.get("context_parallel_size", 1))
+                cp_size = local_cp_size
                 divisor = 1
                 if sp and tp_size > 1:
                     divisor = tp_size
@@ -483,6 +508,8 @@ def process_microbatch(
         use_llava_handoff=use_llava_handoff,
         original_input_ids=original_input_ids,
         original_input_lengths=original_input_lengths,
+        local_cp_size=local_cp_size,
+        local_cp_group=local_cp_group,
     )
 
 
@@ -513,17 +540,31 @@ def process_global_batch(
 
     assert "sample_mask" in batch, "sample_mask must be present in the data!"
 
+    sample_mask = batch["sample_mask"].to(device="cuda", dtype=torch.float32)
+    if "local_cp_sizes" in batch:
+        local_cp_sizes = batch["local_cp_sizes"]
+        if torch.is_tensor(local_cp_sizes):
+            local_cp_sizes = local_cp_sizes.to(device=sample_mask.device, dtype=torch.float32)
+        else:
+            local_cp_sizes = torch.tensor(
+                local_cp_sizes, device=sample_mask.device, dtype=torch.float32
+            )
+        sample_weights = sample_mask / local_cp_sizes
+    else:
+        sample_weights = sample_mask
+
     # Get the normalization factor for the loss
-    local_valid_seqs = torch.sum(batch["sample_mask"])
+    local_valid_seqs = torch.sum(sample_weights)
 
     if "token_mask" not in batch:
         local_valid_toks = local_valid_seqs * batch["input_ids"].shape[1]
     else:
-        local_valid_toks = torch.sum(
-            batch["token_mask"][:, 1:] * batch["sample_mask"].unsqueeze(-1)
+        token_mask = batch["token_mask"][:, 1:].to(
+            device=sample_mask.device, dtype=torch.float32
         )
+        local_valid_toks = torch.sum(token_mask * sample_weights.unsqueeze(-1))
 
-    to_reduce = torch.tensor([local_valid_seqs, local_valid_toks]).cuda()
+    to_reduce = torch.stack([local_valid_seqs, local_valid_toks]).cuda()
     torch.distributed.all_reduce(to_reduce, group=dp_group)
     global_valid_seqs, global_valid_toks = to_reduce[0], to_reduce[1]
 
@@ -547,6 +588,7 @@ def _pack_sequences_for_megatron(
     pad_packed_seq_to: Optional[int] = None,
     cp_rank: int = 0,
     cp_size: int = 1,
+    cp_group: Optional[dist.ProcessGroup] = None,
     tokens_removed_per_sample: Optional[torch.Tensor] = None,
     skip_local_cp_sharding: bool = False,
 ) -> tuple[
@@ -785,6 +827,8 @@ def _pack_sequences_for_megatron(
         max_seqlen_kv=int(max_seqlen),
         qkv_format="thd",
     )
+    packed_seq_params.local_cp_size = cp_size
+    packed_seq_params.cp_group = cp_group
 
     return (
         all_input_ids.contiguous(),
@@ -798,6 +842,7 @@ def _pack_sequences_for_megatron(
 def _get_pack_sequence_parameters_for_megatron(
     megatron_cfg: dict,
     max_seq_len_in_batch: int,
+    effective_cp_size: Optional[int] = None,
 ):
     """Get pack sequence parameters for Megatron model processing with optional context parallelism.
 
@@ -814,7 +859,11 @@ def _get_pack_sequence_parameters_for_megatron(
     tp_size = megatron_cfg["tensor_model_parallel_size"]
     sp = megatron_cfg["sequence_parallel"]
     pp_size = megatron_cfg["pipeline_model_parallel_size"]
-    cp_size = megatron_cfg["context_parallel_size"]
+    cp_size = (
+        effective_cp_size
+        if effective_cp_size is not None
+        else megatron_cfg["context_parallel_size"]
+    )
     fp8_cfg = megatron_cfg.get("fp8_cfg", None) or {}
     use_fp8 = fp8_cfg.get("enabled", False)
 
@@ -873,6 +922,63 @@ def _get_pack_sequence_parameters_for_megatron(
         pad_packed_seq_to_multiple_of,
         pad_packed_seq_to,
     )
+
+
+def _get_local_cp_group_info(
+    data_dict: BatchedDataDict[Any],
+) -> tuple[Optional[dist.ProcessGroup], int, int]:
+    """Return the CP process group, size, and rank for this microbatch."""
+
+    local_cp_group = data_dict.get("_local_cp_group")
+    local_cp_size = data_dict.get("local_cp_size")
+
+    if torch.is_tensor(local_cp_size):
+        cp_size = int(local_cp_size.item())
+    elif local_cp_size is not None:
+        cp_size = int(local_cp_size)
+    elif local_cp_group is not None:
+        cp_size = dist.get_world_size(local_cp_group)
+    else:
+        cp_size = get_context_parallel_world_size()
+
+    if local_cp_group is not None:
+        cp_rank = dist.get_rank(local_cp_group)
+    elif local_cp_size is not None:
+        cp_rank = 0
+    else:
+        cp_rank = get_context_parallel_rank()
+        if cp_size > 1:
+            local_cp_group = get_context_parallel_group()
+
+    return local_cp_group, cp_size, cp_rank
+
+
+_HCP_METADATA_KEYS = frozenset(
+    {
+        "local_cp_size",
+        "_local_cp_group",
+        "_hcp_sample_ids",
+        "_hcp_hdp_ranks",
+        "_hcp_is_dummy",
+        "sample_id_groups",
+        "shard_sample_ids",
+        "sample_sequence_lengths",
+        "local_cp_sizes",
+    }
+)
+
+
+def _strip_hcp_metadata_for_loss(
+    data_dict: BatchedDataDict[Any],
+) -> BatchedDataDict[Any]:
+    """Remove non-batch HCP metadata before sequence-level loss slicing."""
+
+    stripped = type(data_dict)()
+    for key, value in data_dict.items():
+        if key in _HCP_METADATA_KEYS:
+            continue
+        stripped[key] = value
+    return stripped
 
 
 def _unpack_sequences_from_megatron(
