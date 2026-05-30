@@ -66,10 +66,10 @@ export GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 # default and trips the "GPUS_PER_NODE doesn't match cluster GRES" check.
 export NUM_NODES
 
-# Container + mounts. Default to the current super-omni-vllm20 image that ships
-# pre-built /opt/ray_venvs. Overridable via .env.
-CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/rl/images}"
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-vllm20-super-vlm2-20260507-0905b74.sqsh}"
+# Container + mounts. Default to the validated super-v3-omni-vllm20 image on
+# OCI-NRT. Overridable via .env for other clusters.
+CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/aroshanghias/containers}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-20260527-d58a158.sqsh}"
 export MOUNTS="${MOUNTS:-/lustre:/lustre,/home}"
 
 # Trust the baked /opt/ray_venvs/<actor>/ in the container so
@@ -82,6 +82,12 @@ export NRL_VENVS_TRUST_EXISTING="${NRL_VENVS_TRUST_EXISTING:-1}"
 # image; the strict version assert is harmless for this workload.
 export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
 
+if [[ -n "${NEMO_RL_ISOLATED_CACHE_ROOT:-}" ]]; then
+  CACHE_ROOT="${NEMO_RL_ISOLATED_CACHE_ROOT}"
+  HF_HOME="${CACHE_ROOT}/huggingface"
+  HF_MODULES_CACHE="${HF_HOME}/modules"
+  NRL_MEGATRON_CHECKPOINT_DIR="${CACHE_ROOT}/nemo_rl"
+fi
 export CACHE_ROOT="${CACHE_ROOT:-${SOURCE_NEMORL}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
 export HF_MODULES_CACHE="${HF_MODULES_CACHE:-${HF_HOME}/modules}"
@@ -106,9 +112,13 @@ export NRL_DEBUG="${NRL_DEBUG:-0}"
 export NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES="${NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES:-0}"
 export NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES="${NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES:-0}"
 export NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT="${NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT:-0}"
-export USE_REPO_VLLM="${USE_REPO_VLLM:-1}"
-SOURCE_VLLM_DIR="${SOURCE_VLLM_DIR:-${SOURCE_NEMORL}/3rdparty/vllm}"
-SOURCE_VLLM_DIR="$(cd "${SOURCE_VLLM_DIR}" && pwd)"
+export USE_REPO_VLLM="${USE_REPO_VLLM:-0}"
+if [[ "${USE_REPO_VLLM}" == "1" ]]; then
+  SOURCE_VLLM_DIR="${SOURCE_VLLM_DIR:-${SOURCE_NEMORL}/3rdparty/vllm}"
+  SOURCE_VLLM_DIR="$(cd "${SOURCE_VLLM_DIR}" && pwd)"
+else
+  SOURCE_VLLM_DIR="container"
+fi
 # Provide auth credentials for the private flashinfer-cubin gitlab pypi
 # index if NRL_VENVS_TRUST_EXISTING is ever flipped off. Sourced from
 # the user's glab CLI config (no token literal in the script).
@@ -175,6 +185,7 @@ if [[ "${SNAPSHOT_CODE_LOWER}" == "1" || "${SNAPSHOT_CODE_LOWER}" == "true" || "
   rsync -a --delete "${RSYNC_EXCLUDES[@]}" "${SOURCE_NEMORL}/" "${SNAPSHOT_NEMORL}/"
   {
     echo "source_nemorl=${SOURCE_NEMORL}"
+    echo "use_repo_vllm=${USE_REPO_VLLM}"
     echo "source_vllm_dir=${SOURCE_VLLM_DIR}"
     echo "snapshot_nemorl=${SNAPSHOT_NEMORL}"
     echo "job_name=${JOB_NAME}"
@@ -186,24 +197,23 @@ else
 fi
 export NEMORL
 
-if [[ "${USE_REPO_VLLM}" != "1" ]]; then
-  echo "[ERROR] USE_REPO_VLLM=0 is no longer supported by this launcher; container vLLM patching has been removed." >&2
-  echo "[ERROR] Run tools/build-custom-vllm.sh and use the repo vLLM checkout at 3rdparty/vllm." >&2
-  exit 1
-fi
-if [[ "${SOURCE_VLLM_DIR}" == "${SOURCE_NEMORL}/3rdparty/vllm" ]]; then
-  RUNTIME_VLLM_DIR="${NEMORL}/3rdparty/vllm"
-else
-  RUNTIME_VLLM_DIR="${SOURCE_VLLM_DIR}"
-fi
-if [[ ! -f "${RUNTIME_VLLM_DIR}/vllm/__init__.py" ]]; then
-  echo "[ERROR] repo vLLM checkout missing at ${RUNTIME_VLLM_DIR}." >&2
-  echo "[ERROR] Run tools/build-custom-vllm.sh before launching this job." >&2
-  exit 1
-fi
-if [[ -f "${RUNTIME_VLLM_DIR}/nemo-rl.env" ]]; then
-  # shellcheck disable=SC1091
-  source "${RUNTIME_VLLM_DIR}/nemo-rl.env"
+VLLM_PYTHONPATH_PREFIX=""
+if [[ "${USE_REPO_VLLM}" == "1" ]]; then
+  if [[ "${SOURCE_VLLM_DIR}" == "${SOURCE_NEMORL}/3rdparty/vllm" ]]; then
+    RUNTIME_VLLM_DIR="${NEMORL}/3rdparty/vllm"
+  else
+    RUNTIME_VLLM_DIR="${SOURCE_VLLM_DIR}"
+  fi
+  if [[ ! -f "${RUNTIME_VLLM_DIR}/vllm/__init__.py" ]]; then
+    echo "[ERROR] repo vLLM checkout missing at ${RUNTIME_VLLM_DIR}." >&2
+    echo "[ERROR] Set USE_REPO_VLLM=0 to use the vLLM packaged in the container." >&2
+    exit 1
+  fi
+  if [[ -f "${RUNTIME_VLLM_DIR}/nemo-rl.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${RUNTIME_VLLM_DIR}/nemo-rl.env"
+  fi
+  VLLM_PYTHONPATH_PREFIX="${RUNTIME_VLLM_DIR}:"
 fi
 # The precompiled wheel location is build-time metadata from build-custom-vllm.sh.
 # Do not leak it into vLLM20 runtime, where it is reported as an unknown env var.
@@ -254,9 +264,9 @@ if [[ -n "${GRPO_VAL_PERIOD:-}" ]]; then
   EXTRA_OVERRIDES+=" grpo.val_period=${GRPO_VAL_PERIOD}"
 fi
 # Match DFW's vLLM runtime settings while keeping current NRT code/infra.
-EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.enforce_eager=${VLLM_ENFORCE_EAGER:-true}"
-EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING:-false}"
-EXTRA_OVERRIDES+=" policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS:-16384}"
+EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.enforce_eager=${VLLM_ENFORCE_EAGER:-false}"
+EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING:-true}"
+EXTRA_OVERRIDES+=" policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS:-32768}"
 if [[ -n "${VLLM_LOAD_FORMAT:-}" ]]; then
   EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.load_format=${VLLM_LOAD_FORMAT}"
 fi
@@ -271,8 +281,11 @@ EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
 if [[ -n "${WANDB_RUN_ID:-}" ]]; then
   EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
 fi
+if [[ -n "${EXTRA_OVERRIDES_APPEND:-}" ]]; then
+  EXTRA_OVERRIDES+=" ${EXTRA_OVERRIDES_APPEND}"
+fi
 
-PYTHONPATH_ROOTS="${RUNTIME_VLLM_DIR}:${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
+PYTHONPATH_ROOTS="${VLLM_PYTHONPATH_PREFIX}${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
 
 # Match recipes' Hydra override surface 1:1 and explicitly enable wandb
 # against the same project so the two runs land side-by-side.

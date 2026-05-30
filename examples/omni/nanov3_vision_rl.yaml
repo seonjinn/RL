@@ -193,6 +193,7 @@ policy:
       num_first_layers_in_bf16: 0
       skip_tokenizer_init: False
       enforce_eager: false
+      sleep_level: 1
     vllm_kwargs:
       limit_mm_per_prompt: {"image": 2}
       max_num_batched_tokens: 32768

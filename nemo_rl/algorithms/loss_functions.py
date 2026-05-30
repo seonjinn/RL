@@ -213,6 +213,7 @@ class ClippedPGLossFn(LossFunction):
         vocab_parallel_rank: Optional[int] = None,
         vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
         context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+        logprob_chunk_size: Optional[int] = None,
     ) -> tuple[torch.Tensor, dict]:
         """Clipped Policy Gradient RL loss function."""
         token_mask = data["token_mask"][:, 1:]
@@ -244,6 +245,7 @@ class ClippedPGLossFn(LossFunction):
                     tp_group=vocab_parallel_group,
                     inference_only=False,
                     cp_group=context_parallel_group,
+                    chunk_size=logprob_chunk_size,
                 )
                 # slice off to the correct length to remove potential CP padding
                 curr_logprobs = curr_logprobs[:, : data["input_ids"].shape[1] - 1]
@@ -1021,10 +1023,12 @@ class SequencePackingLossWrapper:
         loss_fn: LossFunction,
         cu_seqlens_q: Tensor,
         cu_seqlens_q_padded: Optional[Tensor] = None,
+        logprob_chunk_size: Optional[int] = None,
     ):
         self.loss_fn = loss_fn
         self.cu_seqlens_q = cu_seqlens_q
         self.cu_seqlens_q_padded = cu_seqlens_q_padded
+        self.logprob_chunk_size = logprob_chunk_size
 
     def __call__(
         self,
@@ -1078,6 +1082,13 @@ class SequencePackingLossWrapper:
                 1, logit_start, logit_length
             )
 
+            loss_kwargs = {}
+            if (
+                self.logprob_chunk_size is not None
+                and isinstance(self.loss_fn, ClippedPGLossFn)
+            ):
+                loss_kwargs["logprob_chunk_size"] = self.logprob_chunk_size
+
             loss, metrics = self.loss_fn(
                 next_token_logits_slice,
                 unpadded_seq_data,
@@ -1086,6 +1097,7 @@ class SequencePackingLossWrapper:
                 vocab_parallel_rank=vocab_parallel_rank,
                 vocab_parallel_group=vocab_parallel_group,
                 context_parallel_group=context_parallel_group,
+                **loss_kwargs,
             )
             loss_accum += loss
             for k, v in metrics.items():
@@ -1132,12 +1144,14 @@ class SequencePackingFusionLossWrapper:
         loss_fn: LossFunction,
         cu_seqlens_q: Tensor,
         cu_seqlens_q_padded: Optional[Tensor] = None,
+        logprob_chunk_size: Optional[int] = None,
     ):
         self.loss_fn = loss_fn
         self.cu_seqlens_q = cu_seqlens_q
         self.cu_seqlens_q_padded = (
             cu_seqlens_q_padded if cu_seqlens_q_padded is not None else cu_seqlens_q
         )
+        self.logprob_chunk_size = logprob_chunk_size
 
     def _pack_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Pack input_ids from [B, S] to [1, T_packed] using padded sequence boundaries.
@@ -1199,6 +1213,7 @@ class SequencePackingFusionLossWrapper:
             inference_only=False,
             cp_group=context_parallel_group,
             target_is_pre_rolled=False,
+            chunk_size=self.logprob_chunk_size,
         )
 
         return self.loss_fn(

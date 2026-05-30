@@ -35,10 +35,10 @@ export GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 # default and trips the "GPUS_PER_NODE doesn't match cluster GRES" check.
 export NUM_NODES
 
-# Container + mounts. Default to the super-omni-rl image that ships
-# pre-built /opt/ray_venvs and the vllm-0.18 wheel. Overridable via .env.
-CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/coreai/users/aroshanghias/containers}"
-export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-rl-vllm-v20-20260506-eb05256}"
+# Container + mounts. Default to the validated super-v3-omni-vllm20 image on
+# cw-dfw. Overridable via .env for other clusters.
+CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/users/aroshanghias/containers}"
+export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-20260527-d58a158.sqsh}"
 export MOUNTS="${MOUNTS:-/lustre:/lustre}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
@@ -58,6 +58,12 @@ export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
 # tensors) on engine errors, which floods the log on a single failed step.
 export VLLM_LOG_DUMP_INPUT_ON_ENGINE_ERROR="${VLLM_LOG_DUMP_INPUT_ON_ENGINE_ERROR:-0}"
 
+if [[ -n "${NEMO_RL_ISOLATED_CACHE_ROOT:-}" ]]; then
+  CACHE_ROOT="${NEMO_RL_ISOLATED_CACHE_ROOT}"
+  HF_HOME="${CACHE_ROOT}/huggingface"
+  HF_MODULES_CACHE="${HF_HOME}/modules"
+  NRL_MEGATRON_CHECKPOINT_DIR="${CACHE_ROOT}/nemo_rl"
+fi
 export CACHE_ROOT="${CACHE_ROOT:-${NEMORL}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
 export HF_MODULES_CACHE="${HF_MODULES_CACHE:-${HF_HOME}/modules}"
@@ -129,6 +135,8 @@ EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
 # Set WANDB_RUN_ID (and WANDB_RESUME) to chain runs into one wandb entry.
 [[ -n "${WANDB_RUN_ID:-}" ]] && \
   EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
+[[ -n "${EXTRA_OVERRIDES_APPEND:-}" ]] && \
+  EXTRA_OVERRIDES+=" ${EXTRA_OVERRIDES_APPEND}"
 
 PYTHONPATH_ROOTS="${NEMORL}"
 if [[ "${USE_REPO_MEGATRON:-1}" == "1" ]]; then
@@ -137,13 +145,14 @@ fi
 if [[ "${USE_REPO_VLLM:-0}" == "1" ]]; then
   PYTHONPATH_ROOTS="${NEMORL}/3rdparty/vllm:${PYTHONPATH_ROOTS}"
 fi
+PYTHON_RUNNER="${PYTHON_RUNNER:-uv run --no-sync}"
 
 # Match recipes' Hydra override surface 1:1 and explicitly enable wandb
 # against the same project so the two runs land side-by-side.
 export COMMAND="\
 mkdir -p '${HF_HOME}' '${HF_MODULES_CACHE}' '${NRL_MEGATRON_CHECKPOINT_DIR}' '${TRITON_CACHE_DIR}' '${TMPDIR}' '${RESULTS_DIR}' && \
 export PYTHONPATH=${PYTHONPATH_ROOTS}\${PYTHONPATH:+:\$PYTHONPATH} && \
-uv run --no-sync examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
+${PYTHON_RUNNER} examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
 policy.model_name='${MODEL_NAME}' \

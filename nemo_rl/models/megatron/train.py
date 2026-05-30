@@ -428,6 +428,7 @@ class LossPostProcessor:
                 loss_fn=loss_fn,
                 cu_seqlens_q=packed_seq_params.cu_seqlens_q,
                 cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
+                logprob_chunk_size=self.cfg.get("logprob_chunk_size", None),
             )
 
         loss_fn_wrapped = partial(

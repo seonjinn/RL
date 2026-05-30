@@ -1,0 +1,628 @@
+From baa88a5b87fd9ab5e35ab93c7f897f8e50800df1 Mon Sep 17 00:00:00 2001
+From: sna <sna@nvidia.com>
+Date: Sat, 30 May 2026 12:23:09 -0700
+Subject: [PATCH] Support DynamicCP for Nano Omni multimodal training
+
+---
+ .../core/extensions/transformer_engine.py     | 22 +++++
+ .../models/common/embeddings/rope_utils.py    |  4 +-
+ .../models/multimodal/context_parallel.py     | 75 +++++++++-----
+ .../core/models/multimodal/llava_model.py     | 99 ++++++++++++++-----
+ megatron/core/ssm/mamba_context_parallel.py   | 28 +++++-
+ megatron/core/ssm/mamba_mixer.py              |  3 +
+ megatron/core/transformer/attention.py        | 10 +-
+ .../core/transformer/transformer_config.py    |  3 +
+ 8 files changed, 188 insertions(+), 56 deletions(-)
+
+diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
+index 320350e..c6a9b42 100644
+--- a/megatron/core/extensions/transformer_engine.py
++++ b/megatron/core/extensions/transformer_engine.py
+@@ -800,6 +800,8 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
+                     model_comm_pgs, "hcp"
+                 ), "TEDotProductAttention model_comm_pgs must have hierarchical cp pg"
+ 
++        self._default_cp_group = model_comm_pgs.cp
++
+         if is_te_min_version("0.10.0"):
+             extra_kwargs["attention_type"] = attention_type
+             # older version don't need attention_type
+@@ -907,6 +909,26 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
+         packed_seq_params: PackedSeqParams = None,
+     ):
+         """Forward."""
++        if packed_seq_params is not None:
++            local_cp_size = getattr(packed_seq_params, "local_cp_size", None)
++            local_cp_group = getattr(packed_seq_params, "cp_group", None)
++            if local_cp_size is not None:
++                runtime_cp_comm_type = getattr(self, "cp_comm_type", "p2p")
++                if int(local_cp_size) == 1:
++                    super().set_context_parallel_group(None, None, None, runtime_cp_comm_type)
++                else:
++                    self.cp_group = (
++                        local_cp_group if local_cp_group is not None else self._default_cp_group
++                    )
++                    super().set_context_parallel_group(
++                        self.cp_group,
++                        torch.distributed.get_process_group_ranks(self.cp_group),
++                        TEDotProductAttention.cp_stream,
++                        runtime_cp_comm_type,
++                    )
++            self.kept_packed_seq_params.discard("cp_group")
++            self.kept_packed_seq_params.discard("local_cp_size")
++
+         packed_seq_kwargs = (
+             {key: getattr(packed_seq_params, key) for key in self.kept_packed_seq_params}
+             if packed_seq_params is not None
+diff --git a/megatron/core/models/common/embeddings/rope_utils.py b/megatron/core/models/common/embeddings/rope_utils.py
+index a994e8f..cdd4f1a 100644
+--- a/megatron/core/models/common/embeddings/rope_utils.py
++++ b/megatron/core/models/common/embeddings/rope_utils.py
+@@ -283,12 +283,12 @@ def apply_rotary_pos_emb(
+         if cu_seqlens is None:
+             return fused_apply_rotary_pos_emb(t, freqs)
+         else:
+-            cp_size = parallel_state.get_context_parallel_world_size()
++            cp_size = cp_group.size()
+             if cp_size > 1:
+                 if not is_te_min_version("1.11.0", check_equality=False):
+                     raise ValueError("Only TE >= 1.12 supports RoPE fusion for THD format with CP.")
+                 return fused_apply_rotary_pos_emb_thd(
+-                    t, cu_seqlens, freqs, cp_size=cp_size, cp_rank=parallel_state.get_context_parallel_rank(),
++                    t, cu_seqlens, freqs, cp_size=cp_size, cp_rank=cp_group.rank(),
+                 )
+             else:
+                 return fused_apply_rotary_pos_emb_thd(t, cu_seqlens, freqs)
+diff --git a/megatron/core/models/multimodal/context_parallel.py b/megatron/core/models/multimodal/context_parallel.py
+index fd56842..d2aafd0 100644
+--- a/megatron/core/models/multimodal/context_parallel.py
++++ b/megatron/core/models/multimodal/context_parallel.py
+@@ -2,17 +2,30 @@
+ """Multimodal Sequence Parallel (SP) and Context Parallel (CP) functionality."""
+ 
+ import math
++from typing import Optional
+ 
+ import torch
+ 
+ from megatron.core.packed_seq_params import PackedSeqParams
+ from megatron.core.parallel_state import (
+     get_context_parallel_group,
+-    get_context_parallel_rank,
+-    get_context_parallel_world_size,
+ )
+ 
+ 
++def _resolve_cp_group(cp_group: Optional[torch.distributed.ProcessGroup]):
++    return get_context_parallel_group() if cp_group is None else cp_group
++
++
++def _get_cp_world_size(cp_group: Optional[torch.distributed.ProcessGroup]) -> int:
++    group = _resolve_cp_group(cp_group)
++    return torch.distributed.get_world_size(group)
++
++
++def _get_cp_rank(cp_group: Optional[torch.distributed.ProcessGroup]) -> int:
++    group = _resolve_cp_group(cp_group)
++    return torch.distributed.get_rank(group)
++
++
+ def get_padding(
+     seq_len, cp_size, tp_size, has_sp, decoder_tp_comm_overlap=False, decoder_seq_len=None, fp8_enabled=False
+ ):
+@@ -113,7 +126,7 @@ def get_packed_seq_params(tokens, img_seq_len, padding_needed, cp_size, use_pack
+     return packed_seq_params
+ 
+ 
+-def split_to_context_parallel_ranks(global_t, pad_value=0):
++def split_to_context_parallel_ranks(global_t, pad_value=0, cp_group=None):
+     """Split the tensor global_t into context parallel world size parts.
+ 
+     Args:
+@@ -124,8 +137,8 @@ def split_to_context_parallel_ranks(global_t, pad_value=0):
+         local_t: [samples_per_rank, ...]. samples_per_rank is the # of samples per CP rank.
+         global_pad: Total padding to have equal samples_per_rank across context parallel ranks.
+     """
+-    cp_size = get_context_parallel_world_size()
+-    cp_rank = get_context_parallel_rank()
++    cp_size = _get_cp_world_size(cp_group)
++    cp_rank = _get_cp_rank(cp_group)
+ 
+     # t: [batch, ...]
+     # Number of samples per context parallel rank, rounded up.
+@@ -148,9 +161,9 @@ def split_to_context_parallel_ranks(global_t, pad_value=0):
+     return local_t, global_pad
+ 
+ 
+-def _gather_along_second_dim(local_t):
+-    group = get_context_parallel_group()
+-    cp_size = get_context_parallel_world_size()
++def _gather_along_second_dim(local_t, cp_group=None):
++    group = _resolve_cp_group(cp_group)
++    cp_size = _get_cp_world_size(cp_group)
+     # Bypass the function if we are using only 1 context parallel rank.
+     if cp_size == 1:
+         return local_t
+@@ -169,8 +182,8 @@ def _gather_along_second_dim(local_t):
+     return global_t
+ 
+ 
+-def _reduce_scatter_along_second_dim(global_t):
+-    cp_size = get_context_parallel_world_size()
++def _reduce_scatter_along_second_dim(global_t, cp_group=None):
++    cp_size = _get_cp_world_size(cp_group)
+     # Bypass the function if we are using only 1 CP rank.
+     if cp_size == 1:
+         return global_t
+@@ -185,7 +198,7 @@ def _reduce_scatter_along_second_dim(global_t):
+ 
+     local_t = torch.zeros(global_t.shape[0], samples_per_rank, *global_t.shape[2:], device=global_t.device, dtype=global_t.dtype)
+ 
+-    torch.distributed.reduce_scatter(local_t, tensor_list, group=get_context_parallel_group())
++    torch.distributed.reduce_scatter(local_t, tensor_list, group=_resolve_cp_group(cp_group))
+ 
+     return local_t
+ 
+@@ -196,30 +209,32 @@ class GatherFromContextParallelRanks(torch.autograd.Function):
+     def symbolic(
+         graph,
+         input_,
++        cp_group=None,
+     ):
+         """Symbolic function for tracing."""
+-        return _gather_along_second_dim(input_)
++        return _gather_along_second_dim(input_, cp_group)
+ 
+     @staticmethod
+-    def forward(ctx, input_):
++    def forward(ctx, input_, cp_group=None):
+         """Forward function."""
+-        return _gather_along_second_dim(input_)
++        ctx.cp_group = cp_group
++        return _gather_along_second_dim(input_, cp_group)
+ 
+     @staticmethod
+     def backward(ctx, grad_output):
+         """Backward function."""
+-        return _reduce_scatter_along_second_dim(grad_output)
++        return _reduce_scatter_along_second_dim(grad_output, ctx.cp_group), None
+ 
+ 
+-def gather_from_context_parallel_ranks(local_t, global_pad):
+-    global_t = GatherFromContextParallelRanks.apply(local_t)
++def gather_from_context_parallel_ranks(local_t, global_pad, cp_group=None):
++    global_t = GatherFromContextParallelRanks.apply(local_t, cp_group)
+ 
+     if global_pad > 0:
+         global_t = global_t[:, :-global_pad]
+ 
+     return global_t
+ 
+-def gather_from_context_parallel_ranks_dynamic_res(local_t, num_padded_imgs=0):
++def gather_from_context_parallel_ranks_dynamic_res(local_t, num_padded_imgs=0, cp_group=None):
+     """Gather the tensor local_t from context parallel ranks.
+ 
+     A twist here is that the tensors have different sequence lengths.
+@@ -229,18 +244,19 @@ def gather_from_context_parallel_ranks_dynamic_res(local_t, num_padded_imgs=0):
+         local_t: Local tensor to gather
+         num_padded_imgs: Number of padding images that were added in split (will be removed from end)
+     """
+-    cp_size = get_context_parallel_world_size()
++    group = _resolve_cp_group(cp_group)
++    cp_size = _get_cp_world_size(cp_group)
+     shape = torch.as_tensor(local_t.shape, device=local_t.device)
+     shapes = [torch.empty_like(shape) for _ in range(cp_size)]
+ 
+-    torch.distributed.all_gather(shapes, shape, group=get_context_parallel_group())
++    torch.distributed.all_gather(shapes, shape, group=group)
+ 
+     inputs = [local_t] * cp_size
+     outputs = [
+         torch.empty(*s, dtype=local_t.dtype, device=local_t.device)
+         for s in shapes
+     ]
+-    torch.distributed.nn.functional.all_to_all(outputs, inputs, group=get_context_parallel_group())
++    torch.distributed.nn.functional.all_to_all(outputs, inputs, group=group)
+ 
+     # If padding images were added, remove them from the last num_padded_imgs outputs
+     if num_padded_imgs > 0:
+@@ -342,7 +358,16 @@ def _split_num_frames(num_frames, lb, ub):
+     return new_num_frames
+ 
+ 
+-def split_to_context_parallel_ranks_dynamic_res(global_t, global_imgs_sizes, global_packed_seq_params, fp8_enabled=False, patch_dim=16, num_frames=None, temporal_patch_size=1):
++def split_to_context_parallel_ranks_dynamic_res(
++    global_t,
++    global_imgs_sizes,
++    global_packed_seq_params,
++    fp8_enabled=False,
++    patch_dim=16,
++    num_frames=None,
++    temporal_patch_size=1,
++    cp_group=None,
++):
+     """Split the tensors global_t and global_imgs_sizes into context parallel world size parts.
+ 
+     global_packed_seq_params will be used to compute the local PackedSeqParams corresponding to the split.
+@@ -359,8 +384,8 @@ def split_to_context_parallel_ranks_dynamic_res(global_t, global_imgs_sizes, glo
+         num_padded_imgs: Number of empty images added to pad when num_imgs < cp_size
+         local_num_frames: Split num_frames for this CP rank (None if temporal_patch_size == 1)
+     """
+-    cp_size = get_context_parallel_world_size()
+-    cp_rank = get_context_parallel_rank()
++    cp_size = _get_cp_world_size(cp_group)
++    cp_rank = _get_cp_rank(cp_group)
+ 
+     # Temporal compression requires num_frames for proper tubelet-aware splitting
+     use_tubelet_aware_split = temporal_patch_size > 1
+@@ -455,6 +480,8 @@ def split_to_context_parallel_ranks_dynamic_res(global_t, global_imgs_sizes, glo
+         cu_seqlens_q_padded=None,
+         cu_seqlens_kv_padded=None,
+     )
++    local_packed_seq_params.local_cp_size = cp_size
++    local_packed_seq_params.cp_group = _resolve_cp_group(cp_group)
+ 
+     max_seqlen_local = max(seqlens_local).to(torch.int32)
+     local_packed_seq_params.max_seqlen_q = max_seqlen_local
+diff --git a/megatron/core/models/multimodal/llava_model.py b/megatron/core/models/multimodal/llava_model.py
+index d57f1df..d31241b 100644
+--- a/megatron/core/models/multimodal/llava_model.py
++++ b/megatron/core/models/multimodal/llava_model.py
+@@ -636,6 +636,12 @@ class LLaVAModel(MegatronModule):
+         """
+ 
+         inference_context = deprecate_inference_params(inference_context, inference_params)
++        context_parallel_lm = self.context_parallel_lm
++        if (
++            packed_seq_params is not None
++            and getattr(packed_seq_params, "local_cp_size", None) is not None
++        ):
++            context_parallel_lm = int(packed_seq_params.local_cp_size)
+ 
+         assert self.add_decoder, "input text preprocessing is only needed for the language model"
+ 
+@@ -1041,7 +1047,7 @@ class LLaVAModel(MegatronModule):
+             if final_embedding.shape[1] > self._language_max_sequence_length:
+                 final_embedding = final_embedding[:, : self._language_max_sequence_length]
+             # Transpose to [s,b,h] only if not using CP because CP Sharding expects seq in dim=1
+-            if self.context_parallel_lm == 1:
++            if context_parallel_lm == 1:
+                 final_embedding = final_embedding.transpose(1, 0).contiguous()
+ 
+         if final_position_ids is not None:
+@@ -1049,7 +1055,7 @@ class LLaVAModel(MegatronModule):
+             if final_position_ids.shape[1] > self._language_max_sequence_length:
+                 final_position_ids = final_position_ids[:, : self._language_max_sequence_length]
+             # Transpose to [s,b,h] only if not using CP because CP Sharding expects seq in dim=1
+-            if self.context_parallel_lm == 1:
++            if context_parallel_lm == 1:
+                 final_position_ids = final_position_ids.transpose(1, 0).contiguous()
+ 
+         truncate_labels = (
+@@ -1128,9 +1134,26 @@ class LLaVAModel(MegatronModule):
+         if not self.pre_process and not self.post_process:
+             return combined_embeddings, new_labels, new_loss_mask, position_ids, packed_seq_params
+ 
+-        _ = self._calc_shard_factor(validate_with_combined_embeddings=combined_embeddings)  # used just to assert we're good
++        cp_group = self.cp_group
++        context_parallel_lm = self.context_parallel_lm
++        if (
++            packed_seq_params is not None
++            and getattr(packed_seq_params, "local_cp_size", None) is not None
++        ):
++            context_parallel_lm = int(packed_seq_params.local_cp_size)
++            cp_group = getattr(packed_seq_params, "cp_group", cp_group)
+ 
+-        if self.context_parallel_lm > 1:
++        shard_factor, seq_dim = self.calc_shard_factor_and_seq_dim_for_preprocessing(
++            context_parallel_lm=context_parallel_lm,
++            sequence_parallel_lm=self.sequence_parallel_lm,
++            tensor_model_parallel_size_lm=self.tensor_model_parallel_size_lm,
++        )
++        if shard_factor is not None:
++            assert (
++                combined_embeddings.shape[seq_dim] % shard_factor == 0
++            ), f"Sequence length {combined_embeddings.shape[seq_dim]} should be divisible by {shard_factor} for Sequence/Context parallelism"
++
++        if context_parallel_lm > 1:
+             batch = dict()
+             if self.pre_process:
+                 batch["combined_embeddings"] = combined_embeddings
+@@ -1152,8 +1175,8 @@ class LLaVAModel(MegatronModule):
+                     "1.10.0"
+                 ), "Please update Transformer Engine to >= 1.10 to use \
+                     Context Parallel with THD format data"
+-                cp_size = self.cp_group.size()
+-                cp_rank = self.cp_group.rank()
++                cp_size = cp_group.size()
++                cp_rank = cp_group.rank()
+                 for key, data in batch.items():
+                     index = tex.thd_get_partitioned_indices(
+                         packed_seq_params.cu_seqlens_q_padded, data.size(1), cp_size, cp_rank
+@@ -1376,6 +1399,14 @@ class LLaVAModel(MegatronModule):
+             loss_mask (torch.Tensor): Loss mask expanded to combined sequence length. Shape [b, s].
+         """
+         inference_context = deprecate_inference_params(inference_context, inference_params)
++        cp_group = self.cp_group
++        context_parallel_lm = self.context_parallel_lm
++        if (
++            packed_seq_params is not None
++            and getattr(packed_seq_params, "local_cp_size", None) is not None
++        ):
++            context_parallel_lm = int(packed_seq_params.local_cp_size)
++            cp_group = getattr(packed_seq_params, "cp_group", cp_group)
+ 
+         # Keep a copy of the original imgs_sizes and num_frames in case we split to context parallel ranks later.
+         global_imgs_sizes = imgs_sizes.clone() if imgs_sizes is not None else None
+@@ -1414,7 +1445,7 @@ class LLaVAModel(MegatronModule):
+         elif self.add_encoder and has_images:
+             pad = None
+             if self._dynamic_resolution:
+-                if self.context_parallel_lm > 1:
++                if context_parallel_lm > 1:
+                     # This will split the images and imgs_sizes to context parallel ranks. Each rank will have a different imgs_sizes.
+                     # If there are fewer images than CP ranks, dummy images are added to keep all ranks active.
+                     dummy_img_size = self.vision_model.patch_dim
+@@ -1428,7 +1459,9 @@ class LLaVAModel(MegatronModule):
+                     images, imgs_sizes, vision_packed_seq_params, has_pad_img, num_padded_imgs, local_num_frames = \
+                         split_to_context_parallel_ranks_dynamic_res(
+                             images, imgs_sizes, vision_packed_seq_params, self._vision_fp8, dummy_img_size,
+-                            num_frames=num_frames, temporal_patch_size=self._video_temporal_patch_size
++                            num_frames=num_frames,
++                            temporal_patch_size=self._video_temporal_patch_size,
++                            cp_group=cp_group,
+                         )
+ 
+                     # Update num_frames if it was split
+@@ -1480,8 +1513,8 @@ class LLaVAModel(MegatronModule):
+ 
+             else:
+                 assert self._video_temporal_patch_size == 1, "Temporal compression is not supported for tiling"
+-                if self.context_parallel_lm > 1 and images.shape[0] >= 2:
+-                    cp_images, pad = split_to_context_parallel_ranks(images)
++                if context_parallel_lm > 1 and images.shape[0] >= 2:
++                    cp_images, pad = split_to_context_parallel_ranks(images, cp_group=cp_group)
+                     image_embeddings = self.vision_model(cp_images)
+                 else:
+                     image_embeddings = self.vision_model(images)  # [num_tiles, img_seq_len, h_vision]
+@@ -1582,7 +1615,7 @@ class LLaVAModel(MegatronModule):
+ 
+             vision_projection_padding_needed = 0
+             if self._vision_fp8_no_arch and self._dynamic_resolution:
+-                vision_projection_padding_needed = get_padding(image_embeddings.shape[0], self.context_parallel_lm, self.tensor_model_parallel_size_lm, self.sequence_parallel_lm, fp8_enabled=self._vision_fp8)
++                vision_projection_padding_needed = get_padding(image_embeddings.shape[0], context_parallel_lm, self.tensor_model_parallel_size_lm, self.sequence_parallel_lm, fp8_enabled=self._vision_fp8)
+                 if vision_projection_padding_needed > 0:
+                     padding_image_embeddings = torch.zeros([vision_projection_padding_needed, image_embeddings.shape[1], image_embeddings.shape[2]]).to(image_embeddings.device).to(image_embeddings.dtype)
+                     image_embeddings = torch.cat([image_embeddings, padding_image_embeddings], dim=0)
+@@ -1611,18 +1644,24 @@ class LLaVAModel(MegatronModule):
+             if vision_projection_padding_needed > 0:
+                 image_embeddings = image_embeddings[:-vision_projection_padding_needed, :, :]
+ 
+-            if self.context_parallel_lm > 1 and self._dynamic_resolution:
+-                image_embeddings = gather_from_context_parallel_ranks_dynamic_res(image_embeddings, num_padded_imgs)
++            if context_parallel_lm > 1 and self._dynamic_resolution:
++                image_embeddings = gather_from_context_parallel_ranks_dynamic_res(
++                    image_embeddings, num_padded_imgs, cp_group=cp_group
++                )
+                 # For temporal compression, gather the post-compression imgs_sizes and num_frames
+                 # For non-temporal, use the saved global values for backwards compatibility
+                 if self._video_temporal_patch_size > 1:
+-                    imgs_sizes = gather_from_context_parallel_ranks_dynamic_res(imgs_sizes, num_padded_imgs)
++                    imgs_sizes = gather_from_context_parallel_ranks_dynamic_res(
++                        imgs_sizes, num_padded_imgs, cp_group=cp_group
++                    )
+                     if num_frames is not None:
+                         # Convert to tensor if it's a list
+                         if not isinstance(num_frames, torch.Tensor):
+                             num_frames = torch.tensor(num_frames, dtype=torch.int, device=imgs_sizes.device)
+                         num_frames = gather_from_context_parallel_ranks_dynamic_res(
+-                            num_frames.unsqueeze(-1) if num_frames.dim() == 1 else num_frames, num_padded_imgs
++                            num_frames.unsqueeze(-1) if num_frames.dim() == 1 else num_frames,
++                            num_padded_imgs,
++                            cp_group=cp_group,
+                         ).squeeze(-1)
+                 else:
+                     imgs_sizes = global_imgs_sizes
+@@ -1653,8 +1692,10 @@ class LLaVAModel(MegatronModule):
+                     raise NotImplementedError  # TODO: must rearrange `masks_seqlen` as well
+                 image_embeddings = self._apply_tile_tagging(image_embeddings, num_image_tiles)
+ 
+-            if self.context_parallel_lm > 1 and pad is not None and not self._dynamic_resolution:
+-                image_embeddings = gather_from_context_parallel_ranks(image_embeddings, pad)
++            if context_parallel_lm > 1 and pad is not None and not self._dynamic_resolution:
++                image_embeddings = gather_from_context_parallel_ranks(
++                    image_embeddings, pad, cp_group=cp_group
++                )
+ 
+             # Here, `image_embeddings` and `images` represent entire batch (not cp chunk).
+ 
+@@ -1703,11 +1744,15 @@ class LLaVAModel(MegatronModule):
+             sound_pad = None
+             is_parakeet = "parakeet" in self.sound_model.config.sound_model_type.lower()
+ 
+-            if self.context_parallel_lm > 1 and sound_clips.shape[0] > self.context_parallel_lm:
+-                sound_clips, sound_pad = split_to_context_parallel_ranks(sound_clips)
++            if context_parallel_lm > 1 and sound_clips.shape[0] > context_parallel_lm:
++                sound_clips, sound_pad = split_to_context_parallel_ranks(
++                    sound_clips, cp_group=cp_group
++                )
+                 if is_parakeet:
+                     # Parakeet needs sound lengths. Minimum sound length is the hop length.
+-                    sound_length, sound_pad2 = split_to_context_parallel_ranks(sound_length, pad_value=1600)
++                    sound_length, sound_pad2 = split_to_context_parallel_ranks(
++                        sound_length, pad_value=1600, cp_group=cp_group
++                    )
+                     assert sound_pad == sound_pad2, "something went wrong with splitting to context parallel ranks"
+ 
+             if os.environ.get("NRL_DEBUG", "0") == "1" and sound_clips.numel() > 0:
+@@ -1771,11 +1816,15 @@ class LLaVAModel(MegatronModule):
+                     flush=True,
+                 )
+ 
+-            if self.context_parallel_lm > 1 and sound_pad is not None:
+-                sound_embeddings = gather_from_context_parallel_ranks(sound_embeddings, sound_pad)
++            if context_parallel_lm > 1 and sound_pad is not None:
++                sound_embeddings = gather_from_context_parallel_ranks(
++                    sound_embeddings, sound_pad, cp_group=cp_group
++                )
+                 if sound_embeddings_len is not None:
+                     # Gather sound_embeddings_len along the clips dimension (unsqueeze to 2D, gather, squeeze back)
+-                    sound_embeddings_len = gather_from_context_parallel_ranks(sound_embeddings_len.unsqueeze(0), sound_pad).squeeze(0)
++                    sound_embeddings_len = gather_from_context_parallel_ranks(
++                        sound_embeddings_len.unsqueeze(0), sound_pad, cp_group=cp_group
++                    ).squeeze(0)
+ 
+             if inference_context is not None:
+                 inference_context.key_value_memory_dict["sound_tokens_count"] = sound_embeddings.shape[1]
+@@ -1824,9 +1873,9 @@ class LLaVAModel(MegatronModule):
+             sound_timestamps=sound_timestamps,
+         )  # [combined_seq_len, b, h_language], [b, combined_seq_len], [b, combined_seq_len]
+ 
+-        if self.context_parallel_lm > 1 or self.sequence_parallel_lm:
++        if context_parallel_lm > 1 or self.sequence_parallel_lm:
+             loss_weight = None
+-            if self.context_parallel_lm > 1 and new_labels is not None:
++            if context_parallel_lm > 1 and new_labels is not None:
+                 acc_lengths = (
+                     packed_seq_params.cu_seqlens_q_padded
+                     if packed_seq_params is not None
+diff --git a/megatron/core/ssm/mamba_context_parallel.py b/megatron/core/ssm/mamba_context_parallel.py
+index abd641d..8e6d54c 100644
+--- a/megatron/core/ssm/mamba_context_parallel.py
++++ b/megatron/core/ssm/mamba_context_parallel.py
+@@ -85,6 +85,7 @@ class MambaContextParallel:
+             raise ImportError("einops is required by the Mamba model but cannot be imported")
+ 
+         self.cp_group = cp_group
++        self._default_cp_group = cp_group
+         self.d_inner_local_tp = d_inner_local_tp
+         self.nheads_local_tp = nheads_local_tp
+         self.ngroups_local_tp = ngroups_local_tp
+@@ -96,15 +97,19 @@ class MambaContextParallel:
+         self.D_has_hdim = D_has_hdim
+ 
+         self.cp_size = self.cp_group.size()
++        self.cp_rank = self.cp_group.rank() if self.cp_size > 1 else 0
++        self._set_cp_metadata(self.cp_size, self.cp_rank)
+ 
++    def _set_cp_metadata(self, cp_size: int, cp_rank: int) -> None:
++        self.cp_size = cp_size
++        self.cp_rank = cp_rank
+         if self.cp_size == 1:
+             self.d_inner_local_tpcp = self.d_inner_local_tp
+             self.nheads_local_tpcp = self.nheads_local_tp
+             self.ngroups_local_tpcp = self.ngroups_local_tp
++            self.group_repeat_count = 1
+             return
+ 
+-        self.cp_rank = self.cp_group.rank()
+-
+         # Ensure that each CP rank gets at least one head:
+         assert (
+             self.nheads_local_tp % self.cp_size == 0
+@@ -140,10 +145,28 @@ class MambaContextParallel:
+         # and also `nheads_local_tpcp = nheads_local_tp // cp_size` whilst ngroups_local_tpcp is
+         # either 1 or `ngroups_local_tp // cp_size`
+ 
++    def _activate_cp_group(self, packed_seq_params: Optional[PackedSeqParams] = None) -> None:
++        cp_group = self._default_cp_group
++        cp_size = None
++
++        if packed_seq_params is not None:
++            cp_group = getattr(packed_seq_params, "cp_group", None) or cp_group
++            cp_size = getattr(packed_seq_params, "local_cp_size", None)
++
++        if cp_size is None:
++            cp_size = cp_group.size()
++        cp_size = int(cp_size)
++        cp_rank = cp_group.rank() if cp_size > 1 else 0
++
++        if self.cp_group is not cp_group or self.cp_size != cp_size or self.cp_rank != cp_rank:
++            self.cp_group = cp_group
++            self._set_cp_metadata(cp_size, cp_rank)
++
+     def pre_conv_ssm(
+         self, input_: torch.Tensor, packed_seq_params: Optional[PackedSeqParams] = None
+     ) -> torch.Tensor:
+         """Method to be applied before the convolution and SSM"""
++        self._activate_cp_group(packed_seq_params)
+         if self.cp_size == 1:
+             return input_
+ 
+@@ -205,6 +228,7 @@ class MambaContextParallel:
+         self, input_: torch.Tensor, packed_seq_params: Optional[PackedSeqParams] = None
+     ) -> torch.Tensor:
+         """Method to be applied after the convolution and SSM"""
++        self._activate_cp_group(packed_seq_params)
+         if self.cp_size == 1:
+             return input_
+         else:
+diff --git a/megatron/core/ssm/mamba_mixer.py b/megatron/core/ssm/mamba_mixer.py
+index c95f231..27cb726 100644
+--- a/megatron/core/ssm/mamba_mixer.py
++++ b/megatron/core/ssm/mamba_mixer.py
+@@ -416,6 +416,9 @@ class MambaMixer(MegatronModule):
+         total_tokens_tensor = torch.tensor(
+             [total_tokens], dtype=cu_seqlens.dtype, device=cu_seqlens.device
+         )
++        # Dynamic local-CP can leave padded sequence boundaries beyond the
++        # actual Mamba tensor length. Those boundaries represent no local tokens.
++        cu_seqlens = torch.minimum(cu_seqlens, total_tokens_tensor)
+         cu_seqlens_with_max = torch.cat([cu_seqlens, total_tokens_tensor])
+         # Example: [0, 5, 7, 11, 16] -> [5, 2, 4, 5]
+         seq_lengths = cu_seqlens_with_max[1:] - cu_seqlens_with_max[:-1]
+diff --git a/megatron/core/transformer/attention.py b/megatron/core/transformer/attention.py
+index b534a87..40d0eb6 100644
+--- a/megatron/core/transformer/attention.py
++++ b/megatron/core/transformer/attention.py
+@@ -618,6 +618,10 @@ class Attention(MegatronModule, ABC):
+         no_rope = (
+             self.config.no_rope_freq[self.layer_number - 1] if self.config.no_rope_freq else False
+         )
++        cp_group = self.model_comm_pgs.cp
++        if packed_seq_params is not None:
++            cp_group = getattr(packed_seq_params, "cp_group", None) or cp_group
++
+         if no_rope:
+             rotary_pos_emb = None
+ 
+@@ -735,11 +739,11 @@ class Attention(MegatronModule, ABC):
+                         q_pos_emb,
+                         config=self.config,
+                         cu_seqlens=cu_seqlens_q,
+-                        cp_group=self.model_comm_pgs.cp,
++                        cp_group=cp_group,
+                     )
+                 else:
+                     query = inference_context.apply_rotary_emb_query(
+-                        query, q_pos_emb, self.config, cu_seqlens_q, self.model_comm_pgs.cp
++                        query, q_pos_emb, self.config, cu_seqlens_q, cp_group
+                     )
+             if k_pos_emb is not None:
+                 key = apply_rotary_pos_emb(
+@@ -747,7 +751,7 @@ class Attention(MegatronModule, ABC):
+                     k_pos_emb,
+                     config=self.config,
+                     cu_seqlens=cu_seqlens_kv,
+-                    cp_group=self.model_comm_pgs.cp,
++                    cp_group=cp_group,
+                 )
+ 
+             # TODO, can apply positional embedding to value_layer so it has
+diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
+index 5d98ac5..545237d 100644
+--- a/megatron/core/transformer/transformer_config.py
++++ b/megatron/core/transformer/transformer_config.py
+@@ -541,6 +541,9 @@ class TransformerConfig(ModelParallelConfig):
+     moe_enable_deepep: bool = False
+     """[Experimental] Enable DeepEP for efficient token dispatching and combine in MoE models."""
+ 
++    moe_flex_dispatcher_backend: str = "deepep"
++    """[Experimental] Backend for the flex token dispatcher."""
++
+     moe_enable_hybridep: bool = False
+     """[Experimental] Enable HybridEP for efficient token dispatching and combine in MoE models."""
+ 
+-- 
+2.50.1 (Apple Git-155)
+

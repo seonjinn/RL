@@ -46,6 +46,9 @@ class VllmSpecificArgs(TypedDict):
     max_concurrent_model_loads: NotRequired[int]
     # Timeout in seconds for each load_model call. Default 1800 (30 min).
     model_load_timeout: NotRequired[int]
+    # vLLM sleep level for colocated generation. Higher levels may free more
+    # memory between generation and training at the cost of wake-up overhead.
+    sleep_level: NotRequired[int]
 
 
 class VllmConfig(GenerationConfig):
