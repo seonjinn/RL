@@ -26,7 +26,56 @@ from megatron.core.parallel_state import (
     get_context_parallel_world_size,
 )
 from megatron.core.utils import StragglerDetector
-from megatron.training.utils import get_ltor_masks_and_position_ids
+try:
+    from megatron.training.utils import get_ltor_masks_and_position_ids
+except ModuleNotFoundError as exc:
+    if exc.name != "megatron.training":
+        raise
+
+    def get_ltor_masks_and_position_ids(
+        data: torch.Tensor,
+        eod_token: int,
+        reset_position_ids: bool,
+        reset_attention_mask: bool,
+        eod_mask_loss: bool,
+        pad_token: int | None = None,
+        pad_mask_loss: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Local fallback for Megatron pins that no longer ship megatron.training."""
+
+        micro_batch_size, seq_length = data.size()
+        att_mask_batch = micro_batch_size if reset_attention_mask else 1
+        attention_mask = torch.tril(
+            torch.ones((att_mask_batch, seq_length, seq_length), device=data.device)
+        ).view(att_mask_batch, 1, seq_length, seq_length)
+
+        loss_mask = torch.ones(data.size(), dtype=torch.float, device=data.device)
+        if eod_mask_loss:
+            loss_mask[data == eod_token] = 0.0
+        if pad_mask_loss and pad_token is not None:
+            loss_mask[data == pad_token] = 0.0
+
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=data.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(data)
+        if reset_position_ids:
+            position_ids = position_ids.clone()
+
+        if reset_position_ids or reset_attention_mask:
+            for b in range(micro_batch_size):
+                eod_index = position_ids[b, data[b] == eod_token]
+                if reset_position_ids:
+                    eod_index = eod_index.clone()
+                prev_index = 0
+                for j in range(eod_index.size(0)):
+                    i = eod_index[j]
+                    if reset_attention_mask:
+                        attention_mask[b, 0, (i + 1) :, : (i + 1)] = 0
+                    if reset_position_ids:
+                        position_ids[b, (i + 1) :] -= i + 1 - prev_index
+                        prev_index = i + 1
+
+        attention_mask = attention_mask < 0.5
+        return attention_mask, loss_mask, position_ids
 
 # TODO(omni-mlm-compat): newer Megatron-LM pin requires pad_token and
 # pad_mask_loss; older signatures do not accept them. Inspect once at import

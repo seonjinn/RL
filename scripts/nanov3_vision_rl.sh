@@ -130,7 +130,10 @@ EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
 [[ -n "${WANDB_RUN_ID:-}" ]] && \
   EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
 
-PYTHONPATH_ROOTS="${NEMORL}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
+PYTHONPATH_ROOTS="${NEMORL}"
+if [[ "${USE_REPO_MEGATRON:-1}" == "1" ]]; then
+  PYTHONPATH_ROOTS="${PYTHONPATH_ROOTS}:${NEMORL}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${NEMORL}/3rdparty/Megatron-LM-workspace/Megatron-LM"
+fi
 if [[ "${USE_REPO_VLLM:-0}" == "1" ]]; then
   PYTHONPATH_ROOTS="${NEMORL}/3rdparty/vllm:${PYTHONPATH_ROOTS}"
 fi
