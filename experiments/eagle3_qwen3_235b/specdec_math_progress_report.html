@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 10:20 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 10:22 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -629,7 +629,7 @@
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
-          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code> and both completed at about <code>10:15 PT</code>. Final results: token gate <code>2048</code> is <code>5596.71 tok/s/GPU</code> with <code>57.43%</code> acceptance and <code>1.3424x</code> speedup; token gate <code>1024</code> is <code>5578.08 tok/s/GPU</code> with <code>57.44%</code> acceptance and <code>1.3379x</code> speedup. Batch-size-only gate job <code>3059445</code> is running with request gate <code>4</code> and token gate <code>0</code>; batch-size-only gate job <code>3059556</code> is running with request gate <code>32</code> and token gate <code>0</code>. Neither batch-size-only job has a rollout metric yet.</td>
+          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code> and both completed at about <code>10:15 PT</code>. Final results: token gate <code>2048</code> is <code>5596.71 tok/s/GPU</code> with <code>57.43%</code> acceptance and <code>1.3424x</code> speedup; token gate <code>1024</code> is <code>5578.08 tok/s/GPU</code> with <code>57.44%</code> acceptance and <code>1.3379x</code> speedup. Batch-size-only gate job <code>3059445</code> now has its first rollout metric: request gate <code>4</code>, token gate <code>0</code>, <code>4484.07 tok/s/GPU</code>, <code>64.74%</code> acceptance, <code>1.0755x</code> speedup. Batch-size-only gate job <code>3059556</code> with request gate <code>32</code> is still running with no rollout metric yet.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
@@ -715,7 +715,7 @@
           <div>K=2 token-gate4096 complete: <code>3056052</code>, 20/20 metrics, mean <code>4849.05 tok/s/GPU</code>, speedup <code>1.16x</code>, step-level acceptance <code>38.1%</code>, aggregate acceptance median <code>50%</code></div>
           <div>500K K=1/K=2/K=3 final jobs: <code>3058167</code>/<code>3058168</code>/<code>3058169</code>, n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means <code>5604.28</code>/<code>5004.48</code>/<code>4908.22</code>, acceptance means <code>57.51%</code>/<code>42.11%</code>/<code>31.85%</code></div>
           <div>500K stricter long-tail K=1 jobs: token gate <code>2048</code> <code>3058759</code>, n=<code>20</code>, mean <code>5596.71</code>, speedup <code>1.3424x</code>, acceptance <code>57.43%</code>; token gate <code>1024</code> <code>3058762</code>, n=<code>20</code>, mean <code>5578.08</code>, speedup <code>1.3379x</code>, acceptance <code>57.44%</code></div>
-          <div>500K batch-size-only long-tail K=1 jobs: request gate <code>4</code>, token gate <code>0</code>, job <code>3059445</code>; request gate <code>32</code>, token gate <code>0</code>, job <code>3059556</code>. Both are <code>RUNNING</code> with no rollout metric yet</div>
+          <div>500K batch-size-only long-tail K=1 jobs: request gate <code>4</code>, token gate <code>0</code>, job <code>3059445</code>, n=<code>1</code>, mean <code>4484.07</code>, speedup <code>1.0755x</code>, acceptance <code>64.74%</code>; request gate <code>32</code>, token gate <code>0</code>, job <code>3059556</code>, still <code>RUNNING</code> with no rollout metric yet</div>
         </div>
       </div>
     </div>
