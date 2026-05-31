@@ -129,6 +129,20 @@ echo "SUMMARY_JSON=$SUMMARY_JSON"
 echo "NUM_NODES=$NUM_NODES GPUS_PER_NODE=$GPUS_PER_NODE VLLM_TP=${VLLM_TP:-8} VLLM_DISTRIBUTED_EXECUTOR_BACKEND=${VLLM_DISTRIBUTED_EXECUTOR_BACKEND:-ray}"
 echo "DRY_RUN=$DRY_RUN"
 
+sbatch_cmd=(
+  sbatch
+  --nodes="$NUM_NODES"
+  --account="$ACCOUNT"
+  --partition="$PARTITION"
+  --gres="gpu:$GPUS_PER_NODE"
+  --time="$TIME_LIMIT"
+  --job-name="$JOB_NAME"
+)
+if ((${#SBATCH_EXTRA_ARGV[@]})); then
+  sbatch_cmd+=("${SBATCH_EXTRA_ARGV[@]}")
+fi
+sbatch_cmd+=("$REMOTE_REPO_ROOT/scripts/share/ray.sub")
+
 if [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then
   printf '%q ' env \
     COMMAND="$COMMAND" \
@@ -147,15 +161,7 @@ if [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then
     VLLM_USE_RAY_SPMD_WORKER="${VLLM_USE_RAY_SPMD_WORKER:-0}" \
     VLLM_USE_RAY_WRAPPED_PP_COMM="${VLLM_USE_RAY_WRAPPED_PP_COMM:-0}" \
     RAY_DEDUP_LOGS=0 \
-    sbatch \
-      --nodes="$NUM_NODES" \
-      --account="$ACCOUNT" \
-      --partition="$PARTITION" \
-      --gres="gpu:$GPUS_PER_NODE" \
-      --time="$TIME_LIMIT" \
-      --job-name="$JOB_NAME" \
-      "${SBATCH_EXTRA_ARGV[@]}" \
-      "$REMOTE_REPO_ROOT/scripts/share/ray.sub"
+    "${sbatch_cmd[@]}"
   printf '\n'
   exit 0
 fi
@@ -177,15 +183,7 @@ submit_out=$(
   VLLM_USE_RAY_SPMD_WORKER="${VLLM_USE_RAY_SPMD_WORKER:-0}" \
   VLLM_USE_RAY_WRAPPED_PP_COMM="${VLLM_USE_RAY_WRAPPED_PP_COMM:-0}" \
   RAY_DEDUP_LOGS=0 \
-  sbatch \
-    --nodes="$NUM_NODES" \
-    --account="$ACCOUNT" \
-    --partition="$PARTITION" \
-    --gres="gpu:$GPUS_PER_NODE" \
-    --time="$TIME_LIMIT" \
-    --job-name="$JOB_NAME" \
-    "${SBATCH_EXTRA_ARGV[@]}" \
-    "$REMOTE_REPO_ROOT/scripts/share/ray.sub"
+  "${sbatch_cmd[@]}"
 )
 echo "$submit_out"
 job_id="$(awk '/Submitted batch job/{print $4}' <<<"$submit_out" | tail -1)"

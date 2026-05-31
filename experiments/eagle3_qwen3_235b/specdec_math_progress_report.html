@@ -381,7 +381,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 14:30 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 14:42 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -426,7 +426,7 @@
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> completed successfully after the full <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; last 20 train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> finished the 4096-token-gate NeMo-RL K sweep: K=1 job <code>3058167</code>, K=2 job <code>3058168</code>, and K=3 job <code>3058169</code> all produced <code>20/20</code> generation metrics. Final means: K=1 is <code>5604.28 tok/s/GPU</code> with <code>57.51%</code> mean acceptance, K=2 is <code>5004.48 tok/s/GPU</code> with <code>42.11%</code>, and K=3 is <code>4908.22 tok/s/GPU</code> with <code>31.85%</code>. Existing 30B K=1 50K-drafter run completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric. The clean in-house 235B 500K path is still in target-response generation at <code>309,934/500,000</code> rows, with finalizer <code>3061260</code> and Speculators chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> queued behind it.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> completed successfully after the full <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; last 20 train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> finished the 4096-token-gate NeMo-RL K sweep: K=1 job <code>3058167</code>, K=2 job <code>3058168</code>, and K=3 job <code>3058169</code> all produced <code>20/20</code> generation metrics. Final means: K=1 is <code>5604.28 tok/s/GPU</code> with <code>57.51%</code> mean acceptance, K=2 is <code>5004.48 tok/s/GPU</code> with <code>42.11%</code>, and K=3 is <code>4908.22 tok/s/GPU</code> with <code>31.85%</code>. Existing 30B K=1 50K-drafter run completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric. The clean in-house 235B 500K path is still in target-response generation at <code>322,369/500,000</code> rows, with finalizer <code>3061260</code> and Speculators chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> queued behind it.</p>
     </div>
 
     <h2>500K Eval Snapshot</h2>
@@ -660,7 +660,7 @@
         </tr>
         <tr>
           <td>What did the gate code review find?</td>
-          <td>The runtime patch is applied in both needed places: scheduler lookahead and GPU model-runner draft proposal. The remaining inefficiency is architectural: it is still one SpecDec-enabled vLLM engine with a static gate, so large-batch phases avoid proposal work but still carry drafter memory and SpecDec path overhead. The gate uses the scheduled request/token set, not simply the vLLM log line's total <code>Running</code> request count. A NeMo-RL-level base-vs-SpecDec engine switch is not enough for the current one-call rollout shape, because the long tail happens inside one <code>vLLM.generate</code> call after many sequences finish. The next low-risk path is therefore vLLM-internal gate instrumentation and token-pressure tuning first; true routing would require chunked generation or deeper vLLM scheduler integration.</td>
+          <td>Claude Code and local review found no blocking silent-corruption bug in the SpecDec gate itself. The review did find operational risks in the target-generation resume path: partial JSONL tails could be glued to appended rows, and resume jobs could be submitted without tracking the previous writer. The scripts now repair valid missing-newline tails, quarantine invalid partial tails, require <code>--previous-job-ids</code> for no-dependency resume submissions unless explicitly overridden, and keep explicitly approved no-dependency repair dry-runs working. The remaining inefficiency is architectural: it is still one SpecDec-enabled vLLM engine with a static gate, so large-batch phases avoid proposal work but still carry drafter memory and SpecDec path overhead.</td>
         </tr>
         <tr>
           <td>What instrumentation was added?</td>
@@ -676,7 +676,7 @@
         </tr>
         <tr>
           <td>Is there an active 235B SpecDec job now?</td>
-          <td>No active 235B NeMo-RL SpecDec evaluation job is running as of <code>2026-05-31 14:30 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path, with finalizer <code>3061260</code> and training chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> queued.</td>
+          <td>No active 235B NeMo-RL SpecDec evaluation job is running as of <code>2026-05-31 14:42 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path, with finalizer <code>3061260</code> and training chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> queued.</td>
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
@@ -684,7 +684,7 @@
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
-          <td>Yes. The source overlay validation now passes against the current markers: <code>NRL_SPECDEC_BATCH_GATE_PATCH_V3</code>, <code>NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5</code>, request gate, and scheduled-token gate. The active remote <code>nemo-rl</code> checkout also contains the batch-count fix that uses <code>len(num_scheduled_tokens)+1</code> consistently and wires <code>NRL_VLLM_OMIT_GENERATION_LOGPROBS</code> into sampling params.</td>
+          <td>Yes. The source overlay validation now passes against the current markers: <code>NRL_SPECDEC_BATCH_GATE_PATCH_V4</code>, <code>NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5</code>, request gate, and scheduled-token gate. The active remote <code>nemo-rl</code> checkout also contains the batch-count fix that uses <code>len(num_scheduled_tokens)+1</code> consistently and wires <code>NRL_VLLM_OMIT_GENERATION_LOGPROBS</code> into sampling params.</td>
         </tr>
         <tr>
           <td>Current concern</td>
@@ -705,7 +705,7 @@
     </div>
     <div class="status-row">
       <strong>30B training</strong>
-      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code>, and continuation job <code>3059621</code> is running with <code>48,126/50,000</code> hidden-state files observed. The clean 500K result remains the primary reported path.</span>
+      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code>, and continuation job <code>3059621</code> has completed the <code>50,000/50,000</code> hidden-state cache and entered Speculators training. The clean 500K result remains the primary reported path.</span>
       <span class="pill ok">done</span>
     </div>
     <div class="status-row">
@@ -895,7 +895,7 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code>; continuation job <code>3059621</code> is running, with <code>48,126/50,000</code> hidden-state files observed at the 14:30 PT check.</td>
+          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code>; continuation job <code>3059621</code> is running, with <code>50,000/50,000</code> hidden-state files observed at the 14:42 PT check and training launched from the 150K checkpoint.</td>
           <td>Use only as secondary learning-curve evidence. Main 500K path supersedes this smaller continuation for final evaluation.</td>
         </tr>
         <tr>
@@ -955,7 +955,7 @@
     <h2>235B In-House Drafter Corpus</h2>
     <div class="banner">
       <h2>Current Data Status</h2>
-      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is now being expanded from the same mixed non-OpenMath prompt pool used by the clean 30B run. Completed/partial <code>qwen3_235b_*.jsonl</code> chunk files currently hold <code>309,934</code> rows. All <code>100</code> 235B chunk files now exist and are nonzero, with <code>6</code> files at or above <code>5000</code> rows and <code>94</code> still partial. The active target-generation queue currently has <code>94</code> running jobs after retrying failed chunks <code>020</code>, <code>021</code>, <code>034</code>, <code>041</code> and resubmitting still-short chunks <code>005</code>-<code>008</code>. Finalizer job <code>3061260</code> is queued after all <code>94</code> active target-generation jobs captured after the repair submission. It will validate all chunks, build the exact-unique 500K file with the OpenMath denylist, and convert it to Speculators JSONL if complete. The follow-on Speculators chain is already queued: prepare <code>3061457</code>, hidden-state array <code>3061458_[0-99]</code>, train <code>3061459</code>.</p>
+      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is now being expanded from the same mixed non-OpenMath prompt pool used by the clean 30B run. Completed/partial <code>qwen3_235b_*.jsonl</code> chunk files currently hold <code>322,369</code> rows. All <code>100</code> 235B chunk files now exist and are nonzero, with <code>6</code> files at or above <code>5000</code> rows and <code>94</code> still partial. The active target-generation queue currently has <code>94</code> running jobs after retrying failed chunks <code>020</code>, <code>021</code>, <code>034</code>, <code>041</code> and resubmitting still-short chunks <code>005</code>-<code>008</code>. Finalizer job <code>3061260</code> is queued after all <code>94</code> active target-generation jobs captured after the repair submission. It will validate all chunks, build the exact-unique 500K file with the OpenMath denylist, and convert it to Speculators JSONL if complete. The follow-on Speculators chain is already queued: prepare <code>3061457</code>, hidden-state array <code>3061458_[0-99]</code>, train <code>3061459</code>.</p>
     </div>
     <table>
       <thead>
@@ -964,7 +964,7 @@
       <tbody>
         <tr>
           <td>Existing 235B target responses</td>
-          <td><span class="pill warn">309,934 rows</span></td>
+          <td><span class="pill warn">322,369 rows</span></td>
           <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_target_chunks/qwen3_235b_*.jsonl</code>, generated from mixed non-OpenMath prompts with <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>. This count excludes the completed <code>qwen3_30ba3b_*.jsonl</code> files in the same directory. All <code>100</code> 235B chunk files are nonzero, and most are still partial.</td>
         </tr>
         <tr>
@@ -980,7 +980,7 @@
         <tr>
           <td>Remaining 400K tranche</td>
           <td><span class="pill info">queued/running</span></td>
-          <td>Chunk jobs <code>3059353-3059432</code> generate chunks <code>020-099</code>. At the 14:30 PT check, the 235B target-response files contain <code>309,934</code> rows. Startup-failed chunks <code>046</code> and <code>096</code> were resubmitted as jobs <code>3059476</code> and <code>3059477</code>; chunks <code>037</code> and <code>068</code> were resubmitted as jobs <code>3059839</code> and <code>3059838</code>. Additional failed w1 continuation chunks <code>020</code>, <code>021</code>, <code>034</code>, and <code>041</code> were resubmitted as jobs <code>3061687</code>, <code>3061685</code>, <code>3061684</code>, and <code>3061686</code>. The active qwen3_235b target-generation queue now has <code>94</code> running jobs. Chunks <code>005</code>-<code>008</code> remain short by 8 rows after the first repair wave, so jobs <code>3061744</code>-<code>3061747</code> were submitted as a second repair wave. Finalizer <code>3061260</code> was updated to wait on all <code>94</code> active targetgen jobs.</td>
+          <td>Chunk jobs <code>3059353-3059432</code> generate chunks <code>020-099</code>. At the 14:42 PT check, the 235B target-response files contain <code>322,369</code> rows. Startup-failed chunks <code>046</code> and <code>096</code> were resubmitted as jobs <code>3059476</code> and <code>3059477</code>; chunks <code>037</code> and <code>068</code> were resubmitted as jobs <code>3059839</code> and <code>3059838</code>. Additional failed w1 continuation chunks <code>020</code>, <code>021</code>, <code>034</code>, and <code>041</code> were resubmitted as jobs <code>3061687</code>, <code>3061685</code>, <code>3061684</code>, and <code>3061686</code>. The active qwen3_235b target-generation queue now has <code>94</code> running jobs. Chunks <code>005</code>-<code>008</code> remain short by 8 rows after the first repair wave, so jobs <code>3061744</code>-<code>3061747</code> were submitted as a second repair wave. Finalizer <code>3061260</code> is waiting on all <code>94</code> active targetgen jobs.</td>
         </tr>
         <tr>
           <td>Finalize 235B corpus</td>
@@ -1120,7 +1120,7 @@
         </tr>
         <tr>
           <td>Qwen3-235B in-house path</td>
-          <td>Target-response generation is active on the same mixed non-OpenMath prompt pool. Current observed 235B rows are <code>309,934</code> across <code>100</code> chunk files, all nonzero. The target-generation queue has <code>94</code> running jobs. Finalizer job <code>3061260</code> waits on all <code>94</code> active targetgen jobs captured after the second repair submission, then queued Speculators jobs <code>3061457</code>, <code>3061458_[0-99]</code>, and <code>3061459</code> will prepare, dump hidden states, and train if the corpus validates.</td>
+          <td>Target-response generation is active on the same mixed non-OpenMath prompt pool. Current observed 235B rows are <code>322,369</code> across <code>100</code> chunk files, all nonzero. The target-generation queue has <code>94</code> running jobs. Finalizer job <code>3061260</code> waits on all <code>94</code> active targetgen jobs captured after the second repair submission, then queued Speculators jobs <code>3061457</code>, <code>3061458_[0-99]</code>, and <code>3061459</code> will prepare, dump hidden states, and train if the corpus validates.</td>
           <td>OpenMath NeMo-RL rollout source for baseline and SpecDec throughput comparisons.</td>
           <td><span class="pill info">pending</span> Needs the same prompt-level denylist validation before making a clean train/test split claim.</td>
         </tr>
@@ -1134,7 +1134,7 @@
       </div>
       <div class="step">
         <div class="step-title">2. Target responses</div>
-        <p>30B target responses are complete for the 500K path. 235B responses are separate: <code>309,934</code> 235B rows are currently observed. Jobs <code>3059130-3059133</code>, <code>3059139-3059151</code>, and <code>3059353-3059432</code> cover chunks <code>005-099</code>; retry jobs <code>3059839</code> and <code>3059838</code> created nonzero chunk files <code>037</code> and <code>068</code>. Failed w1 continuation chunks <code>020</code>, <code>021</code>, <code>034</code>, and <code>041</code> were resubmitted as jobs <code>3061687</code>, <code>3061685</code>, <code>3061684</code>, and <code>3061686</code>. The active target-generation queue now shows <code>94</code> running jobs. Chunks <code>005</code>-<code>008</code> were resubmitted as repair jobs <code>3061744</code>-<code>3061747</code>. Finalizer job <code>3061260</code> was updated to wait on all <code>94</code> active targetgen jobs, and the follow-on Speculators chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> is queued after it.</p>
+        <p>30B target responses are complete for the 500K path. 235B responses are separate: <code>322,369</code> 235B rows are currently observed. Jobs <code>3059130-3059133</code>, <code>3059139-3059151</code>, and <code>3059353-3059432</code> cover chunks <code>005-099</code>; retry jobs <code>3059839</code> and <code>3059838</code> created nonzero chunk files <code>037</code> and <code>068</code>. Failed w1 continuation chunks <code>020</code>, <code>021</code>, <code>034</code>, and <code>041</code> were resubmitted as jobs <code>3061687</code>, <code>3061685</code>, <code>3061684</code>, and <code>3061686</code>. The active target-generation queue now shows <code>94</code> running jobs. Chunks <code>005</code>-<code>008</code> were resubmitted as repair jobs <code>3061744</code>-<code>3061747</code>. Finalizer job <code>3061260</code> is waiting on all <code>94</code> active targetgen jobs, and the follow-on Speculators chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> is queued after it.</p>
       </div>
       <div class="step">
         <div class="step-title">3. Speculators format</div>

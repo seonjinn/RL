@@ -19,6 +19,46 @@ BASE_OFFSET="${BASE_OFFSET:-$((CHUNK_INDEX * CHUNK_SIZE))}"
 
 mkdir -p "$(dirname "$OUTPUT_CONVERSATIONS")" "$(dirname "$SUMMARY_JSON")"
 
+if [[ -s "$OUTPUT_CONVERSATIONS" ]]; then
+  "$PYTHON_BIN" - "$OUTPUT_CONVERSATIONS" <<'PY'
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open("rb+") as handle:
+    handle.seek(0, os.SEEK_END)
+    size = handle.tell()
+    if size == 0:
+        raise SystemExit(0)
+
+    handle.seek(size - 1)
+    if handle.read(1) == b"\n":
+        raise SystemExit(0)
+
+    handle.seek(0)
+    data = handle.read()
+    last_newline = data.rfind(b"\n")
+    tail = data[last_newline + 1 :]
+    try:
+        json.loads(tail.decode("utf-8"))
+    except Exception:
+        quarantine = path.with_name(
+            f"{path.name}.partial.{time.strftime('%Y%m%d%H%M%S')}.{os.environ.get('SLURM_JOB_ID', 'manual')}"
+        )
+        quarantine.write_bytes(tail)
+        handle.seek(last_newline + 1 if last_newline >= 0 else 0)
+        handle.truncate()
+        print(f"truncated incomplete JSONL tail to {quarantine}", flush=True)
+    else:
+        handle.seek(0, os.SEEK_END)
+        handle.write(b"\n")
+        print(f"added missing trailing newline to {path}", flush=True)
+PY
+fi
+
 existing_count=0
 if [[ -s "$OUTPUT_CONVERSATIONS" ]]; then
   existing_count="$(wc -l < "$OUTPUT_CONVERSATIONS" | tr -d ' ')"
@@ -68,4 +108,3 @@ SAMPLE_OFFSET="$sample_offset" \
 APPEND=true \
 SKIP_PROMPT_MATERIALIZE=true \
   bash "$EXP_DIR/run_direct_vllm_math_rollout.sh"
-

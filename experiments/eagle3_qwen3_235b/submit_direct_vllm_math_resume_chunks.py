@@ -59,6 +59,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--account", default="coreai_dlalgo_nemorl")
     parser.add_argument("--partition", default="batch")
     parser.add_argument("--previous-job-ids", default="", help="Comma-separated dependency job ids, one per chunk.")
+    parser.add_argument(
+        "--allow-no-previous-dependency",
+        action="store_true",
+        help=(
+            "Allow a resume submission without per-chunk afterany dependencies. "
+            "Use only after verifying no upstream writer is active for the same chunk files."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -93,6 +101,12 @@ def main() -> int:
     previous = [item for item in args.previous_job_ids.split(",") if item]
     if previous and len(previous) != args.chunks:
         raise SystemExit("--previous-job-ids must contain one job id per chunk")
+    if not previous and not args.allow_no_previous_dependency:
+        raise SystemExit(
+            "--previous-job-ids is required for the first submitted resume wave. "
+            "Pass --allow-no-previous-dependency only after checking no active "
+            "job can append to the same chunk files."
+        )
 
     submitted: list[dict[str, str | int | None]] = []
     deps: list[str | None] = previous if previous else [None] * args.chunks
@@ -165,6 +179,7 @@ def main() -> int:
         "wave_limit": args.wave_limit,
         "waves": args.waves,
         "dry_run": args.dry_run,
+        "allow_no_previous_dependency": args.allow_no_previous_dependency,
         "submitted": submitted,
     }
     print(json.dumps(summary, indent=2))

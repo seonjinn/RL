@@ -58,6 +58,7 @@ echo "# Submit Qwen3-235B mixed 500K finalizer"
 echo "ACCOUNT=$ACCOUNT PARTITION=$PARTITION TIME_LIMIT=$TIME_LIMIT GPUS_PER_NODE=$GPUS_PER_NODE"
 echo "JOB_NAME=$JOB_NAME"
 echo "DEPENDENCY=$DEPENDENCY"
+echo "NOTE=dependency is a submission-time squeue snapshot; rerun this submitter or use scontrol update after late targetgen repair submissions"
 echo "DRY_RUN=$DRY_RUN"
 
 if [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then

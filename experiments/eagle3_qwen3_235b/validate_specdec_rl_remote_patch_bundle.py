@@ -43,7 +43,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
     "nemo_rl/models/generation/vllm/vllm_worker.py": [
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
         "def _patch_vllm_batch_gated_speculative_decoding()",
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V3",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
         "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
         "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
         "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
