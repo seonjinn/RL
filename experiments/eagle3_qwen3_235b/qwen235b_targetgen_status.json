@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:28 PDT",
+  "updated_at": "2026-05-31 09:40 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -44,11 +44,19 @@
       ],
       "expected_new_records": 50000,
       "state_at_submit_check": "RUNNING"
+    },
+    "new_chunks_020_099": {
+      "job_id_range": "3059353-3059432",
+      "job_count": 80,
+      "chunks": "020-099",
+      "expected_new_records": 400000,
+      "state_at_submit_check": "61 RUNNING / 33 PENDING across all active 235B targetgen jobs after submission"
     }
   },
   "expected_after_current_wave": {
-    "records": 100000,
-    "chunks": "000-019 exact 5K each if all jobs complete successfully"
+    "records": 500000,
+    "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
+    "current_rows_observed": 49992
   },
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": false,

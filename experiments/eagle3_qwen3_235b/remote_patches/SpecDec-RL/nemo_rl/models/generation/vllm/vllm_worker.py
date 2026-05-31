@@ -1015,7 +1015,7 @@ class BaseVllmGenerationWorker:
                             "                    num_lookahead_tokens=(\n"
                             "                        0\n"
                             "                        if nrl_specdec_scheduler_gate_threshold > 0\n"
-                            "                        and (len(self.running) + 1)\n"
+                            "                        and (len(num_scheduled_tokens) + 1)\n"
                             "                        > nrl_specdec_scheduler_gate_threshold\n"
                             "                        or nrl_specdec_scheduler_gate_token_threshold > 0\n"
                             "                        and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
@@ -1031,7 +1031,7 @@ class BaseVllmGenerationWorker:
                             "                    if request.num_computed_tokens == 0\n"
                             "                    or (\n"
                             "                        nrl_specdec_scheduler_gate_threshold > 0\n"
-                            "                        and (len(self.running) + 1)\n"
+                            "                        and (len(num_scheduled_tokens) + 1)\n"
                             "                        > nrl_specdec_scheduler_gate_threshold\n"
                             "                    )\n"
                             "                    or (\n"
@@ -1093,7 +1093,7 @@ class BaseVllmGenerationWorker:
                             "                        num_lookahead_tokens=(\n"
                             "                            0\n"
                             "                            if nrl_specdec_scheduler_gate_threshold > 0\n"
-                            "                            and (len(self.running) + 1)\n"
+                            "                            and (len(num_scheduled_tokens) + 1)\n"
                             "                            > nrl_specdec_scheduler_gate_threshold\n"
                             "                            or nrl_specdec_scheduler_gate_token_threshold > 0\n"
                             "                            and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
@@ -1111,7 +1111,7 @@ class BaseVllmGenerationWorker:
                             "                    if limit_lookahead_tokens\n"
                             "                    or (\n"
                             "                        nrl_specdec_scheduler_gate_threshold > 0\n"
-                            "                        and (len(self.running) + 1)\n"
+                            "                        and (len(num_scheduled_tokens) + 1)\n"
                             "                        > nrl_specdec_scheduler_gate_threshold\n"
                             "                    )\n"
                             "                    or (\n"
@@ -1173,7 +1173,7 @@ class BaseVllmGenerationWorker:
                             "                        num_lookahead_tokens=(\n"
                             "                            0\n"
                             "                            if nrl_specdec_scheduler_gate_threshold > 0\n"
-                            "                            and (len(self.running) + 1)\n"
+                            "                            and (len(num_scheduled_tokens) + 1)\n"
                             "                            > nrl_specdec_scheduler_gate_threshold\n"
                             "                            or nrl_specdec_scheduler_gate_token_threshold > 0\n"
                             "                            and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
@@ -1490,6 +1490,9 @@ class BaseVllmGenerationWorker:
         force_logprobs = os.environ.get(
             "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS", "0"
         ).lower() in {"1", "true", "yes", "y", "on"}
+        omit_generation_logprobs = os.environ.get(
+            "NRL_VLLM_OMIT_GENERATION_LOGPROBS", "0"
+        ).lower() in {"1", "true", "yes", "y", "on"}
         if spec_decode_requested and force_logprobs:
             allow_specdec_logprobs = os.environ.get(
                 "NRL_ALLOW_SPECDEC_REQUEST_LOGPROBS", "0"
@@ -1503,7 +1506,14 @@ class BaseVllmGenerationWorker:
                     "SpecDec throughput/acceptance runs, or set "
                     "NRL_ALLOW_SPECDEC_REQUEST_LOGPROBS=1 intentionally."
                 )
+        if omit_generation_logprobs and force_logprobs:
+            raise RuntimeError(
+                "NRL_VLLM_OMIT_GENERATION_LOGPROBS=true conflicts with "
+                "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS=true."
+            )
         request_logprobs = (not spec_decode_requested) or force_logprobs
+        if omit_generation_logprobs:
+            request_logprobs = False
 
         return self.SamplingParams(
             temperature=temperature,
