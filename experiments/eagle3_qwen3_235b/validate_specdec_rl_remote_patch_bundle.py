@@ -93,6 +93,12 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "RAY_NODE_IP_ADDRESS",
         'ray_init_kwargs["_node_ip_address"] = ray_node_ip_address',
     ],
+    "nemo_rl/distributed/ray_actor_environment_registry.py": [
+        'getattr(PY_EXECUTABLES, "SGLANG", PY_EXECUTABLES.SYSTEM)',
+        'getattr(PY_EXECUTABLES, "FSDP", VLLM_EXECUTABLE)',
+        "SGLANG_EXECUTABLE",
+        "FSDP_EXECUTABLE",
+    ],
     "nemo_rl/models/megatron/community_import.py": [
         "def _patch_distcp_writer_for_ray_import()",
         "NRL_MEGATRON_IMPORT_INLINE_WRITER",

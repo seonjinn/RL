@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 16:30 PDT",
+  "updated_at": "2026-05-31 16:35 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -917,7 +917,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_and_validated_remotely",
-    "updated_at": "2026-05-31 16:30 PDT",
+    "updated_at": "2026-05-31 16:35 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -925,11 +925,13 @@
     "metrics_visibility": "NeMo-RL now exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last request/token counts, thresholds, and adaptive threshold state.",
     "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8, token threshold 2048, adaptive target 0.75, token threshold range 512-4096, log interval 32.",
     "pre_metrics_patch_eval_job": "3062282",
-    "pre_metrics_patch_eval_state": "RUNNING at 2026-05-31 16:30 PDT from the older /lustre/.../nemo-rl checkout. It reached Step 1 and emitted one NeMo-RL performance metric: 5718.39 tok/s/GPU with 57.87% per-position acceptance. This is secondary evidence because the checkout is not the validated /SpecDec-RL path.",
-    "corrected_eval_job": "3062401",
-    "corrected_eval_state": "RUNNING at 2026-05-31 16:30 PDT from the validated /lustre/.../SpecDec-RL checkout with structured gate metrics and scheduler-following runner behavior; Ray driver log is still building the driver runtime environment, so no rollout metric has been emitted yet.",
+    "pre_metrics_patch_eval_state": "RUNNING at 2026-05-31 16:35 PDT from the older /lustre/.../nemo-rl checkout. It reached Step 2 and emitted two secondary NeMo-RL performance metrics: 5718.39 and 5315.41 tok/s/GPU, mean 5516.90 tok/s/GPU, with mean per-position acceptance 57.46%. This is secondary evidence because the checkout is not the validated /SpecDec-RL path.",
+    "failed_corrected_eval_job": "3062401",
+    "failed_corrected_eval_state": "FAILED before rollout at import time because the remote /SpecDec-RL target checkout still referenced PY_EXECUTABLES.SGLANG while its PY_EXECUTABLES class did not define SGLANG. The overlay already had a safe getattr fallback; the target checkout was patched and validator now requires the fallback.",
+    "corrected_eval_job": "3062507",
+    "corrected_eval_state": "RUNNING at 2026-05-31 16:35 PDT from the validated /lustre/.../SpecDec-RL checkout after applying the SGLANG/FSDP executable fallback and passing target-applied validation; no rollout metric has been emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_gate_metrics_eval_jobs.txt",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet."
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 has one secondary metric at 5718.39 tok/s/GPU and 57.87% acceptance, but it is not counted as the primary corrected result. The hardened adaptive gate code is now validated on /SpecDec-RL and job 3062401 is running, but its NeMo-RL throughput/acceptance result is not available yet."
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 has two secondary metrics with mean 5516.90 tok/s/GPU and 57.46% acceptance, but it is not counted as the primary corrected result. Corrected job 3062401 failed before rollout due a target-checkout PY_EXECUTABLES.SGLANG mismatch; the fallback patch is now applied and target-applied validation passes. Replacement corrected job 3062507 is running, but its NeMo-RL throughput/acceptance result is not available yet."
 }
