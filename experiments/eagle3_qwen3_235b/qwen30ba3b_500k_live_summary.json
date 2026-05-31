@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:32 PDT",
+  "updated_at": "2026-05-31 08:36 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,8 +10,8 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 11,
-      "completed_generation_metrics": 10,
+      "latest_step_seen": 12,
+      "completed_generation_metrics": 11,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
@@ -22,10 +22,11 @@
         6032.86,
         6086.08,
         5061.79,
-        5312.59
+        5312.59,
+        5544.93
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5604.09,
-      "speedup_vs_baseline_mean_so_far": 1.3442,
+      "generated_tokens_sec_gpu_mean_so_far": 5598.71,
+      "speedup_vs_baseline_mean_so_far": 1.3429,
       "acceptance_rate_values": [
         0.5791,
         0.571,
@@ -36,10 +37,11 @@
         0.5776,
         0.5664,
         0.5654,
-        0.5823
+        0.5823,
+        0.5768
       ],
-      "acceptance_rate_mean_so_far": 0.5745,
-      "acceptance_rate_latest_summary": 0.5823,
+      "acceptance_rate_mean_so_far": 0.5747,
+      "acceptance_rate_latest_summary": 0.5768,
       "total_step_seconds": [
         254.2,
         216.66,
@@ -50,14 +52,15 @@
         221.07,
         220.89,
         206.34,
-        211.36
+        211.36,
+        209.47
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 11,
-      "completed_generation_metrics": 10,
+      "latest_step_seen": 12,
+      "completed_generation_metrics": 11,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -68,10 +71,11 @@
         5188.73,
         5271.6,
         4365.68,
-        4954.84
+        4954.84,
+        4866.36
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5048.17,
-      "speedup_vs_baseline_mean_so_far": 1.2108,
+      "generated_tokens_sec_gpu_mean_so_far": 5031.64,
+      "speedup_vs_baseline_mean_so_far": 1.2069,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -82,13 +86,14 @@
         0.424,
         0.4115,
         0.4135,
-        0.4277
+        0.4277,
+        0.4219
       ],
-      "acceptance_rate_mean_so_far": 0.4204,
-      "acceptance_rate_latest_summary": 0.4277,
+      "acceptance_rate_mean_so_far": 0.4205,
+      "acceptance_rate_latest_summary": 0.4219,
       "per_position_acceptance_latest_summary": [
-        0.562,
-        0.2933
+        0.5573,
+        0.2865
       ],
       "total_step_seconds": [
         262.51,
@@ -100,14 +105,15 @@
         231.03,
         238.52,
         214.26,
-        214.33
+        214.33,
+        221.34
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 11,
-      "completed_generation_metrics": 10,
+      "latest_step_seen": 12,
+      "completed_generation_metrics": 11,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -118,10 +124,11 @@
         5027.53,
         5260.25,
         4295.6,
-        4813.4
+        4813.4,
+        4773.78
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4953.06,
-      "speedup_vs_baseline_mean_so_far": 1.188,
+      "generated_tokens_sec_gpu_mean_so_far": 4936.76,
+      "speedup_vs_baseline_mean_so_far": 1.1841,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -132,14 +139,15 @@
         0.3216,
         0.3107,
         0.3124,
-        0.3252
+        0.3252,
+        0.3199
       ],
-      "acceptance_rate_mean_so_far": 0.3181,
-      "acceptance_rate_latest_summary": 0.3252,
+      "acceptance_rate_mean_so_far": 0.3182,
+      "acceptance_rate_latest_summary": 0.3199,
       "per_position_acceptance_latest_summary": [
-        0.5525,
-        0.2821,
-        0.1409
+        0.548,
+        0.2758,
+        0.1357
       ],
       "total_step_seconds": [
         255.95,
@@ -151,7 +159,8 @@
         230.77,
         231.6,
         214.73,
-        212.79
+        212.79,
+        217.93
       ]
     }
   ],
