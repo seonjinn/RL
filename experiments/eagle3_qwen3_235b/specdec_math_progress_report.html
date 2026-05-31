@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 02:13 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 02:28 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -350,20 +350,44 @@
       </div>
       <div class="card">
         <div class="label">30B mixed baseline</div>
-        <div class="metric info">4176.85</div>
-        <p class="small">First observed Step metric from active 20-step run.</p>
+        <div class="metric info">4211.64</div>
+        <p class="small">tok/s/GPU mean from the first 3 completed NeMo-RL generation metrics.</p>
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">8.4K / 50K</div>
-        <p class="small">Hidden states: 8429 files, 524G. Still extracting.</p>
+        <div class="metric warn">10.1K / 50K</div>
+        <p class="small">Hidden states: 10113 files, 628G. Still extracting.</p>
       </div>
     </div>
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL speedup, mixed-math baseline is running, and mixed 100K training is progressing. 235B baseline is stable, but SpecDec K=2 currently fails from a compiled-DAG timeout when the first generation step schedules 64 requests and 2080 tokens.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline is running, and mixed 100K training is progressing. 235B baseline is stable, but SpecDec K=2 currently fails from a compiled-DAG timeout when the first generation step schedules 64 requests and 2080 tokens.</p>
     </div>
+
+    <h2>Measurement Scope</h2>
+    <table>
+      <thead>
+        <tr><th>Number</th><th>Source</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>30B 1.17x-1.22x speedup</td>
+          <td><span class="pill ok">NeMo-RL</span></td>
+          <td>Measured from NeMo-RL <code>Generation Worker Group (Generated tokens/sec/gpu)</code> over completed rollout jobs. This is not a standalone vLLM-only benchmark.</td>
+        </tr>
+        <tr>
+          <td>235B 27.8% acceptance</td>
+          <td><span class="pill warn">vLLM internal</span></td>
+          <td>Observed inside the failed 235B K=2 run before NeMo-RL emitted a completed generation throughput metric. It proves the drafter attached, but it is not a clean NeMo-RL speedup.</td>
+        </tr>
+        <tr>
+          <td>235B baseline 66.78 tok/s/GPU</td>
+          <td><span class="pill ok">NeMo-RL</span></td>
+          <td>Completed 20-step NeMo-RL baseline job <code>3053877</code>.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <h2>Workstreams</h2>
     <div class="status-row">
@@ -383,8 +407,8 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>30B target-response set is complete. Parallel hidden-state sharding has been staged to avoid serial 50K chunks.</span>
-      <span class="pill info">planned</span>
+      <span>30B raw target-response set is complete. It has 500000 rows, 499941 unique normalized prompts, and 0 prompt overlap with OpenMath eval.</span>
+      <span class="pill warn">dedupe first</span>
     </div>
   </section>
 
@@ -418,7 +442,7 @@
         <h3>What Matters</h3>
         <p>30B already proves SpecDec can help NeMo-RL generation, but the best measured speedup is still about 1.22x, not the target 2x. The next useful comparison is the mixed-math 50K checkpoint in the active baseline/K=1/K=2 chain.</p>
         <div class="mono-list">
-          <div>Baseline active: <code>3056050</code>, first metric <code>4176.85 tok/s/GPU</code></div>
+          <div>Baseline active: <code>3056050</code>, current mean <code>4211.64 tok/s/GPU</code> from 3 metrics</div>
           <div>K=1 queued: <code>3056051</code></div>
           <div>K=2 queued: <code>3056052</code></div>
         </div>
@@ -440,14 +464,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>8429</code> hidden-state files, <code>524G</code>.</td>
+          <td>Job <code>3055364</code>, <code>10113</code> hidden-state files, <code>628G</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
-          <td><span class="pill ok">ready</span></td>
-          <td>10 unique 50K slices exist for 30B mixed non-OpenMath.</td>
-          <td>Use parallel hidden-state generation for a 500K full run.</td>
+          <td><span class="pill warn">raw ready</span></td>
+          <td>10 50K slices exist for 30B mixed non-OpenMath. Global normalized prompt uniqueness is <code>499941/500000</code>.</td>
+          <td>Deduplicate or generate 59 replacement rows before calling it an exact 500K-unique run.</td>
         </tr>
       </tbody>
     </table>
@@ -502,7 +526,7 @@
     <div class="flow">
       <div class="step">
         <div class="step-title">1. Prompt pool</div>
-        <p>500K non-OpenMath math prompts: NuminaMath, NuminaMath-CoT, OpenThoughts, DeepScaleR, DAPO.</p>
+        <p>500K non-OpenMath math prompts: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, DAPO-Math-17k.</p>
       </div>
       <div class="step">
         <div class="step-title">2. Target responses</div>
@@ -514,13 +538,69 @@
       </div>
       <div class="step">
         <div class="step-title">4. Hidden states</div>
-        <p>Current bottleneck. 30B 100K shard is at 8429/50000.</p>
+        <p>Current bottleneck. 30B 100K shard is at 10113/50000.</p>
       </div>
       <div class="step">
         <div class="step-title">5. Train + evaluate</div>
         <p>Train Eagle3 drafter, then measure NeMo-RL acceptance and tok/s/GPU.</p>
       </div>
     </div>
+
+    <h2>Dataset Split And Overlap</h2>
+    <table>
+      <thead>
+        <tr><th>Use</th><th>Dataset / File</th><th>Rows</th><th>Overlap Note</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Drafter training prompt pool</td>
+          <td><code>mixed_math_nonopenmath_500k_prompts.jsonl</code></td>
+          <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
+          <td>Non-OpenMath pool. Internal duplicate count is <code>59</code>, so the full 500K run must dedupe or add replacements before claiming exact unique 500K.</td>
+        </tr>
+        <tr>
+          <td>Drafter training target responses</td>
+          <td>10 files: <code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_50k*.jsonl</code></td>
+          <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
+          <td>Responses are synthesized by <code>Qwen/Qwen3-30B-A3B</code>, then converted to Speculators format.</td>
+        </tr>
+        <tr>
+          <td>NeMo-RL math evaluation</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code></td>
+          <td><code>50000</code> rows, <code>44304</code> unique normalized prompts</td>
+          <td>Normalized prompt overlap with the 500K non-OpenMath training pool is <code>0</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>500K Training Mix</h2>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Dataset</th><th>Rows</th><th>Share</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>NuminaMath 1.5</td><td><code>AI-MO/NuminaMath-1.5</code></td><td><code>300000</code></td><td>60%</td></tr>
+        <tr><td>NuminaMath CoT</td><td><code>AI-MO/NuminaMath-CoT</code></td><td><code>100000</code></td><td>20%</td></tr>
+        <tr><td>OpenThoughts math</td><td><code>open-thoughts/OpenThoughts-114k</code></td><td><code>60000</code></td><td>12%</td></tr>
+        <tr><td>DeepScaleR math</td><td><code>PALM-Lab/math-deepscaler</code></td><td><code>25000</code></td><td>5%</td></tr>
+        <tr><td>DAPO math</td><td><code>BytedTsinghua-SIA/DAPO-Math-17k</code></td><td><code>15000</code></td><td>3%</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Training Setup</h2>
+    <table>
+      <thead>
+        <tr><th>Setting</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Target model</td><td><code>Qwen/Qwen3-30B-A3B</code></td></tr>
+        <tr><td>Drafter backend</td><td>Speculators Eagle3 / speculator model</td></tr>
+        <tr><td>Target layers</td><td><code>1 23 44</code></td></tr>
+        <tr><td>Sequence length</td><td><code>8192</code></td></tr>
+        <tr><td>Training continuation</td><td>Full 500K path starts from the completed mixed 50K checkpoint unless explicitly reset.</td></tr>
+        <tr><td>500K execution plan</td><td>Merge 10x50K, prepare once, generate hidden states in 20 global-index shards, train once on the full cache.</td></tr>
+      </tbody>
+    </table>
 
     <h2>Progress</h2>
     <div class="bars">
@@ -536,8 +616,8 @@
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:17%;--c:var(--amber)"></div></div>
-        <strong>17%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:20%;--c:var(--amber)"></div></div>
+        <strong>20%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
@@ -551,7 +631,7 @@
     <h2>500K Parallel Plan</h2>
     <div class="banner">
       <h2>Short Answer</h2>
-      <p>Yes, generate 500K in parallel first, then train once on the full 500K. The missing piece is safe global-index hidden-state sharding. I staged a patch and submit wrapper for this path.</p>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. One correction is required before launch: the raw 500K 30B response set has 59 duplicate normalized prompts, so the exact-unique path should dedupe or add 59 replacements first.</p>
     </div>
 
     <div class="grid two">
@@ -571,7 +651,7 @@
     <div class="flow">
       <div class="step">
         <div class="step-title">Merge 10x50K</div>
-        <p>Create one 500K conversation JSONL.</p>
+        <p>Create one conversation JSONL and enforce normalized-prompt uniqueness.</p>
       </div>
       <div class="step">
         <div class="step-title">Prepare once</div>
@@ -583,7 +663,7 @@
       </div>
       <div class="step">
         <div class="step-title">Train once</div>
-        <p>Train Eagle3 on the complete 500K cache.</p>
+        <p>Train Eagle3 on the complete unique hidden-state cache.</p>
       </div>
       <div class="step">
         <div class="step-title">Evaluate</div>
@@ -619,6 +699,7 @@
       <div>Report mirror fs1: <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/specdec_math_progress_report.html</code></div>
       <div>Report mirror fsw: <code>/lustre/fsw/portfolios/coreai/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/specdec_math_progress_report.html</code></div>
       <div>30B mixed 50K checkpoint: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_50k/checkpoints_train_50k_layers48_mlen8193/0</code></div>
+      <div>30B 500K prompt pool: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></div>
       <div>30B 100K hidden-state dir: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_100k_seen/hidden_states_layers48_mlen8193_offset50k</code></div>
     </div>
   </section>
