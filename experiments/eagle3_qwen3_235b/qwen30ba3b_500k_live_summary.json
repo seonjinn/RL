@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:14 PDT",
+  "updated_at": "2026-05-31 08:17 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,103 +10,112 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 6,
-      "completed_generation_metrics": 5,
+      "latest_step_seen": 7,
+      "completed_generation_metrics": 6,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
         5975.9,
         5568.03,
-        5687.63
+        5687.63,
+        5280.8
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5653.35,
-      "speedup_vs_baseline_mean_so_far": 1.356,
+      "generated_tokens_sec_gpu_mean_so_far": 5591.26,
+      "speedup_vs_baseline_mean_so_far": 1.3411,
       "acceptance_rate_values": [
         0.5791,
         0.571,
         0.5914,
         0.5563,
-        0.5851
+        0.5851,
+        0.5708
       ],
-      "acceptance_rate_mean_so_far": 0.5766,
-      "acceptance_rate_latest_summary": 0.5851,
+      "acceptance_rate_mean_so_far": 0.5756,
+      "acceptance_rate_latest_summary": 0.5708,
       "total_step_seconds": [
         254.2,
         216.66,
         218.56,
         206.36,
-        210.97
+        210.97,
+        204.76
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 6,
-      "completed_generation_metrics": 5,
+      "latest_step_seen": 7,
+      "completed_generation_metrics": 6,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
         5245.61,
         5093.95,
-        5293.27
+        5293.27,
+        4928.26
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5154.51,
-      "speedup_vs_baseline_mean_so_far": 1.2363,
+      "generated_tokens_sec_gpu_mean_so_far": 5116.81,
+      "speedup_vs_baseline_mean_so_far": 1.2273,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
         0.4369,
         0.4015,
-        0.4299
+        0.4299,
+        0.4184
       ],
-      "acceptance_rate_mean_so_far": 0.4217,
-      "acceptance_rate_latest_summary": 0.4299,
+      "acceptance_rate_mean_so_far": 0.4211,
+      "acceptance_rate_latest_summary": 0.4184,
       "per_position_acceptance_latest_summary": [
-        0.5654,
-        0.2943
+        0.5522,
+        0.2846
       ],
       "total_step_seconds": [
         262.51,
         219.25,
         225.44,
         210.96,
-        214.64
+        214.64,
+        207.56
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 6,
-      "completed_generation_metrics": 5,
+      "latest_step_seen": 7,
+      "completed_generation_metrics": 6,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
         5209.79,
         5097.79,
-        5211.14
+        5211.14,
+        4861.72
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5054.43,
-      "speedup_vs_baseline_mean_so_far": 1.2123,
+      "generated_tokens_sec_gpu_mean_so_far": 5022.31,
+      "speedup_vs_baseline_mean_so_far": 1.2046,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
         0.3322,
         0.3007,
-        0.3262
+        0.3262,
+        0.3166
       ],
-      "acceptance_rate_mean_so_far": 0.3188,
-      "acceptance_rate_latest_summary": 0.3262,
+      "acceptance_rate_mean_so_far": 0.3185,
+      "acceptance_rate_latest_summary": 0.3166,
       "per_position_acceptance_latest_summary": [
-        0.5555,
-        0.2833,
-        0.1397
+        0.5434,
+        0.2738,
+        0.1324
       ],
       "total_step_seconds": [
         255.95,
         218.42,
         223.77,
         209.8,
-        216.27
+        216.27,
+        208.12
       ]
     }
   ],
