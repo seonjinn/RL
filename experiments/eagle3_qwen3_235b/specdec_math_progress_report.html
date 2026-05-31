@@ -612,6 +612,10 @@
           <td>The <a href="https://arxiv.org/html/2511.16665v3">TLT adaptive drafter paper</a> frames speculative decoding as most useful during long-tail rollout when the effective batch is small, and notes that fluctuating batch sizes can make always-on SD suboptimal. Our current gate is a practical approximation: keep SD off during large active batches and turn it on only as request/token pressure falls.</td>
         </tr>
         <tr>
+          <td>How is this different from TLT?</td>
+          <td>Current NeMo-RL runs use a fixed offline Speculators Eagle3 drafter plus static request/token thresholds. This avoids per-step draft proposal work when the local vLLM scheduled batch is large, but it still pays startup/model-load/CUDA-graph capture overhead and does not yet include TLT-style online drafter refresh, idle-GPU spot training, or automatic strategy tuning. The batch-gate jobs are therefore testing the scheduler idea first, not the full TLT system.</td>
+        </tr>
+        <tr>
           <td>How is it enabled?</td>
           <td>Submission scripts pass <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code>, then map <code>SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD</code> and <code>SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD</code> into the vLLM worker env vars.</td>
         </tr>
