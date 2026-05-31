@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 12:32 PDT",
+  "updated_at": "2026-05-31 12:35 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -623,8 +623,8 @@
       "request_gate": 96,
       "token_gate": 2048,
       "state": "RUNNING",
-      "latest_step_seen": 19,
-      "completed_generation_metrics": 18,
+      "latest_step_seen": 20,
+      "completed_generation_metrics": 19,
       "generated_tokens_sec_gpu_values": [
         4440.63,
         4343.04,
@@ -643,10 +643,11 @@
         4358.43,
         4212.64,
         4344.49,
-        4174.99
+        4174.99,
+        4584.44
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4412.95,
-      "speedup_vs_baseline_mean_so_far": 1.0585,
+      "generated_tokens_sec_gpu_mean_so_far": 4421.97,
+      "speedup_vs_baseline_mean_so_far": 1.0606,
       "acceptance_rate_values": [
         0.5432,
         0.5645,
@@ -665,13 +666,14 @@
         0.5757,
         0.5716,
         0.585,
-        0.5399
+        0.5399,
+        0.5763
       ],
-      "acceptance_rate_mean_so_far": 0.5745,
-      "acceptance_rate_latest_summary": 0.5399,
+      "acceptance_rate_mean_so_far": 0.5746,
+      "acceptance_rate_latest_summary": 0.5763,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Retry for hybrid request-gate 96 plus token-gate 2048 submitted at 2026-05-31 10:46 PT after job 3059958 failed at Slurm driver-step creation. Eighteen NeMo-RL driver metrics are available: 4412.95 tok/s/GPU mean, 1.0585x versus baseline, and 57.45% acceptance. This is still an interim result."
+      "note": "Retry for hybrid request-gate 96 plus token-gate 2048 submitted at 2026-05-31 10:46 PT after job 3059958 failed at Slurm driver-step creation. Nineteen NeMo-RL driver metrics are available: 4421.97 tok/s/GPU mean, 1.0606x versus baseline, and 57.46% acceptance. This remains far below the token-pressure-only K=1 path."
     },
     {
       "job_id": "3060282",
@@ -708,8 +710,8 @@
       "acceptance_rate_latest_summary": 0.5828,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "latest_gate_counter": "checked=23808 disabled=14581 enabled=9227 last_disabled=False requests=1 tokens=2 request_threshold=96 token_threshold=2048",
-      "note": "Instrumented 8-step run submitted at 2026-05-31 11:32 PT to collect draft-proposal gate-hit logs. It uses request gate 96, token gate 2048, VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32, and NRL_FORCE_REBUILD_VENVS=true. Gate counters are visible: the latest parsed worker line shows 23808 checks, 14581 disabled, and 9227 enabled, enabled at 1 scheduled request and 2 tokens. Seven NeMo-RL generation metrics are available: 4461.36 tok/s/GPU, 1.0701x versus baseline, with 57.09% acceptance."
+      "latest_gate_counter": "checked=26528 disabled=14936 enabled=11592 last_disabled=False requests=1 tokens=2 request_threshold=96 token_threshold=2048",
+      "note": "Instrumented 8-step run submitted at 2026-05-31 11:32 PT to collect draft-proposal gate-hit logs. It uses request gate 96, token gate 2048, VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32, and NRL_FORCE_REBUILD_VENVS=true. Gate counters are visible: the latest parsed worker line shows 26528 checks, 14936 disabled, and 11592 enabled, enabled at 1 scheduled request and 2 tokens. Seven NeMo-RL generation metrics are available: 4461.36 tok/s/GPU, 1.0701x versus baseline, with 57.09% acceptance."
     },
     {
       "job_id": "3060293",
@@ -720,32 +722,34 @@
       "max_steps": 8,
       "gate_log_interval": 32,
       "runtime_gate_patch": "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
-      "latest_step_seen": 7,
-      "completed_generation_metrics": 6,
+      "latest_step_seen": 8,
+      "completed_generation_metrics": 7,
       "generated_tokens_sec_gpu_values": [
         4474.85,
         4215.68,
         4674.38,
         4230.84,
         4481.83,
-        4026.62
+        4026.62,
+        4669.3
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4350.7,
-      "speedup_vs_baseline_mean_so_far": 1.0435,
+      "generated_tokens_sec_gpu_mean_so_far": 4396.21,
+      "speedup_vs_baseline_mean_so_far": 1.0545,
       "acceptance_rate_values": [
         0.6474,
         0.4431,
         0.5,
         0.3718,
         0.2598,
-        0.5
+        0.5,
+        0.0
       ],
-      "acceptance_rate_mean_so_far": 0.4537,
-      "acceptance_rate_latest_summary": 0.5,
+      "acceptance_rate_mean_so_far": 0.3889,
+      "acceptance_rate_latest_summary": 0.0,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "latest_gate_counter": "checked=24096 disabled=24096 enabled=0 last_disabled=True requests=96 tokens=96 request_threshold=4 token_threshold=0",
-      "note": "Small-batch-only V4 instrumented run submitted at 2026-05-31 11:36 PT. SpecDec should only be enabled when the local scheduled request count is 4 or lower. Gate counters are visible and confirm the threshold behavior; earlier lines enabled at requests=4, 2, and 1, while the latest parsed line is disabled at requests=96. Six NeMo-RL generation metrics are available: 4350.70 tok/s/GPU, 1.0435x versus baseline, with 45.37% acceptance."
+      "latest_gate_counter": "checked=28160 disabled=28122 enabled=38 last_disabled=True requests=32 tokens=32 request_threshold=4 token_threshold=0",
+      "note": "Small-batch-only V4 instrumented run submitted at 2026-05-31 11:36 PT. SpecDec should only be enabled when the local scheduled request count is 4 or lower. Gate counters confirm this is extremely strict: latest parsed worker line shows 28160 checks, 28122 disabled, and only 38 enabled. Seven NeMo-RL generation metrics are available: 4396.21 tok/s/GPU, 1.0545x versus baseline, with 38.89% mean acceptance and latest acceptance 0.0."
     },
     {
       "job_id": "3060379",
@@ -756,18 +760,23 @@
       "max_steps": 8,
       "gate_log_interval": 32,
       "runtime_gate_patch": "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
-      "completed_generation_metrics": 0,
-      "generated_tokens_sec_gpu_values": [],
-      "generated_tokens_sec_gpu_mean_so_far": null,
-      "speedup_vs_baseline_mean_so_far": null,
-      "acceptance_rate_values": [],
-      "acceptance_rate_mean_so_far": null,
-      "acceptance_rate_latest_summary": null,
+      "completed_generation_metrics": 1,
+      "generated_tokens_sec_gpu_values": [
+        5714.07
+      ],
+      "generated_tokens_sec_gpu_mean_so_far": 5714.07,
+      "speedup_vs_baseline_mean_so_far": 1.3705,
+      "acceptance_rate_values": [
+        0.5787
+      ],
+      "acceptance_rate_mean_so_far": 0.5787,
+      "acceptance_rate_latest_summary": 0.5787,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Token-pressure-only V4 instrumented run submitted at 2026-05-31 11:58 PT after request-count-only gates stayed near 1.06x. It uses request gate 0, token gate 2048, K=1, MAX_STEPS=8, and VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32. As of 12:32 PT it has attached SpeculativeConfig, entered Step 1, and emitted gate logs, but has no rollout throughput metric yet.",
-      "latest_step_seen": 1,
-      "gate_logs_observed": 16
+      "note": "Token-pressure-only V4 instrumented run submitted at 2026-05-31 11:58 PT after request-count-only gates stayed near 1.06x. It uses request gate 0, token gate 2048, K=1, MAX_STEPS=8, and VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32. First NeMo-RL metric is now available: 5714.07 tok/s/GPU, 1.3705x versus baseline, with 57.87% acceptance. This is n=1, but it aligns with the completed token-gate K=1 results and is the most promising long-tail policy so far.",
+      "latest_step_seen": 2,
+      "gate_logs_observed": 16,
+      "latest_gate_counter": "checked=2720 disabled=1 enabled=2719 last_disabled=False requests=10 tokens=20 request_threshold=0 token_threshold=2048"
     },
     {
       "job_id": "3060401",
@@ -787,7 +796,7 @@
       "acceptance_rate_latest_summary": null,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "TLT-style small-batch-only V4 run submitted at 2026-05-31 12:05 PT after the user requested applying SpecDec only in small-batch regions. It uses request gate 32, token gate 0, K=1, MAX_STEPS=8, and VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32. As of 12:32 PT it is still before SpeculativeConfig and first rollout metric."
+      "note": "TLT-style small-batch-only V4 run submitted at 2026-05-31 12:05 PT after the user requested applying SpecDec only in small-batch regions. It uses request gate 32, token gate 0, K=1, MAX_STEPS=8, and VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32. As of 12:35 PT it has attached SpeculativeConfig but has no rollout metric yet."
     }
   ],
   "dataset_contract": {
@@ -836,5 +845,5 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 is still running and remains near 1.06x so far. V4 gate-hit logging is confirmed in jobs 3060282 and 3060293, showing draft proposal work is mostly disabled during high local request/token pressure and enabled only in later low-pressure scheduler iterations. Token-pressure-only job 3060379 has attached SpeculativeConfig and gate logs but no rollout metric yet; TLT-style request gate 32 job 3060401 is running before first rollout metric."
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 remains near 1.06x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 has produced its first rollout metric at 5714.07 tok/s/GPU, 1.3705x, with 57.87% acceptance; this is n=1 and needs more steps, but it is consistent with the completed token-gate K=1 path being the strongest current policy."
 }
