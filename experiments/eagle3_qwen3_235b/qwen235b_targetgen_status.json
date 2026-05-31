@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:54 PDT",
+  "updated_at": "2026-05-31 10:00 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -72,10 +72,11 @@
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 50480,
-    "current_nonzero_chunk_files": 20,
+    "current_rows_observed": 53200,
+    "current_chunk_files_observed": 96,
+    "current_nonzero_chunk_files": 95,
     "active_targetgen_jobs_observed": 92,
-    "note": "Chunks 010-019 have begun writing partial rows while the 020-099 wave is still mostly loading/generating. Retry chunks 046 and 096 are running and loading the 118-shard 235B checkpoint."
+    "note": "Chunks 010-019 and many 020-099 chunks have begun writing partial rows. Retry chunks 046 and 096 are running but their output files are not present yet."
   },
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": false,
