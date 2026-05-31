@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:13 PDT",
+  "updated_at": "2026-05-31 09:24 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -260,58 +260,76 @@
       "num_speculative_tokens": 1,
       "token_gate": 2048,
       "state": "RUNNING",
-      "latest_step_seen": 4,
-      "completed_generation_metrics": 3,
+      "latest_step_seen": 7,
+      "completed_generation_metrics": 6,
       "generated_tokens_sec_gpu_values": [
         5698.85,
         5286.58,
-        5936.89
+        5936.89,
+        5507.87,
+        5720.6,
+        5366.06
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5640.77,
-      "speedup_vs_baseline_mean_so_far": 1.353,
+      "generated_tokens_sec_gpu_mean_so_far": 5586.14,
+      "speedup_vs_baseline_mean_so_far": 1.3399,
       "acceptance_rate_values": [
         0.5787,
         0.57,
-        0.5911
+        0.5911,
+        0.5558,
+        0.5845,
+        0.5704
       ],
-      "acceptance_rate_mean_so_far": 0.5799,
-      "acceptance_rate_latest_summary": 0.5911,
+      "acceptance_rate_mean_so_far": 0.5751,
+      "acceptance_rate_latest_summary": 0.5704,
       "total_step_seconds": [
         251.79,
         213.61,
-        214.62
+        214.62,
+        205.24,
+        206.93,
+        199.79
       ],
-      "total_step_seconds_mean_so_far": 226.67,
-      "note": "Preliminary long-tail gate result; only 3 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 215.33,
+      "note": "Preliminary long-tail gate result; only 6 rollout metrics so far."
     },
     {
       "job_id": "3058762",
       "num_speculative_tokens": 1,
       "token_gate": 1024,
       "state": "RUNNING",
-      "latest_step_seen": 4,
-      "completed_generation_metrics": 3,
+      "latest_step_seen": 7,
+      "completed_generation_metrics": 6,
       "generated_tokens_sec_gpu_values": [
         5712.32,
         5283.75,
-        5896.54
+        5896.54,
+        5519.82,
+        5727.08,
+        5336.18
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5630.87,
-      "speedup_vs_baseline_mean_so_far": 1.3506,
+      "generated_tokens_sec_gpu_mean_so_far": 5579.28,
+      "speedup_vs_baseline_mean_so_far": 1.3382,
       "acceptance_rate_values": [
         0.5787,
         0.5708,
-        0.5915
+        0.5915,
+        0.5565,
+        0.5841,
+        0.5691
       ],
-      "acceptance_rate_mean_so_far": 0.5803,
-      "acceptance_rate_latest_summary": 0.5915,
+      "acceptance_rate_mean_so_far": 0.5751,
+      "acceptance_rate_latest_summary": 0.5691,
       "total_step_seconds": [
         254.89,
         215.85,
-        218.73
+        218.73,
+        209.87,
+        210.23,
+        206.65
       ],
-      "total_step_seconds_mean_so_far": 229.82,
-      "note": "Preliminary long-tail gate result; only 3 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 219.37,
+      "note": "Preliminary long-tail gate result; only 6 rollout metrics so far."
     }
   ],
   "dataset_contract": {
@@ -332,6 +350,15 @@
         "open-thoughts/OpenThoughts-114k": 60000,
         "PALM-Lab/math-deepscaler": 25000,
         "BytedTsinghua-SIA/DAPO-Math-17k": 15000
+      },
+      "raw_prompt_pool_file": "mixed_math_nonopenmath_500k_prompts.jsonl",
+      "final_training_conversations_file": "mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl",
+      "speculators_training_file": "mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl",
+      "assembly": {
+        "primary_slices": "10 x 50K target-response chunks",
+        "primary_unique_written_before_replacements": 499941,
+        "replacement_rows_written": 59,
+        "replacement_source": "fresh DAPO rows after excluding the 500K prompt pool and OpenMath eval prompts"
       }
     },
     "nemo_rl_test_data": {
@@ -344,11 +371,12 @@
       "method": "lowercase and whitespace-normalized prompt denylist",
       "denylist_prompt_count": 44304,
       "final_training_rows": 500000,
+      "unique_user_prompts": 500000,
       "duplicate_prompts": 0,
       "denylisted_prompts": 0,
       "direct_prompt_overlap": 0,
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 3 metrics each."
+  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 6 metrics each."
 }
