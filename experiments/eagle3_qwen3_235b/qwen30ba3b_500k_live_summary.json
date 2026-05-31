@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:54 PDT",
+  "updated_at": "2026-05-31 09:58 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -396,6 +396,24 @@
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
       "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4."
+    },
+    {
+      "job_id": "3059556",
+      "num_speculative_tokens": 1,
+      "request_gate": 32,
+      "token_gate": 0,
+      "state": "RUNNING",
+      "latest_step_seen": 0,
+      "completed_generation_metrics": 0,
+      "generated_tokens_sec_gpu_values": [],
+      "generated_tokens_sec_gpu_mean_so_far": null,
+      "speedup_vs_baseline_mean_so_far": null,
+      "acceptance_rate_values": [],
+      "acceptance_rate_mean_so_far": null,
+      "acceptance_rate_latest_summary": null,
+      "total_step_seconds": [],
+      "total_step_seconds_mean_so_far": null,
+      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:57 PT. This is a less conservative TLT-style gate to enable SpecDec once scheduled request count is 32 or lower."
     }
   ],
   "dataset_contract": {
@@ -444,5 +462,5 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 14 metrics each. Batch-size-only request-gate 4 run is active but has no rollout metric yet."
+  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 14 metrics each. Batch-size-only request-gate 4 and 32 runs are active but have no rollout metric yet."
 }
