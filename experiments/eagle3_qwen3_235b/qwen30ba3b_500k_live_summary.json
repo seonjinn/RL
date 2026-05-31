@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 15:55 PDT",
+  "updated_at": "2026-05-31 16:06 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -917,14 +917,14 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_and_validated_locally",
-    "updated_at": "2026-05-31 15:55 PDT",
+    "updated_at": "2026-05-31 16:06 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
     "current_behavior": "The vLLM scheduler lookahead gate and model runner proposal gate start from static request/token thresholds, measure local SpecDec enabled ratios over rolling windows, then tighten or loosen request/token thresholds toward a target enabled ratio.",
     "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8, token threshold 2048, adaptive target 0.75, token threshold range 512-4096, log interval 32.",
     "submitted_eval_job": "3062282",
-    "submitted_eval_state_at_submit": "RUNNING at 2026-05-31 15:55 PDT, elapsed 00:04:48, driver environment still rebuilding and no rollout metric emitted yet",
+    "submitted_eval_state_at_submit": "RUNNING at 2026-05-31 16:06 PDT, elapsed about 00:16, Ray worker runtime environments still rebuilding DeepEP/deep-gemm and no rollout metric emitted yet",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_eval_jobs.txt",
     "known_limit": "The scheduler and model-runner controllers are currently local controllers rather than one shared global controller, so their thresholds can drift independently. That is acceptable for the first evaluation but should be unified before treating it as a full TLT implementation."
   },
