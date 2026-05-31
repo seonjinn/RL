@@ -37,7 +37,10 @@ DEFAULT_TIMING_KEYS = (
 )
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-STEP_RE = re.compile(r"training_step\s*=\s*(\d+)")
+STEP_RE = re.compile(
+    r"(?:training_step\s*=\s*|(?:^|=+\s*)Step\s+)(\d+)(?:/\d+)?",
+    re.IGNORECASE,
+)
 FILE_STEP_RE = re.compile(r"(?:^|[_-])step[_-]?(\d+)(?:\D|$)", re.IGNORECASE)
 TOTAL_RE = re.compile(r"Total step time:\s*([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 TIMING_RE = re.compile(
