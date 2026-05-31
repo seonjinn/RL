@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:57 PDT",
+  "updated_at": "2026-05-31 09:11 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,8 +10,8 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 18,
-      "completed_generation_metrics": 17,
+      "latest_step_seen": 20,
+      "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
@@ -29,10 +29,13 @@
         5921.38,
         5503.31,
         5302.43,
-        5421.18
+        5421.18,
+        5336.28,
+        5724.85,
+        5692.07
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5607.78,
-      "speedup_vs_baseline_mean_so_far": 1.3451,
+      "generated_tokens_sec_gpu_mean_so_far": 5604.28,
+      "speedup_vs_baseline_mean_so_far": 1.3442,
       "acceptance_rate_values": [
         0.5791,
         0.571,
@@ -50,10 +53,13 @@
         0.5814,
         0.5773,
         0.5756,
-        0.5812
+        0.5812,
+        0.5492,
+        0.5732,
+        0.5778
       ],
-      "acceptance_rate_mean_so_far": 0.5766,
-      "acceptance_rate_latest_summary": 0.5812,
+      "acceptance_rate_mean_so_far": 0.5751,
+      "acceptance_rate_latest_summary": 0.5778,
       "total_step_seconds": [
         254.2,
         216.66,
@@ -71,18 +77,22 @@
         221.82,
         207.86,
         210.42,
-        215.7
+        215.7,
+        205.49,
+        219.39,
+        208.2
       ],
       "per_position_acceptance_latest_summary": [
-        0.5812
+        0.5778
       ],
-      "total_step_seconds_mean_so_far": 216.06
+      "total_step_seconds_mean_so_far": 215.31,
+      "final_20step_complete": true
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 17,
-      "completed_generation_metrics": 16,
+      "latest_step_seen": 20,
+      "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -99,10 +109,14 @@
         4923.88,
         5198.17,
         5036.23,
-        4957.38
+        4957.38,
+        4634.79,
+        4594.96,
+        5085.14,
+        5052.15
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5045.16,
-      "speedup_vs_baseline_mean_so_far": 1.2101,
+      "generated_tokens_sec_gpu_mean_so_far": 5004.48,
+      "speedup_vs_baseline_mean_so_far": 1.2003,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -119,13 +133,17 @@
         0.424,
         0.4283,
         0.4227,
-        0.4217
+        0.4217,
+        0.4291,
+        0.3952,
+        0.4179,
+        0.4233
       ],
-      "acceptance_rate_mean_so_far": 0.4223,
-      "acceptance_rate_latest_summary": 0.4217,
+      "acceptance_rate_mean_so_far": 0.4211,
+      "acceptance_rate_latest_summary": 0.4233,
       "per_position_acceptance_latest_summary": [
-        0.5586,
-        0.2848
+        0.5596,
+        0.2868
       ],
       "total_step_seconds": [
         262.51,
@@ -143,15 +161,20 @@
         230.28,
         229.65,
         215.21,
-        217.59
+        217.59,
+        222.98,
+        218.16,
+        227.69,
+        214.91
       ],
-      "total_step_seconds_mean_so_far": 223.43
+      "total_step_seconds_mean_so_far": 222.93,
+      "final_20step_complete": true
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 17,
-      "completed_generation_metrics": 16,
+      "latest_step_seen": 20,
+      "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -168,10 +191,14 @@
         4749.74,
         5197.49,
         4861.46,
-        4810.28
+        4810.28,
+        4583.6,
+        4539.93,
+        4967.28,
+        5029.44
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4940.26,
-      "speedup_vs_baseline_mean_so_far": 1.1849,
+      "generated_tokens_sec_gpu_mean_so_far": 4908.22,
+      "speedup_vs_baseline_mean_so_far": 1.1773,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -188,14 +215,18 @@
         0.3208,
         0.3242,
         0.3198,
-        0.3182
+        0.3182,
+        0.3249,
+        0.2962,
+        0.3149,
+        0.32
       ],
-      "acceptance_rate_mean_so_far": 0.3196,
-      "acceptance_rate_latest_summary": 0.3182,
+      "acceptance_rate_mean_so_far": 0.3185,
+      "acceptance_rate_latest_summary": 0.32,
       "per_position_acceptance_latest_summary": [
-        0.5499,
-        0.2743,
-        0.1302
+        0.5511,
+        0.2762,
+        0.1324
       ],
       "total_step_seconds": [
         255.95,
@@ -213,9 +244,14 @@
         231.02,
         229.67,
         214.29,
-        212.7
+        212.7,
+        224.35,
+        215.98,
+        225.42,
+        213.34
       ],
-      "total_step_seconds_mean_so_far": 221.89
+      "total_step_seconds_mean_so_far": 221.46,
+      "final_20step_complete": true
     }
   ],
   "long_tail_gate_followups": [
@@ -224,18 +260,52 @@
       "num_speculative_tokens": 1,
       "token_gate": 2048,
       "state": "RUNNING",
-      "completed_generation_metrics": 0,
-      "latest_step_seen": null,
-      "note": "Driver log exists and vLLM workers are still initializing/loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
+      "latest_step_seen": 3,
+      "completed_generation_metrics": 2,
+      "generated_tokens_sec_gpu_values": [
+        5698.85,
+        5286.58
+      ],
+      "generated_tokens_sec_gpu_mean_so_far": 5492.72,
+      "speedup_vs_baseline_mean_so_far": 1.3175,
+      "acceptance_rate_values": [
+        0.5787,
+        0.57
+      ],
+      "acceptance_rate_mean_so_far": 0.5743,
+      "acceptance_rate_latest_summary": 0.57,
+      "total_step_seconds": [
+        251.79,
+        213.61
+      ],
+      "total_step_seconds_mean_so_far": 232.7,
+      "note": "Preliminary long-tail gate result; only 2 rollout metrics so far."
     },
     {
       "job_id": "3058762",
       "num_speculative_tokens": 1,
       "token_gate": 1024,
       "state": "RUNNING",
-      "completed_generation_metrics": 0,
-      "latest_step_seen": null,
-      "note": "Driver log exists and vLLM workers are still initializing/loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
+      "latest_step_seen": 3,
+      "completed_generation_metrics": 2,
+      "generated_tokens_sec_gpu_values": [
+        5712.32,
+        5283.75
+      ],
+      "generated_tokens_sec_gpu_mean_so_far": 5498.03,
+      "speedup_vs_baseline_mean_so_far": 1.3187,
+      "acceptance_rate_values": [
+        0.5787,
+        0.5708
+      ],
+      "acceptance_rate_mean_so_far": 0.5747,
+      "acceptance_rate_latest_summary": 0.5708,
+      "total_step_seconds": [
+        254.89,
+        215.85
+      ],
+      "total_step_seconds_mean_so_far": 235.37,
+      "note": "Preliminary long-tail gate result; only 2 rollout metrics so far."
     }
   ],
   "dataset_contract": {
@@ -274,5 +344,5 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "This is not the final result. Use full 20-step means after jobs 3058167, 3058168, and 3058169 complete."
+  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary."
 }
