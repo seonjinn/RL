@@ -1,13 +1,18 @@
 stages:
   - deploy
 
+default:
+  image: alpine:3.20
+
 pages:
   stage: deploy
   script:
+    - test -f experiments/eagle3_qwen3_235b/specdec_math_progress_report.html
     - mkdir -p public
     - cp experiments/eagle3_qwen3_235b/specdec_math_progress_report.html public/index.html
+    - ls -lah public
   artifacts:
     paths:
       - public
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
