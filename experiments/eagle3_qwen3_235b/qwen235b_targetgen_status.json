@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 13:10 PDT",
+  "updated_at": "2026-05-31 13:20 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -83,21 +83,57 @@
       ],
       "state_at_retry_check": "RUNNING",
       "note": "Both original jobs failed during vLLM model loading with a Ray worker reporting that no model weights were found. Retry jobs were submitted without dependency as wave 2."
+    },
+    "continuation_chunks_010_099_afterany": {
+      "job_id_range": "3060971-3061060",
+      "job_count": 90,
+      "chunks": "010-099",
+      "dependency": "afterany on the currently running per-chunk jobs from 3059139-3059432 plus retries 3059476, 3059477, 3059838, and 3059839",
+      "wave_limit": 5000,
+      "time_limit": "04:00:00",
+      "state_at_submit_check": "PENDING with Dependency",
+      "note": "Each continuation recomputes the current JSONL line count at runtime and appends only the missing prompt slice."
+    },
+    "short_repair_chunks_005_008": {
+      "job_ids": [
+        "3061066",
+        "3061067",
+        "3061068",
+        "3061069"
+      ],
+      "chunks": [
+        "005",
+        "006",
+        "007",
+        "008"
+      ],
+      "rows_before_submit": {
+        "005": 4997,
+        "006": 4999,
+        "007": 4997,
+        "008": 4999
+      },
+      "wave_limit": 10,
+      "time_limit": "02:00:00",
+      "state_at_submit_check": "2 RUNNING, 2 PENDING",
+      "note": "Small final repair for the 1-3 rows still missing after earlier repair jobs."
     }
   },
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 248148,
+    "current_rows_observed": 257461,
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
-    "active_targetgen_jobs_observed": 90,
+    "active_targetgen_jobs_observed": 184,
     "complete_chunk_files_observed_ge5000_rows": 6,
     "short_nonzero_chunk_files_observed": 94,
-    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Chunks 010-019 and many 020-099 chunks are writing partial rows. Retry chunks 046, 096, 037, and 068 have non-empty files and are writing rows. Latest direct line count is 248148/500000 rows.",
-    "min_nonzero_rows_observed": 1560,
-    "max_rows_observed": 5000
+    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest direct line count is 257461/500000 rows. Continuation jobs 3060971-3061060 are queued afterany for chunks 010-099, and short repair jobs 3061066-3061069 cover chunks 005-008.",
+    "min_nonzero_rows_observed": 1651,
+    "max_rows_observed": 5000,
+    "pending_continuation_jobs_observed": 91,
+    "running_targetgen_jobs_observed": 93
   },
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": false,
