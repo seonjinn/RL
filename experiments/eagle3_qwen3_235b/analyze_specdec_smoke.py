@@ -60,7 +60,8 @@ PROM_METRIC_RE = re.compile(
     re.IGNORECASE,
 )
 ACCEPTANCE_RATE_TEXT_RE = re.compile(
-    r"(?:draft\s+)?accept(?:ance)?(?:[_ -]?rate)?[^0-9-]*"
+    r"(?:avg\s+draft\s+acceptance\s+rate|per-position\s+acceptance\s+rate|"
+    r"draft\s+acceptance\s+rate|acceptance\s+rate)[^0-9-]*"
     r"(-?[0-9]+(?:\.[0-9]+)?)\s*(%)?",
     re.IGNORECASE,
 )
@@ -131,6 +132,13 @@ def normalize_spec_metric(name: str) -> str:
     if "draft" in normalized and "accept" in normalized:
         return "acceptance_rate"
     return normalized
+
+
+def likely_named_metric(name: str) -> bool:
+    # Avoid treating file paths like retro_decoder_spec.py:39 as metrics.
+    if "/" in name or "\\" in name or ".py" in name or len(name) > 96:
+        return False
+    return True
 
 
 def as_rate(name: str, value: float, source_text: str) -> float:
@@ -244,6 +252,8 @@ def parse_spec_metrics(line: str, result: ParseResult) -> None:
     seen_values: set[tuple[str, float]] = set()
     for match in KEY_VALUE_RE.finditer(line):
         raw_name, raw_value = match.groups()
+        if not likely_named_metric(raw_name):
+            continue
         if not any(token in raw_name.lower() for token in ("spec", "draft", "accept", "eagle")):
             continue
         metric_name = normalize_spec_metric(raw_name)
@@ -254,6 +264,8 @@ def parse_spec_metrics(line: str, result: ParseResult) -> None:
 
     for match in PROM_METRIC_RE.finditer(line):
         raw_name, raw_value = match.groups()
+        if not likely_named_metric(raw_name):
+            continue
         if not any(token in raw_name.lower() for token in ("spec", "draft", "accept", "eagle")):
             continue
         metric_name = normalize_spec_metric(raw_name)
