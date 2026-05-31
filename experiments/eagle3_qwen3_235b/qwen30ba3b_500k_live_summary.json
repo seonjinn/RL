@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 12:16 PDT",
+  "updated_at": "2026-05-31 12:20 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -545,8 +545,8 @@
       "request_gate": 64,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 18,
-      "completed_generation_metrics": 17,
+      "latest_step_seen": 19,
+      "completed_generation_metrics": 18,
       "generated_tokens_sec_gpu_values": [
         4510.15,
         4253.17,
@@ -564,10 +564,11 @@
         4704.4,
         4363.91,
         4214.41,
-        4377.33
+        4377.33,
+        4203.62
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4430.8,
-      "speedup_vs_baseline_mean_so_far": 1.0627,
+      "generated_tokens_sec_gpu_mean_so_far": 4418.18,
+      "speedup_vs_baseline_mean_so_far": 1.0597,
       "acceptance_rate_values": [
         0.4856,
         0.5803,
@@ -585,13 +586,14 @@
         0.5428,
         0.5788,
         0.5558,
-        0.5676
+        0.5676,
+        0.5298
       ],
-      "acceptance_rate_mean_so_far": 0.5646,
-      "acceptance_rate_latest_summary": 0.5676,
+      "acceptance_rate_mean_so_far": 0.5627,
+      "acceptance_rate_latest_summary": 0.5298,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Batch-size-only long-tail gate follow-up submitted at 2026-05-31 10:36 PT after request gates 4 and 32 stayed near 1.06x. Seventeen NeMo-RL driver metrics are available: 4430.80 tok/s/GPU mean, 1.0627x versus baseline, and 56.46% acceptance. This is still an interim result."
+      "note": "Batch-size-only long-tail gate follow-up submitted at 2026-05-31 10:36 PT after request gates 4 and 32 stayed near 1.06x. Eighteen NeMo-RL driver metrics are available: 4418.18 tok/s/GPU mean, 1.0597x versus baseline, and 56.27% acceptance. This is still an interim result."
     },
     {
       "job_id": "3059958",
@@ -617,8 +619,8 @@
       "request_gate": 96,
       "token_gate": 2048,
       "state": "RUNNING",
-      "latest_step_seen": 15,
-      "completed_generation_metrics": 14,
+      "latest_step_seen": 16,
+      "completed_generation_metrics": 15,
       "generated_tokens_sec_gpu_values": [
         4440.63,
         4343.04,
@@ -633,10 +635,11 @@
         4353.25,
         4611.69,
         4622.7,
-        4585.18
+        4585.18,
+        4358.43
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4453.03,
-      "speedup_vs_baseline_mean_so_far": 1.0681,
+      "generated_tokens_sec_gpu_mean_so_far": 4446.73,
+      "speedup_vs_baseline_mean_so_far": 1.0666,
       "acceptance_rate_values": [
         0.5432,
         0.5645,
@@ -651,13 +654,14 @@
         0.5934,
         0.5864,
         0.5867,
-        0.5802
+        0.5802,
+        0.5757
       ],
-      "acceptance_rate_mean_so_far": 0.5763,
-      "acceptance_rate_latest_summary": 0.5802,
+      "acceptance_rate_mean_so_far": 0.5762,
+      "acceptance_rate_latest_summary": 0.5757,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Retry for hybrid request-gate 96 plus token-gate 2048 submitted at 2026-05-31 10:46 PT after job 3059958 failed at Slurm driver-step creation. Fourteen NeMo-RL driver metrics are available: 4453.03 tok/s/GPU mean, 1.0681x versus baseline, and 57.63% acceptance. This is still an interim result."
+      "note": "Retry for hybrid request-gate 96 plus token-gate 2048 submitted at 2026-05-31 10:46 PT after job 3059958 failed at Slurm driver-step creation. Fifteen NeMo-RL driver metrics are available: 4446.73 tok/s/GPU mean, 1.0666x versus baseline, and 57.62% acceptance. This is still an interim result."
     },
     {
       "job_id": "3060282",
@@ -668,26 +672,28 @@
       "max_steps": 8,
       "gate_log_interval": 32,
       "runtime_gate_patch": "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
-      "latest_step_seen": 4,
-      "completed_generation_metrics": 3,
+      "latest_step_seen": 5,
+      "completed_generation_metrics": 4,
       "generated_tokens_sec_gpu_values": [
         4458.97,
         4350.47,
-        4688.53
+        4688.53,
+        4286.81
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4499.32,
-      "speedup_vs_baseline_mean_so_far": 1.0792,
+      "generated_tokens_sec_gpu_mean_so_far": 4446.19,
+      "speedup_vs_baseline_mean_so_far": 1.0664,
       "acceptance_rate_values": [
         0.5432,
         0.5678,
-        0.6065
+        0.6065,
+        0.5513
       ],
-      "acceptance_rate_mean_so_far": 0.5725,
-      "acceptance_rate_latest_summary": 0.6065,
+      "acceptance_rate_mean_so_far": 0.5672,
+      "acceptance_rate_latest_summary": 0.5513,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "latest_gate_counter": "checked=10272 disabled=6955 enabled=3317 last_disabled=True requests=121 tokens=121 request_threshold=96 token_threshold=2048",
-      "note": "Instrumented 8-step run submitted at 2026-05-31 11:32 PT to collect draft-proposal gate-hit logs. It uses request gate 96, token gate 2048, VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32, and NRL_FORCE_REBUILD_VENVS=true. Gate counters are visible: the latest parsed worker line shows 10272 checks, 6955 disabled, and 3317 enabled, then disabled again at 121 scheduled requests. Three NeMo-RL generation metrics are available: 4499.32 tok/s/GPU, 1.0792x versus baseline, with 57.25% acceptance."
+      "latest_gate_counter": "checked=13984 disabled=9767 enabled=4217 last_disabled=True requests=96 tokens=3142 request_threshold=96 token_threshold=2048",
+      "note": "Instrumented 8-step run submitted at 2026-05-31 11:32 PT to collect draft-proposal gate-hit logs. It uses request gate 96, token gate 2048, VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32, and NRL_FORCE_REBUILD_VENVS=true. Gate counters are visible: the latest parsed worker line shows 13984 checks, 9767 disabled, and 4217 enabled, then disabled at 96 scheduled requests and 3142 scheduled tokens because token pressure exceeded the 2048 threshold. Four NeMo-RL generation metrics are available: 4446.19 tok/s/GPU, 1.0664x versus baseline, with 56.72% acceptance."
     },
     {
       "job_id": "3060293",
@@ -698,24 +704,26 @@
       "max_steps": 8,
       "gate_log_interval": 32,
       "runtime_gate_patch": "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
-      "latest_step_seen": 3,
-      "completed_generation_metrics": 2,
+      "latest_step_seen": 4,
+      "completed_generation_metrics": 3,
       "generated_tokens_sec_gpu_values": [
         4474.85,
-        4215.68
+        4215.68,
+        4674.38
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4345.27,
-      "speedup_vs_baseline_mean_so_far": 1.0422,
+      "generated_tokens_sec_gpu_mean_so_far": 4454.97,
+      "speedup_vs_baseline_mean_so_far": 1.0685,
       "acceptance_rate_values": [
         0.6474,
-        0.4431
+        0.4431,
+        0.5
       ],
-      "acceptance_rate_mean_so_far": 0.5453,
-      "acceptance_rate_latest_summary": 0.4431,
+      "acceptance_rate_mean_so_far": 0.5302,
+      "acceptance_rate_latest_summary": 0.5,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "latest_gate_counter": "checked=8032 disabled=8032 enabled=0 last_disabled=True requests=56 tokens=56 request_threshold=4 token_threshold=0",
-      "note": "Small-batch-only V4 instrumented run submitted at 2026-05-31 11:36 PT. SpecDec should only be enabled when the local scheduled request count is 4 or lower. Gate counters are visible and confirm the threshold behavior; earlier lines enabled at requests=4, 2, and 1, while the latest parsed line is disabled at requests=56. Two NeMo-RL generation metrics are available: 4345.27 tok/s/GPU, 1.0422x versus baseline, with 54.53% acceptance."
+      "latest_gate_counter": "checked=12000 disabled=12000 enabled=0 last_disabled=True requests=30 tokens=30 request_threshold=4 token_threshold=0",
+      "note": "Small-batch-only V4 instrumented run submitted at 2026-05-31 11:36 PT. SpecDec should only be enabled when the local scheduled request count is 4 or lower. Gate counters are visible and confirm the threshold behavior; earlier lines enabled at requests=4, 2, and 1, while the latest parsed line is disabled at requests=30. Three NeMo-RL generation metrics are available: 4454.97 tok/s/GPU, 1.0685x versus baseline, with 53.02% acceptance."
     },
     {
       "job_id": "3060379",
