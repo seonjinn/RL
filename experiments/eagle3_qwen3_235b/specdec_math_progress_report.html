@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 09:47 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 09:51 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -625,7 +625,7 @@
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
-          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code>. As of <code>09:47 PT</code>, both have <code>12</code> rollout metrics: token gate <code>2048</code> is <code>5624.30 tok/s/GPU</code> with <code>57.50%</code> acceptance; token gate <code>1024</code> is <code>5606.81 tok/s/GPU</code> with <code>57.49%</code> acceptance. Batch-size-only gate job <code>3059445</code> is running with request gate <code>4</code> and token gate <code>0</code>; no rollout metric yet.</td>
+          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code>. As of <code>09:51 PT</code>, both have <code>13</code> rollout metrics: token gate <code>2048</code> is <code>5625.65 tok/s/GPU</code> with <code>57.52%</code> acceptance; token gate <code>1024</code> is <code>5617.38 tok/s/GPU</code> with <code>57.51%</code> acceptance. Batch-size-only gate job <code>3059445</code> is running with request gate <code>4</code> and token gate <code>0</code>; no rollout metric yet.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
@@ -633,7 +633,7 @@
         </tr>
         <tr>
           <td>Current concern</td>
-          <td>K=2 previously failed with <code>64</code> active requests and <code>2080</code> scheduled tokens. A token gate of <code>4096</code> would not disable that case, so strict long-tail follow-ups now use request gate <code>4</code> plus token gate <code>1024</code>.</td>
+          <td>K=2 previously failed with <code>64</code> active requests and <code>2080</code> scheduled tokens. A token gate of <code>4096</code> would not disable that case, so the current request-gated follow-up uses request gate <code>4</code> with token gate <code>0</code> to test batch-size-only SpecDec.</td>
         </tr>
         <tr>
           <td>Strict-gate follow-up jobs</td>
@@ -660,7 +660,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed. K=1/2/3 NeMo-RL evaluations with token gate <code>4096</code> completed <code>20/20</code> metrics: K=1 is <code>5604.28 tok/s/GPU</code> and <code>57.51%</code> acceptance; K=2 is <code>5004.48</code> and <code>42.11%</code>; K=3 is <code>4908.22</code> and <code>31.85%</code>. Follow-up stricter K=1 token-gate jobs <code>3058759</code> (<code>2048</code>) and <code>3058762</code> (<code>1024</code>) are running with <code>12</code> preliminary metrics each; batch-size-only gate job <code>3059445</code> is running.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed. K=1/2/3 NeMo-RL evaluations with token gate <code>4096</code> completed <code>20/20</code> metrics: K=1 is <code>5604.28 tok/s/GPU</code> and <code>57.51%</code> acceptance; K=2 is <code>5004.48</code> and <code>42.11%</code>; K=3 is <code>4908.22</code> and <code>31.85%</code>. Follow-up stricter K=1 token-gate jobs <code>3058759</code> (<code>2048</code>) and <code>3058762</code> (<code>1024</code>) are running with <code>13</code> preliminary metrics each; batch-size-only gate job <code>3059445</code> is running.</span>
       <span class="pill warn">live eval</span>
     </div>
   </section>
@@ -710,7 +710,7 @@
           <div>K=2 strict gate complete: <code>3057073</code>, request gate <code>4</code>, token gate <code>1024</code>, mean <code>4328.88 tok/s/GPU</code> from 20 metrics, speedup <code>1.04x</code>, acceptance <code>28.0%</code></div>
           <div>K=2 token-gate4096 complete: <code>3056052</code>, 20/20 metrics, mean <code>4849.05 tok/s/GPU</code>, speedup <code>1.16x</code>, step-level acceptance <code>38.1%</code>, aggregate acceptance median <code>50%</code></div>
           <div>500K K=1/K=2/K=3 final jobs: <code>3058167</code>/<code>3058168</code>/<code>3058169</code>, n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means <code>5604.28</code>/<code>5004.48</code>/<code>4908.22</code>, acceptance means <code>57.51%</code>/<code>42.11%</code>/<code>31.85%</code></div>
-          <div>500K stricter long-tail K=1 preliminary jobs: token gate <code>2048</code> <code>3058759</code>, n=<code>12</code>, mean <code>5624.30</code>, acceptance <code>57.50%</code>; token gate <code>1024</code> <code>3058762</code>, n=<code>12</code>, mean <code>5606.81</code>, acceptance <code>57.49%</code></div>
+          <div>500K stricter long-tail K=1 preliminary jobs: token gate <code>2048</code> <code>3058759</code>, n=<code>13</code>, mean <code>5625.65</code>, acceptance <code>57.52%</code>; token gate <code>1024</code> <code>3058762</code>, n=<code>13</code>, mean <code>5617.38</code>, acceptance <code>57.51%</code></div>
           <div>500K batch-size-only long-tail K=1 job: request gate <code>4</code>, token gate <code>0</code>, job <code>3059445</code>, currently <code>RUNNING</code> with no rollout metric yet</div>
         </div>
       </div>
@@ -738,7 +738,7 @@
           <td>500K target responses</td>
           <td><span class="pill ok">eval complete</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code> completed <code>20/20</code> generation metrics with token gate <code>4096</code>. Stricter long-tail K=1 follow-ups are running as <code>3058759</code> with token gate <code>2048</code> and <code>3058762</code> with token gate <code>1024</code>; each has <code>12</code> preliminary rollout metrics. Batch-size-only gate job <code>3059445</code> uses request gate <code>4</code> and token gate <code>0</code>. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code> completed <code>20/20</code> generation metrics with token gate <code>4096</code>. Stricter long-tail K=1 follow-ups are running as <code>3058759</code> with token gate <code>2048</code> and <code>3058762</code> with token gate <code>1024</code>; each has <code>13</code> preliminary rollout metrics. Batch-size-only gate job <code>3059445</code> uses request gate <code>4</code> and token gate <code>0</code>. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -1236,7 +1236,7 @@
       <div>30B 500K live summary: <code>experiments/eagle3_qwen3_235b/qwen30ba3b_500k_live_summary.json</code></div>
       <div>235B target-response generation status: <code>experiments/eagle3_qwen3_235b/qwen235b_targetgen_status.json</code>. Current submitted repair/expansion jobs: <code>3059130-3059133</code>, <code>3059139-3059151</code>, <code>3059353-3059432</code>, plus retry jobs <code>3059476</code> and <code>3059477</code>.</div>
       <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code>. Final n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means: <code>5604.28</code>, <code>5004.48</code>, <code>4908.22</code>.</div>
-      <div>30B 500K stricter long-tail eval jobs: K=1 token gate <code>2048</code> job <code>3058759</code>, K=1 token gate <code>1024</code> job <code>3058762</code>. Current n=<code>12</code>/<code>12</code> generated tok/s/GPU means: <code>5624.30</code>, <code>5606.81</code>. New batch-size-only request gate <code>4</code> job: <code>3059445</code>.</div>
+      <div>30B 500K stricter long-tail eval jobs: K=1 token gate <code>2048</code> job <code>3058759</code>, K=1 token gate <code>1024</code> job <code>3058762</code>. Current n=<code>13</code>/<code>13</code> generated tok/s/GPU means: <code>5625.65</code>, <code>5617.38</code>. New batch-size-only request gate <code>4</code> job: <code>3059445</code>.</div>
       <div>30B K=2 live summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/qwen30ba3b_mixed50k_k2_gate4096_3056052_live_summary.json</code></div>
       <div>30B strict long-tail gate run: <code>3057073</code>, K=2, request gate <code>4</code>, token gate <code>1024</code></div>
       <div>235B strict long-tail gate run: <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code>, K=2, request gate <code>4</code>, token gate <code>1024</code>, account <code>coreai_dlalgo_llm</code>, cancelled after Step 1 stall before first metric</div>

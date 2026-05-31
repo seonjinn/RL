@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:47 PDT",
+  "updated_at": "2026-05-31 09:51 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -260,8 +260,8 @@
       "num_speculative_tokens": 1,
       "token_gate": 2048,
       "state": "RUNNING",
-      "latest_step_seen": 12,
-      "completed_generation_metrics": 12,
+      "latest_step_seen": 13,
+      "completed_generation_metrics": 13,
       "generated_tokens_sec_gpu_values": [
         5698.85,
         5286.58,
@@ -274,10 +274,11 @@
         5024.57,
         5405.59,
         5519.86,
-        5918.22
+        5918.22,
+        5641.83
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5624.3,
-      "speedup_vs_baseline_mean_so_far": 1.349,
+      "generated_tokens_sec_gpu_mean_so_far": 5625.65,
+      "speedup_vs_baseline_mean_so_far": 1.3493,
       "acceptance_rate_values": [
         0.5787,
         0.57,
@@ -290,10 +291,11 @@
         0.5642,
         0.5812,
         0.5759,
-        0.5855
+        0.5855,
+        0.5778
       ],
-      "acceptance_rate_mean_so_far": 0.575,
-      "acceptance_rate_latest_summary": 0.5855,
+      "acceptance_rate_mean_so_far": 0.5752,
+      "acceptance_rate_latest_summary": 0.5778,
       "total_step_seconds": [
         251.79,
         213.61,
@@ -306,18 +308,19 @@
         202.01,
         206.23,
         208.69,
-        211.48
+        211.48,
+        216.76
       ],
-      "total_step_seconds_mean_so_far": 213.17,
-      "note": "Preliminary long-tail gate result; only 12 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 213.45,
+      "note": "Preliminary long-tail gate result; only 13 rollout metrics so far."
     },
     {
       "job_id": "3058762",
       "num_speculative_tokens": 1,
       "token_gate": 1024,
       "state": "RUNNING",
-      "latest_step_seen": 12,
-      "completed_generation_metrics": 12,
+      "latest_step_seen": 13,
+      "completed_generation_metrics": 13,
       "generated_tokens_sec_gpu_values": [
         5712.32,
         5283.75,
@@ -330,10 +333,11 @@
         5039.41,
         5333.45,
         5463.32,
-        5910.94
+        5910.94,
+        5744.2
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5606.81,
-      "speedup_vs_baseline_mean_so_far": 1.3448,
+      "generated_tokens_sec_gpu_mean_so_far": 5617.38,
+      "speedup_vs_baseline_mean_so_far": 1.3474,
       "acceptance_rate_values": [
         0.5787,
         0.5708,
@@ -346,10 +350,11 @@
         0.5647,
         0.5804,
         0.5759,
-        0.5857
+        0.5857,
+        0.5777
       ],
-      "acceptance_rate_mean_so_far": 0.5749,
-      "acceptance_rate_latest_summary": 0.5857,
+      "acceptance_rate_mean_so_far": 0.5751,
+      "acceptance_rate_latest_summary": 0.5777,
       "total_step_seconds": [
         254.89,
         215.85,
@@ -362,10 +367,11 @@
         207.41,
         211.73,
         211.7,
-        216.95
+        216.95,
+        219.53
       ],
-      "total_step_seconds_mean_so_far": 217.51,
-      "note": "Preliminary long-tail gate result; only 12 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 217.67,
+      "note": "Preliminary long-tail gate result; only 13 rollout metrics so far."
     },
     {
       "job_id": "3059445",
@@ -432,5 +438,5 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 7 metrics each."
+  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 13 metrics each. Batch-size-only request-gate 4 run is active but has no rollout metric yet."
 }
