@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 10:50 PDT",
+  "updated_at": "2026-05-31 10:53 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -423,8 +423,8 @@
       "request_gate": 4,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 8,
-      "completed_generation_metrics": 7,
+      "latest_step_seen": 9,
+      "completed_generation_metrics": 8,
       "generated_tokens_sec_gpu_values": [
         4484.07,
         4262.05,
@@ -432,10 +432,11 @@
         4244.12,
         4438.06,
         4058.94,
-        4696.83
+        4696.83,
+        4788.99
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4405.37,
-      "speedup_vs_baseline_mean_so_far": 1.0566,
+      "generated_tokens_sec_gpu_mean_so_far": 4453.33,
+      "speedup_vs_baseline_mean_so_far": 1.0682,
       "acceptance_rate_values": [
         0.6474,
         0.3265,
@@ -443,10 +444,11 @@
         0.4547,
         0.4211,
         0.0,
-        0.0
+        0.0,
+        0.5695
       ],
-      "acceptance_rate_mean_so_far": 0.3474,
-      "acceptance_rate_latest_summary": 0.0,
+      "acceptance_rate_mean_so_far": 0.3752,
+      "acceptance_rate_latest_summary": 0.5695,
       "total_step_seconds": [
         282.04,
         243.54,
@@ -454,10 +456,11 @@
         238.03,
         240.84,
         234.84,
-        250.68
+        250.68,
+        251.24
       ],
-      "total_step_seconds_mean_so_far": 248.48,
-      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4. Seven rollout metrics are available, but this is only 7/20 and not a stable final result."
+      "total_step_seconds_mean_so_far": 248.82,
+      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4. Eight rollout metrics are available, but this is only 8/20 and not a stable final result."
     },
     {
       "job_id": "3059556",
