@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 16:23 PDT",
+  "updated_at": "2026-05-31 16:26 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -917,7 +917,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_and_validated_remotely",
-    "updated_at": "2026-05-31 16:23 PDT",
+    "updated_at": "2026-05-31 16:26 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -925,9 +925,9 @@
     "metrics_visibility": "NeMo-RL now exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last request/token counts, thresholds, and adaptive threshold state.",
     "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8, token threshold 2048, adaptive target 0.75, token threshold range 512-4096, log interval 32.",
     "pre_metrics_patch_eval_job": "3062282",
-    "pre_metrics_patch_eval_state": "RUNNING at 2026-05-31 16:23 PDT from the older /lustre/.../nemo-rl checkout; still no rollout metric at latest check.",
+    "pre_metrics_patch_eval_state": "RUNNING at 2026-05-31 16:26 PDT from the older /lustre/.../nemo-rl checkout. It reached Step 1 and vLLM worker logs show batch-gate checks plus draft acceptance around 55-63%, but this is secondary evidence because the checkout is not the validated /SpecDec-RL path.",
     "corrected_eval_job": "3062401",
-    "corrected_eval_state": "RUNNING at 2026-05-31 16:23 PDT from the validated /lustre/.../SpecDec-RL checkout with structured gate metrics and scheduler-following runner behavior; Ray driver log is building the runtime environment and no rollout metric has been emitted yet.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 16:26 PDT from the validated /lustre/.../SpecDec-RL checkout with structured gate metrics and scheduler-following runner behavior; Ray driver log is still building the driver runtime environment, so no rollout metric has been emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_gate_metrics_eval_jobs.txt",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet."
   },
