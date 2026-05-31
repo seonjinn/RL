@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 04:15 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 04:19 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -355,14 +355,14 @@
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">29.4K / 50K</div>
-        <p class="small">Hidden states: 29403 safetensors files. Still extracting.</p>
+        <div class="metric warn">30.5K / 50K</div>
+        <p class="small">Hidden states: 30503 safetensors files. Still extracting.</p>
       </div>
     </div>
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and mixed 100K plus 500K hidden-state extraction is progressing. 30B K=1 has two NeMo-RL generation metrics with mean <code>5424.81 tok/s/GPU</code>, or <code>1.30x</code> versus the mixed baseline, with early vLLM acceptance at <code>55.6%</code>. This is still interim. 30B K=2 strict gate has reached Step 2 with one generation metric at baseline-level throughput and low early acceptance. 235B K=1 remains effectively tied with baseline, and 235B K=2 strict-gate retry is still loading the target checkpoint with no SpecDec rollout metric yet.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and mixed 100K plus 500K hidden-state extraction is progressing. 30B K=1 has three NeMo-RL generation metrics with mean <code>5571.96 tok/s/GPU</code>, or <code>1.34x</code> versus the mixed baseline, with early vLLM acceptance at <code>54.5%</code>. This is still interim. 30B K=2 strict gate has reached Step 3 but is near baseline throughput so far, with low early acceptance. 235B K=1 remains effectively tied with baseline, and 235B K=2 strict-gate retry is still loading the target checkpoint with no SpecDec rollout metric yet.</p>
     </div>
 
     <h2>Dataset Accountability</h2>
@@ -414,7 +414,7 @@
         <tr>
           <td>30B K=1 mixed 50K interim</td>
           <td><span class="pill warn">NeMo-RL</span></td>
-          <td>Running job <code>3056051</code> has two generation metrics with mean <code>5424.81 tok/s/GPU</code>, or <code>1.30x</code> versus the <code>4169.19</code> baseline. vLLM acceptance mean is <code>55.6%</code> across <code>23</code> parsed metrics. This is not final.</td>
+          <td>Running job <code>3056051</code> has three generation metrics with mean <code>5571.96 tok/s/GPU</code>, or <code>1.34x</code> versus the <code>4169.19</code> baseline. vLLM acceptance mean is <code>54.5%</code> across <code>31</code> parsed metrics. This is not final.</td>
         </tr>
         <tr>
           <td>235B K=1 54% acceptance</td>
@@ -465,7 +465,7 @@
     <h2>Workstreams</h2>
     <div class="status-row">
       <strong>30B NeMo-RL</strong>
-      <span>Mixed 50K baseline produced all 20 generation metrics at <code>4169.19 tok/s/GPU</code>. K=1 token-gate4096 job <code>3056051</code> has two generation metrics with mean <code>5424.81 tok/s/GPU</code> (<code>1.30x</code>), and vLLM acceptance is <code>55.6%</code> across <code>23</code> parsed metrics. K=2 strict long-tail gate job <code>3057073</code> reached Step 2 and has one generation metric at <code>4167.20 tok/s/GPU</code> with early acceptance <code>22.0%</code>. Older K=2 token-gate4096 job <code>3056052</code> remains dependency-waiting.</span>
+      <span>Mixed 50K baseline produced all 20 generation metrics at <code>4169.19 tok/s/GPU</code>. K=1 token-gate4096 job <code>3056051</code> has three generation metrics with mean <code>5571.96 tok/s/GPU</code> (<code>1.34x</code>), and vLLM acceptance is <code>54.5%</code> across <code>31</code> parsed metrics. K=2 strict long-tail gate job <code>3057073</code> reached Step 3 and has two generation metrics with mean <code>4190.35 tok/s/GPU</code> and early acceptance <code>24.5%</code>. Older K=2 token-gate4096 job <code>3056052</code> remains dependency-waiting.</span>
       <span class="pill info">running</span>
     </div>
     <div class="status-row">
@@ -480,7 +480,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. The intended r2 hidden-state shards <code>3056798-3056817</code> are running; <code>176965</code> files have appeared so far. A duplicate older shard set <code>3056722-3056741</code> was canceled after confirming it used the same output directory and ranges.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. The intended r2 hidden-state shards <code>3056798-3056817</code> are running; <code>197508</code> files have appeared so far. A duplicate older shard set <code>3056722-3056741</code> was canceled after confirming it used the same output directory and ranges.</span>
       <span class="pill ok">shards running</span>
     </div>
   </section>
@@ -506,9 +506,9 @@
           <strong>1.22x</strong>
         </div>
         <div class="bar-row">
-          <span>K=1 mixed n=2</span>
-          <div class="bar-track"><div class="bar-fill" style="--w:96%;--c:var(--amber)"></div></div>
-          <strong>1.30x</strong>
+          <span>K=1 mixed n=3</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--amber)"></div></div>
+          <strong>1.34x</strong>
         </div>
         <div class="bar-row">
           <span>K=4</span>
@@ -518,11 +518,11 @@
       </div>
       <div class="callout">
         <h3>What Matters</h3>
-        <p>30B already proves SpecDec can help NeMo-RL generation. The older completed best is about <code>1.22x</code>; the active mixed-math K=1 run is currently <code>1.30x</code> from two NeMo-RL generation metrics and still below the 2x target.</p>
+        <p>30B already proves SpecDec can help NeMo-RL generation. The older completed best is about <code>1.22x</code>; the active mixed-math K=1 run is currently <code>1.34x</code> from three NeMo-RL generation metrics and still below the 2x target.</p>
         <div class="mono-list">
           <div>Baseline complete: <code>3056050</code>, mean <code>4169.19 tok/s/GPU</code> from 20 metrics</div>
-          <div>K=1 token-gate4096 running: <code>3056051</code>, mean <code>5424.81 tok/s/GPU</code> from 2 metrics, speedup <code>1.30x</code>, acceptance <code>55.6%</code></div>
-          <div>K=2 strict gate running: <code>3057073</code>, request gate <code>4</code>, token gate <code>1024</code>, Step 2 reached, early generation metric <code>4167.20 tok/s/GPU</code></div>
+          <div>K=1 token-gate4096 running: <code>3056051</code>, mean <code>5571.96 tok/s/GPU</code> from 3 metrics, speedup <code>1.34x</code>, acceptance <code>54.5%</code></div>
+          <div>K=2 strict gate running: <code>3057073</code>, request gate <code>4</code>, token gate <code>1024</code>, Step 3 reached, mean <code>4190.35 tok/s/GPU</code> from 2 metrics</div>
           <div>K=2 token-gate4096 queued: <code>3056052</code></div>
         </div>
       </div>
@@ -543,14 +543,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>29403</code> hidden-state files.</td>
+          <td>Job <code>3055364</code>, <code>30503</code> hidden-state files.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
           <td><span class="pill ok">shards running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> running with <code>176965</code> files so far, train <code>3056818</code> pending dependency. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> running with <code>197508</code> files so far, train <code>3056818</code> pending dependency. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -881,13 +881,13 @@
       </div>
       <div class="bar-row">
         <span>500K HS files</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:35%;--c:var(--amber)"></div></div>
-        <strong>177.0K</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:40%;--c:var(--amber)"></div></div>
+        <strong>197.5K</strong>
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:59%;--c:var(--amber)"></div></div>
-        <strong>59%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:61%;--c:var(--amber)"></div></div>
+        <strong>61%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
