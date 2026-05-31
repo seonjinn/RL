@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 08:17 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 08:20 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -583,7 +583,7 @@
         <tr>
           <td>235B K=1 54% acceptance</td>
           <td><span class="pill warn">vLLM internal</span></td>
-          <td>Observed inside completed job <code>3055926</code>. NeMo-RL mean is <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>53.6%</code> across <code>677</code> parsed acceptance metrics.</td>
+          <td>Observed inside completed job <code>3055926</code>. NeMo-RL mean is <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus the <code>66.78</code> baseline. Driver step-summary acceptance mean is <code>54.6%</code> across <code>20</code> parsed rollout summaries.</td>
         </tr>
         <tr>
           <td>235B baseline 66.78 tok/s/GPU</td>
@@ -616,8 +616,12 @@
           <td>Submission scripts pass <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code>, then map <code>SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD</code> and <code>SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD</code> into the vLLM worker env vars.</td>
         </tr>
         <tr>
-          <td>Is it present in the active 235B job?</td>
-          <td>Yes. Completed job <code>3055926</code> logs show <code>VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH</code>, <code>VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD</code>, and <code>VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD</code> copied to vLLM workers. Values are redacted in Ray logs; the job tag records the token-gate setting as <code>tokengate4096</code>.</td>
+          <td>What was fixed in the submission scripts?</td>
+          <td>Remote <code>SpecDec-RL/Qwen30BA3B_GB200_Main_SpecDec.sh</code> and <code>SpecDec-RL/Qwen235B_GB200_Main_SpecDec.sh</code> were synced to the guarded versions on <code>2026-05-31 08:20 PT</code>. They now reject <code>SPECDEC_DISABLE_BY_BATCH_SIZE</code>, require <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code> when scheduler thresholds are set, keep CUDA graphs via <code>enforce_eager=false</code>, set <code>async_engine=false</code>, and expose <code>NRL_VLLM_OMIT_GENERATION_LOGPROBS</code>.</td>
+        </tr>
+        <tr>
+          <td>Is there an active 235B SpecDec job now?</td>
+          <td>No active 235B SpecDec job is running as of <code>2026-05-31 08:20 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
@@ -647,7 +651,7 @@
     </div>
     <div class="status-row">
       <strong>235B NeMo-RL</strong>
-      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> completed 20/20 steps at <code>66.16 tok/s/GPU</code>, slightly below the <code>66.78</code> baseline despite <code>53.6%</code> vLLM acceptance. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and initialized <code>128</code> vLLM workers plus <code>128</code> lm_policy workers, but stayed in Step 1 with no processed prompts and no throughput metric. It was cancelled after <code>01:16:34</code> to free 32 nodes.</span>
+      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> completed 20/20 steps at <code>66.16 tok/s/GPU</code>, slightly below the <code>66.78</code> baseline despite <code>54.6%</code> driver step-summary acceptance. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and initialized <code>128</code> vLLM workers plus <code>128</code> lm_policy workers, but stayed in Step 1 with no processed prompts and no throughput metric. It was cancelled after <code>01:16:34</code> to free 32 nodes.</span>
       <span class="pill bad">cancelled</span>
     </div>
     <div class="status-row">
@@ -772,7 +776,7 @@
       <tbody>
         <tr><td>Do we have a clean 235B baseline?</td><td>Yes. <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>.</td></tr>
         <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=1 completed 20/20 steps at <code>66.16 tok/s/GPU</code>, slightly below the <code>66.78</code> baseline. K=2 still has no completed rollout metric.</td></tr>
-        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>53.6%</code> across <code>677</code> parsed acceptance metrics. NeMo-RL has <code>20</code> completed generation throughput metrics in the same run.</td></tr>
+        <tr><td>What is K=1 acceptance?</td><td>Driver step-summary acceptance mean is <code>54.6%</code> across <code>20</code> parsed rollout summaries. NeMo-RL has <code>20</code> completed generation throughput metrics in the same run.</td></tr>
         <tr><td>Is the K=2 drafter attached?</td><td>Yes. Retry job <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and entered Step 1 rollout. It produced no NeMo-RL rollout throughput or acceptance metric and was cancelled after stalling.</td></tr>
         <tr><td>Next debug</td><td>Do not count K=2 strict gate as a throughput result. The next practical comparison is the upcoming 500K-trained 30B drafter; for 235B, debug should focus on why K=2 stalls before prompt processing while K=1 completes.</td></tr>
       </tbody>
