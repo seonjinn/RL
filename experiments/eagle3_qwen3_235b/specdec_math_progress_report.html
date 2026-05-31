@@ -125,7 +125,7 @@
   <h1>Qwen3 Eagle3 SpecDec Math Progress</h1>
   <p class="sub">
     Status snapshot for the NeMo-RL speculative decoding effort. Last checked:
-    2026-05-31 01:50 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
+    2026-05-31 01:56 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
     training with Speculators, NeMo-RL acceptance-rate measurement, generation
     speedup, and long-tail batch-size gating.
   </p>
@@ -133,25 +133,28 @@
   <section class="note" aria-label="Latest operator update">
     <h2>Latest Update</h2>
     <p>
-      2026-05-31 01:50 PT: the roadmap/scripts/report tree is versioned in
+      2026-05-31 01:56 PT: the roadmap/scripts/report tree is versioned in
       GitLab at
       <code>ssh://git@gitlab-master.nvidia.com:12051/sna/specdec_rl.git</code>,
-      branch <code>main</code>; latest pushed commit before this refresh is
-      <code>a6acc74</code>. Local credential files and generated logs/caches are
-      ignored. The matched 235B baseline <code>3053877</code> has now emitted all
+      branch <code>main</code>; GitLab Pages is configured by
+      <code>.gitlab-ci.yml</code> and publishes this report as
+      <code>public/index.html</code>. Local credential files and generated
+      logs/caches are ignored. The matched 235B baseline <code>3053877</code> has emitted all
       20 generation metrics: mean generated tok/s/GPU <code>66.78</code>, final
       step <code>66.55</code>. 235B K=2 SpecDec <code>3055189</code> is confirmed
       to run sync rollout (<code>async_engine=false</code>), CUDA graph
       (<code>enforce_eager=false</code>, capture up to <code>512</code>), and
       <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>; it is
       still in Step <code>1/20</code> generation with no acceptance-rate or
-      tok/s/GPU metric yet. 235B K=1 retry <code>3055926</code> is still before
-      rollout metrics. For 30B NeMo-RL eval, patched baseline
-      <code>3056050</code> has launched the driver and is rebuilding the job-local
-      venv; K=1 <code>3056051</code> and K=2 <code>3056052</code> remain queued
-      behind it. The 30B 100K continuation <code>3055364</code> remains in
-      hidden-state extraction with <code>3520</code> files and about
-      <code>219G</code> written.
+      tok/s/GPU metric yet, and the driver log has not advanced since
+      <code>01:48 PT</code>. 235B K=1 retry <code>3055926</code> is still before
+      rollout metrics and is loading target checkpoint shards. For 30B NeMo-RL
+      eval, patched baseline <code>3056050</code> is still rebuilding Ray/vLLM
+      worker environments; K=1 <code>3056051</code> and K=2 <code>3056052</code>
+      remain queued behind it. The 30B 100K continuation <code>3055364</code>
+      remains in hidden-state extraction with <code>4921</code> files and about
+      <code>306G</code> written; fallback <code>3055365</code> is correctly queued as
+      <code>afternotok:3055364</code> if the 4-hour slot times out.
     </p>
     <p>
       2026-05-31 01:33 PT: I found a duplicate 30B fallback branch writing into
@@ -366,8 +369,8 @@
         <tr>
           <td>235B matched baseline</td>
           <td><code>3053877</code></td>
-          <td>Running. Real NeMo-RL rollout has emitted 17 completed generation-throughput metrics: <code>69.19</code>, <code>50.89</code>, <code>75.15</code>, <code>72.51</code>, <code>70.87</code>, <code>65.03</code>, <code>65.57</code>, <code>73.99</code>, <code>72.57</code>, <code>68.46</code>, <code>71.10</code>, <code>75.24</code>, <code>66.38</code>, <code>65.55</code>, <code>69.92</code>, <code>69.49</code>, <code>65.09</code> tok/s/GPU; mean <code>68.65</code>, generated-only mean <code>67.24</code>.</td>
-          <td>Full 20-step mean or at least the same step window as SpecDec.</td>
+          <td>Completed. Real NeMo-RL rollout emitted all <code>20/20</code> generation-throughput metrics; mean generated tok/s/GPU <code>66.78</code>, final step <code>66.55</code>. This is now the matched 235B baseline for the active K=1/K=2 retries.</td>
+          <td>Use the same 20-step window for SpecDec once K=1/K=2 emit metrics.</td>
         </tr>
         <tr>
           <td>235B K=1 gated SpecDec</td>
@@ -378,14 +381,14 @@
         <tr>
           <td>235B K=1 token-gate fallback</td>
           <td><code>3055184</code>; retry <code>3055926</code></td>
-          <td><code>3055184</code> failed in Step 1 with <code>RayChannelTimeoutError</code>. The drafter was attached, but the failing scheduler dump had <code>total_num_scheduled_tokens=2080</code> and token gate <code>2048</code>, so <code>scheduled_spec_decode_tokens={}</code>; this is a compiled-DAG/long-tail timeout, not an acceptance-rate measurement. Retry <code>3055926</code> is running with K=1, token gate <code>&le;4096</code>, and <code>RAY_CGRAPH_get_timeout=3600</code>.</td>
+          <td><code>3055184</code> failed in Step 1 with <code>RayChannelTimeoutError</code>. The drafter was attached, but the failing scheduler dump had <code>total_num_scheduled_tokens=2080</code> and token gate <code>2048</code>, so <code>scheduled_spec_decode_tokens={}</code>; this is a compiled-DAG/long-tail timeout, not an acceptance-rate measurement. Retry <code>3055926</code> is running with K=1, token gate <code>&le;4096</code>, <code>RAY_CGRAPH_get_timeout=3600</code>, and is currently still before rollout metrics while loading target checkpoint shards.</td>
           <td>Confirm retry reaches Step 1 rollout metric and emits acceptance counters.</td>
         </tr>
         <tr>
           <td>235B K=2 token-gate fallback</td>
           <td><code>3055189</code></td>
-          <td>Running. Same chunk002 235B drafter and K=2, scheduled-token gate <code>&le;2048</code>, CUDA graph enabled, Ray compiled-DAG timeout <code>1800s</code>. Worker env setup is complete, <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> is confirmed, and checkpoint shards are loading. No rollout metric yet.</td>
-          <td>Reach setup complete, then compare acceptance and tok/s/GPU with matched baseline.</td>
+          <td>Running. Same chunk002 235B drafter and K=2, scheduled-token gate <code>&le;2048</code>, CUDA graph enabled, Ray compiled-DAG timeout <code>1800s</code>. Worker env setup is complete and <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> is confirmed. It reached Step <code>1/20</code>, but no final Step 1 rollout metric or acceptance counter has emitted yet.</td>
+          <td>Confirm whether Step 1 completes or stalls, then compare acceptance and tok/s/GPU with matched baseline.</td>
         </tr>
         <tr>
           <td>30B mixed non-OpenMath drafter</td>
@@ -396,20 +399,20 @@
         <tr>
           <td>30B mixed-50K NeMo-RL eval</td>
           <td>Current patched chain: <code>3056050</code> -> <code>3056051</code> -> <code>3056052</code></td>
-          <td>Earlier dependency-free jobs <code>3055970</code>/<code>3055971</code> failed at launch with <code>Memory required by task is not available</code>, and old K=2 <code>3055972</code> was canceled. Patched <code>ray.sub</code> now executes Ray status/driver inside the existing <code>ray-head</code> enroot container. Baseline <code>3056050</code> is running, has reached <code>16/16</code> Ray worker units, and has launched <code>ray-driver.log</code>. K=1 <code>3056051</code> and K=2 <code>3056052</code> are queued sequentially after it.</td>
+          <td>Earlier dependency-free jobs <code>3055970</code>/<code>3055971</code> failed at launch with <code>Memory required by task is not available</code>, and old K=2 <code>3055972</code> was canceled. Patched <code>ray.sub</code> now executes Ray status/driver inside the existing <code>ray-head</code> enroot container. Baseline <code>3056050</code> is running, has reached <code>16/16</code> Ray worker units, launched <code>ray-driver.log</code>, and is still building Ray/vLLM worker environments. K=1 <code>3056051</code> and K=2 <code>3056052</code> are queued sequentially after it.</td>
           <td>Confirm baseline reaches rollout metrics, then compare K=1/K=2 acceptance rate and generation tok/s/GPU against the matched baseline.</td>
         </tr>
         <tr>
           <td>500K target data</td>
           <td><code>3055213-3055262</code>, chunk037 repair <code>3055582</code>, exact missing-id repair <code>3055706</code>, held merge <code>3055588</code>, <code>3055278-3055281</code>, plus active 235B targetgen jobs</td>
-          <td>30B mixed chunks are complete at <code>500000/500000</code> rows by direct JSONL line count. Chunk <code>037</code> has <code>5000/5000</code> unique rows after exact repair <code>3055706</code>; repaired offset <code>150000</code> merge <code>3055588</code> completed successfully. 235B mixed chunks <code>000-009</code> remain the active incomplete target set, last observed at about <code>40534/50000</code> rows.</td>
-          <td>Complete the 235B 50K target set; for 30B, wait for the 50K checkpoint so staged 100K-500K training can start.</td>
+          <td>30B mixed chunks are complete at <code>500000/500000</code> rows by direct JSONL line count. Chunk <code>037</code> has <code>5000/5000</code> unique rows after exact repair <code>3055706</code>; repaired offset <code>150000</code> merge <code>3055588</code> completed successfully. 235B mixed target-response generation is still active; wave3/wave4 jobs are running and merged 235B mixed conversation files are not present yet.</td>
+          <td>Complete and merge the 235B 50K target set, then start the 235B mixed non-OpenMath drafter training.</td>
         </tr>
         <tr>
           <td>30B staged mixed training</td>
           <td>Primary <code>3055364</code>; future staged jobs <code>3055365</code>, <code>3055368-3055371</code>, <code>3055589-3055592</code></td>
-          <td>Active. <code>3055364</code> started after <code>3052366</code>, passed validation for the offset <code>50000</code> source slice, converted the data, launched vLLM, and entered hidden-state extraction. Current evidence: <code>675</code> hidden-state files and about <code>42G</code> under <code>hidden_states_layers48_mlen8193_offset50k</code>. Duplicate fallback jobs <code>3055438</code>/<code>3055443</code> and their downstream selectors were canceled because they were writing the same or premature output paths.</td>
-          <td>Monitor extraction speed and ensure <code>3055364</code> reaches the actual 100K-seen training phase within the 4-hour allocation.</td>
+          <td>Active. <code>3055364</code> started after <code>3052366</code>, passed validation for the offset <code>50000</code> source slice, converted the data, launched vLLM, and entered hidden-state extraction. Current evidence: <code>4921</code> hidden-state files and about <code>306G</code> under <code>hidden_states_layers48_mlen8193_offset50k</code>. Duplicate fallback jobs <code>3055438</code>/<code>3055443</code> and their downstream selectors were canceled because they were writing the same or premature output paths.</td>
+          <td>Continue extraction; <code>3055365</code> is queued with <code>afternotok:3055364</code> to resume if the current slot times out.</td>
         </tr>
       </tbody>
     </table>
