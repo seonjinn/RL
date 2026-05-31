@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 05:05 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 05:08 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -365,7 +365,7 @@
       <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and mixed 100K plus 500K hidden-state extraction is progressing. 30B K=1 has fifteen NeMo-RL generation metrics with mean <code>5545.88 tok/s/GPU</code>, or <code>1.33x</code> versus the mixed baseline, with early vLLM acceptance at <code>52.7%</code>. This is still interim. 30B K=2 strict gate has reached Step 14 with mean <code>4328.42 tok/s/GPU</code>, only <code>1.04x</code> versus baseline. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline, so it did not improve NeMo-RL generation throughput. 235B K=2 strict-gate retry attached the drafter but stalled before any rollout throughput metric and was cancelled after <code>01:16:34</code>.</p>
     </div>
 
-    <h2>Dataset Split At A Glance</h2>
+    <h2>Dataset / Overlap At A Glance</h2>
     <div class="grid two">
       <div class="card">
         <div class="label">Drafter training corpus</div>
@@ -377,6 +377,10 @@
         <div class="metric info">OpenMath 50K</div>
         <p class="small"><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, with 44304 unique normalized prompts.</p>
       </div>
+    </div>
+    <div class="banner">
+      <h2>Train/Test Answer</h2>
+      <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations. <strong>NeMo-RL test data:</strong> baseline and SpecDec rollout measurements use <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are denylisted before the 500K training file is written, and final validation shows <code>denylisted_prompts=0</code> inside the training file.</p>
     </div>
     <table>
       <thead>
@@ -679,6 +683,35 @@
       <h2>Dataset Contract</h2>
       <p>The clean Speculators run trains on non-OpenMath mixed math data and evaluates in NeMo-RL on OpenMath. The actual NeMo-RL test file, <code>openmath_reasoning_cot_conversations_50k.jsonl</code>, is used as a denylist before the 500K training file is written, so direct prompt leakage is excluded in the current exact-unique build.</p>
     </div>
+
+    <h2>Exact Files Used</h2>
+    <table>
+      <thead>
+        <tr><th>Role</th><th>File</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Raw mixed prompt pool</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></td>
+          <td>Initial non-OpenMath math prompt pool before target-response generation.</td>
+        </tr>
+        <tr>
+          <td>Final clean training conversations</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+          <td>Exact-unique 500K training conversation file after duplicate removal, OpenMath denylist filtering, and DAPO replacements.</td>
+        </tr>
+        <tr>
+          <td>Speculators training JSONL</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl</code></td>
+          <td>Converted 500K file consumed by the Speculators Eagle3 prepare/train pipeline.</td>
+        </tr>
+        <tr>
+          <td>Actual NeMo-RL test / denylist file</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/openmath_reasoning_cot_conversations_50k.jsonl</code></td>
+          <td>OpenMath rollout source for NeMo-RL baseline and SpecDec tests; also loaded as the denylist during clean 500K construction.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <h2>Model Dataset Accountability</h2>
     <table>
