@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 11:11 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 11:13 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -629,11 +629,11 @@
         </tr>
         <tr>
           <td>Is there an active 235B SpecDec job now?</td>
-          <td>No active 235B SpecDec job is running as of <code>2026-05-31 11:08 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path.</td>
+          <td>No active 235B SpecDec job is running as of <code>2026-05-31 11:13 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path.</td>
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
-          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code> and both completed at about <code>10:15 PT</code>. Final results: token gate <code>2048</code> is <code>5596.71 tok/s/GPU</code> with <code>57.43%</code> acceptance and <code>1.3424x</code> speedup; token gate <code>1024</code> is <code>5578.08 tok/s/GPU</code> with <code>57.44%</code> acceptance and <code>1.3379x</code> speedup. Batch-size-only gate job <code>3059445</code> now has <code>12/20</code> rollout metrics: request gate <code>4</code>, token gate <code>0</code>, mean <code>4409.21 tok/s/GPU</code>, mean acceptance <code>42.13%</code>, <code>1.0576x</code> speedup. Batch-size-only gate job <code>3059556</code> with request gate <code>32</code> has <code>10/20</code> metrics: <code>4389.42 tok/s/GPU</code>, <code>52.46%</code> acceptance, <code>1.0528x</code> speedup. Request gate <code>64</code> job <code>3059932</code> is running in Step 1; vLLM SpecDec metrics are visible with latest per-position acceptance near <code>52.9%</code>, but no NeMo-RL driver throughput metric has been emitted yet. Hybrid request gate <code>96</code> plus token gate <code>2048</code> job <code>3059958</code> failed before driver startup due to Slurm driver-step memory allocation; retry <code>3060012</code> is running with no NeMo-RL metric yet.</td>
+          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code> and both completed at about <code>10:15 PT</code>. Final results: token gate <code>2048</code> is <code>5596.71 tok/s/GPU</code> with <code>57.43%</code> acceptance and <code>1.3424x</code> speedup; token gate <code>1024</code> is <code>5578.08 tok/s/GPU</code> with <code>57.44%</code> acceptance and <code>1.3379x</code> speedup. Batch-size-only gate job <code>3059445</code> now has <code>13/20</code> rollout metrics: request gate <code>4</code>, token gate <code>0</code>, mean <code>4422.38 tok/s/GPU</code>, mean acceptance <code>42.91%</code>, <code>1.0607x</code> speedup. Batch-size-only gate job <code>3059556</code> with request gate <code>32</code> has <code>11/20</code> metrics: <code>4384.87 tok/s/GPU</code>, <code>52.99%</code> acceptance, <code>1.0517x</code> speedup. Request gate <code>64</code> job <code>3059932</code> now has its first NeMo-RL driver metric: <code>4510.15 tok/s/GPU</code>, <code>48.56%</code> acceptance, and <code>1.0818x</code> speedup. Hybrid request gate <code>96</code> plus token gate <code>2048</code> job <code>3059958</code> failed before driver startup due to Slurm driver-step memory allocation; retry <code>3060012</code> is running with no NeMo-RL metric yet.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
@@ -719,7 +719,7 @@
           <div>K=2 token-gate4096 complete: <code>3056052</code>, 20/20 metrics, mean <code>4849.05 tok/s/GPU</code>, speedup <code>1.16x</code>, step-level acceptance <code>38.1%</code>, aggregate acceptance median <code>50%</code></div>
           <div>500K K=1/K=2/K=3 final jobs: <code>3058167</code>/<code>3058168</code>/<code>3058169</code>, n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means <code>5604.28</code>/<code>5004.48</code>/<code>4908.22</code>, acceptance means <code>57.51%</code>/<code>42.11%</code>/<code>31.85%</code></div>
           <div>500K stricter long-tail K=1 jobs: token gate <code>2048</code> <code>3058759</code>, n=<code>20</code>, mean <code>5596.71</code>, speedup <code>1.3424x</code>, acceptance <code>57.43%</code>; token gate <code>1024</code> <code>3058762</code>, n=<code>20</code>, mean <code>5578.08</code>, speedup <code>1.3379x</code>, acceptance <code>57.44%</code></div>
-          <div>500K batch-size-only long-tail K=1 jobs: request gate <code>4</code>, token gate <code>0</code>, job <code>3059445</code>, n=<code>12</code>, mean <code>4409.21</code>, speedup <code>1.0576x</code>, acceptance <code>42.13%</code>; request gate <code>32</code>, token gate <code>0</code>, job <code>3059556</code>, n=<code>10</code>, mean <code>4389.42</code>, speedup <code>1.0528x</code>, acceptance <code>52.46%</code>; request gate <code>64</code>, token gate <code>0</code>, job <code>3059932</code>, running at Step 1 with vLLM SpecDec metrics but no NeMo-RL driver metric yet; hybrid request gate <code>96</code>, token gate <code>2048</code>, job <code>3059958</code>, failed at Slurm driver-step creation, retry <code>3060012</code> running with no metric yet</div>
+          <div>500K batch-size-only long-tail K=1 jobs: request gate <code>4</code>, token gate <code>0</code>, job <code>3059445</code>, n=<code>13</code>, mean <code>4422.38</code>, speedup <code>1.0607x</code>, acceptance <code>42.91%</code>; request gate <code>32</code>, token gate <code>0</code>, job <code>3059556</code>, n=<code>11</code>, mean <code>4384.87</code>, speedup <code>1.0517x</code>, acceptance <code>52.99%</code>; request gate <code>64</code>, token gate <code>0</code>, job <code>3059932</code>, n=<code>1</code>, mean <code>4510.15</code>, speedup <code>1.0818x</code>, acceptance <code>48.56%</code>; hybrid request gate <code>96</code>, token gate <code>2048</code>, job <code>3059958</code>, failed at Slurm driver-step creation, retry <code>3060012</code> running with no metric yet</div>
         </div>
       </div>
     </div>
@@ -799,7 +799,7 @@
     <h2>235B In-House Drafter Corpus</h2>
     <div class="banner">
       <h2>Current Data Status</h2>
-      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is now being expanded from the same mixed non-OpenMath prompt pool used by the clean 30B run. Completed/partial chunk files currently hold <code>126,037</code> rows. All <code>100</code> chunk files now exist and are nonzero. If all retries finish cleanly, the 235B target-response corpus reaches about <code>500000</code> rows; it still needs final merge, OpenMath denylist filtering, and prompt-overlap validation before training a clean 500K 235B drafter.</p>
+      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is now being expanded from the same mixed non-OpenMath prompt pool used by the clean 30B run. Completed/partial chunk files currently hold <code>128,602</code> rows. All <code>100</code> chunk files now exist and are nonzero. If all retries finish cleanly, the 235B target-response corpus reaches about <code>500000</code> rows; it still needs final merge, OpenMath denylist filtering, and prompt-overlap validation before training a clean 500K 235B drafter.</p>
     </div>
     <table>
       <thead>
@@ -808,7 +808,7 @@
       <tbody>
         <tr>
           <td>Existing 235B target responses</td>
-          <td><span class="pill warn">126,037 rows</span></td>
+          <td><span class="pill warn">128,602 rows</span></td>
           <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_target_chunks/qwen3_235b_*.jsonl</code>, generated from mixed non-OpenMath prompts with <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>. This includes complete chunks <code>000-009</code> and partial rows already written by all <code>100</code> chunk files; all retry chunks are now nonzero.</td>
         </tr>
         <tr>
@@ -824,7 +824,7 @@
         <tr>
           <td>Remaining 400K tranche</td>
           <td><span class="pill info">queued/running</span></td>
-          <td>Chunk jobs <code>3059353-3059432</code> generate chunks <code>020-099</code>. At the 11:11 PT check, <code>90</code> 235B targetgen jobs are active. Startup-failed chunks <code>046</code> and <code>096</code> were resubmitted as jobs <code>3059476</code> and <code>3059477</code>; both are writing rows. Chunks <code>037</code> and <code>068</code> were resubmitted as jobs <code>3059839</code> and <code>3059838</code> after the original jobs failed during vLLM model loading; their output files now exist and are writing rows.</td>
+          <td>Chunk jobs <code>3059353-3059432</code> generate chunks <code>020-099</code>. At the 11:13 PT check, <code>90</code> 235B targetgen jobs are active. Startup-failed chunks <code>046</code> and <code>096</code> were resubmitted as jobs <code>3059476</code> and <code>3059477</code>; both are writing rows. Chunks <code>037</code> and <code>068</code> were resubmitted as jobs <code>3059839</code> and <code>3059838</code> after the original jobs failed during vLLM model loading; their output files now exist and are writing rows.</td>
         </tr>
         <tr>
           <td>Clean 235B training claim</td>
@@ -954,7 +954,7 @@
         </tr>
         <tr>
           <td>Qwen3-235B in-house path</td>
-          <td>Target-response generation is active on the same mixed non-OpenMath prompt pool. Current observed rows are <code>126,037</code> across <code>100</code> chunk files, all nonzero.</td>
+          <td>Target-response generation is active on the same mixed non-OpenMath prompt pool. Current observed rows are <code>128,602</code> across <code>100</code> chunk files, all nonzero.</td>
           <td>OpenMath NeMo-RL rollout source for baseline and SpecDec throughput comparisons.</td>
           <td><span class="pill info">pending</span> Needs the same prompt-level denylist validation before making a clean train/test split claim.</td>
         </tr>
@@ -968,7 +968,7 @@
       </div>
       <div class="step">
         <div class="step-title">2. Target responses</div>
-        <p>30B target responses are complete for the 500K path. 235B responses are separate: <code>126,037</code> rows are currently observed. Jobs <code>3059130-3059133</code>, <code>3059139-3059151</code>, and <code>3059353-3059432</code> cover chunks <code>005-099</code>; retry jobs <code>3059839</code> and <code>3059838</code> have now created nonzero chunk files <code>037</code> and <code>068</code>, enough to reach the <code>500K</code> target if they finish cleanly.</p>
+        <p>30B target responses are complete for the 500K path. 235B responses are separate: <code>128,602</code> rows are currently observed. Jobs <code>3059130-3059133</code>, <code>3059139-3059151</code>, and <code>3059353-3059432</code> cover chunks <code>005-099</code>; retry jobs <code>3059839</code> and <code>3059838</code> have now created nonzero chunk files <code>037</code> and <code>068</code>, enough to reach the <code>500K</code> target if they finish cleanly.</p>
       </div>
       <div class="step">
         <div class="step-title">3. Speculators format</div>
