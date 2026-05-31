@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:17 PDT",
+  "updated_at": "2026-05-31 08:23 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,65 +10,73 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 7,
-      "completed_generation_metrics": 6,
+      "latest_step_seen": 9,
+      "completed_generation_metrics": 8,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
         5975.9,
         5568.03,
         5687.63,
-        5280.8
+        5280.8,
+        6032.86,
+        6086.08
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5591.26,
-      "speedup_vs_baseline_mean_so_far": 1.3411,
+      "generated_tokens_sec_gpu_mean_so_far": 5708.31,
+      "speedup_vs_baseline_mean_so_far": 1.3692,
       "acceptance_rate_values": [
         0.5791,
         0.571,
         0.5914,
         0.5563,
         0.5851,
-        0.5708
+        0.5708,
+        0.5776,
+        0.5664
       ],
-      "acceptance_rate_mean_so_far": 0.5756,
-      "acceptance_rate_latest_summary": 0.5708,
+      "acceptance_rate_mean_so_far": 0.5747,
+      "acceptance_rate_latest_summary": 0.5664,
       "total_step_seconds": [
         254.2,
         216.66,
         218.56,
         206.36,
         210.97,
-        204.76
+        204.76,
+        221.07,
+        220.89
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 7,
-      "completed_generation_metrics": 6,
+      "latest_step_seen": 8,
+      "completed_generation_metrics": 7,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
         5245.61,
         5093.95,
         5293.27,
-        4928.26
+        4928.26,
+        5188.73
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5116.81,
-      "speedup_vs_baseline_mean_so_far": 1.2273,
+      "generated_tokens_sec_gpu_mean_so_far": 5127.08,
+      "speedup_vs_baseline_mean_so_far": 1.2298,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
         0.4369,
         0.4015,
         0.4299,
-        0.4184
+        0.4184,
+        0.424
       ],
-      "acceptance_rate_mean_so_far": 0.4211,
-      "acceptance_rate_latest_summary": 0.4184,
+      "acceptance_rate_mean_so_far": 0.4215,
+      "acceptance_rate_latest_summary": 0.424,
       "per_position_acceptance_latest_summary": [
-        0.5522,
-        0.2846
+        0.5595,
+        0.2885
       ],
       "total_step_seconds": [
         262.51,
@@ -76,38 +84,41 @@
         225.44,
         210.96,
         214.64,
-        207.56
+        207.56,
+        231.03
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 7,
-      "completed_generation_metrics": 6,
+      "latest_step_seen": 8,
+      "completed_generation_metrics": 7,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
         5209.79,
         5097.79,
         5211.14,
-        4861.72
+        4861.72,
+        5027.53
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5022.31,
-      "speedup_vs_baseline_mean_so_far": 1.2046,
+      "generated_tokens_sec_gpu_mean_so_far": 5023.05,
+      "speedup_vs_baseline_mean_so_far": 1.2048,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
         0.3322,
         0.3007,
         0.3262,
-        0.3166
+        0.3166,
+        0.3216
       ],
-      "acceptance_rate_mean_so_far": 0.3185,
-      "acceptance_rate_latest_summary": 0.3166,
+      "acceptance_rate_mean_so_far": 0.3189,
+      "acceptance_rate_latest_summary": 0.3216,
       "per_position_acceptance_latest_summary": [
-        0.5434,
-        0.2738,
-        0.1324
+        0.5503,
+        0.2793,
+        0.135
       ],
       "total_step_seconds": [
         255.95,
@@ -115,7 +126,8 @@
         223.77,
         209.8,
         216.27,
-        208.12
+        208.12,
+        230.77
       ]
     }
   ],
