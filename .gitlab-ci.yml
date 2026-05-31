@@ -6,6 +6,8 @@ default:
 
 pages:
   stage: deploy
+  tags:
+    - pages
   script:
     - test -f experiments/eagle3_qwen3_235b/specdec_math_progress_report.html
     - mkdir -p public
