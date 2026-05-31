@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:52 PDT",
+  "updated_at": "2026-05-31 08:54 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,8 +10,8 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 16,
-      "completed_generation_metrics": 15,
+      "latest_step_seen": 17,
+      "completed_generation_metrics": 16,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
@@ -27,10 +27,11 @@
         5867.79,
         5730.43,
         5921.38,
-        5503.31
+        5503.31,
+        5302.43
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5640.58,
-      "speedup_vs_baseline_mean_so_far": 1.3529,
+      "generated_tokens_sec_gpu_mean_so_far": 5619.45,
+      "speedup_vs_baseline_mean_so_far": 1.3479,
       "acceptance_rate_values": [
         0.5791,
         0.571,
@@ -46,10 +47,11 @@
         0.5864,
         0.5779,
         0.5814,
-        0.5773
+        0.5773,
+        0.5756
       ],
       "acceptance_rate_mean_so_far": 0.5763,
-      "acceptance_rate_latest_summary": 0.5773,
+      "acceptance_rate_latest_summary": 0.5756,
       "total_step_seconds": [
         254.2,
         216.66,
@@ -65,14 +67,15 @@
         217.84,
         218.81,
         221.82,
-        207.86
+        207.86,
+        210.42
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 16,
-      "completed_generation_metrics": 15,
+      "latest_step_seen": 17,
+      "completed_generation_metrics": 16,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -153,10 +156,11 @@
         5120.77,
         4749.74,
         5197.49,
-        4861.46
+        4861.46,
+        4810.28
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4948.92,
-      "speedup_vs_baseline_mean_so_far": 1.187,
+      "generated_tokens_sec_gpu_mean_so_far": 4940.26,
+      "speedup_vs_baseline_mean_so_far": 1.1849,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -172,14 +176,15 @@
         0.3296,
         0.3208,
         0.3242,
-        0.3198
+        0.3198,
+        0.3182
       ],
-      "acceptance_rate_mean_so_far": 0.3197,
-      "acceptance_rate_latest_summary": 0.3198,
+      "acceptance_rate_mean_so_far": 0.3196,
+      "acceptance_rate_latest_summary": 0.3182,
       "per_position_acceptance_latest_summary": [
-        0.5512,
-        0.2759,
-        0.1322
+        0.5499,
+        0.2743,
+        0.1302
       ],
       "total_step_seconds": [
         255.95,
@@ -196,7 +201,8 @@
         222.36,
         231.02,
         229.67,
-        214.29
+        214.29,
+        212.7
       ]
     }
   ],
