@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:10 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:15 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -355,8 +355,8 @@
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">18.0K / 50K</div>
-        <p class="small">Hidden states: 17961 safetensors files, 1.1T. Still extracting.</p>
+        <div class="metric warn">18.7K / 50K</div>
+        <p class="small">Hidden states: 18669 safetensors files, 1.1T. Still extracting.</p>
       </div>
     </div>
 
@@ -407,7 +407,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> is running; it already passed source validation and conversion, while shards/train wait on dependency.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> passed source validation and conversion, completed tokenization map, and is now counting token frequencies at about <code>40%</code>. Shards/train still wait on dependency.</span>
       <span class="pill warn">prepare running</span>
     </div>
   </section>
@@ -464,13 +464,13 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>17961</code> hidden-state files, <code>1.1T</code>.</td>
+          <td>Job <code>3055364</code>, <code>18669</code> hidden-state files, <code>1.1T</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
           <td><span class="pill warn">prepare running</span></td>
-          <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures.</td>
+          <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare is in token frequency counting at about <code>40%</code>.</td>
           <td>Current chain: prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code>.</td>
         </tr>
       </tbody>
@@ -731,9 +731,14 @@
         <strong>500K</strong>
       </div>
       <div class="bar-row">
+        <span>500K prepare</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:40%;--c:var(--amber)"></div></div>
+        <strong>40%</strong>
+      </div>
+      <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:36%;--c:var(--amber)"></div></div>
-        <strong>36%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:37%;--c:var(--amber)"></div></div>
+        <strong>37%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
@@ -747,7 +752,7 @@
     <h2>500K Parallel Plan</h2>
     <div class="banner">
       <h2>Short Answer</h2>
-      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K file is already verified, and prepare job <code>3056797</code> is running after passing source validation and conversion. Hidden-state shards <code>3056798-3056817</code> and train <code>3056818</code> are dependency-waiting.</p>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K file is already verified, and prepare job <code>3056797</code> is running after passing source validation and conversion. It has completed the tokenization map and is counting token frequencies at about <code>40%</code>. Hidden-state shards <code>3056798-3056817</code> and train <code>3056818</code> are dependency-waiting.</p>
     </div>
 
     <div class="grid two">
