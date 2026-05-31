@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 07:18 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 07:23 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -380,14 +380,14 @@
       </div>
       <div class="card">
         <div class="label">30B 500K training</div>
-        <div class="metric warn">validating</div>
-        <p class="small">Job 3056818 completed the 1-epoch train loop and is in validation/save-best before checkpoint export.</p>
+        <div class="metric ok">done</div>
+        <p class="small">Job 3056818 completed 1 epoch, wrote checkpoint 0, and selected it as best with val loss 7.491660.</p>
       </div>
     </div>
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> ran the full <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint and is now in validation/save-best before checkpoint export. The final observed train step is <code>global_step=87996</code>; the last 20 train losses average <code>7.149</code> with range <code>6.229-8.346</code>. A dependency wrapper, job <code>3057798</code>, is queued to submit 500K-drafter K=1/2/3 NeMo-RL evaluations after training finishes. 30B K=1 completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 30B K=2 token-gate4096 job <code>3056052</code> completed 20/20 metrics with mean <code>4849.05 tok/s/GPU</code>, or <code>1.16x</code>, with step-level acceptance <code>38.1%</code> and vLLM/aggregate acceptance median <code>50%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> completed successfully after the full <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; last 20 train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is the best checkpoint and is now being evaluated in NeMo-RL: K=1 job <code>3058167</code>, K=2 job <code>3058168</code>, and K=3 job <code>3058169</code> are running with token gate <code>4096</code>. Existing 30B K=1 50K-drafter run completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
     </div>
 
     <h2>Dataset And Leakage Summary</h2>
@@ -542,8 +542,8 @@
     </div>
     <div class="status-row">
       <strong>30B training</strong>
-      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. It is in validation/save-best; final observed train step is <code>global_step=87996</code>, and the latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>. Smaller continuation jobs are tracked separately and are not the final clean 500K path.</span>
-      <span class="pill ok">validating</span>
+      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller continuation jobs are tracked separately and are not the final clean 500K path.</span>
+      <span class="pill ok">done</span>
     </div>
     <div class="status-row">
       <strong>235B NeMo-RL</strong>
@@ -552,7 +552,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files, and train job <code>3056818</code> is running. Dependency wrapper <code>3057798</code> is queued to submit K=1/2/3 NeMo-RL evaluations after <code>3056818</code> succeeds.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed, and K=1/2/3 NeMo-RL evaluations are running as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>.</span>
       <span class="pill ok">train running</span>
     </div>
   </section>
@@ -620,9 +620,9 @@
         </tr>
         <tr>
           <td>500K target responses</td>
-          <td><span class="pill ok">validating</span></td>
+          <td><span class="pill ok">eval running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> completed the full train loop through <code>global_step=87996</code> and is in validation/save-best. Wrapper <code>3057798</code> will submit 500K-drafter K=1/2/3 NeMo-RL evaluations after the train job succeeds and a checkpoint with <code>config.json</code> appears. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs are <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -1005,7 +1005,7 @@
     <h2>500K Parallel Plan</h2>
     <div class="banner">
       <h2>Short Answer</h2>
-      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K file is verified, prepare job <code>3056797</code> completed preprocessing, all 20 hidden-state shards <code>3056798-3056817</code> completed, and train job <code>3056818</code> is now running on the full <code>500000</code>-file cache. Job <code>3057798</code> is queued as an afterok wrapper to submit K=1/2/3 NeMo-RL evaluations as soon as the 500K checkpoint exists.</p>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K file is verified, prepare job <code>3056797</code> completed preprocessing, all 20 hidden-state shards <code>3056798-3056817</code> completed, and train job <code>3056818</code> completed on the full <code>500000</code>-file cache. The resulting checkpoint <code>0</code> is now under K=1/2/3 NeMo-RL evaluation as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>.</p>
     </div>
 
     <div class="grid two">
@@ -1077,7 +1077,7 @@
       <div>30B replacement prompts: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></div>
       <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
       <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
-      <div>30B 500K NeMo-RL eval submitter: wrapper job <code>3057798</code>, afterok on <code>3056818</code>, will submit K=1/2/3 with token gate <code>4096</code></div>
+      <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code></div>
       <div>30B K=2 live summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/qwen30ba3b_mixed50k_k2_gate4096_3056052_live_summary.json</code></div>
       <div>30B strict long-tail gate run: <code>3057073</code>, K=2, request gate <code>4</code>, token gate <code>1024</code></div>
       <div>235B strict long-tail gate run: <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code>, K=2, request gate <code>4</code>, token gate <code>1024</code>, account <code>coreai_dlalgo_llm</code>, cancelled after Step 1 stall before first metric</div>
