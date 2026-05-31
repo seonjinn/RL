@@ -334,7 +334,7 @@ def main() -> int:
     parser.add_argument("--shards", type=int, default=20)
     parser.add_argument("--prep-time", default="02:00:00")
     parser.add_argument("--datagen-time", default="04:00:00")
-    parser.add_argument("--train-time", default="12:00:00")
+    parser.add_argument("--train-time", default="04:00:00")
     parser.add_argument("--from-pretrained", default="")
     parser.add_argument("--replacement-conversations", default=str(default_replacement_conversations()))
     parser.add_argument("--dry-run", action="store_true")

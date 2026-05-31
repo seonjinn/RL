@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 02:35 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 02:47 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -350,8 +350,8 @@
       </div>
       <div class="card">
         <div class="label">30B mixed baseline</div>
-        <div class="metric info">4126.86</div>
-        <p class="small">tok/s/GPU mean from the first 6 completed NeMo-RL generation metrics.</p>
+        <div class="metric info">4203.40</div>
+        <p class="small">tok/s/GPU mean from the first 8 completed NeMo-RL generation metrics.</p>
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
@@ -379,7 +379,7 @@
         <tr>
           <td>235B K=1 50.4% acceptance</td>
           <td><span class="pill warn">vLLM internal</span></td>
-          <td>Observed inside running job <code>3055926</code>. First NeMo-RL generation metric is <code>65.58 tok/s/GPU</code>, which is not a proven speedup versus the <code>66.78</code> baseline.</td>
+          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>64.29 tok/s/GPU</code>, or <code>0.963x</code> versus the <code>66.78</code> baseline.</td>
         </tr>
         <tr>
           <td>235B baseline 66.78 tok/s/GPU</td>
@@ -407,8 +407,8 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Raw 500K has 499941 unique prompts. Replacement target generation is job 3056447, and dependent unique-500K chain submitter is job 3056687.</span>
-      <span class="pill info">replacement running</span>
+      <span>Exact unique 500K is verified. Merge/prepare/20 hidden-state shards/train are submitted as jobs 3056746-3056769.</span>
+      <span class="pill info">500K chain queued</span>
     </div>
   </section>
 
@@ -442,7 +442,7 @@
         <h3>What Matters</h3>
         <p>30B already proves SpecDec can help NeMo-RL generation, but the best measured speedup is still about 1.22x, not the target 2x. The next useful comparison is the mixed-math 50K checkpoint in the active baseline/K=1/K=2 chain.</p>
         <div class="mono-list">
-          <div>Baseline active: <code>3056050</code>, current mean <code>4126.86 tok/s/GPU</code> from 6 metrics</div>
+          <div>Baseline active: <code>3056050</code>, current mean <code>4203.40 tok/s/GPU</code> from 8 metrics</div>
           <div>K=1 queued: <code>3056051</code></div>
           <div>K=2 queued: <code>3056052</code></div>
         </div>
@@ -469,9 +469,9 @@
         </tr>
         <tr>
           <td>500K target responses</td>
-          <td><span class="pill info">repair submitted</span></td>
+          <td><span class="pill info">chain submitted</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Global normalized prompt uniqueness is <code>499941/500000</code>.</td>
-          <td>Fresh DAPO replacement prompts are ready; target-response job <code>3056447</code> feeds dependent chain submitter <code>3056687</code>.</td>
+          <td>Fresh DAPO replacements are complete. Exact unique 500K chain: merge <code>3056746</code>, prepare <code>3056747</code>, shards <code>3056748-3056767</code>, train <code>3056769</code>.</td>
         </tr>
       </tbody>
     </table>
@@ -497,8 +497,8 @@
       </div>
       <div class="card">
         <div class="label">K=1 retry</div>
-        <div class="metric warn">65.58</div>
-        <p class="small">First NeMo-RL tok/s/GPU metric; vLLM internal acceptance tail is <code>50.4%</code>.</p>
+        <div class="metric warn">64.29</div>
+        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.963x</code> so far.</p>
       </div>
     </div>
 
@@ -514,7 +514,7 @@
       </thead>
       <tbody>
         <tr><td>Do we have a clean 235B baseline?</td><td>Yes. <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>.</td></tr>
-        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 has only one metric so far at <code>65.58 tok/s/GPU</code>, below the <code>66.78</code> baseline.</td></tr>
+        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>64.29 tok/s/GPU</code> mean so far, below the <code>66.78</code> baseline.</td></tr>
         <tr><td>Is the drafter attached?</td><td>Yes. The K=2 log shows <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and vLLM SpecDec metrics.</td></tr>
         <tr><td>Next debug</td><td>Wait for K=1. If it also times out, use a stricter token/request gate or disable compiled DAG only for the failing SpecDec path.</td></tr>
       </tbody>
@@ -562,13 +562,13 @@
           <td>Drafter training target responses</td>
           <td>10 files: <code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_50k*.jsonl</code></td>
           <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
-          <td>Responses are synthesized by <code>Qwen/Qwen3-30B-A3B</code>. Exact unique 500K uses fresh DAPO replacements from job <code>3056447</code>.</td>
+          <td>Responses are synthesized by <code>Qwen/Qwen3-30B-A3B</code>. Exact unique 500K uses 59 fresh DAPO replacement rows.</td>
         </tr>
         <tr>
           <td>Replacement prompts</td>
           <td><code>mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></td>
-          <td><code>100</code> fresh prompts</td>
-          <td>Selected from DAPO files after excluding the 500K prompt pool and OpenMath eval prompts.</td>
+          <td><code>100</code> fresh prompts; <code>59</code> used</td>
+          <td>Selected from DAPO files after excluding the 500K prompt pool and OpenMath eval prompts. Validation passed: 100 valid rows, 0 duplicate prompts.</td>
         </tr>
         <tr>
           <td>NeMo-RL math evaluation</td>
@@ -637,7 +637,7 @@
     <h2>500K Parallel Plan</h2>
     <div class="banner">
       <h2>Short Answer</h2>
-      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The raw 500K duplicate issue is now handled by an exact-unique merge builder plus 100 fresh DAPO replacement prompts; replacement target generation is job <code>3056447</code> and dependent chain submitter is <code>3056687</code>.</p>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K chain is now submitted: merge <code>3056746</code>, prepare <code>3056747</code>, hidden-state shards <code>3056748-3056767</code>, train <code>3056769</code>.</p>
     </div>
 
     <div class="grid two">
@@ -707,8 +707,8 @@
       <div>30B mixed 50K checkpoint: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_50k/checkpoints_train_50k_layers48_mlen8193/0</code></div>
       <div>30B 500K prompt pool: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></div>
       <div>30B replacement prompts: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></div>
-      <div>30B replacement target-generation job: <code>3056447</code></div>
-      <div>30B unique 500K chain submitter: <code>3056687</code></div>
+      <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
+      <div>30B exact unique 500K jobs: merge <code>3056746</code>, prepare <code>3056747</code>, shards <code>3056748-3056767</code>, train <code>3056769</code></div>
       <div>30B 100K hidden-state dir: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_100k_seen/hidden_states_layers48_mlen8193_offset50k</code></div>
     </div>
   </section>
