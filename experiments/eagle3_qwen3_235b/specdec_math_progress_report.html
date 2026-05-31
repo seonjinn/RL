@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:22 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:25 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -355,8 +355,8 @@
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">20.7K / 50K</div>
-        <p class="small">Hidden states: 20689 safetensors files, 1.25 TiB. Still extracting.</p>
+        <div class="metric warn">21.1K / 50K</div>
+        <p class="small">Hidden states: 21108 safetensors files, 1.3T. Still extracting.</p>
       </div>
     </div>
 
@@ -436,7 +436,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. All 20 hidden-state shards <code>3056798-3056817</code> are now running; <code>2942</code> hidden-state files have appeared so far, about <code>0.17 TiB</code>.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. All 20 hidden-state shards <code>3056798-3056817</code> are now running; <code>11960</code> hidden-state files have appeared so far, using about <code>758G</code>.</span>
       <span class="pill ok">shards running</span>
     </div>
   </section>
@@ -493,14 +493,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>20689</code> hidden-state files, <code>1.25 TiB</code>.</td>
+          <td>Job <code>3055364</code>, <code>21108</code> hidden-state files, <code>1.3T</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
           <td><span class="pill ok">shards running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, shards <code>3056798-3056817</code> running with <code>2942</code> files / <code>0.17 TiB</code> so far, train <code>3056818</code> pending dependency.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, shards <code>3056798-3056817</code> running with <code>11960</code> files / <code>758G</code> so far, train <code>3056818</code> pending dependency.</td>
         </tr>
       </tbody>
     </table>
@@ -771,8 +771,8 @@
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:41%;--c:var(--amber)"></div></div>
-        <strong>41%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:42%;--c:var(--amber)"></div></div>
+        <strong>42%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
