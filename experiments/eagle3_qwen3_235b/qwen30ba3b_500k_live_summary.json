@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 10:39 PDT",
+  "updated_at": "2026-05-31 10:41 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -423,32 +423,35 @@
       "request_gate": 4,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 5,
-      "completed_generation_metrics": 4,
+      "latest_step_seen": 6,
+      "completed_generation_metrics": 5,
       "generated_tokens_sec_gpu_values": [
         4484.07,
         4262.05,
         4653.55,
-        4244.12
+        4244.12,
+        4438.06
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4410.95,
-      "speedup_vs_baseline_mean_so_far": 1.058,
+      "generated_tokens_sec_gpu_mean_so_far": 4416.37,
+      "speedup_vs_baseline_mean_so_far": 1.0593,
       "acceptance_rate_values": [
         0.6474,
         0.3265,
         0.5823,
-        0.4547
+        0.4547,
+        0.4211
       ],
-      "acceptance_rate_mean_so_far": 0.5027,
-      "acceptance_rate_latest_summary": 0.4547,
+      "acceptance_rate_mean_so_far": 0.4864,
+      "acceptance_rate_latest_summary": 0.4211,
       "total_step_seconds": [
         282.04,
         243.54,
         249.37,
-        238.03
+        238.03,
+        240.84
       ],
-      "total_step_seconds_mean_so_far": 253.25,
-      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4. Four rollout metrics are available, but this is only 4/20 and not a stable final result."
+      "total_step_seconds_mean_so_far": 250.76,
+      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4. Five rollout metrics are available, but this is only 5/20 and not a stable final result."
     },
     {
       "job_id": "3059556",
