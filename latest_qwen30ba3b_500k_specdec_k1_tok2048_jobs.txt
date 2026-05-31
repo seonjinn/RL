@@ -1,0 +1,13 @@
+# Qwen3-30B-A3B 500K Speculators Eagle3 NeMo-RL eval sweep
+created_at=2026-05-31 08:29:56 PDT
+train_job=3056818
+draft_root=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+spec_tokens_list=1
+gate_request_threshold=0
+gate_token_threshold=2048
+max_steps=20
+num_prompts=64
+num_generations=32
+train_global_batch_size=2048
+specdec_k1_job=3058759

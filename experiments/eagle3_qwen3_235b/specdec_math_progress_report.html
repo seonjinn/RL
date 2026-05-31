@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 08:26 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 08:30 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -624,6 +624,10 @@
           <td>No active 235B SpecDec job is running as of <code>2026-05-31 08:20 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric.</td>
         </tr>
         <tr>
+          <td>What is the next long-tail experiment?</td>
+          <td>The active 500K K=1/2/3 jobs use token gate <code>4096</code>. To test a stricter long-tail-only policy, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted without dependency at <code>2026-05-31 08:29 PT</code>. Both are pending on priority as of <code>08:30 PT</code>.</td>
+        </tr>
+        <tr>
           <td>Is the patch bundle current?</td>
           <td>Yes. The source overlay validation now passes against the current markers: <code>NRL_SPECDEC_BATCH_GATE_PATCH_V3</code>, <code>NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5</code>, request gate, and scheduled-token gate. The active remote <code>nemo-rl</code> checkout also contains those markers.</td>
         </tr>
@@ -656,7 +660,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed. K=1/2/3 NeMo-RL evaluations are running as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. Live snapshot: all three have <code>8</code> metrics; K=1 is <code>5708.31 tok/s/GPU</code> and <code>57.47%</code> acceptance, K=2 is <code>5145.15</code> and <code>42.03%</code>, K=3 is <code>5052.70</code> and <code>31.79%</code>. Full 20-step means are still pending.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed. K=1/2/3 NeMo-RL evaluations are running as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. Live snapshot: all three have <code>8</code> metrics; K=1 is <code>5708.31 tok/s/GPU</code> and <code>57.47%</code> acceptance, K=2 is <code>5145.15</code> and <code>42.03%</code>, K=3 is <code>5052.70</code> and <code>31.79%</code>. Full 20-step means are still pending. Follow-up stricter K=1 token-gate jobs <code>3058759</code> (<code>2048</code>) and <code>3058762</code> (<code>1024</code>) are queued.</span>
       <span class="pill warn">live eval</span>
     </div>
   </section>
@@ -732,7 +736,7 @@
           <td>500K target responses</td>
           <td><span class="pill ok">eval running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs are <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. As of <code>08:26 PT</code>, all three have <code>8</code> rollout metrics and reached Step 9. Full 20-step results are pending. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs are <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. As of <code>08:26 PT</code>, all three have <code>8</code> rollout metrics and reached Step 9. Full 20-step results are pending. Stricter long-tail K=1 follow-ups are queued as <code>3058759</code> with token gate <code>2048</code> and <code>3058762</code> with token gate <code>1024</code>. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -1191,6 +1195,7 @@
       <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
       <div>30B 500K live summary: <code>experiments/eagle3_qwen3_235b/qwen30ba3b_500k_live_summary.json</code></div>
       <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code>. Current n=<code>8</code>/<code>8</code>/<code>8</code> generated tok/s/GPU means: <code>5708.31</code>, <code>5145.15</code>, <code>5052.70</code>.</div>
+      <div>30B 500K stricter long-tail eval jobs: K=1 token gate <code>2048</code> job <code>3058759</code>, K=1 token gate <code>1024</code> job <code>3058762</code>. Submit summaries: <code>latest_qwen30ba3b_500k_specdec_k1_tok2048_jobs.txt</code> and <code>latest_qwen30ba3b_500k_specdec_k1_tok1024_jobs.txt</code>.</div>
       <div>30B K=2 live summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/qwen30ba3b_mixed50k_k2_gate4096_3056052_live_summary.json</code></div>
       <div>30B strict long-tail gate run: <code>3057073</code>, K=2, request gate <code>4</code>, token gate <code>1024</code></div>
       <div>235B strict long-tail gate run: <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code>, K=2, request gate <code>4</code>, token gate <code>1024</code>, account <code>coreai_dlalgo_llm</code>, cancelled after Step 1 stall before first metric</div>
