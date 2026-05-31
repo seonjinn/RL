@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:43 PDT",
+  "updated_at": "2026-05-31 09:47 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -260,8 +260,8 @@
       "num_speculative_tokens": 1,
       "token_gate": 2048,
       "state": "RUNNING",
-      "latest_step_seen": 10,
-      "completed_generation_metrics": 9,
+      "latest_step_seen": 12,
+      "completed_generation_metrics": 12,
       "generated_tokens_sec_gpu_values": [
         5698.85,
         5286.58,
@@ -271,10 +271,13 @@
         5366.06,
         6062.91,
         6043.59,
-        5024.57
+        5024.57,
+        5405.59,
+        5519.86,
+        5918.22
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5627.55,
-      "speedup_vs_baseline_mean_so_far": 1.3498,
+      "generated_tokens_sec_gpu_mean_so_far": 5624.3,
+      "speedup_vs_baseline_mean_so_far": 1.349,
       "acceptance_rate_values": [
         0.5787,
         0.57,
@@ -284,10 +287,13 @@
         0.5704,
         0.5764,
         0.5661,
-        0.5642
+        0.5642,
+        0.5812,
+        0.5759,
+        0.5855
       ],
-      "acceptance_rate_mean_so_far": 0.573,
-      "acceptance_rate_latest_summary": 0.5642,
+      "acceptance_rate_mean_so_far": 0.575,
+      "acceptance_rate_latest_summary": 0.5855,
       "total_step_seconds": [
         251.79,
         213.61,
@@ -297,18 +303,21 @@
         199.79,
         217.04,
         220.62,
-        202.01
+        202.01,
+        206.23,
+        208.69,
+        211.48
       ],
-      "total_step_seconds_mean_so_far": 214.63,
-      "note": "Preliminary long-tail gate result; only 9 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 213.17,
+      "note": "Preliminary long-tail gate result; only 12 rollout metrics so far."
     },
     {
       "job_id": "3058762",
       "num_speculative_tokens": 1,
       "token_gate": 1024,
       "state": "RUNNING",
-      "latest_step_seen": 10,
-      "completed_generation_metrics": 9,
+      "latest_step_seen": 12,
+      "completed_generation_metrics": 12,
       "generated_tokens_sec_gpu_values": [
         5712.32,
         5283.75,
@@ -318,10 +327,13 @@
         5336.18,
         5983.29,
         6075.66,
-        5039.41
+        5039.41,
+        5333.45,
+        5463.32,
+        5910.94
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5619.34,
-      "speedup_vs_baseline_mean_so_far": 1.3478,
+      "generated_tokens_sec_gpu_mean_so_far": 5606.81,
+      "speedup_vs_baseline_mean_so_far": 1.3448,
       "acceptance_rate_values": [
         0.5787,
         0.5708,
@@ -331,10 +343,13 @@
         0.5691,
         0.5765,
         0.5652,
-        0.5647
+        0.5647,
+        0.5804,
+        0.5759,
+        0.5857
       ],
-      "acceptance_rate_mean_so_far": 0.573,
-      "acceptance_rate_latest_summary": 0.5647,
+      "acceptance_rate_mean_so_far": 0.5749,
+      "acceptance_rate_latest_summary": 0.5857,
       "total_step_seconds": [
         254.89,
         215.85,
@@ -344,17 +359,20 @@
         206.65,
         222.46,
         223.67,
-        207.41
+        207.41,
+        211.73,
+        211.7,
+        216.95
       ],
-      "total_step_seconds_mean_so_far": 218.86,
-      "note": "Preliminary long-tail gate result; only 9 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 217.51,
+      "note": "Preliminary long-tail gate result; only 12 rollout metrics so far."
     },
     {
       "job_id": "3059445",
       "num_speculative_tokens": 1,
       "request_gate": 4,
       "token_gate": 0,
-      "state": "PENDING",
+      "state": "RUNNING",
       "latest_step_seen": 0,
       "completed_generation_metrics": 0,
       "generated_tokens_sec_gpu_values": [],

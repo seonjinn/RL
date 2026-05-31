@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 09:40 PDT",
+  "updated_at": "2026-05-31 09:47 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -50,7 +50,23 @@
       "job_count": 80,
       "chunks": "020-099",
       "expected_new_records": 400000,
-      "state_at_submit_check": "61 RUNNING / 33 PENDING across all active 235B targetgen jobs after submission"
+      "state_at_submit_check": "92 RUNNING after chunks 046 and 096 failed at startup and were resubmitted"
+    },
+    "startup_retry_chunks_046_096": {
+      "failed_job_ids": [
+        "3059379",
+        "3059429"
+      ],
+      "retry_job_ids": [
+        "3059476",
+        "3059477"
+      ],
+      "chunks": [
+        "046",
+        "096"
+      ],
+      "state_at_retry_check": "RUNNING",
+      "note": "Both failed before target rows were written, with enroot/Ray startup failures. Retry jobs were submitted without dependency."
     }
   },
   "expected_after_current_wave": {
