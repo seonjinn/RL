@@ -437,6 +437,7 @@ class BaseVllmGenerationWorker:
                 "VLLM_DISABLE_USAGE_STATS",
                 "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH",
                 "VLLM_SKIP_P2P_CHECK",
+                "VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL",
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                 "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
                 "VLLM_USE_RAY_COMPILED_DAG",
@@ -630,7 +631,7 @@ class BaseVllmGenerationWorker:
                     content = f.read()
 
                 required_markers = [
-                    "NRL_SPECDEC_BATCH_GATE_PATCH_V3",
+                    "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                     "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
                     "_nrl_specdec_batch_gate_threshold",
@@ -640,6 +641,9 @@ class BaseVllmGenerationWorker:
                     "specdec_batch_gate_disabled",
                     "specdec_batch_gate_disabled = False",
                     "not specdec_batch_gate_disabled",
+                    "specdec_batch_gate_checked_count",
+                    "specdec_batch_gate_log_interval",
+                    "NRL SpecDec batch gate:",
                 ]
                 if (
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD" in content
@@ -792,7 +796,7 @@ class BaseVllmGenerationWorker:
                             "                    spec_decode_metadata,\n"
                             "                    spec_decode_common_attn_metadata,\n"
                             "                )\n",
-                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V3\n"
+                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V4\n"
                             "        specdec_batch_gate_disabled = False\n"
                             "        if self.speculative_config:\n"
                             "            specdec_batch_gate_threshold = getattr(\n"
@@ -847,6 +851,49 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
+                            "            specdec_batch_gate_checked_count = getattr(\n"
+                            "                self, \"_nrl_specdec_batch_gate_checked_count\", 0\n"
+                            "            ) + 1\n"
+                            "            self._nrl_specdec_batch_gate_checked_count = specdec_batch_gate_checked_count\n"
+                            "            if specdec_batch_gate_disabled:\n"
+                            "                self._nrl_specdec_batch_gate_disabled_count = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_disabled_count\", 0\n"
+                            "                ) + 1\n"
+                            "            else:\n"
+                            "                self._nrl_specdec_batch_gate_enabled_count = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_enabled_count\", 0\n"
+                            "                ) + 1\n"
+                            "            specdec_batch_gate_log_interval = getattr(\n"
+                            "                self, \"_nrl_specdec_batch_gate_log_interval\", None\n"
+                            "            )\n"
+                            "            if specdec_batch_gate_log_interval is None:\n"
+                            "                specdec_batch_gate_log_interval_str = __import__(\"os\").environ.get(\n"
+                            "                    \"VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL\", \"256\"\n"
+                            "                )\n"
+                            "                specdec_batch_gate_log_interval = (\n"
+                            "                    int(specdec_batch_gate_log_interval_str)\n"
+                            "                    if specdec_batch_gate_log_interval_str.isdigit()\n"
+                            "                    else 0\n"
+                            "                )\n"
+                            "                self._nrl_specdec_batch_gate_log_interval = specdec_batch_gate_log_interval\n"
+                            "            if specdec_batch_gate_log_interval > 0 and (\n"
+                            "                specdec_batch_gate_checked_count == 1\n"
+                            "                or specdec_batch_gate_checked_count % specdec_batch_gate_log_interval == 0\n"
+                            "            ):\n"
+                            "                try:\n"
+                            "                    logger.info(\n"
+                            "                        \"NRL SpecDec batch gate: checked=%s disabled=%s enabled=%s last_disabled=%s requests=%s tokens=%s request_threshold=%s token_threshold=%s\",\n"
+                            "                        specdec_batch_gate_checked_count,\n"
+                            "                        getattr(self, \"_nrl_specdec_batch_gate_disabled_count\", 0),\n"
+                            "                        getattr(self, \"_nrl_specdec_batch_gate_enabled_count\", 0),\n"
+                            "                        specdec_batch_gate_disabled,\n"
+                            "                        specdec_batch_gate_num_requests,\n"
+                            "                        specdec_batch_gate_num_tokens,\n"
+                            "                        specdec_batch_gate_threshold,\n"
+                            "                        specdec_batch_gate_token_threshold,\n"
+                            "                    )\n"
+                            "                except Exception:\n"
+                            "                    pass\n"
                             "        if specdec_batch_gate_disabled:\n"
                             "            self._draft_token_ids = None\n"
                             "        if self.speculative_config and not specdec_batch_gate_disabled:\n"
@@ -874,7 +921,7 @@ class BaseVllmGenerationWorker:
                             "            spec_decode_common_attn_metadata.max_seq_len + self.num_spec_tokens\n"
                             "            <= effective_drafter_max_model_len\n"
                             "        )\n"
-                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V3\n"
+                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V4\n"
                             "        specdec_batch_gate_disabled = False\n"
                             "        if self.speculative_config:\n"
                             "            specdec_batch_gate_threshold = getattr(\n"
@@ -929,6 +976,49 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
+                            "            specdec_batch_gate_checked_count = getattr(\n"
+                            "                self, \"_nrl_specdec_batch_gate_checked_count\", 0\n"
+                            "            ) + 1\n"
+                            "            self._nrl_specdec_batch_gate_checked_count = specdec_batch_gate_checked_count\n"
+                            "            if specdec_batch_gate_disabled:\n"
+                            "                self._nrl_specdec_batch_gate_disabled_count = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_disabled_count\", 0\n"
+                            "                ) + 1\n"
+                            "            else:\n"
+                            "                self._nrl_specdec_batch_gate_enabled_count = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_enabled_count\", 0\n"
+                            "                ) + 1\n"
+                            "            specdec_batch_gate_log_interval = getattr(\n"
+                            "                self, \"_nrl_specdec_batch_gate_log_interval\", None\n"
+                            "            )\n"
+                            "            if specdec_batch_gate_log_interval is None:\n"
+                            "                specdec_batch_gate_log_interval_str = __import__(\"os\").environ.get(\n"
+                            "                    \"VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL\", \"256\"\n"
+                            "                )\n"
+                            "                specdec_batch_gate_log_interval = (\n"
+                            "                    int(specdec_batch_gate_log_interval_str)\n"
+                            "                    if specdec_batch_gate_log_interval_str.isdigit()\n"
+                            "                    else 0\n"
+                            "                )\n"
+                            "                self._nrl_specdec_batch_gate_log_interval = specdec_batch_gate_log_interval\n"
+                            "            if specdec_batch_gate_log_interval > 0 and (\n"
+                            "                specdec_batch_gate_checked_count == 1\n"
+                            "                or specdec_batch_gate_checked_count % specdec_batch_gate_log_interval == 0\n"
+                            "            ):\n"
+                            "                try:\n"
+                            "                    logger.info(\n"
+                            "                        \"NRL SpecDec batch gate: checked=%s disabled=%s enabled=%s last_disabled=%s requests=%s tokens=%s request_threshold=%s token_threshold=%s\",\n"
+                            "                        specdec_batch_gate_checked_count,\n"
+                            "                        getattr(self, \"_nrl_specdec_batch_gate_disabled_count\", 0),\n"
+                            "                        getattr(self, \"_nrl_specdec_batch_gate_enabled_count\", 0),\n"
+                            "                        specdec_batch_gate_disabled,\n"
+                            "                        specdec_batch_gate_num_requests,\n"
+                            "                        specdec_batch_gate_num_tokens,\n"
+                            "                        specdec_batch_gate_threshold,\n"
+                            "                        specdec_batch_gate_token_threshold,\n"
+                            "                    )\n"
+                            "                except Exception:\n"
+                            "                    pass\n"
                             "        if specdec_batch_gate_disabled:\n"
                             "            self._draft_token_ids = None\n",
                         ),
