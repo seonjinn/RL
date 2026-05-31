@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 14:30 PDT",
+  "updated_at": "2026-05-31 15:44 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -915,5 +915,18 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy."
+  "adaptive_gate_implementation": {
+    "status": "implemented_and_validated_locally",
+    "updated_at": "2026-05-31 15:44 PDT",
+    "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
+    "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
+    "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
+    "current_behavior": "The vLLM scheduler lookahead gate and model runner proposal gate start from static request/token thresholds, measure local SpecDec enabled ratios over rolling windows, then tighten or loosen request/token thresholds toward a target enabled ratio.",
+    "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8, token threshold 2048, adaptive target 0.75, token threshold range 512-4096, log interval 32.",
+    "submitted_eval_job": "3062282",
+    "submitted_eval_state_at_submit": "PENDING, reason None",
+    "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_eval_jobs.txt",
+    "known_limit": "The scheduler and model-runner controllers are currently local controllers rather than one shared global controller, so their thresholds can drift independently. That is acceptable for the first evaluation but should be unified before treating it as a full TLT implementation."
+  },
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Adaptive gate code is now implemented and validated, but its NeMo-RL throughput/acceptance result is not available until the new adaptive eval job completes."
 }

@@ -437,6 +437,18 @@ class BaseVllmGenerationWorker:
                 "VLLM_DISABLE_USAGE_STATS",
                 "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH",
                 "VLLM_SKIP_P2P_CHECK",
+                "VLLM_SPECDEC_ADAPTIVE_ADJUST_INTERVAL",
+                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
+                "VLLM_SPECDEC_ADAPTIVE_HYSTERESIS",
+                "VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD",
+                "VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD",
+                "VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD",
+                "VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD",
+                "VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD",
+                "VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD",
+                "VLLM_SPECDEC_ADAPTIVE_REQUEST_STEP",
+                "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
+                "VLLM_SPECDEC_ADAPTIVE_TOKEN_STEP",
                 "VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL",
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                 "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
@@ -1278,6 +1290,543 @@ class BaseVllmGenerationWorker:
 
             return applied
 
+        def _patch_vllm_adaptive_specdec_gate():
+            """Add an adaptive controller to the already-installed batch gate.
+
+            The V4 gate is a static long-tail guard. This patch keeps the same
+            correctness boundary, but lets the scheduler lookahead gate and the
+            model runner proposal gate tune thresholds toward a target
+            enabled-ratio. The controllers are deliberately local to each vLLM
+            worker process: if the adaptive controller is disabled, the static
+            V4/V5 behavior is unchanged.
+            """
+
+            mode = os.environ.get("VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off").lower()
+            if mode in {"", "0", "off", "false", "no"}:
+                return 0
+
+            applied = 0
+            gpu_model_runner = _get_vllm_file("v1/worker/gpu_model_runner.py")
+            with open(gpu_model_runner) as f:
+                content = f.read()
+
+            if "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1" not in content:
+                if "NRL_SPECDEC_BATCH_GATE_PATCH_V4" not in content:
+                    raise RuntimeError(
+                        "Adaptive SpecDec gate requires the V4 batch gate to be "
+                        f"installed first in {gpu_model_runner}."
+                    )
+
+                init_anchor = "            specdec_batch_gate_disabled = (\n"
+                init_block = (
+                    "            # NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1\n"
+                    "            specdec_adaptive_gate_mode = getattr(\n"
+                    "                self, \"_nrl_specdec_adaptive_gate_mode\", None\n"
+                    "            )\n"
+                    "            if specdec_adaptive_gate_mode is None:\n"
+                    "                _nrl_os = __import__(\"os\")\n"
+                    "                specdec_adaptive_gate_mode = _nrl_os.environ.get(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_GATE_MODE\", \"off\"\n"
+                    "                ).lower()\n"
+                    "                self._nrl_specdec_adaptive_gate_mode = specdec_adaptive_gate_mode\n"
+                    "                def _nrl_adaptive_int(name, default):\n"
+                    "                    value = _nrl_os.environ.get(name, \"\")\n"
+                    "                    return int(value) if value.isdigit() else default\n"
+                    "                def _nrl_adaptive_float(name, default):\n"
+                    "                    try:\n"
+                    "                        return float(_nrl_os.environ.get(name, str(default)))\n"
+                    "                    except ValueError:\n"
+                    "                        return default\n"
+                    "                self._nrl_specdec_adaptive_target_enabled_ratio = _nrl_adaptive_float(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO\", 0.35\n"
+                    "                )\n"
+                    "                self._nrl_specdec_adaptive_hysteresis = _nrl_adaptive_float(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_HYSTERESIS\", 0.05\n"
+                    "                )\n"
+                    "                self._nrl_specdec_adaptive_interval = max(\n"
+                    "                    1,\n"
+                    "                    _nrl_adaptive_int(\"VLLM_SPECDEC_ADAPTIVE_ADJUST_INTERVAL\", 512),\n"
+                    "                )\n"
+                    "                self._nrl_specdec_adaptive_request_step = max(\n"
+                    "                    1,\n"
+                    "                    _nrl_adaptive_int(\"VLLM_SPECDEC_ADAPTIVE_REQUEST_STEP\", 4),\n"
+                    "                )\n"
+                    "                self._nrl_specdec_adaptive_token_step = max(\n"
+                    "                    1,\n"
+                    "                    _nrl_adaptive_int(\"VLLM_SPECDEC_ADAPTIVE_TOKEN_STEP\", 256),\n"
+                    "                )\n"
+                    "                min_request = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD\", 1\n"
+                    "                )\n"
+                    "                max_request = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD\", 128\n"
+                    "                )\n"
+                    "                min_token = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD\", 256\n"
+                    "                )\n"
+                    "                max_token = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD\", 8192\n"
+                    "                )\n"
+                    "                self._nrl_specdec_adaptive_min_request_threshold = min_request\n"
+                    "                self._nrl_specdec_adaptive_max_request_threshold = max_request\n"
+                    "                self._nrl_specdec_adaptive_min_token_threshold = min_token\n"
+                    "                self._nrl_specdec_adaptive_max_token_threshold = max_token\n"
+                    "                initial_request = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD\",\n"
+                    "                    specdec_batch_gate_threshold,\n"
+                    "                )\n"
+                    "                initial_token = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD\",\n"
+                    "                    specdec_batch_gate_token_threshold\n"
+                    "                    if specdec_batch_gate_token_threshold > 0\n"
+                    "                    else 2048,\n"
+                    "                )\n"
+                    "                if initial_request > 0:\n"
+                    "                    initial_request = min(max(initial_request, min_request), max_request)\n"
+                    "                if initial_token > 0:\n"
+                    "                    initial_token = min(max(initial_token, min_token), max_token)\n"
+                    "                self._nrl_specdec_adaptive_request_threshold = initial_request\n"
+                    "                self._nrl_specdec_adaptive_token_threshold = initial_token\n"
+                    "                self._nrl_specdec_adaptive_window_checked = 0\n"
+                    "                self._nrl_specdec_adaptive_window_enabled = 0\n"
+                    "            if specdec_adaptive_gate_mode not in {\"\", \"0\", \"off\", \"false\", \"no\"}:\n"
+                    "                specdec_batch_gate_threshold = getattr(\n"
+                    "                    self,\n"
+                    "                    \"_nrl_specdec_adaptive_request_threshold\",\n"
+                    "                    specdec_batch_gate_threshold,\n"
+                    "                )\n"
+                    "                specdec_batch_gate_token_threshold = getattr(\n"
+                    "                    self,\n"
+                    "                    \"_nrl_specdec_adaptive_token_threshold\",\n"
+                    "                    specdec_batch_gate_token_threshold,\n"
+                    "                )\n"
+                )
+
+                adapt_anchor = "            specdec_batch_gate_log_interval = getattr(\n"
+                adapt_block = (
+                    "            if specdec_adaptive_gate_mode not in {\"\", \"0\", \"off\", \"false\", \"no\"}:\n"
+                    "                adaptive_window_checked = getattr(\n"
+                    "                    self, \"_nrl_specdec_adaptive_window_checked\", 0\n"
+                    "                ) + 1\n"
+                    "                adaptive_window_enabled = getattr(\n"
+                    "                    self, \"_nrl_specdec_adaptive_window_enabled\", 0\n"
+                    "                ) + (0 if specdec_batch_gate_disabled else 1)\n"
+                    "                adaptive_interval = getattr(\n"
+                    "                    self, \"_nrl_specdec_adaptive_interval\", 512\n"
+                    "                )\n"
+                    "                if adaptive_window_checked >= adaptive_interval:\n"
+                    "                    adaptive_enabled_ratio = adaptive_window_enabled / max(\n"
+                    "                        1, adaptive_window_checked\n"
+                    "                    )\n"
+                    "                    adaptive_target = getattr(\n"
+                    "                        self, \"_nrl_specdec_adaptive_target_enabled_ratio\", 0.35\n"
+                    "                    )\n"
+                    "                    adaptive_hysteresis = getattr(\n"
+                    "                        self, \"_nrl_specdec_adaptive_hysteresis\", 0.05\n"
+                    "                    )\n"
+                    "                    request_threshold = getattr(\n"
+                    "                        self, \"_nrl_specdec_adaptive_request_threshold\", 0\n"
+                    "                    )\n"
+                    "                    token_threshold = getattr(\n"
+                    "                        self, \"_nrl_specdec_adaptive_token_threshold\", 0\n"
+                    "                    )\n"
+                    "                    if adaptive_enabled_ratio > adaptive_target + adaptive_hysteresis:\n"
+                    "                        if request_threshold > 0:\n"
+                    "                            request_threshold = max(\n"
+                    "                                getattr(self, \"_nrl_specdec_adaptive_min_request_threshold\", 1),\n"
+                    "                                request_threshold\n"
+                    "                                - getattr(self, \"_nrl_specdec_adaptive_request_step\", 4),\n"
+                    "                            )\n"
+                    "                        if token_threshold > 0:\n"
+                    "                            token_threshold = max(\n"
+                    "                                getattr(self, \"_nrl_specdec_adaptive_min_token_threshold\", 256),\n"
+                    "                                token_threshold\n"
+                    "                                - getattr(self, \"_nrl_specdec_adaptive_token_step\", 256),\n"
+                    "                            )\n"
+                    "                    elif adaptive_enabled_ratio < adaptive_target - adaptive_hysteresis:\n"
+                    "                        if request_threshold > 0:\n"
+                    "                            request_threshold = min(\n"
+                    "                                getattr(self, \"_nrl_specdec_adaptive_max_request_threshold\", 128),\n"
+                    "                                request_threshold\n"
+                    "                                + getattr(self, \"_nrl_specdec_adaptive_request_step\", 4),\n"
+                    "                            )\n"
+                    "                        if token_threshold > 0:\n"
+                    "                            token_threshold = min(\n"
+                    "                                getattr(self, \"_nrl_specdec_adaptive_max_token_threshold\", 8192),\n"
+                    "                                token_threshold\n"
+                    "                                + getattr(self, \"_nrl_specdec_adaptive_token_step\", 256),\n"
+                    "                            )\n"
+                    "                    self._nrl_specdec_adaptive_request_threshold = request_threshold\n"
+                    "                    self._nrl_specdec_adaptive_token_threshold = token_threshold\n"
+                    "                    self._nrl_specdec_adaptive_last_enabled_ratio = adaptive_enabled_ratio\n"
+                    "                    self._nrl_specdec_adaptive_window_checked = 0\n"
+                    "                    self._nrl_specdec_adaptive_window_enabled = 0\n"
+                    "                    try:\n"
+                    "                        logger.info(\n"
+                    "                            \"NRL SpecDec adaptive gate: mode=%s enabled_ratio=%.4f target=%.4f request_threshold=%s token_threshold=%s\",\n"
+                    "                            specdec_adaptive_gate_mode,\n"
+                    "                            adaptive_enabled_ratio,\n"
+                    "                            adaptive_target,\n"
+                    "                            request_threshold,\n"
+                    "                            token_threshold,\n"
+                    "                        )\n"
+                    "                    except Exception:\n"
+                    "                        pass\n"
+                    "                else:\n"
+                    "                    self._nrl_specdec_adaptive_window_checked = adaptive_window_checked\n"
+                    "                    self._nrl_specdec_adaptive_window_enabled = adaptive_window_enabled\n"
+                )
+
+                patched = content.replace(init_anchor, init_block + init_anchor)
+                patched = patched.replace(adapt_anchor, adapt_block + adapt_anchor)
+                if patched == content:
+                    raise RuntimeError(
+                        "Could not install adaptive SpecDec gate in "
+                        f"{gpu_model_runner}; expected V4 gate anchors were missing."
+                    )
+                if "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1" not in patched:
+                    raise RuntimeError(
+                        "Adaptive SpecDec gate patch did not leave the required marker "
+                        f"in {gpu_model_runner}."
+                    )
+                with open(gpu_model_runner, "w") as f:
+                    f.write(patched)
+                applied += 1
+
+            scheduler = _get_vllm_file("v1/core/sched/scheduler.py")
+            with open(scheduler) as f:
+                scheduler_content = f.read()
+
+            if "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1" not in scheduler_content:
+                if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" not in scheduler_content:
+                    raise RuntimeError(
+                        "Adaptive SpecDec scheduler gate requires the V5 "
+                        f"lookahead gate to be installed first in {scheduler}."
+                    )
+
+                helper_anchor = (
+                    "        else:\n"
+                    "            nrl_specdec_scheduler_gate_threshold = 0\n"
+                    "            nrl_specdec_scheduler_gate_token_threshold = 0\n"
+                )
+                helper_block = (
+                    "        # NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1\n"
+                    "        def _nrl_specdec_scheduler_lookahead_tokens(num_requests, num_tokens):\n"
+                    "            request_threshold = nrl_specdec_scheduler_gate_threshold\n"
+                    "            token_threshold = nrl_specdec_scheduler_gate_token_threshold\n"
+                    "            adaptive_mode = getattr(\n"
+                    "                self, \"_nrl_specdec_scheduler_adaptive_mode\", None\n"
+                    "            )\n"
+                    "            if adaptive_mode is None:\n"
+                    "                _nrl_os = __import__(\"os\")\n"
+                    "                adaptive_mode = _nrl_os.environ.get(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_GATE_MODE\", \"off\"\n"
+                    "                ).lower()\n"
+                    "                self._nrl_specdec_scheduler_adaptive_mode = adaptive_mode\n"
+                    "                def _nrl_adaptive_int(name, default):\n"
+                    "                    value = _nrl_os.environ.get(name, \"\")\n"
+                    "                    return int(value) if value.isdigit() else default\n"
+                    "                def _nrl_adaptive_float(name, default):\n"
+                    "                    try:\n"
+                    "                        return float(_nrl_os.environ.get(name, str(default)))\n"
+                    "                    except ValueError:\n"
+                    "                        return default\n"
+                    "                self._nrl_specdec_scheduler_adaptive_target_enabled_ratio = _nrl_adaptive_float(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO\", 0.35\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_hysteresis = _nrl_adaptive_float(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_HYSTERESIS\", 0.05\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_interval = max(\n"
+                    "                    1,\n"
+                    "                    _nrl_adaptive_int(\"VLLM_SPECDEC_ADAPTIVE_ADJUST_INTERVAL\", 512),\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_request_step = max(\n"
+                    "                    1,\n"
+                    "                    _nrl_adaptive_int(\"VLLM_SPECDEC_ADAPTIVE_REQUEST_STEP\", 4),\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_token_step = max(\n"
+                    "                    1,\n"
+                    "                    _nrl_adaptive_int(\"VLLM_SPECDEC_ADAPTIVE_TOKEN_STEP\", 256),\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_min_request_threshold = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD\", 1\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_max_request_threshold = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD\", 128\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_min_token_threshold = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD\", 256\n"
+                    "                )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_max_token_threshold = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD\", 8192\n"
+                    "                )\n"
+                    "                initial_request = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD\",\n"
+                    "                    request_threshold,\n"
+                    "                )\n"
+                    "                initial_token = _nrl_adaptive_int(\n"
+                    "                    \"VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD\",\n"
+                    "                    token_threshold if token_threshold > 0 else 2048,\n"
+                    "                )\n"
+                    "                if initial_request > 0:\n"
+                    "                    initial_request = min(\n"
+                    "                        max(\n"
+                    "                            initial_request,\n"
+                    "                            self._nrl_specdec_scheduler_adaptive_min_request_threshold,\n"
+                    "                        ),\n"
+                    "                        self._nrl_specdec_scheduler_adaptive_max_request_threshold,\n"
+                    "                    )\n"
+                    "                if initial_token > 0:\n"
+                    "                    initial_token = min(\n"
+                    "                        max(\n"
+                    "                            initial_token,\n"
+                    "                            self._nrl_specdec_scheduler_adaptive_min_token_threshold,\n"
+                    "                        ),\n"
+                    "                        self._nrl_specdec_scheduler_adaptive_max_token_threshold,\n"
+                    "                    )\n"
+                    "                self._nrl_specdec_scheduler_adaptive_request_threshold = initial_request\n"
+                    "                self._nrl_specdec_scheduler_adaptive_token_threshold = initial_token\n"
+                    "                self._nrl_specdec_scheduler_adaptive_window_checked = 0\n"
+                    "                self._nrl_specdec_scheduler_adaptive_window_enabled = 0\n"
+                    "            if adaptive_mode not in {\"\", \"0\", \"off\", \"false\", \"no\"}:\n"
+                    "                request_threshold = getattr(\n"
+                    "                    self,\n"
+                    "                    \"_nrl_specdec_scheduler_adaptive_request_threshold\",\n"
+                    "                    request_threshold,\n"
+                    "                )\n"
+                    "                token_threshold = getattr(\n"
+                    "                    self,\n"
+                    "                    \"_nrl_specdec_scheduler_adaptive_token_threshold\",\n"
+                    "                    token_threshold,\n"
+                    "                )\n"
+                    "            disabled = (\n"
+                    "                (request_threshold > 0 and num_requests > request_threshold)\n"
+                    "                or (token_threshold > 0 and num_tokens > token_threshold)\n"
+                    "            )\n"
+                    "            self._nrl_specdec_scheduler_gate_checked_count = getattr(\n"
+                    "                self, \"_nrl_specdec_scheduler_gate_checked_count\", 0\n"
+                    "            ) + 1\n"
+                    "            if disabled:\n"
+                    "                self._nrl_specdec_scheduler_gate_disabled_count = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_disabled_count\", 0\n"
+                    "                ) + 1\n"
+                    "            else:\n"
+                    "                self._nrl_specdec_scheduler_gate_enabled_count = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_enabled_count\", 0\n"
+                    "                ) + 1\n"
+                    "            if adaptive_mode not in {\"\", \"0\", \"off\", \"false\", \"no\"}:\n"
+                    "                adaptive_window_checked = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_adaptive_window_checked\", 0\n"
+                    "                ) + 1\n"
+                    "                adaptive_window_enabled = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_adaptive_window_enabled\", 0\n"
+                    "                ) + (0 if disabled else 1)\n"
+                    "                adaptive_interval = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_adaptive_interval\", 512\n"
+                    "                )\n"
+                    "                if adaptive_window_checked >= adaptive_interval:\n"
+                    "                    adaptive_enabled_ratio = adaptive_window_enabled / max(\n"
+                    "                        1, adaptive_window_checked\n"
+                    "                    )\n"
+                    "                    adaptive_target = getattr(\n"
+                    "                        self,\n"
+                    "                        \"_nrl_specdec_scheduler_adaptive_target_enabled_ratio\",\n"
+                    "                        0.35,\n"
+                    "                    )\n"
+                    "                    adaptive_hysteresis = getattr(\n"
+                    "                        self,\n"
+                    "                        \"_nrl_specdec_scheduler_adaptive_hysteresis\",\n"
+                    "                        0.05,\n"
+                    "                    )\n"
+                    "                    if adaptive_enabled_ratio > adaptive_target + adaptive_hysteresis:\n"
+                    "                        if request_threshold > 0:\n"
+                    "                            request_threshold = max(\n"
+                    "                                getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_min_request_threshold\",\n"
+                    "                                    1,\n"
+                    "                                ),\n"
+                    "                                request_threshold\n"
+                    "                                - getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_request_step\",\n"
+                    "                                    4,\n"
+                    "                                ),\n"
+                    "                            )\n"
+                    "                        if token_threshold > 0:\n"
+                    "                            token_threshold = max(\n"
+                    "                                getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_min_token_threshold\",\n"
+                    "                                    256,\n"
+                    "                                ),\n"
+                    "                                token_threshold\n"
+                    "                                - getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_token_step\",\n"
+                    "                                    256,\n"
+                    "                                ),\n"
+                    "                            )\n"
+                    "                    elif adaptive_enabled_ratio < adaptive_target - adaptive_hysteresis:\n"
+                    "                        if request_threshold > 0:\n"
+                    "                            request_threshold = min(\n"
+                    "                                getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_max_request_threshold\",\n"
+                    "                                    128,\n"
+                    "                                ),\n"
+                    "                                request_threshold\n"
+                    "                                + getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_request_step\",\n"
+                    "                                    4,\n"
+                    "                                ),\n"
+                    "                            )\n"
+                    "                        if token_threshold > 0:\n"
+                    "                            token_threshold = min(\n"
+                    "                                getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_max_token_threshold\",\n"
+                    "                                    8192,\n"
+                    "                                ),\n"
+                    "                                token_threshold\n"
+                    "                                + getattr(\n"
+                    "                                    self,\n"
+                    "                                    \"_nrl_specdec_scheduler_adaptive_token_step\",\n"
+                    "                                    256,\n"
+                    "                                ),\n"
+                    "                            )\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_request_threshold = request_threshold\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_token_threshold = token_threshold\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_last_enabled_ratio = adaptive_enabled_ratio\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_window_checked = 0\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_window_enabled = 0\n"
+                    "                    try:\n"
+                    "                        logger.info(\n"
+                    "                            \"NRL SpecDec scheduler adaptive gate: mode=%s enabled_ratio=%.4f target=%.4f request_threshold=%s token_threshold=%s\",\n"
+                    "                            adaptive_mode,\n"
+                    "                            adaptive_enabled_ratio,\n"
+                    "                            adaptive_target,\n"
+                    "                            request_threshold,\n"
+                    "                            token_threshold,\n"
+                    "                        )\n"
+                    "                    except Exception:\n"
+                    "                        pass\n"
+                    "                else:\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_window_checked = adaptive_window_checked\n"
+                    "                    self._nrl_specdec_scheduler_adaptive_window_enabled = adaptive_window_enabled\n"
+                    "            return 0 if disabled else self.num_lookahead_tokens\n"
+                )
+
+                scheduler_content = scheduler_content.replace(
+                    helper_anchor, helper_anchor + helper_block, 1
+                )
+                lookahead_replacements = [
+                    (
+                        "                    num_lookahead_tokens=(\n"
+                        "                        0\n"
+                        "                        if nrl_specdec_scheduler_gate_threshold > 0\n"
+                        "                        and (len(num_scheduled_tokens) + 1)\n"
+                        "                        > nrl_specdec_scheduler_gate_threshold\n"
+                        "                        or nrl_specdec_scheduler_gate_token_threshold > 0\n"
+                        "                        and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
+                        "                        > nrl_specdec_scheduler_gate_token_threshold\n"
+                        "                        else self.num_lookahead_tokens))\n",
+                        "                    num_lookahead_tokens=_nrl_specdec_scheduler_lookahead_tokens(\n"
+                        "                        len(num_scheduled_tokens) + 1,\n"
+                        "                        sum(num_scheduled_tokens.values()) + num_new_tokens,\n"
+                        "                    ))\n",
+                    ),
+                    (
+                        "                        num_lookahead_tokens=(\n"
+                        "                            0\n"
+                        "                            if nrl_specdec_scheduler_gate_threshold > 0\n"
+                        "                            and (len(num_scheduled_tokens) + 1)\n"
+                        "                            > nrl_specdec_scheduler_gate_threshold\n"
+                        "                            or nrl_specdec_scheduler_gate_token_threshold > 0\n"
+                        "                            and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
+                        "                            > nrl_specdec_scheduler_gate_token_threshold\n"
+                        "                            else self.num_lookahead_tokens\n"
+                        "                        ),\n",
+                        "                        num_lookahead_tokens=_nrl_specdec_scheduler_lookahead_tokens(\n"
+                        "                            len(num_scheduled_tokens) + 1,\n"
+                        "                            sum(num_scheduled_tokens.values()) + num_new_tokens,\n"
+                        "                        ),\n",
+                    ),
+                    (
+                        "                effective_lookahead_tokens = (\n"
+                        "                    0\n"
+                        "                    if request.num_computed_tokens == 0\n"
+                        "                    or (\n"
+                        "                        nrl_specdec_scheduler_gate_threshold > 0\n"
+                        "                        and (len(num_scheduled_tokens) + 1)\n"
+                        "                        > nrl_specdec_scheduler_gate_threshold\n"
+                        "                    )\n"
+                        "                    or (\n"
+                        "                        nrl_specdec_scheduler_gate_token_threshold > 0\n"
+                        "                        and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
+                        "                        > nrl_specdec_scheduler_gate_token_threshold\n"
+                        "                    )\n"
+                        "                    else self.num_lookahead_tokens\n"
+                        "                )\n",
+                        "                effective_lookahead_tokens = (\n"
+                        "                    0\n"
+                        "                    if request.num_computed_tokens == 0\n"
+                        "                    else _nrl_specdec_scheduler_lookahead_tokens(\n"
+                        "                        len(num_scheduled_tokens) + 1,\n"
+                        "                        sum(num_scheduled_tokens.values()) + num_new_tokens,\n"
+                        "                    )\n"
+                        "                )\n",
+                    ),
+                    (
+                        "                effective_lookahead_tokens = (\n"
+                        "                    0\n"
+                        "                    if limit_lookahead_tokens\n"
+                        "                    or (\n"
+                        "                        nrl_specdec_scheduler_gate_threshold > 0\n"
+                        "                        and (len(num_scheduled_tokens) + 1)\n"
+                        "                        > nrl_specdec_scheduler_gate_threshold\n"
+                        "                    )\n"
+                        "                    or (\n"
+                        "                        nrl_specdec_scheduler_gate_token_threshold > 0\n"
+                        "                        and sum(num_scheduled_tokens.values()) + num_new_tokens\n"
+                        "                        > nrl_specdec_scheduler_gate_token_threshold\n"
+                        "                    )\n"
+                        "                    else self.num_lookahead_tokens\n"
+                        "                )\n",
+                        "                effective_lookahead_tokens = (\n"
+                        "                    0\n"
+                        "                    if limit_lookahead_tokens\n"
+                        "                    else _nrl_specdec_scheduler_lookahead_tokens(\n"
+                        "                        len(num_scheduled_tokens) + 1,\n"
+                        "                        sum(num_scheduled_tokens.values()) + num_new_tokens,\n"
+                        "                    )\n"
+                        "                )\n",
+                    ),
+                ]
+                replacement_count = 0
+                for old, new in lookahead_replacements:
+                    if old in scheduler_content:
+                        scheduler_content = scheduler_content.replace(old, new)
+                        replacement_count += 1
+                if (
+                    replacement_count == 0
+                    or "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1"
+                    not in scheduler_content
+                    or "_nrl_specdec_scheduler_lookahead_tokens"
+                    not in scheduler_content
+                ):
+                    raise RuntimeError(
+                        "Could not install adaptive SpecDec scheduler gate in "
+                        f"{scheduler}; expected V5 gate anchors were missing."
+                    )
+                with open(scheduler, "w") as f:
+                    f.write(scheduler_content)
+                applied += 1
+
+            return applied
+
         spec_decode_requested = isinstance(
             self.cfg.get("vllm_kwargs", {}).get("speculative_config"), dict
         )
@@ -1291,6 +1840,16 @@ class BaseVllmGenerationWorker:
         specdec_batch_gate_token_threshold = os.environ.get(
             "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD", "0"
         )
+        specdec_adaptive_gate_mode = os.environ.get(
+            "VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off"
+        ).lower()
+        specdec_adaptive_gate_requested = specdec_adaptive_gate_mode not in {
+            "",
+            "0",
+            "off",
+            "false",
+            "no",
+        }
         enable_runtime_specdec_gate_patch = os.environ.get(
             "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH", "0"
         ).lower() in {"1", "true", "yes", "y", "on"}
@@ -1303,11 +1862,13 @@ class BaseVllmGenerationWorker:
                 specdec_batch_gate_token_threshold.isdigit()
                 and int(specdec_batch_gate_token_threshold) > 0
             )
+            or specdec_adaptive_gate_requested
         )
         if specdec_gate_threshold_requested and not enable_runtime_specdec_gate_patch:
             raise RuntimeError(
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD or "
-                "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD is set, but "
+                "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD or "
+                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE is set, but "
                 "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH is not true. "
                 "This would run with global SpecDec instead of the intended "
                 "runtime scheduler gate."
@@ -1347,8 +1908,14 @@ class BaseVllmGenerationWorker:
                 and specdec_gate_threshold_requested
             ):
                 batch_gate_patch_status = _patch_vllm_batch_gated_speculative_decoding()
+                adaptive_gate_patch_status = (
+                    _patch_vllm_adaptive_specdec_gate()
+                    if specdec_adaptive_gate_requested
+                    else 0
+                )
             else:
                 batch_gate_patch_status = 0
+                adaptive_gate_patch_status = 0
             fcntl.flock(patch_lock.fileno(), fcntl.LOCK_UN)
 
         if (
@@ -1357,10 +1924,13 @@ class BaseVllmGenerationWorker:
         ):
             logger.info(
                 "vLLM batch-gated speculative decoding patch status: %s "
-                "(threshold=%s active requests, token_threshold=%s scheduled tokens).",
+                "(threshold=%s active requests, token_threshold=%s scheduled tokens, "
+                "adaptive_mode=%s, adaptive_status=%s).",
                 "applied" if batch_gate_patch_status else "already-present",
                 specdec_batch_gate_threshold,
                 specdec_batch_gate_token_threshold,
+                specdec_adaptive_gate_mode,
+                "applied" if adaptive_gate_patch_status else "already-present-or-off",
             )
 
         try:
@@ -1503,7 +2073,8 @@ class BaseVllmGenerationWorker:
                 "num_speculative_tokens=%s, draft_tensor_parallel_size=%s, "
                 "disable_by_batch_size=%s, runtime_scheduler_gate_enabled=%s, "
                 "runtime_scheduler_gate_threshold=%s, "
-                "runtime_scheduler_gate_token_threshold=%s, disable_log_stats=%s, "
+                "runtime_scheduler_gate_token_threshold=%s, "
+                "runtime_scheduler_adaptive_mode=%s, disable_log_stats=%s, "
                 "request_logprobs=%s",
                 speculative_config.get("method"),
                 speculative_config.get("num_speculative_tokens"),
@@ -1512,6 +2083,7 @@ class BaseVllmGenerationWorker:
                 enable_runtime_specdec_gate_patch,
                 specdec_batch_gate_threshold,
                 specdec_batch_gate_token_threshold,
+                specdec_adaptive_gate_mode,
                 llm_kwargs.get("disable_log_stats"),
                 specdec_request_logprobs,
             )

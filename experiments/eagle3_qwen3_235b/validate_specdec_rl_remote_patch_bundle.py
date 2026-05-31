@@ -43,8 +43,14 @@ REQUIRED_FILES: dict[str, list[str]] = {
     "nemo_rl/models/generation/vllm/vllm_worker.py": [
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
         "def _patch_vllm_batch_gated_speculative_decoding()",
+        "def _patch_vllm_adaptive_specdec_gate()",
         "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
+        "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
         "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
+        "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
+        "_nrl_specdec_scheduler_lookahead_tokens",
+        "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
+        "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
         "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
         "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
         "_nrl_specdec_batch_gate_threshold",
@@ -62,6 +68,8 @@ REQUIRED_FILES: dict[str, list[str]] = {
     "nemo_rl/models/generation/vllm/vllm_generation.py": [
         "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS",
         "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH",
+        "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
+        "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
         "spec_decode_totals[\"metrics_available\"] = True",
         "spec_decode_totals[\"metrics_complete\"]",
     ],
