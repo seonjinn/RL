@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:00 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:10 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -350,13 +350,13 @@
       </div>
       <div class="card">
         <div class="label">30B mixed baseline</div>
-        <div class="metric info">4182.73</div>
-        <p class="small">tok/s/GPU mean from 13 completed NeMo-RL generation metrics.</p>
+        <div class="metric info">4190.15</div>
+        <p class="small">tok/s/GPU mean from 15 completed NeMo-RL generation metrics.</p>
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">16.6K / 50K</div>
-        <p class="small">Hidden states: 16617 safetensors files, 1.1T. Still extracting.</p>
+        <div class="metric warn">18.0K / 50K</div>
+        <p class="small">Hidden states: 17961 safetensors files, 1.1T. Still extracting.</p>
       </div>
     </div>
 
@@ -379,7 +379,7 @@
         <tr>
           <td>235B K=1 55% acceptance</td>
           <td><span class="pill warn">vLLM internal</span></td>
-          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>65.53 tok/s/GPU</code>, or <code>0.981x</code> versus the <code>66.78</code> baseline. Step aggregate acceptance rates are <code>0.5521</code>, <code>0.5487</code>, <code>0.5801</code>, <code>0.5497</code>, <code>0.5378</code>.</td>
+          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>64.81 tok/s/GPU</code>, or <code>0.971x</code> versus the <code>66.78</code> baseline. Step aggregate acceptance rates are <code>0.5521</code>, <code>0.5487</code>, <code>0.5801</code>, <code>0.5497</code>, <code>0.5378</code>, <code>0.5453</code>.</td>
         </tr>
         <tr>
           <td>235B baseline 66.78 tok/s/GPU</td>
@@ -442,7 +442,7 @@
         <h3>What Matters</h3>
         <p>30B already proves SpecDec can help NeMo-RL generation, but the best measured speedup is still about 1.22x, not the target 2x. The next useful comparison is the mixed-math 50K checkpoint in the active baseline/K=1/K=2 chain.</p>
         <div class="mono-list">
-          <div>Baseline active: <code>3056050</code>, current mean <code>4182.73 tok/s/GPU</code> from 13 metrics</div>
+          <div>Baseline active: <code>3056050</code>, current mean <code>4190.15 tok/s/GPU</code> from 15 metrics</div>
           <div>K=1 queued: <code>3056051</code></div>
           <div>K=2 queued: <code>3056052</code></div>
         </div>
@@ -464,7 +464,7 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>16617</code> hidden-state files, <code>1.1T</code>.</td>
+          <td>Job <code>3055364</code>, <code>17961</code> hidden-state files, <code>1.1T</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
@@ -496,9 +496,9 @@
         <p class="small">Ray compiled-DAG timeout after 1800s.</p>
       </div>
       <div class="card">
-        <div class="label">K=1 retry</div>
-        <div class="metric warn">65.53</div>
-        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.981x</code> so far.</p>
+          <div class="label">K=1 retry</div>
+        <div class="metric warn">64.81</div>
+        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.971x</code> so far.</p>
       </div>
     </div>
 
@@ -514,8 +514,8 @@
       </thead>
       <tbody>
         <tr><td>Do we have a clean 235B baseline?</td><td>Yes. <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>.</td></tr>
-        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>65.53 tok/s/GPU</code> mean so far, below the <code>66.78</code> baseline.</td></tr>
-        <tr><td>What is K=1 acceptance?</td><td>Step aggregate acceptance is stable around <code>55.4%</code> so far: <code>0.5521</code>, <code>0.5487</code>, <code>0.5801</code>, <code>0.5497</code>, <code>0.5378</code>.</td></tr>
+        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>64.81 tok/s/GPU</code> mean so far, below the <code>66.78</code> baseline.</td></tr>
+        <tr><td>What is K=1 acceptance?</td><td>Step aggregate acceptance is stable around <code>55.2%</code> so far: <code>0.5521</code>, <code>0.5487</code>, <code>0.5801</code>, <code>0.5497</code>, <code>0.5378</code>, <code>0.5453</code>.</td></tr>
         <tr><td>Is the drafter attached?</td><td>Yes. The K=2 log shows <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and vLLM SpecDec metrics.</td></tr>
         <tr><td>Next debug</td><td>Wait for K=1. If it also times out, use a stricter token/request gate or disable compiled DAG only for the failing SpecDec path.</td></tr>
       </tbody>
@@ -524,30 +524,58 @@
 
   <section id="data" class="page">
     <h2>Data & Training Pipeline</h2>
-    <div class="flow">
-      <div class="step">
-        <div class="step-title">1. Prompt pool</div>
-        <p>500K non-OpenMath math prompts: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, DAPO-Math-17k.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="label">Training corpus</div>
+        <div class="metric ok">500K</div>
+        <p class="small">Exact-unique mixed math conversations for Speculators Eagle3 training.</p>
       </div>
-      <div class="step">
-        <div class="step-title">2. Target responses</div>
-        <p>30B: complete. 235B: still generating and not merged.</p>
+      <div class="card">
+        <div class="label">NeMo-RL eval set</div>
+        <div class="metric info">50K</div>
+        <p class="small">OpenMath reasoning conversations used for rollout acceptance and throughput.</p>
       </div>
-      <div class="step">
-        <div class="step-title">3. Speculators format</div>
-        <p>Convert conversations into tokenized Arrow data.</p>
+      <div class="card">
+        <div class="label">Prompt overlap</div>
+        <div class="metric ok">0</div>
+        <p class="small">No normalized prompt overlap between the 500K training file and NeMo-RL eval prompts.</p>
       </div>
-      <div class="step">
-        <div class="step-title">4. Hidden states</div>
-        <p>Current bottleneck. 30B 100K shard is at 16617/50000.</p>
-      </div>
-      <div class="step">
-        <div class="step-title">5. Train + evaluate</div>
-        <p>Train Eagle3 drafter, then measure NeMo-RL acceptance and tok/s/GPU.</p>
+      <div class="card">
+        <div class="label">Leakage caveat</div>
+        <div class="metric warn">lexical</div>
+        <p class="small">Verified exact normalized prompts, not semantic near-duplicates.</p>
       </div>
     </div>
 
-    <h2>Train/Test At A Glance</h2>
+    <div class="banner">
+      <h2>Dataset Contract</h2>
+      <p>The clean Speculators run trains on non-OpenMath mixed math data and evaluates in NeMo-RL on OpenMath. The actual NeMo-RL test file, <code>openmath_reasoning_cot_conversations_50k.jsonl</code>, is used as a denylist before the 500K training file is written, so direct prompt leakage is excluded in the current exact-unique build.</p>
+    </div>
+
+    <div class="flow">
+      <div class="step">
+        <div class="step-title">1. Prompt pool</div>
+        <p>500K non-OpenMath math prompts from NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">2. Target responses</div>
+        <p>30B target responses are complete for the 500K path. 235B responses are still separate and not merged into this training corpus.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">3. Speculators format</div>
+        <p>Convert exact-unique conversations into Speculators JSONL, then tokenized Arrow data.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">4. Hidden states</div>
+        <p>Extract selected target-model hidden states for Eagle3. This is the current storage and runtime bottleneck.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">5. Train + evaluate</div>
+        <p>Train the Eagle3 drafter, then measure NeMo-RL acceptance and generation tok/s/GPU on the OpenMath eval file.</p>
+      </div>
+    </div>
+
+    <h2>Train/Test Split Summary</h2>
     <table>
       <thead>
         <tr><th>Question</th><th>Current Answer</th></tr>
@@ -555,15 +583,15 @@
       <tbody>
         <tr>
           <td>What is the current drafter training data?</td>
-          <td>For the clean 30B path, the training pool is mixed non-OpenMath math. It is built from NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k. Target responses are synthesized with <code>Qwen/Qwen3-30B-A3B</code>, then converted to Speculators Eagle3 training data.</td>
+          <td>For the clean 30B path, the training pool is mixed non-OpenMath math: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k. Target responses are synthesized with <code>Qwen/Qwen3-30B-A3B</code>, then converted to Speculators Eagle3 training data.</td>
         </tr>
         <tr>
           <td>What is the actual NeMo-RL test set?</td>
-          <td>NeMo-RL rollout throughput and acceptance tests use <code>openmath_reasoning_cot_conversations_50k.jsonl</code>: <code>50000</code> rows and <code>44304</code> unique normalized prompts.</td>
+          <td>NeMo-RL rollout throughput and acceptance tests use <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. It contains <code>50000</code> rows and <code>44304</code> unique normalized prompts. This file is the evaluation/test prompt source for the baseline and SpecDec NeMo-RL runs.</td>
         </tr>
         <tr>
           <td>Does the mixed 500K training set overlap the NeMo-RL test set?</td>
-          <td>No prompt-level overlap in the current exact-unique build. The OpenMath NeMo-RL evaluation prompts are loaded as a denylist before writing training rows. The denylist size is <code>44304</code>, and the final merge summary reports <code>skipped_denylist=0</code> with <code>records_written=500000</code>.</td>
+          <td>No exact prompt-level overlap in the current exact-unique build. The OpenMath NeMo-RL evaluation prompts are loaded as a denylist before writing training rows. The denylist size is <code>44304</code>, and the final merge/validation path reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code> for the final training file.</td>
         </tr>
         <tr>
           <td>Which result has an OpenMath caveat?</td>
@@ -572,6 +600,10 @@
         <tr>
           <td>What is not mixed into the 500K clean set?</td>
           <td>The OpenMath NeMo-RL evaluation file is not used as a training source. Public HF Eagle3 checkpoints are also separate evaluation inputs, not part of this Speculators 500K training corpus.</td>
+        </tr>
+        <tr>
+          <td>What is the unit of uniqueness?</td>
+          <td>User prompts are normalized by lowercasing and collapsing whitespace, then used as the uniqueness and denylist key. Assistant responses are target-model generations and are not used to decide train/test overlap.</td>
         </tr>
       </tbody>
     </table>
@@ -604,7 +636,7 @@
           <td>Final exact unique training file</td>
           <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
           <td><code>500000</code> rows</td>
-          <td>Verified by line count and merge summary: <code>primary_unique_written_before_replacements=499941</code>, <code>replacement_rows_written=59</code>, <code>status=pass</code>.</td>
+          <td>Verified by line count and merge summary: <code>primary_unique_written_before_replacements=499941</code>, <code>replacement_rows_written=59</code>, <code>status=pass</code>. This is the source training conversation file.</td>
         </tr>
         <tr>
           <td>Speculators 500K conversion</td>
@@ -616,7 +648,7 @@
           <td>NeMo-RL math evaluation</td>
           <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code></td>
           <td><code>50000</code> rows, <code>44304</code> unique normalized prompts</td>
-          <td>Used as the test/evaluation prompt set for NeMo-RL baseline and SpecDec runs. It is denylisted from the mixed 500K training file.</td>
+          <td>Used as the test/evaluation prompt set for NeMo-RL baseline and SpecDec runs. It is not used for the clean 500K Speculators training corpus and is denylisted from the mixed 500K training file.</td>
         </tr>
       </tbody>
     </table>
@@ -639,7 +671,7 @@
         </tr>
         <tr>
           <td>Training/eval overlap</td>
-          <td><code>skipped_denylist=0</code> and <code>records_written=500000</code> in the final exact-unique merge.</td>
+          <td>Final validation: <code>rows=500000</code>, <code>valid=500000</code>, <code>unique_user_prompts=500000</code>, <code>duplicate_prompts=0</code>, <code>denylisted_prompts=0</code>.</td>
           <td>No normalized OpenMath evaluation prompt appeared in the final mixed training inputs.</td>
         </tr>
         <tr>
@@ -700,8 +732,8 @@
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:33%;--c:var(--amber)"></div></div>
-        <strong>33%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:36%;--c:var(--amber)"></div></div>
+        <strong>36%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
