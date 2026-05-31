@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 10:14 PDT",
+  "updated_at": "2026-05-31 10:17 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -259,7 +259,7 @@
       "job_id": "3058759",
       "num_speculative_tokens": 1,
       "token_gate": 2048,
-      "state": "COMPLETING",
+      "state": "COMPLETED",
       "latest_step_seen": 20,
       "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [
@@ -340,7 +340,7 @@
       "job_id": "3058762",
       "num_speculative_tokens": 1,
       "token_gate": 1024,
-      "state": "RUNNING",
+      "state": "COMPLETED",
       "latest_step_seen": 20,
       "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [

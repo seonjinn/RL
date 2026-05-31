@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 10:14 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 10:17 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -629,7 +629,7 @@
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
-          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code>. As of <code>10:14 PT</code>, both have <code>20/20</code> rollout metrics: token gate <code>2048</code> is <code>5596.71 tok/s/GPU</code> with <code>57.43%</code> acceptance and <code>1.3424x</code> speedup; token gate <code>1024</code> is <code>5578.08 tok/s/GPU</code> with <code>57.44%</code> acceptance and <code>1.3379x</code> speedup. Batch-size-only gate job <code>3059445</code> is running with request gate <code>4</code> and token gate <code>0</code>; batch-size-only gate job <code>3059556</code> is running with request gate <code>32</code> and token gate <code>0</code>. Neither batch-size-only job has a rollout metric yet.</td>
+          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. To test stricter long-tail policies, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted at <code>2026-05-31 08:29 PT</code> and both completed at about <code>10:15 PT</code>. Final results: token gate <code>2048</code> is <code>5596.71 tok/s/GPU</code> with <code>57.43%</code> acceptance and <code>1.3424x</code> speedup; token gate <code>1024</code> is <code>5578.08 tok/s/GPU</code> with <code>57.44%</code> acceptance and <code>1.3379x</code> speedup. Batch-size-only gate job <code>3059445</code> is running with request gate <code>4</code> and token gate <code>0</code>; batch-size-only gate job <code>3059556</code> is running with request gate <code>32</code> and token gate <code>0</code>. Neither batch-size-only job has a rollout metric yet.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
