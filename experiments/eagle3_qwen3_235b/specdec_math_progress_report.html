@@ -381,7 +381,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 13:51 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 14:09 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -676,7 +676,7 @@
         </tr>
         <tr>
           <td>Is there an active 235B SpecDec job now?</td>
-          <td>No active 235B NeMo-RL SpecDec evaluation job is running as of <code>2026-05-31 13:51 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path, with finalizer <code>3061260</code> and training chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> queued.</td>
+          <td>No active 235B NeMo-RL SpecDec evaluation job is running as of <code>2026-05-31 14:09 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path, with finalizer <code>3061260</code> and training chain <code>3061457</code> -> <code>3061458_[0-99]</code> -> <code>3061459</code> queued.</td>
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
@@ -705,7 +705,7 @@
     </div>
     <div class="status-row">
       <strong>30B training</strong>
-      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto continuation job <code>3059620</code> has prepared the offset150K 50K dataset and is dumping hidden states, with <code>41,943/50,000</code> files observed at the 13:51 PT check. The clean 500K result remains the primary reported path.</span>
+      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code> at <code>44,975/50,000</code> hidden-state files, and continuation job <code>3059621</code> is now running. The clean 500K result remains the primary reported path.</span>
       <span class="pill ok">done</span>
     </div>
     <div class="status-row">
@@ -832,6 +832,54 @@
       </table>
     </div>
 
+    <div class="chart-panel">
+      <h3>Acceptance Over Wall Time</h3>
+      <p class="small">Same acceptance data, but the x-axis is cumulative rollout wall time at the end of each step. This helps separate drafter quality drift from slow or noisy steps. The current 30B K=1 drafter does not show a time drift: it starts at <code>57.91%</code>, ends at <code>57.78%</code>, and averages <code>57.51%</code> over about <code>71.8</code> minutes.</p>
+      <div class="chart-wrap">
+        <svg class="chart-svg" viewBox="0 0 720 260" role="img" aria-label="Acceptance-rate chart over cumulative wall-clock minutes">
+          <line x1="60" y1="30" x2="60" y2="210" stroke="var(--line)" />
+          <line x1="60" y1="210" x2="660" y2="210" stroke="var(--line)" />
+          <line x1="60" y1="30" x2="660" y2="30" stroke="var(--line)" stroke-dasharray="4 4" />
+          <line x1="60" y1="90" x2="660" y2="90" stroke="var(--line)" stroke-dasharray="4 4" />
+          <line x1="60" y1="150" x2="660" y2="150" stroke="var(--line)" stroke-dasharray="4 4" />
+          <text x="20" y="34" fill="var(--muted)" font-size="12">60%</text>
+          <text x="20" y="94" fill="var(--muted)" font-size="12">50%</text>
+          <text x="20" y="154" fill="var(--muted)" font-size="12">40%</text>
+          <text x="20" y="214" fill="var(--muted)" font-size="12">30%</text>
+          <text x="54" y="232" fill="var(--muted)" font-size="12">0m</text>
+          <text x="174" y="232" fill="var(--muted)" font-size="12">15m</text>
+          <text x="294" y="232" fill="var(--muted)" font-size="12">30m</text>
+          <text x="414" y="232" fill="var(--muted)" font-size="12">45m</text>
+          <text x="534" y="232" fill="var(--muted)" font-size="12">60m</text>
+          <text x="646" y="232" fill="var(--muted)" font-size="12">75m</text>
+          <polyline points="93.9,42.5 122.8,47.4 151.9,35.2 179.4,56.2 207.6,38.9 234.9,47.5 264.3,43.4 293.8,50.2 321.3,50.8 349.5,40.6 377.4,43.9 406.5,38.2 435.6,43.3 465.2,41.2 492.9,43.6 521.0,44.6 549.7,41.3 577.1,60.5 606.4,46.1 634.2,43.3" fill="none" stroke="var(--green)" stroke-width="3" />
+          <polyline points="95.0,135.1 124.2,140.9 154.3,127.9 182.4,149.1 211.0,132.1 238.7,139.0 269.5,135.6 301.3,143.1 329.9,141.9 358.5,133.4 388.0,136.9 417.6,129.5 448.3,135.6 478.9,133.0 507.6,136.4 536.6,137.0 566.4,132.5 595.5,152.9 625.8,139.3 654.5,136.0" fill="none" stroke="var(--amber)" stroke-width="2.5" />
+          <polyline points="94.1,197.3 123.2,201.7 153.1,190.7 181.1,209.6 209.9,194.3 237.6,200.0 268.4,197.0 299.3,203.6 327.9,202.6 356.3,194.9 385.4,198.1 415.0,192.2 445.8,197.5 476.4,195.5 505.0,198.1 533.4,199.1 563.3,195.1 592.1,212.3 622.1,201.1 650.6,198.0" fill="none" stroke="var(--red)" stroke-width="2.5" />
+          <polyline points="93.7,42.8 122.8,47.6 151.7,35.5 178.8,56.2 207.8,39.7 234.9,48.1 264.5,44.3 294.2,50.7" fill="none" stroke="var(--blue)" stroke-width="3.5" stroke-dasharray="7 4" />
+          <polyline points="96.2,89.4 127.2,66.1 158.9,82.6 189.3,124.1 220.0,73.9 250.0,26.3 281.8,101.2 314.4,57.2" fill="none" stroke="#8b5cf6" stroke-width="3.5" stroke-dasharray="3 5" />
+        </svg>
+      </div>
+      <div class="chart-legend">
+        <span class="legend-line" style="--legend-color:var(--green)">K=1 500K, 71.8 minutes, 57.91% -> 57.78%</span>
+        <span class="legend-line" style="--legend-color:var(--amber)">K=2 500K, 74.3 minutes, 42.49% -> 42.33%</span>
+        <span class="legend-line" style="--legend-color:var(--red)">K=3 500K, 73.8 minutes, 32.11% -> 32.00%</span>
+        <span class="legend-line" style="--legend-color:var(--blue)">K=1 token gate 2048, 29.3 minutes, 57.87% -> 56.55%</span>
+        <span class="legend-line" style="--legend-color:#8b5cf6">K=1 request gate 32, 31.8 minutes, 50.10% -> 55.46%</span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Elapsed</th><th>First</th><th>Latest</th><th>Mean</th><th>Readout</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>K=1 500K</td><td>71.8 min</td><td>57.91%</td><td>57.78%</td><td>57.51%</td><td>Stable; no visible acceptance decay across the 20-step run.</td></tr>
+          <tr><td>K=2 500K</td><td>74.3 min</td><td>42.49%</td><td>42.33%</td><td>42.11%</td><td>Stable but lower; larger draft depth reduces accepted-token fraction.</td></tr>
+          <tr><td>K=3 500K</td><td>73.8 min</td><td>32.11%</td><td>32.00%</td><td>31.85%</td><td>Stable but too low for this workload.</td></tr>
+          <tr><td>K=1 token gate 2048</td><td>29.3 min</td><td>57.87%</td><td>56.55%</td><td>57.40%</td><td>Tracks the full K=1 run while giving the best observed NeMo-RL speedup.</td></tr>
+          <tr><td>K=1 request gate 32</td><td>31.8 min</td><td>50.10%</td><td>55.46%</td><td>52.07%</td><td>Noisier; request-count-only gating disables most proposal checks.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
     <h2>30B Status Table</h2>
     <table>
       <thead>
@@ -847,7 +895,7 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto continuation job <code>3059620</code> is currently running hidden-state dump for the next 50K tranche, with <code>41,943/50,000</code> files observed; continuation job <code>3059621</code> is pending on dependency.</td>
+          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code> with <code>44,975/50,000</code> hidden-state files observed; continuation job <code>3059621</code> started and is running the remaining tranche.</td>
           <td>Use only as secondary learning-curve evidence. Main 500K path supersedes this smaller continuation for final evaluation.</td>
         </tr>
         <tr>
