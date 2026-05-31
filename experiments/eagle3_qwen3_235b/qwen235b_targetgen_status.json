@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 14:15 PDT",
+  "updated_at": "2026-05-31 14:19 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -141,6 +141,28 @@
       },
       "state_at_submit_check": "PENDING with Dependency",
       "note": "The first individual-shard submission hit Slurm circular dependency behavior around large fanout. The accepted chain uses a job array and a ray.sub copy with the singleton dependency removed."
+    },
+    "startup_retry_chunks_020_021_034_041": {
+      "failed_job_ids": [
+        "3060981",
+        "3060982",
+        "3060995",
+        "3061002"
+      ],
+      "retry_job_ids": [
+        "3061687",
+        "3061685",
+        "3061684",
+        "3061686"
+      ],
+      "chunks": [
+        "020",
+        "021",
+        "034",
+        "041"
+      ],
+      "state_at_retry_check": "RUNNING",
+      "note": "The first w1 continuation attempts failed within 3-4 minutes due to enroot startup failures while the chunks were still short. Retry jobs were submitted without dependency, and finalizer job 3061260 was updated to wait on 92 active targetgen-resume jobs including these four retries."
     }
   },
   "expected_after_current_wave": {
@@ -150,14 +172,14 @@
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
-    "active_targetgen_jobs_observed": 88,
+    "active_targetgen_jobs_observed": 92,
     "complete_chunk_files_observed_ge5000_rows": 6,
     "short_nonzero_chunk_files_observed": 94,
-    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest direct line count is 295968/500000 rows. At the 14:15 PDT queue check, target generation still shows 86 running and 2 pending qwen3_235b-targetgen-resume jobs. Finalizer job 3061260 is queued afterany on the target-generation jobs, and the Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 is queued after the finalizer succeeds.",
+    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest direct line count is 295968/500000 rows. At the 14:19 PDT queue check, target generation shows 90 running and 2 pending qwen3_235b-targetgen-resume jobs after retrying failed chunks 020, 021, 034, and 041. Finalizer job 3061260 was updated to wait on all 92 active target-generation jobs, and the Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 remains queued after the finalizer succeeds.",
     "min_nonzero_rows_observed": 2243,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 2,
-    "running_targetgen_jobs_observed": 86,
+    "running_targetgen_jobs_observed": 90,
     "completing_targetgen_jobs_observed": 0
   },
   "clean_split_status": {
