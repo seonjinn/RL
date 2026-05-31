@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:08 PDT",
+  "updated_at": "2026-05-31 08:14 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,87 +10,141 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 4,
-      "completed_generation_metrics": 3,
+      "latest_step_seen": 6,
+      "completed_generation_metrics": 5,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
-        5975.9
+        5975.9,
+        5568.03,
+        5687.63
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5670.37,
-      "speedup_vs_baseline_mean_so_far": 1.3601,
+      "generated_tokens_sec_gpu_mean_so_far": 5653.35,
+      "speedup_vs_baseline_mean_so_far": 1.356,
       "acceptance_rate_values": [
         0.5791,
         0.571,
-        0.5914
+        0.5914,
+        0.5563,
+        0.5851
       ],
-      "acceptance_rate_mean_so_far": 0.5805,
-      "acceptance_rate_latest_summary": 0.5914,
+      "acceptance_rate_mean_so_far": 0.5766,
+      "acceptance_rate_latest_summary": 0.5851,
       "total_step_seconds": [
         254.2,
         216.66,
-        218.56
+        218.56,
+        206.36,
+        210.97
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 4,
-      "completed_generation_metrics": 3,
+      "latest_step_seen": 6,
+      "completed_generation_metrics": 5,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
-        5245.61
+        5245.61,
+        5093.95,
+        5293.27
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5128.45,
-      "speedup_vs_baseline_mean_so_far": 1.2301,
+      "generated_tokens_sec_gpu_mean_so_far": 5154.51,
+      "speedup_vs_baseline_mean_so_far": 1.2363,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
-        0.4369
+        0.4369,
+        0.4015,
+        0.4299
       ],
-      "acceptance_rate_mean_so_far": 0.4257,
-      "acceptance_rate_latest_summary": 0.4369,
+      "acceptance_rate_mean_so_far": 0.4217,
+      "acceptance_rate_latest_summary": 0.4299,
       "per_position_acceptance_latest_summary": [
-        0.5605,
-        0.2894
+        0.5654,
+        0.2943
       ],
       "total_step_seconds": [
         262.51,
         219.25,
-        225.44
+        225.44,
+        210.96,
+        214.64
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 4,
-      "completed_generation_metrics": 3,
+      "latest_step_seen": 6,
+      "completed_generation_metrics": 5,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
-        5209.79
+        5209.79,
+        5097.79,
+        5211.14
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4987.73,
-      "speedup_vs_baseline_mean_so_far": 1.1963,
+      "generated_tokens_sec_gpu_mean_so_far": 5054.43,
+      "speedup_vs_baseline_mean_so_far": 1.2123,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
-        0.3322
+        0.3322,
+        0.3007,
+        0.3262
       ],
-      "acceptance_rate_mean_so_far": 0.3224,
-      "acceptance_rate_latest_summary": 0.3322,
+      "acceptance_rate_mean_so_far": 0.3188,
+      "acceptance_rate_latest_summary": 0.3262,
       "per_position_acceptance_latest_summary": [
-        0.5493,
-        0.2774,
-        0.1364
+        0.5555,
+        0.2833,
+        0.1397
       ],
       "total_step_seconds": [
         255.95,
         218.42,
-        223.77
+        223.77,
+        209.8,
+        216.27
       ]
     }
   ],
+  "dataset_contract": {
+    "clean_run": "Qwen3-30B-A3B Speculators Eagle3 500K",
+    "training_data": {
+      "rows": 500000,
+      "type": "exact-unique non-OpenMath math conversations",
+      "target_model": "Qwen/Qwen3-30B-A3B",
+      "target_responses_per_prompt": 1,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "n": 1
+      },
+      "source_mix": {
+        "AI-MO/NuminaMath-1.5": 300000,
+        "AI-MO/NuminaMath-CoT": 100000,
+        "open-thoughts/OpenThoughts-114k": 60000,
+        "PALM-Lab/math-deepscaler": 25000,
+        "BytedTsinghua-SIA/DAPO-Math-17k": 15000
+      }
+    },
+    "nemo_rl_test_data": {
+      "file": "openmath_reasoning_cot_conversations_50k.jsonl",
+      "rows": 50000,
+      "unique_normalized_prompts": 44304,
+      "used_for": "baseline throughput, SpecDec throughput, and acceptance"
+    },
+    "overlap_check": {
+      "method": "lowercase and whitespace-normalized prompt denylist",
+      "denylist_prompt_count": 44304,
+      "final_training_rows": 500000,
+      "duplicate_prompts": 0,
+      "denylisted_prompts": 0,
+      "direct_prompt_overlap": 0,
+      "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
+    }
+  },
   "caveat": "This is not the final result. Use full 20-step means after jobs 3058167, 3058168, and 3058169 complete."
 }
