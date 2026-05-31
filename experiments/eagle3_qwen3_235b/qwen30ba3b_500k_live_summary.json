@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 10:10 PDT",
+  "updated_at": "2026-05-31 10:14 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -259,9 +259,9 @@
       "job_id": "3058759",
       "num_speculative_tokens": 1,
       "token_gate": 2048,
-      "state": "RUNNING",
-      "latest_step_seen": 18,
-      "completed_generation_metrics": 18,
+      "state": "COMPLETING",
+      "latest_step_seen": 20,
+      "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [
         5698.85,
         5286.58,
@@ -280,10 +280,12 @@
         5439.41,
         5348.13,
         5375.17,
-        5320.4
+        5320.4,
+        5709.55,
+        5670.53
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5586.34,
-      "speedup_vs_baseline_mean_so_far": 1.3399,
+      "generated_tokens_sec_gpu_mean_so_far": 5596.71,
+      "speedup_vs_baseline_mean_so_far": 1.3424,
       "acceptance_rate_values": [
         0.5787,
         0.57,
@@ -302,10 +304,12 @@
         0.5755,
         0.5752,
         0.5806,
-        0.5485
+        0.5485,
+        0.5714,
+        0.5771
       ],
-      "acceptance_rate_mean_so_far": 0.5744,
-      "acceptance_rate_latest_summary": 0.5485,
+      "acceptance_rate_mean_so_far": 0.5743,
+      "acceptance_rate_latest_summary": 0.5771,
       "total_step_seconds": [
         251.79,
         213.61,
@@ -324,18 +328,21 @@
         205.47,
         205.18,
         209.93,
-        204.27
+        204.27,
+        217.61,
+        207.14
       ],
-      "total_step_seconds_mean_so_far": 212.21,
-      "note": "Preliminary long-tail gate result; only 18 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 212.22,
+      "final_20step_complete": true,
+      "note": "Token-gate 2048 K=1 follow-up has 20 rollout metrics."
     },
     {
       "job_id": "3058762",
       "num_speculative_tokens": 1,
       "token_gate": 1024,
       "state": "RUNNING",
-      "latest_step_seen": 18,
-      "completed_generation_metrics": 18,
+      "latest_step_seen": 20,
+      "completed_generation_metrics": 20,
       "generated_tokens_sec_gpu_values": [
         5712.32,
         5283.75,
@@ -354,10 +361,12 @@
         5399.23,
         5315.0,
         5329.49,
-        5319.83
+        5319.83,
+        5673.56,
+        5575.21
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5572.94,
-      "speedup_vs_baseline_mean_so_far": 1.3367,
+      "generated_tokens_sec_gpu_mean_so_far": 5578.08,
+      "speedup_vs_baseline_mean_so_far": 1.3379,
       "acceptance_rate_values": [
         0.5787,
         0.5708,
@@ -376,10 +385,12 @@
         0.5758,
         0.5754,
         0.5809,
-        0.548
+        0.548,
+        0.5714,
+        0.5778
       ],
       "acceptance_rate_mean_so_far": 0.5744,
-      "acceptance_rate_latest_summary": 0.548,
+      "acceptance_rate_latest_summary": 0.5778,
       "total_step_seconds": [
         254.89,
         215.85,
@@ -398,10 +409,13 @@
         210.86,
         211.53,
         215.49,
-        209.82
+        209.82,
+        218.6,
+        207.79
       ],
-      "total_step_seconds_mean_so_far": 216.87,
-      "note": "Preliminary long-tail gate result; only 18 rollout metrics so far."
+      "total_step_seconds_mean_so_far": 216.5,
+      "final_20step_complete": true,
+      "note": "Token-gate 1024 K=1 follow-up has 20 rollout metrics."
     },
     {
       "job_id": "3059445",
@@ -486,5 +500,5 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs now have final 20-step means. Token-gate 2048/1024 long-tail follow-ups are still preliminary with 18 metrics each. Batch-size-only request-gate 4 and 32 runs are active but have no rollout metric yet."
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups now have final 20-step means. Batch-size-only request-gate 4 and 32 runs are active but have no rollout metric yet."
 }
