@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:44 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:48 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -355,14 +355,14 @@
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">24.2K / 50K</div>
-        <p class="small">Hidden states: 24163 safetensors files. Still extracting.</p>
+        <div class="metric warn">25.3K / 50K</div>
+        <p class="small">Hidden states: 25326 safetensors files. Still extracting.</p>
       </div>
     </div>
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, 30B K=1 SpecDec has started, and mixed 100K plus 500K hidden-state extraction is progressing. 235B baseline is stable, but SpecDec K=1 is only near baseline so far and K=2 failed from a compiled-DAG timeout when the first generation step scheduled 64 requests and 2080 tokens.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, 30B K=1 SpecDec has started, and mixed 100K plus 500K hidden-state extraction is progressing. 235B baseline is stable, but SpecDec K=1 is only at baseline so far and the first K=2 attempt failed from a compiled-DAG timeout when the first generation step scheduled 64 requests and 2080 tokens. A stricter K=2 long-tail gate retry is running.</p>
     </div>
 
     <h2>Data Guardrails</h2>
@@ -373,8 +373,8 @@
       <tbody>
         <tr>
           <td>Drafter training data</td>
-          <td><code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k.</td>
-          <td>This is the clean Speculators Eagle3 training corpus, not the OpenMath NeMo-RL eval file.</td>
+          <td><code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>.</td>
+          <td>This is the clean Speculators Eagle3 training corpus. OpenMath is not used to train this 500K drafter.</td>
         </tr>
         <tr>
           <td>Actual NeMo-RL test set</td>
@@ -385,6 +385,11 @@
           <td>Train/test overlap</td>
           <td><code>0</code> normalized prompt overlaps. The OpenMath eval prompts are denylisted before writing the final 500K training file.</td>
           <td>This prevents direct prompt leakage. It does not claim semantic near-duplicates are impossible across math datasets.</td>
+        </tr>
+        <tr>
+          <td>Clean claim boundary</td>
+          <td>Report clean results as <strong>mixed non-OpenMath training</strong> evaluated on <strong>OpenMath NeMo-RL rollout</strong>.</td>
+          <td>The older OpenMath-trained 30B result is kept as an integration proof, not the leakage-clean final comparison.</td>
         </tr>
       </tbody>
     </table>
@@ -403,7 +408,7 @@
         <tr>
           <td>235B K=1 55% acceptance</td>
           <td><span class="pill warn">vLLM internal</span></td>
-          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>66.21 tok/s/GPU</code>, or <code>0.992x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>53.6%</code> across <code>357</code> parsed acceptance metrics.</td>
+          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>66.72 tok/s/GPU</code>, or <code>0.999x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>53.7%</code> across <code>393</code> parsed acceptance metrics.</td>
         </tr>
         <tr>
           <td>235B baseline 66.78 tok/s/GPU</td>
@@ -441,7 +446,7 @@
         </tr>
         <tr>
           <td>Strict-gate follow-up jobs</td>
-          <td>30B K=2 strict gate job <code>3057073</code> is running without dependency. 235B K=2 strict gate job <code>3057084</code> failed during Ray/enroot startup before rollout, so retry <code>3057118</code> was submitted from the correct <code>nemo-rl</code> workdir and is pending.</td>
+          <td>30B K=2 strict gate job <code>3057073</code> is running without dependency. 235B K=2 strict gate job <code>3057084</code> failed during Ray/enroot startup before rollout, so retry <code>3057118</code> was submitted from the correct <code>nemo-rl</code> workdir and is running.</td>
         </tr>
       </tbody>
     </table>
@@ -459,12 +464,12 @@
     </div>
     <div class="status-row">
       <strong>235B NeMo-RL</strong>
-      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> is running with 10 completed generation metrics and remains slightly below baseline. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> is pending on <code>coreai_dlalgo_llm</code>.</span>
+      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> is running with 11 completed generation metrics and is effectively tied with baseline. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> is running on <code>coreai_dlalgo_llm</code>.</span>
       <span class="pill warn">debugging</span>
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. The intended r2 hidden-state shards <code>3056798-3056817</code> are running; <code>74336</code> files have appeared so far. A duplicate older shard set <code>3056722-3056741</code> was canceled after confirming it used the same output directory and ranges.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. The intended r2 hidden-state shards <code>3056798-3056817</code> are running; <code>97399</code> files have appeared so far. A duplicate older shard set <code>3056722-3056741</code> was canceled after confirming it used the same output directory and ranges.</span>
       <span class="pill ok">shards running</span>
     </div>
   </section>
@@ -522,14 +527,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>24163</code> hidden-state files.</td>
+          <td>Job <code>3055364</code>, <code>25326</code> hidden-state files.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
           <td><span class="pill ok">shards running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> running with <code>74336</code> files so far, train <code>3056818</code> pending dependency. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> running with <code>97399</code> files so far, train <code>3056818</code> pending dependency. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -555,8 +560,8 @@
       </div>
       <div class="card">
           <div class="label">K=1 retry</div>
-        <div class="metric warn">66.21</div>
-        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.992x</code> so far.</p>
+        <div class="metric warn">66.72</div>
+        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.999x</code> so far.</p>
       </div>
     </div>
 
@@ -572,8 +577,8 @@
       </thead>
       <tbody>
         <tr><td>Do we have a clean 235B baseline?</td><td>Yes. <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>.</td></tr>
-        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>66.21 tok/s/GPU</code> mean so far, below the <code>66.78</code> baseline.</td></tr>
-        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>53.6%</code> so far across <code>357</code> parsed acceptance metrics. NeMo-RL has <code>10</code> completed generation throughput metrics in the same run.</td></tr>
+        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>66.72 tok/s/GPU</code> mean so far, effectively tied with the <code>66.78</code> baseline.</td></tr>
+        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>53.7%</code> so far across <code>393</code> parsed acceptance metrics. NeMo-RL has <code>11</code> completed generation throughput metrics in the same run.</td></tr>
         <tr><td>Is the drafter attached?</td><td>Yes. The K=2 log shows <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and vLLM SpecDec metrics.</td></tr>
         <tr><td>Next debug</td><td>Wait for K=1. If it also times out, use a stricter token/request gate or disable compiled DAG only for the failing SpecDec path.</td></tr>
       </tbody>
@@ -609,6 +614,33 @@
       <h2>Dataset Contract</h2>
       <p>The clean Speculators run trains on non-OpenMath mixed math data and evaluates in NeMo-RL on OpenMath. The actual NeMo-RL test file, <code>openmath_reasoning_cot_conversations_50k.jsonl</code>, is used as a denylist before the 500K training file is written, so direct prompt leakage is excluded in the current exact-unique build.</p>
     </div>
+
+    <h2>Experiment Dataset Map</h2>
+    <table>
+      <thead>
+        <tr><th>Experiment</th><th>Training Samples</th><th>NeMo-RL Test Samples</th><th>Overlap Policy</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Clean Speculators Eagle3 500K</td>
+          <td><code>500000</code> exact-unique non-OpenMath conversations. Mix: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts <code>60K</code>, math-deepscaler <code>25K</code>, DAPO-Math <code>15K</code>.</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, <code>50000</code> rows, <code>44304</code> unique normalized prompts.</td>
+          <td>OpenMath eval prompts are loaded as a denylist before training rows are written. Final validation reports <code>denylisted_prompts=0</code> and <code>duplicate_prompts=0</code>.</td>
+        </tr>
+        <tr>
+          <td>Older 30B OpenMath integration proof</td>
+          <td>OpenMath-trained 50K drafter path used earlier to prove NeMo-RL SpecDec integration.</td>
+          <td>OpenMath rollout source.</td>
+          <td>Not used as the clean final claim because train/eval domain and source are too close. Kept only as an integration and plumbing reference.</td>
+        </tr>
+        <tr>
+          <td>Public HF Eagle3 checks</td>
+          <td>External checkpoint training data is not controlled by this repo.</td>
+          <td>Same OpenMath NeMo-RL rollout source when evaluated here.</td>
+          <td>Reported separately from our Speculators-trained drafter because training sample provenance is different.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <div class="flow">
       <div class="step">
@@ -800,13 +832,13 @@
       </div>
       <div class="bar-row">
         <span>500K HS files</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:15%;--c:var(--amber)"></div></div>
-        <strong>74.3K</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:19%;--c:var(--amber)"></div></div>
+        <strong>97.4K</strong>
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:48%;--c:var(--amber)"></div></div>
-        <strong>48%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:51%;--c:var(--amber)"></div></div>
+        <strong>51%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
