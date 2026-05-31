@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 11:08 PDT",
+  "updated_at": "2026-05-31 11:11 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -480,8 +480,8 @@
       "request_gate": 32,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 10,
-      "completed_generation_metrics": 9,
+      "latest_step_seen": 11,
+      "completed_generation_metrics": 10,
       "generated_tokens_sec_gpu_values": [
         4497.44,
         4222.34,
@@ -491,10 +491,11 @@
         4051.98,
         4703.12,
         4748.68,
-        4076.86
+        4076.86,
+        4247.51
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4405.18,
-      "speedup_vs_baseline_mean_so_far": 1.0566,
+      "generated_tokens_sec_gpu_mean_so_far": 4389.42,
+      "speedup_vs_baseline_mean_so_far": 1.0528,
       "acceptance_rate_values": [
         0.501,
         0.5199,
@@ -504,10 +505,11 @@
         0.5901,
         0.4779,
         0.5505,
-        0.52
+        0.52,
+        0.5681
       ],
-      "acceptance_rate_mean_so_far": 0.5197,
-      "acceptance_rate_latest_summary": 0.52,
+      "acceptance_rate_mean_so_far": 0.5246,
+      "acceptance_rate_latest_summary": 0.5681,
       "total_step_seconds": [
         272.25,
         232.19,
@@ -517,10 +519,11 @@
         226.18,
         240.96,
         240.81,
-        221.63
+        221.63,
+        228.61
       ],
-      "total_step_seconds_mean_so_far": 237.11,
-      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:57 PT. This is a less conservative TLT-style gate to enable SpecDec once scheduled request count is 32 or lower. Nine rollout metrics are available, but this is only 9/20 and not a stable final result."
+      "total_step_seconds_mean_so_far": 236.26,
+      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:57 PT. This is a less conservative TLT-style gate to enable SpecDec once scheduled request count is 32 or lower. Ten rollout metrics are available, but this is only 10/20 and not a stable final result."
     },
     {
       "job_id": "3059932",
@@ -538,7 +541,7 @@
       "acceptance_rate_latest_summary": null,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Batch-size-only long-tail gate follow-up submitted at 2026-05-31 10:36 PT after request gates 4 and 32 showed only about 1.07-1.08x on early metrics. This tests whether allowing SpecDec at scheduled request count 64 recovers more throughput while still avoiding always-on drafting."
+      "note": "Batch-size-only long-tail gate follow-up submitted at 2026-05-31 10:36 PT after request gates 4 and 32 showed only about 1.05-1.07x on early metrics. The run has entered Step 1 and vLLM SpecDec metrics are visible, but no NeMo-RL driver throughput metric has been emitted yet."
     },
     {
       "job_id": "3059958",
