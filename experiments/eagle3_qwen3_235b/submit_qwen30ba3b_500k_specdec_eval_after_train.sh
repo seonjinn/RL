@@ -114,11 +114,13 @@ submit_evals() {
       echo "ERROR: SPEC_TOKENS_LIST contains non-integer value: $token_count" >&2
       exit 4
     fi
-    local tag="main-specdec-mixed500k-k${token_count}-tok${SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD}"
+    local request_gate="${SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD:-0}"
+    local token_gate="${SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD:-0}"
+    local tag="main-specdec-mixed500k-k${token_count}-req${request_gate}-tok${token_gate}"
     local stamp
     stamp="$(date '+%Y%m%d%H%M%S')"
     local env_dir="${NEMO_RL_DIR}/.driver_venvs/qwen30ba3b_main_specdec_mixed500k_k${token_count}_${stamp}"
-    local wandb_name="Qwen30B_A3B_Main_N${NUM_NODES}xG${GPUS_PER_NODE}_specdec_mixed500k_k${token_count}_p${NUM_PROMPTS}_g${NUM_GENERATIONS}_${MAX_STEPS}step_tokgate${SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD}"
+    local wandb_name="Qwen30B_A3B_Main_N${NUM_NODES}xG${GPUS_PER_NODE}_specdec_mixed500k_k${token_count}_p${NUM_PROMPTS}_g${NUM_GENERATIONS}_${MAX_STEPS}step_reqgate${request_gate}_tokgate${token_gate}"
     local tmp
     tmp="$(mktemp)"
     env \
