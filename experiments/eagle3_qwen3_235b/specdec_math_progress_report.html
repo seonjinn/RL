@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 07:23 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 07:42 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -415,8 +415,46 @@
     </div>
     <div class="banner">
       <h2>Train/Test Answer</h2>
-      <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>. <strong>NeMo-RL test data:</strong> baseline, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are used as a denylist during 500K construction; final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>. This means the clean result is mixed-math training evaluated on OpenMath, not OpenMath-on-OpenMath.</p>
+      <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>. <strong>Generation setup:</strong> this is <code>1</code> target response per prompt from <code>Qwen/Qwen3-30B-A3B</code> with temperature <code>1.0</code> and top_p <code>1.0</code>; it is not <code>32</code> responses per prompt. <strong>NeMo-RL test data:</strong> baseline, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are used as a denylist during 500K construction; final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>. This means the clean result is mixed-math training evaluated on OpenMath, not OpenMath-on-OpenMath.</p>
     </div>
+    <h2>500K Qwen3-30B-A3B Dataset Build Details</h2>
+    <table>
+      <thead>
+        <tr><th>Question</th><th>Answer</th><th>Evidence</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>How many training samples?</td>
+          <td><code>500000</code> final exact-unique training conversations. Each row is one math prompt plus one target-model answer.</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+        </tr>
+        <tr>
+          <td>Was it 32 samples per prompt?</td>
+          <td>No. Target generation used one answer per prompt: <code>NUM_RESPONSES=1</code>, request payload <code>n=1</code>, temperature <code>1.0</code>, top_p <code>1.0</code>. The NeMo-RL GRPO test still uses <code>64</code> prompts x <code>32</code> generations per step, but that is evaluation workload, not drafter-training data generation.</td>
+          <td><code>prepare_training_conversations.sh</code>, <code>generate_training_conversations_openai.py</code>, NeMo-RL run overrides</td>
+        </tr>
+        <tr>
+          <td>How was 500K assembled?</td>
+          <td>Ten <code>50K</code> target-response slices were merged. The primary slices had <code>499941</code> unique normalized prompts; <code>59</code> duplicate prompts were skipped and replaced with fresh DAPO rows to reach exactly <code>500000</code>.</td>
+          <td><code>primary_unique_written_before_replacements=499941</code>, <code>replacement_rows_written=59</code>, <code>status=pass</code></td>
+        </tr>
+        <tr>
+          <td>What is the actual NeMo-RL test set?</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>: <code>50000</code> rollout rows and <code>44304</code> unique normalized prompts. This is the file used for baseline throughput, SpecDec throughput, and acceptance measurements.</td>
+          <td>Same file is passed as the OpenMath denylist during clean 500K construction.</td>
+        </tr>
+        <tr>
+          <td>Does train overlap test?</td>
+          <td><span class="pill ok">No direct prompt overlap</span> The builder lowercases and whitespace-normalizes user prompts, loads the <code>44304</code> OpenMath eval prompt keys as a denylist, and writes only rows that do not match it.</td>
+          <td><code>denylist_prompt_count=44304</code>, <code>skipped_denylist=0</code>, final validation <code>denylisted_prompts=0</code></td>
+        </tr>
+        <tr>
+          <td>What is the training exposure?</td>
+          <td>The final job starts from the mixed 50K checkpoint, then runs one full epoch over the clean 500K cache. So the clean corpus has <code>500K</code> unique rows, while optimizer history includes the earlier 50K warm-start.</td>
+          <td>Train job <code>3056818</code>, checkpoint <code>0</code>, full loop <code>87,997/87,997</code></td>
+        </tr>
+      </tbody>
+    </table>
     <div class="contract-flow" aria-label="Train and test dataset contract">
       <div class="contract-node">
         <h3>1. Drafter Training</h3>
@@ -716,7 +754,7 @@
         </tr>
         <tr>
           <td>How were training targets produced?</td>
-          <td>The prompts are answered by <code>Qwen/Qwen3-30B-A3B</code>, converted into Speculators Eagle3 rows, then prepared into the 500K Arrow dataset and hidden-state cache.</td>
+          <td>The prompts are answered by <code>Qwen/Qwen3-30B-A3B</code> with one response per prompt, temperature <code>1.0</code>, and top_p <code>1.0</code>. They are converted into Speculators Eagle3 rows, then prepared into the 500K Arrow dataset and hidden-state cache.</td>
           <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl</code></td>
         </tr>
         <tr>
@@ -953,6 +991,8 @@
       <tbody>
         <tr><td>Target model</td><td><code>Qwen/Qwen3-30B-A3B</code></td></tr>
         <tr><td>Drafter backend</td><td>Speculators Eagle3 / speculator model</td></tr>
+        <tr><td>Target-response sampling</td><td><code>NUM_RESPONSES=1</code>, OpenAI-compatible request <code>n=1</code>, temperature <code>1.0</code>, top_p <code>1.0</code>, max tokens following the <code>8192</code> sequence budget.</td></tr>
+        <tr><td>Training/eval distinction</td><td>Drafter training uses one target answer per training prompt. NeMo-RL evaluation uses the GRPO workload, currently <code>64</code> prompts x <code>32</code> generations per step for the 30B runs.</td></tr>
         <tr><td>Target layers</td><td><code>1 23 44</code></td></tr>
         <tr><td>Sequence length</td><td><code>8192</code></td></tr>
         <tr><td>Loss/data form</td><td>Supervised Speculators Eagle3 drafter training from target responses and selected target-model hidden states; this is not GRPO/DAPO reward training.</td></tr>
