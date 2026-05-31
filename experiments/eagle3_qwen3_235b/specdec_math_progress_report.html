@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 02:28 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 02:27 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -350,13 +350,13 @@
       </div>
       <div class="card">
         <div class="label">30B mixed baseline</div>
-        <div class="metric info">4211.64</div>
-        <p class="small">tok/s/GPU mean from the first 3 completed NeMo-RL generation metrics.</p>
+        <div class="metric info">4175.69</div>
+        <p class="small">tok/s/GPU mean from the first 4 completed NeMo-RL generation metrics.</p>
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">10.1K / 50K</div>
-        <p class="small">Hidden states: 10113 files, 628G. Still extracting.</p>
+        <div class="metric warn">11.2K / 50K</div>
+        <p class="small">Hidden states: 11208 files, 696G. Still extracting.</p>
       </div>
     </div>
 
@@ -442,7 +442,7 @@
         <h3>What Matters</h3>
         <p>30B already proves SpecDec can help NeMo-RL generation, but the best measured speedup is still about 1.22x, not the target 2x. The next useful comparison is the mixed-math 50K checkpoint in the active baseline/K=1/K=2 chain.</p>
         <div class="mono-list">
-          <div>Baseline active: <code>3056050</code>, current mean <code>4211.64 tok/s/GPU</code> from 3 metrics</div>
+          <div>Baseline active: <code>3056050</code>, current mean <code>4175.69 tok/s/GPU</code> from 4 metrics</div>
           <div>K=1 queued: <code>3056051</code></div>
           <div>K=2 queued: <code>3056052</code></div>
         </div>
@@ -464,7 +464,7 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>10113</code> hidden-state files, <code>628G</code>.</td>
+          <td>Job <code>3055364</code>, <code>11208</code> hidden-state files, <code>696G</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
@@ -538,7 +538,7 @@
       </div>
       <div class="step">
         <div class="step-title">4. Hidden states</div>
-        <p>Current bottleneck. 30B 100K shard is at 10113/50000.</p>
+        <p>Current bottleneck. 30B 100K shard is at 11208/50000.</p>
       </div>
       <div class="step">
         <div class="step-title">5. Train + evaluate</div>
@@ -616,8 +616,8 @@
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:20%;--c:var(--amber)"></div></div>
-        <strong>20%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:22%;--c:var(--amber)"></div></div>
+        <strong>22%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
