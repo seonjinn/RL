@@ -123,7 +123,7 @@ def submit_merge_job(sources: list[Path], replacement: Path, merged: Path, dry_r
     primary_args = " ".join(shlex.quote(str(p)) for p in sources)
     script = (
         "set -euo pipefail; "
-        f"tmp='{merged}.tmp'; rm -f \"$tmp\"; "
+        f"tmp='{merged}.tmp.${{SLURM_JOB_ID:-manual}}'; rm -f \"$tmp\"; "
         f"python3 {shlex.quote(str(UNIQUE_BUILDER))} "
         f"--output \"$tmp\" "
         f"--summary-json {shlex.quote(str(summary))} "
@@ -131,8 +131,10 @@ def submit_merge_job(sources: list[Path], replacement: Path, merged: Path, dry_r
         f"--denylist-prompts-from {shlex.quote(str(ARTIFACT_ROOT / 'data/openmath_reasoning_cot_conversations_50k.jsonl'))} "
         f"--primary {primary_args} "
         f"--replacement {shlex.quote(str(replacement))}; "
-        f"mv \"$tmp\" '{merged}'; "
+        f"if [[ -s \"$tmp\" ]]; then mv -f \"$tmp\" '{merged}'; fi; "
+        f"test -s '{merged}'; "
         f"rows=$(wc -l < '{merged}' | tr -d ' '); "
+        f"test \"$rows\" = 500000; "
         f"echo merged={merged} rows=$rows"
     )
     wrap = f"bash -lc {shlex.quote(script)}"
@@ -240,8 +242,15 @@ def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
     merged = ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl"
     spec_jsonl = ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl"
 
-    merge_id = submit_merge_job(sources, replacement, merged, args.dry_run)
+    merge_id = ""
+    prep_dependency = ""
+    if args.skip_merge_if_present and merged.exists() and line_count(merged) == 500_000:
+        merge_id = "verified_existing_500k_unique"
+    else:
+        merge_id = submit_merge_job(sources, replacement, merged, args.dry_run)
+        prep_dependency = f"afterok:{merge_id}"
     base = common_env(root, merged, spec_jsonl)
+    suffix = args.job_suffix
 
     prep_env = {
         **base,
@@ -251,8 +260,8 @@ def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
         "RUN_TRAIN": "false",
     }
     prep_id = submit_pipeline(
-        name="qwen3_30ba3b-speculators-mixed-500k-prep",
-        dependency=f"afterok:{merge_id}",
+        name=f"qwen3_30ba3b-speculators-mixed-500k-prep{suffix}",
+        dependency=prep_dependency,
         time_limit=args.prep_time,
         env=prep_env,
         dry_run=args.dry_run,
@@ -277,7 +286,7 @@ def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
         }
         shard_ids.append(
             submit_pipeline(
-                name=f"qwen3_30ba3b-speculators-mixed-500k-hs-{shard:02d}",
+                name=f"qwen3_30ba3b-speculators-mixed-500k-hs{suffix}-{shard:02d}",
                 dependency=f"afterok:{prep_id}",
                 time_limit=args.datagen_time,
                 env=shard_env,
@@ -296,7 +305,7 @@ def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
         train_env["FROM_PRETRAINED"] = args.from_pretrained
     train_dep = "afterok:" + ":".join(shard_ids)
     train_id = submit_pipeline(
-        name="qwen3_30ba3b-speculators-mixed-500k-train",
+        name=f"qwen3_30ba3b-speculators-mixed-500k-train{suffix}",
         dependency=train_dep,
         time_limit=args.train_time,
         env=train_env,
@@ -320,6 +329,7 @@ def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
         "hidden_state_jobs": shard_ids,
         "train_job": train_id,
         "from_pretrained": args.from_pretrained or "",
+        "skip_merge_if_present": args.skip_merge_if_present,
     }
     report_path = ARTIFACT_ROOT / "reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json"
     if not args.dry_run:
@@ -337,6 +347,8 @@ def main() -> int:
     parser.add_argument("--train-time", default="04:00:00")
     parser.add_argument("--from-pretrained", default="")
     parser.add_argument("--replacement-conversations", default=str(default_replacement_conversations()))
+    parser.add_argument("--skip-merge-if-present", action="store_true")
+    parser.add_argument("--job-suffix", default="")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.shards <= 0 or 500_000 % args.shards != 0:

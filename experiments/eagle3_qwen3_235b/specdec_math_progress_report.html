@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 02:47 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 02:52 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -355,8 +355,8 @@
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">12.8K / 50K</div>
-        <p class="small">Hidden states: 12825 files, 796G. Still extracting.</p>
+        <div class="metric warn">15.2K / 50K</div>
+        <p class="small">Hidden states: 15179 safetensors files, 942G. Still extracting.</p>
       </div>
     </div>
 
@@ -407,8 +407,8 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K is verified. Merge/prepare/20 hidden-state shards/train are submitted as jobs 3056746-3056769.</span>
-      <span class="pill info">500K chain queued</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare/20 hidden-state shards/train were resubmitted from that verified file as jobs 3056797-3056818.</span>
+      <span class="pill info">r2 queued</span>
     </div>
   </section>
 
@@ -464,14 +464,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>12825</code> hidden-state files, <code>796G</code>.</td>
+          <td>Job <code>3055364</code>, <code>15179</code> hidden-state files, <code>942G</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
-          <td><span class="pill info">chain submitted</span></td>
-          <td>10 50K slices exist for 30B mixed non-OpenMath. Global normalized prompt uniqueness is <code>499941/500000</code>.</td>
-          <td>Fresh DAPO replacements are complete. Exact unique 500K chain: merge <code>3056746</code>, prepare <code>3056747</code>, shards <code>3056748-3056767</code>, train <code>3056769</code>.</td>
+          <td><span class="pill info">r2 queued</span></td>
+          <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows.</td>
+          <td>Fresh DAPO replacements are complete. Current chain: prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code>.</td>
         </tr>
       </tbody>
     </table>
@@ -538,13 +538,42 @@
       </div>
       <div class="step">
         <div class="step-title">4. Hidden states</div>
-        <p>Current bottleneck. 30B 100K shard is at 12825/50000.</p>
+        <p>Current bottleneck. 30B 100K shard is at 15179/50000.</p>
       </div>
       <div class="step">
         <div class="step-title">5. Train + evaluate</div>
         <p>Train Eagle3 drafter, then measure NeMo-RL acceptance and tok/s/GPU.</p>
       </div>
     </div>
+
+    <h2>Train/Test At A Glance</h2>
+    <table>
+      <thead>
+        <tr><th>Question</th><th>Current Answer</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>What is the current drafter training data?</td>
+          <td>For the clean 30B path, the training pool is mixed non-OpenMath math. It is built from NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k. Target responses are synthesized with <code>Qwen/Qwen3-30B-A3B</code>, then converted to Speculators Eagle3 training data.</td>
+        </tr>
+        <tr>
+          <td>What is the actual NeMo-RL test set?</td>
+          <td>NeMo-RL rollout throughput and acceptance tests use <code>openmath_reasoning_cot_conversations_50k.jsonl</code>: <code>50000</code> rows and <code>44304</code> unique normalized prompts.</td>
+        </tr>
+        <tr>
+          <td>Does the mixed 500K training set overlap the NeMo-RL test set?</td>
+          <td>No prompt-level overlap in the current exact-unique build. The OpenMath NeMo-RL evaluation prompts are loaded as a denylist before writing training rows. The denylist size is <code>44304</code>, and the final merge summary reports <code>skipped_denylist=0</code> with <code>records_written=500000</code>.</td>
+        </tr>
+        <tr>
+          <td>Which result has an OpenMath caveat?</td>
+          <td>The older 30B OpenMath-trained SpecDec result, <code>1.17x-1.22x</code>, is useful as an integration proof, but it is not the leakage-clean final claim. The clean comparison is mixed non-OpenMath training evaluated on OpenMath NeMo-RL prompts.</td>
+        </tr>
+        <tr>
+          <td>What is not mixed into the 500K clean set?</td>
+          <td>The OpenMath NeMo-RL evaluation file is not used as a training source. Public HF Eagle3 checkpoints are also separate evaluation inputs, not part of this Speculators 500K training corpus.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <h2>Dataset Split And Overlap</h2>
     <table>
@@ -553,16 +582,16 @@
       </thead>
       <tbody>
         <tr>
-          <td>Drafter training prompt pool</td>
+          <td>Planned drafter training prompt pool</td>
           <td><code>mixed_math_nonopenmath_500k_prompts.jsonl</code></td>
           <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
-          <td>Non-OpenMath pool. Internal duplicate count is <code>59</code>, so the full 500K run must dedupe or add replacements before claiming exact unique 500K.</td>
+          <td>Non-OpenMath pool. Internal duplicate count is <code>59</code>.</td>
         </tr>
         <tr>
-          <td>Drafter training target responses</td>
+          <td>Primary target-response slices</td>
           <td>10 files: <code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_50k*.jsonl</code></td>
           <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
-          <td>Responses are synthesized by <code>Qwen/Qwen3-30B-A3B</code>. Exact unique 500K uses 59 fresh DAPO replacement rows.</td>
+          <td>Responses are synthesized by <code>Qwen/Qwen3-30B-A3B</code>. Duplicate primary prompts are skipped before training.</td>
         </tr>
         <tr>
           <td>Replacement prompts</td>
@@ -571,15 +600,56 @@
           <td>Selected from DAPO files after excluding the 500K prompt pool and OpenMath eval prompts. Validation passed: 100 valid rows, 0 duplicate prompts.</td>
         </tr>
         <tr>
+          <td>Final exact unique training file</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+          <td><code>500000</code> rows</td>
+          <td>Verified by line count and merge summary: <code>primary_unique_written_before_replacements=499941</code>, <code>replacement_rows_written=59</code>, <code>status=pass</code>.</td>
+        </tr>
+        <tr>
           <td>NeMo-RL math evaluation</td>
           <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code></td>
           <td><code>50000</code> rows, <code>44304</code> unique normalized prompts</td>
-          <td>Normalized prompt overlap with the 500K non-OpenMath training pool is <code>0</code>.</td>
+          <td>Used as the test/evaluation prompt set for NeMo-RL baseline and SpecDec runs. It is denylisted from the mixed 500K training file.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Overlap Verification Details</h2>
+    <table>
+      <thead>
+        <tr><th>Check</th><th>Evidence</th><th>Interpretation</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Prompt key</td>
+          <td>The unique builder hashes lowercased, whitespace-collapsed user prompts.</td>
+          <td>This catches exact prompt reuse after trivial spacing/case differences.</td>
+        </tr>
+        <tr>
+          <td>OpenMath denylist</td>
+          <td><code>denylist_prompt_count=44304</code> from <code>openmath_reasoning_cot_conversations_50k.jsonl</code>.</td>
+          <td>NeMo-RL evaluation prompts are reserved before any training row is written.</td>
+        </tr>
+        <tr>
+          <td>Training/eval overlap</td>
+          <td><code>skipped_denylist=0</code> and <code>records_written=500000</code> in the final exact-unique merge.</td>
+          <td>No normalized OpenMath evaluation prompt appeared in the final mixed training inputs.</td>
+        </tr>
+        <tr>
+          <td>Internal duplicates</td>
+          <td><code>skipped_duplicate_or_seen=59</code>, then <code>59</code> fresh DAPO replacements were appended.</td>
+          <td>The final file is exactly 500K prompt-unique training conversations.</td>
+        </tr>
+        <tr>
+          <td>Remaining caveat</td>
+          <td>The check is prompt-level lexical normalization, not a semantic near-duplicate search.</td>
+          <td>It prevents direct leakage; it does not claim that mathematically similar problems never occur across datasets.</td>
         </tr>
       </tbody>
     </table>
 
     <h2>500K Training Mix</h2>
+    <p class="small">Rows below are the requested source mix before duplicate replacement. The final exact-unique file keeps this mix as closely as possible, skips 59 duplicate primary prompts, and appends 59 fresh DAPO replacement conversations.</p>
     <table>
       <thead>
         <tr><th>Source</th><th>Dataset</th><th>Rows</th><th>Share</th></tr>
@@ -603,6 +673,7 @@
         <tr><td>Drafter backend</td><td>Speculators Eagle3 / speculator model</td></tr>
         <tr><td>Target layers</td><td><code>1 23 44</code></td></tr>
         <tr><td>Sequence length</td><td><code>8192</code></td></tr>
+        <tr><td>Loss/data form</td><td>Supervised Speculators Eagle3 drafter training from target responses and selected target-model hidden states; this is not GRPO/DAPO reward training.</td></tr>
         <tr><td>Training continuation</td><td>Full 500K path starts from the completed mixed 50K checkpoint unless explicitly reset.</td></tr>
         <tr><td>500K execution plan</td><td>Merge 10x50K, prepare once, generate hidden states in 20 global-index shards, train once on the full cache.</td></tr>
       </tbody>
@@ -622,8 +693,8 @@
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:26%;--c:var(--amber)"></div></div>
-        <strong>26%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:30%;--c:var(--amber)"></div></div>
+        <strong>30%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
@@ -637,7 +708,7 @@
     <h2>500K Parallel Plan</h2>
     <div class="banner">
       <h2>Short Answer</h2>
-      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K chain is now submitted: merge <code>3056746</code>, prepare <code>3056747</code>, hidden-state shards <code>3056748-3056767</code>, train <code>3056769</code>.</p>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The exact-unique 500K file is already verified, so the active r2 chain skips merge and starts from prepare <code>3056797</code>, hidden-state shards <code>3056798-3056817</code>, and train <code>3056818</code>.</p>
     </div>
 
     <div class="grid two">
@@ -657,7 +728,7 @@
     <div class="flow">
       <div class="step">
         <div class="step-title">Merge 10x50K + replacements</div>
-        <p>Skip duplicate prompts, denylist OpenMath eval prompts, then append fresh DAPO replacements to reach exactly 500K.</p>
+        <p>Done. Skip duplicate prompts, denylist OpenMath eval prompts, then append 59 fresh DAPO replacements to reach exactly 500K.</p>
       </div>
       <div class="step">
         <div class="step-title">Prepare once</div>
@@ -708,7 +779,7 @@
       <div>30B 500K prompt pool: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></div>
       <div>30B replacement prompts: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></div>
       <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
-      <div>30B exact unique 500K jobs: merge <code>3056746</code>, prepare <code>3056747</code>, shards <code>3056748-3056767</code>, train <code>3056769</code></div>
+      <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
       <div>30B 100K hidden-state dir: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_100k_seen/hidden_states_layers48_mlen8193_offset50k</code></div>
     </div>
   </section>
