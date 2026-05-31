@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 04:34 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 04:37 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -355,15 +355,56 @@
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">33.4K / 50K</div>
-        <p class="small">Hidden states: 33400 safetensors files. Still extracting.</p>
+        <div class="metric warn">34.0K / 50K</div>
+        <p class="small">Hidden states: 34028 safetensors files. Still extracting.</p>
       </div>
     </div>
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and mixed 100K plus 500K hidden-state extraction is progressing. 30B K=1 has seven NeMo-RL generation metrics with mean <code>5563.97 tok/s/GPU</code>, or <code>1.33x</code> versus the mixed baseline, with early vLLM acceptance at <code>54.1%</code>. This is still interim. 30B K=2 strict gate has reached Step 7 with mean <code>4261.72 tok/s/GPU</code>, only <code>1.02x</code> versus baseline. 235B K=1 remains effectively tied with baseline, and 235B K=2 strict-gate retry has attached the Eagle3 drafter and reached the vLLM-backed policy setup, but has no rollout metric yet.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and mixed 100K plus 500K hidden-state extraction is progressing. 30B K=1 has eight NeMo-RL generation metrics with mean <code>5616.14 tok/s/GPU</code>, or <code>1.35x</code> versus the mixed baseline, with early vLLM acceptance at <code>53.6%</code>. This is still interim. 30B K=2 strict gate has reached Step 7 with mean <code>4261.72 tok/s/GPU</code>, only <code>1.02x</code> versus baseline. 235B K=1 remains effectively tied with baseline, and 235B K=2 strict-gate retry has attached the Eagle3 drafter and is loading Megatron policy state, but has no rollout metric yet.</p>
     </div>
+
+    <h2>Dataset Split At A Glance</h2>
+    <div class="grid two">
+      <div class="card">
+        <div class="label">Drafter training corpus</div>
+        <div class="metric ok">500K</div>
+        <p class="small">Exact-unique non-OpenMath math conversations for the clean Qwen3-30B-A3B Speculators Eagle3 run.</p>
+      </div>
+      <div class="card">
+        <div class="label">NeMo-RL test corpus</div>
+        <div class="metric info">OpenMath 50K</div>
+        <p class="small"><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, with 44304 unique normalized prompts.</p>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Part</th><th>What Is Used</th><th>Leakage / Overlap Control</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Training sample mix</td>
+          <td>NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, DAPO-Math-17k <code>15K</code>.</td>
+          <td>OpenMath is intentionally excluded from the clean 500K training source mix.</td>
+        </tr>
+        <tr>
+          <td>Target-response setup</td>
+          <td>Prompts are answered by <code>Qwen/Qwen3-30B-A3B</code>, merged from 10 50K slices, then converted to Speculators Eagle3 format.</td>
+          <td>The final training file is <code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code>.</td>
+        </tr>
+        <tr>
+          <td>Actual NeMo-RL evaluation</td>
+          <td>Baseline throughput, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>.</td>
+          <td>The same OpenMath eval prompt file is used as a denylist before writing the clean 500K training JSONL.</td>
+        </tr>
+        <tr>
+          <td>Overlap result</td>
+          <td>Final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>.</td>
+          <td><span class="pill ok">0 direct overlap</span> This is normalized prompt-level overlap, not a semantic near-duplicate guarantee.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <h2>Dataset Accountability</h2>
     <p class="small">The clean claim is not based on training and testing on the same OpenMath file. For the clean 30B Speculators path, training data is mixed non-OpenMath math, while NeMo-RL evaluation uses OpenMath and is denylisted from training.</p>
@@ -414,12 +455,12 @@
         <tr>
           <td>30B K=1 mixed 50K interim</td>
           <td><span class="pill warn">NeMo-RL</span></td>
-          <td>Running job <code>3056051</code> has seven generation metrics with mean <code>5563.97 tok/s/GPU</code>, or <code>1.33x</code> versus the <code>4169.19</code> baseline. vLLM acceptance mean is <code>54.1%</code> across <code>63</code> parsed metrics. This is not final.</td>
+          <td>Running job <code>3056051</code> has eight generation metrics with mean <code>5616.14 tok/s/GPU</code>, or <code>1.35x</code> versus the <code>4169.19</code> baseline. vLLM acceptance mean is <code>53.6%</code> across <code>71</code> parsed metrics. This is not final.</td>
         </tr>
         <tr>
           <td>235B K=1 54% acceptance</td>
           <td><span class="pill warn">vLLM internal</span></td>
-          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>66.76 tok/s/GPU</code>, or <code>1.000x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>53.4%</code> across <code>574</code> parsed acceptance metrics.</td>
+          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>66.76 tok/s/GPU</code>, or <code>1.000x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>53.4%</code> across <code>608</code> parsed acceptance metrics.</td>
         </tr>
         <tr>
           <td>235B baseline 66.78 tok/s/GPU</td>
@@ -465,7 +506,7 @@
     <h2>Workstreams</h2>
     <div class="status-row">
       <strong>30B NeMo-RL</strong>
-      <span>Mixed 50K baseline produced all 20 generation metrics at <code>4169.19 tok/s/GPU</code>. K=1 token-gate4096 job <code>3056051</code> has seven generation metrics with mean <code>5563.97 tok/s/GPU</code> (<code>1.33x</code>), and vLLM acceptance is <code>54.1%</code> across <code>63</code> parsed metrics. K=2 strict long-tail gate job <code>3057073</code> reached Step 7 and has six generation metrics with mean <code>4261.72 tok/s/GPU</code> (<code>1.02x</code>) and early acceptance <code>25.8%</code>. Older K=2 token-gate4096 job <code>3056052</code> remains dependency-waiting.</span>
+      <span>Mixed 50K baseline produced all 20 generation metrics at <code>4169.19 tok/s/GPU</code>. K=1 token-gate4096 job <code>3056051</code> has eight generation metrics with mean <code>5616.14 tok/s/GPU</code> (<code>1.35x</code>), and vLLM acceptance is <code>53.6%</code> across <code>71</code> parsed metrics. K=2 strict long-tail gate job <code>3057073</code> reached Step 7 and has six generation metrics with mean <code>4261.72 tok/s/GPU</code> (<code>1.02x</code>) and early acceptance <code>25.1%</code>. Older K=2 token-gate4096 job <code>3056052</code> remains dependency-waiting.</span>
       <span class="pill info">running</span>
     </div>
     <div class="status-row">
@@ -475,12 +516,12 @@
     </div>
     <div class="status-row">
       <strong>235B NeMo-RL</strong>
-      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> is running with 17 completed generation metrics and is effectively tied with baseline in interim numbers. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and logs <code>Using vLLM backend for generation</code>, with no rollout metric yet.</span>
+      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> is running with 17 completed generation metrics and is effectively tied with baseline in interim numbers. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and is loading Megatron policy state, with no rollout metric yet.</span>
       <span class="pill warn">debugging</span>
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. The intended r2 hidden-state shards <code>3056798-3056817</code> are running; <code>253726</code> files have appeared so far. A duplicate older shard set <code>3056722-3056741</code> was canceled after confirming it used the same output directory and ranges.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. The intended r2 hidden-state shards <code>3056798-3056817</code> are running; <code>266019</code> files have appeared so far. A duplicate older shard set <code>3056722-3056741</code> was canceled after confirming it used the same output directory and ranges.</span>
       <span class="pill ok">shards running</span>
     </div>
   </section>
@@ -506,9 +547,9 @@
           <strong>1.22x</strong>
         </div>
         <div class="bar-row">
-          <span>K=1 mixed n=7</span>
-          <div class="bar-track"><div class="bar-fill" style="--w:99%;--c:var(--amber)"></div></div>
-          <strong>1.33x</strong>
+          <span>K=1 mixed n=8</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--amber)"></div></div>
+          <strong>1.35x</strong>
         </div>
         <div class="bar-row">
           <span>K=4</span>
@@ -518,10 +559,10 @@
       </div>
       <div class="callout">
         <h3>What Matters</h3>
-        <p>30B already proves SpecDec can help NeMo-RL generation. The older completed best is about <code>1.22x</code>; the active mixed-math K=1 run is currently <code>1.33x</code> from seven NeMo-RL generation metrics and still below the 2x target.</p>
+        <p>30B already proves SpecDec can help NeMo-RL generation. The older completed best is about <code>1.22x</code>; the active mixed-math K=1 run is currently <code>1.35x</code> from eight NeMo-RL generation metrics and still below the 2x target.</p>
         <div class="mono-list">
           <div>Baseline complete: <code>3056050</code>, mean <code>4169.19 tok/s/GPU</code> from 20 metrics</div>
-          <div>K=1 token-gate4096 running: <code>3056051</code>, mean <code>5563.97 tok/s/GPU</code> from 7 metrics, speedup <code>1.33x</code>, acceptance <code>54.1%</code></div>
+          <div>K=1 token-gate4096 running: <code>3056051</code>, mean <code>5616.14 tok/s/GPU</code> from 8 metrics, speedup <code>1.35x</code>, acceptance <code>53.6%</code></div>
           <div>K=2 strict gate running: <code>3057073</code>, request gate <code>4</code>, token gate <code>1024</code>, Step 7 reached, mean <code>4261.72 tok/s/GPU</code> from 6 metrics</div>
           <div>K=2 token-gate4096 queued: <code>3056052</code></div>
         </div>
@@ -543,14 +584,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>33400</code> hidden-state files.</td>
+          <td>Job <code>3055364</code>, <code>34028</code> hidden-state files.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
           <td><span class="pill ok">shards running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> running with <code>253726</code> files so far, train <code>3056818</code> pending dependency. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> running with <code>266019</code> files so far, train <code>3056818</code> pending dependency. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -594,8 +635,8 @@
       <tbody>
         <tr><td>Do we have a clean 235B baseline?</td><td>Yes. <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>.</td></tr>
         <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No final result yet. K=2 failed before a rollout metric; K=1 is running at <code>66.76 tok/s/GPU</code> mean so far, effectively tied with the <code>66.78</code> baseline but not complete.</td></tr>
-        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>53.4%</code> so far across <code>574</code> parsed acceptance metrics. NeMo-RL has <code>16</code> completed generation throughput metrics in the same run.</td></tr>
-        <tr><td>Is the K=2 drafter attached?</td><td>Yes. Retry job <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and logs <code>Using vLLM backend for generation</code>. It has no NeMo-RL rollout throughput or acceptance metric yet.</td></tr>
+        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>53.4%</code> so far across <code>608</code> parsed acceptance metrics. NeMo-RL has <code>17</code> completed generation throughput metrics in the same run.</td></tr>
+        <tr><td>Is the K=2 drafter attached?</td><td>Yes. Retry job <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and is currently loading Megatron policy state. It has no NeMo-RL rollout throughput or acceptance metric yet.</td></tr>
         <tr><td>Next debug</td><td>Wait for the K=2 retry to enter rollout. If it stalls after worker initialization, inspect Ray compiled-DAG and long-tail gate interaction before changing the drafter.</td></tr>
       </tbody>
     </table>
@@ -881,13 +922,13 @@
       </div>
       <div class="bar-row">
         <span>500K HS files</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:51%;--c:var(--amber)"></div></div>
-        <strong>253.7K</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:53%;--c:var(--amber)"></div></div>
+        <strong>266.0K</strong>
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:67%;--c:var(--amber)"></div></div>
-        <strong>67%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:68%;--c:var(--amber)"></div></div>
+        <strong>68%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
