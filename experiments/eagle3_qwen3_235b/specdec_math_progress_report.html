@@ -125,13 +125,33 @@
   <h1>Qwen3 Eagle3 SpecDec Math Progress</h1>
   <p class="sub">
     Status snapshot for the NeMo-RL speculative decoding effort. Last checked:
-    2026-05-31 01:33 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
+    2026-05-31 01:44 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
     training with Speculators, NeMo-RL acceptance-rate measurement, generation
     speedup, and long-tail batch-size gating.
   </p>
 
   <section class="note" aria-label="Latest operator update">
     <h2>Latest Update</h2>
+    <p>
+      2026-05-31 01:44 PT: the roadmap/scripts/report tree is now versioned in
+      GitLab at
+      <code>ssh://git@gitlab-master.nvidia.com:12051/sna/specdec_rl.git</code>,
+      branch <code>main</code>, initial pushed commit <code>fb09eb5</code>. Local
+      credential files and generated logs/caches are ignored. For 30B NeMo-RL
+      eval, the dependency-free r4 baseline/K=1 jobs failed at Slurm launch
+      with <code>Memory required by task is not available</code>, and the old K=2
+      was canceled. I patched <code>ray.sub</code> to run Ray status/driver inside
+      the existing <code>ray-head</code> enroot container instead of opening a
+      fresh container step. The patched baseline <code>3056050</code> has passed
+      Ray bring-up, reached <code>16/16</code> worker units, and launched
+      <code>ray-driver.log</code>; patched K=1 <code>3056051</code> and K=2
+      <code>3056052</code> are intentionally queued after it to avoid GB200 tile
+      memory contention. For 235B, baseline <code>3053877</code> has reached
+      Step <code>20/20</code> with 19 completed generation metrics so far
+      (mean generated tok/s/GPU <code>66.79</code>), and K=2 SpecDec
+      <code>3055189</code> has reached Step <code>1/20</code>; no acceptance-rate
+      metric has emitted yet.
+    </p>
     <p>
       2026-05-31 01:33 PT: I found a duplicate 30B fallback branch writing into
       the same 100K hidden-state/output paths as the real continuation. I
@@ -374,9 +394,9 @@
         </tr>
         <tr>
           <td>30B mixed-50K NeMo-RL eval</td>
-          <td><code>3055970</code>, <code>3055971</code>, <code>3055972</code></td>
-          <td>Submitted dependency-free after the earlier eval-submit wrapper failed with <code>set: Illegal option -o pipefail</code> under <code>/bin/sh</code>. All three jobs are running: baseline <code>3055970</code>, K=1 gated SpecDec <code>3055971</code>, and K=2 gated SpecDec <code>3055972</code>, all using the mixed non-OpenMath 50K checkpoint <code>checkpoints_train_50k_layers48_mlen8193/0</code>.</td>
-          <td>Wait for scheduling, then compare acceptance rate and generation tok/s/GPU against the matched baseline.</td>
+          <td>Current patched chain: <code>3056050</code> -> <code>3056051</code> -> <code>3056052</code></td>
+          <td>Earlier dependency-free jobs <code>3055970</code>/<code>3055971</code> failed at launch with <code>Memory required by task is not available</code>, and old K=2 <code>3055972</code> was canceled. Patched <code>ray.sub</code> now executes Ray status/driver inside the existing <code>ray-head</code> enroot container. Baseline <code>3056050</code> is running, has reached <code>16/16</code> Ray worker units, and has launched <code>ray-driver.log</code>. K=1 <code>3056051</code> and K=2 <code>3056052</code> are queued sequentially after it.</td>
+          <td>Confirm baseline reaches rollout metrics, then compare K=1/K=2 acceptance rate and generation tok/s/GPU against the matched baseline.</td>
         </tr>
         <tr>
           <td>500K target data</td>
