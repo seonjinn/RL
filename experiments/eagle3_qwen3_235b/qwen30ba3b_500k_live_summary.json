@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:49 PDT",
+  "updated_at": "2026-05-31 08:52 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -71,8 +71,8 @@
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 15,
-      "completed_generation_metrics": 14,
+      "latest_step_seen": 16,
+      "completed_generation_metrics": 15,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -87,10 +87,11 @@
         4866.36,
         5258.92,
         4923.88,
-        5198.17
+        5198.17,
+        5036.23
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5052.07,
-      "speedup_vs_baseline_mean_so_far": 1.2118,
+      "generated_tokens_sec_gpu_mean_so_far": 5051.02,
+      "speedup_vs_baseline_mean_so_far": 1.2115,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -105,13 +106,14 @@
         0.4219,
         0.4341,
         0.424,
-        0.4283
+        0.4283,
+        0.4227
       ],
       "acceptance_rate_mean_so_far": 0.4223,
-      "acceptance_rate_latest_summary": 0.4283,
+      "acceptance_rate_latest_summary": 0.4227,
       "per_position_acceptance_latest_summary": [
-        0.565,
-        0.2916
+        0.5593,
+        0.2861
       ],
       "total_step_seconds": [
         262.51,
@@ -127,14 +129,15 @@
         221.34,
         222.24,
         230.28,
-        229.65
+        229.65,
+        215.21
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 15,
-      "completed_generation_metrics": 14,
+      "latest_step_seen": 16,
+      "completed_generation_metrics": 15,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -149,10 +152,11 @@
         4773.78,
         5120.77,
         4749.74,
-        5197.49
+        5197.49,
+        4861.46
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4955.17,
-      "speedup_vs_baseline_mean_so_far": 1.1885,
+      "generated_tokens_sec_gpu_mean_so_far": 4948.92,
+      "speedup_vs_baseline_mean_so_far": 1.187,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -167,14 +171,15 @@
         0.3199,
         0.3296,
         0.3208,
-        0.3242
+        0.3242,
+        0.3198
       ],
-      "acceptance_rate_mean_so_far": 0.3196,
-      "acceptance_rate_latest_summary": 0.3242,
+      "acceptance_rate_mean_so_far": 0.3197,
+      "acceptance_rate_latest_summary": 0.3198,
       "per_position_acceptance_latest_summary": [
-        0.5552,
-        0.2805,
-        0.1368
+        0.5512,
+        0.2759,
+        0.1322
       ],
       "total_step_seconds": [
         255.95,
@@ -190,7 +195,8 @@
         217.93,
         222.36,
         231.02,
-        229.67
+        229.67,
+        214.29
       ]
     }
   ],
@@ -202,7 +208,7 @@
       "state": "RUNNING",
       "completed_generation_metrics": 0,
       "latest_step_seen": null,
-      "note": "Driver log exists but has no rollout step marker or generated tok/s/GPU metric yet."
+      "note": "Driver log exists and vLLM workers are loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
     },
     {
       "job_id": "3058762",
@@ -211,7 +217,7 @@
       "state": "RUNNING",
       "completed_generation_metrics": 0,
       "latest_step_seen": null,
-      "note": "Driver log exists but has no rollout step marker or generated tok/s/GPU metric yet."
+      "note": "Driver log exists and vLLM workers are loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
     }
   ],
   "dataset_contract": {
