@@ -407,7 +407,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Raw 500K has 499941 unique prompts. 100 fresh DAPO replacement prompts are ready and Qwen3-30B target generation is submitted as job 3056447.</span>
+      <span>Raw 500K has 499941 unique prompts. Replacement target generation is job 3056447, and dependent unique-500K chain submitter is job 3056687.</span>
       <span class="pill info">replacement running</span>
     </div>
   </section>
@@ -471,7 +471,7 @@
           <td>500K target responses</td>
           <td><span class="pill info">repair submitted</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Global normalized prompt uniqueness is <code>499941/500000</code>.</td>
-          <td>Fresh DAPO replacement prompts are ready; target-response job <code>3056447</code> will provide replacements for exact unique 500K.</td>
+          <td>Fresh DAPO replacement prompts are ready; target-response job <code>3056447</code> feeds dependent chain submitter <code>3056687</code>.</td>
         </tr>
       </tbody>
     </table>
@@ -637,7 +637,7 @@
     <h2>500K Parallel Plan</h2>
     <div class="banner">
       <h2>Short Answer</h2>
-      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The raw 500K duplicate issue is now handled by an exact-unique merge builder plus 100 fresh DAPO replacement prompts; replacement target generation is job <code>3056447</code>.</p>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. The raw 500K duplicate issue is now handled by an exact-unique merge builder plus 100 fresh DAPO replacement prompts; replacement target generation is job <code>3056447</code> and dependent chain submitter is <code>3056687</code>.</p>
     </div>
 
     <div class="grid two">
@@ -708,6 +708,7 @@
       <div>30B 500K prompt pool: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></div>
       <div>30B replacement prompts: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></div>
       <div>30B replacement target-generation job: <code>3056447</code></div>
+      <div>30B unique 500K chain submitter: <code>3056687</code></div>
       <div>30B 100K hidden-state dir: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_100k_seen/hidden_states_layers48_mlen8193_offset50k</code></div>
     </div>
   </section>
