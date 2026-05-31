@@ -1,0 +1,16 @@
+diff --git a/scripts/train.py b/scripts/train.py
+index 6c322c4..d050c7d 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -306,7 +306,10 @@ def main(args: argparse.Namespace):
+ 
+     if args.from_pretrained:
+         draft_model = model_class.from_pretrained(
+-            args.from_pretrained, t2d=t2d, d2t=d2t
++            args.from_pretrained,
++            t2d=t2d,
++            d2t=d2t,
++            low_cpu_mem_usage=False,
+         )
+     else:
+         args.draft_vocab_size = draft_vocab_size

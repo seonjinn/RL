@@ -1,0 +1,6 @@
+preflight_job=PREFLIGHT_JOB_ID
+preflight_gpus_per_node=1
+container=/lustre/fs1/portfolios/llmservice/projects/llmservice_deci_llm/containers/nemo_25.07.01.sqsh
+report=/tmp/eagle3_submit_packet_gated_validation/reports/container_preflight_cluster_probe.md
+preflight_json=/tmp/eagle3_submit_packet_gated_validation/reports/container_preflight_pipeline.json
+preflight_markdown=/tmp/eagle3_submit_packet_gated_validation/reports/container_preflight_pipeline.md

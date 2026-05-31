@@ -1,0 +1,52 @@
+diff --git a/nemo_rl/algorithms/grpo.py b/nemo_rl/algorithms/grpo.py
+--- a/nemo_rl/algorithms/grpo.py
++++ b/nemo_rl/algorithms/grpo.py
+@@ -1660,7 +1660,8 @@
+                     train_data.update(extra_multimodal_data)
+                     train_data.to("cpu")
+ 
+-                    metrics_logging_data["content"] = flat_messages["content"]
++                    metrics_logging_data["content"] = flat_messages["content"]
++                    metrics_logging_data["role"] = flat_messages.get("role", [])
+ 
+                 memory_tracker.snapshot_start_of_stage("Computing logprobs", dir())
+                 print("▶ Preparing for logprob inference...", flush=True)
+@@ -1962,7 +1963,10 @@
+             # Log training data
+             memory_tracker.snapshot_start_of_stage("Logging", dir())
+             if not _should_log_nemo_gym_responses(master_config):
+-                log_data = {"content": metrics_logging_data["content"]}
++                log_data = {
++                    "content": metrics_logging_data["content"],
++                    "role": metrics_logging_data["role"],
++                }
+                 log_data["rewards"] = rewards.tolist()
+                 if master_config["grpo"]["use_dynamic_sampling"]:
+                     log_data["filtered_rewards"] = rewards.tolist()
+@@ -2831,7 +2835,8 @@
+                 flat_advantages = train_data["advantages"]
+                 flat_token_mask = flat_messages["token_loss_mask"]
+                 # Save content for logging before deleting flat_messages
+-                flat_messages_content = flat_messages.get("content", [])
++                flat_messages_content = flat_messages.get("content", [])
++                flat_messages_role = flat_messages.get("role", [])
+                 del flat_messages
+ 
+                 # Filter advantages using token mask (only valid response tokens)
+@@ -2975,14 +2980,15 @@
+                         checkpointer.finalize_checkpoint(checkpoint_path)
+                     policy.offload_after_refit()
+ 
+-            log_data = {"content": flat_messages_content}
++            log_data = {"content": flat_messages_content, "role": flat_messages_role}
+             log_data["rewards"] = rewards.tolist()
+             log_data["generation_logprobs"] = train_data["generation_logprobs"].tolist()
+             log_data["prev_logprobs"] = train_data["prev_logprobs"].tolist()
+             log_data["input_lengths"] = input_lengths.tolist()
+             logger.log_batched_dict_as_jsonl(
+                 log_data, f"train_data_step{step + 1}.jsonl"
+             )
+             del train_data
+             del flat_messages_content
++            del flat_messages_role
+ 

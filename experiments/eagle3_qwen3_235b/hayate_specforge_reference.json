@@ -1,0 +1,333 @@
+{
+  "configs": {
+    "qwen3-235B-A22B-eagle3.json": {
+      "eagle_config": {
+        "eagle_aux_hidden_state_layer_ids": [
+          1,
+          46,
+          90
+        ],
+        "use_aux_hidden_state": true
+      },
+      "fields": {
+        "architectures": [
+          "LlamaForCausalLMEagle3"
+        ],
+        "draft_vocab_size": 32000,
+        "hidden_size": 4096,
+        "intermediate_size": 24576,
+        "max_position_embeddings": 40960,
+        "model_type": "llama",
+        "num_attention_heads": 64,
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 4,
+        "rope_theta": 1000000.0,
+        "vocab_size": 151936
+      },
+      "json_status": "valid",
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/configs/qwen3-235B-A22B-eagle3.json",
+      "size": 816,
+      "status": "present"
+    },
+    "qwen3-30B-A3B-eagle3.json": {
+      "eagle_config": {},
+      "fields": {
+        "architectures": [
+          "LlamaForCausalLMEagle3"
+        ],
+        "draft_vocab_size": 32000,
+        "hidden_size": 2048,
+        "intermediate_size": 12288,
+        "max_position_embeddings": 32768,
+        "model_type": "llama",
+        "num_attention_heads": 32,
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 4,
+        "rope_theta": 1000000.0,
+        "vocab_size": 151936
+      },
+      "json_status": "valid",
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/configs/qwen3-30B-A3B-eagle3.json",
+      "size": 764,
+      "status": "present"
+    },
+    "qwen3-8b-eagle3.json": {
+      "eagle_config": {},
+      "fields": {
+        "architectures": [
+          "LlamaForCausalLMEagle3"
+        ],
+        "draft_vocab_size": 32000,
+        "hidden_size": 4096,
+        "intermediate_size": 12288,
+        "max_position_embeddings": 2048,
+        "model_type": "llama",
+        "num_attention_heads": 32,
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 8,
+        "rope_theta": 1000000,
+        "vocab_size": 151936
+      },
+      "json_status": "valid",
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/configs/qwen3-8b-eagle3.json",
+      "size": 762,
+      "status": "present"
+    },
+    "qwen3-8b-eagle3_long.json": {
+      "eagle_config": {},
+      "fields": {
+        "architectures": [
+          "LlamaForCausalLMEagle3"
+        ],
+        "draft_vocab_size": 32000,
+        "hidden_size": 4096,
+        "intermediate_size": 12288,
+        "max_position_embeddings": 32768,
+        "model_type": "llama",
+        "num_attention_heads": 32,
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 8,
+        "rope_theta": 1000000,
+        "vocab_size": 151936
+      },
+      "json_status": "valid",
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/configs/qwen3-8b-eagle3_long.json",
+      "size": 763,
+      "status": "present"
+    },
+    "qwen3-coder-480B-A35B-instruct-eagle3.json": {
+      "eagle_config": {},
+      "fields": {
+        "architectures": [
+          "LlamaForCausalLMEagle3"
+        ],
+        "draft_vocab_size": 32000,
+        "hidden_size": 6144,
+        "intermediate_size": 16384,
+        "max_position_embeddings": 262144,
+        "model_type": "llama",
+        "num_attention_heads": 96,
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 8,
+        "rope_theta": 1000000,
+        "vocab_size": 151936
+      },
+      "json_status": "valid",
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/configs/qwen3-coder-480B-A35B-instruct-eagle3.json",
+      "size": 763,
+      "status": "present"
+    }
+  },
+  "current_architecture_json": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/architecture/eagle3_architecture.json",
+  "current_verifier_config": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/verifier_config/config.json",
+  "examples": {
+    "run_qwen3_dense_eagle3_online_30b-moe_large_qwen_data_long.sh": {
+      "flags": {
+        "--batch-size": "1",
+        "--chat-template": "qwen",
+        "--draft-global-batch-size": "64",
+        "--draft-micro-batch-size": null,
+        "--draft-model-config": "$ROOT_DIR/configs/qwen3-30B-A3B-eagle3.json",
+        "--learning-rate": "1e-4",
+        "--max-length": "32768",
+        "--num-epochs": "10",
+        "--output-dir": "$ROOT_DIR/outputs/Qwen3-30B-A3B-eagle3-base",
+        "--target-model-path": "Qwen/Qwen3-30B-A3B-Base",
+        "--tp-size": "$TP_SIZE",
+        "--train-data-path": "$ROOT_DIR/cache/dataset/magpie_ultrachat_qwen.jsonl",
+        "--ttt-length": "7"
+      },
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/examples/run_qwen3_dense_eagle3_online_30b-moe_large_qwen_data_long.sh",
+      "status": "present"
+    },
+    "run_qwen3_dense_eagle3_online_8b_dapo.sh": {
+      "flags": {
+        "--batch-size": "1",
+        "--chat-template": "qwen",
+        "--draft-global-batch-size": "64",
+        "--draft-micro-batch-size": "2",
+        "--draft-model-config": "$ROOT_DIR/configs/qwen3-8b-eagle3_long.json",
+        "--learning-rate": "1e-4",
+        "--max-length": "32768",
+        "--num-epochs": "10",
+        "--output-dir": "$ROOT_DIR/outputs/Qwen3-8B-eagle3-dapo",
+        "--target-model-path": "Qwen/Qwen3-8B",
+        "--tp-size": "$TP_SIZE",
+        "--train-data-path": "/lustre/fsw/portfolios/coreai/users/hiso/code/nemo-rl_38119888_dev-3/outputs/datagen/poc_spec_8b/outputs_500k.jsonl",
+        "--ttt-length": "7"
+      },
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/examples/run_qwen3_dense_eagle3_online_8b_dapo.sh",
+      "status": "present"
+    },
+    "run_qwen3_moe_eagle3_online.sh": {
+      "flags": {
+        "--batch-size": "1",
+        "--chat-template": "qwen",
+        "--draft-global-batch-size": null,
+        "--draft-micro-batch-size": null,
+        "--draft-model-config": "$ROOT_DIR/configs/qwen3-30B-A3B-eagle3.json",
+        "--learning-rate": "1e-4",
+        "--max-length": "2048",
+        "--num-epochs": "10",
+        "--output-dir": "$ROOT_DIR/outputs/Qwen3-30B-A3B-eagle3",
+        "--target-model-path": "Qwen/Qwen3-30B-A3B",
+        "--tp-size": "$NUM_GPUS",
+        "--train-data-path": "$ROOT_DIR/cache/dataset/sharegpt.jsonl",
+        "--ttt-length": "7"
+      },
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/examples/run_qwen3_moe_eagle3_online.sh",
+      "status": "present"
+    }
+  },
+  "generated_at": "2026-05-22 15:16:32 PDT",
+  "outputs": {
+    "outputs/Qwen3-30B-A3B-eagle3-base/epoch_9": {
+      "files": {
+        "config.json": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-30B-A3B-eagle3-base/epoch_9/config.json",
+          "size": 809,
+          "status": "present"
+        },
+        "model.safetensors": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-30B-A3B-eagle3-base/epoch_9/model.safetensors",
+          "size": 366378848,
+          "status": "present"
+        },
+        "training_state.pt": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-30B-A3B-eagle3-base/epoch_9/training_state.pt",
+          "size": 60183,
+          "status": "present"
+        }
+      },
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-30B-A3B-eagle3-base/epoch_9",
+      "status": "present"
+    },
+    "outputs/Qwen3-8B-eagle3-long/epoch_9": {
+      "files": {
+        "config.json": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/config.json",
+          "size": 807,
+          "status": "present"
+        },
+        "d2t.bin": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/d2t.bin",
+          "size": 257485,
+          "status": "present"
+        },
+        "model.safetensors": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/model.safetensors",
+          "size": 799457128,
+          "status": "present"
+        },
+        "t2d.bin": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/t2d.bin",
+          "size": 153421,
+          "status": "present"
+        },
+        "training_state.pt": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/training_state.pt",
+          "size": 4759,
+          "status": "present"
+        }
+      },
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9",
+      "status": "present"
+    },
+    "outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed": {
+      "files": {
+        "config.json": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed/config.json",
+          "size": 807,
+          "status": "present"
+        },
+        "d2t.bin": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed/d2t.bin",
+          "size": 257485,
+          "status": "present"
+        },
+        "model.safetensors": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed/model.safetensors",
+          "size": 2044116936,
+          "status": "present"
+        },
+        "t2d.bin": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed/t2d.bin",
+          "size": 153421,
+          "status": "present"
+        },
+        "training_state.pt": {
+          "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed/training_state.pt",
+          "size": 4759,
+          "status": "present"
+        }
+      },
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge/outputs/Qwen3-8B-eagle3-long/epoch_9/with-embed",
+      "status": "present"
+    }
+  },
+  "overall_status": "reference_only",
+  "qwen3_235b_comparison": {
+    "conclusion": "SpecForge 235B config is useful for aux-layer sanity, but it is not a direct config source for Thinking-2507.",
+    "rows": [
+      {
+        "current": [
+          1,
+          46,
+          90
+        ],
+        "field": "aux_layers",
+        "match": true,
+        "specforge": [
+          1,
+          46,
+          90
+        ]
+      },
+      {
+        "current": 4096,
+        "field": "hidden_size",
+        "match": true,
+        "specforge": 4096
+      },
+      {
+        "current": 12288,
+        "field": "intermediate_size",
+        "match": false,
+        "specforge": 24576
+      },
+      {
+        "current": 262144,
+        "field": "max_position_embeddings",
+        "match": false,
+        "specforge": 40960
+      },
+      {
+        "current": 64,
+        "field": "num_attention_heads",
+        "match": true,
+        "specforge": 64
+      },
+      {
+        "current": 4,
+        "field": "num_key_value_heads",
+        "match": true,
+        "specforge": 4
+      },
+      {
+        "current": 5000000,
+        "field": "rope_theta",
+        "match": false,
+        "specforge": 1000000.0
+      },
+      {
+        "current": 151936,
+        "field": "vocab_size",
+        "match": true,
+        "specforge": 151936
+      }
+    ],
+    "status": "reference_only"
+  },
+  "readme_claim": "SpecForge README identifies it as an SGLang ecosystem project for SGLang-compatible draft training.",
+  "specforge_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/SpecForge"
+}

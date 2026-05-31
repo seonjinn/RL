@@ -1,0 +1,143 @@
+generated_at: "2026-05-28"
+scope: "Already produced Nsight Systems data for Qwen3-30B-A3B NeMo-RL profiling"
+
+completed_nsys_runs:
+  - id: "hybridep_without_sequence_packing"
+    slurm_job_id: 2972603
+    job_name: "qwen30ba3b-nsys-hybridep-nopack-p8g8-s5to7-N4xG4"
+    state: "COMPLETED"
+    model: "Qwen/Qwen3-30B-A3B"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    wandb:
+      enabled: true
+      entity: "nvidia"
+      project: "sync-grpo-gb200_oci-benchmark"
+      run_name: "Qwen30B_A3B_Main_N4xG4_baseline_p8_g8_8step"
+      run_id: "galhmcmv"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/galhmcmv"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/logs/grpo-qwen3-30ba3b-4n4g/exp_007/wandb/wandb/run-20260527_130530-galhmcmv"
+      local_artifact_file: "run-galhmcmv.wandb"
+
+    cluster_shape:
+      training_nodes: 4
+      gpus_per_node: 4
+      total_training_gpus: 16
+      policy_worker_processes_profiled: 4
+      note: "One megatron_policy_worker nsys report was produced per node."
+
+    grpo_batch_shape_used:
+      num_prompts_per_step: 8
+      num_generations_per_prompt: 8
+      generated_samples_per_step: 64
+      train_global_batch_size: 64
+      train_micro_batch_size: 1
+      max_total_sequence_length: 4096
+      sequence_packing_enabled: false
+      note: "This was a short smoke/profiling shape, not the full performance recipe shape."
+
+    original_performance_recipe_shape_for_reference:
+      num_prompts_per_step: 64
+      num_generations_per_prompt: 32
+      generated_samples_per_step: 2048
+      expected_train_global_batch_size_for_apples_to_apples: 2048
+
+    training_parallelism:
+      configured:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        expert_model_parallel_size: 16
+        sequence_parallel: false
+        moe_token_dispatcher_type: "flex"
+        moe_flex_dispatcher_backend: "hybridep"
+        moe_hybridep_num_sms: 16
+        high_priority_stream_groups:
+          - "ep"
+      derived:
+        total_megatron_training_ranks: 16
+        dense_model_parallel_degree_tp_x_pp: 1
+        expert_parallel_degree: 16
+        expert_data_parallel_replicas_total_ranks_div_tp_pp_ep: 1
+      generation_backend_reference:
+        backend: "vLLM"
+        tensor_parallel_size_per_vllm_engine: 1
+        pipeline_parallel_size_per_vllm_engine: 1
+        data_parallel_size_per_vllm_engine: 1
+        speculative_config: null
+
+    nsys:
+      profile_step_range: "5:8"
+      interpreted_profiled_steps:
+        - 5
+        - 6
+        - 7
+      worker_patterns:
+        - "megatron_policy_worker"
+      artifact_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/2972603-logs/ray/session_2026-05-27_13-01-21_053388_1157134/logs/nsight"
+      total_artifact_size: "3.9G"
+      files:
+        - name: "megatron_policy_worker_5:8_1205208.nsys-rep"
+          size: "992M"
+        - name: "megatron_policy_worker_5:8_1205258.nsys-rep"
+          size: "991M"
+        - name: "megatron_policy_worker_5:8_1205284.nsys-rep"
+          size: "991M"
+        - name: "megatron_policy_worker_5:8_1205312.nsys-rep"
+          size: "992M"
+
+    profiled_window_metrics:
+      step_5:
+        total_step_time_sec: 160.96
+        mean_total_tokens_per_sample: 3462.62
+        e2e_tokens_per_sec_per_gpu: 88.84
+        policy_training_tokens_per_sec_per_gpu: 148.06
+        policy_and_reference_logprobs_tokens_per_sec_per_gpu: 664.48
+        training_worker_group_tokens_per_sec_per_gpu: 121.08
+        generation_worker_group_tokens_per_sec_per_gpu: 554.26
+        training_worker_group_tokens_per_sec: 1937.26
+        generation_worker_group_tokens_per_sec: 8868.20
+      step_6:
+        total_step_time_sec: 163.04
+        mean_total_tokens_per_sample: 3822.92
+        e2e_tokens_per_sec_per_gpu: 96.32
+        policy_training_tokens_per_sec_per_gpu: 159.69
+        policy_and_reference_logprobs_tokens_per_sec_per_gpu: 716.36
+        training_worker_group_tokens_per_sec_per_gpu: 130.58
+        generation_worker_group_tokens_per_sec_per_gpu: 607.10
+        training_worker_group_tokens_per_sec: 2089.28
+        generation_worker_group_tokens_per_sec: 9713.64
+      step_7:
+        total_step_time_sec: 154.91
+        mean_total_tokens_per_sample: 3916.28
+        e2e_tokens_per_sec_per_gpu: 103.88
+        policy_training_tokens_per_sec_per_gpu: 176.84
+        policy_and_reference_logprobs_tokens_per_sec_per_gpu: 789.71
+        training_worker_group_tokens_per_sec_per_gpu: 144.48
+        generation_worker_group_tokens_per_sec_per_gpu: 621.89
+        training_worker_group_tokens_per_sec: 2311.75
+        generation_worker_group_tokens_per_sec: 9950.28
+      average_steps_5_to_7:
+        total_step_time_sec: 159.64
+        mean_total_tokens_per_sample: 3733.94
+        e2e_tokens_per_sec_per_gpu: 96.35
+        policy_training_tokens_per_sec_per_gpu: 161.53
+        policy_and_reference_logprobs_tokens_per_sec_per_gpu: 723.52
+        training_worker_group_tokens_per_sec_per_gpu: 132.05
+        generation_worker_group_tokens_per_sec_per_gpu: 594.42
+        training_worker_group_tokens_per_sec: 2112.76
+        generation_worker_group_tokens_per_sec: 9510.71
+
+excluded_or_pending_runs:
+  - slurm_job_id: 2972602
+    reason: "Failed before the nsys profiling window; no usable .nsys-rep artifact."
+  - slurm_job_id: 2996403
+    reason: "Still running when this summary was created; p8/g8 alltoall run is not yet an already-produced nsys artifact."
+  - slurm_job_id: 2996657
+    reason: "Submitted after this extracted-data summary for the corrected full-shape run: p64/g32/GBS2048, sequence packing enabled, alltoall dispatcher, nsys range 5:8."
+  - slurm_job_id: 2996931
+    reason: "Submitted after this extracted-data summary for the corrected full-shape run: p64/g32/GBS2048, sequence packing disabled, HybridEP backend, nsys range 5:8."
+
+important_caveat:
+  - "The only completed nsys artifact so far used GBS=64, not the original performance recipe shape."
+  - "For the next apples-to-apples profiling run, use num_prompts_per_step=64, num_generations_per_prompt=32, and train_global_batch_size=2048."

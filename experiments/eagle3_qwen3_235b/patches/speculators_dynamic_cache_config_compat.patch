@@ -1,0 +1,35 @@
+diff --git a/src/speculators/models/eagle3/core.py b/src/speculators/models/eagle3/core.py
+index a797f67..db9c84b 100644
+--- a/src/speculators/models/eagle3/core.py
++++ b/src/speculators/models/eagle3/core.py
+@@ -1,4 +1,5 @@
+ import copy
++import inspect
+ from typing import ClassVar
+ 
+ import torch
+@@ -18,6 +19,15 @@ from speculators.models.utils import resolve_target_layer_ids
+ from speculators.proposals.greedy import GreedyTokenProposalConfig
+ 
+ 
++_DYNAMIC_CACHE_ACCEPTS_CONFIG = (
++    "config" in inspect.signature(DynamicCache).parameters
++)
++
++
++def make_dynamic_cache(config):
++    return DynamicCache(config=config) if _DYNAMIC_CACHE_ACCEPTS_CONFIG else DynamicCache()
++
++
+ def conditional_torch_compile(func):
+     if torch.cuda.is_available() and hasattr(torch, "compile"):
+         return torch.compile(func)
+@@ -143,7 +152,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
+             ).unsqueeze(0)
+             # shape: [1, total_seq_len]
+ 
+-        past_key_values = DynamicCache(config=self.config.transformer_layer_config)
++        past_key_values = make_dynamic_cache(self.config.transformer_layer_config)
+ 
+         combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)
+         # Note: Attention mask is stored as a BlockMask object

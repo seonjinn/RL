@@ -1,0 +1,323 @@
+generated_at: "2026-05-28"
+scope: "Qwen3-30B-A3B NeMo-RL GRPO profiling runs"
+cluster: "oci-hsg"
+model: "Qwen3-30B-A3B"
+base_config: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+common_shape:
+  note: "Shape actually used by the short nsys profiling runs, not the full performance recipe shape."
+  num_nodes: 4
+  gpus_per_node: 4
+  total_gpus: 16
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 8
+  train_global_batch_size: 64
+  max_num_steps: 8
+  async_grpo_enabled: false
+  validation_period: 1000
+  checkpointing_enabled: false
+original_recipe_shape:
+  config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+  num_prompts_per_step: 64
+  num_generations_per_prompt: 32
+  generated_samples_per_step: 2048
+  inherited_train_global_batch_size_from_grpo_math_1B: 512
+  gb200_main_script_default_train_global_batch_size: 2048
+  note: "For apples-to-apples performance comparison, keep the same prompt/generation/train batch shape as the baseline script and change only the feature under test."
+nsys:
+  profile_step_range: "5:8"
+  intended_profiled_steps: [5, 6, 7]
+  worker_patterns:
+    - "megatron_policy_worker"
+
+runs:
+  - id: "seqpack_baseline_allgather"
+    slurm_job_id: 2972602
+    job_name: "qwen30ba3b-nsys-seqpack-baseline-p8g8-s5to7-N4xG4"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526"
+    state: "FAILED"
+    elapsed: "00:42:27"
+    exit_code: "1:0"
+    nodes: "nvl72098-T[01,03,11-12]"
+    script_reference: "Qwen30BA3B_GB200_Main_Baseline.sh"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    wandb:
+      enabled: true
+      project: "sync-grpo-gb200_oci-benchmark"
+      run_name: "Qwen30B_A3B_Main_N4xG4_baseline_p8_g8_8step"
+      run_id: "xbbwns2f"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/xbbwns2f"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/logs/grpo-qwen3-30ba3b-4n4g/exp_006/wandb/wandb/run-20260527_130527-xbbwns2f"
+    overrides:
+      - "cluster.num_nodes=4"
+      - "cluster.gpus_per_node=4"
+      - "grpo.async_grpo.enabled=false"
+      - "grpo.val_period=1000"
+      - "checkpointing.enabled=false"
+      - "grpo.num_prompts_per_step=8"
+      - "grpo.num_generations_per_prompt=8"
+      - "policy.train_global_batch_size=64"
+      - "policy.sequence_packing.enabled=true"
+      - "policy.megatron_cfg.moe_enable_deepep=false"
+      - "policy.megatron_cfg.moe_token_dispatcher_type=allgather"
+      - "grpo.max_num_steps=8"
+      - "logger.wandb_enabled=true"
+      - "logger.wandb.project=sync-grpo-gb200_oci-benchmark"
+      - "logger.wandb.name=Qwen30B_A3B_Main_N4xG4_baseline_p8_g8_8step"
+    nsys_artifacts:
+      produced: false
+      reason: "Job failed before reaching the profiling window."
+    failure:
+      category: "NCCL watchdog timeout"
+      collective: "_ALLGATHER_BASE"
+      group: "EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP"
+      note: "HybridEP was disabled. The failure is in the default MoE allgather path with sequence packing enabled."
+
+  - id: "hybridep_without_sequence_packing"
+    slurm_job_id: 2972603
+    job_name: "qwen30ba3b-nsys-hybridep-nopack-p8g8-s5to7-N4xG4"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421"
+    state: "COMPLETED"
+    elapsed: "00:55:54"
+    exit_code: "0:0"
+    nodes: "nvl72097-T[05-08]"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    wandb:
+      enabled: true
+      project: "sync-grpo-gb200_oci-benchmark"
+      run_name: "Qwen30B_A3B_Main_N4xG4_baseline_p8_g8_8step"
+      run_id: "galhmcmv"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/galhmcmv"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/logs/grpo-qwen3-30ba3b-4n4g/exp_007/wandb/wandb/run-20260527_130530-galhmcmv"
+    overrides:
+      - "cluster.num_nodes=4"
+      - "cluster.gpus_per_node=4"
+      - "grpo.async_grpo.enabled=false"
+      - "grpo.val_period=1000"
+      - "checkpointing.enabled=false"
+      - "grpo.num_prompts_per_step=8"
+      - "grpo.num_generations_per_prompt=8"
+      - "policy.train_global_batch_size=64"
+      - "policy.sequence_packing.enabled=false"
+      - "policy.megatron_cfg.moe_token_dispatcher_type=flex"
+      - "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep"
+      - "++policy.megatron_cfg.moe_hybridep_num_sms=16"
+      - "++policy.megatron_cfg.high_priority_stream_groups=[ep]"
+      - "++policy.megatron_cfg.env_vars.CUDA_HOME=/usr/local/cuda"
+      - "++policy.megatron_cfg.hybridep_num_ranks_per_nvlink_domain=16"
+      - "++policy.megatron_cfg.hybridep_use_mnnvl=true"
+      - "grpo.max_num_steps=8"
+      - "logger.wandb_enabled=true"
+      - "logger.wandb.project=sync-grpo-gb200_oci-benchmark"
+      - "logger.wandb.name=Qwen30B_A3B_Main_N4xG4_baseline_p8_g8_8step"
+    nsys_artifacts:
+      produced: true
+      remote_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/2972603-logs/ray/session_2026-05-27_13-01-21_053388_1157134/logs/nsight"
+      files:
+        - name: "megatron_policy_worker_5:8_1205208.nsys-rep"
+          size: "992M"
+        - name: "megatron_policy_worker_5:8_1205258.nsys-rep"
+          size: "991M"
+        - name: "megatron_policy_worker_5:8_1205284.nsys-rep"
+          size: "991M"
+        - name: "megatron_policy_worker_5:8_1205312.nsys-rep"
+          size: "991M"
+    profiled_step_metrics:
+      step_5:
+        total_step_time_sec: 160.96
+        e2e_tokens_per_sec_per_gpu: 88.84
+        policy_training_tokens_per_sec_per_gpu: 148.06
+        training_worker_group_tokens_per_sec_per_gpu: 121.08
+        generation_worker_group_tokens_per_sec_per_gpu: 554.26
+      step_6:
+        total_step_time_sec: 163.04
+        e2e_tokens_per_sec_per_gpu: 96.32
+        policy_training_tokens_per_sec_per_gpu: 159.69
+        training_worker_group_tokens_per_sec_per_gpu: 130.58
+        generation_worker_group_tokens_per_sec_per_gpu: 607.10
+      step_7:
+        total_step_time_sec: 154.91
+        e2e_tokens_per_sec_per_gpu: 103.88
+        policy_training_tokens_per_sec_per_gpu: 176.84
+        training_worker_group_tokens_per_sec_per_gpu: 144.48
+        generation_worker_group_tokens_per_sec_per_gpu: 621.89
+      average_steps_5_to_7:
+        total_step_time_sec: 159.64
+        e2e_tokens_per_sec_per_gpu: 96.35
+        policy_training_tokens_per_sec_per_gpu: 161.53
+        training_worker_group_tokens_per_sec_per_gpu: 132.05
+        generation_worker_group_tokens_per_sec_per_gpu: 594.42
+
+  - id: "seqpack_baseline_alltoall"
+    slurm_job_id: 2996403
+    job_name: "qwen30ba3b-nsys-seqpack-alltoall-p8g8-s5to7-N4xG4"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526"
+    state_at_collection: "RUNNING"
+    elapsed_at_collection: "00:11:49"
+    exit_code_at_collection: "0:0"
+    nodes: "nvl72169-T[03,06,08,15]"
+    local_script: "remote_worktree_edit/scripts/Qwen30BA3B_GB200_Main_Baseline_Alltoall_Nsys.sh"
+    remote_script: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/Qwen30BA3B_GB200_Main_Baseline_Alltoall_Nsys.sh"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    wandb:
+      enabled: true
+      project: "sync-grpo-gb200_oci-benchmark"
+      run_name: "Qwen30B_A3B_Main_N4xG4_seqpack_alltoall_nsys_p8_g8_8step"
+      run_id: "01oaj0eg"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/01oaj0eg"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/logs/grpo-qwen3-30ba3b-4n4g/exp_007/wandb/wandb/run-20260528_124402-01oaj0eg"
+    sbatch:
+      partition: "batch"
+      time_limit: "02:00:00"
+      gres: "gpu:4"
+      ntasks_per_node: 1
+      cpus_per_task: 64
+      mem: 0
+      segment: 4
+    runtime_env:
+      NRL_FORCE_REBUILD_VENVS: "true"
+      UV_PYTHON: "3.12.13"
+      UV_PROJECT_ENVIRONMENT: ".driver_venvs/qwen30ba3b_nsys_seqpack_alltoall_py312"
+      NRL_NSYS_PROFILE_STEP_RANGE: "5:8"
+      NRL_NSYS_WORKER_PATTERNS: "megatron_policy_worker"
+      RAY_LOG_SYNC_FREQUENCY: "30"
+    overrides:
+      - "cluster.num_nodes=4"
+      - "cluster.gpus_per_node=4"
+      - "grpo.async_grpo.enabled=false"
+      - "grpo.val_period=1000"
+      - "checkpointing.enabled=false"
+      - "grpo.num_prompts_per_step=8"
+      - "grpo.num_generations_per_prompt=8"
+      - "policy.train_global_batch_size=64"
+      - "policy.sequence_packing.enabled=true"
+      - "policy.megatron_cfg.moe_enable_deepep=false"
+      - "policy.megatron_cfg.moe_token_dispatcher_type=alltoall"
+      - "grpo.max_num_steps=8"
+      - "logger.wandb_enabled=true"
+      - "logger.wandb.project=sync-grpo-gb200_oci-benchmark"
+      - "logger.wandb.name=Qwen30B_A3B_Main_N4xG4_seqpack_alltoall_nsys_p8_g8_8step"
+    expected_nsys_artifact_root: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996403-logs/ray/*/logs/nsight"
+
+  - id: "seqpack_alltoall_full_shape"
+    slurm_job_id: 2996657
+    job_name: "qwen30ba3b-nsys-seqpack-alltoall-p64g32-gbs2048-s5to7-N4xG4"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526"
+    state_at_collection: "COMPLETED"
+    elapsed_at_collection: "01:26:14"
+    exit_code_at_collection: "0:0"
+    nodes: "nvl72164-T[09-10,14,17]"
+    local_script: "remote_worktree_edit/scripts/Qwen30BA3B_GB200_Main_Baseline_Alltoall_Nsys_FullShape.sh"
+    remote_script: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/Qwen30BA3B_GB200_Main_Baseline_Alltoall_Nsys_FullShape.sh"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    wandb:
+      enabled: true
+      project: "sync-grpo-gb200_oci-benchmark"
+      run_name: "Qwen30B_A3B_Main_N4xG4_seqpack_alltoall_nsys_p64_g32_gbs2048_8step"
+      run_id: "1391ed4r"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/1391ed4r"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/logs/grpo-qwen3-30ba3b-4n4g/exp_008/wandb/wandb/run-20260528_130103-1391ed4r"
+    shape:
+      num_prompts_per_step: 64
+      num_generations_per_prompt: 32
+      generated_samples_per_step: 2048
+      train_global_batch_size: 2048
+      max_num_steps: 8
+    nsys:
+      profile_step_range: "5:8"
+      intended_profiled_steps: [5, 6, 7]
+      worker_patterns:
+        - "megatron_policy_worker"
+    overrides:
+      - "cluster.num_nodes=4"
+      - "cluster.gpus_per_node=4"
+      - "grpo.async_grpo.enabled=false"
+      - "grpo.val_period=1000"
+      - "checkpointing.enabled=false"
+      - "grpo.num_prompts_per_step=64"
+      - "grpo.num_generations_per_prompt=32"
+      - "policy.train_global_batch_size=2048"
+      - "policy.sequence_packing.enabled=true"
+      - "policy.megatron_cfg.moe_enable_deepep=false"
+      - "policy.megatron_cfg.moe_token_dispatcher_type=alltoall"
+      - "grpo.max_num_steps=8"
+      - "logger.wandb_enabled=true"
+      - "logger.wandb.project=sync-grpo-gb200_oci-benchmark"
+      - "logger.wandb.name=Qwen30B_A3B_Main_N4xG4_seqpack_alltoall_nsys_p64_g32_gbs2048_8step"
+    expected_nsys_artifact_root: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996657-logs/ray/*/logs/nsight"
+    nsys_artifacts:
+      produced: true
+      nsys_rep_count: 16
+      total_nsys_rep_size: "14.41 GiB"
+
+  - id: "hybridep_nopack_full_shape"
+    slurm_job_id: 2996931
+    job_name: "qwen30ba3b-nsys-hybridep-nopack-p64g32-gbs2048-s5to7-N4xG4"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421"
+    state_at_collection: "FAILED"
+    elapsed_at_collection: "00:44:01"
+    exit_code_at_collection: "1:0"
+    nodes: "nvl72069-T[01,10,12,17]"
+    local_script: "remote_worktree_edit/scripts/Qwen30BA3B_GB200_Main_HybridEP_NoPack_Nsys_FullShape.sh"
+    remote_script: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/Qwen30BA3B_GB200_Main_HybridEP_NoPack_Nsys_FullShape.sh"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    wandb:
+      enabled: true
+      project: "sync-grpo-gb200_oci-benchmark"
+      run_name: "Qwen30B_A3B_Main_N4xG4_hybridep_nopack_nsys_p64_g32_gbs2048_8step"
+      run_id: "6w36bqva"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/6w36bqva"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/logs/grpo-qwen3-30ba3b-4n4g/exp_008/wandb/wandb/run-20260528_131655-6w36bqva"
+    shape:
+      num_prompts_per_step: 64
+      num_generations_per_prompt: 32
+      generated_samples_per_step: 2048
+      train_global_batch_size: 2048
+      max_num_steps: 8
+    nsys:
+      profile_step_range: "5:8"
+      intended_profiled_steps: [5, 6, 7]
+      worker_patterns:
+        - "megatron_policy_worker"
+    overrides:
+      - "cluster.num_nodes=4"
+      - "cluster.gpus_per_node=4"
+      - "grpo.async_grpo.enabled=false"
+      - "grpo.val_period=1000"
+      - "checkpointing.enabled=false"
+      - "grpo.num_prompts_per_step=64"
+      - "grpo.num_generations_per_prompt=32"
+      - "policy.train_global_batch_size=2048"
+      - "policy.sequence_packing.enabled=false"
+      - "policy.megatron_cfg.moe_token_dispatcher_type=flex"
+      - "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep"
+      - "++policy.megatron_cfg.moe_hybridep_num_sms=16"
+      - "++policy.megatron_cfg.high_priority_stream_groups=[ep]"
+      - "++policy.megatron_cfg.env_vars.CUDA_HOME=/usr/local/cuda"
+      - "++policy.megatron_cfg.hybridep_num_ranks_per_nvlink_domain=16"
+      - "++policy.megatron_cfg.hybridep_use_mnnvl=true"
+      - "grpo.max_num_steps=8"
+      - "logger.wandb_enabled=true"
+      - "logger.wandb.project=sync-grpo-gb200_oci-benchmark"
+      - "logger.wandb.name=Qwen30B_A3B_Main_N4xG4_hybridep_nopack_nsys_p64_g32_gbs2048_8step"
+    expected_nsys_artifact_root: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526-hybridep421/2996931-logs/ray/*/logs/nsight"
+    nsys_artifacts:
+      produced: false
+      nsys_rep_count: 0
+      total_nsys_rep_size: "0.00 GiB"
+      reason: "MegatronPolicyWorker failed during initialization before reaching the nsys profiling window."
+    failure:
+      category: "MegatronPolicyWorker initialization failure"
+      error: "torch.distributed.DistNetworkError: Broken pipe"
+      location: "setup_reference_model_state -> get_model -> _ddp_wrap -> broadcast_params -> torch.distributed.broadcast"
+      note: "Failure happened before any training step metrics were emitted, so there is no valid HybridEP GBS2048 profiling result yet."
+
+notes:
+  - "The completed profiling result is HybridEP without sequence packing."
+  - "The original sequence-packing baseline with allgather failed before the nsys window."
+  - "The alltoall sequence-packing run was submitted to test whether the baseline path can run with variable-length packed sequences."
+  - "The p8/g8/GBS64 shape was chosen for short nsys smoke profiling. It should not be used as the final baseline-vs-feature throughput comparison against the full performance recipe."

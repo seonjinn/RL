@@ -1,0 +1,32 @@
+diff --git a/vllm/compilation/piecewise_backend.py b/vllm/compilation/piecewise_backend.py
+--- a/vllm/compilation/piecewise_backend.py
++++ b/vllm/compilation/piecewise_backend.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import contextlib
+ import dataclasses
+ import io
+ import json
+@@ -298,9 +299,17 @@ class PiecewiseBackend:
+                     else list(args)
+                 )
+ 
+-                with (
+-                    torch._functorch.config.patch("bundled_autograd_cache", True),
+-                ):
++                # Torch 2.8 does not expose this functorch config key, while
++                # newer vLLM releases try to set it during piecewise compile.
++                # Keep CUDA Graph/compile enabled and only patch the key when
++                # the local Torch build supports it.
++                functorch_config = getattr(torch._functorch.config, "_config", {})
++                bundled_autograd_cache_context = (
++                    torch._functorch.config.patch("bundled_autograd_cache", True)
++                    if "bundled_autograd_cache" in functorch_config
++                    else contextlib.nullcontext()
++                )
++                with bundled_autograd_cache_context:
+                     range_entry.runnable = self.vllm_backend.compiler_manager.compile(
+                         self.graph,
+                         args_list,

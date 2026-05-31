@@ -1,0 +1,84 @@
+#!/bin/bash
+#SBATCH --job-name=q235b-eagle3-export
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1
+#SBATCH --partition=batch
+#SBATCH --time=02:00:00
+#SBATCH --mem=0
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+set -euo pipefail
+
+# Required at submission time:
+#   sbatch --account=<account> \
+#     --export=ALL,TRAINED_CKPT=/path/modelopt_ckpt,EXPORT_DIR=/path/exported,VLLM_DRAFT_DIR=/path/vllm,VERIFIER_CONFIG_DIR=/path/verifier \
+#     experiments/eagle3_qwen3_235b/slurm_export_vllm.sbatch
+
+REPO_ROOT="${REPO_ROOT:-$PWD}"
+ARTIFACT_ROOT="${ARTIFACT_ROOT:-}"
+SCRIPT="$REPO_ROOT/experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_export_vllm.sh"
+DRY_RUN="${DRY_RUN:-false}"
+MODELOPT_DIR="${MODELOPT_DIR:-$REPO_ROOT/Model-Optimizer}"
+REFERENCE_ARCH="${REFERENCE_ARCH:-$REPO_ROOT/experiments/eagle3_qwen3_235b/qwen3_235b_thinking_eagle3_architecture.json}"
+BASE_MODEL="${BASE_MODEL:-}"
+RUN_CONFIG_COMPARE="${RUN_CONFIG_COMPARE:-true}"
+RUN_TRAINING_CKPT_VALIDATION="${RUN_TRAINING_CKPT_VALIDATION:-true}"
+RUN_EXPORT_ARTIFACT_VALIDATION="${RUN_EXPORT_ARTIFACT_VALIDATION:-true}"
+TRAINING_CKPT_VALIDATION_JSON="${TRAINING_CKPT_VALIDATION_JSON:-}"
+TRAINING_CKPT_VALIDATION_MARKDOWN="${TRAINING_CKPT_VALIDATION_MARKDOWN:-}"
+EXPORT_CONFIG_COMPARE_JSON="${EXPORT_CONFIG_COMPARE_JSON:-}"
+VLLM_CONFIG_COMPARE_JSON="${VLLM_CONFIG_COMPARE_JSON:-}"
+EXPORT_ARTIFACTS_JSON="${EXPORT_ARTIFACTS_JSON:-}"
+EXPORT_ARTIFACTS_MARKDOWN="${EXPORT_ARTIFACTS_MARKDOWN:-}"
+TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
+CONTAINER="${CONTAINER:-${EAGLE_CONTAINER:-${EAGLE_IMAGE:-}}}"
+MOUNTS="${MOUNTS:-${EAGLE_MOUNTS:-${EAGLE_BIND:-}}}"
+CONTAINER_WORKDIR="${CONTAINER_WORKDIR:-$REPO_ROOT}"
+EXPORT_PYTHONPATH="$MODELOPT_DIR:$REPO_ROOT:${PYTHONPATH:-}"
+
+for required in TRAINED_CKPT EXPORT_DIR VLLM_DRAFT_DIR VERIFIER_CONFIG_DIR; do
+  if [[ -z "${!required:-}" ]]; then
+    echo "$required is required." >&2
+    exit 1
+  fi
+done
+
+SRUN_CONTAINER_ARGS=()
+if [[ -n "$CONTAINER" ]]; then
+  echo "Using container image: $CONTAINER"
+  SRUN_CONTAINER_ARGS+=(--container-image="$CONTAINER")
+  [[ -n "$MOUNTS" ]] && SRUN_CONTAINER_ARGS+=(--container-mounts="$MOUNTS")
+  SRUN_CONTAINER_ARGS+=(--container-workdir="$CONTAINER_WORKDIR")
+else
+  echo "No container image configured; running on host Python." >&2
+fi
+
+mkdir -p logs
+
+srun "${SRUN_CONTAINER_ARGS[@]}" --ntasks=1 bash -lc '
+  set -euo pipefail
+  export DRY_RUN="'"$DRY_RUN"'"
+  export ARTIFACT_ROOT="'"$ARTIFACT_ROOT"'"
+  export TRAINED_CKPT="'"${TRAINED_CKPT:-}"'"
+  export EXPORT_DIR="'"${EXPORT_DIR:-}"'"
+  export VLLM_DRAFT_DIR="'"${VLLM_DRAFT_DIR:-}"'"
+  export VERIFIER_CONFIG_DIR="'"${VERIFIER_CONFIG_DIR:-}"'"
+  export MODELOPT_DIR="'"$MODELOPT_DIR"'"
+  export REFERENCE_ARCH="'"$REFERENCE_ARCH"'"
+  export BASE_MODEL="'"$BASE_MODEL"'"
+  export RUN_CONFIG_COMPARE="'"$RUN_CONFIG_COMPARE"'"
+  export RUN_TRAINING_CKPT_VALIDATION="'"$RUN_TRAINING_CKPT_VALIDATION"'"
+  export RUN_EXPORT_ARTIFACT_VALIDATION="'"$RUN_EXPORT_ARTIFACT_VALIDATION"'"
+  export TRAINING_CKPT_VALIDATION_JSON="'"$TRAINING_CKPT_VALIDATION_JSON"'"
+  export TRAINING_CKPT_VALIDATION_MARKDOWN="'"$TRAINING_CKPT_VALIDATION_MARKDOWN"'"
+  export EXPORT_CONFIG_COMPARE_JSON="'"$EXPORT_CONFIG_COMPARE_JSON"'"
+  export VLLM_CONFIG_COMPARE_JSON="'"$VLLM_CONFIG_COMPARE_JSON"'"
+  export EXPORT_ARTIFACTS_JSON="'"$EXPORT_ARTIFACTS_JSON"'"
+  export EXPORT_ARTIFACTS_MARKDOWN="'"$EXPORT_ARTIFACTS_MARKDOWN"'"
+  export TRUST_REMOTE_CODE="'"$TRUST_REMOTE_CODE"'"
+  export PYTHONPATH="'"$EXPORT_PYTHONPATH"'"
+  cd "'"$REPO_ROOT"'"
+  bash "'"$SCRIPT"'"
+'

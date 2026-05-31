@@ -1,0 +1,15 @@
+diff --git a/src/speculators/models/eagle3/attention.py b/src/speculators/models/eagle3/attention.py
+index 9f1cc8a..91a73f6 100644
+--- a/src/speculators/models/eagle3/attention.py
++++ b/src/speculators/models/eagle3/attention.py
+@@ -96,8 +96,9 @@ def extend_mask_for_draft_tokens(block_mask: BlockMask) -> BlockMask:
+         dtype=kv_indices.dtype,
+         device=kv_indices.device,
+     ).reshape(1, 1, q_blocks, 1)
++    scatter_index = kv_num_blocks.unsqueeze(-1).to(torch.long)
+     kv_indices.scatter_(
+-        dim=-1, index=kv_num_blocks.unsqueeze(-1), src=new_block_indices
++        dim=-1, index=scatter_index, src=new_block_indices
+     )
+ 
+     kv_num_blocks = kv_num_blocks + 1

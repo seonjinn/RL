@@ -1,0 +1,56 @@
+generated_at: "2026-05-28"
+scope: "Qwen3-30B-A3B seqpack + alltoall Nsight Systems result directories"
+workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526"
+
+runs:
+  gbs64:
+    slurm_job_id: 2996403
+    job_name: "qwen30ba3b-nsys-seqpack-alltoall-p8g8-s5to7-N4xG4"
+    state: "COMPLETED"
+    elapsed: "00:54:09"
+    shape:
+      num_prompts_per_step: 8
+      num_generations_per_prompt: 8
+      train_global_batch_size: 64
+      max_num_steps: 8
+      profiled_steps: [5, 6, 7]
+    log_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996403-logs"
+    log_dir_size: "861M"
+    nsys:
+      nsys_rep_count: 16
+      total_nsys_rep_size: "0.77 GiB"
+      dirs:
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996403-logs/ray/session_2026-05-28_12-26-41_064241_122664/logs/nsight"
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996403-logs/ray/nvl72169-T06/session_2026-05-28_12-26-41_064241_122664/logs/nsight"
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996403-logs/ray/nvl72169-T08/session_2026-05-28_12-26-41_064241_122664/logs/nsight"
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996403-logs/ray/nvl72169-T15/session_2026-05-28_12-26-41_064241_122664/logs/nsight"
+    wandb:
+      run_id: "01oaj0eg"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/01oaj0eg"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/logs/grpo-qwen3-30ba3b-4n4g/exp_007/wandb/wandb/run-20260528_124402-01oaj0eg"
+
+  gbs2048:
+    slurm_job_id: 2996657
+    job_name: "qwen30ba3b-nsys-seqpack-alltoall-p64g32-gbs2048-s5to7-N4xG4"
+    state: "COMPLETED"
+    elapsed: "01:26:14"
+    shape:
+      num_prompts_per_step: 64
+      num_generations_per_prompt: 32
+      train_global_batch_size: 2048
+      max_num_steps: 8
+      profiled_steps: [5, 6, 7]
+    log_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996657-logs"
+    log_dir_size: "15G"
+    nsys:
+      nsys_rep_count: 16
+      total_nsys_rep_size: "14.41 GiB"
+      dirs:
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996657-logs/ray/session_2026-05-28_12-44-10_774695_3251125/logs/nsight"
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996657-logs/ray/nvl72164-T10/session_2026-05-28_12-44-10_774695_3251125/logs/nsight"
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996657-logs/ray/nvl72164-T14/session_2026-05-28_12-44-10_774695_3251125/logs/nsight"
+        - "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/2996657-logs/ray/nvl72164-T17/session_2026-05-28_12-44-10_774695_3251125/logs/nsight"
+    wandb:
+      run_id: "1391ed4r"
+      run_url: "https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/1391ed4r"
+      local_dir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/logs/grpo-qwen3-30ba3b-4n4g/exp_008/wandb/wandb/run-20260528_130103-1391ed4r"

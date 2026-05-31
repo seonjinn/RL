@@ -1,0 +1,90 @@
+diff --git a/vllm/compilation/backends.py b/vllm/compilation/backends.py
+--- a/vllm/compilation/backends.py
++++ b/vllm/compilation/backends.py
+@@ -11,7 +11,7 @@ import operator
+ import os
+ import pprint
+ import time
+ from collections.abc import Callable, Generator, Sequence
+-from contextlib import contextmanager
++from contextlib import contextmanager, nullcontext
+ from copy import deepcopy
+ from functools import partial
+ from typing import Any
+@@ -316,10 +316,16 @@ class CompilerManager:
+ 
+             from unittest.mock import patch
+ 
++            functorch_config = getattr(torch._functorch.config, "_config", {})
++            autograd_cache_normalize_inputs_context = (
++                torch._functorch.config.patch(autograd_cache_normalize_inputs=True)
++                if "autograd_cache_normalize_inputs" in functorch_config
++                else nullcontext()
++            )
++
+             with (
+                 # Graphs that are isometric (different node names but same
+                 # structure) should be treated as the same.
+-                torch._functorch.config.patch(autograd_cache_normalize_inputs=True),
++                autograd_cache_normalize_inputs_context,
+                 patch(
+                     "torch._functorch._aot_autograd.autograd_cache.autograd_cache_key",
+                     autograd_cache_key,
+diff --git a/vllm/compilation/compiler_interface.py b/vllm/compilation/compiler_interface.py
+--- a/vllm/compilation/compiler_interface.py
++++ b/vllm/compilation/compiler_interface.py
+@@ -548,13 +548,16 @@ class InductorAdaptor(CompilerInterface):
+             # InductorAdaptor (unfortunately) requires AOTAutogradCache
+             # to be turned off to run. It will fail to acquire the hash_str
+             # and error if not.
+             # StandaloneInductorAdaptor (PyTorch 2.8+) fixes this problem.
+-            stack.enter_context(
+-                torch._functorch.config.patch(enable_autograd_cache=False)
+-            )
+-            stack.enter_context(
+-                torch._functorch.config.patch(enable_remote_autograd_cache=False)
+-            )
++            functorch_config = getattr(torch._functorch.config, "_config", {})
++            if "enable_autograd_cache" in functorch_config:
++                stack.enter_context(
++                    torch._functorch.config.patch(enable_autograd_cache=False)
++                )
++            if "enable_remote_autograd_cache" in functorch_config:
++                stack.enter_context(
++                    torch._functorch.config.patch(enable_remote_autograd_cache=False)
++                )
+ 
+             compiled_graph = compile_fx(
+                 graph,
+                 example_inputs,
+@@ -684,7 +687,9 @@ def set_inductor_config(config: dict[str, Any], compile_range: Range) -> None:
+ 
+ 
+ def set_functorch_config() -> None:
+     if not envs.VLLM_USE_MEGA_AOT_ARTIFACT:
+-        torch._functorch.config.bundled_autograd_cache = False
++        functorch_config = getattr(torch._functorch.config, "_config", {})
++        if "bundled_autograd_cache" in functorch_config:
++            torch._functorch.config.bundled_autograd_cache = False
+ 
+ 
+ class EagerAdaptor(CompilerInterface):
+diff --git a/vllm/compilation/piecewise_backend.py b/vllm/compilation/piecewise_backend.py
+--- a/vllm/compilation/piecewise_backend.py
++++ b/vllm/compilation/piecewise_backend.py
+@@ -196,9 +196,15 @@ class PiecewiseCompileInterpreter:
+ 
+         def serialize(fn: Callable[..., Any]) -> bytes:
+             assert hasattr(fn, "serialize"), "fn must have serialize method"
+-            with torch._functorch.config.patch("bundled_autograd_cache", True):
++            functorch_config = getattr(torch._functorch.config, "_config", {})
++            bundled_autograd_cache_context = (
++                torch._functorch.config.patch("bundled_autograd_cache", True)
++                if "bundled_autograd_cache" in functorch_config
++                else contextlib.nullcontext()
++            )
++            with bundled_autograd_cache_context:
+                 entry = fn.serialize()
+ 
+                 f = io.BytesIO()
+                 StandaloneCompiledArtifactsPickler(f).dump(entry)

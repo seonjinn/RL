@@ -1,0 +1,32 @@
+# Online Eagle3 draft-training overlay for the Qwen3-235B SWE RL config.
+#
+# Use only after a usable Eagle3 draft checkpoint exists. This asks NeMo-RL to
+# own and update the draft model during policy training, then refit policy +
+# draft weights into vLLM for rollout generation.
+#
+# NeMo-RL online draft training currently requires:
+#   - Megatron policy backend enabled
+#   - DTensor disabled
+#   - sequence packing disabled
+#
+# The fixed-draft rollout path is still the safer first validation stage; see
+# nemo_rl_specdec_overlay.yaml.
+
+policy:
+  megatron_cfg:
+    enabled: true
+  dtensor_cfg:
+    enabled: false
+  sequence_packing:
+    enabled: false
+  draft:
+    enabled: true
+    model_name: ${oc.env:EAGLE3_DRAFT_MODEL}
+    loss_weight: ${oc.env:EAGLE3_DRAFT_LOSS_WEIGHT,1.0}
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: eagle3
+        model: ${oc.env:EAGLE3_DRAFT_MODEL}
+        num_speculative_tokens: ${oc.env:EAGLE3_NUM_SPEC_TOKENS,3}
+        draft_tensor_parallel_size: ${oc.env:EAGLE3_DRAFT_TP,1}

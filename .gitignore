@@ -1,0 +1,32 @@
+# Ralph Loop state (local only)
+progress.txt
+loop.sh
+
+# Local credentials and machine state
+env.sh
+.DS_Store
+.claude/
+.monitor_state/
+.ruff_cache/
+
+# Generated logs and runtime outputs
+logs/
+outputs/
+*.log
+*.out
+*.err
+
+# External checkout / large artifacts
+Model-Optimizer/
+*.sqsh
+*.safetensors
+*.pt
+*.bin
+*.nemo
+
+# Python build/cache files
+__pycache__/
+*.py[cod]
+
+# Nested/temporary checkouts that should not become implicit submodules
+experiments/qwen3-235b-swe-full-run/report/

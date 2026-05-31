@@ -1,0 +1,15 @@
+--- vllm/compilation/backends.py.orig
++++ vllm/compilation/backends.py
+@@ -846,7 +846,14 @@
+-    def __call__(self, graph: fx.GraphModule, example_inputs: Sequence[Any]) -> Any:
++    def __call__(
++        self,
++        graph: fx.GraphModule,
++        example_inputs: Sequence[Any],
++        **kwargs: Any,
++    ) -> Any:
++        if kwargs:
++            logger.debug("Ignoring torch.compile backend kwargs: %s", sorted(kwargs))
+         from .caching import (
+             VllmSerializableFunction,
+         )

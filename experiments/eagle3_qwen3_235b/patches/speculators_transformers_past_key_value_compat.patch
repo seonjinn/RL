@@ -1,0 +1,13 @@
+diff --git a/src/speculators/models/eagle3/model_definitions.py b/src/speculators/models/eagle3/model_definitions.py
+index d80532d..a84dd19 100644
+--- a/src/speculators/models/eagle3/model_definitions.py
++++ b/src/speculators/models/eagle3/model_definitions.py
+@@ -99,7 +99,7 @@ class Eagle3FirstLayerMixin:
+             hidden_states=hidden_states,
+             attention_mask=attention_mask,
+             position_ids=position_ids,
+-            past_key_values=past_key_values,
++            past_key_value=past_key_values,
+             use_cache=use_cache,
+             cache_position=cache_position,
+             position_embeddings=position_embeddings,

@@ -1,0 +1,18 @@
+diff --git a/src/speculators/train/utils.py b/src/speculators/train/utils.py
+index 04a20c9..6d233c5 100644
+--- a/src/speculators/train/utils.py
++++ b/src/speculators/train/utils.py
+@@ -32,7 +32,12 @@ def maybe_setup_distributed() -> tuple[int, int, int, bool]:
+     if acc is None:
+         raise ValueError("No accelerator found")
+     backend = torch.distributed.get_default_backend_for_device(acc)
+-    dist.init_process_group(backend, device_id=local_rank)
++    device_type = acc.type if isinstance(acc, torch.device) else str(acc)
++    if device_type == "cuda":
++        device = torch.device(device_type, local_rank)
++        dist.init_process_group(backend, device_id=device)
++    else:
++        dist.init_process_group(backend)
+ 
+     rank = dist.get_rank()
+ 

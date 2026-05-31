@@ -1,0 +1,24 @@
+diff --git a/src/speculators/models/eagle3/model_definitions.py b/src/speculators/models/eagle3/model_definitions.py
+index 9b4e4a1..d80532d 100644
+--- a/src/speculators/models/eagle3/model_definitions.py
++++ b/src/speculators/models/eagle3/model_definitions.py
+@@ -1,4 +1,4 @@
+-from typing import Any
++from typing import Any, TypedDict
+ 
+ import torch
+ from transformers import Cache, LlamaConfig, PretrainedConfig
+@@ -6,7 +6,12 @@ from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMS
+ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+ from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3RMSNorm
+ from transformers.processing_utils import Unpack
+-from transformers.utils.generic import TransformersKwargs
++
++try:
++    from transformers.utils.generic import TransformersKwargs
++except ImportError:
++    class TransformersKwargs(TypedDict, total=False):
++        pass
+ 
+ from speculators.models import base_components
+ 

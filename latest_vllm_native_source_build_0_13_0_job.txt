@@ -1,0 +1,4 @@
+vllm_native_source_build_job=VLLM_SOURCE_BUILD_JOB_ID
+output_site=/tmp/qwen3_235b_eagle3_test/python_site/vllm_0_13_0_cu129_torch28nv_source_py312
+json=/tmp/qwen3_235b_eagle3_test/reports/vllm_native_source_build_0_13_0.json
+markdown=/tmp/qwen3_235b_eagle3_test/reports/vllm_native_source_build_0_13_0.md

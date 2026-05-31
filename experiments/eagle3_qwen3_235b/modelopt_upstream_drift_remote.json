@@ -1,0 +1,548 @@
+{
+  "decision": {
+    "allowed_focus_diffs": [
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py"
+    ],
+    "disallowed_focus_diffs": [],
+    "hayate_dirty_file_count": 7,
+    "hayate_head": "4eacb0da723ab60e0bc4edd28dbf25ad7064be06",
+    "hayate_reference_only": true,
+    "local_head": "b02e8885509c53b4e187f9fd5f56c5497e937d7e",
+    "overall_status": "pass",
+    "recommendation": "Use the local/remote ModelOpt checkout as the training source. Treat Hayate's checkout as workflow reference only; port only intentional workflow ideas, not the older checkout wholesale.",
+    "source_of_truth": "local_modelopt",
+    "summary": "official main advanced, but Eagle3/speculative-decoding focus paths are unchanged",
+    "unrelated_dirty_file_count": 38,
+    "unrelated_dirty_files": [
+      ".claude/skills/common/environment-setup.md",
+      ".claude/skills/common/remote-execution.md",
+      ".claude/skills/common/workspace-management.md",
+      ".claude/skills/compare-results/SKILL.md",
+      ".claude/skills/compare-results/tests/evals.json",
+      ".claude/skills/deployment/SKILL.md",
+      ".claude/skills/evaluation/SKILL.md",
+      ".claude/skills/evaluation/recipes/env.example",
+      ".claude/skills/evaluation/recipes/examples/example_eval.yaml",
+      ".claude/skills/evaluation/recipes/tasks/aa_lcr.md",
+      ".claude/skills/evaluation/recipes/tasks/aime2025.md",
+      ".claude/skills/evaluation/recipes/tasks/aime2025.yaml",
+      ".claude/skills/evaluation/recipes/tasks/gpqa.md",
+      ".claude/skills/evaluation/recipes/tasks/gpqa.yaml",
+      ".claude/skills/evaluation/recipes/tasks/ifbench.md",
+      ".claude/skills/evaluation/recipes/tasks/ifbench.yaml",
+      ".claude/skills/evaluation/recipes/tasks/livecodebench.md",
+      ".claude/skills/evaluation/recipes/tasks/livecodebench.yaml",
+      ".claude/skills/evaluation/recipes/tasks/mmlu_pro.md",
+      ".claude/skills/evaluation/recipes/tasks/mmlu_pro.yaml",
+      ".claude/skills/evaluation/recipes/tasks/mmmu_pro.md",
+      ".claude/skills/evaluation/recipes/tasks/ns_hle_aa.md",
+      ".claude/skills/evaluation/recipes/tasks/scicode.md",
+      ".claude/skills/evaluation/recipes/tasks/scicode.yaml",
+      ".claude/skills/evaluation/recipes/tasks/tau2_bench_telecom.md",
+      ".claude/skills/evaluation/tests/evals.json",
+      ".claude/skills/launching-evals/references/analyze-results.md",
+      ".claude/skills/monitor/SKILL.md",
+      ".claude/skills/ptq/SKILL.md",
+      ".claude/skills/ptq/references/checkpoint-validation.md",
+      ".claude/skills/ptq/references/unsupported-models.md",
+      ".claude/skills/ptq/tests.json",
+      ".gitignore",
+      "CHANGELOG.rst",
+      "modelopt/torch/quantization/mode.py",
+      "tests/unit/torch/quantization/test_mode.py",
+      "tools/launcher/core.py",
+      "tools/launcher/slurm_config.py"
+    ],
+    "upstream_focus_diff_file_count": 0,
+    "upstream_focus_diff_files": [],
+    "upstream_focus_status": "ok",
+    "upstream_head": "3ff15ccef3f0a46703a169272f61640cea311a1c",
+    "upstream_head_matches": false,
+    "upstream_probe_ok": true
+  },
+  "focus_paths": [
+    "examples/speculative_decoding/README.md",
+    "examples/speculative_decoding/launch_train.sh",
+    "examples/speculative_decoding/main.py",
+    "examples/speculative_decoding/fsdp_config.json",
+    "examples/speculative_decoding/collect_hidden_states/common.py",
+    "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_hf.py",
+    "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py",
+    "examples/speculative_decoding/scripts/export_hf_checkpoint.py",
+    "examples/speculative_decoding/scripts/convert_to_vllm_ckpt.py",
+    "examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py",
+    "examples/speculative_decoding/prepare_input_conversations/generate_responses.py",
+    "examples/speculative_decoding/slurm/generate_responses.sbatch",
+    "examples/speculative_decoding/slurm/train_eagle3.sbatch",
+    "examples/speculative_decoding/slurm/submit_all.sh",
+    "examples/speculative_decoding/eagle_config_qwen3_8b.json",
+    "examples/speculative_decoding/eagle_config_qwen3_30b_moe.json",
+    "examples/speculative_decoding/eagle_config_qwen3_32b.json",
+    "modelopt_recipes/general/speculative_decoding/eagle3.yaml",
+    "modelopt/torch/speculative/eagle/config.py",
+    "modelopt/torch/speculative/eagle/eagle_model.py",
+    "modelopt/torch/speculative/eagle/utils.py"
+  ],
+  "generated_at": "2026-05-22 06:51:34 PDT",
+  "hayate": {
+    "branch": "main",
+    "dirty_files": [
+      "?? examples/speculative_decoding/eagle_config_qwen3_30b_moe.json",
+      "?? examples/speculative_decoding/eagle_config_qwen3_32b.json",
+      "?? examples/speculative_decoding/eagle_config_qwen3_8b.json",
+      "?? examples/speculative_decoding/logs/",
+      "?? examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py",
+      "?? examples/speculative_decoding/prepare_input_conversations/generate_responses.py",
+      "?? examples/speculative_decoding/slurm/"
+    ],
+    "exists": true,
+    "focus_diff_files": [],
+    "focus_diff_stat": "",
+    "focus_files": {
+      "examples/speculative_decoding/README.md": {
+        "exists": true,
+        "sha256": "7cca639e2422359b8adf51f4d2080b1b5f059b434b5f681c2a105b8ab3f93080",
+        "size_bytes": 14184
+      },
+      "examples/speculative_decoding/collect_hidden_states/common.py": {
+        "exists": false
+      },
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_hf.py": {
+        "exists": true,
+        "sha256": "1d88fb1e804321ace8bb3769986c6560e1f36a8398e996028bc5ece00d588f7b",
+        "size_bytes": 8384
+      },
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py": {
+        "exists": true,
+        "sha256": "47bc2ca14c8e6bb838ae578a4423a97779b7ae55904d787d50fe73be1843eb4f",
+        "size_bytes": 10587
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_30b_moe.json": {
+        "exists": true,
+        "sha256": "60c2aafb6c09df990248d21a552a392f64e26307125807159d56f8c808c05238",
+        "size_bytes": 466
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_32b.json": {
+        "exists": true,
+        "sha256": "4013c3f340349d4e9794ccb26a3cef79f850e7dd90c085816d64a6cccabd69bd",
+        "size_bytes": 467
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_8b.json": {
+        "exists": true,
+        "sha256": "ab884821c3a5bf775af9262d9c3c3177e898472f1102038244ea4e72dd8a97de",
+        "size_bytes": 467
+      },
+      "examples/speculative_decoding/fsdp_config.json": {
+        "exists": true,
+        "sha256": "93573b3c5a178bceccdd49b78ece53704418afee9737107ed3c8aef3d93fe7d0",
+        "size_bytes": 18
+      },
+      "examples/speculative_decoding/launch_train.sh": {
+        "exists": true,
+        "sha256": "aab294708a6443f90f1912c890cef81b2e588a1e25b2b07b6f75673a2d99381c",
+        "size_bytes": 6732
+      },
+      "examples/speculative_decoding/main.py": {
+        "exists": true,
+        "sha256": "4955344b6d51a6c67e76a481307d616ed50a60431f40c6a685ddd3fe4ec7a721",
+        "size_bytes": 9770
+      },
+      "examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py": {
+        "exists": true,
+        "sha256": "718e3e1c0c3aed7e09d18b9b42a23e947b7f032945708cc76890214872ee0d7a",
+        "size_bytes": 4207
+      },
+      "examples/speculative_decoding/prepare_input_conversations/generate_responses.py": {
+        "exists": true,
+        "sha256": "9879ee4bebe7f8d16f28bf794f56a27812b63d0dabc4d2ef2ba07096df691eba",
+        "size_bytes": 8765
+      },
+      "examples/speculative_decoding/scripts/convert_to_vllm_ckpt.py": {
+        "exists": true,
+        "sha256": "d4ffc1946d7196aa2f5f7e4681195bf958dcfee9be18d25105745a783ba5268a",
+        "size_bytes": 5035
+      },
+      "examples/speculative_decoding/scripts/export_hf_checkpoint.py": {
+        "exists": true,
+        "sha256": "feb473816a86047089f43eca77e23b0de09b9542c53157e44c3bf02731a43911",
+        "size_bytes": 1650
+      },
+      "examples/speculative_decoding/slurm/generate_responses.sbatch": {
+        "exists": true,
+        "sha256": "e649d29d10f2f465411ad783dbc2d6a67374411d06c8b8ce0356180d6105c86b",
+        "size_bytes": 2630
+      },
+      "examples/speculative_decoding/slurm/submit_all.sh": {
+        "exists": true,
+        "sha256": "1bd5188b7af19061a7dc2df06c1e7d05e1bdf59839d23c6201b957ccdd820dc3",
+        "size_bytes": 5146
+      },
+      "examples/speculative_decoding/slurm/train_eagle3.sbatch": {
+        "exists": true,
+        "sha256": "9cc9dcb5d7fa048e8617beb1fe133a09d1a30dbe02fd7d5a241faa73dd2cfc2a",
+        "size_bytes": 4105
+      },
+      "modelopt/torch/speculative/eagle/config.py": {
+        "exists": false
+      },
+      "modelopt/torch/speculative/eagle/eagle_model.py": {
+        "exists": true,
+        "sha256": "2180f1982b275e6bdcb09562e3bf798c3ac49aa2095a45817705cec826cacc9e",
+        "size_bytes": 1835
+      },
+      "modelopt/torch/speculative/eagle/utils.py": {
+        "exists": true,
+        "sha256": "7071637dbc7b1c7a31e7709f4c37a9028b27d466e2a4707c45971282b8560d4e",
+        "size_bytes": 3106
+      },
+      "modelopt_recipes/general/speculative_decoding/eagle3.yaml": {
+        "exists": false
+      }
+    },
+    "head": "4eacb0da723ab60e0bc4edd28dbf25ad7064be06",
+    "is_git_repo": true,
+    "label": "hayate_modelopt",
+    "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/ghq/github.com/NVIDIA/TensorRT-Model-Optimizer",
+    "remote_lines": [
+      "origin\thttps://github.com/NVIDIA/TensorRT-Model-Optimizer (fetch)",
+      "origin\thttps://github.com/NVIDIA/TensorRT-Model-Optimizer (push)"
+    ],
+    "short_head": "4eacb0da723a"
+  },
+  "local": {
+    "branch": "main",
+    "dirty_files": [
+      "M .claude/skills/common/environment-setup.md",
+      " M .claude/skills/common/remote-execution.md",
+      " M .claude/skills/common/workspace-management.md",
+      " D .claude/skills/compare-results/SKILL.md",
+      " D .claude/skills/compare-results/tests/evals.json",
+      " M .claude/skills/deployment/SKILL.md",
+      " M .claude/skills/evaluation/SKILL.md",
+      " M .claude/skills/evaluation/recipes/env.example",
+      " M .claude/skills/evaluation/recipes/examples/example_eval.yaml",
+      " D .claude/skills/evaluation/recipes/tasks/aa_lcr.md",
+      " D .claude/skills/evaluation/recipes/tasks/aime2025.md",
+      " D .claude/skills/evaluation/recipes/tasks/gpqa.md",
+      " D .claude/skills/evaluation/recipes/tasks/ifbench.md",
+      " D .claude/skills/evaluation/recipes/tasks/livecodebench.md",
+      " D .claude/skills/evaluation/recipes/tasks/mmlu_pro.md",
+      " D .claude/skills/evaluation/recipes/tasks/mmmu_pro.md",
+      " D .claude/skills/evaluation/recipes/tasks/ns_hle_aa.md",
+      " D .claude/skills/evaluation/recipes/tasks/scicode.md",
+      " D .claude/skills/evaluation/recipes/tasks/tau2_bench_telecom.md",
+      " M .claude/skills/evaluation/tests/evals.json",
+      " M .claude/skills/launching-evals/references/analyze-results.md",
+      " M .claude/skills/monitor/SKILL.md",
+      " M .claude/skills/ptq/SKILL.md",
+      " M .claude/skills/ptq/references/checkpoint-validation.md",
+      " M .claude/skills/ptq/references/unsupported-models.md",
+      " M .claude/skills/ptq/tests.json",
+      " M .gitignore",
+      " M CHANGELOG.rst",
+      " M examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py",
+      " M modelopt/torch/quantization/mode.py",
+      " M tests/unit/torch/quantization/test_mode.py",
+      " M tools/launcher/core.py",
+      " M tools/launcher/slurm_config.py",
+      "?? .claude/skills/evaluation/recipes/tasks/aime2025.yaml",
+      "?? .claude/skills/evaluation/recipes/tasks/gpqa.yaml",
+      "?? .claude/skills/evaluation/recipes/tasks/ifbench.yaml",
+      "?? .claude/skills/evaluation/recipes/tasks/livecodebench.yaml",
+      "?? .claude/skills/evaluation/recipes/tasks/mmlu_pro.yaml",
+      "?? .claude/skills/evaluation/recipes/tasks/scicode.yaml"
+    ],
+    "exists": true,
+    "focus_diff_files": [
+      "M\texamples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py"
+    ],
+    "focus_diff_stat": ".../compute_hidden_states_trtllm.py                | 49 ++++++++++++++++++----\n 1 file changed, 40 insertions(+), 9 deletions(-)",
+    "focus_files": {
+      "examples/speculative_decoding/README.md": {
+        "exists": true,
+        "sha256": "5ece8b2f2da81d0576a2ee94b4750c0ba061004fdc8870ac181804ac723db03b",
+        "size_bytes": 17972
+      },
+      "examples/speculative_decoding/collect_hidden_states/common.py": {
+        "exists": true,
+        "sha256": "d8013be2f92f91973c1174cb0070d5c49b6b2c95afa769679c8c98b4609957bd",
+        "size_bytes": 7059
+      },
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_hf.py": {
+        "exists": true,
+        "sha256": "8872364a3873dc3a1fc178edc92f022f60f764a46ad18ed4f34f5dc9a591039e",
+        "size_bytes": 8930
+      },
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py": {
+        "exists": true,
+        "sha256": "6cc4ed71a76efe131dbea00063231e1a470786fcaf87f927d15af582e0ca0064",
+        "size_bytes": 11448
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_30b_moe.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_32b.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_8b.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/fsdp_config.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/launch_train.sh": {
+        "exists": true,
+        "sha256": "5f59bbb4be010a4014b0e862063311e2ef9cdbe0073c50ce3124e368a76cc041",
+        "size_bytes": 3038
+      },
+      "examples/speculative_decoding/main.py": {
+        "exists": true,
+        "sha256": "2ae31bef07e955c1ba8f99a205ca5024cbcf34dc8c1ddec3cc0d9a9bb50482be",
+        "size_bytes": 11669
+      },
+      "examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py": {
+        "exists": false
+      },
+      "examples/speculative_decoding/prepare_input_conversations/generate_responses.py": {
+        "exists": false
+      },
+      "examples/speculative_decoding/scripts/convert_to_vllm_ckpt.py": {
+        "exists": true,
+        "sha256": "d4ffc1946d7196aa2f5f7e4681195bf958dcfee9be18d25105745a783ba5268a",
+        "size_bytes": 5035
+      },
+      "examples/speculative_decoding/scripts/export_hf_checkpoint.py": {
+        "exists": true,
+        "sha256": "8cdf28bc732aabed95c3d648559ea42e366b36f70c2c77050104090badd1be56",
+        "size_bytes": 1767
+      },
+      "examples/speculative_decoding/slurm/generate_responses.sbatch": {
+        "exists": false
+      },
+      "examples/speculative_decoding/slurm/submit_all.sh": {
+        "exists": false
+      },
+      "examples/speculative_decoding/slurm/train_eagle3.sbatch": {
+        "exists": false
+      },
+      "modelopt/torch/speculative/eagle/config.py": {
+        "exists": false
+      },
+      "modelopt/torch/speculative/eagle/eagle_model.py": {
+        "exists": true,
+        "sha256": "5d18dc2ae9f6e4acbcd639df9104ab7b947c78eb21460922f26383d5a88a5d1e",
+        "size_bytes": 2509
+      },
+      "modelopt/torch/speculative/eagle/utils.py": {
+        "exists": true,
+        "sha256": "98c2fdc17cfe5d15f0e6117bd503da1ac67355d431ffc8286f8ca787c972b5b9",
+        "size_bytes": 7595
+      },
+      "modelopt_recipes/general/speculative_decoding/eagle3.yaml": {
+        "exists": true,
+        "sha256": "a619c65331420d017205e7ac8b41b987688b05bb6a56e9c533043a3cb262c888",
+        "size_bytes": 1910
+      }
+    },
+    "head": "b02e8885509c53b4e187f9fd5f56c5497e937d7e",
+    "is_git_repo": true,
+    "label": "local_modelopt",
+    "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/Model-Optimizer",
+    "remote_lines": [
+      "origin\thttps://github.com/NVIDIA/Model-Optimizer.git (fetch)",
+      "origin\thttps://github.com/NVIDIA/Model-Optimizer.git (push)"
+    ],
+    "short_head": "b02e8885509c"
+  },
+  "local_vs_hayate_focus_files": [
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "7cca639e2422359b8adf51f4d2080b1b5f059b434b5f681c2a105b8ab3f93080",
+      "local_exists": true,
+      "local_sha256": "5ece8b2f2da81d0576a2ee94b4750c0ba061004fdc8870ac181804ac723db03b",
+      "path": "examples/speculative_decoding/README.md",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "aab294708a6443f90f1912c890cef81b2e588a1e25b2b07b6f75673a2d99381c",
+      "local_exists": true,
+      "local_sha256": "5f59bbb4be010a4014b0e862063311e2ef9cdbe0073c50ce3124e368a76cc041",
+      "path": "examples/speculative_decoding/launch_train.sh",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "4955344b6d51a6c67e76a481307d616ed50a60431f40c6a685ddd3fe4ec7a721",
+      "local_exists": true,
+      "local_sha256": "2ae31bef07e955c1ba8f99a205ca5024cbcf34dc8c1ddec3cc0d9a9bb50482be",
+      "path": "examples/speculative_decoding/main.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "93573b3c5a178bceccdd49b78ece53704418afee9737107ed3c8aef3d93fe7d0",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/fsdp_config.json",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": false,
+      "hayate_sha256": null,
+      "local_exists": true,
+      "local_sha256": "d8013be2f92f91973c1174cb0070d5c49b6b2c95afa769679c8c98b4609957bd",
+      "path": "examples/speculative_decoding/collect_hidden_states/common.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "1d88fb1e804321ace8bb3769986c6560e1f36a8398e996028bc5ece00d588f7b",
+      "local_exists": true,
+      "local_sha256": "8872364a3873dc3a1fc178edc92f022f60f764a46ad18ed4f34f5dc9a591039e",
+      "path": "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_hf.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "47bc2ca14c8e6bb838ae578a4423a97779b7ae55904d787d50fe73be1843eb4f",
+      "local_exists": true,
+      "local_sha256": "6cc4ed71a76efe131dbea00063231e1a470786fcaf87f927d15af582e0ca0064",
+      "path": "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "feb473816a86047089f43eca77e23b0de09b9542c53157e44c3bf02731a43911",
+      "local_exists": true,
+      "local_sha256": "8cdf28bc732aabed95c3d648559ea42e366b36f70c2c77050104090badd1be56",
+      "path": "examples/speculative_decoding/scripts/export_hf_checkpoint.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "d4ffc1946d7196aa2f5f7e4681195bf958dcfee9be18d25105745a783ba5268a",
+      "local_exists": true,
+      "local_sha256": "d4ffc1946d7196aa2f5f7e4681195bf958dcfee9be18d25105745a783ba5268a",
+      "path": "examples/speculative_decoding/scripts/convert_to_vllm_ckpt.py",
+      "same_sha256": true
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "718e3e1c0c3aed7e09d18b9b42a23e947b7f032945708cc76890214872ee0d7a",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "9879ee4bebe7f8d16f28bf794f56a27812b63d0dabc4d2ef2ba07096df691eba",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/prepare_input_conversations/generate_responses.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "e649d29d10f2f465411ad783dbc2d6a67374411d06c8b8ce0356180d6105c86b",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/slurm/generate_responses.sbatch",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "9cc9dcb5d7fa048e8617beb1fe133a09d1a30dbe02fd7d5a241faa73dd2cfc2a",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/slurm/train_eagle3.sbatch",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "1bd5188b7af19061a7dc2df06c1e7d05e1bdf59839d23c6201b957ccdd820dc3",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/slurm/submit_all.sh",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "ab884821c3a5bf775af9262d9c3c3177e898472f1102038244ea4e72dd8a97de",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/eagle_config_qwen3_8b.json",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "60c2aafb6c09df990248d21a552a392f64e26307125807159d56f8c808c05238",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/eagle_config_qwen3_30b_moe.json",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "4013c3f340349d4e9794ccb26a3cef79f850e7dd90c085816d64a6cccabd69bd",
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "examples/speculative_decoding/eagle_config_qwen3_32b.json",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": false,
+      "hayate_sha256": null,
+      "local_exists": true,
+      "local_sha256": "a619c65331420d017205e7ac8b41b987688b05bb6a56e9c533043a3cb262c888",
+      "path": "modelopt_recipes/general/speculative_decoding/eagle3.yaml",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": false,
+      "hayate_sha256": null,
+      "local_exists": false,
+      "local_sha256": null,
+      "path": "modelopt/torch/speculative/eagle/config.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "2180f1982b275e6bdcb09562e3bf798c3ac49aa2095a45817705cec826cacc9e",
+      "local_exists": true,
+      "local_sha256": "5d18dc2ae9f6e4acbcd639df9104ab7b947c78eb21460922f26383d5a88a5d1e",
+      "path": "modelopt/torch/speculative/eagle/eagle_model.py",
+      "same_sha256": false
+    },
+    {
+      "hayate_exists": true,
+      "hayate_sha256": "7071637dbc7b1c7a31e7709f4c37a9028b27d466e2a4707c45971282b8560d4e",
+      "local_exists": true,
+      "local_sha256": "98c2fdc17cfe5d15f0e6117bd503da1ac67355d431ffc8286f8ca787c972b5b9",
+      "path": "modelopt/torch/speculative/eagle/utils.py",
+      "same_sha256": false
+    }
+  ],
+  "notes": [
+    "local ModelOpt worktree has uncommitted changes",
+    "local ModelOpt HEAD is behind official upstream main, but Eagle3 focus paths are unchanged",
+    "Hayate/Hiso ModelOpt checkout has uncommitted or untracked files"
+  ],
+  "official_example_url": "https://github.com/NVIDIA/Model-Optimizer/tree/main/examples/speculative_decoding",
+  "overall_status": "warn",
+  "upstream_focus_diff": {
+    "file_count": 0,
+    "files": [],
+    "status": "ok",
+    "upstream_head": "3ff15ccef3f0a46703a169272f61640cea311a1c"
+  },
+  "upstream_probe": {
+    "enabled": true,
+    "head": "3ff15ccef3f0a46703a169272f61640cea311a1c",
+    "ref": "refs/heads/main",
+    "short_head": "3ff15ccef3f0",
+    "status": "ok",
+    "url": "https://github.com/NVIDIA/Model-Optimizer.git"
+  }
+}

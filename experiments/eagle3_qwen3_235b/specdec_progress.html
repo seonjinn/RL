@@ -1,0 +1,2335 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3-235B Eagle3 SpecDec Progress</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1117;
+      --panel: #121922;
+      --panel-2: #17202b;
+      --text: #eef3f8;
+      --muted: #a6b3c1;
+      --line: #263343;
+      --strong-line: #3a4b5f;
+      --accent: #55b7ff;
+      --accent-2: #5bd69a;
+      --warn: #f2c14e;
+      --risk: #ff7b72;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      --done-bg: rgba(91, 214, 154, 0.13);
+      --active-bg: rgba(85, 183, 255, 0.16);
+      --queue-bg: rgba(166, 179, 193, 0.10);
+      --mono-bg: rgba(238, 243, 248, 0.06);
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --panel-2: #edf3f8;
+      --text: #13202d;
+      --muted: #5c6b7a;
+      --line: #d5dee8;
+      --strong-line: #b7c5d4;
+      --accent: #0969da;
+      --accent-2: #218358;
+      --warn: #9a6700;
+      --risk: #cf222e;
+      --shadow: 0 18px 50px rgba(19, 32, 45, 0.12);
+      --done-bg: rgba(33, 131, 88, 0.10);
+      --active-bg: rgba(9, 105, 218, 0.11);
+      --queue-bg: rgba(92, 107, 122, 0.09);
+      --mono-bg: rgba(19, 32, 45, 0.05);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(1440px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 28px 0 44px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 20px 0 24px;
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-2) 20%, transparent);
+    }
+
+    h1 {
+      margin: 8px 0 8px;
+      max-width: 920px;
+      font-size: clamp(34px, 4.5vw, 64px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 980px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex: 0 0 auto;
+      min-width: 126px;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 12px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+
+    .toggle-mark {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      background: var(--active-bg);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.75fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    section,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    section {
+      padding: 20px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 3px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .tag.done {
+      color: var(--accent-2);
+      background: var(--done-bg);
+      border-color: color-mix(in srgb, var(--accent-2) 38%, var(--line));
+    }
+
+    .tag.active {
+      color: var(--accent);
+      background: var(--active-bg);
+      border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+    }
+
+    .tag.warn {
+      color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
+      border-color: color-mix(in srgb, var(--warn) 34%, var(--line));
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      min-height: 132px;
+      padding: 16px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 28px;
+      line-height: 1.1;
+      font-weight: 850;
+    }
+
+    .metric p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-rail {
+      display: grid;
+      gap: 14px;
+    }
+
+    .overall {
+      display: grid;
+      grid-template-columns: 110px 1fr 58px;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .bar {
+      position: relative;
+      height: 14px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--queue-bg);
+      border: 1px solid var(--line);
+    }
+
+    .bar > span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--pct);
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    }
+
+    .phase-list {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(110px, 1fr));
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .phase {
+      min-height: 120px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--queue-bg);
+    }
+
+    .phase.done {
+      background: var(--done-bg);
+      border-color: color-mix(in srgb, var(--accent-2) 34%, var(--line));
+    }
+
+    .phase.active {
+      background: var(--active-bg);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+    }
+
+    .phase strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 13px;
+    }
+
+    .phase span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .cards-2,
+    .cards-3 {
+      display: grid;
+      gap: 12px;
+    }
+
+    .cards-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cards-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .info-card {
+      padding: 16px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .info-card p,
+    .info-card li {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .info-card p {
+      margin: 0;
+    }
+
+    ul,
+    ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 7px;
+    }
+
+    .todo {
+      display: grid;
+      gap: 10px;
+      counter-reset: step;
+    }
+
+    .todo-item {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 12px;
+      align-items: start;
+      padding: 14px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .todo-item::before {
+      counter-increment: step;
+      content: counter(step);
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--mono-bg);
+      color: var(--text);
+      font-weight: 850;
+      font-size: 13px;
+    }
+
+    .todo-title {
+      margin: 0 0 4px;
+      font-weight: 800;
+    }
+
+    .todo-desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .code {
+      display: block;
+      overflow-x: auto;
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--mono-bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+
+    .kv {
+      display: grid;
+      gap: 8px;
+    }
+
+    .kv-row {
+      display: grid;
+      grid-template-columns: 138px 1fr;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    .kv-row:last-child {
+      border-bottom: 0;
+    }
+
+    .kv-row span:first-child {
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .path {
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .side-card {
+      padding: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .side-card + .side-card {
+      margin-top: 18px;
+    }
+
+    .decision {
+      border-left: 4px solid var(--accent);
+    }
+
+    .risk {
+      border-left: 4px solid var(--risk);
+    }
+
+    .footer-note {
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    @media (max-width: 1100px) {
+      .shell,
+      .cards-2,
+      .cards-3,
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .phase-list {
+        grid-template-columns: repeat(7, 160px);
+      }
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: min(100% - 24px, 1440px);
+        padding-top: 12px;
+      }
+
+      .topbar {
+        flex-direction: column;
+      }
+
+      .mode-toggle {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .overall {
+        grid-template-columns: 1fr;
+      }
+
+      .todo-item {
+        grid-template-columns: 34px 1fr;
+      }
+
+      .todo-item .tag {
+        grid-column: 2;
+        justify-self: start;
+      }
+
+      .kv-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="topbar">
+      <div>
+        <div class="eyebrow"><span class="dot"></span>Speculative Decoding Effort · 2026-05-22</div>
+        <h1>Qwen3-235B Eagle3 Draft Model 진행 현황</h1>
+        <p class="lead">
+          SWE async GRPO에서 generation 병목을 줄이기 위한 Eagle3 draft model 작업 현황, Hayate/Hiso 코드 분석 결과,
+          그리고 bootstrap부터 Slurm pipeline까지의 실행 단계를 한 페이지에 정리했다.
+        </p>
+      </div>
+      <button class="mode-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode">
+        <span class="toggle-mark" aria-hidden="true"></span>
+        <span id="themeLabel">Dark</span>
+      </button>
+    </div>
+
+    <div class="shell">
+      <div class="stack">
+        <section>
+          <div class="section-head">
+            <h2>Executive Summary</h2>
+            <span class="tag active">grouped-weight probe pending; corpus pending</span>
+          </div>
+          <div class="summary-grid">
+            <div class="metric">
+              <div class="label">Bottleneck</div>
+              <div class="value">76.1%</div>
+              <p>`exposed_generation`이 step time의 대부분을 차지한다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Target Model</div>
+              <div class="value">235B</div>
+              <p>`Qwen3-235B-A22B-Thinking-2507`, seq len 16k.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Hayate Diff</div>
+              <div class="value">Exp</div>
+              <p>ModelOpt core patch보다 `experiments/eagle3` workflow가 핵심.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Submit Gate</div>
+              <div class="value">PASS</div>
+              <p>container preflight job `2850317`은 COMPLETED 0:0이고 rollout submit preflight도 PASS다. 이전 rollout jobs `2850773`/`2851239`는 존재하지 않는 old container path 때문에 실패했다. launcher default를 `/lustre/fs1/portfolios/llmservice/projects/llmservice_deci_llm/containers/nemo_25.07.01.sqsh`로 고쳤고, torch/native-library skew를 피하려고 `uv sync`를 skip하고 `/opt/venv/bin/python`을 직접 쓰도록 보강했다. `2863716`은 Ray runtime-env agent timeout, `2864216`은 Ray head CoreWorker port `10002` bind 실패, `2866525`는 Qwen3MoE provider `finalize()` 누락, `2866601`은 expert tensor parallelism product mismatch, `2866688`은 Bridge finalize after-override ETP recoupling, `2866765`는 missing ETP initialize kwarg로 중단됐다. `2866789`는 Bridge provider entrypoint가 `provide_models()`인 API drift로 실패했고, `2866871`은 NCCL duplicate GPU, `2867033`은 fused layernorm mapping scatter, `2867262`는 old ReplicatedMapping broadcast bug, `2867356`은 CPU target tensor를 NCCL로 broadcast하는 경로, `2867545`는 grouped expert linear module type 미등록, `2867662`는 grouped module에 `.weight`가 없는 문제로 끝났다. Probes `2867247`, `2867422`, `2867656`은 fallback AutoMapping, CUDA broadcast patch, grouped expert linear registration을 PASS했고, probe `2867766`은 temporary `.weight` helper 검증용으로 제출된 상태다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Runtime Gate</div>
+              <div class="value">PASS</div>
+              <p>wheel ABI probe는 0개 shared target에서 실패했지만, source-built vLLM site `/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/python_site/vllm_0_10_2_cu129_torch28nv_source_py312`가 native import를 PASS했다. 현재 gate는 이 site를 `SHARED_VLLM_SITE`로 쓰는 Qwen3-235B SWE rollout smoke이며, 다음 rollout은 probe `2867766` PASS 확인 뒤 제출한다. 현재 active container는 nightly vLLM Docker가 아니라 fixed NeMo 25.07.01 sqsh이고, 더 최신/nightly image는 별도 container preflight와 vLLM native/runtime probe를 통과해야 교체할 수 있다. vLLM 0.13.0 fallback job `2857812`는 ABI-only candidate로 추적하지만 `0.10.2` rollout gate를 막는 active unblocker는 아니다. rollout corpus가 생긴 뒤에만 Eagle3 hidden-state dump/train/export를 제출한다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Slurm Shape</div>
+              <div class="value">16/24x4</div>
+              <p>`batch` partition은 `gpu:4` node다. 다음 smoke도 `NUM_GPU=4`, `NUM_NODES=24`, `NUM_GEN_NODES=8`, `TP=4`, `ETP=1`, `EP=16`, `CP=1`, `PP=4`, first/last stage `23/23` balanced 24n4g profile로 제출한다. remote `SpecDec-RL/ray.sub`는 Ray head에도 `--min-worker-port=54001 --max-worker-port=54513`를 전달하도록 패치됐다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Resource Profile</div>
+              <div class="value">PASS</div>
+              <p>`eagle3_resource_profile.env`가 rollout wrapper와 pipeline wrapper 양쪽에 기본 적용된다. canonical `eagle3_slurm_capacity.json`도 4-GPU request 기준 PASS로 갱신됐다. `rollout_resource_profiles_preflight.json`은 `official_32n4g_async`가 dry-run, Slurm `--test-only`, Megatron topology를 모두 PASS하고, 별도 output path의 `compact_16n4g_smoke`는 dry-run/Slurm은 PASS지만 train-world topology 때문에 FAIL임을 기록한다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Fallback</div>
+              <div class="value">Live</div>
+              <p>현재 active rollout은 없다. `2861605`는 cancelled, `2863716`은 Ray runtime-env agent timeout, `2864216`은 Ray head CoreWorker port `10002` bind failure, `2866525`는 Qwen3MoE provider `finalize()` 누락, `2866601`은 expert tensor parallelism product mismatch, `2866688`은 after-finalize ETP recoupling, `2866765`는 missing ETP initialize kwarg, `2866789`는 Bridge `provide_distributed_model()`/`provide_models()` API drift, `2866871`은 NCCL duplicate GPU detection, `2867033`은 fused layernorm mapping scatter, `2867262`는 old ReplicatedMapping broadcast bug, `2867356`은 CPU target tensor NCCL broadcast bug, `2867545`는 grouped expert linear module type miss, `2867662`는 grouped expert `.weight` attr miss로 끝났고 모두 rollout JSONL을 만들지 못했다. Probe `2867766`이 temporary `.weight` helper를 검증하면 같은 24n4g profile로 다음 smoke를 제출한다. 아직 rollout conversation JSONL은 없다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Pilot Wiring</div>
+              <div class="value">WAIT</div>
+              <p>`pilot_existing_chat_content_64.jsonl` 기준 submit preflight는 ModelOpt path, loss-mask patch, local preflight, wrapper dry-run, Slurm pipeline dry-run을 PASS했다. rollout corpus용 pipeline submit preflight와 gated submit check는 operator refresh 안에서 queue/watcher report 다음, planner 이전에 갱신된다. corpus missing 때문에 pipeline submit preflight는 아직 INCOMPLETE이고, gated submit check는 `submit_ready=false`라 제출 없이 FAIL/`expected_not_ready=true`/`executed=false`인 것이 정상이다. ModelOpt recipe override validator는 `pass`이고 loss-mask patch validator는 `pass`이다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Training Data</div>
+              <div class="value">SWE/RL</div>
+              <p>final Eagle3 input은 DAPO/OpenMath가 아니라 Qwen3-235B Thinking SWE/RL rollout의 `train_data_step*.jsonl`을 정규화한 `qwen3_235b_swe_rollout_conversations.jsonl`이다. fixed 5-row smoke input은 runtime/capture proof이고, full candidate는 `/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/swegym_train_nemogym_hf_full.jsonl`이다. 이 full SWE-Gym materialization은 2,438 rows, validation failures 0, warnings 0으로 PASS했고 full rollout submit preflight도 non-dry-run name과 source-built vLLM env로 PASS/`submit_ready=true`다. 기존 full R2E/SWE path는 fsw/fs1 양쪽 모두 missing이고, direct R2E-Gym probe는 timeout/empty output이라 아직 ready source가 아니다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Backend Choice</div>
+              <div class="value">ModelOpt</div>
+              <p>Primary는 ModelOpt Eagle3다. vLLM `speculators`는 vLLM-native training/export 후보로 별도 probe를 추가하고, SpecForge는 SGLang comparison/reference로 유지한다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Train Length</div>
+              <div class="value">Pilot</div>
+              <p>첫 학습은 rollout corpus가 생긴 뒤 `RUN_PILOT=true`로 제출한다: 8 conversations, `MAX_STEPS=20`, dump/train/export Slurm limit `2h/2h/1h`. 이후 2.4k SWE-Gym first calibration, 10k-50k target-domain calibration, 50k-100k production candidate 순서로 둔다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">Goal Proof</div>
+              <div class="value">Matrix</div>
+              <p>draft trained=false. `2026-05-23 01:14 PDT` 기준 goal evidence와 completion audit은 아직 incomplete다. 이유는 단일 blocker다: rollout conversation JSONL이 아직 생성되지 않았다. 다음 smoke는 probe `2867766` PASS 확인 뒤 제출하며, gated pipeline submit evidence는 `dump_job`, `train_job`, `export_job` job id가 모두 기록되어야 proven으로 인정한다.</p>
+            </div>
+            <div class="metric">
+              <div class="label">RL Code</div>
+              <div class="value">Fixed</div>
+              <p>SpecDec-RL은 fixed Eagle3 rollout부터 검증하고, online draft training은 별도 gate로 둔다.</p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
+            <h2>Status Bar</h2>
+            <span class="tag">fixed-input rollout smoke pending; Eagle3 pipeline gated on corpus</span>
+          </div>
+          <div class="status-rail">
+            <div class="overall">
+              <strong>Execution path readiness</strong>
+              <div class="bar" aria-label="Overall progress" style="--pct: 81%"><span></span></div>
+              <strong>81%</strong>
+            </div>
+            <div class="phase-list" aria-label="Project phases">
+              <div class="phase done">
+                <strong>1. Baseline</strong>
+                <span>Qwen3 RL 병목과 실행 config 파악 완료.</span>
+              </div>
+              <div class="phase done">
+                <strong>2. ModelOpt</strong>
+                <span>현재 recipe API와 Eagle3 offline/online 흐름 확인.</span>
+              </div>
+              <div class="phase done">
+                <strong>3. Hayate Diff</strong>
+                <span>`experiments/eagle3` 중심 변경으로 정리.</span>
+              </div>
+              <div class="phase done">
+                <strong>4. Bootstrap</strong>
+                <span>data/template/preflight/pipeline/audit를 하나의 dry-run-first entry로 묶음.</span>
+              </div>
+              <div class="phase done">
+                <strong>5. Smoke Test</strong>
+                <span>baseline/public-draft smoke pair와 log analyzer 준비, 실행 검증 필요.</span>
+              </div>
+              <div class="phase active">
+                <strong>6. Cluster Inputs</strong>
+                <span>`oci-hsg-cs-001-vscode-02`에서 container preflight를 실제 Slurm job으로 실행했고 PASS했다. Qwen3 generation template은 assistant 출력 block만 `{% generation %}`으로 감싸도록 수정되어 container 안의 Transformers assistant-mask validation을 통과했다. rollout launcher는 8-GPU node assumption을 제거하고 oci-hsg의 4-GPU node shape에 맞춰 제출된다.</span>
+              </div>
+              <div class="phase active">
+                <strong>7. Operator Gates</strong>
+                <span>이전 official/compact rollout jobs `2850773`/`2851239`는 old container image missing으로 실패했다. 그 원인을 반영해 launcher default와 submit preflight를 fixed container로 수정했고, 이후 torch/native-library skew를 피하려고 `uv sync` skip + `/opt/venv/bin/python` direct launcher를 적용했다. `2863716`은 Ray runtime-env agent timeout on `nvl72089-T06`, `2864216`은 Ray head CoreWorker port `10002` bind failure on `nvl72007-T01`, `2866525`는 Qwen3MoE provider `finalize()` 누락, `2866601`은 expert tensor parallelism mismatch, `2866688`은 Bridge finalize ETP recoupling, `2866765`는 missing ETP initialize kwarg, `2866789`는 Bridge provider entrypoint mismatch, `2866871`은 NCCL duplicate GPU detection, `2867033`은 fused layernorm mapping scatter, `2867262`는 old ReplicatedMapping broadcast bug, `2867356`은 CPU target tensor NCCL broadcast bug, `2867545`는 grouped expert linear module type miss, `2867662`는 grouped expert `.weight` attr miss로 실패했고 모두 rollout JSONL을 만들지 못했다. Probes `2866588`, `2866747`, `2867247`, `2867422`, `2867656`은 finalize shim, after-finalize ETP preservation, fallback AutoMapping, CUDA broadcast patch, grouped expert linear registration을 PASS했다. Probe `2867766`은 temporary `.weight` helper 검증용으로 제출됐다. gated helper는 `dump_job`, `train_job`, `export_job`가 모두 기록될 때만 Eagle3 pilot submit을 proven으로 인정한다.</span>
+              </div>
+              <div class="phase">
+                <strong>8. RL Validate</strong>
+                <span>acceptance, step time, reward regression 측정.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
+            <h2>What We Know</h2>
+            <span class="tag done">Analysis captured</span>
+          </div>
+          <div class="cards-3">
+            <div class="info-card">
+              <h3>Hayate/Hiso ModelOpt</h3>
+              <p>
+                기존 ModelOpt worktree에서는 core library 변경보다 DAPO-Math response generation과 Eagle3 workflow wiring이 핵심이었다.
+                추가로 접근 가능한 Hayate/Hiso `SpecForge` checkout을 찾았고, 여기에는 Qwen3 8B/30B draft outputs와
+                `configs/qwen3-235B-A22B-eagle3.json`가 있다. 이 235B config는 aux layers `[1, 46, 90]`가 우리 derivation과 맞지만
+                Thinking-2507 verifier와 RoPE theta, max position, intermediate size가 달라 직접 복사하면 안 된다.
+                따라서 Qwen3-235B 학습 source of truth는 current ModelOpt + verifier-derived architecture + Qwen3 loss-mask patch + SWE/RL rollout corpus다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Hayate Draft Inventory</h3>
+              <p>
+                `eagle3_draft_config_inventory.json`는 Hayate draft artifact root와 현재 export/vLLM draft root를 같은 reference arch로 검사한다.
+                현재 `sna` 권한에서는 Hayate model directory가 permission denied라 configs scanned 0, status `warn`으로 기록된다.
+                이 제한은 non-blocking reference evidence로 남기고, 실제 Qwen3-235B Thinking draft는 우리 pipeline에서 새로 만든다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Public Draft</h3>
+              <p>
+                `nvidia/Qwen3-235B-A22B-Eagle3`는 존재하지만 base가 Thinking-2507이 아니다.
+                compatibility test에는 유용하지만 최종 RL draft로 단정하면 안 된다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Hardware</h3>
+              <p>
+                H100에서도 원리상 가능하다. 다만 235B verifier forward와 hidden-state dump가 비용의 본체라서,
+                online training은 GB200 쪽이 훨씬 현실적이다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Local Patch</h3>
+              <p>
+                TRT-LLM hidden-state dumper에 `--answer-only-loss`와 `loss_mask` 저장을 추가했다.
+                Dump wrapper도 `CHAT_TEMPLATE` generation tag를 verifier launch 전에 확인한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Architecture Guardrail</h3>
+              <p>
+                Train wrapper가 `use_aux_hidden_state=true`, heads 64, KV heads 4, aux layers `[1,46,90]`,
+                Thinking-2507 `rope_theta=5000000`, `rms_norm_eps=1e-6`을 명시한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Arbitrary Model Derivation</h3>
+              <p>
+                `derive_eagle3_architecture.py`가 verifier `config.json`에서 heads, KV heads, FFN size,
+                rope theta, RMS eps, ModelOpt default aux layers를 산출하고 train wrapper용 env file을 만든다.
+                일반화 절차는 `EAGLE3_DRAFT_MODEL_PLAYBOOK.md`로 분리했다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Online ModelOpt Path</h3>
+              <p>
+                Hayate의 later workflow에 맞춰 `data.data_path` 기반 online training wrapper를 추가했다.
+                Slurm template도 준비됐지만 235B verifier가 training loop에 남으므로 GB200/large H100용 경로로 본다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Bootstrap Entry</h3>
+              <p>
+                `bootstrap_eagle3_path.sh`가 artifact layout, chat template, conversation prep, local preflight,
+                architecture derivation, Slurm dependency plan, readiness audit를 같은 env set으로 정렬한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Cluster Probe</h3>
+              <p>
+                `probe_cluster_environment.py`가 sbatch/srun, sacctmgr account association, partition, container/mount,
+                artifact disk, GPU visibility, Python packages를 job 제출 없이 확인한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Slurm Inputs</h3>
+              <p>
+                현재 Qwen3-235B SWE launch script 기준 `SBATCH_ACCOUNT=coreai_dlalgo_nemorl`,
+                `SBATCH_PARTITION=batch`가 가장 자연스러운 후보이다. pilot script는 안전하게 `dummy`를 기본값으로 유지한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Container Candidates</h3>
+              <p>
+                기존 SWE script의 default container는 `oci-hsg-cs-001-vscode-02`에서 보이지 않았다.
+                대신 llmservice NeMo/Nemo-RL sqsh 3개가 path-visible이며, 선택한 image에서 ModelOpt import preflight를 돌려야 한다.
+                container Slurm preflight는 이제 log marker뿐 아니라 `container_preflight_pipeline.json` structured PASS도 남긴다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>SpecDec-RL Reference</h3>
+              <p>
+                `/lustre/fs1/.../users/sna/SpecDec-RL`는 `main@c40dba37789c`이고 Qwen3-235B async GRPO recipe와
+                vLLM local server launcher를 제공한다. Qwen3-235B Eagle3 train recipe는 없어서 ModelOpt pipeline으로 draft를 만든다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Remote Pilot</h3>
+              <p>
+                `run_eagle3_remote_cluster_pilot.sh`가 `oci-hsg-cs-001-vscode-02` 같은 remote host에서 같은 cluster pilot dry-run을 실행한다.
+                기본은 `SUBMIT=false`이고, `PRINT_ONLY=true`로 SSH command만 확인할 수 있다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Remote Host Probe</h3>
+              <p>
+                `probe_eagle3_remote_host.py`가 `oci-hsg` alias, Slurm, Lustre, Hayate ModelOpt/draft path,
+                remote git head를 submit 없이 JSON/Markdown으로 기록한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Remote Dry-Run</h3>
+              <p>
+                `oci-hsg-cs-001-vscode-02`에 patched official ModelOpt를 staged했고 `SUBMIT=false` pilot이 handoff까지 완료됐다.
+                staged verifier metadata 기준 wrapper/preflight는 통과했고, readiness는 heavy artifact 부재 때문에 `INCOMPLETE`이다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Operator Handoff Guard</h3>
+              <p>
+                원격 report 기준 container preflight job `2850317`은 terminal `COMPLETED`, exit `0:0`이고
+                `container_preflight_analysis.json`은 PASS이다. 첫 submit은 GPU spec 누락, 두 번째 submit은
+                QOSMinGRES, 이후 두 번은 Qwen3 template/validator 문제를 드러냈고 모두 수정됐다.
+                이후 rollout wrapper의 executable-bit assumption, GB200 8-GPU/node assumption, missing old container default를 수정했다.
+                old-container rollout jobs `2850773`/`2851239`는 실패했고, fixed-container 재시도 `2853795`는
+                torch/native-library skew를 드러낸 뒤 실패했다. 이후 vLLM 0.10.2 ray-layout patch까지 적용한
+                rollout job `2855291`은 Ray/vLLM worker startup까지 진행했지만 `vllm._C.abi3.so` native import에서
+                Torch 2.8 nv25.05 ABI mismatch로 실패했다. source-built vLLM target은 `2856310` finalize와
+                `2856339` ABI probe로 PASS했다. `2856410`은 missing `cpuinfo`, `2856536`은 missing `frozendict`에서 실패했고,
+                `2857503`/`2857581`은 vLLM OpenAI serving API drift로 `model_config` TypeError를 드러냈고,
+                `SpecDec-RL/nemo_rl/models/generation/vllm/vllm_worker_async.py`에 signature 기반 호환 패치를 반영했다.
+                이후 `2858232`/`2858693`은 Megatron-Bridge API drift를 드러냈고, `2858959`는 Ray startup 뒤
+                Slurm worker-step memory/accounting 문제로 실패했다. compact `2859878`은 topology preflight에서
+                train-world size mismatch가 확인되어 실행 전 취소했다. 이후 `2866601`은 expert tensor parallelism mismatch로
+                실패했다. Probe `2866747`은 after-finalize ETP preservation을 PASS했고, `2867033`은 CUDA device binding 이후 fused layernorm mapping scatter를 드러냈다. Probe `2867247`은 fallback AutoMapping을 PASS했고, `2867262`는 old ReplicatedMapping의 target tensor/device bug를 드러냈으며, `2867356`은 target parameter가 CPU일 때 NCCL broadcast가 실패하는 경로를 드러냈다. Probe `2867422`는 CUDA-broadcast fallback patch를 PASS했고, `2867545`는 grouped expert linear module registration gap을 드러냈다. Probe `2867656`은 `TEColumnParallelGroupedLinear=column`, `TERowParallelGroupedLinear=row` registration을 PASS했다. `2867662`는 grouped expert module에 `.weight`가 없는 다음 gap을 드러냈고, probe `2867766`은 temporary `.weight` helper를 검증하기 위해 제출됐다.
+                `operator_followups/01_submit_rollout_capture.json`은 terminal-state 전 analyzer 실행을 막는 `waiting` 상태이고,
+                `eagle3_operator_queue.json`은 operator poll을 처리한 뒤 `current_ready_set_processed`로 분류된다.
+                `eagle3_operator_followups_validation.json`, `eagle3_operator_submit_packet_validation.json`,
+                `eagle3_operator_ready_submit_preflight.json`은 모두 PASS로 검증된다.
+                completion contract self-test는 synthetic trained/export/sweep artifact가 final audit을 PASS시키는지와
+                wrong `VLLM_DRAFT_DIR` sweep evidence가 reject되는지를 submit 없이 검증한다.
+                completion audit도 이 guard와 submit packet validation, gated pipeline submit evidence를 required PASS check로 포함하며,
+                현재 refresh 후 completion audit summary는 PASS 19, INCOMPLETE 4, MISSING 10, WARN 4이고 overall은 `incomplete`이다.
+                `eagle3_operator_submit_packet.json`은 이 긴 sheet에서 지금 실행할 command와 terminal-state guard command만
+                축약해 operator에게 넘기는 no-submit packet이다.
+                `eagle3_operator_submit_packet_validation.json`은 packet이 sheet와 같은 ready action 순서, allow flag,
+                `--run-after` 금지, `--execute-after` 분리 규칙을 지키는지 검증한다.
+                `preflight_eagle3_operator_ready_submit.py`는 ready action의 Slurm binary, command env, container path,
+                ModelOpt/verifier/input/template path, SpecDec-RL path, report/job output parent writeability를 submit 없이 검사하며
+                원격 기준 rollout submit preflight는 PASS, `submit_ready=true`이다.
+                `summarize_eagle3_operator_queue.py`는 execution/follow-up/ready-submit state를 합쳐 action별 `next_step`을 기록하며
+                현재 ready set은 처리됐고 next action은 `rollout_poll`이다.
+                `validate_eagle3_operator_queue_transitions.py`는 synthetic state 7개를 만들어 submit, poll, keep-polling,
+                execute-followup, refresh, failure path가 의도대로 분기되는지 확인한다.
+                container preflight 후 analyzer는 Slurm job id와 structured preflight JSON의 `slurm_job_id`를 대조해서 stale report를 막는다.
+                `refresh_eagle3_operator_state.py`는 queue/watcher/pipeline submit preflight를 먼저 갱신하고, 그 다음 planner,
+                validations, completion contract, sheet, submit packet, goal evidence, completion audit을 한 번에 갱신하는 no-submit refresh step이다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Ready-submit Preflight</h3>
+              <p>
+                operator sheet와 submit packet이 논리적으로 맞는지만 보는 단계에서 한 발 더 나아가,
+                현재 `oci-hsg` host에서 실제 ready command가 실행 가능한 입력과 output directory를 갖췄는지 확인한다.
+                이 검사는 job을 제출하지 않으며, container preflight와 rollout capture submit 두 action 모두에 대해
+                stale job file risk, writable report parent, rollout submit-preflight readiness를 같이 본다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Slurm Capacity Probe</h3>
+              <p>
+                `probe_eagle3_slurm_capacity.py`가 `sinfo`로 partition GRES를 읽어 hidden-state dump/train/export request와 비교한다.
+                원격 `batch`는 `gpu:4(S:0-1)`로 보인다. refresh path는 `eagle3_resource_profile.env`를 읽어
+                `DUMP_GPUS_PER_NODE=4 TRAIN_GPUS_PER_NODE=4 TP=4` 기준으로 canonical capacity report를 PASS 상태로 갱신한다.
+                `validate_eagle3_resource_profile_application.py`는 이 env를 source한 pipeline dry-run에서 dump/train/export sbatch command가 실제로 4/4/1 GPU request와 `TP=4`를 출력하는지 검증한다.
+                이 profile은 Slurm shape 기준 PASS지만,
+                실제 Qwen3-235B verifier memory fit은 container preflight 이후 hidden-state dump pilot에서 확인해야 한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>NeMo-RL Drift Gate</h3>
+              <p>
+                `check_nemo_rl_eagle3_drift.py`가 target SpecDec-RL checkout에서 fixed Eagle3 rollout marker와 online draft-training marker를 분리해서 기록한다.
+                현재 계획은 fixed exported draft를 먼저 만들고 NeMo-RL/vLLM smoke와 sweep으로 acceptance, speedup, reward regression을 본 뒤 online draft training 여부를 결정하는 것이다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Pilot Conversation Data</h3>
+              <p>
+                remote artifact root에 `pilot_existing_chat_content_64.jsonl`을 만들었다.
+                64개 conversation, 16k 기준 validation warning/failure 0이라 hidden-state dump smoke 입력으로 쓸 수 있다.
+                이 데이터로 pilot submit preflight를 돌렸고 wrapper/pipeline dry-run은 통과했다. 다만 최종 학습 corpus는
+                Thinking-2507 또는 실제 RL rollout response로 다시 만들어야 하므로, 이 64개는 wiring 확인용이다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Rollout Capture Gate</h3>
+              <p>
+                `validate_rollout_capture_config.py`가 Qwen3 SWE config, effective chat template, SpecDec-RL logging source를 검사한다.
+                현재 compact `train_data_step*.jsonl` 경로는 `should_log_nemo_gym_responses=false`이고,
+                production capture 전에는 `apply_specdec_rl_rollout_role_logging_patch.sh`로 patch 적용 가능성을 확인한 뒤
+                `specdec_rl_rollout_role_logging.patch`로 `role` 배열도 남기는 것을 권장한다.
+                `preflight_rollout_capture_submit.py`는 SpecDec-RL checkout, staged chat template, capture wrapper, 최종 `run_grpo` dry-run을
+                Slurm submit 없이 한 번에 검사하고 `submit_ready`를 기록한다.
+                `run_rollout_capture_smoke.sh`는 1-step capture plan을 만들고,
+                `materialize_rollout_capture_corpus.sh`는 완료된 `train_data_step*.jsonl`를 ModelOpt conversation JSONL로 변환한다.
+                `analyze_rollout_capture.py`는 현재 artifact 상태를 `missing_capture`, `needs_materialize`, `pass`, `fail`로 요약한다.
+                `analyze_rollout_capture_job.py`는 submit 이후 job id, Slurm/Ray log, capture JSONL, materialized corpus 상태를 함께 추적한다.
+                `advance_rollout_capture_state.py`는 submit 이후 상태를 읽고 submit, poll, materialize, pipeline dry-run 중 다음 command를 하나로 좁힌다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>SpecForge / SGLang</h3>
+              <p>
+                SpecForge는 SGLang team ecosystem project로 명시되어 있고, EAGLE3 training model을 SGLang serving으로 가져가는 경로다.
+                `examples/run_qwen3_235b_a22b_eagle3.sh`는 `train_eagle3.py`, `--target-model-backend sglang`, `--chat-template qwen` 형태라
+                architecture/training-shape 참고에는 유용하다. 다만 현재 upstream script 내용은 Qwen3-Next-80B-A3B target을 가리키므로,
+                우리 ModelOpt/vLLM/NeMo-RL Qwen3-235B path의 drop-in 대체로 보지는 않는다.
+                SpecForge data-prep 문서의 conversation format은 `id` + `conversations`이고, pre-formatted text는 `id` + `text`와
+                `--is-preformatted`가 필요하다. 우리 기본 pipeline은 ModelOpt용 `conversation_id` + `messages`를 유지하되,
+                comparison run을 위해 converter에서 `OUTPUT_SCHEMA=specforge`를 지원한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>vLLM Speculators</h3>
+              <p>
+                `vllm-project/speculators`는 vLLM에 바로 배포할 draft model을 학습하는 별도 stack이다.
+                공식 docs의 online EAGLE3 tutorial은 `speculators&gt;=0.5.0`와 별도 `vllm&gt;=0.18` serving env를 전제로 하고,
+                `prepare_data.py`가 chat template/tokenization/loss mask를 만들며 `train.py`가 online/offline/hybrid hidden-state training을 지원한다.
+                공개 supported table에는 Qwen3 MoE 235B EAGLE3 training/deployment가 포함되어 있어 강한 후보지만,
+                현재 NeMo-RL rollout unblocker인 source-built `vllm 0.10.2` runtime과는 다른 경로다.
+                따라서 지금은 ModelOpt를 primary로 두고, normalized rollout conversations를 Speculators `prepare_data.py` 입력으로 바꾸는 adapter/probe를 second track으로 둔다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Recent SWE/RL Evidence</h3>
+              <p>
+                2026-05-22 기준 공개 자료상 NeMo RL v0.6은 RL rollout speculative decoding을 공식 지원하고,
+                별도로 long-context multi-step SWE RL benchmark도 공개했다. 하지만 SWE RL loop 안에서 EAGLE3 draft를 실제로
+                end-to-end 학습/검증한 공개 사례는 아직 제한적이다. Red Hat의 SWE-bench 결과는 vLLM serving benchmark라서
+                우리에게는 throughput 참고 자료이고, RL training proof는 rollout capture와 in-loop smoke/sweep으로 따로 만들어야 한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Corpus Strategy</h3>
+              <p>
+                `analyze_corpus_strategy.py`가 target context를 `swe_rl`, `math`, `general`로 나눠 primary corpus를 결정한다.
+                현재 Qwen3 SWE/RL 목표에서는 실제 RL rollout이 primary이고,
+                DAPO/OpenMathInstruct류 Math corpus는 math target일 때 primary, SWE/RL에서는 supplemental로 기록된다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Training Scale</h3>
+              <p>
+                `estimate_eagle3_training_scale.py`가 corpus row 수, effective global batch, hidden-state 저장량을 기준으로
+                pilot, calibration, production-candidate 규모를 계산한다. 현재 4-GPU/node 기준 plan은 8개/20-step pilot,
+                2.4k SWE-Gym first calibration, 10k-50k target-domain calibration, 50k-100k SWE/RL production candidate이다.
+                vLLM Speculators tutorial의 5k는 getting-started 규모이고, EAGLE original은 68k ShareGPT로 70B급을 1-2일에 학습한
+                low-cost baseline이다. EAGLE-3 paper는 68k ShareGPT + 464k UltraChat에 target-model regenerated responses를 쓰며,
+                NVIDIA Qwen3-235B-A22B Eagle3 공개 model card도 약 503.3k data points / 500k samples를 기록한다.
+                Baseten guide는 specialized draft 100k, large generic draft 500k, sample당 1k-2k tokens를 권장한다.
+                TAPS 2026 결과는 70k MathInstruct와 70k ShareGPT만 바꿔도 math/MT-Bench acceptance가 크게 달라진다는 것을 보여서,
+                SWE/RL에서는 DAPO/OpenMathInstruct가 아니라 Qwen3-235B SWE/RL rollout sample을 primary로 둬야 한다.
+                따라서 SWE/RL은 먼저 2.4k calibration 후 10k-50k, 그 다음 50k-100k candidate를 만들고,
+                300k-500k는 broad Qwen3-235B reusable draft가 필요할 때만 목표로 둔다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Sample-Size Evidence</h3>
+              <p>
+                2026-05-23 기준 확인한 외부 근거는 다음과 같다. vLLM Speculators Qwen3-8B online tutorial은 5k sample demo,
+                EAGLE는 68k ShareGPT, EAGLE-3는 532k급 ShareGPT+UltraChat, NVIDIA Qwen3-235B-A22B Eagle3는 503.3k data points,
+                SpecForge는 UltraChat 200k / ShareGPT 120k / PerfectBlend 1.4M supported datasets,
+                TorchSpec Kimi K2.5는 600k samples / 6B tokens / 1500 H200 GPU hours 사례다.
+                TAPS는 70k MathInstruct vs 70k ShareGPT 비교로 domain-matched draft가 더 긴 acceptance length를 만든다는 점을 보인다.
+                NVIDIA NeMo-RL speculative decoding report도 generic chat보다 in-domain post-training initialization이 RL-Zero rollout speedup을
+                약 1.5x에서 1.8x로 올렸다고 기록한다.
+                공통 결론은 static human answer보다 target model이 같은 prompt/template에서 재생성한 response가 acceptance rate에 더 중요하다는 점이다.
+                Baseten의 최신 EAGLE-3 guide도 specialized task는 약 100k, large generic draft는 약 500k,
+                sample당 1k-2k total tokens를 baseline으로 제시하므로, SWE/RL은 50k-100k target rollout production candidate를
+                먼저 만들고 300k-500k는 범용 Qwen3-235B draft가 필요할 때만 확장한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Next-Action Planner</h3>
+              <p>
+                `plan_eagle3_next_actions.py`가 container, rollout, pipeline, loss-mask, NeMo-RL drift,
+                training-scale report를 읽고 다음 operator command와 heavy GPU 여부를 한 리포트로 묶는다.
+                container PASS와 rollout `pipeline_dry_run` 이후에는 no-submit `run_pipeline_submit_preflight`를
+                다음 action으로 올려 pilot Slurm chain 제출 전에 마지막 wiring check를 강제한다.
+                pipeline analysis PASS 이후에도 training-checkpoint/export-artifact contract가 PASS가 아니면
+                먼저 no-submit post-export validation action을 올린다. 두 artifact contract가 모두 PASS일 때만
+                exported draft에 대한 trained-draft token sweep을 다음 gate로 올린다.
+                `create_eagle3_operator_sheet.py`는 이 planner 결과를 사람이 실행하기 쉬운 순서표로 바꾼다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Completion Audit Gate</h3>
+              <p>
+                `audit_eagle3_completion.py`는 trained-draft sweep이 같은 `VLLM_DRAFT_DIR`를 테스트했는지 확인한다.
+                또한 sweep job file에서 `artifact_root`, `config_file`, `env_file`, `chat_template`,
+                `repo_root` 또는 `swe_repo_root`가 기록되어야 RL context가 증명된 것으로 본다.
+                training checkpoint report도 PASS여야 하며, HF checkpoint weights, positive trainer step,
+                `modelopt_state.pth`, Qwen3 Eagle3 `eagle` mode를 확인한다.
+                export artifact report도 PASS여야 하며, HF/vLLM config, non-empty weights, safetensors 구조,
+                Eagle3 one-checkpoint contract를 확인한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Pipeline Evidence Chain</h3>
+              <p>
+                `preflight_eagle3_pipeline_submit.py`가 생성하는 pilot analyze command는 이제 job file, Slurm logs,
+                hidden-state validation JSON, training checkpoint report, export artifact report, verifier config,
+                chat template, ModelOpt path를 명시적으로 넘긴다. 따라서 pilot 이후 hidden dump/train/export 증거가
+                같은 artifact root 아래에서 이어진다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Goal Evidence Matrix</h3>
+              <p>
+                `audit_eagle3_goal_evidence.py`는 최종 completion audit보다 한 단계 넓게, 목표 달성 요건을
+                architecture, Hayate/ModelOpt reference, Hayate draft inventory, rollout corpus, container gate, pipeline preflight,
+                gated submit, hidden-state/train/export, RL sweep, completion audit으로 나누고 각 항목이 현재 proven/incomplete/missing인지 기록한다.
+                따라서 지금 상태처럼 path는 준비됐지만 draft checkpoint가 아직 없는 경우를 명확히 표시한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Operator Handoff</h3>
+              <p>
+                원격 handoff는 `/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/handoff`에 재생성했다.
+                operator sheet validation은 실행 command의 print-only/allow flag/json-out 계약을 확인한다.
+                Slurm follow-up guard는 execution record와 job file을 읽고 `squeue`/`sacct`에서 terminal state가 증명될 때만
+                after_commands를 실행한다.
+                container preflight follow-up analyzer도 ModelOpt, verifier config, input data, chat template, mount 정보를
+                submit command에서 그대로 받아 재현성과 provenance를 유지한다.
+                manifest에는 operator sheet `ready_for_operator`, ready actions
+                `submit_container_preflight`, `submit_rollout_capture`, operator execution `not_started`가 기록되어 있다.
+                아직 우리가 Slurm/GPU job을 제출하지 않았기 때문에 execution record는 0개가 맞다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Reasoning Content</h3>
+              <p>
+                `normalize_rl_rollouts_to_conversations.py`가 별도 `reasoning_content`를
+                `<think>...</think>`로 assistant content 앞에 병합하는 옵션을 지원한다.
+                Qwen3 Thinking 데이터에는 `INCLUDE_REASONING_CONTENT=true`를 검토한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Pilot Gate</h3>
+              <p>
+                `RUN_PILOT=true`는 같은 Slurm chain을 쓰되 hidden dump 8개, train sample 8개, `max_steps=20`으로 제한해
+                full 235B run 전에 schema/mask/export 문제를 먼저 잡는다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Resume Gate</h3>
+              <p>
+                `analyze_eagle3_pipeline.py`가 Slurm log와 artifact evidence를 읽고 `next_action.resume_command`를 만든다.
+                실패한 stage 이전의 `RUN_*` flag는 자동으로 꺼져서 이미 만든 artifact를 재사용한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Upstream Drift</h3>
+              <p>
+                2026-05-21 23:00 PDT 기준 원격 training host의 ModelOpt HEAD는 official
+                `NVIDIA/Model-Optimizer@main` `b02e8885...`와 일치한다.
+                focus diff는 허용된 TRT-LLM hidden-state `loss_mask` patch뿐이며,
+                Hayate checkout은 `4eacb0da...` reference workflow로만 둔다.
+                로컬 Mac checkout은 `c9098b63...`로 뒤처져 있어 실행 기준으로 쓰지 않는다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Patch Bundle</h3>
+              <p>
+                로컬 TRT-LLM dumper `loss_mask` patch를 `git apply` 가능한 bundle로 export한다.
+                `--compat-modelopt-dir`로 최신/clean checkout 적용 가능성도 worktree 수정 없이 확인한다.
+              </p>
+            </div>
+            <div class="info-card">
+              <h3>Artifact Status</h3>
+              <p>
+                로컬 dry-run과 handoff bundle은 검증됐다. 실제 Qwen3-235B Thinking Eagle3 draft checkpoint는
+                oci-hsg/Slurm pilot이 끝나야 존재 여부를 증명할 수 있다.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
+            <h2>Next Actions</h2>
+            <span class="tag active">Current working queue</span>
+          </div>
+          <div class="todo">
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">vLLM runtime ABI 고정</p>
+                <p class="todo-desc">
+                  0.10.2/0.11.2/0.13.0 wheel target은 모두 `vllm._C` ABI mismatch로 실패했다.
+                  NeMo 25.07.01 container 안에서 source-built vLLM site를 만든 뒤 `2856339` ABI probe가 PASS했다.
+                  이후 missing pure deps, compile/Inductor, OpenAI serving `model_config`, Megatron-Bridge API drift, topology mismatch, missing full data path를 차례로 정리했다.
+                  현재 active gate는 source-built `vllm 0.10.2` site를 쓰는 balanced fallback이며, probe `2867766` PASS 확인 뒤 다음 24n4g smoke를 제출한다.
+                  vLLM 0.13.0 fallback `2857812`는 native import probe에서 `tokenizers==0.21.4` conflict로 FAIL했고, 최신 vLLM/speculators stack은 별도 backend probe로 분리한다.
+                </p>
+              </div>
+              <span class="tag done">Done</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">Container preflight 고정</p>
+                <p class="todo-desc">
+                  `SBATCH_ACCOUNT=coreai_dlalgo_nemorl`, `SBATCH_PARTITION=batch` 후보는 확인했다.
+                  이제 선택한 sqsh image에서 `PREFLIGHT_REQUIRE_MODELOPT_IMPORT=true`로 ModelOpt/Transformers/TRT-LLM import와
+                  recipe validation을 확인해야 한다.
+                </p>
+              </div>
+              <span class="tag done">Done</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">Bootstrap dry-run 고정</p>
+                <p class="todo-desc">
+                  remote dry-run은 `pilot_existing_chat_content_64.jsonl` 기준 handoff까지 통과했다.
+                  final corpus가 생기면 같은 command에서 `INPUT_DATA`만 교체해 data/template/preflight/pipeline/audit 경로를 다시 확인한다.
+                </p>
+              </div>
+              <span class="tag done">Ready</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">Public draft smoke test</p>
+                <p class="todo-desc">
+                  `nvidia/Qwen3-235B-A22B-Eagle3`를 vLLM speculative_config로 넣고 실제 NeMo-RL rollout에서
+                  acceptance와 `exposed_generation` 변화를 baseline과 비교한다. Wrapper는
+                  `submit_static_specdec_smoke_pair.sh`, 분석기는 `analyze_static_specdec_smoke_pair.py`.
+                </p>
+              </div>
+              <span class="tag done">Ready</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">Target-domain conversations 만들기</p>
+                <p class="todo-desc">
+                  SWE prompts와 Thinking-2507 assistant outputs, 또는 실제 RL rollout logs를 OpenAI-style
+                  `messages`/`conversations` JSONL로 정리한다. Generator는 `generate_training_conversations_openai.py`,
+                  rollout 정규화는 `normalize_rl_rollouts_to_conversations.py`, 사전 검증은 `validate_training_conversations.py`.
+                  fixed 5-row smoke input과 full 2,438-row SWE-Gym NemoGym input은 준비됐지만, 최종 training conversations는 다음 patched smoke와 이후 full rollout이 생성할 `train_data_step*.jsonl`에서 만들어야 한다.
+                </p>
+              </div>
+              <span class="tag warn">Partial</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">vLLM Speculators probe</p>
+                <p class="todo-desc">
+                  `vllm-project/speculators`는 Qwen3 MoE 235B EAGLE3 지원 후보지만 `speculators&gt;=0.5.0`/`vllm&gt;=0.18` 계열이라 현재 `0.10.2` rollout unblocker와 분리한다.
+                  다음 단계는 normalized rollout conversation을 `scripts/prepare_data.py`가 받는 local JSONL로 변환하는 adapter, environment install probe, hidden extraction smoke, tiny train smoke다.
+                </p>
+              </div>
+              <span class="tag">Track</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">Hidden-state dump</p>
+                <p class="todo-desc">
+                  Qwen3-235B 94-layer 기준 aux layers `[1,46,90]`로 last hidden + 3 aux hidden states를 저장한다.
+                  첫 GPU 실행은 `RUN_PILOT=true`로 8개 conversation만 태우고, 통과 후 full dump로 확대한다.
+                  16k sample당 대략 512 MiB 규모라 storage 계획이 필요하다.
+                </p>
+              </div>
+              <span class="tag warn">Heavy</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">ModelOpt offline train/export</p>
+                <p class="todo-desc">
+                  현재 repo의 recipe API로 draft를 학습하고, HF export 후 vLLM one-checkpoint format으로 변환한다.
+                  Export wrapper가 HF/vLLM config를 verifier/reference와 자동 비교한다.
+                </p>
+              </div>
+              <span class="tag">Queued</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">ModelOpt online train reference</p>
+                <p class="todo-desc">
+                  Hayate가 이동했던 online base-model training을 현재 recipe API로 표현했다.
+                  `modelopt_qwen3_235b_online_train.sh`는 `INPUT_DATA`와 `CHAT_TEMPLATE`를 받아 `data.data_path`를 사용한다.
+                </p>
+              </div>
+              <span class="tag done">Ready</span>
+            </div>
+            <div class="todo-item">
+              <div>
+                <p class="todo-title">RL validation gate</p>
+                <p class="todo-desc">
+                  Public draft smoke와 trained draft smoke를 분리했다. `submit_trained_draft_spec_tokens_sweep.sh`로
+                  `num_speculative_tokens` 2/3/4를 sweep하고 step time, reward, malformed thinking, tool latency를 같이 본다.
+                  sweep job file은 draft path와 RL config/env/chat-template context까지 남겨 completion audit의 증거로 쓴다.
+                </p>
+              </div>
+              <span class="tag">Queued</span>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
+            <h2>Command Snippets</h2>
+            <span class="tag">Local templates</span>
+          </div>
+          <div class="cards-2">
+            <div class="info-card">
+              <h3>Bootstrap plan</h3>
+              <code class="code">ARTIFACT_ROOT=/path/to/qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=&lt;account&gt; \
+bash experiments/eagle3_qwen3_235b/run_eagle3_cluster_pilot.sh
+
+python3 experiments/eagle3_qwen3_235b/discover_eagle3_run_inputs.py \
+  /lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso \
+  /lustre/fsw/portfolios/coreai/users/sna \
+  --artifact-root /path/to/qwen3_235b_eagle3 \
+  --env-out /path/to/qwen3_235b_eagle3/eagle3_inputs.env \
+  --markdown-out /path/to/qwen3_235b_eagle3/eagle3_input_discovery.md \
+  --json-out /path/to/qwen3_235b_eagle3/eagle3_input_discovery.json
+
+source /path/to/qwen3_235b_eagle3/eagle3_inputs.env
+
+ARTIFACT_ROOT=/path/to/qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=&lt;account&gt; \
+VERIFIER_CONFIG_DIR=/path/to/Qwen3-235B-A22B-Thinking-2507 \
+bash experiments/eagle3_qwen3_235b/bootstrap_eagle3_path.sh
+
+PREP_DRY_RUN=false \
+MODE=rollout \
+INPUT_PATHS="/path/to/rollouts.jsonl /path/to/trajectory_dir" \
+TOKENIZER_CONFIG=/path/to/tokenizer_config.json \
+ARTIFACT_ROOT=/path/to/qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=&lt;account&gt; \
+VERIFIER_CONFIG_DIR=/path/to/Qwen3-235B-A22B-Thinking-2507 \
+bash experiments/eagle3_qwen3_235b/bootstrap_eagle3_path.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Pilot pipeline</h3>
+              <code class="code">SUBMIT=false \
+RUN_PILOT=true \
+ARTIFACT_ROOT=/path/to/qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=&lt;account&gt; \
+VERIFIER_CONFIG_DIR=/path/to/Qwen3-235B-A22B-Thinking-2507 \
+bash experiments/eagle3_qwen3_235b/bootstrap_eagle3_path.sh
+
+SUBMIT=true \
+PREP_DRY_RUN=false \
+RUN_PILOT=true \
+ARTIFACT_ROOT=/path/to/qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=&lt;account&gt; \
+VERIFIER_CONFIG_DIR=/path/to/Qwen3-235B-A22B-Thinking-2507 \
+bash experiments/eagle3_qwen3_235b/run_eagle3_cluster_pilot.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Reasoning-aware data prep</h3>
+              <code class="code">MODE=rollout \
+INPUT_PATHS="/path/to/rollouts_with_reasoning_content.jsonl" \
+OUTPUT_DATA=/path/to/qwen3_235b_swe_conversations.jsonl \
+INCLUDE_REASONING_CONTENT=true \
+MAX_SEQ_LEN=32768 \
+bash experiments/eagle3_qwen3_235b/prepare_training_conversations.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Remote pilot dry-run</h3>
+              <code class="code">PRINT_ONLY=true \
+REMOTE_HOST=oci-hsg-cs-001-vscode-02 \
+REMOTE_WORKDIR=/lustre/.../Nemo-RL_Qwen3_Roadmap \
+REMOTE_ARTIFACT_ROOT=/lustre/.../qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=&lt;account&gt; \
+bash experiments/eagle3_qwen3_235b/run_eagle3_remote_cluster_pilot.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Remote host probe</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/probe_eagle3_remote_host.py \
+  --hosts oci-hsg-cs-001-vscode-02 oci-hsg-cs-001-vscode-01 oci-hsg-cs-001-login-01.nvidia.com oci-hsg \
+  --remote-workdir /lustre/fsw/portfolios/coreai/users/sna/Nemo-RL_Qwen3_Roadmap \
+  --artifact-root /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3 \
+  --json-out /path/eagle3_remote_host_probe.json \
+  --markdown-out /path/eagle3_remote_host_probe.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Baseline + static smoke pair</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_nemo_rl_specdec_integration.py \
+  --config grpo_qwen3_235b_swe.yaml \
+  --draft-model nvidia/Qwen3-235B-A22B-Eagle3 \
+  --integration-mode generation-only \
+  --num-speculative-tokens 3 \
+  --draft-tensor-parallel-size 1 \
+  --specdec-rl-dir /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+  --markdown-out /path/to/nemo_rl_specdec_integration.md \
+  --json-out /path/to/nemo_rl_specdec_integration.json
+
+SUBMIT=false
+MAX_NUM_STEPS=1
+BASELINE_WANDB_NAME=qwen3-235b-swe-baseline-smoke
+SPECDEC_WANDB_NAME=qwen3-235b-swe-eagle3-public-smoke
+EAGLE3_DRAFT_MODEL=nvidia/Qwen3-235B-A22B-Eagle3
+EAGLE3_NUM_SPEC_TOKENS=3
+EAGLE3_DRAFT_TP=1
+
+bash experiments/eagle3_qwen3_235b/submit_static_specdec_smoke_pair.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Online draft gate</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_nemo_rl_specdec_integration.py \
+  --config grpo_qwen3_235b_swe.yaml \
+  --draft-model /path/to/qwen3_235b_eagle3_vllm \
+  --integration-mode online-draft-training \
+  --draft-loss-weight 1.0 \
+  --num-speculative-tokens 3 \
+  --draft-tensor-parallel-size 1 \
+  --specdec-rl-dir /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+  --markdown-out /path/to/nemo_rl_eagle3_online_draft_integration.md \
+  --json-out /path/to/nemo_rl_eagle3_online_draft_integration.json \
+  --env-out /path/to/nemo_rl_eagle3_online_draft_overrides.env</code>
+            </div>
+            <div class="info-card">
+              <h3>Trained draft smoke pair</h3>
+              <code class="code">SUBMIT=false \
+VLLM_DRAFT_DIR=/path/to/qwen3_235b_eagle3_vllm \
+EAGLE3_NUM_SPEC_TOKENS=3 \
+bash experiments/eagle3_qwen3_235b/submit_trained_draft_smoke_pair.sh
+
+python3 experiments/eagle3_qwen3_235b/analyze_static_specdec_smoke_pair.py \
+  --job-file latest_trained_draft_specdec_smoke_jobs.txt \
+  --repo-root /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+  --markdown-out /path/to/trained_draft_specdec_smoke.md \
+  --json-out /path/to/trained_draft_specdec_smoke.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Trained draft token sweep</h3>
+              <code class="code">SUBMIT=false \
+ARTIFACT_ROOT=/path/to/qwen3_235b_eagle3 \
+REPO_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+SWE_REPO_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+CONFIG_FILE=/path/to/Nemo-RL_Qwen3_Roadmap/grpo_qwen3_235b_swe.yaml \
+ENV_FILE=/path/to/Nemo-RL_Qwen3_Roadmap/env.sh \
+CHAT_TEMPLATE=/path/to/qwen3_generation_template.jinja2 \
+VLLM_DRAFT_DIR=/path/to/qwen3_235b_eagle3_vllm \
+SPEC_TOKENS_LIST="2 3 4" \
+MAX_NUM_STEPS=2 \
+EAGLE3_DRAFT_TP=1 \
+bash experiments/eagle3_qwen3_235b/submit_trained_draft_spec_tokens_sweep.sh
+
+python3 experiments/eagle3_qwen3_235b/analyze_spec_tokens_sweep.py \
+  --job-file latest_trained_draft_spec_tokens_sweep_jobs.txt \
+  --repo-root /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+  --markdown-out /path/to/trained_draft_spec_tokens_sweep.md \
+  --json-out /path/to/trained_draft_spec_tokens_sweep.json \
+  --fail-on-missing-spec-metrics</code>
+            </div>
+            <div class="info-card">
+              <h3>Smoke log analysis</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/analyze_static_specdec_smoke_pair.py \
+  --repo-root /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL \
+  --markdown-out /path/to/specdec_smoke_summary.md \
+  --json-out /path/to/specdec_smoke_summary.json
+
+python3 experiments/eagle3_qwen3_235b/analyze_specdec_smoke.py \
+  /path/to/specdec-smoke-logs \
+  --baseline /path/to/baseline-logs \
+  --gen-outlier-threshold-s 800 \
+  --min-generation-speedup-pct 10 \
+  --min-acceptance-rate 0.45 \
+  --markdown-out /path/to/specdec_smoke_summary.md \
+  --json-out /path/to/specdec_smoke_summary.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Training conversations</h3>
+              <code class="code">MODE=discover \
+ROLLOUT_ROOTS="/path/to/nemo_rl_outputs /path/to/another_run" \
+OUTPUT_DATA=/path/to/qwen3_235b_swe_conversations.jsonl \
+bash experiments/eagle3_qwen3_235b/prepare_training_conversations.sh
+
+MODE=generate \
+PROMPT_DATA=/path/to/swe_prompts.jsonl \
+OPENAI_BASE_URL=http://localhost:8000/v1 \
+MODEL_PATH=Qwen/Qwen3-235B-A22B-Thinking-2507 \
+OUTPUT_DATA=/path/to/qwen3_235b_swe_conversations.jsonl \
+bash experiments/eagle3_qwen3_235b/prepare_training_conversations.sh
+
+python3 experiments/eagle3_qwen3_235b/generate_training_conversations_openai.py \
+  --input /path/to/swe_prompts.jsonl \
+  --output /tmp/unused.jsonl \
+  --inspect-only
+
+python3 experiments/eagle3_qwen3_235b/generate_training_conversations_openai.py \
+  --input /path/to/swe_prompts.jsonl \
+  --output /path/to/qwen3_235b_swe_conversations.jsonl \
+  --api-base http://localhost:8000/v1 \
+  --model Qwen/Qwen3-235B-A22B-Thinking-2507 \
+  --num-responses 4 --append
+
+python3 experiments/eagle3_qwen3_235b/normalize_rl_rollouts_to_conversations.py \
+  --input /path/to/train_data_step*.jsonl \
+  --output /path/to/qwen3_235b_swe_conversations.jsonl \
+  --include-metadata
+
+# SGLang/SpecForge comparison corpus only; keep default modelopt for the main pipeline.
+OUTPUT_SCHEMA=specforge MODE=rollout \
+INPUT_PATHS="/path/to/train_data_step*.jsonl" \
+OUTPUT_DATA=/path/to/specforge_conversations.jsonl \
+bash experiments/eagle3_qwen3_235b/prepare_training_conversations.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Discover rollout data</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/discover_rollout_conversation_sources.py \
+  /path/to/nemo_rl_outputs_or_logs \
+  --include-all-jsonl \
+  --markdown-out /path/to/rollout_source_discovery.md \
+  --json-out /path/to/rollout_source_discovery.json
+
+python3 experiments/eagle3_qwen3_235b/discover_rollout_conversation_sources.py \
+  /path/to/nemo_rl_outputs_or_logs \
+  --include-all-jsonl \
+  --top-k 4 \
+  --prepare-output /path/to/qwen3_235b_swe_conversations.jsonl \
+  --include-metadata</code>
+            </div>
+            <div class="info-card">
+              <h3>Validate conversations</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_training_conversations.py \
+  /path/to/qwen3_235b_swe_conversations.jsonl \
+  --max-seq-len 16384 \
+  --json-out /path/to/qwen3_235b_swe_conversations.validation.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Derive Eagle3 architecture</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/derive_eagle3_architecture.py \
+  --verifier-config /path/to/verifier/config.json \
+  --json-out /path/to/eagle3_architecture.json \
+  --env-out /path/to/eagle3_architecture.env \
+  --dotlist-out /path/to/eagle3_architecture.dotlist
+
+ARCH_ENV_FILE=/path/to/eagle3_architecture.env \
+HIDDEN_STATES_DIR=/path/to/hidden_states \
+OUTPUT_DIR=/path/to/modelopt_ckpt \
+bash experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_offline_train.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Prepare chat template</h3>
+              <code class="code">TOKENIZER_CONFIG=/path/to/Qwen3-235B-A22B-Thinking-2507/tokenizer_config.json \
+OUTPUT_TEMPLATE=/path/to/qwen3_generation_template.jinja2 \
+bash experiments/eagle3_qwen3_235b/prepare_qwen3_chat_template.sh
+
+BASE_MODEL=Qwen/Qwen3-235B-A22B-Thinking-2507 \
+OUTPUT_TEMPLATE=/path/to/qwen3_generation_template.jinja2 \
+bash experiments/eagle3_qwen3_235b/prepare_qwen3_chat_template.sh
+
+python3 experiments/eagle3_qwen3_235b/prepare_qwen3_generation_template.py \
+  --tokenizer-config /path/to/Qwen3-235B-A22B-Thinking-2507/tokenizer_config.json \
+  --output /path/to/qwen3_generation_template.jinja2
+
+python3 experiments/eagle3_qwen3_235b/prepare_qwen3_generation_template.py \
+  --model Qwen/Qwen3-235B-A22B-Thinking-2507 \
+  --output /path/to/qwen3_generation_template.jinja2
+
+python3 experiments/eagle3_qwen3_235b/validate_chat_template_loss_mask.py \
+  --model-or-tokenizer Qwen/Qwen3-235B-A22B-Thinking-2507 \
+  --chat-template /path/to/qwen3_generation_template.jinja2</code>
+            </div>
+            <div class="info-card">
+              <h3>Hidden-state dump</h3>
+              <code class="code">INPUT_DATA=/path/to/conversations.jsonl \
+HIDDEN_STATES_DIR=/path/to/hidden_states \
+BACKEND=trtllm TP=8 DP_WORLD_SIZE=8 \
+ANSWER_ONLY_LOSS=true CHAT_TEMPLATE=/path/to/qwen3_generation_template.jinja2 \
+bash experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_dump_hidden_states.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Validate hidden states</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_hidden_state_dump.py \
+  /path/to/hidden_states \
+  --require-loss-mask \
+  --require-positive-loss-mask \
+  --expected-hidden-size 4096 \
+  --expected-aux-count 3 \
+  --max-seq-len 16384 \
+  --validate-modelopt-loader \
+  --modelopt-dir /path/to/Model-Optimizer</code>
+            </div>
+            <div class="info-card">
+              <h3>ModelOpt offline training template</h3>
+              <code class="code">HIDDEN_STATES_DIR=/path/to/hidden_states \
+OUTPUT_DIR=/path/to/qwen3_235b_eagle3 \
+ANSWER_ONLY_LOSS=true \
+USE_FAKE_BASE_FOR_OFFLINE=true \
+bash experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_offline_train.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>ModelOpt online training template</h3>
+              <code class="code">INPUT_DATA=/path/to/conversations.jsonl \
+OUTPUT_DIR=/path/to/qwen3_235b_eagle3_online \
+ANSWER_ONLY_LOSS=true \
+CHAT_TEMPLATE=/path/to/qwen3_generation_template.jinja2 \
+bash experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_online_train.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Config compare</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/compare_eagle3_configs.py \
+  --draft-config /path/to/exported_draft \
+  --verifier-config /path/to/local/verifier \
+  --reference-arch experiments/eagle3_qwen3_235b/qwen3_235b_thinking_eagle3_architecture.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Draft config inventory</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/inventory_eagle3_draft_configs.py \
+  /path/to/hayate_or_exported_draft_models \
+  --markdown-out /path/to/eagle3_draft_config_inventory.md \
+  --json-out /path/to/eagle3_draft_config_inventory.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Hayate inventory</h3>
+              <code class="code">REMOTE_HOST=cw-dfw-cs-001-vscode-01 \
+bash experiments/eagle3_qwen3_235b/inventory_hayate_eagle3_artifacts.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Provenance capture</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/collect_eagle3_provenance.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --modelopt-dir /path/Model-Optimizer \
+  --verifier-config-dir /path/verifier \
+  --input-data /path/conversations.jsonl \
+  --hidden-states-dir /path/hiddens \
+  --output-dir /path/modelopt_ckpt \
+  --export-dir /path/exported \
+  --vllm-draft-dir /path/vllm \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_provenance.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_provenance.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Cluster probe</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/probe_cluster_environment.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --modelopt-dir /path/Model-Optimizer \
+  --verifier-config-dir /path/verifier \
+  --input-data /path/conversations.jsonl \
+  --sbatch-account &lt;account&gt; \
+  --sbatch-partition batch \
+  --json-out /path/qwen3_235b_eagle3/reports/cluster_environment_probe.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/cluster_environment_probe.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Container preflight</h3>
+              <code class="code">SUBMIT=false \
+ARTIFACT_ROOT=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3 \
+SBATCH_ACCOUNT=coreai_dlalgo_nemorl \
+SBATCH_PARTITION=batch \
+CONTAINER=/lustre/fs1/portfolios/llmservice/projects/llmservice_deci_llm/containers/nemo_25.07.01.sqsh \
+MOUNTS=/lustre:/lustre \
+VERIFIER_CONFIG_DIR=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/verifier_config \
+INPUT_DATA=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/pilot_existing_chat_content_64.jsonl \
+CHAT_TEMPLATE=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/templates/qwen3_generation_template.jinja2 \
+bash experiments/eagle3_qwen3_235b/submit_eagle3_container_preflight.sh
+
+python3 experiments/eagle3_qwen3_235b/analyze_container_preflight.py \
+  --job-file latest_eagle3_container_preflight_job.txt \
+  --logs-dir logs \
+  --cluster-probe-json /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/container_preflight_cluster_probe.json \
+  --artifact-root /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3 \
+  --container /lustre/fs1/portfolios/llmservice/projects/llmservice_deci_llm/containers/nemo_25.07.01.sqsh \
+  --sbatch-account coreai_dlalgo_nemorl \
+  --sbatch-partition batch \
+  --markdown-out /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/container_preflight_analysis.md \
+  --json-out /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/container_preflight_analysis.json</code>
+            </div>
+            <div class="info-card">
+              <h3>ModelOpt drift</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/check_modelopt_upstream_drift.py \
+  --modelopt-dir /path/Model-Optimizer \
+  --hayate-modelopt-dir /lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/ghq/github.com/NVIDIA/TensorRT-Model-Optimizer \
+  --json-out /path/qwen3_235b_eagle3/reports/modelopt_upstream_drift.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/modelopt_upstream_drift.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Pipeline submit gate</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/preflight_eagle3_pipeline_submit.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --input-data /path/qwen3_235b_eagle3/data/qwen3_235b_swe_rollout_conversations.jsonl \
+  --container-preflight-json /path/qwen3_235b_eagle3/reports/container_preflight_analysis.json \
+  --corpus-strategy-json /path/qwen3_235b_eagle3/reports/corpus_strategy.json \
+  --rollout-state-json /path/qwen3_235b_eagle3/reports/rollout_capture_state_advance.json \
+  --fail-if-not-ready \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Hayate workflow</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/analyze_hayate_modelopt_workflow.py \
+  --hayate-modelopt-dir /lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/ghq/github.com/NVIDIA/TensorRT-Model-Optimizer \
+  --json-out /path/qwen3_235b_eagle3/reports/hayate_modelopt_workflow.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/hayate_modelopt_workflow.md</code>
+            </div>
+            <div class="info-card">
+              <h3>ModelOpt patch bundle</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/export_modelopt_eagle3_patch_bundle.py \
+  --modelopt-dir /path/Model-Optimizer \
+  --compat-modelopt-dir /path/clean_or_latest_Model-Optimizer \
+  --out-dir /path/qwen3_235b_eagle3/patches/modelopt_eagle3_qwen3</code>
+            </div>
+            <div class="info-card">
+              <h3>ModelOpt loss-mask gate</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_modelopt_loss_mask_patch.py \
+  --modelopt-dir /path/Model-Optimizer \
+  --json-out /path/qwen3_235b_eagle3/reports/modelopt_loss_mask_patch.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/modelopt_loss_mask_patch.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Readiness audit</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/audit_eagle3_readiness.py \
+  --input-data /path/conversations.jsonl \
+  --hidden-states-dir /path/hiddens \
+  --output-dir /path/modelopt_ckpt \
+  --export-dir /path/exported \
+  --vllm-draft-dir /path/vllm \
+  --verifier-config-dir /path/verifier \
+  --reference-arch /path/eagle3_architecture.json \
+  --arch-env-file /path/eagle3_architecture.env \
+  --nemo-rl-drift-json /path/qwen3_235b_eagle3/reports/nemo_rl_eagle3_drift.json \
+  --training-scale-json /path/qwen3_235b_eagle3/reports/eagle3_training_scale.json \
+  --markdown-out /path/eagle3_readiness.md \
+  --json-out /path/eagle3_readiness.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Training scale plan</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/estimate_eagle3_training_scale.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --input-data /path/conversations.jsonl \
+  --corpus-strategy-json /path/qwen3_235b_eagle3/reports/corpus_strategy.json \
+  --pipeline-submit-preflight-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_training_scale.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_training_scale.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Next-action plan</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/plan_eagle3_next_actions.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --container-preflight-json /path/qwen3_235b_eagle3/reports/container_preflight_analysis.json \
+  --rollout-submit-preflight-json /path/qwen3_235b_eagle3/reports/rollout_capture_submit_preflight.json \
+  --rollout-state-json /path/qwen3_235b_eagle3/reports/rollout_capture_state_advance.json \
+  --pipeline-submit-preflight-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.json \
+  --pipeline-analysis-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_analysis.json \
+  --training-checkpoint-json /path/qwen3_235b_eagle3/reports/eagle3_training_checkpoint.json \
+  --export-artifacts-json /path/qwen3_235b_eagle3/reports/eagle3_export_artifacts.json \
+  --sweep-json /path/qwen3_235b_eagle3/reports/trained_draft_spec_tokens_sweep.json \
+  --training-scale-json /path/qwen3_235b_eagle3/reports/eagle3_training_scale.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_next_actions.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Operator sheet</h3>
+              <p>Planner output을 operator용 한 장짜리 실행 순서표로 렌더링한다. 이 단계는 job을 제출하지 않고, 실제 execute command에는 action별 execution record 경로를 포함한다. Slurm action에는 immediate `--run-after` command를 만들지 않는다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/create_eagle3_operator_sheet.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Next-action operator</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/run_eagle3_next_action.py \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --list
+
+python3 experiments/eagle3_qwen3_235b/run_eagle3_next_action.py \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --action-id submit_container_preflight
+
+# explicit execution only:
+# --execute --allow-slurm
+# add --allow-heavy-gpu for rollout capture or pipeline actions
+# for Slurm actions, run after_commands only after terminal job state
+
+python3 experiments/eagle3_qwen3_235b/run_eagle3_slurm_followups.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --action-id submit_container_preflight
+
+# only after READY_FOR_FOLLOWUP:
+# add --execute-after</code>
+            </div>
+            <div class="info-card">
+              <h3>Operator submit packet</h3>
+              <p>현재 ready action만 뽑아 execute command, Slurm terminal-state guard, open goal requirements를 한 파일로 만든다. validation 단계는 packet이 operator sheet와 같은 command를 담고, Slurm follow-up 실행이 terminal-state guard 뒤에만 남아 있는지 확인한다. 둘 다 job을 제출하지 않는다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/create_eagle3_operator_submit_packet.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --operator-sheet-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet_validation.json \
+  --operator-followup-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_followups_validation.json \
+  --operator-execution-json /path/qwen3_235b_eagle3/reports/eagle3_operator_execution.json \
+  --goal-evidence-json /path/qwen3_235b_eagle3/reports/eagle3_goal_evidence.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet.md
+
+python3 experiments/eagle3_qwen3_235b/validate_eagle3_operator_submit_packet.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --operator-submit-packet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet.json \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --operator-sheet-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet_validation.json \
+  --operator-followup-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_followups_validation.json \
+  --operator-execution-json /path/qwen3_235b_eagle3/reports/eagle3_operator_execution.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet_validation.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet_validation.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Ready-submit preflight</h3>
+              <p>현재 ready action들이 `oci-hsg`에서 바로 제출 가능한 입력, Slurm command, container, writable output parent를 갖췄는지 검사한다. 이 단계는 job을 제출하지 않는다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/preflight_eagle3_operator_ready_submit.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --operator-submit-packet-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet_validation.json \
+  --rollout-submit-preflight-json /path/qwen3_235b_eagle3/reports/rollout_capture_submit_preflight.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_ready_submit_preflight.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_ready_submit_preflight.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Operator queue</h3>
+              <p>operator sheet, execution records, follow-up validation, ready-submit preflight를 합쳐 현재 action별 next step과 다음 command를 기록한다. 이 단계는 job을 제출하지 않는다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/summarize_eagle3_operator_queue.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --operator-execution-json /path/qwen3_235b_eagle3/reports/eagle3_operator_execution.json \
+  --operator-followup-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_followups_validation.json \
+  --operator-ready-submit-preflight-json /path/qwen3_235b_eagle3/reports/eagle3_operator_ready_submit_preflight.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_queue.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_queue.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Queue transition validation</h3>
+              <p>실제 Slurm 제출 없이 synthetic report set으로 operator queue의 상태 전이를 검증한다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_operator_queue_transitions.py \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_queue_transitions.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_queue_transitions.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Completion contract self-test</h3>
+              <p>실제 checkpoint 없이 synthetic trained/export/sweep artifact root를 만들고 final audit contract를 검증한다. 좋은 evidence는 PASS, wrong draft path를 가리키는 sweep evidence는 FAIL이어야 한다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_completion_contract.py \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_completion_contract.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_completion_contract.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Slurm capacity probe</h3>
+              <p>partition의 visible GPU-per-node와 pipeline resource env를 비교한다. `batch`가 4-GPU shape이면 8-GPU default pipeline submit을 막고, 4-GPU override 후보를 별도로 검증한다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/probe_eagle3_slurm_capacity.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --sbatch-partition batch \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_slurm_capacity.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_slurm_capacity.md \
+  --env-out /path/qwen3_235b_eagle3/reports/eagle3_resource_profile.env
+
+python3 experiments/eagle3_qwen3_235b/probe_eagle3_slurm_capacity.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --sbatch-partition batch \
+  --dump-gpus-per-node 4 \
+  --train-gpus-per-node 4 \
+  --tp 4 \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_slurm_capacity_4gpu_candidate.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_slurm_capacity_4gpu_candidate.md
+
+source /path/qwen3_235b_eagle3/reports/eagle3_resource_profile.env</code>
+            </div>
+            <div class="info-card">
+              <h3>Resource profile application</h3>
+              <p>생성된 resource profile env가 `submit_eagle3_pipeline.sh` dry-run과 `preflight_eagle3_pipeline_submit.py`가 출력하는 pilot submit command까지 실제로 전파되는지 확인한다. oci-hsg 검증 결과 profile 값을 직접 export하지 않고 `RESOURCE_PROFILE_ENV`만 지정해도 dump/train `--gres=gpu:4`, export `--gres=gpu:1`, `TP=4`가 적용됐고 stale `gpu:8` 요청은 남지 않았다. 이 단계도 job을 제출하지 않는다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_resource_profile_application.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --resource-profile-env /path/qwen3_235b_eagle3/reports/eagle3_resource_profile.env \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_resource_profile_application.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_resource_profile_application.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Operator state refresh</h3>
+              <p>Slurm follow-up analyzer가 끝난 뒤 stale operator state를 방지하기 위해 planner, validations, completion contract, operator sheet, submit packet, ready-submit preflight, operator queue, goal evidence, completion audit을 한 번에 다시 쓴다. 이 단계도 job을 제출하지 않는다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/refresh_eagle3_operator_state.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_state_refresh.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_state_refresh.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Next-action validation</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_next_action_plan.py \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_next_actions_validation.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_next_actions_validation.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Operator execution validation</h3>
+              <p>실제 `run_eagle3_next_action.py --execute` 후 남은 execution record의 JSON shape, action linkage, return code, follow-up analyzer return code를 검증한다. 아직 제출 전이면 `not_started`가 정상이며, Slurm job 성공 여부는 각 stage analyzer가 판단한다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_operator_execution.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_operator_execution.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_operator_execution.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Transition validation</h3>
+              <p>Builds synthetic report states and checks that the planner promotes the intended no-submit and submit gates in order.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_next_action_transitions.py \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_next_action_transitions.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_next_action_transitions.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Goal evidence matrix</h3>
+              <p>Writes the user-facing proof matrix; it does not submit Slurm or touch GPU.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/audit_eagle3_goal_evidence.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_goal_evidence.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_goal_evidence.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Training checkpoint validation</h3>
+              <p>Checks the trained ModelOpt checkpoint before export and requires torch/ModelOpt state loading inside the cluster export job.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_training_checkpoint.py \
+  --checkpoint-dir /path/modelopt_ckpt \
+  --modelopt-dir /path/Model-Optimizer \
+  --reference-arch /path/eagle3_architecture.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_training_checkpoint.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_training_checkpoint.md \
+  --require-modelopt-state-load \
+  --fail-on-error</code>
+            </div>
+            <div class="info-card">
+              <h3>Export artifact validation</h3>
+              <p>Checks the HF export and vLLM one-checkpoint draft configs, weights, safetensors headers/offsets, Eagle3 contract fields, and config comparisons before RL smoke.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/validate_eagle3_export_artifacts.py \
+  --export-dir /path/exported \
+  --vllm-draft-dir /path/vllm \
+  --verifier-config-dir /path/verifier \
+  --reference-arch /path/eagle3_architecture.json \
+  --export-config-compare-json /path/exported/config_compare.json \
+  --vllm-config-compare-json /path/vllm/config_compare.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_export_artifacts.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_export_artifacts.md \
+  --fail-on-error</code>
+            </div>
+            <div class="info-card">
+              <h3>NeMo-RL drift/support</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/check_nemo_rl_eagle3_drift.py \
+  --nemo-rl-dir /path/SpecDec-RL \
+  --json-out /path/qwen3_235b_eagle3/reports/nemo_rl_eagle3_drift.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/nemo_rl_eagle3_drift.md</code>
+            </div>
+            <div class="info-card">
+              <h3>Pipeline log analysis</h3>
+              <p>Reads copied Slurm logs and artifact paths, then emits stage status plus a safe resume dry-run command in <code>next_action</code>.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/analyze_eagle3_pipeline.py \
+  --job-file latest_eagle3_pipeline_jobs.txt \
+  --logs-dir logs \
+  --input-data /path/conversations.jsonl \
+  --hidden-states-dir /path/hiddens \
+  --hidden-validation-json /path/hiddens/validation_summary.json \
+  --output-dir /path/modelopt_ckpt \
+  --training-checkpoint-json /path/qwen3_235b_eagle3/reports/eagle3_training_checkpoint.json \
+  --export-dir /path/exported \
+  --vllm-draft-dir /path/vllm \
+  --export-artifacts-json /path/qwen3_235b_eagle3/reports/eagle3_export_artifacts.json \
+  --verifier-config-dir /path/verifier \
+  --sbatch-account &lt;account&gt; \
+  --run-pilot true \
+  --markdown-out /path/eagle3_pipeline_analysis.md \
+  --json-out /path/eagle3_pipeline_analysis.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Completion audit</h3>
+              <p>
+                Final PASS는 trained-draft sweep JSON이 audited `VLLM_DRAFT_DIR`와 같은 draft를 검증했고,
+                job file metadata에 RL config/env/chat-template context가 남아 있을 때만 허용한다.
+              </p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/audit_eagle3_completion.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --provenance-json /path/qwen3_235b_eagle3/reports/eagle3_provenance.json \
+  --cluster-probe-json /path/qwen3_235b_eagle3/reports/cluster_environment_probe.json \
+  --upstream-drift-json /path/qwen3_235b_eagle3/reports/modelopt_upstream_drift.json \
+  --modelopt-patch-manifest /path/qwen3_235b_eagle3/patches/modelopt_eagle3_qwen3/manifest.json \
+  --next-action-plan-validation-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions_validation.json \
+  --operator-queue-transitions-json /path/qwen3_235b_eagle3/reports/eagle3_operator_queue_transitions.json \
+  --operator-followup-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_followups_validation.json \
+  --operator-submit-packet-validation-json /path/qwen3_235b_eagle3/reports/eagle3_operator_submit_packet_validation.json \
+  --operator-ready-submit-preflight-json /path/qwen3_235b_eagle3/reports/eagle3_operator_ready_submit_preflight.json \
+  --operator-queue-json /path/qwen3_235b_eagle3/reports/eagle3_operator_queue.json \
+  --completion-contract-json /path/qwen3_235b_eagle3/reports/eagle3_completion_contract.json \
+  --container-preflight-json /path/qwen3_235b_eagle3/reports/container_preflight_analysis.json \
+  --rollout-state-json /path/qwen3_235b_eagle3/reports/rollout_capture_state_advance.json \
+  --corpus-strategy-json /path/qwen3_235b_eagle3/reports/corpus_strategy.json \
+  --pipeline-submit-preflight-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.json \
+  --pipeline-analysis-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_analysis.json \
+  --hidden-validation-json /path/hiddens/validation_summary.json \
+  --output-dir /path/modelopt_ckpt \
+  --training-checkpoint-json /path/qwen3_235b_eagle3/reports/eagle3_training_checkpoint.json \
+  --export-dir /path/exported \
+  --vllm-draft-dir /path/vllm \
+  --export-artifacts-json /path/qwen3_235b_eagle3/reports/eagle3_export_artifacts.json \
+  --export-config-compare-json /path/exported/config_compare.json \
+  --vllm-config-compare-json /path/vllm/config_compare.json \
+  --sweep-json /path/qwen3_235b_eagle3/reports/trained_draft_spec_tokens_sweep.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_completion_audit.md \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_completion_audit.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Handoff bundle</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/create_eagle3_handoff_bundle.py \
+  --out-dir /path/qwen3_235b_eagle3_handoff \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --sbatch-account &lt;account&gt; \
+  --provenance-json /path/qwen3_235b_eagle3/reports/eagle3_provenance.json \
+  --input-discovery-json /path/qwen3_235b_eagle3/eagle3_input_discovery.json \
+  --cluster-probe-json /path/qwen3_235b_eagle3/reports/cluster_environment_probe.json \
+  --upstream-drift-json /path/qwen3_235b_eagle3/reports/modelopt_upstream_drift.json \
+  --modelopt-patch-manifest /path/qwen3_235b_eagle3/patches/modelopt_eagle3_qwen3/manifest.json \
+  --readiness-json /path/qwen3_235b_eagle3/reports/eagle3_readiness.json \
+  --nemo-rl-drift-json /path/qwen3_235b_eagle3/reports/nemo_rl_eagle3_drift.json \
+  --training-scale-json /path/qwen3_235b_eagle3/reports/eagle3_training_scale.json \
+  --next-action-plan-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions.json \
+  --next-action-plan-validation-json /path/qwen3_235b_eagle3/reports/eagle3_next_actions_validation.json \
+  --next-action-transitions-json /path/qwen3_235b_eagle3/reports/eagle3_next_action_transitions.json \
+  --operator-sheet-json /path/qwen3_235b_eagle3/reports/eagle3_operator_sheet.json \
+  --operator-execution-json /path/qwen3_235b_eagle3/reports/eagle3_operator_execution.json \
+  --pipeline-analysis-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_analysis.json \
+  --training-checkpoint-json /path/qwen3_235b_eagle3/reports/eagle3_training_checkpoint.json \
+  --export-artifacts-json /path/qwen3_235b_eagle3/reports/eagle3_export_artifacts.json \
+  --sweep-json /path/qwen3_235b_eagle3/reports/trained_draft_spec_tokens_sweep.json \
+  --completion-json /path/qwen3_235b_eagle3/reports/eagle3_completion_audit.json \
+  --goal-evidence-json /path/qwen3_235b_eagle3/reports/eagle3_goal_evidence.json \
+  --hayate-inventory /path/qwen3_235b_eagle3/reports/hayate_inventory.txt \
+  --draft-inventory-json /path/qwen3_235b_eagle3/reports/eagle3_draft_config_inventory.json</code>
+            </div>
+            <div class="info-card">
+              <h3>Pipeline submitter</h3>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/preflight_eagle3_pipeline.py \
+  --input-data /path/conversations.jsonl \
+  --hidden-states-dir /path/hiddens \
+  --output-dir /path/modelopt_ckpt \
+  --export-dir /path/exported \
+  --vllm-draft-dir /path/vllm \
+  --verifier-config-dir /path/verifier \
+  --sbatch-account &lt;account&gt; \
+  --require-modelopt-import
+
+SUBMIT=false SBATCH_ACCOUNT=&lt;account&gt; \
+INPUT_DATA=/path/conversations.jsonl \
+HIDDEN_STATES_DIR=/path/hiddens \
+OUTPUT_DIR=/path/modelopt_ckpt \
+TRAINED_CKPT=/path/modelopt_ckpt \
+EXPORT_DIR=/path/exported \
+VLLM_DRAFT_DIR=/path/vllm \
+VERIFIER_CONFIG_DIR=/path/verifier \
+RUN_TRAINED_DRAFT_SMOKE=true \
+SMOKE_EAGLE3_NUM_SPEC_TOKENS=3 \
+bash experiments/eagle3_qwen3_235b/submit_eagle3_pipeline.sh</code>
+            </div>
+            <div class="info-card">
+              <h3>Gated pilot submit</h3>
+              <p>Preflight JSON이 `submit_ready=true`이고 rollout corpus가 실제로 존재할 때만 pilot hidden-state/train/export pipeline 제출을 허용한다.</p>
+              <code class="code">python3 experiments/eagle3_qwen3_235b/submit_eagle3_pipeline_if_ready.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --preflight-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_pipeline_gated_submit.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_pipeline_gated_submit.md
+
+python3 experiments/eagle3_qwen3_235b/submit_eagle3_pipeline_if_ready.py \
+  --artifact-root /path/qwen3_235b_eagle3 \
+  --preflight-json /path/qwen3_235b_eagle3/reports/eagle3_pipeline_submit_preflight.json \
+  --json-out /path/qwen3_235b_eagle3/reports/eagle3_pipeline_gated_submit.json \
+  --markdown-out /path/qwen3_235b_eagle3/reports/eagle3_pipeline_gated_submit.md \
+  --execute --allow-heavy-gpu</code>
+            </div>
+            <div class="info-card">
+              <h3>Slurm preflight</h3>
+              <code class="code">sbatch --account=&lt;account&gt; \
+  --export=ALL,INPUT_DATA=/path/conversations.jsonl,HIDDEN_STATES_DIR=/path/hiddens,OUTPUT_DIR=/path/modelopt_ckpt,EXPORT_DIR=/path/exported,VLLM_DRAFT_DIR=/path/vllm,VERIFIER_CONFIG_DIR=/path/verifier,CONTAINER=/path/container.squashfs,MOUNTS=/lustre:/lustre,$PWD:$PWD \
+  experiments/eagle3_qwen3_235b/slurm_preflight.sbatch</code>
+            </div>
+            <div class="info-card">
+              <h3>Slurm hidden dump</h3>
+              <code class="code">sbatch --account=&lt;account&gt; \
+  --export=ALL,INPUT_DATA=/path/conversations.jsonl,HIDDEN_STATES_DIR=/path/hiddens,CHAT_TEMPLATE=/path/template.jinja2 \
+  experiments/eagle3_qwen3_235b/slurm_dump_hidden_states.sbatch</code>
+            </div>
+            <div class="info-card">
+              <h3>Slurm hidden validation</h3>
+              <code class="code">sbatch --account=&lt;account&gt; \
+  --export=ALL,HIDDEN_STATES_DIR=/path/hiddens \
+  experiments/eagle3_qwen3_235b/slurm_validate_hidden_states.sbatch</code>
+            </div>
+            <div class="info-card">
+              <h3>Slurm train/export</h3>
+              <code class="code">sbatch --account=&lt;account&gt; \
+  --export=ALL,HIDDEN_STATES_DIR=/path/hiddens,OUTPUT_DIR=/path/modelopt_ckpt \
+  experiments/eagle3_qwen3_235b/slurm_offline_train.sbatch
+
+sbatch --account=&lt;account&gt; \
+  --export=ALL,TRAINED_CKPT=/path/modelopt_ckpt,EXPORT_DIR=/path/exported,VLLM_DRAFT_DIR=/path/vllm,VERIFIER_CONFIG_DIR=/path/verifier \
+  experiments/eagle3_qwen3_235b/slurm_export_vllm.sbatch</code>
+            </div>
+            <div class="info-card">
+              <h3>Slurm online train</h3>
+              <code class="code">sbatch --account=&lt;account&gt; --nodes=&lt;nodes&gt; \
+  --export=ALL,INPUT_DATA=/path/conversations.jsonl,OUTPUT_DIR=/path/modelopt_online,ANSWER_ONLY_LOSS=true,CHAT_TEMPLATE=/path/qwen3_generation_template.jinja2 \
+  experiments/eagle3_qwen3_235b/slurm_online_train.sbatch</code>
+            </div>
+            <div class="info-card">
+              <h3>Export for vLLM</h3>
+              <code class="code">TRAINED_CKPT=/path/to/modelopt_ckpt \
+EXPORT_DIR=/path/to/exported_draft \
+VLLM_DRAFT_DIR=/path/to/vllm_draft \
+VERIFIER_CONFIG_DIR=/path/to/local/verifier \
+EXPORT_CONFIG_COMPARE_JSON=/path/to/exported_config_compare.json \
+VLLM_CONFIG_COMPARE_JSON=/path/to/vllm_config_compare.json \
+bash experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_export_vllm.sh</code>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside>
+        <div class="side-card decision">
+          <div class="section-head">
+            <h2>Decision</h2>
+            <span class="tag active">Recommended</span>
+          </div>
+          <p>
+            먼저 static draft smoke test를 한다. 그 결과 acceptance와 step time이 의미 있게 개선되면
+            Thinking-2507 + SWE/RL distribution에 맞춘 draft를 새로 학습한다.
+          </p>
+        </div>
+
+        <div class="side-card">
+          <h2>RL-Specific Delta</h2>
+          <ul>
+            <li>Serving-only specdec는 verifier가 고정되어 있다.</li>
+            <li>RL에서는 policy가 바뀌므로 static draft가 stale해질 수 있다.</li>
+            <li>Online/co-trained draft는 Megatron, DTensor off, sequence packing off, draft loss, weight sync가 추가로 필요하다.</li>
+            <li>ModelOpt만으로 끝나는 작업이 아니라 NeMo-RL generation/training loop 검증이 필요하다.</li>
+          </ul>
+        </div>
+
+        <div class="side-card risk">
+          <h2>Open Risks</h2>
+          <ul>
+            <li>vLLM native ABI는 source-built 0.10.2 site로 PASS했다. 현재 가장 큰 실행 risk는 active balanced 24n4g retry `2867662`가 explicit `ETP=1`, initialize kwarg, `provide_models()` fallback, CUDA device binding, fallback AutoMapping grouped-linear patch로 실제 role-aware logs와 parseable smoke corpus를 만드는지다. compact 16n4g fallback은 Megatron topology상 reject됐고, 0.13.0 source-build fallback `2857812`는 ABI probe 전 dependency conflict로 FAIL했으므로 active unblocker가 아니다.</li>
+            <li>public draft는 `Qwen3-235B-A22B` 기준이라 Thinking-2507과 mismatch 가능성이 있다.</li>
+            <li>Hidden-state dump storage가 매우 크다.</li>
+            <li>SpecDec가 tool/test latency를 줄이지는 않으므로 RL loop 전체에서 재측정해야 한다.</li>
+          </ul>
+        </div>
+
+        <div class="side-card">
+          <h2>Artifact Map</h2>
+          <div class="kv">
+            <div class="kv-row">
+              <span>Roadmap</span>
+              <span class="path">experiments/eagle3_qwen3_235b/README.md</span>
+            </div>
+            <div class="kv-row">
+              <span>Playbook</span>
+              <span class="path">experiments/eagle3_qwen3_235b/EAGLE3_DRAFT_MODEL_PLAYBOOK.md</span>
+            </div>
+            <div class="kv-row">
+              <span>Remote status</span>
+              <span class="path">experiments/eagle3_qwen3_235b/REMOTE_CLUSTER_STATUS.md</span>
+            </div>
+            <div class="kv-row">
+              <span>Offline train</span>
+              <span class="path">experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_offline_train.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Online train</span>
+              <span class="path">experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_online_train.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Dump script</span>
+              <span class="path">experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_dump_hidden_states.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Data prep</span>
+              <span class="path">experiments/eagle3_qwen3_235b/prepare_training_conversations.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Data script</span>
+              <span class="path">experiments/eagle3_qwen3_235b/generate_training_conversations_openai.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Data discover</span>
+              <span class="path">experiments/eagle3_qwen3_235b/discover_rollout_conversation_sources.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Data validate</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_training_conversations.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Template wrapper</span>
+              <span class="path">experiments/eagle3_qwen3_235b/prepare_qwen3_chat_template.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Template prep</span>
+              <span class="path">experiments/eagle3_qwen3_235b/prepare_qwen3_generation_template.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Template mask</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_chat_template_loss_mask.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Dump validate</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_hidden_state_dump.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Loss-mask patch</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_modelopt_loss_mask_patch.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Arch ref</span>
+              <span class="path">experiments/eagle3_qwen3_235b/qwen3_235b_thinking_eagle3_architecture.json</span>
+            </div>
+            <div class="kv-row">
+              <span>Config check</span>
+              <span class="path">experiments/eagle3_qwen3_235b/compare_eagle3_configs.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Draft inventory</span>
+              <span class="path">experiments/eagle3_qwen3_235b/inventory_eagle3_draft_configs.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Training scale</span>
+              <span class="path">experiments/eagle3_qwen3_235b/estimate_eagle3_training_scale.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Next actions</span>
+              <span class="path">experiments/eagle3_qwen3_235b/plan_eagle3_next_actions.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Operator helper</span>
+              <span class="path">experiments/eagle3_qwen3_235b/run_eagle3_next_action.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Action validator</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_next_action_plan.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Operator sheet</span>
+              <span class="path">experiments/eagle3_qwen3_235b/create_eagle3_operator_sheet.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Ready-submit preflight</span>
+              <span class="path">experiments/eagle3_qwen3_235b/preflight_eagle3_operator_ready_submit.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Operator queue</span>
+              <span class="path">experiments/eagle3_qwen3_235b/summarize_eagle3_operator_queue.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Queue transitions</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_operator_queue_transitions.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Completion contract</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_completion_contract.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm capacity</span>
+              <span class="path">experiments/eagle3_qwen3_235b/probe_eagle3_slurm_capacity.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Profile application</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_resource_profile_application.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Execution validator</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_operator_execution.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Transition validator</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_next_action_transitions.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Training checkpoint validator</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_training_checkpoint.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Export validator</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_eagle3_export_artifacts.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Readiness audit</span>
+              <span class="path">experiments/eagle3_qwen3_235b/audit_eagle3_readiness.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Goal evidence</span>
+              <span class="path">experiments/eagle3_qwen3_235b/audit_eagle3_goal_evidence.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Preflight</span>
+              <span class="path">experiments/eagle3_qwen3_235b/preflight_eagle3_pipeline.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Recipe check</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_modelopt_recipe_overrides.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Smoke analyzer</span>
+              <span class="path">experiments/eagle3_qwen3_235b/analyze_specdec_smoke.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Rollout normalize</span>
+              <span class="path">experiments/eagle3_qwen3_235b/normalize_rl_rollouts_to_conversations.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Source vLLM smoke</span>
+              <span class="path">experiments/eagle3_qwen3_235b/submit_source_vllm_rollout_smoke.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Source vLLM watcher</span>
+              <span class="path">experiments/eagle3_qwen3_235b/watch_vllm_source_build_then_rollout.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Pair analyzer</span>
+              <span class="path">experiments/eagle3_qwen3_235b/analyze_static_specdec_smoke_pair.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Inventory</span>
+              <span class="path">experiments/eagle3_qwen3_235b/inventory_hayate_eagle3_artifacts.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Provenance</span>
+              <span class="path">experiments/eagle3_qwen3_235b/collect_eagle3_provenance.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Cluster pilot</span>
+              <span class="path">experiments/eagle3_qwen3_235b/run_eagle3_cluster_pilot.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Remote probe</span>
+              <span class="path">experiments/eagle3_qwen3_235b/probe_eagle3_remote_host.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Pipeline</span>
+              <span class="path">experiments/eagle3_qwen3_235b/submit_eagle3_pipeline.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Gated pipeline submit</span>
+              <span class="path">experiments/eagle3_qwen3_235b/submit_eagle3_pipeline_if_ready.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Container preflight</span>
+              <span class="path">experiments/eagle3_qwen3_235b/submit_eagle3_container_preflight.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Preflight analyzer</span>
+              <span class="path">experiments/eagle3_qwen3_235b/analyze_container_preflight.py</span>
+            </div>
+            <div class="kv-row">
+              <span>RL specdec gate</span>
+              <span class="path">experiments/eagle3_qwen3_235b/validate_nemo_rl_specdec_integration.py</span>
+            </div>
+            <div class="kv-row">
+              <span>NeMo-RL drift</span>
+              <span class="path">experiments/eagle3_qwen3_235b/check_nemo_rl_eagle3_drift.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Completion audit</span>
+              <span class="path">experiments/eagle3_qwen3_235b/audit_eagle3_completion.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Handoff</span>
+              <span class="path">experiments/eagle3_qwen3_235b/create_eagle3_handoff_bundle.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm preflight</span>
+              <span class="path">experiments/eagle3_qwen3_235b/slurm_preflight.sbatch</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm dump</span>
+              <span class="path">experiments/eagle3_qwen3_235b/slurm_dump_hidden_states.sbatch</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm hiddens check</span>
+              <span class="path">experiments/eagle3_qwen3_235b/slurm_validate_hidden_states.sbatch</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm train</span>
+              <span class="path">experiments/eagle3_qwen3_235b/slurm_offline_train.sbatch</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm online</span>
+              <span class="path">experiments/eagle3_qwen3_235b/slurm_online_train.sbatch</span>
+            </div>
+            <div class="kv-row">
+              <span>Slurm export</span>
+              <span class="path">experiments/eagle3_qwen3_235b/slurm_export_vllm.sbatch</span>
+            </div>
+            <div class="kv-row">
+              <span>Export script</span>
+              <span class="path">experiments/eagle3_qwen3_235b/modelopt_qwen3_235b_export_vllm.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Smoke pair</span>
+              <span class="path">experiments/eagle3_qwen3_235b/submit_static_specdec_smoke_pair.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Trained smoke</span>
+              <span class="path">experiments/eagle3_qwen3_235b/submit_trained_draft_smoke_pair.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Spec smoke</span>
+              <span class="path">experiments/eagle3_qwen3_235b/run_static_specdec_smoke.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>Base smoke</span>
+              <span class="path">experiments/eagle3_qwen3_235b/run_baseline_smoke.sh</span>
+            </div>
+            <div class="kv-row">
+              <span>RL overlay</span>
+              <span class="path">experiments/eagle3_qwen3_235b/nemo_rl_specdec_overlay.yaml</span>
+            </div>
+            <div class="kv-row">
+              <span>Online overlay</span>
+              <span class="path">experiments/eagle3_qwen3_235b/nemo_rl_eagle3_online_draft_overlay.yaml</span>
+            </div>
+            <div class="kv-row">
+              <span>Local patch</span>
+              <span class="path">Model-Optimizer/.../compute_hidden_states_trtllm.py</span>
+            </div>
+            <div class="kv-row">
+              <span>Hayate path</span>
+              <span class="path">/lustre/fs1/.../hiso/ghq/github.com/NVIDIA/TensorRT-Model-Optimizer</span>
+            </div>
+            <div class="kv-row">
+              <span>Hayate workflow</span>
+              <span class="path">DAPO math + legacy Qwen3 8B/30B/32B</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <p class="footer-note">Last updated after grouped expert temporary-weight patch and probe 2867766 submit; remote status check pending on local SSH/DNS recovery: 2026-05-23 01:14 PDT</p>
+  </main>
+
+  <script>
+    const root = document.documentElement;
+    const toggle = document.getElementById("themeToggle");
+    const label = document.getElementById("themeLabel");
+
+    function setTheme(theme) {
+      root.dataset.theme = theme;
+      label.textContent = theme === "dark" ? "Dark" : "Light";
+      localStorage.setItem("specdec-theme", theme);
+    }
+
+    const saved = localStorage.getItem("specdec-theme");
+    if (saved === "light" || saved === "dark") {
+      setTheme(saved);
+    } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+      setTheme("light");
+    }
+
+    toggle.addEventListener("click", () => {
+      setTheme(root.dataset.theme === "dark" ? "light" : "dark");
+    });
+  </script>
+</body>
+</html>

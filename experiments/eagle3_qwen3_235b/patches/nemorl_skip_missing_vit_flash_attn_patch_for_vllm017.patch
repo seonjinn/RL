@@ -1,0 +1,18 @@
+diff --git a/nemo_rl/models/generation/vllm/vllm_worker.py b/nemo_rl/models/generation/vllm/vllm_worker.py
+index 8b7be2a..2d10292 100644
+--- a/nemo_rl/models/generation/vllm/vllm_worker.py
++++ b/nemo_rl/models/generation/vllm/vllm_worker.py
+@@ -279,7 +279,12 @@ class VllmGenerationWorker:
+ 
+             This is properly fixed in https://github.com/vllm-project/vllm/pull/28763. We can remove this patch once we upgrade to a version of vllm that contains this fix.
+             """
+-            file_to_patch = _get_vllm_file("attention/layer.py")
++            file_to_patch = _get_vllm_file("attention/layer.py", required=False)
++            if file_to_patch is None:
++                logger.warning(
++                    "Skipping vLLM ViT flash attention backend patch; attention/layer.py is not present in this vLLM layout."
++                )
++                return
+             with open(file_to_patch, "r") as f:
+                 content = f.read()
+ 

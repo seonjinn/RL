@@ -1,0 +1,18 @@
+diff --git a/src/speculators/train/utils.py b/src/speculators/train/utils.py
+index a2cd12e..9afebf5 100644
+--- a/src/speculators/train/utils.py
++++ b/src/speculators/train/utils.py
+@@ -153,8 +153,11 @@ def apply_fully_sharded(model: torch.nn.Module):
+         reduce_dtype=torch.float32,
+     )
+ 
+-    for layer in model.layers:  # type: ignore[union-attr]
+-        fully_shard(layer, mp_policy=mp_policy)
++    wrap_layers = os.environ.get("SPECULATORS_FSDP_WRAP_LAYERS", "true").lower()
++    wrap_layers = wrap_layers not in {"0", "false", "no"}
++    if wrap_layers:
++        for layer in model.layers:  # type: ignore[union-attr]
++            fully_shard(layer, mp_policy=mp_policy)
+ 
+     fully_shard(model)
+ 

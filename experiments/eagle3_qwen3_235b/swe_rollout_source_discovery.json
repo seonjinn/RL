@@ -1,0 +1,186 @@
+{
+  "all_candidates": [
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "model_output": 5,
+        "model_patch": 5,
+        "repro_test_info_base64": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "reward": 5,
+        "verification_result": 5,
+        "verification_time": 5
+      },
+      "mtime": 1777420204.0,
+      "path": "/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/ultra/Gym-0428/resources_servers/swerl_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 191993
+    },
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "extracted_model_code": 5,
+        "extracted_model_output": 5,
+        "metadata": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "result": 5,
+        "reward": 5
+      },
+      "mtime": 1777420202.0,
+      "path": "/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/ultra/Gym-0428/resources_servers/code_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 42404
+    },
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "model_output": 5,
+        "model_patch": 5,
+        "repro_test_info_base64": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "reward": 5,
+        "verification_result": 5,
+        "verification_time": 5
+      },
+      "mtime": 1774687301.0,
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3rdparty/Gym-workspace/Gym/resources_servers/swerl_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 191993
+    },
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "extracted_model_code": 5,
+        "extracted_model_output": 5,
+        "metadata": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "result": 5,
+        "reward": 5
+      },
+      "mtime": 1774687301.0,
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3rdparty/Gym-workspace/Gym/resources_servers/code_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 42404
+    }
+  ],
+  "files_scanned": 4,
+  "patterns": [
+    "train_data_step*.jsonl",
+    "*rollout*.jsonl",
+    "*trajectory*.jsonl",
+    "*trajectories*.jsonl",
+    "*generation*.jsonl",
+    "*sample*.jsonl"
+  ],
+  "positive_candidates": 4,
+  "prepare_result": {
+    "normalize_output": "{\n  \"rows_seen\": 20,\n  \"rows_with_output\": 20,\n  \"records_written\": 5,\n  \"records_skipped\": 15,\n  \"output\": \"/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/swe_rollout_reference_conversations.jsonl\",\n  \"output_schema\": \"modelopt\"\n}\n",
+    "normalize_returncode": 0,
+    "output": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/swe_rollout_reference_conversations.jsonl",
+    "validate_output": "Training conversation validation\n- files: 1\n- rows scanned: 5\n- valid rows: 5\n- unique conversation/id: 5\n- schema counts: {'modelopt': 5}\n- estimated tokens: p50=5710 p95=6688 max=6688 total=23535\n- estimated hidden-state storage: 0.718 GiB for scanned rows\n- warnings: 0\n- failures: 0\n",
+    "validate_returncode": 0
+  },
+  "prepared_output": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/swe_rollout_reference_conversations.jsonl",
+  "roots": [
+    "/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/ultra/Gym-0428/resources_servers/swerl_gen/data/example_rollouts.jsonl",
+    "/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/ultra/Gym-0428/resources_servers/code_gen/data/example_rollouts.jsonl",
+    "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3rdparty/Gym-workspace/Gym/resources_servers/swerl_gen/data/example_rollouts.jsonl",
+    "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3rdparty/Gym-workspace/Gym/resources_servers/code_gen/data/example_rollouts.jsonl"
+  ],
+  "selected_candidates": [
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "model_output": 5,
+        "model_patch": 5,
+        "repro_test_info_base64": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "reward": 5,
+        "verification_result": 5,
+        "verification_time": 5
+      },
+      "mtime": 1777420204.0,
+      "path": "/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/ultra/Gym-0428/resources_servers/swerl_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 191993
+    },
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "extracted_model_code": 5,
+        "extracted_model_output": 5,
+        "metadata": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "result": 5,
+        "reward": 5
+      },
+      "mtime": 1777420202.0,
+      "path": "/lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/ultra/Gym-0428/resources_servers/code_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 42404
+    },
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "model_output": 5,
+        "model_patch": 5,
+        "repro_test_info_base64": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "reward": 5,
+        "verification_result": 5,
+        "verification_time": 5
+      },
+      "mtime": 1774687301.0,
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3rdparty/Gym-workspace/Gym/resources_servers/swerl_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 191993
+    },
+    {
+      "extracted_conversations": 5,
+      "invalid_json": 0,
+      "json_rows": 5,
+      "key_counts": {
+        "extracted_model_code": 5,
+        "extracted_model_output": 5,
+        "metadata": 5,
+        "response": 5,
+        "responses_create_params": 5,
+        "result": 5,
+        "reward": 5
+      },
+      "mtime": 1774687301.0,
+      "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3rdparty/Gym-workspace/Gym/resources_servers/code_gen/data/example_rollouts.jsonl",
+      "rows_sampled": 5,
+      "sample_error": null,
+      "size_bytes": 42404
+    }
+  ]
+}

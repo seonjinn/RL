@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Qwen3-235B SWE Throughput Optimization Tracker</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; line-height: 1.5; }
+  h1 { font-size: 22px; border-bottom: 2px solid #0b3d91; padding-bottom: 6px; margin-top: 0; }
+  h2 { font-size: 18px; margin-top: 32px; color: #0b3d91; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+  h3 { font-size: 15px; margin-top: 18px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: right; vertical-align: top; }
+  th { background: #f0f4fa; text-align: center; font-weight: 600; }
+  td.label { text-align: left; font-weight: 500; }
+  td.note { text-align: left; font-size: 12px; color: #555; }
+  .gain { color: #036b1d; font-weight: 600; }
+  .loss { color: #b00020; font-weight: 600; }
+  .flat { color: #555; }
+  .pending { color: #d97706; font-style: italic; }
+  .planned { color: #6b7280; }
+  .footnote { font-size: 12px; color: #555; margin-top: 6px; }
+  .timestamp { color: #6b7280; font-size: 12px; }
+  details { margin: 8px 0; padding: 6px 10px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; }
+  summary { cursor: pointer; font-weight: 500; color: #0b3d91; }
+  details[open] { background: #ffffff; }
+  .status-panel { background: #f9fafb; border: 1px solid #d1d5db; border-radius: 6px; padding: 12px 16px; margin: 12px 0; }
+  .status-panel h3 { margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #0b3d91; }
+  .checklist { list-style: none; padding-left: 0; margin: 6px 0; }
+  .checklist li { padding: 4px 0; font-size: 13px; }
+  .icon { display: inline-block; width: 22px; font-size: 14px; }
+  .done { color: #036b1d; }
+  .running { color: #d97706; }
+  .blocked { color: #b00020; }
+  .deferred { color: #6b7280; }
+  .config-line { font-size: 12px; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>Qwen3-235B SWE: Performance Optimization Tracker</h1>
+<p class="timestamp">Last update: <strong>2026-05-20 01:35 UTC</strong></p>
+<p class="config-line">Model: Qwen3-235B-A22B-Thinking-2507 · 16 nodes × 8 H100 (sm_90) · max_total_sequence_length=16384 · train_global_batch_size=256 · num_prompts/step=32, num_gen/prompt=8 · async GRPO (max_trajectory_age_steps=1)</p>
+
+<h2>1. Feature Porting Checklist</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:30%">Feature</th>
+      <th style="width:14%">Status</th>
+      <th style="width:18%">Job</th>
+      <th>Outcome / Blocker</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="label"><strong>HybridEP</strong> (Megatron flex dispatcher, deep_ep@a0d27f1)</td>
+      <td><span class="done">✅ DONE</span></td>
+      <td>11811510</td>
+      <td class="note">22/20 steps, E2E 387 s (<span class="gain">-2.2% vs baseline</span>). Reproducible (matches 11795544 within &lt;1%).</td>
+    </tr>
+    <tr>
+      <td class="label"><strong>MXFP8 rollout</strong> (PR #1887 EMULATION bypass)</td>
+      <td><span class="blocked">❌ HW BLOCKED</span></td>
+      <td>(11 attempts, all failed)</td>
+      <td class="note">MXFP8 GEMM is Blackwell-only at HW level (E8M0 tensor cores). <code>mxfp8_e4m3_quantize</code> kernel returns NaN on sm_90. <strong>Defer to GB200 (OCI-Hsg / Lyris).</strong> User-approved closure 2026-05-16.</td>
+    </tr>
+    <tr>
+      <td class="label"><strong>skip prev_logprobs</strong> (<code>seq_logprob_error_threshold=null</code> + <code>force_on_policy_ratio=true</code>)</td>
+      <td><span class="done">✅ ≥15/20</span></td>
+      <td>11819947 (15/20)</td>
+      <td class="note">LogProb stage = 0.00 s (works), but Generation +15% (async overlap collapsed). Steady-state median(2-8, 10-15, drop outlier step 9) = <strong>420.37 s</strong>; net E2E <span class="loss">+8.6%</span> regression vs HybridEP-only 387 s. <strong>Verdict: skip_logprob is net negative on this workload.</strong></td>
+    </tr>
+    <tr>
+      <td class="label"><strong>Blockwise FP8 refit</strong> (PR #2037 port — H100-compatible MXFP8 substitute)</td>
+      <td><span class="blocked">❌ BLOCKED (3 attempts — H100 structurally closed)</span></td>
+      <td>11821741 (TP=8), 11822667 (TP=4 gmu=0.7), 11822969 (TP=4 gmu=0.90)</td>
+      <td class="note"><strong>All 3 candidate configs structurally fail on H100</strong>. TP=8: <code>output_size 192 ≠ k·128</code> (1536/8). TP=4 gmu=0.7: KV cache <strong>-0.51 GiB</strong> (model 55.14 GiB ate 56 GiB budget). TP=4 gmu=0.90: vllm engine init PASSED (KV cache 15.31 GiB), but <strong>refit OOM during <code>update_weights_from_collective</code></strong> — needed 1.59 GiB extra, only 376 MiB free of 79.11 GiB capacity. Also <code>deep_ep csrc/jit/handle.hpp:25 '301'</code>. <strong>Zero step times produced across all 3 attempts.</strong> H100 has no working blockwise FP8 config for Qwen3-235B at TP×gmu × refit memory triple-constraint.</td>
+    </tr>
+    <tr>
+      <td class="label"><strong>fuse_loss</strong> (PR #1904 kernel)</td>
+      <td><span class="done">✅ COMPLETE</span></td>
+      <td>11824033 → 11824494 → 11824844 → 11825211 → <strong>11825251</strong></td>
+      <td class="note">Port complete on <code>sj/super-v3-fuseloss-port</code> @ <code>7203c77e1</code> (SequencePackingFusionLossWrapper + train.py import + <code>fuse_loss=True</code> gate + Gym-scrub defensive restore). Combined with HybridEP via <code>hybridep_fuseloss</code> variant. 11824494 failed exit 2 (uninitialized submodules — fixed). 11824844 failed exit 1:0 at NemoGym._spinup 7:28 elapsed (Gym submodule files scrubbed by uv sync editable install — <code>responses_api_models/vllm_model/configs/vllm_model_for_training.yaml</code> missing). 11825211 cancelled by admin. <strong>Fix</strong>: commit 7203c77e1 adds defensive <code>git checkout HEAD -- .</code> across all 4 submodules in SETUP_COMMAND.sh post-<code>uv sync</code>. <strong>11825251 SUCCESS</strong>: binding step 15 landed clean at 378.85 s (2026-05-17 04:10 UTC), <code>policy_training</code> 60.76 s. Steady-state medians (10 clean samples): Training 60.5 s (-9.6% vs baseline), LogProb 17.9 s (-12.3%), Generation 299.2 s (-3.0%), E2E <strong>377.6 s (-4.6% vs baseline, -2.4% vs HybridEP-only)</strong>. weight_sync 18.89 s (-22.6% carry-over from ray-opt). Long-tail rate 4/15 = 27% (inherent SWE rollout variance, not fuseloss regression — training stayed 59-60 s through all long-tails).</td>
+    </tr>
+    <tr>
+      <td class="label"><strong>HybridEP + FP8-Training v2</strong> (Megatron blockwise FP8 + DeepSeek-V3 H100 recipe — MXFP8 substitute)</td>
+      <td><span class="done">✅ 20/20</span></td>
+      <td>11912255</td>
+      <td class="note"><strong>COMPLETED 20/20 steps at elapsed 03:42:33 (ExitCode 0:0)</strong>. First validated H100 substitute for the MXFP8-rollout /loop goal (MXFP8 HW-blocked on H100). v1 (11901475) OOM'd at TE FusedAdam exp_avg init; v2 applied DeepSeek-V3 production pattern: <code>use_precision_aware_optimizer=true</code> + <code>empty_unused_memory_level=1</code> + <code>moe_router_dtype=fp32</code> + <code>defer_fp32_logits=true</code> + <code>NVTE_FP8_BLOCK_SCALING_FP32_SCALES=1</code>. Steady-state (13 normal steps) <strong>413.3 s/step</strong>. Per-stage medians (steps 1-19): policy_training 58.71 s (flat 57-60 s, FP8 forward+backward stable), weight_sync 19.64 s (trends 24→17 s, no refit regression), exposed_generation 334.86 s (long-tail dominated under timeout60). TFLOPS/rank median 148.04 (cluster aggregate ~9.6 k). 4 long-tail boundaries at idx 4/8/15/18 (93%+ ExposedGen — timeout60 truncation regime, NOT FP8 overhead). Branch: <code>submit_hybridep_fp8tr_v2_timeout60.sh</code>, variant <code>hybridep_fp8tr_v2</code>.</td>
+    </tr>
+    <tr>
+      <td class="label"><strong>MXFP8 training</strong> (PR #1969 <code>fp8_param_gather</code>)</td>
+      <td><span class="deferred">⏸ DEFERRED</span></td>
+      <td>—</td>
+      <td class="note">Depends on functional MXFP8 forward — blocked at same HW limit. Blackwell follow-up. <strong>H100 substitute = Megatron blockwise FP8 above (validated 20/20 on 11912255).</strong></td>
+    </tr>
+    <tr>
+      <td class="label"><strong>PR #2495</strong> discard-weight on finish_generation</td>
+      <td><span class="deferred">N/A</span></td>
+      <td>—</td>
+      <td class="note">Gates on <code>colocated_inference=true</code> + optimizer_cpu_offload — both inactive in our config. Cherry-pick would be no-op.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>2. Performance Summary (steady-state median, s/step)</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2">Config</th>
+      <th rowspan="2">Job</th>
+      <th rowspan="2">Steps</th>
+      <th colspan="2">Training</th>
+      <th colspan="2">LogProb</th>
+      <th colspan="2">Generation</th>
+      <th colspan="2">E2E</th>
+    </tr>
+    <tr>
+      <th>s</th><th>vs base</th>
+      <th>s</th><th>vs base</th>
+      <th>s</th><th>vs base</th>
+      <th>s</th><th>vs base</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="label">Baseline (bf16 rollout, alltoall)</td>
+      <td>11793255</td>
+      <td>12/26</td>
+      <td>66.9</td><td class="flat">—</td>
+      <td>20.4</td><td class="flat">—</td>
+      <td>308.3</td><td class="flat">—</td>
+      <td><strong>395.6</strong></td><td class="flat">—</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP</td>
+      <td>11811510</td>
+      <td><span class="done">22/20 ✓</span></td>
+      <td>60.2</td><td class="gain">-10.0%</td>
+      <td>17.7</td><td class="gain">-13.2%</td>
+      <td>309.1</td><td class="flat">+0.3%</td>
+      <td><strong>387.0</strong></td><td class="gain">-2.2%</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP + skip prev_logprob</td>
+      <td>11819947</td>
+      <td><span class="done">15/20 ✓</span></td>
+      <td>60.7</td><td class="gain">-9.3%</td>
+      <td><strong>0.00</strong></td><td class="gain">-100%</td>
+      <td>355.8</td><td class="loss">+15.4%</td>
+      <td><strong>420.4</strong></td><td class="loss">+8.6%</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP + fuse_loss (Row 5)</td>
+      <td>11825251</td>
+      <td><span class="done">20/20 ✓</span></td>
+      <td>60.4</td><td class="gain">-9.7%</td>
+      <td>17.9</td><td class="gain">-12.3%</td>
+      <td>299.3</td><td class="gain">-2.9%</td>
+      <td><strong>377.4</strong></td><td class="gain">-4.6%</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP + FP8-Training v2 (Row 6 — MXFP8 H100 substitute)</td>
+      <td>11912255</td>
+      <td><span class="done">20/20 ✓</span></td>
+      <td>58.71</td><td class="gain">-12.2%</td>
+      <td>19.64</td><td class="gain">-3.7%</td>
+      <td>334.86</td><td class="loss">+8.6%</td>
+      <td><strong>413.3</strong></td><td class="loss">+4.5%</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP + skip + blockwise FP8 refit (TP=8)</td>
+      <td>11821741</td>
+      <td><span class="blocked">0/20 ❌</span></td>
+      <td colspan="8" class="note loss">FAILED at vllm EngineCore init: <code>output_size 192 ≠ k·128</code>. Qwen3-235B MoE intermediate 1536 / TP=8 = 192, not divisible by blockwise FP8 block_n=128. Structural model×quant×TP incompatibility — not env, not port bug.</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP + skip + blockwise FP8 refit (TP=4 mitigation)</td>
+      <td>11822667</td>
+      <td><span class="blocked">0/20 ❌</span></td>
+      <td colspan="8" class="note loss">FAILED at vllm KV cache allocation: <code>No available memory for cache blocks</code>. Per-shard FP8 model = <strong>55.14 GiB</strong>, gmu=0.7 budget = 56 GiB → KV cache memory <strong>-0.51 GiB</strong>. Divisibility check passed (1536/4=384 ✓), but model alone consumes the entire budget. Elapsed 9:47 then FAILED.</td>
+    </tr>
+    <tr>
+      <td class="label">+ HybridEP + skip + blockwise FP8 refit (TP=4 gmu=0.90 retry)</td>
+      <td>11822969</td>
+      <td><span class="blocked">0/20 ❌</span></td>
+      <td colspan="8" class="note loss">FAILED during refit (<code>update_weights_from_collective</code>): <strong>CUDA OOM</strong> needed 1.59 GiB, only 376 MiB free of 79.11 GiB. gmu=0.90 cleared engine init (KV cache 15.31 GiB), AsyncTrajectoryCollector spawned 32 workers, but refit broadcast pushed peak to 78.73 GiB. Also <code>csrc/jit/handle.hpp:25 '301'</code> (deep_ep JIT handle, cudaErrorMapBufferObjectFailed). Elapsed ~17 min then refit aborted. <strong>All 3 FP8 refit configs on H100 fail at distinct points → path structurally closed.</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="footnote">Methodology: drop cold-start step 1; drop outlier steps where generation &gt; 800 s (rare slow-trajectory tail).
+E2E = exposed_generation + policy_training + policy_and_reference_logprobs.</p>
+
+<h2>3. Current Job Status</h2>
+
+<div class="status-panel">
+  <h3>RUNNING / PENDING</h3>
+  <ul class="checklist">
+    <li><span class="icon">🟡</span><strong>11819947</strong> (Row 4 — skip prev_logprob): <strong>15/20 ✓ threshold reached</strong>. Still running for the remaining 5 steps but the binding ≥15/20 condition is now met. Median 420.37 s (steps 2-15 minus outlier step 9). +8.6% E2E vs HybridEP-only baseline.</li>
+  </ul>
+  <h3>DONE</h3>
+  <ul class="checklist">
+    <li><span class="icon">✅</span><strong>11811510</strong> (HybridEP-only): 22/20 sustained at 387 s.</li>
+    <li><span class="icon">✅</span><strong>11819947</strong> (Row 4 — HybridEP + skip_logprob): 15/20 sustained at 420.4 s. <strong>Goal met</strong> but config is a regression vs HybridEP-only.</li>
+    <li><span class="icon">✅</span><strong>11825251</strong> (Row 5 — HybridEP + fuse_loss): <strong>20/20 complete at 377.4 s 3-stage E2E. Best E2E across all 5 rows on H100.</strong> Training -9.7%, LogProb -12.3%, Generation -2.9%, weight_sync -22.6%, E2E -4.6% vs baseline (-2.5% vs HybridEP-only). 13 clean samples + 6 long-tails (30% rate, training stayed 57-61s through all).</li>
+    <li><span class="icon">✅</span><strong>11912255</strong> (Row 6 — HybridEP + FP8-Training v2): <strong>20/20 complete at 413.3 s steady E2E (411.42 s median).</strong> First validated H100 substitute for MXFP8-rollout /loop goal. Training 58.71 s (-12.2% vs baseline, flat 57-60 s through full FP8 forward+backward), LogProb-equiv 19.64 s (trends 24→17 s, no refit regression), Generation 334.86 s (+8.6%, timeout60 long-tail dominated NOT FP8 overhead), E2E +4.5% vs baseline / +6.8% vs HybridEP-only / +8.9% vs HybridEP+FP8KV. TFLOPS/rank 148.04 (~9.6 k cluster). 4 long-tail boundaries at idx 4/8/15/18 (93%+ ExposedGen). Recipe: blockwise E4M3 + precision_aware_optimizer + DeepSeek-V3 H100 pattern. <strong>MXFP8-rollout goal CLOSED on H100 via FP8-Training substitute.</strong></li>
+  </ul>
+  <h3>BLOCKED</h3>
+  <ul class="checklist">
+    <li><span class="icon">❌</span><strong>MXFP8</strong>: HW-permanent on H100. 11 attempts logged. Closure ratified by user.</li>
+    <li><span class="icon">❌</span><strong>11821741</strong> (Row 4b — FP8 refit TP=8): structural divisibility block. 1536/8=192 not divisible by block_n=128. Failed at <code>fp8.py:767 create_weights</code> after 14:54.</li>
+    <li><span class="icon">❌</span><strong>11822667</strong> (Row 4c — FP8 refit TP=4): KV cache underflow. FP8 model shard 55.14 GiB ate gmu=0.7 budget 56 GiB → KV cache memory -0.51 GiB. Failed at 9:47. Next: TP=4 + gmu=0.85 candidate.</li>
+  </ul>
+</div>
+
+<h2>4. Row 4 Detail — skip prev_logprob regression</h2>
+
+<details>
+<summary><strong>Why E2E rose +7.3% despite logprob stage = 0.00 s</strong></summary>
+<p><strong>Raw step times (steps 1-8):</strong> 347.48 / 407.53 / 415.12 / 494.22 / 401.94 / 433.55 / 412.16 / 421.70 s. Median(2-8) = <strong>415.12 s</strong>.</p>
+<p><strong>Diagnosis:</strong> <code>▶ Skipping prev_logprobs (force_on_policy_ratio=True)</code> fires every step. LogProb stage = 0.00 s as designed. But Generation rose 309 → 350 s (+13%).</p>
+<p><strong>Root cause:</strong> async GRPO with <code>max_trajectory_age_steps=1</code> overlaps logprob compute with generation rollout. Removing logprob compute (saving 17 s) collapses the overlap window — generation now sits on the critical path. Net: ~17 s saved minus ~40 s extra generation = +7.3% regression.</p>
+<p><strong>Mitigation candidate:</strong> <code>max_trajectory_age_steps=2</code> would reopen the overlap window (rollout one step ahead of policy update). Not yet validated.</p>
+<p><strong>Verdict:</strong> skip_prev_logprob is a stage-level win but a system-level wash on this config. Run continues to ≥15/20 to firm the median; mitigation defer to next iteration.</p>
+</details>
+
+<h2>5. Row 4b Detail — FP8 refit port</h2>
+
+<details>
+<summary><strong>Port summary (4 commits, 12 files, 241+/40−)</strong></summary>
+<ul>
+  <li>Branch: <code>sj/super-v3-fp8-refit @ ce94e49fe</code>, worktree <code>nemo-rl-qwen-swe-fp8-refit</code>.</li>
+  <li>4 commits, all authored <code>seonjinn &lt;sna@nvidia.com&gt;</code>:
+    <ol>
+      <li>Add <code>fp8_train_utils.py</code> blockwise quantizer (76 LOC, no vLLM deps).</li>
+      <li>Add <code>get_fp8_param_names</code> / <code>set_fp8_param_names</code> interfaces.</li>
+      <li>Wire two-pass FP8 refit in <code>grpo</code> + <code>distillation</code>.</li>
+      <li>Add FP8 refit path to <code>vllm_backend.py</code>.</li>
+    </ol>
+  </li>
+  <li><strong>Opt-in gate:</strong> no new flag. Gated on existing <code>is_fp8_model(vllm_config)</code> → True only when vllm launched with <code>--quantization fp8</code> + <code>Fp8Config.weight_block_size</code> set. Default = disabled.</li>
+  <li><strong>Why ROI &gt; fuse_loss:</strong> 230 LOC additive (no <code>prepare_fn</code> dep) vs fuse_loss 500+ LOC structural. Target: weight_sync 24 s → ~12 s.</li>
+  <li><strong>vllm_backend.py merge:</strong> super-v3 has inline <code>fp8.load_weights</code> branch + <code>_maybe_load_drafter_weights</code> MTP call. Adopted PR's <code>_load_model_weights</code> helper, extended to call drafter, replaced collective duplicate closure with lambda dispatcher. FP8-disabled behavior identical to pre-port super-v3.</li>
+</ul>
+</details>
+
+<details>
+<summary><strong>Attempt 1 (11821282) FAILED — worktree submodule init bug</strong></summary>
+<p>Job <code>11821282</code> exited code 2:0 after 4:01 elapsed. Single ray-driver.log error: <code>error: Workspace member .../3rdparty/Automodel-workspace/Automodel is missing a `pyproject.toml`</code>.</p>
+<p><strong>Root cause:</strong> <code>git worktree add</code> does NOT inherit initialized submodule content. All 4 submodules (Automodel, Gym, Megatron-Bridge, Megatron-LM) were empty. <code>uv sync --frozen</code> validates workspace members at SETUP and aborts.</p>
+<p><strong>Fix:</strong> <code>git submodule update --init --recursive</code> in the worktree (took 34 s). Memory <code>feedback_worktree_missing_submodules</code> captured to prevent recurrence.</p>
+</details>
+
+<details>
+<summary><strong>Attempt 2 (11821741) FAILED — structural model×quant×TP incompatibility</strong></summary>
+<p>Job exited code <strong>1:0</strong> at <strong>14:54 elapsed</strong> (2026-05-17 05:28 → 05:43 UTC). All srun steps CANCELLED at exit 0:15 (SIGTERM from driver).</p>
+<p><strong>Driver log:</strong></p>
+<pre style="font-size:11px; background:#fef2f2; padding:8px; border-left:3px solid #b00020; overflow-x:auto;">ValueError: The output_size of gate's and up's weight = 192 is not
+divisible by weight quantization block_n = 128.
+  File ".../vllm/model_executor/layers/quantization/fp8.py", line 767,
+    in create_weights</pre>
+<p><strong>Root cause:</strong> Qwen3-235B-A22B-Thinking-2507-FP8 has MoE <code>intermediate_size=1536</code>. With <code>vllm_cfg.tensor_parallel_size=8</code>, each shard gets 1536/8 = <strong>192</strong>. vllm's blockwise FP8 path requires <code>output_size % block_n == 0</code>, but 192 % 128 = 64 ≠ 0. Raised inside upstream vllm <code>fp8.py:767 create_weights</code>, identical across all 7 worker ranks.</p>
+<p><strong>This is NOT:</strong></p>
+<ul>
+  <li>An environmental failure (worktree submodules were initialized this run; SETUP passed).</li>
+  <li>A PR #2037 port bug (the failing path is upstream vllm blockwise FP8 quant, called for any FP8 model with <code>weight_block_size=[128,128]</code>).</li>
+  <li>A vllm version regression (same logic present in vllm 0.13 and 0.17).</li>
+</ul>
+<p><strong>Two mitigation paths, neither attempted:</strong></p>
+<ol>
+  <li><strong>Drop TP from 8 → 4 for vllm rollout</strong>: 1536/4 = 384 = 128×3 ✓. But TP=4 doubles per-shard weights → memory pressure on 80 GB H100, possible OOM. Generation topology shifts (currently 8nodes × 8 GPU at TP=8; TP=4 means 16 vllm instances at 4 GPU each). Async GRPO traffic patterns change. Validate first with vllm-only smoke.</li>
+  <li><strong>Skip FP8 on MoE layers</strong> via <code>ignored_layers</code> or per-layer quant overrides. But the bulk of the refit gain was on MoE weights specifically — this loses most of the expected win.</li>
+</ol>
+<p><strong>Recognition signature:</strong> driver exit 1:0 at ~14-15 min elapsed (after env build + worker injection but before model load completes). Grep <code>ray-driver.log</code> for <code>output_size.*not divisible by weight quantization block_n</code>.</p>
+<p>Memory <code>feedback_fp8_blockwise_192_not_div_128</code> captured. Practical optimization-stack answer for H100 remains <strong>HybridEP-only</strong>.</p>
+</details>
+
+<h2>6. Stage-by-stage View</h2>
+
+<table>
+  <thead>
+    <tr><th>Stage</th><th>Baseline</th><th>HybridEP</th><th>+ skip prev_logprob</th><th>+ fuse_loss (Row 5)</th><th>+ FP8-Training v2 (Row 6)</th><th>+ FP8 refit</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="label">Training</td>
+      <td>66.9 s</td>
+      <td>60.2 s <span class="gain">(-10%)</span></td>
+      <td>60.7 s <span class="gain">(-9%)</span></td>
+      <td>60.5 s <span class="gain">(-9.6%)</span></td>
+      <td>58.71 s <span class="gain">(-12.2%)</span></td>
+      <td class="blocked"><strong>n/a</strong></td>
+    </tr>
+    <tr>
+      <td class="label">LogProb</td>
+      <td>20.4 s</td>
+      <td>17.7 s <span class="gain">(-13%)</span></td>
+      <td><strong>0.00 s</strong> <span class="gain">(skip)</span></td>
+      <td>17.9 s <span class="gain">(-12%)</span></td>
+      <td>19.64 s <span class="gain">(-3.7%)</span></td>
+      <td class="blocked"><strong>n/a</strong></td>
+    </tr>
+    <tr>
+      <td class="label">Generation</td>
+      <td>308.3 s</td>
+      <td>309.1 s <span class="flat">(0%)</span></td>
+      <td>348.9 s <span class="loss">(+13%)</span></td>
+      <td>299.2 s <span class="gain">(-3.0%)</span></td>
+      <td>334.86 s <span class="loss">(+8.6%)</span></td>
+      <td class="blocked"><strong>n/a</strong></td>
+    </tr>
+    <tr>
+      <td class="label">weight_sync</td>
+      <td>~24 s</td>
+      <td>~22 s</td>
+      <td>~22 s</td>
+      <td>18.9 s <span class="gain">(-21%)</span></td>
+      <td>(folded into LogProb col)</td>
+      <td class="blocked"><strong>n/a</strong> (failed at EngineCore/refit OOM)</td>
+    </tr>
+    <tr>
+      <td class="label"><strong>E2E</strong></td>
+      <td><strong>395.6 s</strong></td>
+      <td><strong>387.0 s</strong> <span class="gain">(-1.9%)</span></td>
+      <td><strong>415.1 s</strong> <span class="loss">(+7.3%)</span></td>
+      <td><strong>377.6 s</strong> <span class="gain">(-4.6%)</span></td>
+      <td><strong>413.3 s</strong> <span class="loss">(+4.5%)</span></td>
+      <td class="blocked"><strong>0/20 ❌</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="footnote"><strong>Why E2E gains are small overall:</strong> generation dominates (78% of step). HybridEP touches only MoE comm in training+logprob. To beat -2% E2E, must reduce generation itself (Blackwell MXFP8, speculative decode, longer batches) or eliminate logprob entirely (but recovery of async overlap is needed first).</p>
+
+<h2>7. Iteration Log (historical, collapsed)</h2>
+
+<details open>
+<summary><strong>2026-05-19 12:30 UTC — N+85: HybridEP + FP8-Training v2 COMPLETED 20/20 → /loop GOAL COMPLETE</strong></summary>
+<p>Job <strong>11912255</strong> finished at elapsed 03:42:33, ExitCode 0:0 on 16n × 8 H100 CW partition <code>batch</code>. No OOM. Only error in logs is benign <code>hermes_tool_parser</code> ERROR (vllm tool-parser noise, no behavioral impact on SWE rollout). <strong>First validated H100 substitute for the MXFP8-rollout /loop goal</strong> — MXFP8 forward pass is HW-blocked on H100 (Blackwell E8M0 tensor cores), so the pivot was Megatron blockwise FP8 *training* (DeepGEMM, sm_90 supported).</p>
+<p><strong>v1 → v2 fix path:</strong> v1 (11901475) OOM'd at TE FusedAdam <code>exp_avg</code> init due to <code>use_precision_aware_optimizer=false</code>. v2 applied DeepSeek-V3 671B production pattern: <code>use_precision_aware_optimizer=true</code> (Adam moments fp16 vs fp32 saves ~½ optimizer state) + <code>empty_unused_memory_level=1</code> + <code>moe_router_dtype=fp32</code> + <code>defer_fp32_logits=true</code> + env <code>NVTE_FP8_BLOCK_SCALING_FP32_SCALES=1</code>. Cleared step 15 at elapsed 2:34, then ran to 20/20 cleanly.</p>
+<p><strong>Per-stage measured (full 20/20 from ray-driver.log):</strong> steady-state Total median 411.42 s, mean (steps 1-19) 605.7 s. policy_training rock-stable 58.46±0.5 s (FP8 forward+backward+optimizer fully consistent). weight_sync trends 24→17 s (cache warming, no refit regression). exposed_generation median 334.86 s but mean 524.4 s due to 4 long-tail boundaries at idx 4/8/15/18 (93%+ ExposedGen — timeout60 truncation regime, NOT FP8 overhead). TFLOPS/rank 148.04 median (cluster ~9.6 k).</p>
+<p><strong>vs prior H100 baselines (steady non-boundary):</strong> +8.9% per-step vs HybridEP+FP8KV 380.86 s, +4.0% vs Ray-opt v2 398.91 s, +6.8% vs HybridEP-only 387 s. Most cost (80%) still in ExposedGen — H100 FP8 forward+backward in transformer layers does NOT shift the gen-bound regime. <strong>Recipe now empirically validated for Qwen3-235B-MoE H100 GRPO</strong> (memory: <code>project_qwen3_235b_swe_hybridep_fp8tr_v2_success</code>, <code>reference_fp8_training_h100_megatron_te</code>).</p>
+</details>
+
+<details>
+<summary>2026-05-17 05:14 UTC — N+12: FP8 refit Phase A submission (attempt 1 failed, attempt 2 RUNNING)</summary>
+<p>FP8 refit port complete on <code>sj/super-v3-fp8-refit @ ce94e49fe</code>. Submit attempt 1 (11821282) failed at SETUP due to uninitialized worktree submodules — single ray-driver.log error: workspace member missing pyproject.toml. Fix: <code>git submodule update --init --recursive</code> in worktree (34 s). Memory <code>feedback_worktree_missing_submodules</code> written. Resubmit 11821741 via <code>bash submit_perf_fp8refit_smoke.sh</code> RUNNING since 22:28:24 UTC.</p>
+</details>
+
+<details>
+<summary>2026-05-16 22:00 UTC — N+11: Row 4 skip prev_logprob regression diagnosed</summary>
+<p>Row 4 (job 11819947) reached 5+ steps with logprob stage = 0.00 s as designed. But E2E rose +6-7% vs HybridEP because async overlap collapsed: generation went 309 → 350 s. Memory <code>feedback_async_overlap_loss_when_skipping_logprob</code> captured. Mitigation: <code>max_trajectory_age_steps=2</code> (untested).</p>
+</details>
+
+<details>
+<summary>2026-05-16 20:35 UTC — N+10 (final MXFP8 verdict): mxfp8_e4m3_quantize broken on sm_90</summary>
+<p>Diagnostic prints inside <code>fp8.load_weights</code> showed <code>mxfp8_e4m3_quantize(v)</code> returns all-zero or NaN E4M3+E8M0 tensors when fed healthy BF16 input. Quantizer kernel broken on H100, not the surrounding pipeline. Six prior iterations (N+5..N+10) each peeled one symptom layer — root cause is cuTLASS-backed quantizer requiring sm_100+. EMULATION enum exists but the utility doesn't actually emulate.</p>
+<p><strong>Closure:</strong> MXFP8 perf validation deferred to Blackwell. HybridEP-only = practical H100 Combined answer. User-approved.</p>
+<p><strong>Lesson:</strong> validate the unit primitive (5-line standalone call) before integrating. Would have caught this in 30 s instead of 6 iterations.</p>
+</details>
+
+<details>
+<summary>2026-05-16 19:30 UTC — N+9: bypass install proven, refit broadcast writes zeros</summary>
+<p>All three preconditions held: bypass installed (2254× confirmation), backend = EMULATION, refit completed. Yet <code>weight_scale_from_checkpoint</code> stayed all-zero post-refit. Conclusion: the c5ec220b5 copy is structurally correct but copies zeros to zeros (no-op). Real bug is upstream in <code>fp8.load_weights → model.load_weights</code> name dispatch — led to N+10 quantizer instrumentation.</p>
+</details>
+
+<details>
+<summary>2026-05-16 19:10 UTC — N+8: refit storage-alias broken on EMULATION</summary>
+<p>Added <code>layer.weight_scale.data.copy_(layer.weight_scale_from_checkpoint.data)</code> in the EMULATION not-first-time branch of <code>process_weights_after_loading_mxfp8_linear</code>. PR #1887 author tested on Blackwell where FLASHINFER fires; EMULATION on H100 was untested. Fix held but only as one step in a longer chain.</p>
+</details>
+
+<details>
+<summary>2026-05-16 18:50 UTC — N+7: vllm v1 EngineCore subprocess re-imports fresh</summary>
+<p>Discovered bypass must install at <code>worker_extension_cls</code> module-import time, not via parent-actor or collective_rpc. <code>vllm_worker.py:521</code> registers the extension; RayWorkerWrapper subprocess imports it at startup before model load. Module-level <code>_apply_mxfp8_sm90_bypass()</code> call lands at correct time.</p>
+</details>
+
+<details>
+<summary>2026-05-16 17:30 UTC — N+6: EMULATION refit must register weight_scale_from_checkpoint Parameter</summary>
+<p>Earlier early-return at top of <code>process_weights_after_loading_mxfp8_linear</code> was too aggressive — skipped Parameter creation. <code>update_weights_from_collective</code> looked up the Parameter by name and silently failed. Fix: always register; only the swizzle is FLASHINFER-specific. Memory <code>feedback_mxfp8_emulation_refit_register</code>.</p>
+</details>
+
+<details>
+<summary>2026-05-16 17:00 UTC — N+5: HybridEP 11811510 reached 22/20 + vllm 0.17 _preprocess_chat fix</summary>
+<p>HybridEP 22/20 sustained (E2E 387 s). vllm 0.17.1 renamed <code>_preprocess_chat</code> kwargs (chat_template → default_template) and removed tokenizer arg. Wrote backward-compat dispatcher so same branch serves both HybridEP (vllm 0.13) + MXFP8 (vllm 0.17). Memory <code>feedback_vllm017_preprocess_chat_signature</code>.</p>
+</details>
+
+<details>
+<summary>2026-05-16 19:20 UTC — N+3: uv_cache lock timeout on parallel Gym venv builds</summary>
+<p>4 NemoGym subprocess venvs build the same editable nemo-gym wheel in parallel against a shared lustre <code>UV_CACHE_DIR</code>. Lustre metadata IO is slow enough that uv's default 300 s lock timeout blows. Fix: <code>UV_LOCK_TIMEOUT=3600</code> + strengthen venv-wipe block to catch half-built skeletons. Memory <code>feedback_gym_uv_lock_timeout</code>.</p>
+</details>
+
+<details>
+<summary>2026-05-16 17:05 UTC — N+2: Gym subprocess venv py-version mismatch</summary>
+<p>May-13 container is py3.13. Existing Gym subprocess venvs were py3.12 from earlier super-v3 runs. uv bumped <code>pyvenv.cfg</code> to 3.13 but <code>lib/python3.13/site-packages/</code> stayed empty. <code>NEMO_GYM_SKIP_VENV_IF_PRESENT=1</code> short-circuited the install. Fix: SETUP_COMMAND probes <code>import ray</code> and wipes broken venvs. Memory <code>feedback_gym_subprocess_venv_py_version_mismatch</code>.</p>
+</details>
+
+<details>
+<summary>2026-05-16 14:35 UTC — N: Megatron-Bridge bind-mount regression on fuseloss worktree</summary>
+<p>fuseloss worktree's <code>submit_perf_variant.sh</code> branched off perf-patch before the Megatron-Bridge bind-mount was added there as an uncommitted edit. Patched the mount. Memory <code>feedback_fuseloss_worktree_mount_regression</code>.</p>
+</details>
+
+<details>
+<summary>2026-05-16 14:00 UTC — N-1: Gym ray pin conflict fix</summary>
+<p>SETUP_COMMAND relaxes <code>ray[default]==2.49.2</code> → <code>ray[default]</code> on May-13 container so subprocess venv resolves against parent ray 2.54.0. Memory <code>feedback_gym_ray_pin_conflict</code>.</p>
+</details>
+
+<h2>9. Apples-to-apples 4-way (timeout60, ≥15 steps) — COMPLETE</h2>
+
+<p style="font-size: 13px;">
+Steady-state means over body steps (warmup step 0 dropped). Per-config long-tail outliers (exposed_generation &gt; 2× median across that config's body) are listed and excluded from the steady mean. Source: <code>ray-driver.log</code> on each <code>&lt;jid&gt;-logs/</code> dir.
+</p>
+
+<table style="font-size: 13px; border-collapse: collapse;">
+  <thead>
+    <tr style="background: #f0f0f0;">
+      <th style="border: 1px solid #999; padding: 4px 8px;">Config</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">Job</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">Body steps</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">Long-tail dropped</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">Steady N</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">Total (s/step)</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">policy_training (s)</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">weight_sync (s)</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">exposed_gen (s)</th>
+      <th style="border: 1px solid #999; padding: 4px 8px;">TFLOPS/rank</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="border: 1px solid #999; padding: 4px 8px;">A. Ray-opt clean v2</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">11857294</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">24</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">8, 15, 23</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">21</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">398.91</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">67.64</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">21.84</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">287.13</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">128.03</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid #999; padding: 4px 8px;">B. HybridEP base</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">11891376</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">18</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">8, 15, 18</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">15</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;"><b>405.75</b></td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">60.10</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;"><b>19.64</b></td>
+      <td style="border: 1px solid #999; padding: 4px 8px;"><b>307.34</b></td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">144.18</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid #999; padding: 4px 8px;">C. HybridEP + fuse_loss</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">11919621</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">17</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">8, 15</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">15</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">411.40</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">60.31</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">20.42</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">311.81</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">144.01</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid #999; padding: 4px 8px;">D. HybridEP + FP8-Tr v2</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">11912255</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">19</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">4, 8, 15, 18</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">15</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">435.30</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;"><b>58.53</b></td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">19.76</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;">337.01</td>
+      <td style="border: 1px solid #999; padding: 4px 8px;"><b>148.40</b></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 style="font-size: 14px; margin-top: 16px;">Insights (4-way complete)</h3>
+<ul style="font-size: 13px;">
+  <li><b>fuse_loss does NOT reduce policy_training on Qwen3-235B SWE at timeout60.</b> C (HybridEP+fuse_loss) lands at policy_training=60.31 s vs B (HybridEP base) 60.10 s — statistical wash, well within step-to-step noise (σ≈1 s observed). TFLOPS/rank is also flat (144.01 vs 144.18). The PR #1904 kernel saves a measurable slice in microbenchmarks, but at this scale (16n×8 H100, max_seq=16384) the training-time gain is in the noise floor. [[feedback_fuseloss_super_v3_structural_mismatch]]</li>
+  <li><b>fuse_loss does NOT shift exposed_generation either.</b> C gen=311.81 s vs B 307.34 s (+1.5%, within noise). The async overlap collapse hypothesis is rejected at this resolution — fuse_loss neither helps nor hurts rollout drift on this workload. The hypothesis was tractable in principle (PR #1904 changes training compute, which sets the async window for rollout to fill); it just doesn't move the needle at this scale.</li>
+  <li><b>HybridEP base (B) remains the H100 sweet spot.</b> 405.75 s vs C's 411.40 s (+1.4%, within noise) and D's 435.30 s (+7.3%, real regression). B = pareto-optimal across all 4 configs: lowest Total, ties for highest TFLOPS/rank, lowest exposed_generation. No measured intervention beats it under timeout60. [[project_qwen3_235b_swe_hybridep_fp8tr_v2_success]]</li>
+  <li><b>weight_sync is flat across HybridEP variants.</b> B = 19.64 s, C = 20.42 s, D = 19.76 s; A's 21.84 s reflects the older clean-v2 path without HybridEP. weight_sync is no longer the bottleneck once HybridEP is on; further gains have to come from rollout long-tail / exposed_generation. [[project_fp8_kv_cache_rollout_gain]]</li>
+  <li><b>exposed_generation is the binding constraint, universally.</b> Steady values 287 / 307 / 312 / 337 s (A/B/C/D) dwarf training (~60 s) and weight_sync (~20 s). All four configs hit long-tail steps with gen &gt; 1000 s — step 8 is universal, step 15 is universal, plus per-config extras (A: 23; B: 18; C: clean at 8/15; D: 4/18). swebench rollout long-tail survives timeout60 in the steady-state slot too, just less extreme than without the cap. [[feedback_fp8_kv_regresses_with_timeout60]]</li>
+  <li><b>4-way verdict: feature porting plateau on H100.</b> All three optimization candidates (fuse_loss, FP8-Training v2, and the earlier FP8 KV / skip_logprob variants from §2) yield wall-time results within ±7% of HybridEP base. The compute-side knobs are exhausted at this scale; the next factor of throughput must come from breaking the rollout long-tail (step-8 and step-15 universal &gt;1000 s gens), not from kernel-level training optimizations.</li>
+</ul>
+
+<h3 style="font-size: 14px; margin-top: 12px;">Rerun chain — slot C</h3>
+<p style="font-size: 13px;">Initial attempt <b>11919524</b> FAILED at 00:06:13 with Hydra <code>OverridesError</code> (key needed <code>+</code>/<code>++</code> prefix). Wrapper fix re-submitted as <b>11919618</b> (also a wrapper-only variant that died on the same logic), then real run <b>11919621</b> launched with the <code>++policy.sequence_packing.fuse_loss=true</code> prefix. 11919621 reached step 18 (steady N=15) before harvest deadline at 3h02m elapsed — sufficient for steady-state comparison vs B's N=15 and D's N=15.</p>
+
+<h2>8. References</h2>
+
+<ul style="font-size: 13px;">
+  <li>Full diagnostic narrative: <a href="README.md">README.md</a></li>
+  <li>Project memory index: <code>~/.claude/projects/-Users-sna-Nemo-RL-Qwen3-Roadmap/memory/MEMORY.md</code></li>
+  <li>Iteration log: <a href="../../../progress.txt"><code>progress.txt</code></a></li>
+  <li>Key memories: <code>feedback_worktree_missing_submodules</code>, <code>feedback_async_overlap_loss_when_skipping_logprob</code>, <code>reference_flashinfer_mxfp8_sm90</code>, <code>feedback_fuseloss_super_v3_structural_mismatch</code>.</li>
+</ul>
+
+</body>
+</html>

@@ -1,0 +1,181 @@
+{
+  "decision": {
+    "allowed_focus_diffs": [
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py"
+    ],
+    "disallowed_focus_diffs": [],
+    "hayate_dirty_file_count": 0,
+    "hayate_head": null,
+    "hayate_reference_only": true,
+    "local_head": "c9098b63fb5e855958182cd760cecb50e9bef794",
+    "overall_status": "warn",
+    "recommendation": "Use the local/remote ModelOpt checkout as the training source. Treat Hayate's checkout as workflow reference only; port only intentional workflow ideas, not the older checkout wholesale.",
+    "source_of_truth": "local_modelopt",
+    "summary": "local ModelOpt HEAD is not at official upstream main",
+    "unrelated_dirty_file_count": 0,
+    "unrelated_dirty_files": [],
+    "upstream_focus_diff_file_count": 0,
+    "upstream_focus_diff_files": [],
+    "upstream_focus_status": "unavailable",
+    "upstream_head": "3ff15ccef3f0a46703a169272f61640cea311a1c",
+    "upstream_head_matches": false,
+    "upstream_probe_ok": true
+  },
+  "focus_paths": [
+    "examples/speculative_decoding/README.md",
+    "examples/speculative_decoding/launch_train.sh",
+    "examples/speculative_decoding/main.py",
+    "examples/speculative_decoding/fsdp_config.json",
+    "examples/speculative_decoding/collect_hidden_states/common.py",
+    "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_hf.py",
+    "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py",
+    "examples/speculative_decoding/scripts/export_hf_checkpoint.py",
+    "examples/speculative_decoding/scripts/convert_to_vllm_ckpt.py",
+    "examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py",
+    "examples/speculative_decoding/prepare_input_conversations/generate_responses.py",
+    "examples/speculative_decoding/slurm/generate_responses.sbatch",
+    "examples/speculative_decoding/slurm/train_eagle3.sbatch",
+    "examples/speculative_decoding/slurm/submit_all.sh",
+    "examples/speculative_decoding/eagle_config_qwen3_8b.json",
+    "examples/speculative_decoding/eagle_config_qwen3_30b_moe.json",
+    "examples/speculative_decoding/eagle_config_qwen3_32b.json",
+    "modelopt_recipes/general/speculative_decoding/eagle3.yaml",
+    "modelopt/torch/speculative/eagle/config.py",
+    "modelopt/torch/speculative/eagle/eagle_model.py",
+    "modelopt/torch/speculative/eagle/utils.py"
+  ],
+  "generated_at": "2026-05-22 06:51:22 PDT",
+  "hayate": {
+    "exists": false,
+    "label": "hayate_modelopt",
+    "path": "/lustre/fs1/portfolios/coreai/projects/coreai_horizon_dilations/users/hiso/ghq/github.com/NVIDIA/TensorRT-Model-Optimizer"
+  },
+  "local": {
+    "branch": "main",
+    "dirty_files": [
+      "M examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py"
+    ],
+    "exists": true,
+    "focus_diff_files": [
+      "M\texamples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py"
+    ],
+    "focus_diff_stat": ".../compute_hidden_states_trtllm.py                | 49 ++++++++++++++++++----\n 1 file changed, 40 insertions(+), 9 deletions(-)",
+    "focus_files": {
+      "examples/speculative_decoding/README.md": {
+        "exists": true,
+        "sha256": "5ece8b2f2da81d0576a2ee94b4750c0ba061004fdc8870ac181804ac723db03b",
+        "size_bytes": 17972
+      },
+      "examples/speculative_decoding/collect_hidden_states/common.py": {
+        "exists": true,
+        "sha256": "d8013be2f92f91973c1174cb0070d5c49b6b2c95afa769679c8c98b4609957bd",
+        "size_bytes": 7059
+      },
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_hf.py": {
+        "exists": true,
+        "sha256": "8872364a3873dc3a1fc178edc92f022f60f764a46ad18ed4f34f5dc9a591039e",
+        "size_bytes": 8930
+      },
+      "examples/speculative_decoding/collect_hidden_states/compute_hidden_states_trtllm.py": {
+        "exists": true,
+        "sha256": "6cc4ed71a76efe131dbea00063231e1a470786fcaf87f927d15af582e0ca0064",
+        "size_bytes": 11448
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_30b_moe.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_32b.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/eagle_config_qwen3_8b.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/fsdp_config.json": {
+        "exists": false
+      },
+      "examples/speculative_decoding/launch_train.sh": {
+        "exists": true,
+        "sha256": "5f59bbb4be010a4014b0e862063311e2ef9cdbe0073c50ce3124e368a76cc041",
+        "size_bytes": 3038
+      },
+      "examples/speculative_decoding/main.py": {
+        "exists": true,
+        "sha256": "2ae31bef07e955c1ba8f99a205ca5024cbcf34dc8c1ddec3cc0d9a9bb50482be",
+        "size_bytes": 11669
+      },
+      "examples/speculative_decoding/prepare_input_conversations/add_dapo17k.py": {
+        "exists": false
+      },
+      "examples/speculative_decoding/prepare_input_conversations/generate_responses.py": {
+        "exists": false
+      },
+      "examples/speculative_decoding/scripts/convert_to_vllm_ckpt.py": {
+        "exists": true,
+        "sha256": "d4ffc1946d7196aa2f5f7e4681195bf958dcfee9be18d25105745a783ba5268a",
+        "size_bytes": 5035
+      },
+      "examples/speculative_decoding/scripts/export_hf_checkpoint.py": {
+        "exists": true,
+        "sha256": "8cdf28bc732aabed95c3d648559ea42e366b36f70c2c77050104090badd1be56",
+        "size_bytes": 1767
+      },
+      "examples/speculative_decoding/slurm/generate_responses.sbatch": {
+        "exists": false
+      },
+      "examples/speculative_decoding/slurm/submit_all.sh": {
+        "exists": false
+      },
+      "examples/speculative_decoding/slurm/train_eagle3.sbatch": {
+        "exists": false
+      },
+      "modelopt/torch/speculative/eagle/config.py": {
+        "exists": false
+      },
+      "modelopt/torch/speculative/eagle/eagle_model.py": {
+        "exists": true,
+        "sha256": "5d18dc2ae9f6e4acbcd639df9104ab7b947c78eb21460922f26383d5a88a5d1e",
+        "size_bytes": 2509
+      },
+      "modelopt/torch/speculative/eagle/utils.py": {
+        "exists": true,
+        "sha256": "98c2fdc17cfe5d15f0e6117bd503da1ac67355d431ffc8286f8ca787c972b5b9",
+        "size_bytes": 7595
+      },
+      "modelopt_recipes/general/speculative_decoding/eagle3.yaml": {
+        "exists": true,
+        "sha256": "a619c65331420d017205e7ac8b41b987688b05bb6a56e9c533043a3cb262c888",
+        "size_bytes": 1910
+      }
+    },
+    "head": "c9098b63fb5e855958182cd760cecb50e9bef794",
+    "is_git_repo": true,
+    "label": "local_modelopt",
+    "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/Model-Optimizer",
+    "remote_lines": [
+      "origin\tgit@github.com:NVIDIA/Model-Optimizer.git (fetch)",
+      "origin\tgit@github.com:NVIDIA/Model-Optimizer.git (push)"
+    ],
+    "short_head": "c9098b63fb5e"
+  },
+  "local_vs_hayate_focus_files": [],
+  "notes": [
+    "local ModelOpt worktree has uncommitted changes",
+    "local ModelOpt HEAD does not match probed official upstream main",
+    "Hayate ModelOpt path is not visible on this host"
+  ],
+  "official_example_url": "https://github.com/NVIDIA/Model-Optimizer/tree/main/examples/speculative_decoding",
+  "overall_status": "warn",
+  "upstream_focus_diff": {
+    "reason": "upstream commit object is not present locally; fetch before comparing focus paths",
+    "status": "unavailable",
+    "upstream_head": "3ff15ccef3f0a46703a169272f61640cea311a1c"
+  },
+  "upstream_probe": {
+    "enabled": true,
+    "head": "3ff15ccef3f0a46703a169272f61640cea311a1c",
+    "ref": "refs/heads/main",
+    "short_head": "3ff15ccef3f0",
+    "status": "ok",
+    "url": "https://github.com/NVIDIA/Model-Optimizer.git"
+  }
+}

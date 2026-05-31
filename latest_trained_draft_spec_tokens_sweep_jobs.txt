@@ -1,0 +1,15 @@
+# trained draft spec-token sweep
+vllm_draft_dir=/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/tmp.sHFHeQ9Adh/vllm
+artifact_root=/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/tmp.sHFHeQ9Adh/art
+repo_root=/repo
+swe_repo_root=/repo
+config_file=/cfg.yaml
+env_file=/env.sh
+chat_template=/tpl.j2
+max_num_steps=2
+spec_tokens_list=2 3 4
+eagle3_draft_tp=1
+baseline_job=BASELINE_JOB_ID
+specdec_tokens_2_job=SPECDEC_2_JOB_ID
+specdec_tokens_3_job=SPECDEC_3_JOB_ID
+specdec_tokens_4_job=SPECDEC_4_JOB_ID

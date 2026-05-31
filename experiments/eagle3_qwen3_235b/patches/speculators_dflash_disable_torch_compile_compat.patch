@@ -1,0 +1,12 @@
+diff --git a/src/speculators/models/dflash/core.py b/src/speculators/models/dflash/core.py
+index 0000000..0000000 100644
+--- a/src/speculators/models/dflash/core.py
++++ b/src/speculators/models/dflash/core.py
+@@ -185,7 +185,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
+             )
+         return self.config.mask_token_id
+ 
+-    @torch.compile
+     def forward(
+         self,
+         hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]

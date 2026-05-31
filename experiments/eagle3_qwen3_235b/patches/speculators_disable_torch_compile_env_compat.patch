@@ -1,0 +1,20 @@
+diff --git a/src/speculators/models/eagle3/core.py b/src/speculators/models/eagle3/core.py
+index db9c84b..9e903f8 100644
+--- a/src/speculators/models/eagle3/core.py
++++ b/src/speculators/models/eagle3/core.py
+@@ -1,5 +1,6 @@
+ import copy
+ import inspect
++import os
+ from typing import ClassVar
+ 
+ import torch
+@@ -29,6 +30,8 @@ def make_dynamic_cache(config):
+ 
+ 
+ def conditional_torch_compile(func):
++    if os.environ.get("SPECULATORS_DISABLE_TORCH_COMPILE", "").lower() in {"1", "true", "yes"}:
++        return func
+     if torch.cuda.is_available() and hasattr(torch, "compile"):
+         return torch.compile(func)
+     else:

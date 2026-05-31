@@ -1,0 +1,15 @@
+# Minimal static Eagle3 overlay for the Qwen3-235B SWE RL config.
+# Apply as Hydra overrides or merge manually into grpo_qwen3_235b_swe.yaml.
+#
+# This does not train the draft online. It only asks vLLM generation workers to
+# load and use a pre-trained Eagle3 draft checkpoint.
+
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: eagle3
+        model: ${oc.env:EAGLE3_DRAFT_MODEL}
+        num_speculative_tokens: ${oc.env:EAGLE3_NUM_SPEC_TOKENS,3}
+        draft_tensor_parallel_size: ${oc.env:EAGLE3_DRAFT_TP,1}
+

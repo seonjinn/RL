@@ -1,0 +1,3 @@
+megatron_compat_probe_job=2867766
+json=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/megatron_compat_probe.json
+markdown=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/megatron_compat_probe.md
