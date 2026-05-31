@@ -1,0 +1,96 @@
+{
+  "updated_at": "2026-05-31 08:08 PDT",
+  "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
+  "baseline": {
+    "job_id": "3056050",
+    "generated_tokens_sec_gpu_mean": 4169.19,
+    "completed_generation_metrics": 20
+  },
+  "runs": [
+    {
+      "job_id": "3058167",
+      "num_speculative_tokens": 1,
+      "latest_step_seen": 4,
+      "completed_generation_metrics": 3,
+      "generated_tokens_sec_gpu_values": [
+        5752.28,
+        5282.92,
+        5975.9
+      ],
+      "generated_tokens_sec_gpu_mean_so_far": 5670.37,
+      "speedup_vs_baseline_mean_so_far": 1.3601,
+      "acceptance_rate_values": [
+        0.5791,
+        0.571,
+        0.5914
+      ],
+      "acceptance_rate_mean_so_far": 0.5805,
+      "acceptance_rate_latest_summary": 0.5914,
+      "total_step_seconds": [
+        254.2,
+        216.66,
+        218.56
+      ]
+    },
+    {
+      "job_id": "3058168",
+      "num_speculative_tokens": 2,
+      "latest_step_seen": 4,
+      "completed_generation_metrics": 3,
+      "generated_tokens_sec_gpu_values": [
+        5168.46,
+        4971.28,
+        5245.61
+      ],
+      "generated_tokens_sec_gpu_mean_so_far": 5128.45,
+      "speedup_vs_baseline_mean_so_far": 1.2301,
+      "acceptance_rate_values": [
+        0.4249,
+        0.4152,
+        0.4369
+      ],
+      "acceptance_rate_mean_so_far": 0.4257,
+      "acceptance_rate_latest_summary": 0.4369,
+      "per_position_acceptance_latest_summary": [
+        0.5605,
+        0.2894
+      ],
+      "total_step_seconds": [
+        262.51,
+        219.25,
+        225.44
+      ]
+    },
+    {
+      "job_id": "3058169",
+      "num_speculative_tokens": 3,
+      "latest_step_seen": 4,
+      "completed_generation_metrics": 3,
+      "generated_tokens_sec_gpu_values": [
+        4894.97,
+        4858.44,
+        5209.79
+      ],
+      "generated_tokens_sec_gpu_mean_so_far": 4987.73,
+      "speedup_vs_baseline_mean_so_far": 1.1963,
+      "acceptance_rate_values": [
+        0.3211,
+        0.3139,
+        0.3322
+      ],
+      "acceptance_rate_mean_so_far": 0.3224,
+      "acceptance_rate_latest_summary": 0.3322,
+      "per_position_acceptance_latest_summary": [
+        0.5493,
+        0.2774,
+        0.1364
+      ],
+      "total_step_seconds": [
+        255.95,
+        218.42,
+        223.77
+      ]
+    }
+  ],
+  "caveat": "This is not the final result. Use full 20-step means after jobs 3058167, 3058168, and 3058169 complete."
+}
