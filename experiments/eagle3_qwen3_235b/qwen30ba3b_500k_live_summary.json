@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:47 PDT",
+  "updated_at": "2026-05-31 08:49 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,8 +10,8 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 15,
-      "completed_generation_metrics": 14,
+      "latest_step_seen": 16,
+      "completed_generation_metrics": 15,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
@@ -26,10 +26,11 @@
         5544.93,
         5867.79,
         5730.43,
-        5921.38
+        5921.38,
+        5503.31
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5650.39,
-      "speedup_vs_baseline_mean_so_far": 1.3553,
+      "generated_tokens_sec_gpu_mean_so_far": 5640.58,
+      "speedup_vs_baseline_mean_so_far": 1.3529,
       "acceptance_rate_values": [
         0.5791,
         0.571,
@@ -44,10 +45,11 @@
         0.5768,
         0.5864,
         0.5779,
-        0.5814
+        0.5814,
+        0.5773
       ],
       "acceptance_rate_mean_so_far": 0.5763,
-      "acceptance_rate_latest_summary": 0.5814,
+      "acceptance_rate_latest_summary": 0.5773,
       "total_step_seconds": [
         254.2,
         216.66,
@@ -62,14 +64,15 @@
         209.47,
         217.84,
         218.81,
-        221.82
+        221.82,
+        207.86
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 14,
-      "completed_generation_metrics": 13,
+      "latest_step_seen": 15,
+      "completed_generation_metrics": 14,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -83,10 +86,11 @@
         4954.84,
         4866.36,
         5258.92,
-        4923.88
+        4923.88,
+        5198.17
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5040.83,
-      "speedup_vs_baseline_mean_so_far": 1.2091,
+      "generated_tokens_sec_gpu_mean_so_far": 5052.07,
+      "speedup_vs_baseline_mean_so_far": 1.2118,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -100,13 +104,14 @@
         0.4277,
         0.4219,
         0.4341,
-        0.424
+        0.424,
+        0.4283
       ],
-      "acceptance_rate_mean_so_far": 0.4218,
-      "acceptance_rate_latest_summary": 0.424,
+      "acceptance_rate_mean_so_far": 0.4223,
+      "acceptance_rate_latest_summary": 0.4283,
       "per_position_acceptance_latest_summary": [
-        0.5605,
-        0.2876
+        0.565,
+        0.2916
       ],
       "total_step_seconds": [
         262.51,
@@ -121,14 +126,15 @@
         214.33,
         221.34,
         222.24,
-        230.28
+        230.28,
+        229.65
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 14,
-      "completed_generation_metrics": 13,
+      "latest_step_seen": 15,
+      "completed_generation_metrics": 14,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -142,10 +148,11 @@
         4813.4,
         4773.78,
         5120.77,
-        4749.74
+        4749.74,
+        5197.49
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4936.53,
-      "speedup_vs_baseline_mean_so_far": 1.1841,
+      "generated_tokens_sec_gpu_mean_so_far": 4955.17,
+      "speedup_vs_baseline_mean_so_far": 1.1885,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -159,14 +166,15 @@
         0.3252,
         0.3199,
         0.3296,
-        0.3208
+        0.3208,
+        0.3242
       ],
-      "acceptance_rate_mean_so_far": 0.3193,
-      "acceptance_rate_latest_summary": 0.3208,
+      "acceptance_rate_mean_so_far": 0.3196,
+      "acceptance_rate_latest_summary": 0.3242,
       "per_position_acceptance_latest_summary": [
-        0.5518,
-        0.2773,
-        0.133
+        0.5552,
+        0.2805,
+        0.1368
       ],
       "total_step_seconds": [
         255.95,
@@ -181,7 +189,8 @@
         212.79,
         217.93,
         222.36,
-        231.02
+        231.02,
+        229.67
       ]
     }
   ],
