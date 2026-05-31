@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:25 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:28 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -364,6 +364,30 @@
       <h2>Current Read</h2>
       <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline is running, and mixed 100K training is progressing. 235B baseline is stable, but SpecDec K=2 currently fails from a compiled-DAG timeout when the first generation step schedules 64 requests and 2080 tokens.</p>
     </div>
+
+    <h2>Data Guardrails</h2>
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Current Contract</th><th>Why It Matters</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Drafter training data</td>
+          <td><code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k.</td>
+          <td>This is the clean Speculators Eagle3 training corpus, not the OpenMath NeMo-RL eval file.</td>
+        </tr>
+        <tr>
+          <td>Actual NeMo-RL test set</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>: <code>50000</code> rows, <code>44304</code> unique normalized prompts.</td>
+          <td>Baseline, SpecDec acceptance, and NeMo-RL generation tok/s/GPU are measured on this OpenMath rollout source.</td>
+        </tr>
+        <tr>
+          <td>Train/test overlap</td>
+          <td><code>0</code> normalized prompt overlaps. The OpenMath eval prompts are denylisted before writing the final 500K training file.</td>
+          <td>This prevents direct prompt leakage. It does not claim semantic near-duplicates are impossible across math datasets.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <h2>Measurement Scope</h2>
     <table>
