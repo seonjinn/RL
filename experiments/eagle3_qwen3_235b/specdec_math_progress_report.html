@@ -125,7 +125,7 @@
   <h1>Qwen3 Eagle3 SpecDec Math Progress</h1>
   <p class="sub">
     Status snapshot for the NeMo-RL speculative decoding effort. Last checked:
-    2026-05-31 01:56 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
+    2026-05-31 02:07 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
     training with Speculators, NeMo-RL acceptance-rate measurement, generation
     speedup, and long-tail batch-size gating.
   </p>
@@ -133,13 +133,14 @@
   <section class="note" aria-label="Latest operator update">
     <h2>Latest Update</h2>
     <p>
-      2026-05-31 01:56 PT: the roadmap/scripts/report tree is versioned in
+      2026-05-31 02:07 PT: the roadmap/scripts/report tree is versioned in
       GitLab at
       <code>ssh://git@gitlab-master.nvidia.com:12051/sna/specdec_rl.git</code>,
-      branch <code>main</code>; GitLab Pages is configured by
-      <code>.gitlab-ci.yml</code> and publishes this report as
-      <code>public/index.html</code>. Local credential files and generated
-      logs/caches are ignored. The matched 235B baseline <code>3053877</code> has emitted all
+      branch <code>main</code>. GitLab Pages is configured by
+      <code>.gitlab-ci.yml</code>, now targets the shared runner tag
+      <code>pages</code>, and publishes this report as <code>public/index.html</code>.
+      Local credential files and generated logs/caches are ignored. The matched
+      235B baseline <code>3053877</code> has emitted all
       20 generation metrics: mean generated tok/s/GPU <code>66.78</code>, final
       step <code>66.55</code>. 235B K=2 SpecDec <code>3055189</code> is confirmed
       to run sync rollout (<code>async_engine=false</code>), CUDA graph
@@ -148,13 +149,33 @@
       still in Step <code>1/20</code> generation with no acceptance-rate or
       tok/s/GPU metric yet, and the driver log has not advanced since
       <code>01:48 PT</code>. 235B K=1 retry <code>3055926</code> is still before
-      rollout metrics and is loading target checkpoint shards. For 30B NeMo-RL
-      eval, patched baseline <code>3056050</code> is still rebuilding Ray/vLLM
-      worker environments; K=1 <code>3056051</code> and K=2 <code>3056052</code>
-      remain queued behind it. The 30B 100K continuation <code>3055364</code>
-      remains in hidden-state extraction with <code>4921</code> files and about
-      <code>306G</code> written; fallback <code>3055365</code> is correctly queued as
-      <code>afternotok:3055364</code> if the 4-hour slot times out.
+      rollout metrics and is loading/checkpoint-initializing the 235B target plus
+      drafter stack. For 30B NeMo-RL eval, patched baseline
+      <code>3056050</code> is still rebuilding Ray/vLLM worker environments; K=1
+      <code>3056051</code> and K=2 <code>3056052</code> remain queued behind it.
+      The 30B 100K continuation <code>3055364</code> remains in hidden-state
+      extraction with <code>7172</code> files and about <code>446G</code> written;
+      fallback <code>3055365</code> is correctly queued as
+      <code>afternotok:3055364</code> if the 4-hour slot times out. The 235B
+      mixed non-OpenMath target set is still not merged: no
+      <code>mixed_math_nonopenmath_qwen3_235b</code> conversation file is present,
+      wave3/wave4 targetgen jobs are active, and merge/training jobs
+      <code>3052197</code>/<code>3052198</code> remain dependency-pending.
+    </p>
+    <p>
+      500K Speculators training should be treated as a staged multi-day run, not
+      one monolithic job. The current 30B mixed 100K continuation is extracting
+      hidden states at roughly <code>10K samples/hour</code>; the completed 30B
+      mixed 50K path needed one 4-hour timeout job plus a <code>02:21:09</code>
+      completion job, so a realistic 30B 50K chunk costs about
+      <code>6-7 hours</code>. Sequential 500K therefore lands around
+      <code>60-70 GPU-hours of wall time on the current 1-GPU Speculators path</code>
+      before queue delays. Storage is the stronger constraint: current 30B hidden
+      states are <code>7172 files / 446G</code>, implying roughly
+      <code>3.1T per 50K</code> and up to <code>30T</code> if all 500K hidden states
+      are retained. The current plan is therefore chunked continuation:
+      generate/extract <code>50K</code>, train/continue, checkpoint, then move to
+      the next unique <code>50K</code> slice.
     </p>
     <p>
       2026-05-31 01:33 PT: I found a duplicate 30B fallback branch writing into
@@ -411,8 +432,14 @@
         <tr>
           <td>30B staged mixed training</td>
           <td>Primary <code>3055364</code>; future staged jobs <code>3055365</code>, <code>3055368-3055371</code>, <code>3055589-3055592</code></td>
-          <td>Active. <code>3055364</code> started after <code>3052366</code>, passed validation for the offset <code>50000</code> source slice, converted the data, launched vLLM, and entered hidden-state extraction. Current evidence: <code>4921</code> hidden-state files and about <code>306G</code> under <code>hidden_states_layers48_mlen8193_offset50k</code>. Duplicate fallback jobs <code>3055438</code>/<code>3055443</code> and their downstream selectors were canceled because they were writing the same or premature output paths.</td>
+          <td>Active. <code>3055364</code> started after <code>3052366</code>, passed validation for the offset <code>50000</code> source slice, converted the data, launched vLLM, and entered hidden-state extraction. Current evidence: <code>7172</code> hidden-state files and about <code>446G</code> under <code>hidden_states_layers48_mlen8193_offset50k</code>. Duplicate fallback jobs <code>3055438</code>/<code>3055443</code> and their downstream selectors were canceled because they were writing the same or premature output paths.</td>
           <td>Continue extraction; <code>3055365</code> is queued with <code>afternotok:3055364</code> to resume if the current slot times out.</td>
+        </tr>
+        <tr>
+          <td>500K Speculators runtime/storage plan</td>
+          <td>Chunked continuation, <code>50K</code> unique samples at a time</td>
+          <td>Current 30B mixed hidden-state extraction is about <code>10K samples/hour</code>. The completed 30B mixed 50K path required about <code>6-7 hours</code> wall time across timeout+continuation jobs. At the current hidden-state density, retaining all hidden states would cost roughly <code>3.1T/50K</code>, or up to <code>30T</code> for <code>500K</code>.</td>
+          <td>Do not run 500K as one cache. Continue the chunk pipeline: unique 50K slice, extract hidden states, train/continue, save checkpoint, then advance to the next slice.</td>
         </tr>
       </tbody>
     </table>
@@ -445,9 +472,12 @@
       long-tail gate follows the design pressure described in
       <a href="https://arxiv.org/html/2511.16665v3">TLT / Adaptive Drafter</a>:
       SpecDec is most useful during low-effective-batch long-tail rollout, while
-      large active batches can lose throughput. Current 235B K=1/K=2 jobs therefore
-      gate on scheduled requests <code>&le;32</code> and scheduled tokens <code>&le;2048</code>
-      with CUDA graph still enabled.
+      large active batches can lose throughput. The active 235B retries therefore
+      keep CUDA graph enabled and use the runtime scheduled-token gate
+      (<code>K=2</code>: <code>&le;2048</code>, <code>K=1</code>: <code>&le;4096</code>).
+      The stricter scheduled-request gate branch reached the first Step 1
+      progress line but stalled before useful rollout metrics, so token-gated
+      jobs are the immediate matched comparison path.
     </p>
   </section>
 
