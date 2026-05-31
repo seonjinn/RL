@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 11:05 PDT",
+  "updated_at": "2026-05-31 11:08 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -423,8 +423,8 @@
       "request_gate": 4,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 12,
-      "completed_generation_metrics": 11,
+      "latest_step_seen": 13,
+      "completed_generation_metrics": 12,
       "generated_tokens_sec_gpu_values": [
         4484.07,
         4262.05,
@@ -436,10 +436,11 @@
         4788.99,
         4101.96,
         4241.85,
-        4350.03
+        4350.03,
+        4590.09
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4392.77,
-      "speedup_vs_baseline_mean_so_far": 1.0536,
+      "generated_tokens_sec_gpu_mean_so_far": 4409.21,
+      "speedup_vs_baseline_mean_so_far": 1.0576,
       "acceptance_rate_values": [
         0.6474,
         0.3265,
@@ -451,10 +452,11 @@
         0.5695,
         0.5405,
         0.57,
-        0.5685
+        0.5685,
+        0.375
       ],
-      "acceptance_rate_mean_so_far": 0.4255,
-      "acceptance_rate_latest_summary": 0.5685,
+      "acceptance_rate_mean_so_far": 0.4213,
+      "acceptance_rate_latest_summary": 0.375,
       "total_step_seconds": [
         282.04,
         243.54,
@@ -466,10 +468,11 @@
         251.24,
         232.26,
         238.95,
-        240.88
+        240.88,
+        247.01
       ],
-      "total_step_seconds_mean_so_far": 245.7,
-      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4. Eleven rollout metrics are available, but this is only 11/20 and not a stable final result."
+      "total_step_seconds_mean_so_far": 245.81,
+      "note": "Batch-size-only long-tail gate run submitted at 2026-05-31 09:43 PT. SpecDec is disabled when scheduled request count is greater than 4. Twelve rollout metrics are available, but this is only 12/20 and not a stable final result."
     },
     {
       "job_id": "3059556",
@@ -525,7 +528,7 @@
       "request_gate": 64,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 0,
+      "latest_step_seen": 1,
       "completed_generation_metrics": 0,
       "generated_tokens_sec_gpu_values": [],
       "generated_tokens_sec_gpu_mean_so_far": null,
