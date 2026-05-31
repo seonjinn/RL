@@ -1,0 +1,58 @@
+{
+  "updated_at": "2026-05-31 09:28 PDT",
+  "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
+  "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+  "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
+  "output_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_target_chunks",
+  "generation_setup": {
+    "responses_per_prompt": 1,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "max_tokens": 4096,
+    "max_model_len": 8192,
+    "output_schema": "speculators"
+  },
+  "current_completed_chunks": {
+    "chunks": "000-009",
+    "records_before_repair": 49992,
+    "chunk_size": 5000,
+    "note": "Chunks 005, 006, 007, and 008 were short by 8 total rows before the repair wave."
+  },
+  "submitted_jobs": {
+    "repair_chunks_005_008": {
+      "job_ids": [
+        "3059130",
+        "3059131",
+        "3059132",
+        "3059133"
+      ],
+      "expected_new_records": 8,
+      "state_at_submit_check": "RUNNING"
+    },
+    "new_chunks_010_019": {
+      "job_ids": [
+        "3059139",
+        "3059141",
+        "3059142",
+        "3059143",
+        "3059144",
+        "3059147",
+        "3059148",
+        "3059149",
+        "3059150",
+        "3059151"
+      ],
+      "expected_new_records": 50000,
+      "state_at_submit_check": "RUNNING"
+    }
+  },
+  "expected_after_current_wave": {
+    "records": 100000,
+    "chunks": "000-019 exact 5K each if all jobs complete successfully"
+  },
+  "clean_split_status": {
+    "openmath_denylist_applied_to_final_merge": false,
+    "direct_prompt_overlap_verified": false,
+    "note": "The 235B in-house path is still target-generation work. The final merged 500K file must be built with the same OpenMath denylist and normalized prompt overlap validation used for the clean 30B run before any leakage-clean claim."
+  }
+}
