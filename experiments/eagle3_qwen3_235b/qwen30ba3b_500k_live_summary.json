@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:39 PDT",
+  "updated_at": "2026-05-31 08:47 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,8 +10,8 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 13,
-      "completed_generation_metrics": 12,
+      "latest_step_seen": 15,
+      "completed_generation_metrics": 14,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
@@ -24,10 +24,12 @@
         5061.79,
         5312.59,
         5544.93,
-        5867.79
+        5867.79,
+        5730.43,
+        5921.38
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5621.13,
-      "speedup_vs_baseline_mean_so_far": 1.3483,
+      "generated_tokens_sec_gpu_mean_so_far": 5650.39,
+      "speedup_vs_baseline_mean_so_far": 1.3553,
       "acceptance_rate_values": [
         0.5791,
         0.571,
@@ -40,10 +42,12 @@
         0.5654,
         0.5823,
         0.5768,
-        0.5864
+        0.5864,
+        0.5779,
+        0.5814
       ],
-      "acceptance_rate_mean_so_far": 0.5757,
-      "acceptance_rate_latest_summary": 0.5864,
+      "acceptance_rate_mean_so_far": 0.5763,
+      "acceptance_rate_latest_summary": 0.5814,
       "total_step_seconds": [
         254.2,
         216.66,
@@ -56,14 +60,16 @@
         206.34,
         211.36,
         209.47,
-        217.84
+        217.84,
+        218.81,
+        221.82
       ]
     },
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 13,
-      "completed_generation_metrics": 12,
+      "latest_step_seen": 14,
+      "completed_generation_metrics": 13,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -76,10 +82,11 @@
         4365.68,
         4954.84,
         4866.36,
-        5258.92
+        5258.92,
+        4923.88
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5050.58,
-      "speedup_vs_baseline_mean_so_far": 1.2114,
+      "generated_tokens_sec_gpu_mean_so_far": 5040.83,
+      "speedup_vs_baseline_mean_so_far": 1.2091,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -92,13 +99,14 @@
         0.4135,
         0.4277,
         0.4219,
-        0.4341
+        0.4341,
+        0.424
       ],
-      "acceptance_rate_mean_so_far": 0.4216,
-      "acceptance_rate_latest_summary": 0.4341,
+      "acceptance_rate_mean_so_far": 0.4218,
+      "acceptance_rate_latest_summary": 0.424,
       "per_position_acceptance_latest_summary": [
-        0.5684,
-        0.2997
+        0.5605,
+        0.2876
       ],
       "total_step_seconds": [
         262.51,
@@ -112,14 +120,15 @@
         214.26,
         214.33,
         221.34,
-        222.24
+        222.24,
+        230.28
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 13,
-      "completed_generation_metrics": 12,
+      "latest_step_seen": 14,
+      "completed_generation_metrics": 13,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -132,10 +141,11 @@
         4295.6,
         4813.4,
         4773.78,
-        5120.77
+        5120.77,
+        4749.74
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4952.1,
-      "speedup_vs_baseline_mean_so_far": 1.1878,
+      "generated_tokens_sec_gpu_mean_so_far": 4936.53,
+      "speedup_vs_baseline_mean_so_far": 1.1841,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -148,14 +158,15 @@
         0.3124,
         0.3252,
         0.3199,
-        0.3296
+        0.3296,
+        0.3208
       ],
-      "acceptance_rate_mean_so_far": 0.3192,
-      "acceptance_rate_latest_summary": 0.3296,
+      "acceptance_rate_mean_so_far": 0.3193,
+      "acceptance_rate_latest_summary": 0.3208,
       "per_position_acceptance_latest_summary": [
-        0.5588,
-        0.2888,
-        0.1411
+        0.5518,
+        0.2773,
+        0.133
       ],
       "total_step_seconds": [
         255.95,
@@ -169,8 +180,29 @@
         214.73,
         212.79,
         217.93,
-        222.36
+        222.36,
+        231.02
       ]
+    }
+  ],
+  "long_tail_gate_followups": [
+    {
+      "job_id": "3058759",
+      "num_speculative_tokens": 1,
+      "token_gate": 2048,
+      "state": "RUNNING",
+      "completed_generation_metrics": 0,
+      "latest_step_seen": null,
+      "note": "Driver log exists but has no rollout step marker or generated tok/s/GPU metric yet."
+    },
+    {
+      "job_id": "3058762",
+      "num_speculative_tokens": 1,
+      "token_gate": 1024,
+      "state": "RUNNING",
+      "completed_generation_metrics": 0,
+      "latest_step_seen": null,
+      "note": "Driver log exists but has no rollout step marker or generated tok/s/GPU metric yet."
     }
   ],
   "dataset_contract": {
