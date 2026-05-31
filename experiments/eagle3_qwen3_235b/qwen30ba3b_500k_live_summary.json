@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 16:43 PDT",
+  "updated_at": "2026-05-31 16:52 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -917,7 +917,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_and_resubmitted",
-    "updated_at": "2026-05-31 16:43 PDT",
+    "updated_at": "2026-05-31 16:52 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -931,7 +931,7 @@
     "superseded_corrected_eval_job": "3062507",
     "superseded_corrected_eval_state": "CANCELLED at 2026-05-31 16:42 PDT before rollout metrics after code review found the runner-side gate could overwrite a threshold-disabled state when scheduled_spec_decode_tokens existed.",
     "corrected_eval_job": "3062565",
-    "corrected_eval_state": "RUNNING at 2026-05-31 16:43 PDT from the validated /lustre/.../SpecDec-RL checkout after applying the SGLANG/FSDP executable fallback and the semantic long-tail gate fix; no rollout metric has been emitted yet.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 16:52 PDT from the validated /lustre/.../SpecDec-RL checkout after applying the SGLANG/FSDP executable fallback and the semantic long-tail gate fix; no rollout metric has been emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_gate_metrics_eval_jobs.txt",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet."
   },
