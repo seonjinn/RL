@@ -9,10 +9,8 @@ trains once over the full 500K cache.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import re
 import shlex
 import subprocess
 import time
@@ -33,6 +31,9 @@ ARTIFACT_ROOT = Path(
 )
 PIPELINE_SCRIPT = (
     REPO_ROOT / "experiments/eagle3_qwen3_235b/slurm_speculators_offline_pipeline.sbatch"
+)
+UNIQUE_BUILDER = (
+    REPO_ROOT / "experiments/eagle3_qwen3_235b/build_unique_training_conversations.py"
 )
 
 ACCOUNT = os.environ.get("ACCOUNT", "coreai_dlalgo_nemorl")
@@ -90,100 +91,47 @@ def line_count(path: Path) -> int:
     return count
 
 
-def normalize_prompt(prompt: str) -> str:
-    return re.sub(r"\s+", " ", prompt.strip()).lower()
+def default_replacement_conversations() -> Path:
+    return ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_replacement_conversations_dapo100.jsonl"
 
 
-def prompt_hash(prompt: str) -> str:
-    return hashlib.sha256(normalize_prompt(prompt).encode("utf-8")).hexdigest()
-
-
-def prompt_from_record(record: dict[str, object]) -> str:
-    for key in ("prompt", "messages", "conversations"):
-        value = record.get(key)
-        if isinstance(value, str):
-            return value
-        if isinstance(value, list):
-            for message in value:
-                if not isinstance(message, dict):
-                    continue
-                if message.get("role") in ("user", "human"):
-                    content = message.get("content") or message.get("value")
-                    if isinstance(content, str):
-                        return content
-    return ""
-
-
-def validate_prompt_set(sources: list[Path]) -> None:
-    denylist_path = ARTIFACT_ROOT / "data/openmath_reasoning_cot_conversations_50k.jsonl"
-    if not denylist_path.exists():
-        raise FileNotFoundError(f"missing OpenMath eval denylist: {denylist_path}")
-
-    openmath_hashes: set[str] = set()
-    with denylist_path.open(encoding="utf-8") as f:
-        for line in f:
-            prompt = prompt_from_record(json.loads(line))
-            if prompt:
-                openmath_hashes.add(prompt_hash(prompt))
-
-    seen: set[str] = set()
-    duplicate_examples: list[str] = []
-    overlap_examples: list[str] = []
-    total = 0
-    for source in sources:
-        with source.open(encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                total += 1
-                record = json.loads(line)
-                key = prompt_hash(prompt_from_record(record))
-                row_id = str(record.get("id") or record.get("conversation_id") or f"{source.name}:{line_no}")
-                if key in seen and len(duplicate_examples) < 10:
-                    duplicate_examples.append(row_id)
-                if key in openmath_hashes and len(overlap_examples) < 10:
-                    overlap_examples.append(row_id)
-                seen.add(key)
-
-    duplicate_count = total - len(seen)
-    if duplicate_count or overlap_examples:
-        detail = [
-            f"raw_rows={total}",
-            f"unique_normalized_prompts={len(seen)}",
-            f"duplicate_count={duplicate_count}",
-            f"openmath_overlap_examples={overlap_examples}",
-            f"duplicate_examples={duplicate_examples}",
-        ]
-        raise RuntimeError(
-            "500K source conversations are not exact unique non-OpenMath data; "
-            "deduplicate or generate replacement rows before submitting.\n"
-            + "\n".join(detail)
-        )
-
-
-def validate_sources() -> list[Path]:
+def validate_sources(replacement_conversations: Path) -> list[Path]:
     sources = [source_for_offset(offset) for offset in range(0, 500_000, 50_000)]
     missing = [p for p in sources if not p.exists()]
     if missing:
         raise FileNotFoundError("missing 50K source slices:\n" + "\n".join(map(str, missing)))
+    if not UNIQUE_BUILDER.exists():
+        raise FileNotFoundError(f"missing unique merge builder: {UNIQUE_BUILDER}")
+    if not replacement_conversations.exists() or replacement_conversations.stat().st_size == 0:
+        raise FileNotFoundError(
+            "missing replacement conversations needed to make exact unique 500K:\n"
+            f"{replacement_conversations}"
+        )
     bad = [(p, line_count(p)) for p in sources if line_count(p) != 50_000]
     if bad:
         raise RuntimeError(
             "source slices must each have exactly 50000 rows:\n"
             + "\n".join(f"{p}: {n}" for p, n in bad)
         )
-    validate_prompt_set(sources)
     return sources
 
 
-def submit_merge_job(sources: list[Path], merged: Path, dry_run: bool) -> str:
+def submit_merge_job(sources: list[Path], replacement: Path, merged: Path, dry_run: bool) -> str:
     merged.parent.mkdir(parents=True, exist_ok=True)
-    source_list = " ".join(str(p) for p in sources)
+    summary = ARTIFACT_ROOT / "reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_unique_merge_summary.json"
+    primary_args = " ".join(shlex.quote(str(p)) for p in sources)
     script = (
         "set -euo pipefail; "
         f"tmp='{merged}.tmp'; rm -f \"$tmp\"; "
-        f"cat {source_list} > \"$tmp\"; "
-        "rows=$(wc -l < \"$tmp\" | tr -d ' '); "
-        "test \"$rows\" = 500000; "
+        f"python3 {shlex.quote(str(UNIQUE_BUILDER))} "
+        f"--output \"$tmp\" "
+        f"--summary-json {shlex.quote(str(summary))} "
+        "--expected-count 500000 "
+        f"--denylist-prompts-from {shlex.quote(str(ARTIFACT_ROOT / 'data/openmath_reasoning_cot_conversations_50k.jsonl'))} "
+        f"--primary {primary_args} "
+        f"--replacement {shlex.quote(str(replacement))}; "
         f"mv \"$tmp\" '{merged}'; "
+        f"rows=$(wc -l < '{merged}' | tr -d ' '); "
         f"echo merged={merged} rows=$rows"
     )
     wrap = f"bash -lc {shlex.quote(script)}"
@@ -284,12 +232,13 @@ def submit_pipeline(
 
 def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
     (REPO_ROOT / "logs").mkdir(parents=True, exist_ok=True)
-    sources = validate_sources()
+    replacement = Path(args.replacement_conversations)
+    sources = validate_sources(replacement)
     root = ARTIFACT_ROOT / "speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel"
-    merged = ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k.jsonl"
-    spec_jsonl = ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_speculators.jsonl"
+    merged = ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl"
+    spec_jsonl = ARTIFACT_ROOT / "data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl"
 
-    merge_id = submit_merge_job(sources, merged, args.dry_run)
+    merge_id = submit_merge_job(sources, replacement, merged, args.dry_run)
     base = common_env(root, merged, spec_jsonl)
 
     prep_env = {
@@ -358,6 +307,7 @@ def submit_parallel(args: argparse.Namespace) -> dict[str, object]:
         "model": MODEL,
         "shards": args.shards,
         "source_slices": [str(p) for p in sources],
+        "replacement_conversations": str(replacement),
         "merged_conversations": str(merged),
         "speculators_jsonl": str(spec_jsonl),
         "output_dir": str(root),
@@ -384,6 +334,7 @@ def main() -> int:
     parser.add_argument("--datagen-time", default="04:00:00")
     parser.add_argument("--train-time", default="12:00:00")
     parser.add_argument("--from-pretrained", default="")
+    parser.add_argument("--replacement-conversations", default=str(default_replacement_conversations()))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.shards <= 0 or 500_000 % args.shards != 0:
