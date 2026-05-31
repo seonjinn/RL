@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 06:55 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 06:57 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -362,7 +362,7 @@
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> is running from the 50K checkpoint and has reached at least <code>global_step=65959</code>. The last 20 observed loss samples have mean <code>7.11</code> and range <code>6.18-8.33</code>. A dependency wrapper, job <code>3057798</code>, is queued to submit 500K-drafter K=1/2/3 NeMo-RL evaluations after training finishes. 30B K=1 completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 30B K=2 token-gate4096 job <code>3056052</code> is now running Step 17; the first 16 completed metrics average <code>4885.11 tok/s/GPU</code>, or <code>1.17x</code>, with step-level acceptance <code>38.2%</code> and vLLM/aggregate acceptance median <code>50%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> is running from the 50K checkpoint and has reached at least <code>global_step=68298</code>. The last 20 observed loss samples have mean <code>7.38</code> and range <code>6.41-8.25</code>. A dependency wrapper, job <code>3057798</code>, is queued to submit 500K-drafter K=1/2/3 NeMo-RL evaluations after training finishes. 30B K=1 completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 30B K=2 token-gate4096 job <code>3056052</code> is now running Step 17; the first 16 completed metrics average <code>4885.11 tok/s/GPU</code>, or <code>1.17x</code>, with step-level acceptance <code>38.2%</code> and vLLM/aggregate acceptance median <code>50%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
     </div>
 
     <h2>Dataset And Leakage Summary</h2>
@@ -498,7 +498,7 @@
     </div>
     <div class="status-row">
       <strong>30B training</strong>
-      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> is running from the 50K checkpoint. It has reached <code>global_step=65959</code>; the latest 20 observed losses average <code>7.11</code> with range <code>6.18-8.33</code>. Smaller continuation jobs are tracked separately and are not the final clean 500K path.</span>
+      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> is running from the 50K checkpoint. It has reached <code>global_step=68298</code>; the latest 20 observed losses average <code>7.38</code> with range <code>6.41-8.25</code>. Smaller continuation jobs are tracked separately and are not the final clean 500K path.</span>
       <span class="pill ok">500K training</span>
     </div>
     <div class="status-row">
@@ -578,7 +578,7 @@
           <td>500K target responses</td>
           <td><span class="pill ok">training</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> running from the 50K checkpoint at least through <code>global_step=65959</code>. Wrapper <code>3057798</code> will submit 500K-drafter K=1/2/3 NeMo-RL evaluations after the train job succeeds. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> running from the 50K checkpoint at least through <code>global_step=68298</code>. Wrapper <code>3057798</code> will submit 500K-drafter K=1/2/3 NeMo-RL evaluations after the train job succeeds. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
