@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 13:31 PDT",
+  "updated_at": "2026-05-31 13:35 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -118,23 +118,32 @@
       "time_limit": "02:00:00",
       "state_at_submit_check": "2 RUNNING, 2 PENDING",
       "note": "Small final repair for the 1-3 rows still missing after earlier repair jobs."
+    },
+    "finalizer_after_targetgen": {
+      "job_id": "3061260",
+      "dependency": "afterany on all active qwen3_235b-targetgen-resume jobs observed at submit time",
+      "time_limit": "00:45:00",
+      "gpus_per_node": 4,
+      "state_at_submit_check": "PENDING with Dependency",
+      "note": "The first attempt with 1 GPU was rejected by Slurm QOSMinGRES. The accepted 4-GPU finalizer validates all 100 chunk files, builds the exact-unique 500K 235B training JSONL with the OpenMath denylist, and converts it to Speculators JSONL if the corpus is complete."
     }
   },
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 269791,
+    "current_rows_observed": 274598,
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
     "active_targetgen_jobs_observed": 174,
     "complete_chunk_files_observed_ge5000_rows": 6,
     "short_nonzero_chunk_files_observed": 94,
-    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest direct line count is 269791/500000 rows. Continuation jobs 3060971-3060980 are running for chunks 010-019, continuation jobs 3060981-3061060 remain queued afterany for chunks 020-099, and short repair jobs 3061066-3061069 cover chunks 005-008.",
-    "min_nonzero_rows_observed": 1787,
+    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest direct line count is 274598/500000 rows. Continuation jobs 3060971-3060980 are running for chunks 010-019, continuation jobs 3060981-3061060 remain queued afterany for chunks 020-099, and short repair jobs 3061066-3061069 cover chunks 005-008. Finalizer job 3061260 is queued afterany on the target-generation jobs.",
+    "min_nonzero_rows_observed": 1840,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 80,
-    "running_targetgen_jobs_observed": 94
+    "running_targetgen_jobs_observed": 90,
+    "completing_targetgen_jobs_observed": 4
   },
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": false,
