@@ -39,6 +39,7 @@ UNIQUE_BUILDER = (
 ACCOUNT = os.environ.get("ACCOUNT", "coreai_dlalgo_nemorl")
 PARTITION = os.environ.get("PARTITION", "batch")
 GPUS_PER_NODE = os.environ.get("GPUS_PER_NODE", "4")
+MERGE_GPUS = os.environ.get("MERGE_GPUS", "1")
 
 MODEL = "Qwen/Qwen3-30B-A3B"
 SEQ_LENGTH = "8192"
@@ -142,6 +143,7 @@ def submit_merge_job(sources: list[Path], replacement: Path, merged: Path, dry_r
             "--ntasks=1",
             f"--account={ACCOUNT}",
             f"--partition={PARTITION}",
+            f"--gres=gpu:{MERGE_GPUS}",
             "--time=00:30:00",
             "--job-name=qwen3_30ba3b-merge-mixed-500k",
             "--output=logs/%x_%j.out",
