@@ -63,6 +63,8 @@ VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 CONCURRENCY="${CONCURRENCY:-16}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-240}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
+DATAGEN_START_INDEX="${DATAGEN_START_INDEX:-}"
+DATAGEN_END_INDEX="${DATAGEN_END_INDEX:-}"
 
 RUN_CLONE="${RUN_CLONE:-true}"
 RUN_CONVERT="${RUN_CONVERT:-true}"
@@ -107,6 +109,7 @@ if [[ "$APPLY_COMPAT_PATCHES" == "true" || "$APPLY_COMPAT_PATCHES" == "True" ]];
     "$SCRIPT_DIR/patches/speculators_fsdp_layer_wrap_cache_compat.patch"
     "$SCRIPT_DIR/patches/speculators_torch28_scatter_index_dtype_compat.patch"
     "$SCRIPT_DIR/patches/speculators_from_pretrained_no_meta_compat.patch"
+    "$SCRIPT_DIR/patches/speculators_datagen_index_range_compat.patch"
   )
   for compat_patch in "${compat_patches[@]}"; do
     if [[ -f "$compat_patch" ]]; then
@@ -152,6 +155,7 @@ echo "TARGET_LAYER_IDS=$TARGET_LAYER_IDS"
 echo "SPECULATOR_TYPE=$SPECULATOR_TYPE"
 echo "MAX_SAMPLES=$MAX_SAMPLES SAMPLE_OFFSET=$SAMPLE_OFFSET SEQ_LENGTH=$SEQ_LENGTH"
 echo "MIN_HIDDEN_STATES=$MIN_HIDDEN_STATES"
+echo "DATAGEN_START_INDEX=$DATAGEN_START_INDEX DATAGEN_END_INDEX=$DATAGEN_END_INDEX"
 echo "VLLM_SITE=$VLLM_SITE"
 echo "VLLM_LAUNCH_EXTRA_ARGS=$VLLM_LAUNCH_EXTRA_ARGS"
 echo "VALIDATE_SOURCE_CONVERSATIONS=$VALIDATE_SOURCE_CONVERSATIONS FAIL_ON_DUPLICATE_PROMPTS=$FAIL_ON_DUPLICATE_PROMPTS"
@@ -280,6 +284,12 @@ if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then
     )
     if [[ -n "$MAX_SAMPLES" && "$MAX_SAMPLES" != "0" ]]; then
       datagen_cmd+=(--max-samples "$MAX_SAMPLES")
+    fi
+    if [[ -n "$DATAGEN_START_INDEX" ]]; then
+      datagen_cmd+=(--start-index "$DATAGEN_START_INDEX")
+    fi
+    if [[ -n "$DATAGEN_END_INDEX" ]]; then
+      datagen_cmd+=(--end-index "$DATAGEN_END_INDEX")
     fi
     if [[ "$VALIDATE_OUTPUTS" == "true" || "$VALIDATE_OUTPUTS" == "True" ]]; then
       datagen_cmd+=(--validate-outputs)

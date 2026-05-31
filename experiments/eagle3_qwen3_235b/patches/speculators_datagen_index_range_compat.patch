@@ -1,0 +1,121 @@
+--- a/scripts/data_generation_offline.py
++++ b/scripts/data_generation_offline.py
+@@ -95,6 +95,24 @@
+         default=None,
+         help="Maximum number of samples to process (default: None, process all)",
+     )
++    parser.add_argument(
++        "--start-index",
++        type=int,
++        default=0,
++        help=(
++            "First preprocessed dataset index to process, inclusive. "
++            "Useful for sharded hidden-state generation."
++        ),
++    )
++    parser.add_argument(
++        "--end-index",
++        type=int,
++        default=None,
++        help=(
++            "Last preprocessed dataset index to process, exclusive. "
++            "Defaults to the end of the dataset."
++        ),
++    )
+ 
+     # Output arguments
+     parser.add_argument(
+@@ -187,48 +205,48 @@
+ 
+ 
+ def get_indices_to_process(
+-    num_samples: int, max_samples: int | None, existing: list[int]
++    num_samples: int,
++    max_samples: int | None,
++    existing: list[int],
++    start_index: int = 0,
++    end_index: int | None = None,
+ ) -> list[int]:
+     """Determines which indices should be processed. If max_samples is None
+-    returns all dataset indices not in existing. Otherwise gets the first
+-    `max_samples - len(existing)` samples not already in existing.
++    returns all dataset indices in [start_index, end_index) not in existing.
++    Otherwise gets the first `max_samples` missing samples in that range.
+ 
+     Args:
+         num_samples: Total size of preprocessed dataset
+         max_samples: (Optional) limit for number of samples to process
+         existing: list of ids that have already been processed
++        start_index: first dataset index to process, inclusive
++        end_index: final dataset index to process, exclusive
+ 
+     Returns:
+         list of dataset indices to process
+     """
+ 
+-    if len(existing) >= num_samples:
+-        logger.info("All samples already processed!")
++    start_index = max(0, start_index)
++    end_index = num_samples if end_index is None else min(num_samples, end_index)
++    if start_index >= end_index:
++        logger.info("Empty index range [%s, %s); nothing to process.", start_index, end_index)
+         return []
+-    if max_samples and len(existing) >= max_samples:
+-        logger.info("At least max_samples already processed!")
++
++    existing_s = set(existing)
++    to_process = [i for i in range(start_index, end_index) if i not in existing_s]
++    if not to_process:
++        logger.info("All samples in range [%s, %s) already processed!", start_index, end_index)
+         return []
+ 
+     if len(existing) > 0:
+         logger.info(f"Found {len(existing)} existing samples.")
+ 
+-    existing_s = set(existing)
+     if max_samples is None:
+-        return [i for i in range(num_samples) if i not in existing_s]
+-
+-    num_remaining = min(max_samples, num_samples) - len(existing)
+-    to_process = []
+-    cur = 0
+-    while num_remaining > 0 and cur < num_samples:
+-        if cur not in existing_s:
+-            to_process.append(cur)
+-            num_remaining -= 1
+-
+-        cur += 1
+-
+-    return to_process
++        return to_process
++
++    return to_process[:max_samples]
+ 
+ 
+ def check_safetensors_file(path: Path, tokens: list[int]):
+     with safe_open(path, "pt") as f:
+         t_ids = f.get_tensor("token_ids").tolist()
+@@ -370,7 +388,11 @@
+     num_samples = len(dataset)
+ 
+     to_process = get_indices_to_process(
+-        num_samples, args.max_samples, existing_file_indices
++        num_samples,
++        args.max_samples,
++        existing_file_indices,
++        args.start_index,
++        args.end_index,
+     )
+     if not to_process:
+         return
+@@ -440,6 +462,10 @@
+     setup_root_logger()
+ 
+     logger.info("EAGLE Offline Data Generation")
++    if args.start_index < 0:
++        raise ValueError("--start-index must be non-negative")
++    if args.end_index is not None and args.end_index < args.start_index:
++        raise ValueError("--end-index must be greater than or equal to --start-index")
+ 
+     dataset = load_from_disk(args.preprocessed_data)
+ 
