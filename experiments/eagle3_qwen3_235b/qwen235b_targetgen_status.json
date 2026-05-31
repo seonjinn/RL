@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 10:03 PDT",
+  "updated_at": "2026-05-31 10:07 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -72,11 +72,11 @@
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 56697,
+    "current_rows_observed": 59906,
     "current_chunk_files_observed": 98,
-    "current_nonzero_chunk_files": 97,
+    "current_nonzero_chunk_files": 98,
     "active_targetgen_jobs_observed": 92,
-    "note": "Chunks 010-019 and many 020-099 chunks have begun writing partial rows. Retry chunk 096 has started writing rows; retry chunk 046 has created its output file but is still at 0 rows. Both retry vLLM servers are up and serving chat completions."
+    "note": "Chunks 010-019 and many 020-099 chunks have begun writing partial rows. Retry chunks 046 and 096 are both writing rows now. Both retry vLLM servers are up and serving chat completions."
   },
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": false,
