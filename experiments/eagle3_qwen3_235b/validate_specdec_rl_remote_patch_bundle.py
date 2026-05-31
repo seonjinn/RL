@@ -55,6 +55,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "NRL_ALLOW_SPECDEC_DISABLE_BY_BATCH_SIZE",
         "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH",
         "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS",
+        'default_disable_log_stats = "true"',
         "max_new_tokens=allowed_new_tokens_per_sample[idx]",
         "stop_strings=self._merge_stop_strings(",
     ],
@@ -223,6 +224,43 @@ def required_file_rows(patch_root: Path, target_root: Path) -> list[dict[str, An
     return rows
 
 
+def check_grpo_generation_indent(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    grpo = patch_root / "nemo_rl" / "algorithms" / "grpo.py"
+    if not grpo.exists():
+        add(checks, "source", "grpo generation timer indent", "fail", f"missing: {grpo}")
+        return
+    text = read_text(grpo)
+    expected = (
+        '                if policy_generation is not None and hasattr(\n'
+        '                    policy_generation, "clear_vllm_logger_metrics"\n'
+        '                ):\n'
+        '                    policy_generation.clear_vllm_logger_metrics()\n'
+        '\n'
+        '                with timer.time("generation"):\n'
+    )
+    nested = (
+        '                    policy_generation.clear_vllm_logger_metrics()\n'
+        '\n'
+        '                    with timer.time("generation"):\n'
+    )
+    if expected in text and nested not in text:
+        add(
+            checks,
+            "source",
+            "grpo generation timer indent",
+            "pass",
+            "generation rollout is not nested under the optional vLLM metrics-clear hook",
+        )
+    else:
+        add(
+            checks,
+            "source",
+            "grpo generation timer indent",
+            "fail",
+            "generation rollout may be nested under clear_vllm_logger_metrics and skipped for other backends",
+        )
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     patch_root = args.patch_root
@@ -248,6 +286,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "required overlay file is missing or lacks expected markers",
                 missing_snippets=row.get("source_missing_snippets"),
             )
+
+    check_grpo_generation_indent(checks, patch_root)
 
     if ignored:
         add(
@@ -285,7 +325,16 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     for check in checks:
         status_counts[check["status"]] = status_counts.get(check["status"], 0) + 1
 
-    source_ok = all(row.get("source_status") == "pass" for row in rows) and patch_root.exists()
+    source_failures = [
+        check
+        for check in checks
+        if check.get("area") == "source" and check.get("status") == "fail"
+    ]
+    source_ok = (
+        all(row.get("source_status") == "pass" for row in rows)
+        and patch_root.exists()
+        and not source_failures
+    )
     target_ok = target_root.exists() and all(row.get("target_status") == "applied" for row in rows)
     if not source_ok:
         overall = "fail"

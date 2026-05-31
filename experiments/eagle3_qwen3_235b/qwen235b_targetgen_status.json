@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 14:42 PDT",
+  "updated_at": "2026-05-31 15:02 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -140,8 +140,8 @@
       },
       "wave_limit": 10,
       "time_limit": "02:00:00",
-      "state_at_submit_check": "RUNNING",
-      "note": "Submitted at 14:28 PDT after verifying the previous completed repair jobs did not fill the last 8 missing rows. Finalizer job 3061260 was updated to wait on 94 active targetgen-resume jobs including this second repair wave."
+      "state_at_submit_check": "COMPLETED but chunks remained short",
+      "note": "Submitted at 14:28 PDT after verifying the previous completed repair jobs did not fill the last 8 missing rows. Jobs completed, but chunks 005-008 still showed 4997/4999/4997/4999 rows at the 14:47 PDT check, so a third repair wave was submitted with the hardened resume script."
     },
     "finalizer_after_targetgen": {
       "job_id": "3061260",
@@ -187,27 +187,51 @@
       ],
       "state_at_retry_check": "RUNNING at 14:24 PDT",
       "note": "The first w1 continuation attempts failed within 3-4 minutes due to enroot startup failures while the chunks were still short. Retry jobs were submitted without dependency, and finalizer job 3061260 was updated to wait on 92 active targetgen-resume jobs including these four retries."
+    },
+    "third_short_repair_chunks_005_008": {
+      "job_ids": [
+        "3061845",
+        "3061846",
+        "3061847",
+        "3061848"
+      ],
+      "chunks": [
+        "005",
+        "006",
+        "007",
+        "008"
+      ],
+      "rows_before_submit": {
+        "005": 4997,
+        "006": 4999,
+        "007": 4997,
+        "008": 4999
+      },
+      "wave_limit": 10,
+      "time_limit": "02:00:00",
+      "state_at_submit_check": "job 3061845 RUNNING and 3061846 COMPLETING at 15:02 PDT",
+      "note": "Submitted with the hardened resume script and explicit --allow-no-previous-dependency after confirming no active writer remained for chunks 005-008. Finalizer job 3061260 was updated to wait on 94 active targetgen-resume jobs including these four repair jobs. At 15:02 PDT, jobs 3061845 and 3061846 were still visible; jobs 3061847 and 3061848 had left squeue, but chunks 005-008 still showed 4997/4999/4997/4999 rows."
     }
   },
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 322369,
+    "current_rows_observed": 343586,
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
     "active_targetgen_jobs_observed": 94,
     "complete_chunk_files_observed_ge5000_rows": 6,
     "short_nonzero_chunk_files_observed": 94,
-    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest per-chunk line-count sweep observed 322369/500000 rows. At the 14:42 PDT queue check, target generation shows 94 running qwen3_235b-targetgen-resume jobs after retrying failed chunks 020, 021, 034, 041 and resubmitting the still-short chunks 005-008. Finalizer job 3061260 is still waiting on all 94 active target-generation jobs. The Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 remains queued after the finalizer succeeds.",
-    "min_nonzero_rows_observed": 2336,
+    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest per-chunk line-count sweep observed 343586/500000 rows. At the 15:02 PDT queue check, target generation still had active qwen3_235b-targetgen-resume jobs, and finalizer job 3061260 remained dependency-pending on the captured target-generation dependency set. The Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 remains queued after the finalizer succeeds.",
+    "min_nonzero_rows_observed": 2545,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 0,
     "running_targetgen_jobs_observed": 94,
     "completing_targetgen_jobs_observed": 0
   },
   "code_review_status": {
-    "updated_at": "2026-05-31 14:42 PDT",
+    "updated_at": "2026-05-31 15:02 PDT",
     "reviewers": [
       "Codex",
       "Claude Code 2.1.159"
@@ -215,16 +239,23 @@
     "status": "patched_and_validated",
     "fixes": [
       "Resume chunk runner now repairs valid JSONL files missing a trailing newline and quarantines invalid partial tails before counting rows.",
+      "Resume chunk runner now validates all existing JSONL rows before appending and rejects GENERATION_SKIP_FAILED=true because count-based resume requires gap-free output.",
+      "Concurrent direct-vLLM conversation generation now flushes completed responses in input order, so line-count resume remains a valid leading-prefix offset.",
+      "Resume submitter now fails if sbatch output cannot be parsed into a job id, preventing unsafe multi-wave dependency chains.",
+      "SpecDec-RL grpo.py generation timing block is no longer nested under the optional clear_vllm_logger_metrics hook, so non-vLLM generation backends cannot skip rollout by accident.",
+      "SpecDec vLLM log stats now default to disabled for fair baseline comparisons unless NRL_VLLM_DISABLE_LOG_STATS explicitly opts in.",
       "Any no-dependency resume submission now requires explicit --allow-no-previous-dependency after checking no concurrent writer is active.",
       "Direct vLLM submit wrapper now builds sbatch arguments as an array, so no-dependency dry-runs and submissions do not fail on an empty SBATCH_EXTRA_ARGV.",
       "Finalizer submitter now prints that dependency discovery is a submission-time squeue snapshot.",
-      "SpecDec-RL overlay validator now checks the current NRL_SPECDEC_BATCH_GATE_PATCH_V4 marker."
+      "SpecDec-RL overlay validator now checks the current NRL_SPECDEC_BATCH_GATE_PATCH_V4 marker and the grpo generation-block indentation invariant."
     ],
     "validated": [
       "python3 -m py_compile submitters and validator",
       "bash -n direct-vLLM resume/finalize scripts",
       "SpecDec-RL remote patch bundle source validation PASS",
       "local partial-line resume tests for valid missing-newline and invalid truncated-tail JSONL",
+      "local ordered concurrent generation test with deliberately out-of-order completion",
+      "local resume guard test rejecting GENERATION_SKIP_FAILED=true",
       "local no-dependency dry-run for start-wave 2 repair path"
     ]
   },

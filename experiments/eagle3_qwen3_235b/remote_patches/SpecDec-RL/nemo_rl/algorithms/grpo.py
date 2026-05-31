@@ -1248,55 +1248,55 @@ def grpo_train(
                 ):
                     policy_generation.clear_vllm_logger_metrics()
 
-                    with timer.time("generation"):
-                        # Use NeMo-Gym rollouts if enabled. We cascade NeMo-Gym first since NeMo-Gym requires async rollouts.
-                        if _should_use_nemo_gym(master_config):
-                            generation_config = master_config["policy"]["generation"]
-                            nemo_gym_rollout_result = run_async_nemo_gym_rollout(
-                                policy_generation=policy_generation,
-                                input_batch=repeated_batch,
-                                tokenizer=tokenizer,
-                                task_to_env=task_to_env,
-                                max_seq_len=None,
-                                generation_config=generation_config,
-                                max_rollout_turns=None,
-                                greedy=False,
-                            )
-                            input_ids = nemo_gym_rollout_result.input_ids
-                            repeated_batch = nemo_gym_rollout_result.final_batch
-                            rollout_metrics = nemo_gym_rollout_result.rollout_metrics
-                        # Use async rollouts if vLLM async engine is enabled
-                        elif _should_use_async_rollouts(master_config):
-                            (
-                                repeated_batch,
-                                rollout_metrics,
-                            ) = run_async_multi_turn_rollout(
-                                policy_generation=policy_generation,
-                                input_batch=repeated_batch,
-                                tokenizer=tokenizer,
-                                task_to_env=task_to_env,
-                                max_seq_len=master_config["policy"][
-                                    "max_total_sequence_length"
-                                ],
-                                max_rollout_turns=master_config["grpo"][
-                                    "max_rollout_turns"
-                                ],
-                                greedy=False,
-                            )
-                        else:
-                            repeated_batch, rollout_metrics = run_multi_turn_rollout(
-                                policy_generation=policy_generation,
-                                input_batch=repeated_batch,
-                                tokenizer=tokenizer,
-                                task_to_env=task_to_env,
-                                max_seq_len=master_config["policy"][
-                                    "max_total_sequence_length"
-                                ],
-                                max_rollout_turns=master_config["grpo"][
-                                    "max_rollout_turns"
-                                ],
-                                greedy=False,
-                            )
+                with timer.time("generation"):
+                    # Use NeMo-Gym rollouts if enabled. We cascade NeMo-Gym first since NeMo-Gym requires async rollouts.
+                    if _should_use_nemo_gym(master_config):
+                        generation_config = master_config["policy"]["generation"]
+                        nemo_gym_rollout_result = run_async_nemo_gym_rollout(
+                            policy_generation=policy_generation,
+                            input_batch=repeated_batch,
+                            tokenizer=tokenizer,
+                            task_to_env=task_to_env,
+                            max_seq_len=None,
+                            generation_config=generation_config,
+                            max_rollout_turns=None,
+                            greedy=False,
+                        )
+                        input_ids = nemo_gym_rollout_result.input_ids
+                        repeated_batch = nemo_gym_rollout_result.final_batch
+                        rollout_metrics = nemo_gym_rollout_result.rollout_metrics
+                    # Use async rollouts if vLLM async engine is enabled
+                    elif _should_use_async_rollouts(master_config):
+                        (
+                            repeated_batch,
+                            rollout_metrics,
+                        ) = run_async_multi_turn_rollout(
+                            policy_generation=policy_generation,
+                            input_batch=repeated_batch,
+                            tokenizer=tokenizer,
+                            task_to_env=task_to_env,
+                            max_seq_len=master_config["policy"][
+                                "max_total_sequence_length"
+                            ],
+                            max_rollout_turns=master_config["grpo"][
+                                "max_rollout_turns"
+                            ],
+                            greedy=False,
+                        )
+                    else:
+                        repeated_batch, rollout_metrics = run_multi_turn_rollout(
+                            policy_generation=policy_generation,
+                            input_batch=repeated_batch,
+                            tokenizer=tokenizer,
+                            task_to_env=task_to_env,
+                            max_seq_len=master_config["policy"][
+                                "max_total_sequence_length"
+                            ],
+                            max_rollout_turns=master_config["grpo"][
+                                "max_rollout_turns"
+                            ],
+                            greedy=False,
+                        )
 
                 # Keep metric polling out of the generation timer and before
                 # finish_generation(), since vLLM sleep/reset paths may drop

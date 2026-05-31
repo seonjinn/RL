@@ -159,6 +159,12 @@ def main() -> int:
                 env["SBATCH_EXTRA_ARGS"] = f"--dependency=afterany:{deps[dep_index]}"
 
             job_id, output_text = run_submit(env, args.dry_run)
+            if not args.dry_run and job_id is None:
+                raise RuntimeError(
+                    "submit output did not contain a job id; refusing to build an "
+                    "unsafe resume dependency chain for "
+                    f"{args.model_label} chunk {chunk_index:03d} wave {wave}"
+                )
             submitted.append(
                 {
                     "wave": wave,

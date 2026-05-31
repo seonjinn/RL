@@ -17,6 +17,11 @@ CHUNK_SIZE="${CHUNK_SIZE:-5000}"
 WAVE_LIMIT="${WAVE_LIMIT:-1000}"
 BASE_OFFSET="${BASE_OFFSET:-$((CHUNK_INDEX * CHUNK_SIZE))}"
 
+if [[ "${GENERATION_SKIP_FAILED:-false}" == "true" || "${GENERATION_SKIP_FAILED:-false}" == "True" ]]; then
+  echo "GENERATION_SKIP_FAILED=true is incompatible with count-based chunk resume." >&2
+  exit 1
+fi
+
 mkdir -p "$(dirname "$OUTPUT_CONVERSATIONS")" "$(dirname "$SUMMARY_JSON")"
 
 if [[ -s "$OUTPUT_CONVERSATIONS" ]]; then
@@ -35,27 +40,38 @@ with path.open("rb+") as handle:
         raise SystemExit(0)
 
     handle.seek(size - 1)
-    if handle.read(1) == b"\n":
-        raise SystemExit(0)
+    if handle.read(1) != b"\n":
+        handle.seek(0)
+        data = handle.read()
+        last_newline = data.rfind(b"\n")
+        tail = data[last_newline + 1 :]
+        try:
+            json.loads(tail.decode("utf-8"))
+        except Exception:
+            quarantine = path.with_name(
+                f"{path.name}.partial.{time.strftime('%Y%m%d%H%M%S')}.{os.environ.get('SLURM_JOB_ID', 'manual')}"
+            )
+            quarantine.write_bytes(tail)
+            handle.seek(last_newline + 1 if last_newline >= 0 else 0)
+            handle.truncate()
+            print(f"truncated incomplete JSONL tail to {quarantine}", flush=True)
+        else:
+            handle.seek(0, os.SEEK_END)
+            handle.write(b"\n")
+            print(f"added missing trailing newline to {path}", flush=True)
 
     handle.seek(0)
-    data = handle.read()
-    last_newline = data.rfind(b"\n")
-    tail = data[last_newline + 1 :]
-    try:
-        json.loads(tail.decode("utf-8"))
-    except Exception:
-        quarantine = path.with_name(
-            f"{path.name}.partial.{time.strftime('%Y%m%d%H%M%S')}.{os.environ.get('SLURM_JOB_ID', 'manual')}"
-        )
-        quarantine.write_bytes(tail)
-        handle.seek(last_newline + 1 if last_newline >= 0 else 0)
-        handle.truncate()
-        print(f"truncated incomplete JSONL tail to {quarantine}", flush=True)
-    else:
-        handle.seek(0, os.SEEK_END)
-        handle.write(b"\n")
-        print(f"added missing trailing newline to {path}", flush=True)
+    for line_no, raw_line in enumerate(handle, 1):
+        if not raw_line.endswith(b"\n"):
+            raise SystemExit(
+                f"{path}: line {line_no} is not newline-terminated after tail repair"
+            )
+        try:
+            json.loads(raw_line)
+        except Exception as exc:
+            raise SystemExit(
+                f"{path}: invalid JSONL at line {line_no}; refusing to append: {exc}"
+            )
 PY
 fi
 

@@ -1465,7 +1465,7 @@ class BaseVllmGenerationWorker:
                 # disable quantization
                 vllm_kwargs["hf_overrides"]["quantization_config"] = {}
 
-        default_disable_log_stats = "false" if spec_decode_requested else "true"
+        default_disable_log_stats = "true"
 
         llm_kwargs = dict(
             model=self.model_name,

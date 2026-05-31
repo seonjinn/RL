@@ -503,15 +503,20 @@ def main() -> None:
             with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
                 future_to_job = {
                     executor.submit(generate_one, args, prompt_messages): (
+                        idx,
                         cid,
                         sid,
                         response_index,
                         prompt_messages,
                     )
-                    for cid, sid, response_index, prompt_messages in jobs
+                    for idx, (cid, sid, response_index, prompt_messages) in enumerate(jobs)
                 }
+                pending_results: dict[
+                    int, tuple[str, str, int, list[dict[str, str]], str] | None
+                ] = {}
+                next_to_write = 0
                 for future in as_completed(future_to_job):
-                    cid, sid, response_index, prompt_messages = future_to_job[future]
+                    idx, cid, sid, response_index, prompt_messages = future_to_job[future]
                     try:
                         response = future.result()
                     except Exception as exc:
@@ -519,19 +524,40 @@ def main() -> None:
                             raise
                         print(f"skip {cid}: generation failed: {exc}", file=sys.stderr)
                         num_skipped += 1
-                        continue
-                    write_record(
-                        out_f,
-                        cid,
-                        sid,
-                        response_index,
-                        prompt_messages,
-                        response,
-                        args.model,
-                        args.output_schema,
-                    )
-                    num_written += 1
-                    print(f"wrote {cid}", file=sys.stderr)
+                        pending_results[idx] = None
+                    else:
+                        pending_results[idx] = (
+                            cid,
+                            sid,
+                            response_index,
+                            prompt_messages,
+                            response,
+                        )
+
+                    while next_to_write in pending_results:
+                        result = pending_results.pop(next_to_write)
+                        next_to_write += 1
+                        if result is None:
+                            continue
+                        (
+                            out_cid,
+                            out_sid,
+                            out_response_index,
+                            out_prompt_messages,
+                            out_response,
+                        ) = result
+                        write_record(
+                            out_f,
+                            out_cid,
+                            out_sid,
+                            out_response_index,
+                            out_prompt_messages,
+                            out_response,
+                            args.model,
+                            args.output_schema,
+                        )
+                        num_written += 1
+                        print(f"wrote {out_cid}", file=sys.stderr)
 
         print(
             json.dumps(
