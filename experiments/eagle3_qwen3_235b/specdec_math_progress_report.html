@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:42 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:44 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -441,7 +441,7 @@
         </tr>
         <tr>
           <td>Strict-gate follow-up jobs</td>
-          <td>30B K=2 strict gate job <code>3057073</code> is running without dependency. 235B K=2 strict gate job <code>3057084</code> is running on <code>coreai_dlalgo_llm</code>.</td>
+          <td>30B K=2 strict gate job <code>3057073</code> is running without dependency. 235B K=2 strict gate job <code>3057084</code> failed during Ray/enroot startup before rollout, so retry <code>3057118</code> was submitted from the correct <code>nemo-rl</code> workdir and is pending.</td>
         </tr>
       </tbody>
     </table>
@@ -459,7 +459,7 @@
     </div>
     <div class="status-row">
       <strong>235B NeMo-RL</strong>
-      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> is running with 10 completed generation metrics and remains slightly below baseline. K=2 strict long-tail gate job <code>3057084</code> is now running on <code>coreai_dlalgo_llm</code>.</span>
+      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> is running with 10 completed generation metrics and remains slightly below baseline. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> is pending on <code>coreai_dlalgo_llm</code>.</span>
       <span class="pill warn">debugging</span>
     </div>
     <div class="status-row">
@@ -893,7 +893,7 @@
       <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
       <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
       <div>30B strict long-tail gate run: <code>3057073</code>, K=2, request gate <code>4</code>, token gate <code>1024</code></div>
-      <div>235B strict long-tail gate run: <code>3057084</code>, K=2, request gate <code>4</code>, token gate <code>1024</code>, account <code>coreai_dlalgo_llm</code></div>
+      <div>235B strict long-tail gate run: <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code>, K=2, request gate <code>4</code>, token gate <code>1024</code>, account <code>coreai_dlalgo_llm</code></div>
       <div>30B 100K hidden-state dir: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_100k_seen/hidden_states_layers48_mlen8193_offset50k</code></div>
     </div>
   </section>
