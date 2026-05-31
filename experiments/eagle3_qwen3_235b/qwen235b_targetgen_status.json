@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 11:31 PDT",
+  "updated_at": "2026-05-31 11:51 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -88,12 +88,14 @@
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 146522,
+    "current_rows_observed": 166196,
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
     "active_targetgen_jobs_observed": 90,
-    "note": "Chunks 010-019 and many 020-099 chunks are writing partial rows. Retry chunks 046 and 096 are both writing rows now. Retry chunks 037 and 068 have created non-empty files and are writing rows."
+    "complete_chunk_files_observed_ge5000_rows": 6,
+    "short_nonzero_chunk_files_observed": 94,
+    "note": "Count only includes qwen3_235b_*.jsonl files; the directory also contains qwen3_30ba3b_* files from the completed 30B target-response path and those are intentionally excluded. Chunks 010-019 and many 020-099 chunks are writing partial rows. Retry chunks 046 and 096 are both writing rows now. Retry chunks 037 and 068 have created non-empty files and are writing rows."
   },
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": false,
