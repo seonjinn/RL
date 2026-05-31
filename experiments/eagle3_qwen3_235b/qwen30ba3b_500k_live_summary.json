@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 14:28 PDT",
+  "updated_at": "2026-05-31 14:30 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -863,10 +863,10 @@
     "job_id": "3059620",
     "continuation_job_id": "3059621",
     "state_at_check": "3059620 TIMEOUT after 04:00:28, 3059621 RUNNING continuation",
-    "check_time": "2026-05-31 14:28 PDT",
+    "check_time": "2026-05-31 14:30 PDT",
     "dataset_stage": "offset150K 50K tranche prepared into Speculators dataset",
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_200k_seen/hidden_states_layers48_mlen8193_offset150k",
-    "hidden_state_files_observed": 47481,
+    "hidden_state_files_observed": 48126,
     "hidden_state_files_expected": 50000
   },
   "dataset_contract": {
