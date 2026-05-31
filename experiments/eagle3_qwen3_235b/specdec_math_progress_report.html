@@ -620,6 +620,10 @@
           <td>The runtime patch is applied in both needed places: scheduler lookahead and GPU model-runner draft proposal. The remaining inefficiency is architectural: it is still one SpecDec-enabled vLLM engine with a static gate, so large-batch phases avoid proposal work but still carry drafter memory and SpecDec path overhead. The gate uses the scheduled request/token set, not simply the vLLM log line's total <code>Running</code> request count. Low-risk next code improvements are gate-hit counters, a shared gate predicate to avoid scheduler/model-runner drift, and then a two-engine bulk/tail rollout path if the hybrid threshold does not recover speed.</td>
         </tr>
         <tr>
+          <td>What instrumentation was added?</td>
+          <td>The active remote NeMo-RL checkout now has <code>NRL_SPECDEC_BATCH_GATE_PATCH_V4</code> for draft-proposal gate counters. Future rebuilt vLLM worker environments log <code>NRL SpecDec batch gate: checked=... disabled=... enabled=...</code>. The log cadence is controlled by <code>VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL</code>, now wired through the 30B/235B SpecDec launch scripts and Ray worker env propagation.</td>
+        </tr>
+        <tr>
           <td>How is it enabled?</td>
           <td>Submission scripts pass <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code>, then map <code>SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD</code> and <code>SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD</code> into the vLLM worker env vars.</td>
         </tr>
