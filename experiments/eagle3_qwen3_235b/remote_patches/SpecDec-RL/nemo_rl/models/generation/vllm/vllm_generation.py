@@ -904,8 +904,59 @@ class VllmGeneration(GenerationInterface):
             "num_accepted_tokens": 0,
             "num_accepted_tokens_per_pos": [],
         }
+        spec_decode_gate_totals: dict[str, Any] = {
+            "metrics_available": False,
+            "metrics_partial": False,
+            "num_reporting_workers": 0,
+            "num_expected_workers": len(dp_indices) if spec_decode_enabled else 0,
+            "runner": {"num_reporting_objects": 0},
+            "scheduler": {"num_reporting_objects": 0},
+        }
         spec_decode_seen = False
         spec_decode_reporting_workers = 0
+        spec_decode_gate_seen = False
+        spec_decode_gate_reporting_workers = 0
+
+        def merge_gate_group(dst: dict[str, Any], src: dict[str, Any]) -> None:
+            dst["num_reporting_objects"] = int(
+                dst.get("num_reporting_objects", 0)
+            ) + int(src.get("num_reporting_objects", 0))
+            for key in ("checked", "enabled", "disabled"):
+                if key in src:
+                    dst[key] = int(dst.get(key, 0)) + int(src.get(key, 0))
+            for key, value in src.items():
+                if key in {"num_reporting_objects", "checked", "enabled", "disabled"}:
+                    continue
+                if key.endswith("_observed") and isinstance(value, list):
+                    values = dst.setdefault(key, [])
+                    for item in value:
+                        if item not in values:
+                            values.append(item)
+                    continue
+                observed_key = f"{key}_observed"
+                values = dst.setdefault(observed_key, [])
+                if value not in values:
+                    values.append(value)
+                dst[key] = value
+
+        def finalize_gate_totals() -> None:
+            spec_decode_gate_totals["num_reporting_workers"] = (
+                spec_decode_gate_reporting_workers
+            )
+            spec_decode_gate_totals["num_expected_workers"] = len(dp_indices)
+            spec_decode_gate_totals["metrics_partial"] = (
+                spec_decode_enabled
+                and spec_decode_gate_reporting_workers < len(dp_indices)
+            )
+            spec_decode_gate_totals["metrics_complete"] = not spec_decode_gate_totals[
+                "metrics_partial"
+            ]
+            spec_decode_gate_totals["metrics_available"] = True
+            for group in ("runner", "scheduler"):
+                bucket = spec_decode_gate_totals[group]
+                checked = int(bucket.get("checked", 0))
+                if checked > 0:
+                    bucket["enabled_ratio"] = float(bucket.get("enabled", 0)) / checked
 
         for dp_idx, stats in zip(dp_indices, results):
             if not stats:
@@ -947,6 +998,20 @@ class VllmGeneration(GenerationInterface):
                     current.extend([0] * (len(values) - len(current)))
                 for idx, value in enumerate(values):
                     current[idx] += int(value)
+            spec_decode_gate = stats.get("spec_decode_gate")
+            if spec_decode_gate:
+                if spec_decode_gate.get("metrics_available") is False:
+                    continue
+                spec_decode_gate_seen = True
+                spec_decode_gate_reporting_workers += 1
+                for group in ("runner", "scheduler"):
+                    gate_group = spec_decode_gate.get(group)
+                    if isinstance(gate_group, dict):
+                        merge_gate_group(spec_decode_gate_totals[group], gate_group)
+
+        if spec_decode_gate_seen:
+            finalize_gate_totals()
+            vllm_logger_metrics["spec_decode_gate"] = spec_decode_gate_totals
 
         if spec_decode_enabled and not spec_decode_seen:
             vllm_logger_metrics["spec_decode"] = {

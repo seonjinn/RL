@@ -612,6 +612,64 @@ def print_performance_metrics(
             mean_acceptance_length
         )
 
+    spec_decode_gate_metrics = (
+        vllm_logger_metrics.get("spec_decode_gate", {})
+        if isinstance(vllm_logger_metrics, dict)
+        else {}
+    )
+    if spec_decode_gate_metrics:
+        metrics_available = bool(spec_decode_gate_metrics.get("metrics_available", True))
+        metrics_partial = bool(spec_decode_gate_metrics.get("metrics_partial", False))
+        performance_metrics["spec_decode_gate/metrics_available"] = (
+            1 if metrics_available else 0
+        )
+        performance_metrics["spec_decode_gate/metrics_partial"] = (
+            1 if metrics_partial else 0
+        )
+        performance_metrics["spec_decode_gate/num_reporting_workers"] = int(
+            spec_decode_gate_metrics.get("num_reporting_workers", 0)
+        )
+        performance_metrics["spec_decode_gate/num_expected_workers"] = int(
+            spec_decode_gate_metrics.get("num_expected_workers", 0)
+        )
+        print("  • SpecDec Gate Metrics:")
+        for group in ("scheduler", "runner"):
+            group_metrics = spec_decode_gate_metrics.get(group, {})
+            if not isinstance(group_metrics, dict):
+                continue
+            checked = int(group_metrics.get("checked", 0))
+            enabled = int(group_metrics.get("enabled", 0))
+            disabled = int(group_metrics.get("disabled", 0))
+            enabled_ratio = float(group_metrics.get("enabled_ratio", 0.0))
+            print(
+                f"    - {group}: checked={checked} enabled={enabled} "
+                f"disabled={disabled} enabled_ratio={enabled_ratio:.4f}"
+            )
+            for key in (
+                "num_reporting_objects",
+                "checked",
+                "enabled",
+                "disabled",
+                "enabled_ratio",
+                "request_threshold",
+                "token_threshold",
+                "last_num_requests",
+                "last_num_tokens",
+                "last_disabled",
+                "effective_lookahead_tokens",
+                "adaptive_request_threshold",
+                "adaptive_token_threshold",
+                "adaptive_target_enabled_ratio",
+                "adaptive_last_enabled_ratio",
+                "adaptive_window_checked",
+                "adaptive_window_enabled",
+            ):
+                value = group_metrics.get(key)
+                if isinstance(value, bool):
+                    value = 1 if value else 0
+                if isinstance(value, (int, float)):
+                    performance_metrics[f"spec_decode_gate/{group}/{key}"] = value
+
     is_vllm_metrics_logger_enabled = master_config["policy"]["generation"].get(
         "vllm_cfg", {}
     ).get("enable_vllm_metrics_logger", False) and master_config["policy"][

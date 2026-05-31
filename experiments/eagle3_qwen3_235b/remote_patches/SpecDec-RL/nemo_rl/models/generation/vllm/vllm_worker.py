@@ -217,15 +217,201 @@ class BaseVllmGenerationWorker:
         diff["active"] = diff["num_draft_tokens"] > 0
         return diff
 
+    @staticmethod
+    def _gate_number(value: Any) -> int | float | bool | str | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int | float | str):
+            return value
+        return None
+
+    @staticmethod
+    def _add_gate_sum(bucket: dict[str, Any], key: str, value: Any) -> None:
+        if isinstance(value, bool):
+            value = int(value)
+        if isinstance(value, int | float):
+            bucket[key] = bucket.get(key, 0) + value
+
+    @staticmethod
+    def _add_gate_observed_value(bucket: dict[str, Any], key: str, value: Any) -> None:
+        value = BaseVllmGenerationWorker._gate_number(value)
+        if value is None:
+            return
+        observed_key = f"{key}_observed"
+        values = bucket.setdefault(observed_key, [])
+        if value not in values:
+            values.append(value)
+        bucket[key] = value
+
+    @staticmethod
+    def _diff_vllm_specdec_gate_metrics(
+        current: dict[str, Any], baseline: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not current:
+            return {}
+        diff = copy.deepcopy(current)
+        for group in ("runner", "scheduler"):
+            current_group = current.get(group)
+            if not isinstance(current_group, dict):
+                continue
+            baseline_group = baseline.get(group, {}) if isinstance(baseline, dict) else {}
+            diff_group = diff.setdefault(group, {})
+            for key in ("checked", "enabled", "disabled"):
+                diff_group[key] = max(
+                    0,
+                    int(current_group.get(key, 0))
+                    - int((baseline_group or {}).get(key, 0)),
+                )
+            checked = int(diff_group.get("checked", 0))
+            if checked > 0:
+                diff_group["enabled_ratio"] = (
+                    float(diff_group.get("enabled", 0)) / checked
+                )
+        return diff
+
+    def _iter_vllm_gate_metric_objects(self):
+        """Best-effort walk over local vLLM objects that may own gate counters."""
+        llm = getattr(self, "llm", None)
+        queue: list[Any] = [obj for obj in (self, llm) if obj is not None]
+        seen: set[int] = set()
+        max_objects = 512
+
+        while queue and len(seen) < max_objects:
+            obj = queue.pop(0)
+            obj_id = id(obj)
+            if obj_id in seen:
+                continue
+            seen.add(obj_id)
+            if isinstance(obj, dict):
+                queue.extend(obj.values())
+                continue
+            if isinstance(obj, list | tuple | set):
+                queue.extend(obj)
+                continue
+            try:
+                attrs = vars(obj)
+            except TypeError:
+                continue
+            if any(name.startswith("_nrl_specdec") for name in attrs):
+                yield obj
+
+            module = type(obj).__module__
+            if obj is not self and not module.startswith(("vllm", "nemo_rl")):
+                continue
+            for value in attrs.values():
+                if isinstance(value, int | float | str | bytes | bool | type(None)):
+                    continue
+                queue.append(value)
+
+    def _read_vllm_specdec_gate_metrics(self) -> dict[str, Any]:
+        """Read runtime SpecDec long-tail gate counters, if the patch installed them."""
+        metrics: dict[str, Any] = {
+            "metrics_available": False,
+            "runner": {"num_reporting_objects": 0},
+            "scheduler": {"num_reporting_objects": 0},
+        }
+        runner_sums = {
+            "_nrl_specdec_batch_gate_checked_count": "checked",
+            "_nrl_specdec_batch_gate_enabled_count": "enabled",
+            "_nrl_specdec_batch_gate_disabled_count": "disabled",
+        }
+        runner_values = {
+            "_nrl_specdec_batch_gate_threshold": "request_threshold",
+            "_nrl_specdec_batch_gate_token_threshold": "token_threshold",
+            "_nrl_specdec_batch_gate_last_num_requests": "last_num_requests",
+            "_nrl_specdec_batch_gate_last_num_tokens": "last_num_tokens",
+            "_nrl_specdec_batch_gate_last_disabled": "last_disabled",
+            "_nrl_specdec_adaptive_gate_mode": "adaptive_mode",
+            "_nrl_specdec_adaptive_request_threshold": "adaptive_request_threshold",
+            "_nrl_specdec_adaptive_token_threshold": "adaptive_token_threshold",
+            "_nrl_specdec_adaptive_target_enabled_ratio": "adaptive_target_enabled_ratio",
+            "_nrl_specdec_adaptive_last_enabled_ratio": "adaptive_last_enabled_ratio",
+            "_nrl_specdec_adaptive_window_checked": "adaptive_window_checked",
+            "_nrl_specdec_adaptive_window_enabled": "adaptive_window_enabled",
+        }
+        scheduler_sums = {
+            "_nrl_specdec_scheduler_gate_checked_count": "checked",
+            "_nrl_specdec_scheduler_gate_enabled_count": "enabled",
+            "_nrl_specdec_scheduler_gate_disabled_count": "disabled",
+        }
+        scheduler_values = {
+            "_nrl_specdec_scheduler_gate_threshold": "request_threshold",
+            "_nrl_specdec_scheduler_gate_token_threshold": "token_threshold",
+            "_nrl_specdec_scheduler_gate_last_num_requests": "last_num_requests",
+            "_nrl_specdec_scheduler_gate_last_num_tokens": "last_num_tokens",
+            "_nrl_specdec_scheduler_gate_last_disabled": "last_disabled",
+            "_nrl_specdec_scheduler_gate_effective_lookahead_tokens": "effective_lookahead_tokens",
+            "_nrl_specdec_scheduler_adaptive_mode": "adaptive_mode",
+            "_nrl_specdec_scheduler_adaptive_request_threshold": "adaptive_request_threshold",
+            "_nrl_specdec_scheduler_adaptive_token_threshold": "adaptive_token_threshold",
+            "_nrl_specdec_scheduler_adaptive_target_enabled_ratio": "adaptive_target_enabled_ratio",
+            "_nrl_specdec_scheduler_adaptive_last_enabled_ratio": "adaptive_last_enabled_ratio",
+            "_nrl_specdec_scheduler_adaptive_window_checked": "adaptive_window_checked",
+            "_nrl_specdec_scheduler_adaptive_window_enabled": "adaptive_window_enabled",
+        }
+
+        for obj in self._iter_vllm_gate_metric_objects():
+            attrs = vars(obj)
+            saw_runner = False
+            for attr, key in runner_sums.items():
+                if attr in attrs:
+                    self._add_gate_sum(metrics["runner"], key, attrs[attr])
+                    saw_runner = True
+            for attr, key in runner_values.items():
+                if attr in attrs:
+                    self._add_gate_observed_value(metrics["runner"], key, attrs[attr])
+                    saw_runner = True
+            if saw_runner:
+                metrics["runner"]["num_reporting_objects"] += 1
+
+            saw_scheduler = False
+            for attr, key in scheduler_sums.items():
+                if attr in attrs:
+                    self._add_gate_sum(metrics["scheduler"], key, attrs[attr])
+                    saw_scheduler = True
+            for attr, key in scheduler_values.items():
+                if attr in attrs:
+                    self._add_gate_observed_value(metrics["scheduler"], key, attrs[attr])
+                    saw_scheduler = True
+            if saw_scheduler:
+                metrics["scheduler"]["num_reporting_objects"] += 1
+
+        saw_gate = any(
+            metrics[group].get("num_reporting_objects", 0) > 0
+            for group in ("runner", "scheduler")
+        )
+        if not saw_gate:
+            return {}
+        metrics["metrics_available"] = True
+        for group in ("runner", "scheduler"):
+            bucket = metrics[group]
+            checked = int(bucket.get("checked", 0))
+            if checked > 0:
+                bucket["enabled_ratio"] = float(bucket.get("enabled", 0)) / checked
+        return metrics
+
     def clear_vllm_logger_metrics(self) -> None:
         self._vllm_spec_decode_metrics_baseline = (
             self._read_vllm_spec_decode_metrics()
         )
+        self._vllm_specdec_gate_metrics_baseline = (
+            self._read_vllm_specdec_gate_metrics()
+        )
 
     def get_vllm_logger_metrics(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        gate_current = self._read_vllm_specdec_gate_metrics()
+        if gate_current:
+            gate_baseline = getattr(self, "_vllm_specdec_gate_metrics_baseline", None)
+            result["spec_decode_gate"] = (
+                self._diff_vllm_specdec_gate_metrics(gate_current, gate_baseline)
+                if gate_baseline is not None
+                else gate_current
+            )
         current = self._read_vllm_spec_decode_metrics()
         if not current:
-            return {"spec_decode": {"metrics_available": False}}
+            result["spec_decode"] = {"metrics_available": False}
+            return result
         baseline = getattr(self, "_vllm_spec_decode_metrics_baseline", None)
         spec_decode = (
             self._diff_vllm_spec_decode_metrics(current, baseline)
@@ -233,8 +419,10 @@ class BaseVllmGenerationWorker:
             else current
         )
         if not spec_decode:
-            return {"spec_decode": {"metrics_available": False}}
-        return {"spec_decode": spec_decode}
+            result["spec_decode"] = {"metrics_available": False}
+            return result
+        result["spec_decode"] = spec_decode
+        return result
 
     @staticmethod
     def configure_worker(
@@ -484,6 +672,38 @@ class BaseVllmGenerationWorker:
                         content = content.replace(old_line, additional_env_vars_new)
                         need_replace = True
                         break
+                else:
+                    match = re.search(r"ADDITIONAL_ENV_VARS\s*=\s*\{([^}]*)\}", content)
+                    if match:
+                        existing = {
+                            item[0] or item[1]
+                            for item in re.findall(
+                                r'"([^"]+)"|\'([^\']+)\'', match.group(1)
+                            )
+                        }
+                        merged = []
+                        for name in specdec_runtime_env_vars:
+                            if name not in merged:
+                                merged.append(name)
+                        for name in sorted(existing):
+                            if name and name not in merged:
+                                merged.append(name)
+                        replacement = (
+                            "ADDITIONAL_ENV_VARS = {"
+                            + ", ".join(f'"{name}"' for name in merged)
+                            + "}"
+                        )
+                        content = (
+                            content[: match.start()]
+                            + replacement
+                            + content[match.end() :]
+                        )
+                        need_replace = True
+                    elif spec_decode_requested:
+                        raise RuntimeError(
+                            "Could not patch vLLM ADDITIONAL_ENV_VARS for "
+                            "SpecDec runtime env propagation."
+                        )
 
             if not need_replace:
                 return
@@ -863,6 +1083,19 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
+                            "            specdec_scheduled_tokens = getattr(\n"
+                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
+                            "            )\n"
+                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                            "                specdec_scheduled_tokens, \"__len__\"\n"
+                            "            ):\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    len(specdec_scheduled_tokens) == 0\n"
+                            "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                )\n"
+                            "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
+                            "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
+                            "            self._nrl_specdec_batch_gate_last_disabled = specdec_batch_gate_disabled\n"
                             "            specdec_batch_gate_checked_count = getattr(\n"
                             "                self, \"_nrl_specdec_batch_gate_checked_count\", 0\n"
                             "            ) + 1\n"
@@ -988,6 +1221,19 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
+                            "            specdec_scheduled_tokens = getattr(\n"
+                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
+                            "            )\n"
+                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                            "                specdec_scheduled_tokens, \"__len__\"\n"
+                            "            ):\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    len(specdec_scheduled_tokens) == 0\n"
+                            "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                )\n"
+                            "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
+                            "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
+                            "            self._nrl_specdec_batch_gate_last_disabled = specdec_batch_gate_disabled\n"
                             "            specdec_batch_gate_checked_count = getattr(\n"
                             "                self, \"_nrl_specdec_batch_gate_checked_count\", 0\n"
                             "            ) + 1\n"
@@ -1379,7 +1625,7 @@ class BaseVllmGenerationWorker:
                     "                    \"VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD\",\n"
                     "                    specdec_batch_gate_token_threshold\n"
                     "                    if specdec_batch_gate_token_threshold > 0\n"
-                    "                    else 2048,\n"
+                    "                    else 0,\n"
                     "                )\n"
                     "                if initial_request > 0:\n"
                     "                    initial_request = min(max(initial_request, min_request), max_request)\n"
@@ -1567,7 +1813,7 @@ class BaseVllmGenerationWorker:
                     "                )\n"
                     "                initial_token = _nrl_adaptive_int(\n"
                     "                    \"VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD\",\n"
-                    "                    token_threshold if token_threshold > 0 else 2048,\n"
+                    "                    token_threshold,\n"
                     "                )\n"
                     "                if initial_request > 0:\n"
                     "                    initial_request = min(\n"
@@ -1603,6 +1849,12 @@ class BaseVllmGenerationWorker:
                     "            disabled = (\n"
                     "                (request_threshold > 0 and num_requests > request_threshold)\n"
                     "                or (token_threshold > 0 and num_tokens > token_threshold)\n"
+                    "            )\n"
+                    "            self._nrl_specdec_scheduler_gate_last_num_requests = num_requests\n"
+                    "            self._nrl_specdec_scheduler_gate_last_num_tokens = num_tokens\n"
+                    "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
+                    "            self._nrl_specdec_scheduler_gate_effective_lookahead_tokens = (\n"
+                    "                0 if disabled else self.num_lookahead_tokens\n"
                     "            )\n"
                     "            self._nrl_specdec_scheduler_gate_checked_count = getattr(\n"
                     "                self, \"_nrl_specdec_scheduler_gate_checked_count\", 0\n"
