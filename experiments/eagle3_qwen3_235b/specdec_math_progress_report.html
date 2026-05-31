@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 03:20 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 03:22 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -350,13 +350,13 @@
       </div>
       <div class="card">
         <div class="label">30B mixed baseline</div>
-        <div class="metric info">4172.76</div>
-        <p class="small">tok/s/GPU mean from 17 completed NeMo-RL generation metrics.</p>
+        <div class="metric info">4163.35</div>
+        <p class="small">tok/s/GPU mean from 18 completed NeMo-RL generation metrics.</p>
       </div>
       <div class="card">
         <div class="label">30B 100K training</div>
-        <div class="metric warn">20.2K / 50K</div>
-        <p class="small">Hidden states: 20198 safetensors files, 1.1T. Still extracting.</p>
+        <div class="metric warn">20.7K / 50K</div>
+        <p class="small">Hidden states: 20689 safetensors files, 1.25 TiB. Still extracting.</p>
       </div>
     </div>
 
@@ -379,7 +379,7 @@
         <tr>
           <td>235B K=1 55% acceptance</td>
           <td><span class="pill warn">vLLM internal</span></td>
-          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>64.87 tok/s/GPU</code>, or <code>0.972x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>55.1%</code> across <code>248</code> parsed acceptance metrics.</td>
+          <td>Observed inside running job <code>3055926</code>. Current NeMo-RL mean is <code>65.49 tok/s/GPU</code>, or <code>0.981x</code> versus the <code>66.78</code> baseline. vLLM acceptance mean is <code>54.6%</code> across <code>284</code> parsed acceptance metrics.</td>
         </tr>
         <tr>
           <td>235B baseline 66.78 tok/s/GPU</td>
@@ -436,7 +436,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. All 20 hidden-state shards <code>3056798-3056817</code> are now running; train job <code>3056818</code> waits on them.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. All 20 hidden-state shards <code>3056798-3056817</code> are now running; <code>2942</code> hidden-state files have appeared so far, about <code>0.17 TiB</code>.</span>
       <span class="pill ok">shards running</span>
     </div>
   </section>
@@ -471,7 +471,7 @@
         <h3>What Matters</h3>
         <p>30B already proves SpecDec can help NeMo-RL generation, but the best measured speedup is still about 1.22x, not the target 2x. The next useful comparison is the mixed-math 50K checkpoint in the active baseline/K=1/K=2 chain.</p>
         <div class="mono-list">
-          <div>Baseline active: <code>3056050</code>, current mean <code>4172.76 tok/s/GPU</code> from 17 metrics</div>
+          <div>Baseline active: <code>3056050</code>, current mean <code>4163.35 tok/s/GPU</code> from 18 metrics</div>
           <div>K=1 queued: <code>3056051</code></div>
           <div>K=2 queued: <code>3056052</code></div>
         </div>
@@ -493,14 +493,14 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055364</code>, <code>20198</code> hidden-state files, <code>1.1T</code>.</td>
+          <td>Job <code>3055364</code>, <code>20689</code> hidden-state files, <code>1.25 TiB</code>.</td>
           <td>Finish extraction, then continue training from 50K.</td>
         </tr>
         <tr>
           <td>500K target responses</td>
           <td><span class="pill ok">shards running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, shards <code>3056798-3056817</code> running, train <code>3056818</code> pending dependency.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, shards <code>3056798-3056817</code> running with <code>2942</code> files / <code>0.17 TiB</code> so far, train <code>3056818</code> pending dependency.</td>
         </tr>
       </tbody>
     </table>
@@ -526,8 +526,8 @@
       </div>
       <div class="card">
           <div class="label">K=1 retry</div>
-        <div class="metric warn">64.87</div>
-        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.972x</code> so far.</p>
+        <div class="metric warn">65.49</div>
+        <p class="small">Current mean NeMo-RL tok/s/GPU; speedup is <code>0.981x</code> so far.</p>
       </div>
     </div>
 
@@ -543,8 +543,8 @@
       </thead>
       <tbody>
         <tr><td>Do we have a clean 235B baseline?</td><td>Yes. <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>.</td></tr>
-        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>64.87 tok/s/GPU</code> mean so far, below the <code>66.78</code> baseline.</td></tr>
-        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>55.1%</code> so far across <code>248</code> parsed acceptance metrics. NeMo-RL has <code>7</code> completed generation throughput metrics in the same run.</td></tr>
+        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. K=2 failed before a rollout metric; K=1 is running at <code>65.49 tok/s/GPU</code> mean so far, below the <code>66.78</code> baseline.</td></tr>
+        <tr><td>What is K=1 acceptance?</td><td>vLLM acceptance mean is <code>54.6%</code> so far across <code>284</code> parsed acceptance metrics. NeMo-RL has <code>8</code> completed generation throughput metrics in the same run.</td></tr>
         <tr><td>Is the drafter attached?</td><td>Yes. The K=2 log shows <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and vLLM SpecDec metrics.</td></tr>
         <tr><td>Next debug</td><td>Wait for K=1. If it also times out, use a stricter token/request gate or disable compiled DAG only for the failing SpecDec path.</td></tr>
       </tbody>
@@ -771,8 +771,8 @@
       </div>
       <div class="bar-row">
         <span>30B 100K HS</span>
-        <div class="bar-track"><div class="bar-fill" style="--w:40%;--c:var(--amber)"></div></div>
-        <strong>40%</strong>
+        <div class="bar-track"><div class="bar-fill" style="--w:41%;--c:var(--amber)"></div></div>
+        <strong>41%</strong>
       </div>
       <div class="bar-row">
         <span>235B responses</span>
