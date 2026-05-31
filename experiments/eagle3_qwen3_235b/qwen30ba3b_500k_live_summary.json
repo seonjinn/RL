@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 13:10 PDT",
+  "updated_at": "2026-05-31 13:31 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -858,6 +858,17 @@
       "latest_gate_counter": "checked=32000 disabled=31560 enabled=440 last_disabled=True requests=84 tokens=84 request_threshold=32 token_threshold=0"
     }
   ],
+  "learning_curve_followup": {
+    "purpose": "Secondary 30B learning-curve checkpoint after 100K/150K continuations; the clean 500K checkpoint remains the primary reported result.",
+    "job_id": "3059620",
+    "continuation_job_id": "3059621",
+    "state_at_check": "3059620 RUNNING, 3059621 PENDING on dependency",
+    "check_time": "2026-05-31 13:31 PDT",
+    "dataset_stage": "offset150K 50K tranche prepared into Speculators dataset",
+    "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_200k_seen/hidden_states_layers48_mlen8193_offset150k",
+    "hidden_state_files_observed": 38027,
+    "hidden_state_files_expected": 50000
+  },
   "dataset_contract": {
     "clean_run": "Qwen3-30B-A3B Speculators Eagle3 500K",
     "training_data": {

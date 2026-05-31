@@ -381,7 +381,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 13:22 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 13:31 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -705,7 +705,7 @@
     </div>
     <div class="status-row">
       <strong>30B training</strong>
-      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto continuation job <code>3059620</code> has prepared the offset150K 50K dataset and is dumping hidden states, with <code>36,984/50,000</code> files observed at the 13:24 PT check. The clean 500K result remains the primary reported path.</span>
+      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto continuation job <code>3059620</code> has prepared the offset150K 50K dataset and is dumping hidden states, with <code>38,027/50,000</code> files observed at the 13:31 PT check. The clean 500K result remains the primary reported path.</span>
       <span class="pill ok">done</span>
     </div>
     <div class="status-row">
@@ -847,7 +847,7 @@
         <tr>
           <td>Mixed 100K continuation</td>
           <td><span class="pill warn">running</span></td>
-          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto continuation job <code>3059620</code> is currently running hidden-state dump for the next 50K tranche, with <code>36,984/50,000</code> files observed; continuation job <code>3059621</code> is pending on dependency.</td>
+          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto continuation job <code>3059620</code> is currently running hidden-state dump for the next 50K tranche, with <code>38,027/50,000</code> files observed; continuation job <code>3059621</code> is pending on dependency.</td>
           <td>Use only as secondary learning-curve evidence. Main 500K path supersedes this smaller continuation for final evaluation.</td>
         </tr>
         <tr>
@@ -907,7 +907,7 @@
     <h2>235B In-House Drafter Corpus</h2>
     <div class="banner">
       <h2>Current Data Status</h2>
-      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is now being expanded from the same mixed non-OpenMath prompt pool used by the clean 30B run. Completed/partial <code>qwen3_235b_*.jsonl</code> chunk files currently hold <code>261,012</code> rows. All <code>100</code> 235B chunk files now exist and are nonzero, with <code>6</code> files at or above <code>5000</code> rows. Continuation jobs <code>3060971-3061060</code> are queued after the current chunk jobs to finish chunks <code>010-099</code>, and short repair jobs <code>3061066-3061069</code> cover chunks <code>005-008</code>. After the 500K corpus is complete it still needs final merge, OpenMath denylist filtering, and prompt-overlap validation before training a clean 500K 235B drafter.</p>
+      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is now being expanded from the same mixed non-OpenMath prompt pool used by the clean 30B run. Completed/partial <code>qwen3_235b_*.jsonl</code> chunk files currently hold <code>269,791</code> rows. All <code>100</code> 235B chunk files now exist and are nonzero, with <code>6</code> files at or above <code>5000</code> rows. Continuation jobs <code>3060971-3060980</code> are now running for chunks <code>010-019</code>; continuation jobs <code>3060981-3061060</code> are still queued after the remaining chunk jobs to finish chunks <code>020-099</code>. Short repair jobs <code>3061066-3061069</code> cover chunks <code>005-008</code>. After the 500K corpus is complete it still needs final merge, OpenMath denylist filtering, and prompt-overlap validation before training a clean 500K 235B drafter.</p>
     </div>
     <table>
       <thead>
@@ -916,7 +916,7 @@
       <tbody>
         <tr>
           <td>Existing 235B target responses</td>
-          <td><span class="pill warn">261,012 rows</span></td>
+          <td><span class="pill warn">269,791 rows</span></td>
           <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_target_chunks/qwen3_235b_*.jsonl</code>, generated from mixed non-OpenMath prompts with <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>. This count excludes the completed <code>qwen3_30ba3b_*.jsonl</code> files in the same directory. All <code>100</code> 235B chunk files are nonzero, and most are still partial.</td>
         </tr>
         <tr>
@@ -932,7 +932,7 @@
         <tr>
           <td>Remaining 400K tranche</td>
           <td><span class="pill info">queued/running</span></td>
-          <td>Chunk jobs <code>3059353-3059432</code> generate chunks <code>020-099</code>. At the 13:22 PT check, the 235B target-response files contain <code>261,012</code> rows. Startup-failed chunks <code>046</code> and <code>096</code> were resubmitted as jobs <code>3059476</code> and <code>3059477</code>; chunks <code>037</code> and <code>068</code> were resubmitted as jobs <code>3059839</code> and <code>3059838</code>. Continuation jobs <code>3060971-3061060</code> are now queued with per-chunk <code>afterany</code> dependencies, and short repair jobs <code>3061066-3061069</code> cover chunks <code>005-008</code>.</td>
+          <td>Chunk jobs <code>3059353-3059432</code> generate chunks <code>020-099</code>. At the 13:31 PT check, the 235B target-response files contain <code>269,791</code> rows. Startup-failed chunks <code>046</code> and <code>096</code> were resubmitted as jobs <code>3059476</code> and <code>3059477</code>; chunks <code>037</code> and <code>068</code> were resubmitted as jobs <code>3059839</code> and <code>3059838</code>. Continuation jobs <code>3060971-3060980</code> are now running for chunks <code>010-019</code>, while <code>3060981-3061060</code> remain queued with per-chunk <code>afterany</code> dependencies. Short repair jobs <code>3061066-3061069</code> cover chunks <code>005-008</code>.</td>
         </tr>
         <tr>
           <td>Clean 235B training claim</td>
@@ -1062,7 +1062,7 @@
         </tr>
         <tr>
           <td>Qwen3-235B in-house path</td>
-          <td>Target-response generation is active on the same mixed non-OpenMath prompt pool. Current observed 235B rows are <code>261,012</code> across <code>100</code> chunk files, all nonzero. Continuation jobs <code>3060971-3061060</code> and short repair jobs <code>3061066-3061069</code> are submitted.</td>
+          <td>Target-response generation is active on the same mixed non-OpenMath prompt pool. Current observed 235B rows are <code>269,791</code> across <code>100</code> chunk files, all nonzero. Continuation jobs <code>3060971-3060980</code> are running; <code>3060981-3061060</code> and short repair jobs <code>3061066-3061069</code> are submitted.</td>
           <td>OpenMath NeMo-RL rollout source for baseline and SpecDec throughput comparisons.</td>
           <td><span class="pill info">pending</span> Needs the same prompt-level denylist validation before making a clean train/test split claim.</td>
         </tr>
@@ -1076,7 +1076,7 @@
       </div>
       <div class="step">
         <div class="step-title">2. Target responses</div>
-        <p>30B target responses are complete for the 500K path. 235B responses are separate: <code>261,012</code> 235B rows are currently observed. Jobs <code>3059130-3059133</code>, <code>3059139-3059151</code>, and <code>3059353-3059432</code> cover chunks <code>005-099</code>; retry jobs <code>3059839</code> and <code>3059838</code> created nonzero chunk files <code>037</code> and <code>068</code>. Continuation jobs <code>3060971-3061060</code> and short repair jobs <code>3061066-3061069</code> are now submitted to finish the exact <code>500K</code> target.</p>
+        <p>30B target responses are complete for the 500K path. 235B responses are separate: <code>269,791</code> 235B rows are currently observed. Jobs <code>3059130-3059133</code>, <code>3059139-3059151</code>, and <code>3059353-3059432</code> cover chunks <code>005-099</code>; retry jobs <code>3059839</code> and <code>3059838</code> created nonzero chunk files <code>037</code> and <code>068</code>. Continuation jobs <code>3060971-3060980</code> are now running for chunks <code>010-019</code>, <code>3060981-3061060</code> remain queued for chunks <code>020-099</code>, and short repair jobs <code>3061066-3061069</code> are submitted to finish the exact <code>500K</code> target.</p>
       </div>
       <div class="step">
         <div class="step-title">3. Speculators format</div>
