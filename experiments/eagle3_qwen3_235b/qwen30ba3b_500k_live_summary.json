@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:54 PDT",
+  "updated_at": "2026-05-31 08:57 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -10,8 +10,8 @@
     {
       "job_id": "3058167",
       "num_speculative_tokens": 1,
-      "latest_step_seen": 17,
-      "completed_generation_metrics": 16,
+      "latest_step_seen": 18,
+      "completed_generation_metrics": 17,
       "generated_tokens_sec_gpu_values": [
         5752.28,
         5282.92,
@@ -28,10 +28,11 @@
         5730.43,
         5921.38,
         5503.31,
-        5302.43
+        5302.43,
+        5421.18
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5619.45,
-      "speedup_vs_baseline_mean_so_far": 1.3479,
+      "generated_tokens_sec_gpu_mean_so_far": 5607.78,
+      "speedup_vs_baseline_mean_so_far": 1.3451,
       "acceptance_rate_values": [
         0.5791,
         0.571,
@@ -48,10 +49,11 @@
         0.5779,
         0.5814,
         0.5773,
-        0.5756
+        0.5756,
+        0.5812
       ],
-      "acceptance_rate_mean_so_far": 0.5763,
-      "acceptance_rate_latest_summary": 0.5756,
+      "acceptance_rate_mean_so_far": 0.5766,
+      "acceptance_rate_latest_summary": 0.5812,
       "total_step_seconds": [
         254.2,
         216.66,
@@ -68,8 +70,13 @@
         218.81,
         221.82,
         207.86,
-        210.42
-      ]
+        210.42,
+        215.7
+      ],
+      "per_position_acceptance_latest_summary": [
+        0.5812
+      ],
+      "total_step_seconds_mean_so_far": 216.06
     },
     {
       "job_id": "3058168",
@@ -91,10 +98,11 @@
         5258.92,
         4923.88,
         5198.17,
-        5036.23
+        5036.23,
+        4957.38
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5051.02,
-      "speedup_vs_baseline_mean_so_far": 1.2115,
+      "generated_tokens_sec_gpu_mean_so_far": 5045.16,
+      "speedup_vs_baseline_mean_so_far": 1.2101,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -110,13 +118,14 @@
         0.4341,
         0.424,
         0.4283,
-        0.4227
+        0.4227,
+        0.4217
       ],
       "acceptance_rate_mean_so_far": 0.4223,
-      "acceptance_rate_latest_summary": 0.4227,
+      "acceptance_rate_latest_summary": 0.4217,
       "per_position_acceptance_latest_summary": [
-        0.5593,
-        0.2861
+        0.5586,
+        0.2848
       ],
       "total_step_seconds": [
         262.51,
@@ -133,14 +142,16 @@
         222.24,
         230.28,
         229.65,
-        215.21
-      ]
+        215.21,
+        217.59
+      ],
+      "total_step_seconds_mean_so_far": 223.43
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 16,
-      "completed_generation_metrics": 15,
+      "latest_step_seen": 17,
+      "completed_generation_metrics": 16,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -203,7 +214,8 @@
         229.67,
         214.29,
         212.7
-      ]
+      ],
+      "total_step_seconds_mean_so_far": 221.89
     }
   ],
   "long_tail_gate_followups": [
@@ -214,7 +226,7 @@
       "state": "RUNNING",
       "completed_generation_metrics": 0,
       "latest_step_seen": null,
-      "note": "Driver log exists and vLLM workers are loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
+      "note": "Driver log exists and vLLM workers are still initializing/loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
     },
     {
       "job_id": "3058762",
@@ -223,7 +235,7 @@
       "state": "RUNNING",
       "completed_generation_metrics": 0,
       "latest_step_seen": null,
-      "note": "Driver log exists and vLLM workers are loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
+      "note": "Driver log exists and vLLM workers are still initializing/loading model shards, but there is no rollout step marker or generated tok/s/GPU metric yet."
     }
   ],
   "dataset_contract": {

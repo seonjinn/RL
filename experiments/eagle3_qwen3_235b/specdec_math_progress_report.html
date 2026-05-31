@@ -342,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 08:54 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 08:57 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -387,7 +387,7 @@
 
     <div class="banner">
       <h2>Current Read</h2>
-      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> completed successfully after the full <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; last 20 train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is being evaluated in NeMo-RL: K=1 job <code>3058167</code>, K=2 job <code>3058168</code>, and K=3 job <code>3058169</code> are running with token gate <code>4096</code>. As of <code>2026-05-31 08:54 PT</code>, K=1 and K=3 reached Step 17 with sixteen completed generation metrics, while K=2 reached Step 16 with fifteen completed metrics. Current means: K=1 is <code>5619.45 tok/s/GPU</code> with <code>57.63%</code> mean acceptance, K=2 is <code>5051.02 tok/s/GPU</code> with <code>42.23%</code>, and K=3 is <code>4940.26 tok/s/GPU</code> with <code>31.96%</code>. Existing 30B K=1 50K-drafter run completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
+      <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> completed successfully after the full <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; last 20 train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is being evaluated in NeMo-RL: K=1 job <code>3058167</code>, K=2 job <code>3058168</code>, and K=3 job <code>3058169</code> are running with token gate <code>4096</code>. As of <code>2026-05-31 08:57 PT</code>, K=1 reached Step 18 with seventeen completed generation metrics, while K=2 and K=3 reached Step 17 with sixteen completed metrics each. Current means: K=1 is <code>5607.78 tok/s/GPU</code> with <code>57.66%</code> mean acceptance, K=2 is <code>5045.16 tok/s/GPU</code> with <code>42.23%</code>, and K=3 is <code>4940.26 tok/s/GPU</code> with <code>31.96%</code>. Existing 30B K=1 50K-drafter run completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
     </div>
 
     <h2>500K Eval Snapshot</h2>
@@ -400,20 +400,20 @@
         <tr>
           <td>K=1</td>
           <td><code>3058167</code></td>
-          <td><code>16/20</code></td>
-          <td><code>5619.45</code></td>
+          <td><code>17/20</code></td>
+          <td><code>5607.78</code></td>
           <td><code>1.35x</code></td>
-          <td><code>57.63%</code></td>
-          <td><code>216.09s</code></td>
+          <td><code>57.66%</code></td>
+          <td><code>216.06s</code></td>
         </tr>
         <tr>
           <td>K=2</td>
           <td><code>3058168</code></td>
-          <td><code>15/20</code></td>
-          <td><code>5051.02</code></td>
+          <td><code>16/20</code></td>
+          <td><code>5045.16</code></td>
           <td><code>1.21x</code></td>
           <td><code>42.23%</code></td>
-          <td><code>223.81s</code></td>
+          <td><code>223.43s</code></td>
         </tr>
         <tr>
           <td>K=3</td>
@@ -625,7 +625,7 @@
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
-          <td>The active 500K K=1/2/3 jobs use token gate <code>4096</code>. To test a stricter long-tail-only policy, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted without dependency at <code>2026-05-31 08:29 PT</code>. Both are running as of <code>08:54 PT</code>; logs show vLLM worker initialization and model shard loading, but no rollout metric yet.</td>
+          <td>The active 500K K=1/2/3 jobs use token gate <code>4096</code>. To test a stricter long-tail-only policy, K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> were submitted without dependency at <code>2026-05-31 08:29 PT</code>. Both are running as of <code>08:57 PT</code>; logs show vLLM worker initialization and model shard loading, but no rollout metric yet.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
@@ -660,7 +660,7 @@
     </div>
     <div class="status-row">
       <strong>500K scaling</strong>
-      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed. K=1/2/3 NeMo-RL evaluations are running as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. Live snapshot: K=1 has <code>16</code> metrics at <code>5619.45 tok/s/GPU</code> and <code>57.63%</code> acceptance; K=2 has <code>15</code> metrics at <code>5051.02</code> and <code>42.23%</code>; K=3 has <code>16</code> metrics at <code>4940.26</code> and <code>31.96%</code>. Full 20-step means are still pending. Follow-up stricter K=1 token-gate jobs <code>3058759</code> (<code>2048</code>) and <code>3058762</code> (<code>1024</code>) are running and loading vLLM model shards but have no rollout metric yet.</span>
+      <span>Exact unique 500K JSONL is verified at 500000 rows. Prepare job <code>3056797</code> completed validation, conversion, tokenization map, and token frequency counting. Hidden-state shards <code>3056798-3056817</code> completed with exactly <code>500000</code> files. Train job <code>3056818</code> completed. K=1/2/3 NeMo-RL evaluations are running as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. Live snapshot: K=1 has <code>17</code> metrics at <code>5607.78 tok/s/GPU</code> and <code>57.66%</code> acceptance; K=2 has <code>16</code> metrics at <code>5045.16</code> and <code>42.23%</code>; K=3 has <code>16</code> metrics at <code>4940.26</code> and <code>31.96%</code>. Full 20-step means are still pending. Follow-up stricter K=1 token-gate jobs <code>3058759</code> (<code>2048</code>) and <code>3058762</code> (<code>1024</code>) are running and loading vLLM model shards but have no rollout metric yet.</span>
       <span class="pill warn">live eval</span>
     </div>
   </section>
@@ -709,7 +709,7 @@
           <div>K=1 token-gate4096 complete: <code>3056051</code>, mean <code>5500.27 tok/s/GPU</code> from 20 metrics, speedup <code>1.32x</code>, acceptance <code>52.5%</code></div>
           <div>K=2 strict gate complete: <code>3057073</code>, request gate <code>4</code>, token gate <code>1024</code>, mean <code>4328.88 tok/s/GPU</code> from 20 metrics, speedup <code>1.04x</code>, acceptance <code>28.0%</code></div>
           <div>K=2 token-gate4096 complete: <code>3056052</code>, 20/20 metrics, mean <code>4849.05 tok/s/GPU</code>, speedup <code>1.16x</code>, step-level acceptance <code>38.1%</code>, aggregate acceptance median <code>50%</code></div>
-          <div>500K K=1/K=2/K=3 live jobs: <code>3058167</code>/<code>3058168</code>/<code>3058169</code>, n=<code>16</code>/<code>15</code>/<code>16</code> generated tok/s/GPU means <code>5619.45</code>/<code>5051.02</code>/<code>4940.26</code>, acceptance means <code>57.63%</code>/<code>42.23%</code>/<code>31.96%</code></div>
+          <div>500K K=1/K=2/K=3 live jobs: <code>3058167</code>/<code>3058168</code>/<code>3058169</code>, n=<code>17</code>/<code>16</code>/<code>16</code> generated tok/s/GPU means <code>5607.78</code>/<code>5045.16</code>/<code>4940.26</code>, acceptance means <code>57.66%</code>/<code>42.23%</code>/<code>31.96%</code></div>
         </div>
       </div>
     </div>
@@ -736,7 +736,7 @@
           <td>500K target responses</td>
           <td><span class="pill ok">eval running</span></td>
           <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
-          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs are <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. As of <code>08:54 PT</code>, K=1/K=3 have <code>16</code> rollout metrics and reached Step 17; K=2 has <code>15</code> metrics and reached Step 16. Full 20-step results are pending. Stricter long-tail K=1 follow-ups are running as <code>3058759</code> with token gate <code>2048</code> and <code>3058762</code> with token gate <code>1024</code>; they are loading vLLM model shards and have no rollout metric yet. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs are <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. As of <code>08:57 PT</code>, K=1 has <code>17</code> rollout metrics and reached Step 18; K=2/K=3 have <code>16</code> metrics and reached Step 17. Full 20-step results are pending. Stricter long-tail K=1 follow-ups are running as <code>3058759</code> with token gate <code>2048</code> and <code>3058762</code> with token gate <code>1024</code>; they are loading vLLM model shards and have no rollout metric yet. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
         </tr>
       </tbody>
     </table>
@@ -1194,7 +1194,7 @@
       <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
       <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
       <div>30B 500K live summary: <code>experiments/eagle3_qwen3_235b/qwen30ba3b_500k_live_summary.json</code></div>
-      <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code>. Current n=<code>16</code>/<code>15</code>/<code>16</code> generated tok/s/GPU means: <code>5619.45</code>, <code>5051.02</code>, <code>4940.26</code>.</div>
+      <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code>. Current n=<code>17</code>/<code>16</code>/<code>16</code> generated tok/s/GPU means: <code>5607.78</code>, <code>5045.16</code>, <code>4940.26</code>.</div>
       <div>30B 500K stricter long-tail eval jobs: K=1 token gate <code>2048</code> job <code>3058759</code>, K=1 token gate <code>1024</code> job <code>3058762</code>. Submit summaries: <code>latest_qwen30ba3b_500k_specdec_k1_tok2048_jobs.txt</code> and <code>latest_qwen30ba3b_500k_specdec_k1_tok1024_jobs.txt</code>.</div>
       <div>30B K=2 live summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/qwen30ba3b_mixed50k_k2_gate4096_3056052_live_summary.json</code></div>
       <div>30B strict long-tail gate run: <code>3057073</code>, K=2, request gate <code>4</code>, token gate <code>1024</code></div>
