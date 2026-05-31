@@ -317,7 +317,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 06:41 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 06:41 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -331,7 +331,7 @@
     <button class="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button class="tab" data-tab="q30">Qwen3-30B-A3B</button>
     <button class="tab" data-tab="q235">Qwen3-235B</button>
-    <button class="tab" data-tab="data">Data & Training</button>
+    <button class="tab" data-tab="data">Dataset & Training</button>
     <button class="tab" data-tab="parallel">500K Parallel Plan</button>
     <button class="tab" data-tab="links">Artifacts</button>
   </nav>
@@ -365,22 +365,32 @@
       <p>30B is the healthy path right now: OpenMath SpecDec already showed real NeMo-RL rollout speedup, mixed-math baseline completed its 20 generation metrics, and the clean 500K hidden-state cache is complete. The 500K Speculators Eagle3 train job <code>3056818</code> is running from the 50K checkpoint and has reached at least <code>global_step=49705</code>. The last 20 observed loss samples have mean <code>7.42</code> and range <code>6.23-9.09</code>. A dependency wrapper, job <code>3057798</code>, is queued to submit 500K-drafter K=1/2/3 NeMo-RL evaluations after training finishes. 30B K=1 completed 20/20 NeMo-RL generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the mixed baseline, with vLLM acceptance at <code>52.5%</code>. 30B K=2 token-gate4096 job <code>3056052</code> is now running Step 13; the first 12 completed metrics average <code>4887.39 tok/s/GPU</code>, or <code>1.17x</code>, with step-level acceptance <code>38.1%</code> and vLLM/aggregate acceptance median <code>50%</code>. 235B K=1 completed 20/20 steps with mean <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus baseline; 235B K=2 stalled before any rollout throughput metric.</p>
     </div>
 
-    <h2>Dataset / Overlap At A Glance</h2>
-    <div class="grid two">
+    <h2>Dataset And Leakage Summary</h2>
+    <div class="grid">
       <div class="card">
-        <div class="label">Drafter training corpus</div>
+        <div class="label">Clean drafter training</div>
         <div class="metric ok">500K</div>
         <p class="small">Exact-unique non-OpenMath math conversations for the clean Qwen3-30B-A3B Speculators Eagle3 run.</p>
       </div>
       <div class="card">
-        <div class="label">NeMo-RL test corpus</div>
+        <div class="label">NeMo-RL test set</div>
         <div class="metric info">OpenMath 50K</div>
         <p class="small"><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, with 44304 unique normalized prompts.</p>
+      </div>
+      <div class="card">
+        <div class="label">Direct prompt overlap</div>
+        <div class="metric ok">0</div>
+        <p class="small">OpenMath eval prompts are denylisted before the 500K training file is written.</p>
+      </div>
+      <div class="card">
+        <div class="label">Clean claim boundary</div>
+        <div class="metric warn">split</div>
+        <p class="small">Mixed non-OpenMath training, evaluated on OpenMath NeMo-RL rollouts.</p>
       </div>
     </div>
     <div class="banner">
       <h2>Train/Test Answer</h2>
-      <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations from NuminaMath, OpenThoughts, math-deepscaler, and DAPO. <strong>NeMo-RL test data:</strong> baseline and SpecDec rollout measurements use <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are denylisted before the 500K training file is written, and final validation shows <code>denylisted_prompts=0</code> inside the training file. This means the clean result is mixed-math training evaluated on OpenMath, not OpenMath-on-OpenMath.</p>
+      <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>. <strong>NeMo-RL test data:</strong> baseline, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are used as a denylist during 500K construction; final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>. This means the clean result is mixed-math training evaluated on OpenMath, not OpenMath-on-OpenMath.</p>
     </div>
     <table>
       <thead>
@@ -406,41 +416,6 @@
           <td>Overlap result</td>
           <td>Final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>.</td>
           <td><span class="pill ok">0 direct overlap</span> This is normalized prompt-level overlap, not a semantic near-duplicate guarantee.</td>
-        </tr>
-      </tbody>
-    </table>
-
-    <h2>Dataset Accountability</h2>
-    <p class="small">The clean claim is not based on training and testing on the same OpenMath file. For the clean 30B Speculators path, training data is mixed non-OpenMath math, while NeMo-RL evaluation uses OpenMath and is denylisted from training.</p>
-    <table>
-      <thead>
-        <tr><th>Item</th><th>Current Contract</th><th>Why It Matters</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Clean drafter training data</td>
-          <td><code>500000</code> exact-unique non-OpenMath math conversations for the Qwen3-30B-A3B Speculators Eagle3 path: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>.</td>
-          <td>OpenMath is not used to train this 500K drafter. Target responses are generated by <code>Qwen/Qwen3-30B-A3B</code>, then converted to Speculators Eagle3 data.</td>
-        </tr>
-        <tr>
-          <td>Actual NeMo-RL test set</td>
-          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>: <code>50000</code> rows, <code>44304</code> unique normalized prompts.</td>
-          <td>Baseline, SpecDec acceptance, and NeMo-RL generation tok/s/GPU are measured on this OpenMath rollout source.</td>
-        </tr>
-        <tr>
-          <td>Train/test overlap</td>
-          <td><code>0</code> normalized prompt overlaps. The OpenMath eval prompts are denylisted before writing the final 500K training file.</td>
-          <td>This prevents direct prompt leakage. It does not claim semantic near-duplicates are impossible across math datasets.</td>
-        </tr>
-        <tr>
-          <td>Clean claim boundary</td>
-          <td>Report clean results as <strong>mixed non-OpenMath training</strong> evaluated on <strong>OpenMath NeMo-RL rollout</strong>.</td>
-          <td>The older OpenMath-trained 30B result is kept as an integration proof, not the leakage-clean final comparison.</td>
-        </tr>
-        <tr>
-          <td>Public HF checkpoint boundary</td>
-          <td>Public Eagle3 checkpoints are evaluated separately because their training sample provenance is external to this repo.</td>
-          <td>They can be useful baselines, but they are not counted as our 500K Speculators training result.</td>
         </tr>
       </tbody>
     </table>
@@ -718,27 +693,6 @@
       </tbody>
     </table>
 
-    <h2>Dataset Verdict</h2>
-    <table>
-      <thead>
-        <tr><th>Question</th><th>Answer In This Report</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>How is the training dataset composed?</td>
-          <td><code>500000</code> exact-unique non-OpenMath conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>. Target answers are generated by <code>Qwen/Qwen3-30B-A3B</code>, then converted into Speculators Eagle3 training rows.</td>
-        </tr>
-        <tr>
-          <td>What is the actual NeMo-RL test set?</td>
-          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, with <code>50000</code> rollout rows and <code>44304</code> unique normalized prompts. This is the source used for NeMo-RL baseline throughput, SpecDec throughput, and acceptance measurements.</td>
-        </tr>
-        <tr>
-          <td>Does training overlap the NeMo-RL test set?</td>
-          <td><span class="pill ok">No direct prompt overlap</span> The OpenMath eval prompts are denylisted during 500K construction. Final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>. This is a normalized prompt-level check, not a semantic near-duplicate proof.</td>
-        </tr>
-      </tbody>
-    </table>
-
     <h2>Exact Files Used</h2>
     <table>
       <thead>
@@ -801,33 +755,6 @@
       </tbody>
     </table>
 
-    <h2>Experiment Dataset Map</h2>
-    <table>
-      <thead>
-        <tr><th>Experiment</th><th>Training Samples</th><th>NeMo-RL Test Samples</th><th>Overlap Policy</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Clean Speculators Eagle3 500K</td>
-          <td><code>500000</code> exact-unique non-OpenMath conversations. Mix: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts <code>60K</code>, math-deepscaler <code>25K</code>, DAPO-Math <code>15K</code>.</td>
-          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, <code>50000</code> rows, <code>44304</code> unique normalized prompts.</td>
-          <td>OpenMath eval prompts are loaded as a denylist before training rows are written. Final validation reports <code>denylisted_prompts=0</code> and <code>duplicate_prompts=0</code>.</td>
-        </tr>
-        <tr>
-          <td>Older 30B OpenMath integration proof</td>
-          <td>OpenMath-trained 50K drafter path used earlier to prove NeMo-RL SpecDec integration.</td>
-          <td>OpenMath rollout source.</td>
-          <td>Not used as the clean final claim because train/eval domain and source are too close. Kept only as an integration and plumbing reference.</td>
-        </tr>
-        <tr>
-          <td>Public HF Eagle3 checks</td>
-          <td>External checkpoint training data is not controlled by this repo.</td>
-          <td>Same OpenMath NeMo-RL rollout source when evaluated here.</td>
-          <td>Reported separately from our Speculators-trained drafter because training sample provenance is different.</td>
-        </tr>
-      </tbody>
-    </table>
-
     <div class="flow">
       <div class="step">
         <div class="step-title">1. Prompt pool</div>
@@ -850,39 +777,6 @@
         <p>Train the Eagle3 drafter, then measure NeMo-RL acceptance and generation tok/s/GPU on the OpenMath eval file.</p>
       </div>
     </div>
-
-    <h2>Train/Test Split Summary</h2>
-    <table>
-      <thead>
-        <tr><th>Question</th><th>Current Answer</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>What is the current drafter training data?</td>
-          <td>For the clean 30B path, the training pool is mixed non-OpenMath math: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k. Target responses are synthesized with <code>Qwen/Qwen3-30B-A3B</code>, then converted to Speculators Eagle3 training data.</td>
-        </tr>
-        <tr>
-          <td>What is the actual NeMo-RL test set?</td>
-          <td>NeMo-RL rollout throughput and acceptance tests use <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. It contains <code>50000</code> rows and <code>44304</code> unique normalized prompts. This file is the evaluation/test prompt source for the baseline and SpecDec NeMo-RL runs.</td>
-        </tr>
-        <tr>
-          <td>Does the mixed 500K training set overlap the NeMo-RL test set?</td>
-          <td>No exact prompt-level overlap in the current exact-unique build. The OpenMath NeMo-RL evaluation prompts are loaded as a denylist before writing training rows. The denylist size is <code>44304</code>, and the final merge/validation path reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code> for the final training file.</td>
-        </tr>
-        <tr>
-          <td>Which result has an OpenMath caveat?</td>
-          <td>The older 30B OpenMath-trained SpecDec result, <code>1.17x-1.22x</code>, is useful as an integration proof, but it is not the leakage-clean final claim. The clean comparison is mixed non-OpenMath training evaluated on OpenMath NeMo-RL prompts.</td>
-        </tr>
-        <tr>
-          <td>What is not mixed into the 500K clean set?</td>
-          <td>The OpenMath NeMo-RL evaluation file is not used as a training source. Public HF Eagle3 checkpoints are also separate evaluation inputs, not part of this Speculators 500K training corpus.</td>
-        </tr>
-        <tr>
-          <td>What is the unit of uniqueness?</td>
-          <td>User prompts are normalized by lowercasing and collapsing whitespace, then used as the uniqueness and denylist key. Assistant responses are target-model generations and are not used to decide train/test overlap.</td>
-        </tr>
-      </tbody>
-    </table>
 
     <h2>Dataset Split And Overlap</h2>
     <table>
@@ -963,7 +857,36 @@
       </tbody>
     </table>
 
-    <h2>500K Training Mix</h2>
+    <h2>500K Source Mix</h2>
+    <div class="bars">
+      <div class="bar-row">
+        <span>Numina 1.5</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:60%;--c:var(--blue)"></div></div>
+        <strong>300K</strong>
+      </div>
+      <div class="bar-row">
+        <span>Numina CoT</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:20%;--c:var(--green)"></div></div>
+        <strong>100K</strong>
+      </div>
+      <div class="bar-row">
+        <span>OpenThoughts</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:12%;--c:var(--amber)"></div></div>
+        <strong>60K</strong>
+      </div>
+      <div class="bar-row">
+        <span>DeepScaleR</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:5%;--c:var(--purple)"></div></div>
+        <strong>25K</strong>
+      </div>
+      <div class="bar-row">
+        <span>DAPO math</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:3%;--c:var(--red)"></div></div>
+        <strong>15K</strong>
+      </div>
+    </div>
+
+    <h2>500K Source Mix Table</h2>
     <p class="small">Rows below are the requested source mix before duplicate replacement. The final exact-unique file keeps this mix as closely as possible, skips 59 duplicate primary prompts, and appends 59 fresh DAPO replacement conversations.</p>
     <table>
       <thead>
