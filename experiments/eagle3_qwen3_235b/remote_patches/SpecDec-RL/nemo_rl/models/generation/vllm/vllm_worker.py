@@ -613,6 +613,8 @@ class BaseVllmGenerationWorker:
             specdec_runtime_env_vars = (
                 "HF_TOKEN",
                 "HUGGING_FACE_HUB_TOKEN",
+                "NRL_ALLOW_SPECDEC_REQUEST_LOGPROBS",
+                "NRL_VLLM_OMIT_GENERATION_LOGPROBS",
                 "NCCL_CUMEM_ENABLE",
                 "NCCL_NVLS_ENABLE",
                 "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
@@ -1089,7 +1091,7 @@ class BaseVllmGenerationWorker:
                             "            if specdec_scheduled_tokens is not None and hasattr(\n"
                             "                specdec_scheduled_tokens, \"__len__\"\n"
                             "            ):\n"
-                            "                specdec_batch_gate_disabled = (\n"
+                            "                specdec_batch_gate_disabled = specdec_batch_gate_disabled or (\n"
                             "                    len(specdec_scheduled_tokens) == 0\n"
                             "                    and specdec_batch_gate_num_requests > 0\n"
                             "                )\n"
@@ -1227,7 +1229,7 @@ class BaseVllmGenerationWorker:
                             "            if specdec_scheduled_tokens is not None and hasattr(\n"
                             "                specdec_scheduled_tokens, \"__len__\"\n"
                             "            ):\n"
-                            "                specdec_batch_gate_disabled = (\n"
+                            "                specdec_batch_gate_disabled = specdec_batch_gate_disabled or (\n"
                             "                    len(specdec_scheduled_tokens) == 0\n"
                             "                    and specdec_batch_gate_num_requests > 0\n"
                             "                )\n"
@@ -2086,11 +2088,33 @@ class BaseVllmGenerationWorker:
             "NRL_REQUIRE_VLLM_SPECDEC_POST_STEP_PATCH", "1"
         ).lower() in {"1", "true", "yes", "y", "on"}
 
-        specdec_batch_gate_threshold = os.environ.get(
-            "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD", "0"
+        def _nrl_env_nonnegative_int(name: str, default: int = 0) -> int:
+            value = os.environ.get(name)
+            if value is None or str(value).strip() == "":
+                return default
+            try:
+                parsed = int(str(value).strip())
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"{name} must be a non-negative integer, got {value!r}."
+                ) from exc
+            if parsed < 0:
+                raise RuntimeError(
+                    f"{name} must be a non-negative integer, got {value!r}."
+                )
+            return parsed
+
+        specdec_batch_gate_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD"
         )
-        specdec_batch_gate_token_threshold = os.environ.get(
-            "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD", "0"
+        specdec_batch_gate_token_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD"
+        )
+        specdec_adaptive_initial_request_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD"
+        )
+        specdec_adaptive_initial_token_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD"
         )
         specdec_adaptive_gate_mode = os.environ.get(
             "VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off"
@@ -2106,16 +2130,25 @@ class BaseVllmGenerationWorker:
             "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH", "0"
         ).lower() in {"1", "true", "yes", "y", "on"}
         specdec_gate_threshold_requested = (
-            (
-                specdec_batch_gate_threshold.isdigit()
-                and int(specdec_batch_gate_threshold) > 0
-            )
-            or (
-                specdec_batch_gate_token_threshold.isdigit()
-                and int(specdec_batch_gate_token_threshold) > 0
-            )
+            specdec_batch_gate_threshold > 0
+            or specdec_batch_gate_token_threshold > 0
             or specdec_adaptive_gate_requested
         )
+        if specdec_adaptive_gate_requested and not (
+            specdec_batch_gate_threshold > 0
+            or specdec_batch_gate_token_threshold > 0
+            or specdec_adaptive_initial_request_threshold > 0
+            or specdec_adaptive_initial_token_threshold > 0
+        ):
+            raise RuntimeError(
+                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE is set, but no positive "
+                "static or initial request/token threshold is configured. "
+                "Set VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD, "
+                "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD, "
+                "VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD, or "
+                "VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD so adaptive "
+                "SpecDec cannot silently become global SpecDec."
+            )
         if specdec_gate_threshold_requested and not enable_runtime_specdec_gate_patch:
             raise RuntimeError(
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD or "
