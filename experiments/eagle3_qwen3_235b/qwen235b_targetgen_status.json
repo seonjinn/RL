@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 15:02 PDT",
+  "updated_at": "2026-05-31 15:05 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -210,28 +210,52 @@
       "wave_limit": 10,
       "time_limit": "02:00:00",
       "state_at_submit_check": "job 3061845 RUNNING and 3061846 COMPLETING at 15:02 PDT",
-      "note": "Submitted with the hardened resume script and explicit --allow-no-previous-dependency after confirming no active writer remained for chunks 005-008. Finalizer job 3061260 was updated to wait on 94 active targetgen-resume jobs including these four repair jobs. At 15:02 PDT, jobs 3061845 and 3061846 were still visible; jobs 3061847 and 3061848 had left squeue, but chunks 005-008 still showed 4997/4999/4997/4999 rows."
+      "note": "Submitted with the hardened resume script and explicit --allow-no-previous-dependency after confirming no active writer remained for chunks 005-008. Finalizer job 3061260 was updated to wait on 94 active targetgen-resume jobs including these four repair jobs. At 15:02 PDT, jobs 3061845 and 3061846 were still visible; jobs 3061847 and 3061848 had left squeue, but chunks 005-008 still showed 4997/4999/4997/4999 rows. After all third-wave repair jobs left squeue and the chunks remained short, a fourth repair wave was submitted with the fixed ordered-writer code."
+    },
+    "fourth_short_repair_chunks_005_008": {
+      "job_ids": [
+        "3061953",
+        "3061954",
+        "3061955",
+        "3061956"
+      ],
+      "chunks": [
+        "005",
+        "006",
+        "007",
+        "008"
+      ],
+      "rows_before_submit": {
+        "005": 4997,
+        "006": 4999,
+        "007": 4997,
+        "008": 4999
+      },
+      "wave_limit": 10,
+      "time_limit": "02:00:00",
+      "state_at_submit_check": "SUBMITTED at 15:05 PDT",
+      "note": "Submitted after confirming no active writer remained for chunks 005-008. Finalizer job 3061260 was updated to wait on 94 active qwen3_235b-targetgen-resume jobs including these four fourth-wave repair jobs."
     }
   },
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 343586,
+    "current_rows_observed": 345838,
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
     "active_targetgen_jobs_observed": 94,
     "complete_chunk_files_observed_ge5000_rows": 6,
     "short_nonzero_chunk_files_observed": 94,
-    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest per-chunk line-count sweep observed 343586/500000 rows. At the 15:02 PDT queue check, target generation still had active qwen3_235b-targetgen-resume jobs, and finalizer job 3061260 remained dependency-pending on the captured target-generation dependency set. The Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 remains queued after the finalizer succeeds.",
-    "min_nonzero_rows_observed": 2545,
+    "note": "Count only includes qwen3_235b_*.jsonl files; qwen3_30ba3b_* files in the same directory are intentionally excluded. Latest per-chunk line-count sweep observed 345838/500000 rows. At the 15:05 PDT queue check, target generation had 90 running qwen3_235b-targetgen-resume jobs before the fourth short-chunk repair submission; after submitting jobs 3061953-3061956 and updating finalizer 3061260, the finalizer waits on 94 active target-generation jobs. The Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 remains queued after the finalizer succeeds.",
+    "min_nonzero_rows_observed": 2576,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 0,
     "running_targetgen_jobs_observed": 94,
     "completing_targetgen_jobs_observed": 0
   },
   "code_review_status": {
-    "updated_at": "2026-05-31 15:02 PDT",
+    "updated_at": "2026-05-31 15:05 PDT",
     "reviewers": [
       "Codex",
       "Claude Code 2.1.159"
