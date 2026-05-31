@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 08:23 PDT",
+  "updated_at": "2026-05-31 08:26 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -50,8 +50,8 @@
     {
       "job_id": "3058168",
       "num_speculative_tokens": 2,
-      "latest_step_seen": 8,
-      "completed_generation_metrics": 7,
+      "latest_step_seen": 9,
+      "completed_generation_metrics": 8,
       "generated_tokens_sec_gpu_values": [
         5168.46,
         4971.28,
@@ -59,10 +59,11 @@
         5093.95,
         5293.27,
         4928.26,
-        5188.73
+        5188.73,
+        5271.6
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5127.08,
-      "speedup_vs_baseline_mean_so_far": 1.2298,
+      "generated_tokens_sec_gpu_mean_so_far": 5145.15,
+      "speedup_vs_baseline_mean_so_far": 1.2341,
       "acceptance_rate_values": [
         0.4249,
         0.4152,
@@ -70,13 +71,14 @@
         0.4015,
         0.4299,
         0.4184,
-        0.424
+        0.424,
+        0.4115
       ],
-      "acceptance_rate_mean_so_far": 0.4215,
-      "acceptance_rate_latest_summary": 0.424,
+      "acceptance_rate_mean_so_far": 0.4203,
+      "acceptance_rate_latest_summary": 0.4115,
       "per_position_acceptance_latest_summary": [
-        0.5595,
-        0.2885
+        0.5487,
+        0.2743
       ],
       "total_step_seconds": [
         262.51,
@@ -85,14 +87,15 @@
         210.96,
         214.64,
         207.56,
-        231.03
+        231.03,
+        238.52
       ]
     },
     {
       "job_id": "3058169",
       "num_speculative_tokens": 3,
-      "latest_step_seen": 8,
-      "completed_generation_metrics": 7,
+      "latest_step_seen": 9,
+      "completed_generation_metrics": 8,
       "generated_tokens_sec_gpu_values": [
         4894.97,
         4858.44,
@@ -100,10 +103,11 @@
         5097.79,
         5211.14,
         4861.72,
-        5027.53
+        5027.53,
+        5260.25
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 5023.05,
-      "speedup_vs_baseline_mean_so_far": 1.2048,
+      "generated_tokens_sec_gpu_mean_so_far": 5052.7,
+      "speedup_vs_baseline_mean_so_far": 1.2119,
       "acceptance_rate_values": [
         0.3211,
         0.3139,
@@ -111,14 +115,15 @@
         0.3007,
         0.3262,
         0.3166,
-        0.3216
+        0.3216,
+        0.3107
       ],
-      "acceptance_rate_mean_so_far": 0.3189,
-      "acceptance_rate_latest_summary": 0.3216,
+      "acceptance_rate_mean_so_far": 0.3179,
+      "acceptance_rate_latest_summary": 0.3107,
       "per_position_acceptance_latest_summary": [
-        0.5503,
-        0.2793,
-        0.135
+        0.5409,
+        0.2657,
+        0.1254
       ],
       "total_step_seconds": [
         255.95,
@@ -127,7 +132,8 @@
         209.8,
         216.27,
         208.12,
-        230.77
+        230.77,
+        231.6
       ]
     }
   ],
