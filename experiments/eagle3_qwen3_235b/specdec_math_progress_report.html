@@ -125,7 +125,7 @@
   <h1>Qwen3 Eagle3 SpecDec Math Progress</h1>
   <p class="sub">
     Status snapshot for the NeMo-RL speculative decoding effort. Last checked:
-    2026-05-31 01:44 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
+    2026-05-31 01:50 PT. Scope: Qwen3-235B and Qwen3-30B-A3B Eagle3 drafter
     training with Speculators, NeMo-RL acceptance-rate measurement, generation
     speedup, and long-tail batch-size gating.
   </p>
@@ -133,24 +133,25 @@
   <section class="note" aria-label="Latest operator update">
     <h2>Latest Update</h2>
     <p>
-      2026-05-31 01:44 PT: the roadmap/scripts/report tree is now versioned in
+      2026-05-31 01:50 PT: the roadmap/scripts/report tree is versioned in
       GitLab at
       <code>ssh://git@gitlab-master.nvidia.com:12051/sna/specdec_rl.git</code>,
-      branch <code>main</code>, initial pushed commit <code>fb09eb5</code>. Local
-      credential files and generated logs/caches are ignored. For 30B NeMo-RL
-      eval, the dependency-free r4 baseline/K=1 jobs failed at Slurm launch
-      with <code>Memory required by task is not available</code>, and the old K=2
-      was canceled. I patched <code>ray.sub</code> to run Ray status/driver inside
-      the existing <code>ray-head</code> enroot container instead of opening a
-      fresh container step. The patched baseline <code>3056050</code> has passed
-      Ray bring-up, reached <code>16/16</code> worker units, and launched
-      <code>ray-driver.log</code>; patched K=1 <code>3056051</code> and K=2
-      <code>3056052</code> are intentionally queued after it to avoid GB200 tile
-      memory contention. For 235B, baseline <code>3053877</code> has reached
-      Step <code>20/20</code> with 19 completed generation metrics so far
-      (mean generated tok/s/GPU <code>66.79</code>), and K=2 SpecDec
-      <code>3055189</code> has reached Step <code>1/20</code>; no acceptance-rate
-      metric has emitted yet.
+      branch <code>main</code>; latest pushed commit before this refresh is
+      <code>a6acc74</code>. Local credential files and generated logs/caches are
+      ignored. The matched 235B baseline <code>3053877</code> has now emitted all
+      20 generation metrics: mean generated tok/s/GPU <code>66.78</code>, final
+      step <code>66.55</code>. 235B K=2 SpecDec <code>3055189</code> is confirmed
+      to run sync rollout (<code>async_engine=false</code>), CUDA graph
+      (<code>enforce_eager=false</code>, capture up to <code>512</code>), and
+      <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>; it is
+      still in Step <code>1/20</code> generation with no acceptance-rate or
+      tok/s/GPU metric yet. 235B K=1 retry <code>3055926</code> is still before
+      rollout metrics. For 30B NeMo-RL eval, patched baseline
+      <code>3056050</code> has launched the driver and is rebuilding the job-local
+      venv; K=1 <code>3056051</code> and K=2 <code>3056052</code> remain queued
+      behind it. The 30B 100K continuation <code>3055364</code> remains in
+      hidden-state extraction with <code>3520</code> files and about
+      <code>219G</code> written.
     </p>
     <p>
       2026-05-31 01:33 PT: I found a duplicate 30B fallback branch writing into

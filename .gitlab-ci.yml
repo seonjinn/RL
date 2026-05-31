@@ -1,0 +1,13 @@
+stages:
+  - deploy
+
+pages:
+  stage: deploy
+  script:
+    - mkdir -p public
+    - cp experiments/eagle3_qwen3_235b/specdec_math_progress_report.html public/index.html
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
