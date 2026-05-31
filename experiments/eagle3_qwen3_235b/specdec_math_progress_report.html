@@ -245,6 +245,30 @@
       background: var(--c);
       border-radius: 999px;
     }
+    .contract-flow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr) 42px minmax(0, 1fr);
+      gap: 10px;
+      align-items: stretch;
+      margin: 12px 0 14px;
+    }
+    .contract-node {
+      min-height: 126px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      box-shadow: var(--shadow);
+    }
+    .contract-node h3 { margin-bottom: 7px; }
+    .contract-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 18px;
+    }
     .flow {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -299,7 +323,8 @@
     @media (max-width: 900px) {
       header { display: block; }
       .toolbar { justify-content: flex-start; margin-top: 12px; }
-      .grid, .grid.two, .split { grid-template-columns: 1fr; }
+      .grid, .grid.two, .split, .contract-flow { grid-template-columns: 1fr; }
+      .contract-arrow { min-height: 18px; }
       .status-row { grid-template-columns: 1fr; }
       .flow { grid-template-columns: 1fr; }
       .step:not(:last-child)::after { display: none; }
@@ -317,7 +342,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-05-31 07:10 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-05-31 07:15 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -391,6 +416,25 @@
     <div class="banner">
       <h2>Train/Test Answer</h2>
       <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>. <strong>NeMo-RL test data:</strong> baseline, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are used as a denylist during 500K construction; final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>. This means the clean result is mixed-math training evaluated on OpenMath, not OpenMath-on-OpenMath.</p>
+    </div>
+    <div class="contract-flow" aria-label="Train and test dataset contract">
+      <div class="contract-node">
+        <h3>1. Drafter Training</h3>
+        <p class="small">500K exact-unique non-OpenMath math conversations generated with <code>Qwen/Qwen3-30B-A3B</code> targets.</p>
+        <p class="small">Mix: NuminaMath-1.5 300K, NuminaMath-CoT 100K, OpenThoughts-114k 60K, math-deepscaler 25K, DAPO-Math-17k 15K.</p>
+      </div>
+      <div class="contract-arrow">-&gt;</div>
+      <div class="contract-node">
+        <h3>2. Leakage Guard</h3>
+        <p class="small"><code>openmath_reasoning_cot_conversations_50k.jsonl</code> is loaded as a denylist before writing the final 500K training file.</p>
+        <p class="small">Validation: <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, <code>denylisted_prompts=0</code>.</p>
+      </div>
+      <div class="contract-arrow">-&gt;</div>
+      <div class="contract-node">
+        <h3>3. NeMo-RL Test</h3>
+        <p class="small">All clean baseline, SpecDec throughput, and acceptance measurements use OpenMath rollouts.</p>
+        <p class="small">Test file: <code>50000</code> rows, <code>44304</code> unique normalized prompts. Overlap claim is prompt-level, not semantic-near-duplicate proof.</p>
+      </div>
     </div>
     <table>
       <thead>
