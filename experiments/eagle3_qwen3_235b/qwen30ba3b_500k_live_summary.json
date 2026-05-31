@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 11:51 PDT",
+  "updated_at": "2026-05-31 11:59 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -545,8 +545,8 @@
       "request_gate": 64,
       "token_gate": 0,
       "state": "RUNNING",
-      "latest_step_seen": 12,
-      "completed_generation_metrics": 11,
+      "latest_step_seen": 13,
+      "completed_generation_metrics": 12,
       "generated_tokens_sec_gpu_values": [
         4510.15,
         4253.17,
@@ -558,10 +558,11 @@
         4832.73,
         4070.62,
         4272.16,
-        4346.18
+        4346.18,
+        4586.62
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4404.07,
-      "speedup_vs_baseline_mean_so_far": 1.0563,
+      "generated_tokens_sec_gpu_mean_so_far": 4419.28,
+      "speedup_vs_baseline_mean_so_far": 1.06,
       "acceptance_rate_values": [
         0.4856,
         0.5803,
@@ -573,13 +574,14 @@
         0.5567,
         0.5491,
         0.5804,
-        0.5865
+        0.5865,
+        0.5715
       ],
-      "acceptance_rate_mean_so_far": 0.5628,
-      "acceptance_rate_latest_summary": 0.5865,
+      "acceptance_rate_mean_so_far": 0.5635,
+      "acceptance_rate_latest_summary": 0.5715,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Batch-size-only long-tail gate follow-up submitted at 2026-05-31 10:36 PT after request gates 4 and 32 stayed near 1.06x. Eleven NeMo-RL driver metrics are available: 4404.07 tok/s/GPU mean, 1.0563x versus baseline, and 56.28% acceptance. This is still an interim result."
+      "note": "Batch-size-only long-tail gate follow-up submitted at 2026-05-31 10:36 PT after request gates 4 and 32 stayed near 1.06x. Twelve NeMo-RL driver metrics are available: 4419.28 tok/s/GPU mean, 1.0600x versus baseline, and 56.35% acceptance. This is still an interim result."
     },
     {
       "job_id": "3059958",
@@ -605,8 +607,8 @@
       "request_gate": 96,
       "token_gate": 2048,
       "state": "RUNNING",
-      "latest_step_seen": 9,
-      "completed_generation_metrics": 8,
+      "latest_step_seen": 11,
+      "completed_generation_metrics": 10,
       "generated_tokens_sec_gpu_values": [
         4440.63,
         4343.04,
@@ -615,10 +617,12 @@
         4559.11,
         4105.84,
         4711.46,
-        4805.88
+        4805.88,
+        4050.46,
+        4250.17
       ],
-      "generated_tokens_sec_gpu_mean_so_far": 4483.63,
-      "speedup_vs_baseline_mean_so_far": 1.0754,
+      "generated_tokens_sec_gpu_mean_so_far": 4416.97,
+      "speedup_vs_baseline_mean_so_far": 1.0594,
       "acceptance_rate_values": [
         0.5432,
         0.5645,
@@ -627,13 +631,15 @@
         0.5841,
         0.5663,
         0.5765,
-        0.5808
+        0.5808,
+        0.5749,
+        0.5765
       ],
-      "acceptance_rate_mean_so_far": 0.5712,
-      "acceptance_rate_latest_summary": 0.5808,
+      "acceptance_rate_mean_so_far": 0.5721,
+      "acceptance_rate_latest_summary": 0.5765,
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
-      "note": "Retry for hybrid request-gate 96 plus token-gate 2048 submitted at 2026-05-31 10:46 PT after job 3059958 failed at Slurm driver-step creation. Eight NeMo-RL driver metrics are available: 4483.63 tok/s/GPU mean, 1.0754x versus baseline, and 57.12% acceptance. This is still an interim result."
+      "note": "Retry for hybrid request-gate 96 plus token-gate 2048 submitted at 2026-05-31 10:46 PT after job 3059958 failed at Slurm driver-step creation. Ten NeMo-RL driver metrics are available: 4416.97 tok/s/GPU mean, 1.0594x versus baseline, and 57.21% acceptance. This is still an interim result."
     },
     {
       "job_id": "3060282",
@@ -674,6 +680,26 @@
       "total_step_seconds": [],
       "total_step_seconds_mean_so_far": null,
       "note": "Small-batch-only V4 instrumented run submitted at 2026-05-31 11:36 PT. SpecDec should only be enabled when the local scheduled request count is 4 or lower. Slurm state is RUNNING as of 2026-05-31 11:51 PT, still before first rollout metric or gate-hit log."
+    },
+    {
+      "job_id": "3060379",
+      "num_speculative_tokens": 1,
+      "request_gate": 0,
+      "token_gate": 2048,
+      "state": "RUNNING",
+      "max_steps": 8,
+      "gate_log_interval": 32,
+      "runtime_gate_patch": "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
+      "completed_generation_metrics": 0,
+      "generated_tokens_sec_gpu_values": [],
+      "generated_tokens_sec_gpu_mean_so_far": null,
+      "speedup_vs_baseline_mean_so_far": null,
+      "acceptance_rate_values": [],
+      "acceptance_rate_mean_so_far": null,
+      "acceptance_rate_latest_summary": null,
+      "total_step_seconds": [],
+      "total_step_seconds_mean_so_far": null,
+      "note": "Token-pressure-only V4 instrumented run submitted at 2026-05-31 11:58 PT after request-count-only gates stayed near 1.06x. It uses request gate 0, token gate 2048, K=1, MAX_STEPS=8, and VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=32 to compare against the best completed token-gate 2048 path without request-count disabling."
     }
   ],
   "dataset_contract": {
@@ -722,5 +748,5 @@
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4 and 32 runs also reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Request-gate 64 and hybrid request-gate 96 plus token-gate 2048 are still running. V4 gate-hit logging jobs 3060282 and 3060293 are running but have not emitted rollout metrics or NRL SpecDec batch gate counters yet."
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4 and 32 runs also reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Request-gate 64 and hybrid request-gate 96 plus token-gate 2048 are still running and remain near 1.06x so far. V4 gate-hit logging jobs 3060282 and 3060293 are running but have not emitted rollout metrics or NRL SpecDec batch gate counters yet. Token-pressure-only V4 job 3060379 was submitted to compare against the best token-gate-only path."
 }
