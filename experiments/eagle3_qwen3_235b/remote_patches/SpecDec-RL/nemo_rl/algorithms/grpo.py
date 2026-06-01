@@ -1124,6 +1124,20 @@ def _metric_int(metrics: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+def _metric_bool(metrics: dict[str, Any], key: str, default: bool) -> bool:
+    value = metrics.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _specdec_per_position_acceptance_rates(
     spec_decode: dict[str, Any],
 ) -> list[float]:
@@ -1179,6 +1193,31 @@ def _maybe_apply_specdec_step_controller(
     scheduler = gate.get("scheduler", {}) if isinstance(gate, dict) else {}
     if not isinstance(scheduler, dict):
         scheduler = {}
+    dynamic_enabled_default = _env_bool(
+        "SPECDEC_DYNAMIC_DRAFT_TOKENS",
+        _env_bool("VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS", False),
+    )
+    dynamic_enabled = _metric_bool(
+        scheduler, "dynamic_draft_tokens_enabled", dynamic_enabled_default
+    )
+    if not dynamic_enabled:
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_dynamic_disabled": 1,
+                "controller/action_failed_no_targets": 0,
+                "controller/action_failed_runtime_exception": 0,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
+        print(
+            "[SpecDec step controller] "
+            f"step={step} no-op: dynamic draft tokens are disabled",
+            flush=True,
+        )
+        return
 
     min_k = max(1, _env_int("NRL_SPECDEC_CONTROLLER_MIN_K", 1))
     max_k = max(min_k, _env_int("NRL_SPECDEC_CONTROLLER_MAX_K", 3))
@@ -1247,6 +1286,17 @@ def _maybe_apply_specdec_step_controller(
     try:
         results = policy_generation.set_specdec_runtime_controls(controls)
     except Exception as exc:
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_dynamic_disabled": 0,
+                "controller/action_failed_no_targets": 0,
+                "controller/action_failed_runtime_exception": 1,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
         print(
             f"[SpecDec step controller] step={step} action={action} failed: {exc}",
             flush=True,
@@ -1262,7 +1312,9 @@ def _maybe_apply_specdec_step_controller(
         logger.log_metrics(
             {
                 "controller/action_noop": 1,
+                "controller/action_failed_dynamic_disabled": 0,
                 "controller/action_failed_no_targets": 1,
+                "controller/action_failed_runtime_exception": 0,
                 "controller/updated_objects": 0,
             },
             step,
@@ -1278,7 +1330,9 @@ def _maybe_apply_specdec_step_controller(
     logger.log_metrics(
         {
             "controller/action_noop": 0,
+            "controller/action_failed_dynamic_disabled": 0,
             "controller/action_failed_no_targets": 0,
+            "controller/action_failed_runtime_exception": 0,
             "controller/action_decrease_k": (
                 1 if action.startswith("decrease_k") else 0
             ),
