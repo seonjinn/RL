@@ -29,7 +29,13 @@ fi
 
 SOURCE_VLLM_SITE="${SOURCE_VLLM_SITE:-$ARTIFACT_ROOT/python_site/vllm_0_10_2_cu129_torch28nv_source_py312}"
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3-235B-A22B-Thinking-2507}"
-PROMPT_DATA="${PROMPT_DATA:-$DATA_DIR/openmath_direct_vllm_prompts_smoke.jsonl}"
+if [[ -z "${PROMPT_DATA+x}" ]]; then
+  if [[ "$(basename "$RUN_SCRIPT")" == "run_direct_vllm_math_missing_id_repair.sh" ]]; then
+    PROMPT_DATA="$DATA_DIR/mixed_math_nonopenmath_500k_prompts.jsonl"
+  else
+    PROMPT_DATA="$DATA_DIR/openmath_direct_vllm_prompts_smoke.jsonl"
+  fi
+fi
 OUTPUT_CONVERSATIONS="${OUTPUT_CONVERSATIONS:-$DATA_DIR/qwen3_235b_math_direct_vllm_conversations_smoke.jsonl}"
 SUMMARY_JSON="${SUMMARY_JSON:-$REPORT_DIR/direct_vllm_math_rollout_summary.json}"
 SERVER_LOG="${SERVER_LOG:-$REPORT_DIR/direct_vllm_math_rollout_server_${JOB_NAME}.log}"

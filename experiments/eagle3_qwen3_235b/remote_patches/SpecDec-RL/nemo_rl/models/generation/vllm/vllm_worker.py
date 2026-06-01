@@ -1848,6 +1848,15 @@ class BaseVllmGenerationWorker:
                         "Adaptive SpecDec gate patch did not leave the required marker "
                         f"in {gpu_model_runner}."
                     )
+                missing_markers = [
+                    marker for marker in runner_required_markers if marker not in patched
+                ]
+                if missing_markers:
+                    raise RuntimeError(
+                        "Adaptive SpecDec gate runner patch installed only partially "
+                        f"in {gpu_model_runner}; missing markers: "
+                        + ", ".join(missing_markers)
+                    )
                 with open(gpu_model_runner, "w") as f:
                     f.write(patched)
                 applied += 1

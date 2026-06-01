@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 20:13 PDT",
+  "updated_at": "2026-05-31 20:41 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -929,12 +929,12 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_activebatch_hardened_resubmitted",
-    "updated_at": "2026-05-31 20:13 PDT",
+    "updated_at": "2026-05-31 20:41 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
     "current_behavior": "The vLLM scheduler lookahead gate starts from static request/token thresholds, measures local SpecDec enabled ratios over rolling windows, then tightens or loosens request/token thresholds toward a target enabled ratio. The scheduler request pressure now uses active requests, max(len(self.running), scheduled_requests), instead of scheduled_requests alone, so long-tail activation follows the actual active batch. The model runner treats scheduler no-lookahead as a disable signal and also keeps its own request/token threshold-disabled state, so scheduled_spec_decode_tokens cannot re-enable draft proposal after a threshold disable. Adaptive mode fails fast unless at least one positive static or initial request/token threshold is configured, preventing accidental global SpecDec. Existing patched vLLM worker environments are upgraded in place for the active-batch scheduler marker and runner threshold-disabled marker instead of failing on marker drift.",
-    "metrics_visibility": "NeMo-RL exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last scheduled request count, last active request count, last token count, thresholds, and adaptive threshold state. The sync worker already returned these metrics; the async worker now returns the same spec_decode_gate payload and resets the gate baseline in clear_vllm_logger_metrics.",
+    "metrics_visibility": "NeMo-RL exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last scheduled request count, last active request count, last token count, thresholds, and adaptive threshold state. The sync worker already returned these metrics; the async worker returns the same spec_decode_gate payload and resets the gate baseline in clear_vllm_logger_metrics. A post-review fix now also emits spec_decode_gate/metrics_available=0 when SpecDec is enabled but no gate object is reachable, so missing gate metrics are explicit rather than silently absent.",
     "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8. Primary token-pressure active-batch run uses request threshold 0, token threshold 2048, adaptive target 0.75. Follow-up long-tail request-gate runs use req32+tok2048 and req64+tok2048 with adaptive target 0.50.",
     "pre_metrics_patch_eval_job": "3062282",
     "pre_metrics_patch_eval_state": "CANCELLED at 2026-05-31 16:42 PDT after reaching Step 4 from the older /lustre/.../nemo-rl checkout. It emitted secondary NeMo-RL performance metrics, including Step 1 5718.39 and Step 2 5315.41 tok/s/GPU, mean 5516.90 tok/s/GPU across the first two recorded metrics, with mean per-position acceptance 57.46%. This remains secondary evidence because the checkout is not the validated /SpecDec-RL path.",
@@ -963,16 +963,16 @@
     ],
     "failed_activebatch_runtime_patch_state": "FAILED before rollout at 2026-05-31 19:56 PDT. The adaptive runner patch inserted its init block before the first body line under an if statement in the generated vLLM gpu_model_runner.py, causing IndentationError: expected an indented block after if statement. No NeMo-RL throughput or acceptance metric was emitted. The init anchor was moved to the threshold-disabled line, both adaptive replacements are limited to one replacement, and generated gpu_model_runner.py/scheduler.py are now py_compile checked immediately after runtime patching.",
     "corrected_eval_job": "3064870",
-    "corrected_eval_state": "RUNNING at 2026-05-31 20:13 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. This is the replacement after fixing the adaptive runner indentation issue. Ray workers are connected and the driver is still rebuilding its uv environment/native packages because NRL_FORCE_REBUILD_VENVS=true; flash-attn, transformer-engine, DeepEP, grouped-gemm, and mamba-ssm have built, with causal-conv1d still not complete in the latest driver log. No NeMo-RL rollout throughput or acceptance metric has emitted yet.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 20:41 PDT. Job 3064870 is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive target 0.75. vLLM initialized and MegatronPolicyWorker env creation finished; no rollout throughput or acceptance metric has emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_activebatch_jobs.txt",
-    "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold_disabled OR scheduled_spec_decode_tokens behavior, async spec_decode_gate metric forwarding, target-applied remote validation for the new markers, and py_compile validation of generated vLLM runner/scheduler files after runtime patching.",
+    "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold_disabled OR scheduled_spec_decode_tokens behavior, async spec_decode_gate metric forwarding, explicit metrics_available=0 fallback when gate objects are not reachable, safer launcher defaults that enable the runtime gate with a 4096-token threshold, target-applied remote validation for the new markers, and py_compile validation of generated vLLM runner/scheduler files after runtime patching. Qwen30/Qwen235 launchers now also wait for iter_0000000/run_config.yaml when a checkpoint directory already exists, preventing concurrent conversion races from being mistaken for completed checkpoints.",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet.",
     "superseded_activebatch_eval_job": "3063331",
     "superseded_activebatch_eval_state": "CANCELLED at 2026-05-31 18:33 PDT after 00:05:18 because it started building the driver environment before the final runner threshold-disabled hardening was synced.",
     "activebatch_followup_jobs": [
       {
         "job_id": "3064871",
-        "state_at_submit_check": "RUNNING at 2026-05-31 20:13 PDT after fixing the adaptive runner indentation issue; driver is still in uv/native package build logs and no NeMo-RL throughput or acceptance metric emitted yet",
+        "state_at_submit_check": "RUNNING at 2026-05-31 20:41 PDT. req32+tok2048 adaptive target 0.50 is past vLLM CUDA graph capture and MegatronPolicyWorker env creation; no rollout throughput or acceptance metric has emitted yet.",
         "num_speculative_tokens": 1,
         "request_gate": 32,
         "token_gate": 2048,
@@ -981,7 +981,7 @@
       },
       {
         "job_id": "3064872",
-        "state_at_submit_check": "RUNNING at 2026-05-31 20:13 PDT after fixing the adaptive runner indentation issue; driver is still in uv/native package build logs and no NeMo-RL throughput or acceptance metric emitted yet",
+        "state_at_submit_check": "FAILED before rollout at 2026-05-31 20:40 PDT. This was not a SpecDec gate failure: concurrent jobs raced on the first HF->mcore Megatron checkpoint conversion, saw the checkpoint directory before iter_0000000/run_config.yaml existed, and MegatronPolicyWorker raised FileNotFoundError. The run_config.yaml exists now, and retry job 3065713 was submitted with the same req64+tok2048 adaptive target 0.50 settings.",
         "num_speculative_tokens": 1,
         "request_gate": 64,
         "token_gate": 2048,
@@ -998,7 +998,9 @@
       "3063616",
       "3063617"
     ],
-    "cancelled_old_driver_followup_state": "CANCELLED before rollout at 2026-05-31 19:03 PDT after job 3063394 exposed the second-layout runner marker bug; those replacements were later superseded by 3064542 and 3064543 after the adaptive scheduler marker fallback fix."
+    "cancelled_old_driver_followup_state": "CANCELLED before rollout at 2026-05-31 19:03 PDT after job 3063394 exposed the second-layout runner marker bug; those replacements were later superseded by 3064542 and 3064543 after the adaptive scheduler marker fallback fix.",
+    "activebatch_req64_retry_job": "3065713",
+    "activebatch_req64_retry_state": "RUNNING at 2026-05-31 20:41 PDT after the Megatron checkpoint run_config.yaml became available."
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 was cancelled and remains secondary evidence only. Corrected jobs 3062401, 3062565, and 3062730 failed before rollout on environment/patch-forwarding issues; jobs 3062996, 3063061, 3063331, 3063394, 3063924, 3063925, 3063926, 3064541, 3064542, and 3064543 were superseded after code review hardening and scheduler/runner marker fixes. Replacement active-batch adaptive jobs 3064870, 3064871, and 3064872 are running, so corrected adaptive long-tail NeMo-RL throughput/acceptance results are not available yet."
+  "caveat": "30B adaptive jobs 3064870 and 3064871 are still running; req64 job 3064872 failed before rollout due to a Megatron checkpoint conversion race and was resubmitted as 3065713. No new adaptive acceptance/throughput number is available yet beyond previously confirmed 30B K=1 token-pressure result 3060379 at 5696.58 tok/s/GPU and 57.40% acceptance."
 }

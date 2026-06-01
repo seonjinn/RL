@@ -84,6 +84,8 @@ def chunk_path(chunk_dir: Path, model_label: str, chunk: int) -> Path:
 
 def prepare(args: argparse.Namespace) -> int:
     chunks = parse_chunks(args.chunks)
+    if not chunks:
+        raise ValueError("--chunks did not select any chunk ids")
     chunk_set = set(chunks)
     existing: dict[int, set[str]] = {}
     before_rows: dict[str, int] = {}
@@ -97,8 +99,10 @@ def prepare(args: argparse.Namespace) -> int:
 
     args.missing_prompts.parent.mkdir(parents=True, exist_ok=True)
     missing_rows = 0
+    source_rows = 0
     with args.missing_prompts.open("w", encoding="utf-8") as out:
         for line_num, record in iter_jsonl(args.prompt_data):
+            source_rows = line_num
             chunk = (line_num - 1) // args.chunk_size
             if chunk not in chunk_set:
                 continue
@@ -113,6 +117,14 @@ def prepare(args: argparse.Namespace) -> int:
             missing_map[cid] = chunk
             missing_rows += 1
 
+    required_source_rows = (max(chunks) + 1) * args.chunk_size
+    if source_rows < required_source_rows:
+        raise ValueError(
+            f"{args.prompt_data} has only {source_rows} prompt rows, but repairing chunks "
+            f"{chunks[0]:03d}-{chunks[-1]:03d} with chunk_size={args.chunk_size} requires "
+            f"at least {required_source_rows} rows. Refusing to treat this as zero missing ids."
+        )
+
     for chunk in chunks:
         missing_counts[f"{chunk:03d}"] = sum(1 for value in missing_map.values() if value == chunk)
 
@@ -123,6 +135,8 @@ def prepare(args: argparse.Namespace) -> int:
         "chunk_dir": str(args.chunk_dir),
         "model_label": args.model_label,
         "chunk_size": args.chunk_size,
+        "source_prompt_rows": source_rows,
+        "required_source_prompt_rows": required_source_rows,
         "chunks": [f"{chunk:03d}" for chunk in chunks],
         "rows_before": before_rows,
         "missing_counts": missing_counts,

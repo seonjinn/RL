@@ -654,6 +654,7 @@ def print_performance_metrics(
                 "request_threshold",
                 "token_threshold",
                 "last_num_requests",
+                "last_active_requests",
                 "last_num_tokens",
                 "last_disabled",
                 "effective_lookahead_tokens",

@@ -1014,6 +1014,8 @@ class VllmGeneration(GenerationInterface):
         if spec_decode_gate_seen:
             finalize_gate_totals()
             vllm_logger_metrics["spec_decode_gate"] = spec_decode_gate_totals
+        elif spec_decode_enabled:
+            vllm_logger_metrics["spec_decode_gate"] = spec_decode_gate_totals
 
         if spec_decode_enabled and not spec_decode_seen:
             vllm_logger_metrics["spec_decode"] = {

@@ -18,6 +18,7 @@ EXPECTED_COUNT="${EXPECTED_COUNT:-500000}"
 MODEL="${MODEL:-Qwen/Qwen3-235B-A22B-Thinking-2507}"
 SEQ_LENGTH="${SEQ_LENGTH:-8192}"
 DENYLIST="${DENYLIST:-$ARTIFACT_ROOT/data/openmath_reasoning_cot_conversations_50k.jsonl}"
+REPLACEMENT_CONVERSATIONS="${REPLACEMENT_CONVERSATIONS:-$ARTIFACT_ROOT/data/mixed_math_nonopenmath_qwen3_235b_replacement_conversations_dapo100.jsonl}"
 FINAL_CONVERSATIONS="${FINAL_CONVERSATIONS:-$ARTIFACT_ROOT/data/mixed_math_nonopenmath_qwen3_235b_conversations_500k_unique.jsonl}"
 SPECULATORS_JSONL="${SPECULATORS_JSONL:-$ARTIFACT_ROOT/data/mixed_math_nonopenmath_qwen3_235b_conversations_500k_unique_speculators.jsonl}"
 SPECULATORS_OUTPUT_DIR="${SPECULATORS_OUTPUT_DIR:-$ARTIFACT_ROOT/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel}"
@@ -99,12 +100,20 @@ done
 
 tmp_final="${FINAL_CONVERSATIONS}.tmp.${SLURM_JOB_ID:-manual}"
 rm -f "$tmp_final"
+replacement_args=()
+if [[ -s "$REPLACEMENT_CONVERSATIONS" ]]; then
+  replacement_args=(--replacement "$REPLACEMENT_CONVERSATIONS")
+else
+  echo "WARNING: replacement conversations file is missing or empty: $REPLACEMENT_CONVERSATIONS" >&2
+  echo "WARNING: final merge will fail if primary chunks contain duplicate or denylisted prompts." >&2
+fi
 python3 "$EXP_DIR/build_unique_training_conversations.py" \
   --output "$tmp_final" \
   --summary-json "$MERGE_SUMMARY_JSON" \
   --expected-count "$EXPECTED_COUNT" \
   --denylist-prompts-from "$DENYLIST" \
-  --primary "${inputs[@]}"
+  --primary "${inputs[@]}" \
+  "${replacement_args[@]}"
 mv -f "$tmp_final" "$FINAL_CONVERSATIONS"
 
 rows="$(wc -l < "$FINAL_CONVERSATIONS" | tr -d ' ')"

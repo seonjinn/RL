@@ -35,6 +35,16 @@ echo "CHUNK_DIR=$CHUNK_DIR"
 echo "MISSING_PROMPTS=$MISSING_PROMPTS"
 echo "GENERATED_REPAIR_OUTPUT=$GENERATED_REPAIR_OUTPUT"
 
+if [[ "$(basename "$PROMPT_DATA")" == "openmath_direct_vllm_prompts_smoke.jsonl" && "${ALLOW_SMOKE_PROMPT_DATA_FOR_REPAIR:-false}" != "true" ]]; then
+  echo "Refusing to run missing-id repair with smoke PROMPT_DATA: $PROMPT_DATA" >&2
+  echo "Set PROMPT_DATA to the full mixed prompt file or ALLOW_SMOKE_PROMPT_DATA_FOR_REPAIR=true for an intentional smoke test." >&2
+  exit 2
+fi
+if [[ ! -s "$PROMPT_DATA" ]]; then
+  echo "PROMPT_DATA is missing or empty: $PROMPT_DATA" >&2
+  exit 2
+fi
+
 python3 "$EXP_DIR/repair_direct_vllm_missing_chunk_ids.py" prepare \
   --prompt-data "$PROMPT_DATA" \
   --chunk-dir "$CHUNK_DIR" \
