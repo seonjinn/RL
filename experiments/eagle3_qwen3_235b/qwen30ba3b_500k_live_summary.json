@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 14:28 PDT",
+  "updated_at": "2026-06-01 14:35 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -202,14 +202,16 @@
     }
   ],
   "vllm_standalone_benchmark_current": {
-    "updated_at": "2026-06-01 14:25 PDT",
+    "updated_at": "2026-06-01 14:35 PDT",
     "scope": "vLLM standalone bench serve static benchmark; not NeMo-RL E2E",
     "model": "Qwen/Qwen3-30B-A3B",
     "baseline_job": "3079765",
     "specdec_job": "3079840",
     "previous_cancelled_jobs": [
       "3078992",
-      "3078993"
+      "3078993",
+      "3079766",
+      "3079840"
     ],
     "shape": {
       "scenario": "short",
@@ -240,9 +242,45 @@
     "baseline_logs": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_baseline_hffix_20260601_141825",
     "specdec_logs": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_hffix_export_20260601_142539",
     "hf_hub_fix_version": "0.36.0",
-    "status": "baseline 3079765 running and produced BS=1; invalid spec job 3079766 was cancelled because SPECULATIVE_CONFIG was not exported; replacement SpecDec job 3079840 is running and log lines 101-102 verify exported SPECULATIVE_CONFIG.",
+    "status": "per-BS baseline 3079765 is still running and has produced BS=1/2/4; failed SpecDec per-BS job 3079840 was cancelled after cudagraph capture-size startup failure; paired shared-server baseline/specdec jobs 3080042/3080041 are running with explicit CUDA graph capture sizes.",
     "invalid_cancelled_specdec_job": "3079766",
-    "speculative_config_exported": true
+    "speculative_config_exported": true,
+    "paired_shared_baseline_job": "3080042",
+    "paired_shared_specdec_job": "3080041",
+    "baseline_partial_results": [
+      {
+        "batch_size": 1,
+        "output_tok_s_per_gpu": 220.2155,
+        "total_tok_s_per_gpu": 440.431
+      },
+      {
+        "batch_size": 2,
+        "output_tok_s_per_gpu": 403.7873,
+        "total_tok_s_per_gpu": 807.5747
+      },
+      {
+        "batch_size": 4,
+        "output_tok_s_per_gpu": 666.6193,
+        "total_tok_s_per_gpu": 1333.2386
+      }
+    ],
+    "specdec_3079840_failure": {
+      "state": "cancelled_after_startup_failure",
+      "root_cause": "vLLM SpecDec K=1 requires cudagraph capture sizes rounded to a multiple of K+1=2, but the per-batch BS=1 server used cudagraph_capture_sizes=[1].",
+      "fix": "Rerun with shared server and COMPILATION_CONFIG_JSON={\"cudagraph_capture_sizes\":[2,4,8,16]} for SpecDec while keeping enforce_eager=false."
+    },
+    "paired_shared_logs": {
+      "baseline": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_baseline_shared_20260601_143425",
+      "specdec": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_shared_cgfix_20260601_143425"
+    },
+    "paired_shared_configs": {
+      "baseline": "experiments/eagle3_qwen3_235b/vllm_standalone_qwen30ba3b_baseline_shared_20260601_143425.conf",
+      "specdec": "experiments/eagle3_qwen3_235b/vllm_standalone_qwen30ba3b_specdec_k1_shared_cgfix_20260601_143425.conf"
+    },
+    "paired_shared_job_state": {
+      "baseline_3080042": "RUNNING",
+      "specdec_3080041": "RUNNING"
+    }
   },
   "runs": [
     {
@@ -2052,5 +2090,31 @@
       "interpretation": "Generation is faster, but E2E is slightly slower because non-generation phases dominate and SpecDec overhead offsets the rollout gain."
     },
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
+  },
+  "qwen3_235b_500k_training_current": {
+    "updated_at": "2026-06-01 14:35 PDT",
+    "stage": "hidden_state_extraction",
+    "hidden_state_count": 203361,
+    "target_hidden_state_count": 500000,
+    "hidden_state_count_fraction": 0.406722,
+    "array_job": "3072149_[0-99]%5",
+    "active_tasks": [
+      "37",
+      "38",
+      "39",
+      "40",
+      "41"
+    ],
+    "pending_tasks": "42-99 pending on JobArrayTaskLimit",
+    "train_job": "3072524",
+    "train_job_state": "PENDING Dependency",
+    "repair_jobs": [
+      "3072518",
+      "3072519",
+      "3072520",
+      "3072521",
+      "3072522",
+      "3072523"
+    ]
   }
 }

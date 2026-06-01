@@ -1,0 +1,18 @@
+updated_at=2026-06-01 14:35:00 PDT
+paired_shared_baseline_job=3080042
+paired_shared_specdec_job=3080041
+cancelled_failed_specdec_job=3079840
+continuing_per_batch_baseline_job=3079765
+invalid_cancelled_specdec_job=3079766
+old_cancelled_jobs=3078992,3078993
+hf_hub_fix_version=0.36.0
+model=Qwen/Qwen3-30B-A3B
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+scope=vLLM standalone serve static benchmark, not NeMo-RL E2E
+scenario=short ISL=1000 OSL=1000 batch_sizes=1 2 4 8 16 num_prompts_multiplier=10
+baseline_shared_config=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/vllm_standalone_qwen30ba3b_baseline_shared_20260601_143425.conf
+specdec_shared_config=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/vllm_standalone_qwen30ba3b_specdec_k1_shared_cgfix_20260601_143425.conf
+baseline_shared_logs=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_baseline_shared_20260601_143425
+specdec_shared_logs=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_shared_cgfix_20260601_143425
+specdec_cudagraph_fix=COMPILATION_CONFIG_JSON {"cudagraph_capture_sizes":[2,4,8,16]} with SHARED_SERVER=1 and enforce_eager=false
+baseline_partial_per_batch_3079765=BS1 220.2155 output_tok_s_per_gpu; BS2 403.7873; BS4 666.6193
