@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 19:31 PDT",
+  "updated_at": "2026-05-31 19:41 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -929,7 +929,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_activebatch_hardened_running",
-    "updated_at": "2026-05-31 19:31 PDT",
+    "updated_at": "2026-05-31 19:41 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -957,7 +957,7 @@
     ],
     "failed_activebatch_marker_eval_state": "FAILED before rollout at 2026-05-31 19:28 PDT. All three runs initialized VllmGenerationWorker actors, then the scheduler patch checker rejected the already-adaptive vLLM scheduler as partial because it required the static inline active-batch marker max(len(self.running), len(num_scheduled_tokens) + 1) even when the adaptive helper marker active_requests = max(num_requests, len(self.running)) was present. No NeMo-RL throughput or acceptance metric was emitted. The checker now accepts either marker, and remote py_compile plus target-applied validation pass.",
     "corrected_eval_job": "3064541",
-    "corrected_eval_state": "RUNNING at 2026-05-31 19:31 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. This is the replacement after fixing the adaptive scheduler marker false positive; no NeMo-RL throughput or acceptance metric has emitted yet.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 19:41 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. This is the replacement after fixing the adaptive scheduler marker false positive. The driver is still building the runtime environment; no NeMo-RL throughput or acceptance metric has emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_activebatch_jobs.txt",
     "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold_disabled OR scheduled_spec_decode_tokens behavior, async spec_decode_gate metric forwarding, and target-applied remote validation for the new markers.",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet.",
@@ -965,8 +965,8 @@
     "superseded_activebatch_eval_state": "CANCELLED at 2026-05-31 18:33 PDT after 00:05:18 because it started building the driver environment before the final runner threshold-disabled hardening was synced.",
     "activebatch_followup_jobs": [
       {
-                "job_id": "3064542",
-                "state_at_submit_check": "RUNNING at 2026-05-31 19:31 PDT with no NeMo-RL throughput or acceptance metric emitted yet; replacement after fixing the adaptive scheduler marker false positive",
+        "job_id": "3064542",
+        "state_at_submit_check": "RUNNING at 2026-05-31 19:41 PDT with no NeMo-RL throughput or acceptance metric emitted yet; replacement after fixing the adaptive scheduler marker false positive",
         "num_speculative_tokens": 1,
         "request_gate": 32,
         "token_gate": 2048,
@@ -974,8 +974,8 @@
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_activebatch_req32_tok2048_target050_jobs.txt"
       },
       {
-                "job_id": "3064543",
-                "state_at_submit_check": "RUNNING at 2026-05-31 19:31 PDT with no NeMo-RL throughput or acceptance metric emitted yet; replacement after fixing the adaptive scheduler marker false positive",
+        "job_id": "3064543",
+        "state_at_submit_check": "RUNNING at 2026-05-31 19:41 PDT with no NeMo-RL throughput or acceptance metric emitted yet; replacement after fixing the adaptive scheduler marker false positive",
         "num_speculative_tokens": 1,
         "request_gate": 64,
         "token_gate": 2048,
