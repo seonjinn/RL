@@ -49,6 +49,7 @@ NUM_GENERATIONS="${NUM_GENERATIONS:-32}"
 TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-$((NUM_PROMPTS * NUM_GENERATIONS))}"
 MAX_STEPS="${MAX_STEPS:-20}"
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS="${NRL_MEGATRON_NCCL_TIMEOUT_SECONDS:-1800}"
+REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
 
 mkdir -p "${NRL_MEGATRON_CHECKPOINT_DIR}"
 
@@ -59,6 +60,19 @@ fi
 if [[ ! -s "${SCRIPT_DIR}/ray.sub" ]]; then
   echo "ERROR: patched ray.sub not found at ${SCRIPT_DIR}/ray.sub" >&2
   exit 2
+fi
+if [[ "${REQUIRE_SPECDEC_RL_PATCHES}" == "true" || "${REQUIRE_SPECDEC_RL_PATCHES}" == "True" ]]; then
+  require_patch_marker() {
+    local file="$1"
+    local marker="$2"
+    if [[ ! -s "${file}" ]] || ! grep -q "${marker}" "${file}"; then
+      echo "ERROR: required SpecDec-RL parity marker '${marker}' is missing from ${file}" >&2
+      echo "Use NEMO_RL_DIR=/lustre/fs1/.../SpecDec-RL with the current patch bundle, or set REQUIRE_SPECDEC_RL_PATCHES=false only for diagnostics." >&2
+      exit 2
+    fi
+  }
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_VLLM_OMIT_GENERATION_LOGPROBS"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/algorithms/grpo.py" "_repair_specdec_generation_logprobs_if_safe"
 fi
 
 VLLM_EXTRA_OVERRIDES=""
@@ -83,6 +97,7 @@ uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${SCRIPT_DIR} py
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
 policy.generation.vllm_cfg.enforce_eager=false \
+policy.generation.vllm_cfg.async_engine=false \
 grpo.async_grpo.enabled=false \
 grpo.val_period=1000 \
 checkpointing.enabled=false \

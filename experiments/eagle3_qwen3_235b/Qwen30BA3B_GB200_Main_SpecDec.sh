@@ -223,8 +223,20 @@ if [[ -z "${DRAFT_MODEL}" || ! -s "${DRAFT_MODEL}/config.json" ]]; then
 fi
 
 path_is_within() {
-  local child="${1%/}"
-  local parent="${2%/}"
+  canonical_path_if_exists() {
+    local path="${1%/}"
+    if [[ -e "${path}" ]]; then
+      (cd "${path}" && pwd -P)
+    elif [[ -e "$(dirname "${path}")" ]]; then
+      printf "%s/%s\n" "$(cd "$(dirname "${path}")" && pwd -P)" "$(basename "${path}")"
+    else
+      printf "%s\n" "${path}"
+    fi
+  }
+  local child
+  local parent
+  child="$(canonical_path_if_exists "$1")"
+  parent="$(canonical_path_if_exists "$2")"
   [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
 }
 

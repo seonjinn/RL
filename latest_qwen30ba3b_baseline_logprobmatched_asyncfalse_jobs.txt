@@ -1,0 +1,12 @@
+# Qwen3-30B-A3B logprob-matched async_engine=false baseline
+created_at=2026-06-01 10:52:45 PDT
+nemo_rl_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL
+container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh
+num_prompts=64
+num_generations=32
+train_global_batch_size=2048
+max_steps=4
+nrl_vllm_omit_generation_logprobs=true
+async_engine=false
+baseline_job=3075647
+compare_against_specdec_job=3074778

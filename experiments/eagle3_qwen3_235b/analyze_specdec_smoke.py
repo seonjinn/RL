@@ -85,6 +85,16 @@ CONFIG_KEY_ALIASES = {
 RUN_CONFIG_KEYS = {
     "NRL_VLLM_OMIT_GENERATION_LOGPROBS",
     "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS",
+    "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
+    "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS",
+    "VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS",
     "VLLM_MAX_NUM_SEQS",
     "VLLM_MAX_NUM_BATCHED_TOKENS",
     "VLLM_ATTENTION_BACKEND",
@@ -93,6 +103,7 @@ RUN_CONFIG_KEYS = {
     "policy.train_global_batch_size",
     "policy.generation.max_new_tokens",
     "policy.generation.vllm_cfg.enforce_eager",
+    "policy.generation.vllm_cfg.async_engine",
 }
 BASELINE_EXACT_MATCH_KEYS = (
     "grpo.num_prompts_per_step",
@@ -100,8 +111,10 @@ BASELINE_EXACT_MATCH_KEYS = (
     "policy.train_global_batch_size",
     "policy.generation.max_new_tokens",
     "policy.generation.vllm_cfg.enforce_eager",
+    "policy.generation.vllm_cfg.async_engine",
     "VLLM_MAX_NUM_SEQS",
     "VLLM_MAX_NUM_BATCHED_TOKENS",
+    "VLLM_ATTENTION_BACKEND",
 )
 
 
@@ -727,10 +740,17 @@ def baseline_compatibility_check(
                 }
             )
 
-    passed = not mismatches and baseline_request_logprobs is not None and current_request_logprobs is not None
+    passed = (
+        not mismatches
+        and not missing
+        and baseline_request_logprobs is not None
+        and current_request_logprobs is not None
+    )
     reason = None
     if mismatches:
         reason = "baseline/current generation configs differ"
+    elif missing:
+        reason = "missing baseline/current generation config parity evidence"
     elif baseline_request_logprobs is None or current_request_logprobs is None:
         reason = "missing generation logprob mode evidence"
 

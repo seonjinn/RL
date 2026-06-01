@@ -1332,9 +1332,73 @@ def _maybe_apply_specdec_step_controller(
         return
 
     gate = vllm_logger_metrics.get("spec_decode_gate", {})
+    # NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_GATE_METRICS_V1
+    if not isinstance(gate, dict) or not gate.get("metrics_available", False):
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_gate_metrics": 1,
+                "controller/action_failed_dynamic_disabled": 0,
+                "controller/action_failed_no_targets": 0,
+                "controller/action_failed_runtime_exception": 0,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
+        print(
+            "[SpecDec step controller] "
+            f"step={step} no-op: gate metrics unavailable",
+            flush=True,
+        )
+        return
+    gate_metrics_complete = bool(
+        gate.get("metrics_complete", not bool(gate.get("metrics_partial", False)))
+    )
+    if not gate_metrics_complete:
+        reporting_workers = _metric_int(gate, "num_reporting_workers", 0)
+        expected_workers = _metric_int(gate, "num_expected_workers", 0)
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_gate_metrics": 1,
+                "controller/action_failed_dynamic_disabled": 0,
+                "controller/action_failed_no_targets": 0,
+                "controller/action_failed_runtime_exception": 0,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
+        print(
+            "[SpecDec step controller] "
+            f"step={step} no-op: partial gate metrics "
+            f"({reporting_workers}/{expected_workers} workers)",
+            flush=True,
+        )
+        return
     scheduler = gate.get("scheduler", {}) if isinstance(gate, dict) else {}
-    if not isinstance(scheduler, dict):
-        scheduler = {}
+    if not isinstance(scheduler, dict) or _metric_int(
+        scheduler, "num_reporting_objects", 0
+    ) <= 0:
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_gate_metrics": 1,
+                "controller/action_failed_dynamic_disabled": 0,
+                "controller/action_failed_no_targets": 0,
+                "controller/action_failed_runtime_exception": 0,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
+        print(
+            "[SpecDec step controller] "
+            f"step={step} no-op: scheduler gate metrics unavailable",
+            flush=True,
+        )
+        return
     dynamic_enabled_default = _env_bool(
         "SPECDEC_DYNAMIC_DRAFT_TOKENS",
         _env_bool("VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS", False),

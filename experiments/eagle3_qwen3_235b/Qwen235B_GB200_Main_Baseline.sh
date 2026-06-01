@@ -47,6 +47,7 @@ MAX_STEPS="${MAX_STEPS:-20}"
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS="${NRL_MEGATRON_NCCL_TIMEOUT_SECONDS:-1800}"
 NRL_VLLM_DISABLE_LOG_STATS="${NRL_VLLM_DISABLE_LOG_STATS:-false}"
 NRL_VLLM_OMIT_GENERATION_LOGPROBS="${NRL_VLLM_OMIT_GENERATION_LOGPROBS:-true}"
+REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
 VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-}"
 VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-}"
@@ -56,6 +57,23 @@ mkdir -p "${NRL_MEGATRON_CHECKPOINT_DIR}"
 if [[ ! -s "${CONTAINER}" ]]; then
   echo "ERROR: container not found: ${CONTAINER}" >&2
   exit 2
+fi
+if [[ ! -s "${SCRIPT_DIR}/ray.sub" ]]; then
+  echo "ERROR: patched ray.sub not found at ${SCRIPT_DIR}/ray.sub" >&2
+  exit 2
+fi
+if [[ "${REQUIRE_SPECDEC_RL_PATCHES}" == "true" || "${REQUIRE_SPECDEC_RL_PATCHES}" == "True" ]]; then
+  require_patch_marker() {
+    local file="$1"
+    local marker="$2"
+    if [[ ! -s "${file}" ]] || ! grep -q "${marker}" "${file}"; then
+      echo "ERROR: required SpecDec-RL parity marker '${marker}' is missing from ${file}" >&2
+      echo "Use NEMO_RL_DIR=/lustre/fs1/.../SpecDec-RL with the current patch bundle, or set REQUIRE_SPECDEC_RL_PATCHES=false only for diagnostics." >&2
+      exit 2
+    fi
+  }
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_VLLM_OMIT_GENERATION_LOGPROBS"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/algorithms/grpo.py" "_repair_specdec_generation_logprobs_if_safe"
 fi
 
 VLLM_EXTRA_OVERRIDES=""
@@ -83,6 +101,7 @@ policy.generation.vllm_cfg.tensor_parallel_size=16 \
 policy.generation.vllm_cfg.expert_parallel_size=1 \
 policy.generation.vllm_cfg.pipeline_parallel_size=1 \
 policy.generation.vllm_cfg.enforce_eager=false \
+policy.generation.vllm_cfg.async_engine=false \
 policy.megatron_cfg.tensor_model_parallel_size=2 \
 policy.megatron_cfg.expert_model_parallel_size=16 \
 policy.megatron_cfg.pipeline_model_parallel_size=8 \

@@ -64,6 +64,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
         "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
         "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS",
+        "NRL_SPECDEC_DYNAMIC_REQUIRES_GATE_THRESHOLD_V1",
         "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
         "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
         "_nrl_specdec_scheduler_dynamic_last_selected_tokens",
@@ -127,7 +128,9 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "def _uses_vllm_specdec_without_generation_logprobs(",
         "def _repair_specdec_generation_logprobs_if_safe(",
         "NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_DP_METRICS_V1",
+        "NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_GATE_METRICS_V1",
         "controller/action_failed_partial_metrics",
+        "controller/action_failed_gate_metrics",
         "next_small = min(max_k, max(next_medium, max(min_k, current_small - 1)))",
         "ray.get(trajectory_collector.set_weight_version.remote(weight_version))",
         "collection_task = trajectory_collector.start_collection.remote(dataloader)",
@@ -660,6 +663,71 @@ def check_runner_gate_first_draft_guard(
     )
 
 
+def check_dynamic_requires_gate_threshold(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    worker = patch_root / "nemo_rl/models/generation/vllm/vllm_worker.py"
+    try:
+        text = read_text(worker)
+        required = [
+            "NRL_SPECDEC_DYNAMIC_REQUIRES_GATE_THRESHOLD_V1",
+            "if specdec_dynamic_draft_tokens_requested and not (",
+            "SpecDec cannot silently become global SpecDec",
+        ]
+        missing = [snippet for snippet in required if snippet not in text]
+        if missing:
+            raise AssertionError("missing snippets: " + ", ".join(missing))
+    except Exception as exc:
+        add(
+            checks,
+            "source",
+            "dynamic-K requires gate threshold",
+            "fail",
+            "dynamic-K can become global SpecDec unless runtime setup rejects missing request/token thresholds",
+            error=str(exc),
+        )
+        return
+
+    add(
+        checks,
+        "source",
+        "dynamic-K requires gate threshold",
+        "pass",
+        "runtime setup rejects dynamic-K without a positive static/adaptive request or token threshold",
+    )
+
+
+def check_controller_requires_gate_metrics(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    grpo = patch_root / "nemo_rl/algorithms/grpo.py"
+    try:
+        text = read_text(grpo)
+        required = [
+            "NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_GATE_METRICS_V1",
+            "controller/action_failed_gate_metrics",
+            "gate.get(\"metrics_complete\"",
+            "scheduler gate metrics unavailable",
+        ]
+        missing = [snippet for snippet in required if snippet not in text]
+        if missing:
+            raise AssertionError("missing snippets: " + ", ".join(missing))
+    except Exception as exc:
+        add(
+            checks,
+            "source",
+            "controller requires gate metrics",
+            "fail",
+            "step controller can update dynamic K from missing or partial scheduler gate metrics",
+            error=str(exc),
+        )
+        return
+
+    add(
+        checks,
+        "source",
+        "controller requires gate metrics",
+        "pass",
+        "step controller no-ops unless aggregate gate metrics and scheduler gate objects are available and complete",
+    )
+
+
 def check_scheduler_output_gate_runtime_fixture(checks: list[dict[str, Any]], patch_root: Path) -> None:
     worker = patch_root / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker.py"
     if not worker.exists():
@@ -806,6 +874,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     check_dynamic_request_id_arity_guard(checks, patch_root)
     check_dynamic_position_counter_partial_upgrade(checks, patch_root)
     check_runner_gate_first_draft_guard(checks, patch_root)
+    check_dynamic_requires_gate_threshold(checks, patch_root)
+    check_controller_requires_gate_metrics(checks, patch_root)
     check_scheduler_output_gate_runtime_fixture(checks, patch_root)
 
     if ignored:

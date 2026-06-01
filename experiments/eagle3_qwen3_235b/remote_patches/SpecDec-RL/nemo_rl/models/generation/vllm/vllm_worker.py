@@ -3773,6 +3773,23 @@ class BaseVllmGenerationWorker:
                 "VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD so adaptive "
                 "SpecDec cannot silently become global SpecDec."
             )
+        # NRL_SPECDEC_DYNAMIC_REQUIRES_GATE_THRESHOLD_V1
+        if specdec_dynamic_draft_tokens_requested and not (
+            specdec_batch_gate_threshold > 0
+            or specdec_batch_gate_token_threshold > 0
+            or specdec_adaptive_initial_request_threshold > 0
+            or specdec_adaptive_initial_token_threshold > 0
+            or specdec_adaptive_gate_requested
+        ):
+            raise RuntimeError(
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS is set, but no positive "
+                "static/adaptive request or token threshold is configured. "
+                "Set VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD, "
+                "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD, "
+                "VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD, or "
+                "VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD so dynamic-K "
+                "SpecDec cannot silently become global SpecDec."
+            )
         if specdec_gate_threshold_requested and not enable_runtime_specdec_gate_patch:
             raise RuntimeError(
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD or "
