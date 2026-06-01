@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 15:45 PDT",
+  "updated_at": "2026-06-01 15:53 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -23,7 +23,7 @@
       "job_id": "3080343",
       "submitted_at": "2026-06-01 15:00 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 15:45 PDT",
+      "latest_state": "RUNNING at 15:53 PDT",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "provenance": "manual_diagnostic",
@@ -41,13 +41,13 @@
       "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh",
       "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
       "wandb_name": "Qwen235B_A22B_PublicHF_NVIDIA_Thinking2507_Eagle3_k1_4step_20260601",
-      "latest_observation": "Ray cluster reached 128/128 workers online. The driver connected to Ray, NeMo-RL emitted the speculative-decoding-enabled warning, and Ray runtime-env builders are installing the math environment across workers. No vLLM model-load, acceptance, or throughput metric has been emitted yet."
+      "latest_observation": "Ray cluster reached 128/128 workers online. The driver connected to Ray, NeMo-RL emitted the speculative-decoding-enabled warning, VllmGenerationWorker env creation finished across workers, and the job has entered 235B safetensors model loading. Latest observed load progress reached roughly the first third of the 118 shards on the fastest workers. No acceptance or throughput metric has been emitted yet."
     },
     {
       "job_id": "3081230",
       "submitted_at": "2026-06-01 15:22 PDT",
       "state_at_submit_check": "PENDING",
-      "latest_state": "RUNNING at 15:45 PDT on coreai_dlalgo_llm",
+      "latest_state": "RUNNING at 15:53 PDT on coreai_dlalgo_llm",
       "drafter": "RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/RedHatAI_Qwen3-235B-A22B-Thinking-2507-speculator.eagle3",
       "provenance": "manual_diagnostic",
@@ -65,16 +65,16 @@
       "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh",
       "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
       "wandb_name": "Qwen235B_A22B_PublicHF_RedHat_speculator_eagle3_k1_4step_20260601",
-      "latest_observation": "Running on 32 nodes with a separate driver venv to avoid racing the NVIDIA diagnostic environment rebuild. Worker bootstrap reached 128/128 actors online, native extensions were built, the final 7 packages were installed, NeMo-RL emitted the speculative-decoding-enabled warning, and Ray runtime-env builders are installing the math environment across workers. No model-load or metric yet."
+      "latest_observation": "Running on 32 nodes with a separate driver venv to avoid racing the NVIDIA diagnostic environment rebuild. Worker bootstrap reached 128/128 actors online, NeMo-RL emitted the speculative-decoding-enabled warning, VllmGenerationWorker env creation finished across workers, and the job has entered 235B safetensors model loading. Latest observed load progress reached early shards out of 118. No acceptance or throughput metric has been emitted yet."
     }
   ],
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 228520,
+    "latest_observed_hidden_state_files": 234079,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
     "latest_observed_array_window": "tasks 41-50 running, 51-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT",
-    "rough_eta": "About 8-12h for remaining hidden-state extraction now that 10 shards are active, plus several hours for training if scheduling remains stable.",
+    "rough_eta": "About 6-10h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
 }
