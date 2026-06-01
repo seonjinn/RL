@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 08:40 PDT",
+  "updated_at": "2026-06-01 08:53 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1330,13 +1330,13 @@
       "replacement_job": "3072963",
       "reason": "V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and prevents partial per-request gating from becoming a whole-batch draft skip.",
       "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt",
-      "state_at_latest_check": "FAILED at 2026-06-01 07:50 PDT after Step 1 early metrics. MegatronPolicyWorker get_logprobs hit NCCL watchdog timeout on _ALLGATHER_BASE in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP after 1800000 ms, then Ray reported ActorDiedError. Current-code K=1 validation job 3073673 is RUNNING and has not reached Step 1 metrics yet."
+      "state_at_latest_check": "FAILED at 2026-06-01 07:50 PDT after Step 1 early metrics. MegatronPolicyWorker get_logprobs hit NCCL watchdog timeout on _ALLGATHER_BASE in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP after 1800000 ms, then Ray reported ActorDiedError. Current-code K=1 validation job 3073673 emitted Step 1 early metrics but launched with NRL_VLLM_OMIT_GENERATION_LOGPROBS=false and was cancelled after matched replacement 3074189 started with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true."
     },
     "post_review_hardening_commit": "c647865",
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, 57.40% acceptance. A separate review found possible generation-logprob mismatch between historical baseline and SpecDec runs, so final speedup claims now require a logprob-matched baseline rerun. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency; Step 1 early generation emitted acceptance_rate=0.5791 and early generated throughput 5777.31 tok/s/GPU, then entered policy.get_logprobs. This is not yet final NeMo-RL throughput. Public HF Eagle3 smoke runs are attach/provenance checks only unless the baseline/config/model family are re-run under identical conditions.",
+  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, 57.40% acceptance. A separate review found possible generation-logprob mismatch between historical baseline and SpecDec runs, so final speedup claims now require a logprob-matched baseline rerun. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 emitted Step 1 early generation with acceptance_rate=0.5791 and early generated throughput 5777.31 tok/s/GPU, then entered policy.get_logprobs. Its launch env shows NRL_VLLM_OMIT_GENERATION_LOGPROBS=false, so it is early evidence only and was cancelled after matched SpecDec job 3074189 started. Job 3074189 is running with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, K=1, token gate 2048, p64/g32, GBS 2048, and MAX_STEPS=4 for the apples-to-apples comparison against baseline job 3074142. Both 3074142 and 3074189 have command-line evidence for NRL_VLLM_OMIT_GENERATION_LOGPROBS=true. Public HF Eagle3 smoke runs are attach/provenance checks only unless the baseline/config/model family are re-run under identical conditions.",
   "current_primary_dynamic_k_job": "3072963_failed",
   "batch_gate_v7_review_fix": {
     "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running_step1_generation_seen",
@@ -1378,9 +1378,12 @@
     "num_prompts_per_step": 64,
     "num_generations_per_prompt": 32,
     "train_global_batch_size": 2048,
+    "env": {
+      "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "false"
+    },
     "draft_root": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193",
-    "result_status": "step1 early generation metrics emitted; final throughput pending policy.get_logprobs/training",
-    "state_at_latest_check": "RUNNING at 2026-06-01 08:38 PDT on nvl72139-T[09,11-12,15]; Step 1 generation completed and emitted early metrics, then entered policy.get_logprobs. No completed-step final generated tok/s/GPU metric yet.",
+    "result_status": "step1 early generation metrics emitted; cancelled after matched replacement started because launch env used NRL_VLLM_OMIT_GENERATION_LOGPROBS=false",
+    "state_at_latest_check": "COMPLETING after scancel at 2026-06-01 08:53 PDT; Step 1 generation completed and emitted early metrics, then entered policy.get_logprobs. No completed-step final generated tok/s/GPU metric emitted.",
     "step1_early_metrics": {
       "status": "early_generation_only_not_final_throughput",
       "acceptance_rate": 0.5791,
@@ -1395,6 +1398,26 @@
       "gate": "request_gate=0 token_gate=2048 K=1 static; effectively enabled for all Step 1 proposal checks",
       "next_phase_observed": "policy.get_logprobs"
     }
+  },
+  "logprob_matched_k1_validation_job": {
+    "job_id": "3074189",
+    "state_at_submit_check": "RUNNING at 2026-06-01 08:53 PDT on nvl72115-T[08-09,11,16]",
+    "purpose": "Apples-to-apples 30B SpecDec K=1 comparison against logprob-matched baseline job 3074142.",
+    "num_speculative_tokens": 1,
+    "request_gate": 0,
+    "token_gate": 2048,
+    "dynamic_k": false,
+    "max_steps": 4,
+    "num_prompts_per_step": 64,
+    "num_generations_per_prompt": 32,
+    "train_global_batch_size": 2048,
+    "env": {
+      "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "true"
+    },
+    "draft_model": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0",
+    "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_eval_jobs_logprobmatched.txt",
+    "run_config_evidence": "ray-head/ray-worker logs show NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, p64/g32, GBS=2048, MAX_STEPS=4, token_gate=2048, and draft_model checkpoint 0.",
+    "result_status": "running; waiting for NeMo-RL generation metrics"
   },
   "post_review_hardening": {
     "updated_at": "2026-06-01 07:44 PDT",
@@ -1449,7 +1472,8 @@
     "in_house_500k_speculators": "Main result tables require launcher provenance guards to point at the expected mixed non-OpenMath 500K checkpoint root.",
     "baseline_config_parity": "Required for final speedup claims. The analyzer must prove matching generation-logprob mode plus prompt/generation shape and vLLM batch caps, or mark the comparison non-comparable unless explicitly overridden for legacy diagnostics.",
     "drafter_training_mode": "Current measured NeMo-RL jobs use fixed_external_drafter. Online drafter refresh inside the GRPO loop is not implemented.",
-    "logprob_matched_baseline_job": "3074142 submitted at 2026-06-01 08:40 PDT for final apples-to-apples speedup."
+    "logprob_matched_baseline_job": "3074142 submitted at 2026-06-01 08:40 PDT for final apples-to-apples speedup.",
+    "logprob_matched_specdec_job": "3074189 submitted at 2026-06-01 08:48 PDT after fixing the 500K eval wrapper default to NRL_VLLM_OMIT_GENERATION_LOGPROBS=true; running at 2026-06-01 08:53 PDT with command-line evidence for the true setting."
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
@@ -1481,10 +1505,10 @@
     "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
   },
   "logprob_matched_baseline_validation": {
-    "updated_at": "2026-06-01 08:40 PDT",
+    "updated_at": "2026-06-01 08:53 PDT",
     "baseline_job_id": "3074142",
     "baseline_job_name": "qwen30ba3b-main-baseline-logprobmatched-p64g32-4step-N4xG4",
-    "state": "submitted",
+    "state": "baseline running; matched SpecDec running",
     "purpose": "Apples-to-apples baseline for current 30B SpecDec K=1 validation, with generation logprobs omitted to match vLLM SpecDec behavior.",
     "num_prompts_per_step": 64,
     "num_generations_per_prompt": 32,
@@ -1493,7 +1517,9 @@
     "env": {
       "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "true"
     },
-    "compare_against_specdec_job": "3073673",
-    "note": "Historical baseline 4169.19 tok/s/GPU remains useful context, but final speedup should use this logprob-matched baseline once completed."
+    "compare_against_specdec_job": "3074189",
+    "superseded_noncomparable_specdec_job": "3073673",
+    "matched_specdec_job_state_at_submit_check": "RUNNING at 2026-06-01 08:53 PDT on nvl72115-T[08-09,11,16]",
+    "note": "Historical baseline 4169.19 tok/s/GPU remains useful context, but final speedup should use baseline 3074142 and SpecDec 3074189 once both complete. Job 3073673 remains useful for early acceptance evidence but launched with NRL_VLLM_OMIT_GENERATION_LOGPROBS=false."
   }
 }
