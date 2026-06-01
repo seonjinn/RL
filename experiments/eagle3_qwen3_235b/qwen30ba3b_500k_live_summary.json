@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 14:23 PDT",
+  "updated_at": "2026-06-01 14:28 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -2024,13 +2024,14 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 14:15 PDT",
+    "updated_at": "2026-06-01 14:28 PDT",
     "hidden_state_array_job": "3072149_[0-99]%5",
     "active_tasks": "36-40 running; 41-99 pending on JobArrayTaskLimit",
     "train_job": "3072524 dependency-pending on hidden-state array completion",
-    "hidden_state_files_observed": 196639,
+    "hidden_state_files_observed": 201722,
     "hidden_state_files_expected": 500000,
-    "status": "hidden-state generation is still running; 235B Speculators training has not started yet."
+    "status": "hidden-state generation is still running; 235B Speculators training has not started yet.",
+    "hidden_state_file_extension": ".safetensors"
   },
   "hybridep_specdec_interpretation": {
     "updated_at": "2026-06-01 14:11 PDT",
