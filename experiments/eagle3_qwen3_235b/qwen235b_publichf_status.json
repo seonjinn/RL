@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 15:15 PDT",
+  "updated_at": "2026-06-01 15:18 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -49,8 +49,8 @@
     "train_job": "3072524",
     "latest_observed_hidden_state_files": 213472,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 41-45 running, 46-99 pending on JobArrayTaskLimit",
-    "rough_eta": "About 16-20h for remaining hidden-state extraction plus several hours for training if scheduling remains stable.",
+    "latest_observed_array_window": "tasks 41-45 running; pending suffix updated from 3072149_[46-99%5] to 3072149_[46-99%10] after raising ArrayTaskThrottle to 10 at 15:18 PDT",
+    "rough_eta": "About 16-20h if only 5 shards keep running; potentially closer to 8-10h for remaining hidden-state extraction if the raised throttle reaches 10 active shards, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
 }
