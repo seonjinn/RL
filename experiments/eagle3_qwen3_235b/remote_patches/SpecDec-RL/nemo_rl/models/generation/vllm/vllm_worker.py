@@ -342,6 +342,18 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_gate_last_num_tokens": "last_num_tokens",
             "_nrl_specdec_scheduler_gate_last_disabled": "last_disabled",
             "_nrl_specdec_scheduler_gate_effective_lookahead_tokens": "effective_lookahead_tokens",
+            "_nrl_specdec_scheduler_dynamic_draft_tokens_enabled": "dynamic_draft_tokens_enabled",
+            "_nrl_specdec_scheduler_dynamic_last_selected_tokens": "dynamic_last_selected_tokens",
+            "_nrl_specdec_scheduler_dynamic_small_request_threshold": "dynamic_small_request_threshold",
+            "_nrl_specdec_scheduler_dynamic_medium_request_threshold": "dynamic_medium_request_threshold",
+            "_nrl_specdec_scheduler_dynamic_small_token_threshold": "dynamic_small_token_threshold",
+            "_nrl_specdec_scheduler_dynamic_medium_token_threshold": "dynamic_medium_token_threshold",
+            "_nrl_specdec_scheduler_dynamic_small_tokens": "dynamic_small_tokens",
+            "_nrl_specdec_scheduler_dynamic_medium_tokens": "dynamic_medium_tokens",
+            "_nrl_specdec_scheduler_dynamic_large_tokens": "dynamic_large_tokens",
+            "_nrl_specdec_scheduler_dynamic_small_selected_count": "dynamic_small_selected_count",
+            "_nrl_specdec_scheduler_dynamic_medium_selected_count": "dynamic_medium_selected_count",
+            "_nrl_specdec_scheduler_dynamic_large_selected_count": "dynamic_large_selected_count",
             "_nrl_specdec_scheduler_adaptive_mode": "adaptive_mode",
             "_nrl_specdec_scheduler_adaptive_request_threshold": "adaptive_request_threshold",
             "_nrl_specdec_scheduler_adaptive_token_threshold": "adaptive_token_threshold",
@@ -643,6 +655,14 @@ class BaseVllmGenerationWorker:
                 "VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL",
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                 "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS",
                 "VLLM_USE_RAY_COMPILED_DAG",
                 "VLLM_USE_RAY_SPMD_WORKER",
                 "VLLM_USE_RAY_WRAPPED_PP_COMM",
@@ -1637,7 +1657,11 @@ class BaseVllmGenerationWorker:
             """
 
             mode = os.environ.get("VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off").lower()
-            if mode in {"", "0", "off", "false", "no"}:
+            dynamic_mode = os.environ.get(
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS", "0"
+            ).lower()
+            dynamic_requested = dynamic_mode in {"1", "true", "yes", "y", "on"}
+            if mode in {"", "0", "off", "false", "no"} and not dynamic_requested:
                 return 0
 
             applied = 0
@@ -1869,19 +1893,103 @@ class BaseVllmGenerationWorker:
                     or "else _nrl_specdec_scheduler_lookahead_tokens(" in text
                 )
 
+            dynamic_scheduler_lookahead_block = (
+                "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1\n"
+                "            effective_lookahead_tokens = 0 if disabled else self.num_lookahead_tokens\n"
+                "            dynamic_enabled = getattr(\n"
+                "                self, \"_nrl_specdec_scheduler_dynamic_draft_tokens_enabled\", None\n"
+                "            )\n"
+                "            if dynamic_enabled is None:\n"
+                "                _nrl_os = __import__(\"os\")\n"
+                "                dynamic_enabled = _nrl_os.environ.get(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS\", \"0\"\n"
+                "                ).lower() in {\"1\", \"true\", \"yes\", \"y\", \"on\"}\n"
+                "                self._nrl_specdec_scheduler_dynamic_draft_tokens_enabled = dynamic_enabled\n"
+                "                def _nrl_dynamic_int(name, default):\n"
+                "                    value = _nrl_os.environ.get(name, \"\")\n"
+                "                    return int(value) if value.isdigit() else default\n"
+                "                self._nrl_specdec_scheduler_dynamic_small_request_threshold = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD\", 4\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_medium_request_threshold = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD\", 16\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_small_token_threshold = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD\", 0\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_medium_token_threshold = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD\", 0\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_small_tokens = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS\", self.num_lookahead_tokens\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_medium_tokens = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS\", min(self.num_lookahead_tokens, 2)\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_large_tokens = _nrl_dynamic_int(\n"
+                "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS\", 1\n"
+                "                )\n"
+                "            if dynamic_enabled and effective_lookahead_tokens > 0:\n"
+                "                small_request_threshold = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_small_request_threshold\", 4\n"
+                "                )\n"
+                "                medium_request_threshold = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_medium_request_threshold\", 16\n"
+                "                )\n"
+                "                small_token_threshold = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_small_token_threshold\", 0\n"
+                "                )\n"
+                "                medium_token_threshold = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_medium_token_threshold\", 0\n"
+                "                )\n"
+                "                selected_tokens = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_large_tokens\", 1\n"
+                "                )\n"
+                "                selected_tier = \"large\"\n"
+                "                if active_requests <= small_request_threshold and (\n"
+                "                    small_token_threshold <= 0 or num_tokens <= small_token_threshold\n"
+                "                ):\n"
+                "                    selected_tokens = getattr(\n"
+                "                        self,\n"
+                "                        \"_nrl_specdec_scheduler_dynamic_small_tokens\",\n"
+                "                        self.num_lookahead_tokens,\n"
+                "                    )\n"
+                "                    selected_tier = \"small\"\n"
+                "                elif active_requests <= medium_request_threshold and (\n"
+                "                    medium_token_threshold <= 0 or num_tokens <= medium_token_threshold\n"
+                "                ):\n"
+                "                    selected_tokens = getattr(\n"
+                "                        self,\n"
+                "                        \"_nrl_specdec_scheduler_dynamic_medium_tokens\",\n"
+                "                        min(self.num_lookahead_tokens, 2),\n"
+                "                    )\n"
+                "                    selected_tier = \"medium\"\n"
+                "                effective_lookahead_tokens = min(\n"
+                "                    self.num_lookahead_tokens,\n"
+                "                    max(1, int(selected_tokens)),\n"
+                "                )\n"
+                "                count_name = f\"_nrl_specdec_scheduler_dynamic_{selected_tier}_selected_count\"\n"
+                "                setattr(self, count_name, getattr(self, count_name, 0) + 1)\n"
+                "            self._nrl_specdec_scheduler_dynamic_last_selected_tokens = effective_lookahead_tokens\n"
+            )
+
             scheduler_required_markers = [
                 "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
+                "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1",
                 "def _nrl_specdec_scheduler_lookahead_tokens",
                 "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
                 "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS",
                 "_nrl_specdec_scheduler_adaptive_request_threshold",
                 "_nrl_specdec_scheduler_adaptive_token_threshold",
                 "_nrl_specdec_scheduler_adaptive_window_checked",
                 "_nrl_specdec_scheduler_gate_last_active_requests",
                 "active_requests = max(num_requests, len(self.running))",
                 "_nrl_specdec_scheduler_gate_effective_lookahead_tokens",
+                "_nrl_specdec_scheduler_dynamic_last_selected_tokens",
+                "_nrl_specdec_scheduler_dynamic_small_selected_count",
                 "NRL SpecDec scheduler adaptive gate:",
-                "return 0 if disabled else self.num_lookahead_tokens",
+                "return effective_lookahead_tokens",
             ]
             if "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1" not in scheduler_content:
                 if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" not in scheduler_content:
@@ -1991,13 +2099,12 @@ class BaseVllmGenerationWorker:
                     "                (request_threshold > 0 and active_requests > request_threshold)\n"
                     "                or (token_threshold > 0 and num_tokens > token_threshold)\n"
                     "            )\n"
-                    "            self._nrl_specdec_scheduler_gate_last_num_requests = num_requests\n"
+                    + dynamic_scheduler_lookahead_block
+                    + "            self._nrl_specdec_scheduler_gate_last_num_requests = num_requests\n"
                     "            self._nrl_specdec_scheduler_gate_last_active_requests = active_requests\n"
                     "            self._nrl_specdec_scheduler_gate_last_num_tokens = num_tokens\n"
                     "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
-                    "            self._nrl_specdec_scheduler_gate_effective_lookahead_tokens = (\n"
-                    "                0 if disabled else self.num_lookahead_tokens\n"
-                    "            )\n"
+                    "            self._nrl_specdec_scheduler_gate_effective_lookahead_tokens = effective_lookahead_tokens\n"
                     "            self._nrl_specdec_scheduler_gate_checked_count = getattr(\n"
                     "                self, \"_nrl_specdec_scheduler_gate_checked_count\", 0\n"
                     "            ) + 1\n"
@@ -2112,7 +2219,7 @@ class BaseVllmGenerationWorker:
                     "                else:\n"
                     "                    self._nrl_specdec_scheduler_adaptive_window_checked = adaptive_window_checked\n"
                     "                    self._nrl_specdec_scheduler_adaptive_window_enabled = adaptive_window_enabled\n"
-                    "            return 0 if disabled else self.num_lookahead_tokens\n"
+                    "            return effective_lookahead_tokens\n"
                 )
 
                 scheduler_content = scheduler_content.replace(
@@ -2261,6 +2368,39 @@ class BaseVllmGenerationWorker:
                         with open(scheduler, "w") as f:
                             f.write(upgraded_content)
                         scheduler_content = upgraded_content
+                if "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1" not in scheduler_content:
+                    static_effective_block = (
+                        "            self._nrl_specdec_scheduler_gate_last_num_requests = num_requests\n"
+                        "            self._nrl_specdec_scheduler_gate_last_active_requests = active_requests\n"
+                        "            self._nrl_specdec_scheduler_gate_last_num_tokens = num_tokens\n"
+                        "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
+                        "            self._nrl_specdec_scheduler_gate_effective_lookahead_tokens = (\n"
+                        "                0 if disabled else self.num_lookahead_tokens\n"
+                        "            )\n"
+                    )
+                    dynamic_effective_block = (
+                        dynamic_scheduler_lookahead_block
+                        + "            self._nrl_specdec_scheduler_gate_last_num_requests = num_requests\n"
+                        "            self._nrl_specdec_scheduler_gate_last_active_requests = active_requests\n"
+                        "            self._nrl_specdec_scheduler_gate_last_num_tokens = num_tokens\n"
+                        "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
+                        "            self._nrl_specdec_scheduler_gate_effective_lookahead_tokens = effective_lookahead_tokens\n"
+                    )
+                    static_return = "            return 0 if disabled else self.num_lookahead_tokens\n"
+                    if static_effective_block not in scheduler_content or static_return not in scheduler_content:
+                        raise RuntimeError(
+                            "Could not upgrade existing adaptive SpecDec scheduler "
+                            f"gate with dynamic draft-depth cap in {scheduler}; "
+                            "expected V1 scheduler anchors were missing."
+                        )
+                    scheduler_content = scheduler_content.replace(
+                        static_effective_block, dynamic_effective_block, 1
+                    )
+                    scheduler_content = scheduler_content.replace(
+                        static_return, "            return effective_lookahead_tokens\n", 1
+                    )
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
                 missing_markers = [
                     marker
                     for marker in scheduler_required_markers
@@ -2300,6 +2440,28 @@ class BaseVllmGenerationWorker:
                     f"{name} must be a non-negative integer, got {value!r}."
                 )
             return parsed
+
+        def _nrl_env_optional_positive_int(name: str) -> int | None:
+            value = os.environ.get(name)
+            if value is None or str(value).strip() == "":
+                return None
+            parsed = _nrl_env_nonnegative_int(name)
+            if parsed < 1:
+                raise RuntimeError(f"{name} must be >= 1, got {value!r}.")
+            return parsed
+
+        def _nrl_env_bool(name: str, default: bool = False) -> bool:
+            value = os.environ.get(name)
+            if value is None or str(value).strip() == "":
+                return default
+            normalized = str(value).strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off"}:
+                return False
+            raise RuntimeError(
+                f"{name} must be a boolean value, got {value!r}."
+            )
 
         def _nrl_env_float(
             name: str,
@@ -2384,6 +2546,64 @@ class BaseVllmGenerationWorker:
             min_value=0.0,
             max_value=1.0,
         )
+        specdec_dynamic_small_request_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD", 4
+        )
+        specdec_dynamic_medium_request_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD", 16
+        )
+        specdec_dynamic_small_token_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD", 0
+        )
+        specdec_dynamic_medium_token_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD", 0
+        )
+        if (
+            specdec_dynamic_small_request_threshold
+            > specdec_dynamic_medium_request_threshold
+        ):
+            raise RuntimeError(
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD must be <= "
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD."
+            )
+        if (
+            specdec_dynamic_small_token_threshold > 0
+            and specdec_dynamic_medium_token_threshold > 0
+            and specdec_dynamic_small_token_threshold
+            > specdec_dynamic_medium_token_threshold
+        ):
+            raise RuntimeError(
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD must be <= "
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD when both "
+                "are positive."
+            )
+        dynamic_small_tokens = _nrl_env_optional_positive_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS"
+        )
+        dynamic_medium_tokens = _nrl_env_optional_positive_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS"
+        )
+        dynamic_large_tokens = _nrl_env_optional_positive_int(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS"
+        )
+        if (
+            dynamic_small_tokens is not None
+            and dynamic_medium_tokens is not None
+            and dynamic_small_tokens < dynamic_medium_tokens
+        ):
+            raise RuntimeError(
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS must be >= "
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS."
+            )
+        if (
+            dynamic_medium_tokens is not None
+            and dynamic_large_tokens is not None
+            and dynamic_medium_tokens < dynamic_large_tokens
+        ):
+            raise RuntimeError(
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS must be >= "
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS."
+            )
         specdec_adaptive_gate_mode = os.environ.get(
             "VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off"
         ).lower()
@@ -2394,6 +2614,9 @@ class BaseVllmGenerationWorker:
             "false",
             "no",
         }
+        specdec_dynamic_draft_tokens_requested = _nrl_env_bool(
+            "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS", False
+        )
         enable_runtime_specdec_gate_patch = os.environ.get(
             "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH", "0"
         ).lower() in {"1", "true", "yes", "y", "on"}
@@ -2401,6 +2624,7 @@ class BaseVllmGenerationWorker:
             specdec_batch_gate_threshold > 0
             or specdec_batch_gate_token_threshold > 0
             or specdec_adaptive_gate_requested
+            or specdec_dynamic_draft_tokens_requested
         )
         if specdec_adaptive_gate_requested and not (
             specdec_batch_gate_threshold > 0
@@ -2421,7 +2645,8 @@ class BaseVllmGenerationWorker:
             raise RuntimeError(
                 "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD or "
                 "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD or "
-                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE is set, but "
+                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE or "
+                "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS is set, but "
                 "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH is not true. "
                 "This would run with global SpecDec instead of the intended "
                 "runtime scheduler gate."
@@ -2464,6 +2689,7 @@ class BaseVllmGenerationWorker:
                 adaptive_gate_patch_status = (
                     _patch_vllm_adaptive_specdec_gate()
                     if specdec_adaptive_gate_requested
+                    or specdec_dynamic_draft_tokens_requested
                     else 0
                 )
             else:
@@ -2478,11 +2704,12 @@ class BaseVllmGenerationWorker:
             logger.info(
                 "vLLM batch-gated speculative decoding patch status: %s "
                 "(threshold=%s active requests, token_threshold=%s scheduled tokens, "
-                "adaptive_mode=%s, adaptive_status=%s).",
+                "adaptive_mode=%s, dynamic_draft_tokens=%s, adaptive_status=%s).",
                 "applied" if batch_gate_patch_status else "already-present",
                 specdec_batch_gate_threshold,
                 specdec_batch_gate_token_threshold,
                 specdec_adaptive_gate_mode,
+                specdec_dynamic_draft_tokens_requested,
                 "applied" if adaptive_gate_patch_status else "already-present-or-off",
             )
 

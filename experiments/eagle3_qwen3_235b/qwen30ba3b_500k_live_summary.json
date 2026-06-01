@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 20:52 PDT",
+  "updated_at": "2026-05-31 21:34 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -928,14 +928,14 @@
     "operational_decision": "Treat K=1 as the current production-quality setting for NeMo-RL. K=2/K=3 should only be enabled behind adaptive depth or long-tail gating if per-position acceptance improves."
   },
   "adaptive_gate_implementation": {
-    "status": "implemented_validated_remotely_runner_deadlock_fixed_resubmitted",
-    "updated_at": "2026-05-31 20:52 PDT",
-    "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
-    "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
-    "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
-    "current_behavior": "The vLLM scheduler lookahead gate starts from static request/token thresholds, measures local SpecDec enabled ratios over rolling windows, then tightens or loosens request/token thresholds toward a target enabled ratio. The scheduler request pressure now uses active requests, max(len(self.running), scheduled_requests), instead of scheduled_requests alone, so long-tail activation follows the actual active batch. The model runner now skips draft proposal only when its request/token threshold state says disabled; it no longer treats an empty scheduled_spec_decode_tokens map as a disable signal, because that can deadlock the first EAGLE draft. Adaptive mode fails fast unless at least one positive static or initial request/token threshold is configured, preventing accidental global SpecDec. Existing patched vLLM worker environments are upgraded in place for the active-batch scheduler marker and runner threshold-disabled/deadlock-fix markers instead of failing on marker drift.",
-    "metrics_visibility": "NeMo-RL exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last scheduled request count, last active request count, last token count, thresholds, and adaptive threshold state. The sync worker already returned these metrics; the async worker returns the same spec_decode_gate payload and resets the gate baseline in clear_vllm_logger_metrics. A post-review fix now also emits spec_decode_gate/metrics_available=0 when SpecDec is enabled but no gate object is reachable, so missing gate metrics are explicit rather than silently absent.",
-    "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8. Primary token-pressure active-batch run uses request threshold 0, token threshold 2048, adaptive target 0.75. Follow-up long-tail request-gate runs use req32+tok2048 and req64+tok2048 with adaptive target 0.50.",
+    "status": "implemented_validated_remotely_runner_deadlock_fixed_resubmitted_dynamic_depth_resubmitted_after_review",
+    "updated_at": "2026-05-31 21:34 PDT",
+    "scope": "Taming Long Tail/ReSpec-style adaptive activation and draft-depth selection for NeMo-RL/vLLM SpecDec",
+    "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1 plus NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1",
+    "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*; SPECDEC_DYNAMIC_DRAFT_* -> VLLM_SPECDEC_DYNAMIC_DRAFT_*",
+    "current_behavior": "The vLLM scheduler lookahead gate starts from static request/token thresholds, measures local SpecDec enabled ratios over rolling windows, then tightens or loosens request/token thresholds toward a target enabled ratio. The scheduler request pressure now uses active requests, max(len(self.running), scheduled_requests), instead of scheduled_requests alone, so long-tail activation follows the actual active batch. The model runner now skips draft proposal only when its request/token threshold state says disabled; it no longer treats an empty scheduled_spec_decode_tokens map as a disable signal, because that can deadlock the first EAGLE draft. Adaptive mode fails fast unless at least one positive static or initial request/token threshold is configured, preventing accidental global SpecDec. ReSpec-style dynamic depth can cap the scheduler lookahead by active-batch regime, for example K=3 when active requests <=4, K=2 when active requests <=32, and K=1 otherwise. Existing patched vLLM worker environments are upgraded in place for the active-batch scheduler marker, dynamic-depth marker, and runner threshold-disabled/deadlock-fix markers instead of failing on marker drift.",
+    "metrics_visibility": "NeMo-RL exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last scheduled request count, last active request count, last token count, thresholds, adaptive threshold state, and dynamic draft-depth state including dynamic_last_selected_tokens. The sync worker already returned these metrics; the async worker returns the same spec_decode_gate payload and resets the gate baseline in clear_vllm_logger_metrics. A post-review fix now also emits spec_decode_gate/metrics_available=0 when SpecDec is enabled but no gate object is reachable, so missing gate metrics are explicit rather than silently absent.",
+    "default_fast_eval_plan": "Qwen3-30B-A3B K=1, MAX_STEPS=8. Primary token-pressure active-batch run uses request threshold 0, token threshold 2048, adaptive target 0.75. Follow-up long-tail request-gate runs use req32+tok2048 and req64+tok2048 with adaptive target 0.50. ReSpec-style dynamic-depth run uses max K=3, req64+tok2048, active-request caps <=4 -> K3, <=32 -> K2, and larger active batches -> K1.",
     "pre_metrics_patch_eval_job": "3062282",
     "pre_metrics_patch_eval_state": "CANCELLED at 2026-05-31 16:42 PDT after reaching Step 4 from the older /lustre/.../nemo-rl checkout. It emitted secondary NeMo-RL performance metrics, including Step 1 5718.39 and Step 2 5315.41 tok/s/GPU, mean 5516.90 tok/s/GPU across the first two recorded metrics, with mean per-position acceptance 57.46%. This remains secondary evidence because the checkout is not the validated /SpecDec-RL path.",
     "failed_corrected_eval_job": "3062401",
@@ -969,16 +969,16 @@
     ],
     "superseded_runner_deadlock_eval_state": "CANCELLED/SUPERSEDED at 2026-05-31 20:52 PDT. These jobs reached rollout, but logs showed runner gate counters with enabled=0 and disabled=checked because the runner interpreted empty scheduled_spec_decode_tokens as a disable signal. Since that can prevent the first EAGLE draft from ever being proposed, these runs should not be used for acceptance or throughput conclusions.",
     "corrected_eval_job": "3065811",
-    "corrected_eval_state": "PENDING at 2026-05-31 20:52 PDT. Job 3065811 is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive target 0.75, using the runner deadlock fix.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 21:34 PDT. Job 3065811 is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive target 0.75, using the runner deadlock fix. Ray is up with 16/16 workers; vLLM model loading and CUDA Graph capture progressed, and the driver is building Megatron policy-worker runtime environments. No Step 1/8, SpecDec gate counter, throughput, or acceptance metric has emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_activebatch_jobs.txt",
     "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold-disabled gating without scheduled_spec_decode_tokens deadlock, async spec_decode_gate metric forwarding, explicit metrics_available=0 fallback when gate objects are not reachable, safer launcher defaults that enable the runtime gate with a 4096-token threshold, target-applied remote validation for the new markers, and py_compile validation of generated vLLM runner/scheduler files after runtime patching. Qwen30/Qwen235 launchers now also wait for iter_0000000/run_config.yaml when a checkpoint directory already exists, preventing concurrent conversion races from being mistaken for completed checkpoints.",
-    "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet.",
+    "known_limit": "This implements adaptive activation and ReSpec-style dynamic draft-depth selection, not the full TLT/ReSpec research system: no online drafter refresh, no reward-weighted KD, and no idle-GPU spot training yet.",
     "superseded_activebatch_eval_job": "3063331",
     "superseded_activebatch_eval_state": "CANCELLED at 2026-05-31 18:33 PDT after 00:05:18 because it started building the driver environment before the final runner threshold-disabled hardening was synced.",
     "activebatch_followup_jobs": [
       {
         "job_id": "3065812",
-        "state_at_submit_check": "PENDING at 2026-05-31 20:52 PDT after runner deadlock fix. req32+tok2048 adaptive target 0.50 is resubmitted; no rollout throughput or acceptance metric has emitted yet.",
+        "state_at_submit_check": "RUNNING at 2026-05-31 21:34 PDT after runner deadlock fix. req32+tok2048 adaptive target 0.50 is resubmitted. Ray is up with 16/16 workers; vLLM model loading and CUDA Graph capture progressed, and Megatron policy-worker initialization has started. No rollout throughput or acceptance metric has emitted yet.",
         "num_speculative_tokens": 1,
         "request_gate": 32,
         "token_gate": 2048,
@@ -987,7 +987,7 @@
       },
       {
         "job_id": "3065813",
-        "state_at_submit_check": "PENDING at 2026-05-31 20:52 PDT after runner deadlock fix. This supersedes failed job 3064872 and deadlock-affected retry 3065713 with the same req64+tok2048 adaptive target 0.50 settings.",
+        "state_at_submit_check": "RUNNING at 2026-05-31 21:34 PDT after runner deadlock fix. This supersedes failed job 3064872 and deadlock-affected retry 3065713 with the same req64+tok2048 adaptive target 0.50 settings. Ray is up with 16/16 workers; vLLM model loading and CUDA Graph capture progressed, and Megatron policy-worker initialization has started. No rollout throughput or acceptance metric has emitted yet.",
         "num_speculative_tokens": 1,
         "request_gate": 64,
         "token_gate": 2048,
@@ -995,6 +995,24 @@
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_fix_req64_jobs.txt"
       }
     ],
+    "dynamic_depth_superseded_job": {
+      "job_id": "3066189",
+      "state_at_submit_check": "CANCELLED/SUPERSEDED at 2026-05-31 21:27 PDT before rollout metrics. Agent review and direct inspection of the generated vLLM scheduler showed no NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1 marker because dynamic-only mode returned early when VLLM_SPECDEC_ADAPTIVE_GATE_MODE was off. Do not use this job for dynamic-depth conclusions."
+    },
+    "dynamic_depth_followup_job": {
+      "job_id": "3066319",
+      "state_at_submit_check": "RUNNING at 2026-05-31 21:34 PDT. Submitted after fixing dynamic-only scheduler patching, stricter dynamic env validation, dynamic token-threshold metrics, and per-tier dynamic selection counters. It is max K=3, max_steps=8, GBS=2048, request gate 64, token gate 2048, dynamic draft-depth enabled with small active requests <=4 using K=3, medium <=32 using K=2, and larger batches using K=1. Ray reached 16/16 workers after a head restart; the driver is building its runtime environment. No rollout throughput, acceptance, or dynamic_last_selected_tokens metric has emitted yet.",
+      "num_speculative_tokens": 3,
+      "request_gate": 64,
+      "token_gate": 2048,
+      "dynamic_draft_tokens": true,
+      "small_request_threshold": 4,
+      "medium_request_threshold": 32,
+      "small_tokens": 3,
+      "medium_tokens": 2,
+      "large_tokens": 1,
+      "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamic_depth_jobs.txt"
+    },
     "superseded_shared_venv_followup_jobs": [
       "3063421",
       "3063422"
@@ -1008,5 +1026,5 @@
     "activebatch_req64_retry_job": "3065713",
     "activebatch_req64_retry_state": "CANCELLED/SUPERSEDED at 2026-05-31 20:52 PDT because it used the runner code that could deadlock first-draft proposal when scheduled_spec_decode_tokens was empty."
   },
-  "caveat": "30B adaptive jobs 3065811, 3065812, and 3065813 are newly submitted after fixing the runner first-draft deadlock. No new adaptive acceptance/throughput number is available yet beyond previously confirmed 30B K=1 token-pressure result 3060379 at 5696.58 tok/s/GPU and 57.40% acceptance."
+  "caveat": "30B adaptive jobs 3065811, 3065812, 3065813, and dynamic-depth replacement job 3066319 are running after fixing the runner first-draft deadlock and dynamic-only scheduler no-op. No new adaptive acceptance/throughput number is available yet beyond previously confirmed 30B K=1 token-pressure result 3060379 at 5696.58 tok/s/GPU and 57.40% acceptance."
 }
