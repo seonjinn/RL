@@ -343,6 +343,17 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_dynamic_small_selected_count": "dynamic_small_selected_count",
             "_nrl_specdec_scheduler_dynamic_medium_selected_count": "dynamic_medium_selected_count",
             "_nrl_specdec_scheduler_dynamic_large_selected_count": "dynamic_large_selected_count",
+            "_nrl_specdec_scheduler_dynamic_small_selected_token_count": "dynamic_small_selected_token_count",
+            "_nrl_specdec_scheduler_dynamic_medium_selected_token_count": "dynamic_medium_selected_token_count",
+            "_nrl_specdec_scheduler_dynamic_large_selected_token_count": "dynamic_large_selected_token_count",
+            "_nrl_specdec_scheduler_dynamic_pos1_selected_count": "dynamic_pos1_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos2_selected_count": "dynamic_pos2_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos3_selected_count": "dynamic_pos3_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos4_selected_count": "dynamic_pos4_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos5_selected_count": "dynamic_pos5_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos6_selected_count": "dynamic_pos6_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos7_selected_count": "dynamic_pos7_selected_count",
+            "_nrl_specdec_scheduler_dynamic_pos8_selected_count": "dynamic_pos8_selected_count",
         }
         scheduler_values = {
             "_nrl_specdec_scheduler_gate_threshold": "request_threshold",
@@ -354,6 +365,7 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_gate_effective_lookahead_tokens": "effective_lookahead_tokens",
             "_nrl_specdec_scheduler_dynamic_draft_tokens_enabled": "dynamic_draft_tokens_enabled",
             "_nrl_specdec_scheduler_dynamic_last_selected_tokens": "dynamic_last_selected_tokens",
+            "_nrl_specdec_scheduler_dynamic_last_selected_tier": "dynamic_last_selected_tier",
             "_nrl_specdec_scheduler_dynamic_last_stored_tokens": "dynamic_last_stored_tokens",
             "_nrl_specdec_scheduler_dynamic_small_request_threshold": "dynamic_small_request_threshold",
             "_nrl_specdec_scheduler_dynamic_medium_request_threshold": "dynamic_medium_request_threshold",
@@ -1991,6 +2003,21 @@ class BaseVllmGenerationWorker:
                 "                self._nrl_specdec_scheduler_dynamic_large_selected_count = getattr(\n"
                 "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_count\", 0\n"
                 "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_small_selected_token_count = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_small_selected_token_count\", 0\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_medium_selected_token_count = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_medium_selected_token_count\", 0\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_large_selected_token_count = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_token_count\", 0\n"
+                "                )\n"
+                "                for _nrl_pos_idx in range(1, 9):\n"
+                "                    _nrl_pos_name = f\"_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count\"\n"
+                "                    setattr(self, _nrl_pos_name, getattr(self, _nrl_pos_name, 0))\n"
+                "                self._nrl_specdec_scheduler_dynamic_last_selected_tier = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_last_selected_tier\", \"\"\n"
+                "                )\n"
                 "            if dynamic_enabled and effective_lookahead_tokens > 0:\n"
                 "                small_request_threshold = getattr(\n"
                 "                    self, \"_nrl_specdec_scheduler_dynamic_small_request_threshold\", 4\n"
@@ -2030,8 +2057,9 @@ class BaseVllmGenerationWorker:
                 "                    self.num_lookahead_tokens,\n"
                 "                    max(1, int(selected_tokens)),\n"
                 "                )\n"
-                "                count_name = f\"_nrl_specdec_scheduler_dynamic_{selected_tier}_selected_count\"\n"
-                "                setattr(self, count_name, getattr(self, count_name, 0) + 1)\n"
+                "                self._nrl_specdec_scheduler_dynamic_last_selected_tier = selected_tier\n"
+                "            else:\n"
+                "                self._nrl_specdec_scheduler_dynamic_last_selected_tier = \"\"\n"
                 "            self._nrl_specdec_scheduler_dynamic_last_selected_tokens = effective_lookahead_tokens\n"
             )
 
@@ -2050,8 +2078,12 @@ class BaseVllmGenerationWorker:
                 "active_requests = max(num_requests, len(self.running))",
                 "_nrl_specdec_scheduler_gate_effective_lookahead_tokens",
                 "_nrl_specdec_scheduler_dynamic_last_selected_tokens",
+                "_nrl_specdec_scheduler_dynamic_last_selected_tier",
                 "_nrl_specdec_scheduler_dynamic_last_stored_tokens",
                 "_nrl_specdec_scheduler_dynamic_small_selected_count",
+                "_nrl_specdec_scheduler_dynamic_small_selected_token_count",
+                "_nrl_specdec_scheduler_dynamic_pos1_selected_count",
+                "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_COUNTERS_ON_STORE_V1",
                 "NRL SpecDec scheduler adaptive gate:",
                 "return effective_lookahead_tokens",
             ]
@@ -2082,7 +2114,7 @@ class BaseVllmGenerationWorker:
                 "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
                 "            request.spec_token_ids = spec_token_ids\n",
             ]
-            update_draft_cap_block = (
+            old_update_draft_cap_block = (
                 "            # Add newly generated spec token ids to the request.\n"
                 "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1\n"
                 "            dynamic_draft_cap = getattr(\n"
@@ -2106,6 +2138,47 @@ class BaseVllmGenerationWorker:
                 "                metadata = request.structured_output_request\n"
                 "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
                 "            request.spec_token_ids = spec_token_ids\n"
+            )
+            update_draft_cap_block = (
+                "            # Add newly generated spec token ids to the request.\n"
+                "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1\n"
+                "            dynamic_draft_cap = getattr(\n"
+                "                self,\n"
+                "                \"_nrl_specdec_scheduler_dynamic_last_selected_tokens\",\n"
+                "                self.num_spec_tokens,\n"
+                "            )\n"
+                "            try:\n"
+                "                dynamic_draft_cap = int(dynamic_draft_cap)\n"
+                "            except (TypeError, ValueError):\n"
+                "                dynamic_draft_cap = self.num_spec_tokens\n"
+                "            dynamic_draft_cap = max(0, min(self.num_spec_tokens, dynamic_draft_cap))\n"
+                "            if dynamic_draft_cap == 0:\n"
+                "                spec_token_ids = []\n"
+                "            elif len(spec_token_ids) > dynamic_draft_cap:\n"
+                "                spec_token_ids = list(spec_token_ids[:dynamic_draft_cap])\n"
+                "            else:\n"
+                "                spec_token_ids = list(spec_token_ids)\n"
+                "            if self.structured_output_manager.should_advance(request):\n"
+                "                metadata = request.structured_output_request\n"
+                "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
+                "            request.spec_token_ids = spec_token_ids\n"
+                "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_COUNTERS_ON_STORE_V1\n"
+                "            self._nrl_specdec_scheduler_dynamic_last_stored_tokens = len(spec_token_ids)\n"
+                "            dynamic_tier = getattr(\n"
+                "                self, \"_nrl_specdec_scheduler_dynamic_last_selected_tier\", \"\"\n"
+                "            )\n"
+                "            if dynamic_tier in {\"small\", \"medium\", \"large\"} and len(spec_token_ids) > 0:\n"
+                "                count_name = f\"_nrl_specdec_scheduler_dynamic_{dynamic_tier}_selected_count\"\n"
+                "                setattr(self, count_name, getattr(self, count_name, 0) + 1)\n"
+                "                token_count_name = f\"_nrl_specdec_scheduler_dynamic_{dynamic_tier}_selected_token_count\"\n"
+                "                setattr(\n"
+                "                    self,\n"
+                "                    token_count_name,\n"
+                "                    getattr(self, token_count_name, 0) + len(spec_token_ids),\n"
+                "                )\n"
+                "                for _nrl_pos_idx in range(min(len(spec_token_ids), self.num_spec_tokens)):\n"
+                "                    pos_count_name = f\"_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx + 1}_selected_count\"\n"
+                "                    setattr(self, pos_count_name, getattr(self, pos_count_name, 0) + 1)\n"
             )
             if "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1" not in scheduler_content:
                 if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" not in scheduler_content:
@@ -2568,6 +2641,99 @@ class BaseVllmGenerationWorker:
                     scheduler_content = scheduler_content.replace(
                         dynamic_selected_count_anchor,
                         dynamic_selected_count_block,
+                        1,
+                    )
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
+                if (
+                    "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1"
+                    in scheduler_content
+                    and "_nrl_specdec_scheduler_dynamic_small_selected_token_count"
+                    not in scheduler_content
+                ):
+                    dynamic_token_count_anchor = (
+                        "                self._nrl_specdec_scheduler_dynamic_large_selected_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_count\", 0\n"
+                        "                )\n"
+                    )
+                    dynamic_token_count_block = (
+                        dynamic_token_count_anchor
+                        + "                self._nrl_specdec_scheduler_dynamic_small_selected_token_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_small_selected_token_count\", 0\n"
+                        "                )\n"
+                        "                self._nrl_specdec_scheduler_dynamic_medium_selected_token_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_medium_selected_token_count\", 0\n"
+                        "                )\n"
+                        "                self._nrl_specdec_scheduler_dynamic_large_selected_token_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_token_count\", 0\n"
+                        "                )\n"
+                        "                for _nrl_pos_idx in range(1, 9):\n"
+                        "                    _nrl_pos_name = f\"_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count\"\n"
+                        "                    setattr(self, _nrl_pos_name, getattr(self, _nrl_pos_name, 0))\n"
+                        "                self._nrl_specdec_scheduler_dynamic_last_selected_tier = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_last_selected_tier\", \"\"\n"
+                        "                )\n"
+                    )
+                    if dynamic_token_count_anchor not in scheduler_content:
+                        raise RuntimeError(
+                            "Could not upgrade existing adaptive SpecDec scheduler "
+                            f"gate dynamic token counters in {scheduler}; expected "
+                            "selected-count anchor was missing."
+                        )
+                    scheduler_content = scheduler_content.replace(
+                        dynamic_token_count_anchor,
+                        dynamic_token_count_block,
+                        1,
+                    )
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
+                if (
+                    "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1"
+                    in scheduler_content
+                    and "_nrl_specdec_scheduler_dynamic_last_selected_tier"
+                    in scheduler_content
+                    and "count_name = f\"_nrl_specdec_scheduler_dynamic_{selected_tier}_selected_count\""
+                    in scheduler_content
+                ):
+                    old_lookahead_counter_block = (
+                        "                count_name = f\"_nrl_specdec_scheduler_dynamic_{selected_tier}_selected_count\"\n"
+                        "                setattr(self, count_name, getattr(self, count_name, 0) + 1)\n"
+                        "            self._nrl_specdec_scheduler_dynamic_last_selected_tokens = effective_lookahead_tokens\n"
+                    )
+                    new_lookahead_counter_block = (
+                        "                self._nrl_specdec_scheduler_dynamic_last_selected_tier = selected_tier\n"
+                        "            else:\n"
+                        "                self._nrl_specdec_scheduler_dynamic_last_selected_tier = \"\"\n"
+                        "            self._nrl_specdec_scheduler_dynamic_last_selected_tokens = effective_lookahead_tokens\n"
+                    )
+                    if old_lookahead_counter_block not in scheduler_content:
+                        raise RuntimeError(
+                            "Could not upgrade existing adaptive SpecDec scheduler "
+                            f"lookahead counters in {scheduler}; expected old "
+                            "lookahead-counter block was missing."
+                        )
+                    scheduler_content = scheduler_content.replace(
+                        old_lookahead_counter_block,
+                        new_lookahead_counter_block,
+                        1,
+                    )
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
+                if (
+                    "NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1"
+                    in scheduler_content
+                    and "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_COUNTERS_ON_STORE_V1"
+                    not in scheduler_content
+                ):
+                    if old_update_draft_cap_block not in scheduler_content:
+                        raise RuntimeError(
+                            "Could not upgrade existing adaptive SpecDec scheduler "
+                            f"with store-time dynamic counters in {scheduler}; "
+                            "expected old update_draft_token_ids block was missing."
+                        )
+                    scheduler_content = scheduler_content.replace(
+                        old_update_draft_cap_block,
+                        update_draft_cap_block,
                         1,
                     )
                     with open(scheduler, "w") as f:

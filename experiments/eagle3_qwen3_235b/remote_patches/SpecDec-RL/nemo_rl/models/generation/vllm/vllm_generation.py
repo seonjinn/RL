@@ -1114,23 +1114,63 @@ class VllmGeneration(GenerationInterface):
                     (
                         _gate_int("dynamic_small_selected_count"),
                         _gate_int("dynamic_small_tokens"),
+                        _gate_int("dynamic_small_selected_token_count"),
                     ),
                     (
                         _gate_int("dynamic_medium_selected_count"),
                         _gate_int("dynamic_medium_tokens"),
+                        _gate_int("dynamic_medium_selected_token_count"),
                     ),
                     (
                         _gate_int("dynamic_large_selected_count"),
                         _gate_int("dynamic_large_tokens"),
+                        _gate_int("dynamic_large_selected_token_count"),
                     ),
                 ]
                 dynamic_requested = dynamic_requested or _truthy(
                     scheduler_gate.get("dynamic_draft_tokens_enabled", False)
                 )
-                dynamic_count_total = sum(count for count, _ in dynamic_tiers)
-                dynamic_token_total = sum(
+                dynamic_pos_denominators = [
+                    _gate_int(f"dynamic_pos{pos + 1}_selected_count")
+                    for pos in range(len(accepted_per_pos))
+                ]
+                dynamic_pos_available = any(dynamic_pos_denominators)
+                dynamic_tier_count_total = sum(count for count, _, _ in dynamic_tiers)
+                dynamic_tier_cap_token_total = sum(
                     count * max(0, selected_tokens)
-                    for count, selected_tokens in dynamic_tiers
+                    for count, selected_tokens, _ in dynamic_tiers
+                )
+                dynamic_tier_stored_token_total = sum(
+                    stored_tokens for _, _, stored_tokens in dynamic_tiers
+                )
+                if dynamic_pos_available:
+                    dynamic_count_total = dynamic_pos_denominators[0]
+                    dynamic_token_total = sum(dynamic_pos_denominators)
+                    dynamic_per_pos_denominators = dynamic_pos_denominators
+                    dynamic_denominator_source = "scheduler_dynamic_stored"
+                else:
+                    dynamic_count_total = dynamic_tier_count_total
+                    dynamic_token_total = (
+                        dynamic_tier_stored_token_total
+                        if dynamic_tier_stored_token_total > 0
+                        else dynamic_tier_cap_token_total
+                    )
+                    dynamic_per_pos_denominators = [
+                        sum(
+                            count
+                            for count, selected_tokens, _ in dynamic_tiers
+                            if selected_tokens >= pos + 1
+                        )
+                        for pos in range(len(accepted_per_pos))
+                    ]
+                    dynamic_denominator_source = "scheduler_dynamic"
+                spec_decode_totals["dynamic_selected_tier_count_total"] = (
+                    dynamic_tier_count_total
+                )
+                spec_decode_totals["dynamic_selected_tier_draft_tokens"] = (
+                    dynamic_tier_stored_token_total
+                    if dynamic_tier_stored_token_total > 0
+                    else dynamic_tier_cap_token_total
                 )
                 spec_decode_totals["dynamic_selected_count_total"] = dynamic_count_total
                 spec_decode_totals["dynamic_selected_draft_tokens"] = dynamic_token_total
@@ -1165,15 +1205,8 @@ class VllmGeneration(GenerationInterface):
                     dynamic_count_total > 0
                     and spec_decode_totals.get("dynamic_selected_count_consistent")
                 ):
-                    per_pos_denominators = [
-                        sum(
-                            count
-                            for count, selected_tokens in dynamic_tiers
-                            if selected_tokens >= pos + 1
-                        )
-                        for pos in range(len(accepted_per_pos))
-                    ]
-                    per_pos_denominator_source = "scheduler_dynamic"
+                    per_pos_denominators = dynamic_per_pos_denominators
+                    per_pos_denominator_source = dynamic_denominator_source
                 elif dynamic_count_total > 0:
                     per_pos_denominator_source = "num_drafts_dynamic_mismatch"
                     per_pos_denominator_reliable = False
