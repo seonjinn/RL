@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 12:20 PDT",
+  "updated_at": "2026-06-01 13:43 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1336,7 +1336,7 @@
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, then failed in policy.get_logprobs with the same EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP _ALLGATHER_BASE NCCL timeout class at 2026-06-01 12:07 PDT. Strict SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then hit a Megatron policy.get_logprobs NCCL timeout in the same group at 2026-06-01 11:06 PDT. This gives a strict early generation-only speedup of 1.2058x, but not final completed-step throughput; the full-GRPO blocker is reproduced by baseline and is not SpecDec-only. Reduced alltoall-dispatcher smoke jobs now prove the 30B NeMo-RL full 1-step loop can complete with this dispatcher: baseline 3076036 completed Step 1/1, and SpecDec 3076041 completed Step 1/1 with acceptance 58.88% while passing rewards, logprobs, and policy training. This is a reduced p8/g8, GBS64 validation, not the final p64/g32 throughput comparison. Corrected V8 long-tail verifier 3076833 completed the stop-after-generation diagnostic with acceptance 57.65%, early generated throughput 6669.63 tok/s/GPU, draft_tokens 2287959, accepted_tokens 1319121, and runner gate disabled_count 16/21977; this is generation-side/long-tail evidence, not full GRPO throughput. First p64/g32 alltoall follow-up 3077214/3077216 produced no comparable metric: baseline 3077214 failed before rollout in MegatronPolicyWorker import with a TransformerEngine/Triton JIT AttributeError, and SpecDec 3077216 was cancelled after a repeated Ray startup_token worker-registration stall. Repaired p64/g32 r2 jobs 3078476 and 3078477 were submitted at 2026-06-01 13:25 PDT and were pending at the initial check.",
+  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, then failed in policy.get_logprobs with the same EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP _ALLGATHER_BASE NCCL timeout class at 2026-06-01 12:07 PDT. Strict SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then hit a Megatron policy.get_logprobs NCCL timeout in the same group at 2026-06-01 11:06 PDT. This gives a strict early generation-only speedup of 1.2058x, but not final completed-step throughput; the full-GRPO blocker is reproduced by baseline and is not SpecDec-only. Reduced alltoall-dispatcher smoke jobs now prove the 30B NeMo-RL full 1-step loop can complete with this dispatcher: baseline 3076036 completed Step 1/1, and SpecDec 3076041 completed Step 1/1 with acceptance 58.88% while passing rewards, logprobs, and policy training. This is a reduced p8/g8, GBS64 validation, not the final p64/g32 throughput comparison. Corrected V8 long-tail verifier 3076833 completed the stop-after-generation diagnostic with acceptance 57.65%, early generated throughput 6669.63 tok/s/GPU, draft_tokens 2287959, accepted_tokens 1319121, and runner gate disabled_count 16/21977; this is generation-side/long-tail evidence, not full GRPO throughput. First p64/g32 alltoall follow-up 3077214/3077216 produced no comparable metric: baseline 3077214 failed before rollout in MegatronPolicyWorker import with a TransformerEngine/Triton JIT AttributeError, and SpecDec 3077216 was cancelled after a repeated Ray startup_token worker-registration stall. Repaired p64/g32 r2 jobs 3078476 and 3078477 were cancelled after repeating the startup_token/worker-registration stall with NRL_FORCE_REBUILD_VENVS=false. Fresh r3 p64/g32 jobs 3078629 and 3078630 were submitted with NRL_FORCE_REBUILD_VENVS=true and were RUNNING as of 2026-06-01 13:43 PDT in Ray/vLLM environment setup, with no rollout throughput or acceptance metrics emitted yet. No publishable pure vLLM standalone benchmark table exists yet for the 30B 500K drafter; the current reported throughput values are NeMo-RL generation metrics or NeMo-RL generation-side diagnostics.",
   "current_primary_dynamic_k_job": "3076833_v8_resubmitted_r3_with_stop_and_maxlen",
   "batch_gate_v7_review_fix": {
     "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running_step1_generation_seen",
@@ -1622,7 +1622,7 @@
     "superseded_failed_pair": "3074142/3074189"
   },
   "alltoall_logprob_smoke_jobs": {
-    "updated_at": "2026-06-01 13:26 PDT",
+    "updated_at": "2026-06-01 13:43 PDT",
     "purpose": "Diagnose the repeated Megatron policy.get_logprobs NCCL timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP by avoiding the MoE allgather dispatcher path on a reduced strict NeMo-RL smoke.",
     "baseline_job_id": "3076036",
     "specdec_job_id": "3076041",
@@ -1674,9 +1674,9 @@
     },
     "manifest": "latest_qwen30ba3b_alltoall_smoke_jobs.txt",
     "p64g32_followup": {
-      "submitted_at": "2026-06-01 13:25 PDT",
-      "baseline_job_id": "3078476",
-      "specdec_job_id": "3078477",
+      "submitted_at": "2026-06-01 13:36 PDT",
+      "baseline_job_id": "3078629",
+      "specdec_job_id": "3078630",
       "shape": {
         "num_prompts_per_step": 64,
         "num_generations_per_prompt": 32,
@@ -1687,12 +1687,19 @@
       "overrides": {
         "policy.megatron_cfg.moe_token_dispatcher_type": "alltoall",
         "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "true",
-        "NRL_FORCE_REBUILD_VENVS": "false",
+        "NRL_FORCE_REBUILD_VENVS": "true",
         "RAY_VENV": "job-specific default from patched ray.sub",
         "NUM_SPECULATIVE_TOKENS": "1 for SpecDec"
       },
       "manifest": "latest_qwen30ba3b_alltoall_p64g32_strict_jobs.txt",
-      "status": "resubmitted; 3078476 and 3078477 are RUNNING as of 2026-06-01 13:31 PDT, with no rollout metrics emitted yet",
+      "status": "r3 resubmitted; 3078629 and 3078630 are RUNNING as of 2026-06-01 13:43 PDT in Ray/vLLM environment setup, with no rollout metrics emitted yet",
+      "superseded_r2_attempt": {
+        "submitted_at": "2026-06-01 13:25 PDT",
+        "baseline_job_id": "3078476",
+        "specdec_job_id": "3078477",
+        "baseline_failure": "CANCELLED after the r3 replacement was submitted. With NRL_FORCE_REBUILD_VENVS=false, the job still stalled before rollout during vLLM/Ray worker startup and emitted repeated TypeError: connect() got an unexpected keyword argument 'startup_token'.",
+        "specdec_failure": "CANCELLED after the r3 replacement was submitted. It reached Ray worker startup but did not emit rollout throughput or acceptance metrics before the same startup_token worker-registration class repeated."
+      },
       "superseded_attempt": {
         "submitted_at": "2026-06-01 12:19 PDT",
         "baseline_job_id": "3077214",
@@ -1701,10 +1708,10 @@
         "specdec_failure": "CANCELLED after 1:02 elapsed. vLLM policy workers never registered and Ray repeated TypeError: connect() got an unexpected keyword argument 'startup_token'."
       }
     },
-    "next_decision": "Poll p64/g32 r2 jobs 3078476 and 3078477. If both complete, use their completed NeMo-RL generated tok/s/GPU and E2E tok/s/GPU as the strict alltoall baseline-vs-SpecDec comparison. If p64/g32 still fails, keep p8/g8 as functional proof and inspect scale-specific Megatron/NCCL behavior."
+    "next_decision": "Poll p64/g32 r3 jobs 3078629 and 3078630. If both complete, use their completed NeMo-RL generated tok/s/GPU and E2E tok/s/GPU as the strict alltoall baseline-vs-SpecDec comparison. If p64/g32 still fails, keep p8/g8 as functional proof and inspect scale-specific Megatron/NCCL behavior."
   },
   "longtail_gate_v8_verification": {
-    "updated_at": "2026-06-01 13:26 PDT",
+    "updated_at": "2026-06-01 13:43 PDT",
     "root_cause_found_in_3075161": "Dynamic-K K=3 job 3075161 reached NeMo-RL Step 1 generation with acceptance 57.77% and early generated throughput 5314.79 tok/s/GPU, but gate metrics showed runner enabled_ratio=1.0. Log evidence showed requests=128, tokens=3360, token_threshold=2048, and last_disabled=False, so scheduler all_disabled=false was overriding runner threshold state.",
     "fix": "SpecDec-RL V8 batch gate now sets runner disabled state to runner_threshold_disabled OR scheduler_all_disabled. Qwen30B/Qwen235B SpecDec launchers now require NRL_SPECDEC_BATCH_GATE_PATCH_V8. Older patched vLLM environments fail closed and require rebuild instead of silently using the stale gate.",
     "verification_job_id": "3076833",
@@ -1779,11 +1786,11 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 13:26 PDT",
+    "updated_at": "2026-06-01 13:43 PDT",
     "hidden_state_array_job": "3072149_[0-99]%5",
     "active_tasks": "36-40 running; 41-99 pending on JobArrayTaskLimit",
     "train_job": "3072524 dependency-pending on hidden-state array completion",
-    "hidden_state_files_observed": 180048,
+    "hidden_state_files_observed": 185145,
     "hidden_state_files_expected": 500000,
     "status": "hidden-state generation is still running; 235B Speculators training has not started yet."
   }
