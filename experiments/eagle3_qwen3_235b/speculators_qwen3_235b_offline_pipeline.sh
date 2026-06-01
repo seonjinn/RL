@@ -268,13 +268,28 @@ payload = {
 manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"# Wrote prepare manifest: {manifest_path}")
 PY
+  fi
+fi
+
+check_connector_cmd=(
+  python3 -c
+  'import os, pathlib, vllm; flag=os.environ.get("VLLM_USE_V1", ""); print(f"vLLM={vllm.__file__} VLLM_USE_V1={flag}"); root=pathlib.Path(vllm.__file__).parent; text="\n".join(p.read_text(errors="ignore") for p in root.rglob("*.py") if p.is_file()); raise SystemExit("VLLM_USE_V1=0 is not supported for hidden-state extraction" if flag == "0" else (0 if "ExampleHiddenStatesConnector" in text and "extract_hidden_states" in text else "vLLM install lacks ExampleHiddenStatesConnector/extract_hidden_states support"))'
+)
+
+patch_vllm_ray_runtime_env_cmd=(
+  python3 - "$VLLM_SITE"
+)
+
+if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then
+  if [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then
+    echo "# dry-run: skipping hidden-state manifest preflight"
+  else
     python3 - "$HIDDEN_STATE_MANIFEST" "$PREPARE_MANIFEST" "$MODEL" "$SEQ_LENGTH" "$TARGET_LAYER_IDS" "$MIN_HIDDEN_STATES" "$HIDDEN_STATES_DIR" <<'PY'
 from __future__ import annotations
 
 import hashlib
 import json
 import sys
-import time
 from pathlib import Path
 
 
@@ -288,37 +303,48 @@ def sha256_file(path: Path) -> str:
 
 manifest_path = Path(sys.argv[1])
 prepare_manifest_path = Path(sys.argv[2])
+hidden_states_dir = Path(sys.argv[7])
+if not prepare_manifest_path.exists():
+    raise SystemExit(f"ERROR: prepare manifest is missing: {prepare_manifest_path}")
 prepare_manifest = json.loads(prepare_manifest_path.read_text(encoding="utf-8"))
-payload = {
-    "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
-    "created_by": "speculators_qwen3_235b_offline_pipeline.sh",
+expected = {
     "model": sys.argv[3],
     "seq_length": int(sys.argv[4]),
     "target_layer_ids": [int(item) for item in sys.argv[5].split()],
     "expected_hidden_states": int(sys.argv[6]) if sys.argv[6] else 0,
-    "hidden_states_dir": sys.argv[7],
+    "hidden_states_dir": str(hidden_states_dir),
     "prepare_manifest": str(prepare_manifest_path),
     "prepare_manifest_sha256": sha256_file(prepare_manifest_path),
     "speculators_jsonl": prepare_manifest.get("speculators_jsonl"),
     "speculators_jsonl_sha256": prepare_manifest.get("speculators_jsonl_sha256"),
 }
-manifest_path.parent.mkdir(parents=True, exist_ok=True)
-manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(f"# Wrote hidden-state manifest: {manifest_path}")
+has_hidden_files = next(hidden_states_dir.glob("hs_*.safetensors"), None) is not None
+if manifest_path.exists():
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mismatches = [
+        f"{key}: actual={manifest.get(key)!r} expected={value!r}"
+        for key, value in expected.items()
+        if manifest.get(key) != value
+    ]
+    if mismatches and has_hidden_files:
+        raise SystemExit(
+            "ERROR: hidden-state manifest does not match current prepared data "
+            f"and hidden-state files already exist: {'; '.join(mismatches)}"
+        )
+    if mismatches:
+        print("# Hidden-state manifest will be replaced after datagen")
+    else:
+        print(f"# Hidden-state manifest matches prepared data: {manifest_path}")
+elif has_hidden_files:
+    raise SystemExit(
+        "ERROR: hidden-state files already exist but hidden-state manifest is missing; "
+        f"refusing to mix stale outputs in {hidden_states_dir}"
+    )
+else:
+    print("# No existing hidden-state files; datagen will create hidden-state manifest")
 PY
   fi
-fi
 
-check_connector_cmd=(
-  python3 -c
-  'import pathlib, vllm; root=pathlib.Path(vllm.__file__).parent; text="\n".join(p.read_text(errors="ignore") for p in root.rglob("*.py") if p.is_file()); raise SystemExit(0 if "ExampleHiddenStatesConnector" in text and "extract_hidden_states" in text else "vLLM install lacks ExampleHiddenStatesConnector/extract_hidden_states support")'
-)
-
-patch_vllm_ray_runtime_env_cmd=(
-  python3 - "$VLLM_SITE"
-)
-
-if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then
   echo "# Checking vLLM hidden-state extraction support"
   printf '%q ' "${check_connector_cmd[@]}"; printf '\n'
   [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]] || "${check_connector_cmd[@]}"
@@ -427,6 +453,49 @@ PY
     fi
     printf '%q ' "${datagen_cmd[@]}"; printf '\n'
     "${datagen_cmd[@]}"
+    python3 - "$HIDDEN_STATE_MANIFEST" "$PREPARE_MANIFEST" "$MODEL" "$SEQ_LENGTH" "$TARGET_LAYER_IDS" "$MIN_HIDDEN_STATES" "$HIDDEN_STATES_DIR" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+manifest_path = Path(sys.argv[1])
+prepare_manifest_path = Path(sys.argv[2])
+prepare_manifest = json.loads(prepare_manifest_path.read_text(encoding="utf-8"))
+payload = {
+    "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+    "created_by": "speculators_qwen3_235b_offline_pipeline.sh",
+    "model": sys.argv[3],
+    "seq_length": int(sys.argv[4]),
+    "target_layer_ids": [int(item) for item in sys.argv[5].split()],
+    "expected_hidden_states": int(sys.argv[6]) if sys.argv[6] else 0,
+    "hidden_states_dir": sys.argv[7],
+    "prepare_manifest": str(prepare_manifest_path),
+    "prepare_manifest_sha256": sha256_file(prepare_manifest_path),
+    "speculators_jsonl": prepare_manifest.get("speculators_jsonl"),
+    "speculators_jsonl_sha256": prepare_manifest.get("speculators_jsonl_sha256"),
+    "datagen_start_index": os.environ.get("DATAGEN_START_INDEX"),
+    "datagen_end_index": os.environ.get("DATAGEN_END_INDEX"),
+}
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+tmp_path = manifest_path.with_name(f"{manifest_path.name}.{os.getpid()}.tmp")
+tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.replace(tmp_path, manifest_path)
+print(f"# Wrote hidden-state manifest after datagen: {manifest_path}")
+PY
     cleanup
     trap - EXIT
   fi

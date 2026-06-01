@@ -233,7 +233,7 @@ def expected_hidden_state_manifest(p: dict[str, Path]) -> dict[str, object]:
     }
 
 
-def write_hidden_state_manifest(p: dict[str, Path]) -> None:
+def validate_hidden_state_manifest_reuse_safety(p: dict[str, Path]) -> None:
     manifest_path = p["hidden_state_manifest"]
     expected = expected_hidden_state_manifest(p)
     hidden_files = list(p["hidden_states_dir"].glob("hs_*.safetensors"))
@@ -251,14 +251,22 @@ def write_hidden_state_manifest(p: dict[str, Path]) -> None:
                 "hidden-state manifest does not match current prepared data, "
                 f"but {len(hidden_files)} hidden-state files already exist: {mismatches}"
             )
-    payload = {
-        **expected,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
-        "created_by": "submit_qwen235b_mixed_500k_speculators_after_finalize.py",
-    }
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"+ wrote hidden-state manifest {manifest_path}", flush=True)
+        print(
+            "+ hidden-state manifest mismatch but no hidden-state files exist; "
+            "datagen will write a fresh manifest",
+            flush=True,
+        )
+        return
+    if hidden_files:
+        raise RuntimeError(
+            "hidden-state files already exist but hidden-state manifest is missing; "
+            f"refusing to bootstrap stale outputs in {p['hidden_states_dir']}"
+        )
+    print(
+        "+ hidden-state manifest is absent and no hidden-state files exist; "
+        "datagen will write it after successful generation",
+        flush=True,
+    )
 
 
 def common_env(p: dict[str, Path]) -> dict[str, str]:
@@ -387,7 +395,7 @@ def submit_ray_datagen(
         "TRANSFORMERS_CACHE": os.environ.get("TRANSFORMERS_CACHE", f"{HF_HOME}/hub"),
         "VLLM_CACHE_ROOT": os.environ.get("VLLM_CACHE_ROOT", str(ARTIFACT_ROOT / "vllm_cache")),
         "VLLM_DISABLE_USAGE_STATS": "1",
-        "VLLM_USE_V1": os.environ.get("VLLM_USE_V1", "0"),
+        "VLLM_USE_V1": os.environ.get("VLLM_USE_V1", "1"),
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
@@ -536,7 +544,7 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
     validate_inputs(p, allow_pending_finalizer=args.allow_pending_finalizer)
     if args.existing_prepare_job_id and not args.dry_run:
         validate_prepared_outputs(p)
-        write_hidden_state_manifest(p)
+        validate_hidden_state_manifest_reuse_safety(p)
     if not args.dry_run:
         (REPO_ROOT / "logs").mkdir(parents=True, exist_ok=True)
         p["report"].parent.mkdir(parents=True, exist_ok=True)
