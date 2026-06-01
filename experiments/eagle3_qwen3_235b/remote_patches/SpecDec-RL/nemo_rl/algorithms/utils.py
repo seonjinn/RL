@@ -596,6 +596,9 @@ def print_performance_metrics(
         accepted_per_pos = spec_decode_metrics.get(
             "num_accepted_tokens_per_pos", []
         )
+        per_pos_reliable = bool(
+            spec_decode_metrics.get("acceptance_rate_per_pos_reliable", True)
+        )
         print("  • SpecDec Metrics:")
         print(f"    - Active this interval: {active}")
         print(f"    - Drafts: {num_drafts}")
@@ -628,9 +631,11 @@ def print_performance_metrics(
             per_pos_rates, per_pos_denominators = specdec_per_position_acceptance_rates(
                 spec_decode_metrics
             )
+            reliability_note = "" if per_pos_reliable else " (unreliable denominator)"
             print(
                 "    - Per-position acceptance rate: "
                 + ", ".join(f"{rate:.4f}" for rate in per_pos_rates)
+                + reliability_note
             )
             for idx, rate in enumerate(per_pos_rates):
                 performance_metrics[f"spec_decode/acceptance_rate_pos_{idx + 1}"] = (
@@ -650,6 +655,18 @@ def print_performance_metrics(
         performance_metrics["spec_decode/mean_acceptance_length"] = (
             mean_acceptance_length
         )
+        performance_metrics["spec_decode/acceptance_rate_per_pos_reliable"] = (
+            1 if per_pos_reliable else 0
+        )
+        for key in (
+            "dynamic_selected_count_total",
+            "dynamic_selected_draft_tokens",
+            "dynamic_selected_count_mismatch",
+            "dynamic_selected_draft_token_mismatch",
+        ):
+            value = spec_decode_metrics.get(key)
+            if isinstance(value, (int, float)):
+                performance_metrics[f"spec_decode/{key}"] = value
 
     spec_decode_gate_metrics = (
         vllm_logger_metrics.get("spec_decode_gate", {})

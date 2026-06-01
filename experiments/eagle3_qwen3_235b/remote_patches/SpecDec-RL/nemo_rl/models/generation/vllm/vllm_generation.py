@@ -1086,6 +1086,8 @@ class VllmGeneration(GenerationInterface):
             per_pos_denominators = [spec_decode_totals["num_drafts"]] * len(
                 accepted_per_pos
             )
+            per_pos_denominator_source = "num_drafts"
+            per_pos_denominator_reliable = True
             scheduler_gate = spec_decode_gate_totals.get("scheduler", {})
             if isinstance(scheduler_gate, dict):
                 def _gate_int(key: str) -> int:
@@ -1108,7 +1110,39 @@ class VllmGeneration(GenerationInterface):
                         _gate_int("dynamic_large_tokens"),
                     ),
                 ]
-                if sum(count for count, _ in dynamic_tiers) > 0:
+                dynamic_count_total = sum(count for count, _ in dynamic_tiers)
+                dynamic_token_total = sum(
+                    count * max(0, selected_tokens)
+                    for count, selected_tokens in dynamic_tiers
+                )
+                spec_decode_totals["dynamic_selected_count_total"] = dynamic_count_total
+                spec_decode_totals["dynamic_selected_draft_tokens"] = dynamic_token_total
+                if dynamic_count_total > 0:
+                    num_drafts = int(spec_decode_totals.get("num_drafts", 0) or 0)
+                    num_draft_tokens = int(
+                        spec_decode_totals.get("num_draft_tokens", 0) or 0
+                    )
+                    count_tolerance = max(32, int(max(num_drafts, 1) * 0.05))
+                    token_tolerance = max(32, int(max(num_draft_tokens, 1) * 0.05))
+                    count_matches = (
+                        abs(dynamic_count_total - num_drafts) <= count_tolerance
+                    )
+                    token_matches = (
+                        abs(dynamic_token_total - num_draft_tokens) <= token_tolerance
+                    )
+                    spec_decode_totals["dynamic_selected_count_mismatch"] = (
+                        dynamic_count_total - num_drafts
+                    )
+                    spec_decode_totals["dynamic_selected_draft_token_mismatch"] = (
+                        dynamic_token_total - num_draft_tokens
+                    )
+                    spec_decode_totals["dynamic_selected_count_consistent"] = (
+                        count_matches and token_matches
+                    )
+                if (
+                    dynamic_count_total > 0
+                    and spec_decode_totals.get("dynamic_selected_count_consistent")
+                ):
                     per_pos_denominators = [
                         sum(
                             count
@@ -1117,7 +1151,17 @@ class VllmGeneration(GenerationInterface):
                         )
                         for pos in range(len(accepted_per_pos))
                     ]
+                    per_pos_denominator_source = "scheduler_dynamic"
+                elif dynamic_count_total > 0:
+                    per_pos_denominator_source = "num_drafts_dynamic_mismatch"
+                    per_pos_denominator_reliable = False
             spec_decode_totals["num_drafts_per_pos"] = per_pos_denominators
+            spec_decode_totals["num_drafts_per_pos_source"] = (
+                per_pos_denominator_source
+            )
+            spec_decode_totals["acceptance_rate_per_pos_reliable"] = (
+                per_pos_denominator_reliable
+            )
             spec_decode_totals["acceptance_rate_per_pos"] = [
                 float(accepted) / denominator if denominator > 0 else 0.0
                 for accepted, denominator in zip(accepted_per_pos, per_pos_denominators)

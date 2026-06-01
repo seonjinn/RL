@@ -1030,10 +1030,14 @@ def _log_specdec_vllm_metrics(
         )
         per_pos_rates = _specdec_per_position_acceptance_rates(spec_decode)
         if per_pos_rates:
+            suffix = ""
+            if spec_decode.get("acceptance_rate_per_pos_reliable") is False:
+                suffix = " unreliable_denominator=true"
             print(
                 "[SpecDec early metrics] "
                 f"step={step} per_position_acceptance="
-                + ",".join(f"{rate:.4f}" for rate in per_pos_rates[:8]),
+                + ",".join(f"{rate:.4f}" for rate in per_pos_rates[:8])
+                + suffix,
                 flush=True,
             )
 
@@ -1196,7 +1200,11 @@ def _maybe_apply_specdec_step_controller(
     allow_increase = _env_bool("NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE", False)
     second_pos_floor = _env_float("NRL_SPECDEC_CONTROLLER_POS2_FLOOR", 0.25)
     third_pos_floor = _env_float("NRL_SPECDEC_CONTROLLER_POS3_FLOOR", 0.15)
-    per_pos = _specdec_per_position_acceptance_rates(spec_decode)
+    per_pos = (
+        _specdec_per_position_acceptance_rates(spec_decode)
+        if spec_decode.get("acceptance_rate_per_pos_reliable", True)
+        else []
+    )
 
     next_small = current_small
     next_medium = current_medium
