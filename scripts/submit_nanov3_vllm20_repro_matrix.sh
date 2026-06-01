@@ -209,14 +209,9 @@ add_49k_dyncp_threshold_sweep_rows() {
 }
 
 add_long_rows() {
-  submit_job "64k-tp2-cp32-nohcp" 65536 2 32 8 nohcp "" "" 128 512 "${MAX_STEPS}"
-  submit_job "64k-tp2-cp32" 65536 2 32 8 dyncp 4096 1.0 128 512 "${MAX_STEPS}"
-
-  submit_job "128k-tp4-cp16-nohcp" 131072 4 16 8 nohcp "" "" 128 512 "${MAX_STEPS}"
-  submit_job "128k-tp4-cp16" 131072 4 16 8 dyncp 8192 1.0 128 512 "${MAX_STEPS}"
-
-  submit_job "256k-tp4-cp16-nohcp" 262144 4 16 8 nohcp "" "" 128 512 "${MAX_STEPS}"
-  submit_job "256k-tp4-cp16" 262144 4 16 8 dyncp 16384 1.0 128 512 "${MAX_STEPS}"
+  add_64k_rows
+  add_128k_rows
+  add_256k_safe_rows
 }
 
 add_64k_rows() {
@@ -250,6 +245,14 @@ add_256k_safe_rows() {
   COMMON_EXTRA_OVERRIDES="${previous_extra}"
 }
 
+add_256k_safe_baseline_rows() {
+  local previous_extra="${COMMON_EXTRA_OVERRIDES}"
+  COMMON_EXTRA_OVERRIDES+=" policy.sequence_packing.train_mb_tokens=131072"
+  COMMON_EXTRA_OVERRIDES+=" policy.sequence_packing.logprob_mb_tokens=131072"
+  submit_job "256k-tp4-cp16-nohcp-mb128k" 262144 4 16 8 nohcp "" "" 128 512 "${MAX_STEPS}"
+  COMMON_EXTRA_OVERRIDES="${previous_extra}"
+}
+
 add_256k_safe_dyncp_rows() {
   # DynamicCP-only variant used when a matching no-HCP 256K safe baseline is
   # already running or completed.
@@ -263,13 +266,13 @@ add_256k_safe_dyncp_rows() {
 add_long_baseline_rows() {
   submit_job "64k-tp2-cp32-nohcp" 65536 2 32 8 nohcp "" "" 128 512 "${MAX_STEPS}"
   submit_job "128k-tp4-cp16-nohcp" 131072 4 16 8 nohcp "" "" 128 512 "${MAX_STEPS}"
-  submit_job "256k-tp4-cp16-nohcp" 262144 4 16 8 nohcp "" "" 128 512 "${MAX_STEPS}"
+  add_256k_safe_baseline_rows
 }
 
 add_long_dyncp_rows() {
   submit_job "64k-tp2-cp32" 65536 2 32 8 dyncp 4096 1.0 128 512 "${MAX_STEPS}"
   submit_job "128k-tp4-cp16" 131072 4 16 8 dyncp 8192 1.0 128 512 "${MAX_STEPS}"
-  submit_job "256k-tp4-cp16" 262144 4 16 8 dyncp 16384 1.0 128 512 "${MAX_STEPS}"
+  add_256k_safe_dyncp_rows
 }
 
 add_long_dyncp_safe_rows() {
@@ -290,8 +293,12 @@ add_128k_dyncp_threshold_sweep_rows() {
 }
 
 add_256k_dyncp_threshold_sweep_rows() {
+  local previous_extra="${COMMON_EXTRA_OVERRIDES}"
+  COMMON_EXTRA_OVERRIDES+=" policy.sequence_packing.train_mb_tokens=131072"
+  COMMON_EXTRA_OVERRIDES+=" policy.sequence_packing.logprob_mb_tokens=131072"
   submit_job "256k-tp4-cp16-th16384" 262144 4 16 8 dyncp 16384 1.0 128 512 "${MAX_STEPS}"
   submit_job "256k-tp4-cp16-th32768" 262144 4 16 8 dyncp 32768 1.0 128 512 "${MAX_STEPS}"
+  COMMON_EXTRA_OVERRIDES="${previous_extra}"
 }
 
 add_long_dyncp_threshold_sweep_rows() {
@@ -367,6 +374,9 @@ case "${SUBMIT_SET}" in
   256k_safe)
     add_256k_safe_rows
     ;;
+  256k_safe_baseline)
+    add_256k_safe_baseline_rows
+    ;;
   256k_safe_dyncp)
     add_256k_safe_dyncp_rows
     ;;
@@ -419,7 +429,7 @@ case "${SUBMIT_SET}" in
     add_long_rows
     ;;
   *)
-    echo "Unknown SUBMIT_SET=${SUBMIT_SET}; expected canary, main, main_baseline, 8k_baseline, main_dyncp, 49k, 49k_baseline, 49k_dyncp, 49k_dyncp_threshold_sweep, long, long_no256, 64k, 64k_baseline, 128k, 256k_safe, 256k_safe_dyncp, long_baseline, long_dyncp, long_dyncp_safe, 64k_dyncp_threshold_sweep, 128k_dyncp_threshold_sweep, 256k_dyncp_threshold_sweep, long_dyncp_threshold_sweep, step_time_49k, step_time_64k, step_time_128k, step_time, baselines, dyncp, all" >&2
+    echo "Unknown SUBMIT_SET=${SUBMIT_SET}; expected canary, main, main_baseline, 8k_baseline, main_dyncp, 49k, 49k_baseline, 49k_dyncp, 49k_dyncp_threshold_sweep, long, long_no256, 64k, 64k_baseline, 128k, 256k_safe, 256k_safe_baseline, 256k_safe_dyncp, long_baseline, long_dyncp, long_dyncp_safe, 64k_dyncp_threshold_sweep, 128k_dyncp_threshold_sweep, 256k_dyncp_threshold_sweep, long_dyncp_threshold_sweep, step_time_49k, step_time_64k, step_time_128k, step_time, baselines, dyncp, all" >&2
     exit 1
     ;;
 esac
