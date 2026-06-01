@@ -31,6 +31,7 @@ SBATCH_EXTRA_ARGS="${SBATCH_EXTRA_ARGS:-}"
 JOB_TAG="${JOB_TAG:-main-baseline}"
 
 CONFIG_FILE="${CONFIG_FILE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml}"
+TARGET_MODEL_ID="${TARGET_MODEL_ID:-Qwen/Qwen3-30B-A3B}"
 CONTAINER="${CONTAINER:-${SCRIPT_DIR}/nemo_rl_nightly.sqsh}"
 HF_HOME="${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/cache}"
@@ -99,6 +100,7 @@ uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${SCRIPT_DIR} py
 --config ${CONFIG_FILE} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
+policy.model_name=${TARGET_MODEL_ID} \
 policy.generation.vllm_cfg.enforce_eager=false \
 policy.generation.vllm_cfg.async_engine=false \
 grpo.async_grpo.enabled=false \

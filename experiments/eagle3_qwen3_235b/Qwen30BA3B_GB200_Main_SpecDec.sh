@@ -332,6 +332,7 @@ uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${SCRIPT_DIR} py
 --config ${CONFIG_FILE} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
+policy.model_name=${TARGET_MODEL_ID} \
 policy.generation.vllm_cfg.enforce_eager=false \
 policy.generation.vllm_cfg.async_engine=false \
 grpo.async_grpo.enabled=false \

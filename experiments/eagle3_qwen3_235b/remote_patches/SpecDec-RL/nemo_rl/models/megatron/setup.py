@@ -319,9 +319,10 @@ def validate_model_paths(config: PolicyConfig) -> tuple[str, str, bool]:
         hf_model_subdir = f"model_{hf_model_subdir.replace('/', '_')}"
 
     pretrained_path = f"{get_megatron_checkpoint_dir()}/{hf_model_subdir}"
-    pt_checkpoint_exists = os.path.exists(pretrained_path) and os.path.exists(
-        os.path.join(pretrained_path, "iter_0000000")
+    pretrained_run_config = os.path.join(
+        pretrained_path, "iter_0000000", "run_config.yaml"
     )
+    pt_checkpoint_exists = os.path.exists(pretrained_run_config)
 
     return hf_model_name, pretrained_path, pt_checkpoint_exists
 

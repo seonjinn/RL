@@ -31,6 +31,7 @@ SBATCH_EXTRA_ARGS="${SBATCH_EXTRA_ARGS:-}"
 JOB_TAG="${JOB_TAG:-main-baseline}"
 
 CONFIG_FILE="${CONFIG_FILE:-examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n8g.yaml}"
+TARGET_MODEL_ID="${TARGET_MODEL_ID:-Qwen/Qwen3-235B-A22B-Thinking-2507}"
 CONTAINER="${CONTAINER:-${SCRIPT_DIR}/nemo_rl_nightly.sqsh}"
 HF_HOME="${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/cache}"
@@ -99,6 +100,7 @@ uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${SCRIPT_DIR} py
 --config ${CONFIG_FILE} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
+policy.model_name=${TARGET_MODEL_ID} \
 policy.generation.vllm_cfg.tensor_parallel_size=16 \
 policy.generation.vllm_cfg.expert_parallel_size=1 \
 policy.generation.vllm_cfg.pipeline_parallel_size=1 \
