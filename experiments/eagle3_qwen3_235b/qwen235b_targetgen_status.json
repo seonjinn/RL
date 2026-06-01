@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 21:41 PDT",
+  "updated_at": "2026-06-01 00:10 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -302,7 +302,7 @@
       "time_limit": "00:45:00",
       "gpus_per_node": 4,
       "state_at_submit_check": "CANCELLED by 150081; superseded by wave4 finalizer 3063314",
-      "note": "This wave3 finalizer was superseded after the repair plan was split into partial-apply jobs and smaller safe wave4 chunk-repair jobs. The old wave4 finalizer 3063314 was also superseded; the active finalizer is 3065683."
+      "note": "This wave3 finalizer was superseded after the repair plan was split into partial-apply jobs and smaller safe wave4 chunk-repair jobs. The old wave4 finalizer 3063314 and later safe-w4 finalizer 3065683 were superseded by direct missing-id repair job 3068010 and finalizer 3068014."
     },
     "speculators_training_chain_after_wave3_finalizer": {
       "prepare_job": "3063098",
@@ -319,7 +319,7 @@
       "state_at_submit_check": "CANCELLED by 150081; superseded by wave4 chain 3063316 -> 3063317_[0-99] -> 3063318",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-      "note": "This wave3 chain was cancelled when finalizer 3063077 was superseded. The older wave4 chain 3063316 -> 3063317_[0-99] -> 3063318 was also cancelled; the active chain is 3065684 -> 3065685_[0-99] -> 3065686."
+      "note": "This wave3 chain was cancelled when finalizer 3063077 was superseded. The older wave4 chain 3063316 -> 3063317_[0-99] -> 3063318 and later safe-w4 chain 3065684 -> 3065685_[0-99] -> 3065686 were also superseded; the active chain is 3068015 -> 3068016_[0-99] -> 3068017 after finalizer 3068014."
     },
     "partial_apply_after_wave3": {
       "job_ids": [
@@ -352,23 +352,23 @@
       "job_count": 43,
       "dependency": "afterok on the corresponding safe partial-apply job for each group",
       "time_limit": "04:00:00",
-      "state_at_latest_check": "RUNNING at 2026-05-31 23:34 PDT for the last observed safe wave4 repair dependency job 3065608. Many other safe wave4 repair jobs have completed; finalizer 3065683 is still PENDING on afterok:3065608.",
+      "state_at_latest_check": "SUPERSEDED by direct adaptive missing-id repair job 3068010 at 2026-06-01 00:10 PDT.",
       "note": "Replaces cancelled stale jobs 3063263-3063312. Jobs are packed by estimated missing ids and explicitly use /data/mixed_math_nonopenmath_500k_prompts.jsonl; the repair code now refuses OpenMath smoke PROMPT_DATA and refuses prompt files too short for the requested chunk ids."
     },
     "finalizer_after_missing_id_repair_wave4_chunk": {
-      "job_id": "3065683",
-      "dependency": "afterok on safe-w4 repair jobs 3065584-3065633 plus 235B DAPO replacement generation job 3065574",
+      "job_id": "3068014",
+      "dependency": "afterok:3068010",
       "time_limit": "00:45:00",
       "gpus_per_node": 4,
-      "state_at_latest_check": "PENDING with Dependency at 2026-05-31 23:34 PDT. scontrol shows finalizer 3065683 waiting on afterok:3065608; job 3065608 is RUNNING, not failed, so the chain is still live.",
+      "state_at_latest_check": "PENDING with Dependency at 2026-06-01 00:10 PDT behind running repair job 3068010.",
       "replacement_conversations": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_qwen3_235b_replacement_conversations_dapo100.jsonl",
       "note": "Replaces cancelled stale finalizer 3063314. It validates all 100 qwen3_235b chunk files, builds exact-unique 500K JSONL with the OpenMath denylist, and now includes replacement conversations so duplicate prompts in the 500K prompt pool do not reduce the final count below 500K."
     },
     "speculators_training_chain_after_wave4_finalizer": {
-      "prepare_job": "3065684",
-      "hidden_state_array_job": "3065685_[0-99]",
-      "train_job": "3065686",
-      "dependency": "prepare afterok:3065683, hidden-state array afterok:3065684, train afterok:3065685",
+      "prepare_job": "3068015",
+      "hidden_state_array_job": "3068016_[0-99]",
+      "train_job": "3068017",
+      "dependency": "prepare afterok:3068014, hidden-state array afterok:3068015, train afterok:3068016",
       "shards": 100,
       "datagen_nodes": 2,
       "time_limits": {
@@ -376,10 +376,19 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_latest_check": "PENDING with Dependency at 2026-05-31 23:34 PDT while finalizer 3065683 waits for safe wave4 repair job 3065608. Prepare job 3065684, hidden-state array 3065685_[0-99], and train job 3065686 remain chained behind the finalizer.",
+      "state_at_latest_check": "PENDING with Dependency at 2026-06-01 00:10 PDT while repair job 3068010 runs and finalizer 3068014 waits.",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
       "note": "Replaces cancelled stale chain 3063316 -> 3063317_[0-99] -> 3063318. It will only run after the repaired corpus and replacement rows validate."
+    },
+    "safe_w4_missing_id_repair_adaptive_maxtok": {
+      "job_id": "3068010",
+      "state_at_latest_check": "RUNNING at 2026-06-01 00:10 PDT on nvl72137-T[08,18]",
+      "missing_prompts": 1435,
+      "generated_rows_observed": 112,
+      "missing_prompt_file": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_target_chunks/qwen3_235b_missing_id_repair_safe_w4_g2_05_adaptive_maxtok_missing_prompts.jsonl",
+      "generated_output": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_target_chunks/qwen3_235b_missing_id_repair_safe_w4_g2_05_adaptive_maxtok_generated.jsonl",
+      "note": "This direct-vLLM repair uses adaptive max_tokens reduction after HTTP 400 context-window errors. It is filling missing ids for the clean 235B 500K target-response corpus; dependent finalizer/prep/hidden-state/train chain 3068014 -> 3068015 -> 3068016_[0-99] -> 3068017 remains pending on this repair path."
     }
   },
   "expected_after_current_wave": {
@@ -389,11 +398,11 @@
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
-    "active_targetgen_jobs_observed": 0,
+    "active_targetgen_jobs_observed": 1,
     "active_missing_id_repair_jobs_observed": 19,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. Jobs 3062965-3062970 timed out at 4h but generated 15,017 temporary repair rows before timeout, and job 3062971 completed. Official rows remain 478,197 and complete chunk files remain 14. The old wave4 tail was cancelled after review; safe partial-apply jobs 3065583/3065593/3065602/3065609/3065616/3065624/3065631, safe chunk repair jobs 3065584-3065633, finalizer 3065683, and Speculators chain 3065684 -> 3065685_[0-99] -> 3065686 are now queued/running as the active repair path. At 2026-05-31 23:34 PDT, 3065608 was the remaining observed running dependency for finalizer 3065683. Replacement generation job 3065574 generated and validated 100 DAPO replacement conversations with overall_status=pass.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. The prior safe wave4 path has been replaced by direct missing-id repair job 3068010 for 1435 missing prompts with adaptive max_tokens; as of 2026-06-01 00:10 PDT it is RUNNING and has generated 112 repair rows. Dependent finalizer/prep/hidden-state/train chain 3068014 -> 3068015 -> 3068016_[0-99] -> 3068017 remains pending behind this repair path.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 50,
@@ -403,10 +412,13 @@
     "wave3_generated_repair_rows_observed_at": "2026-05-31 22:02 PDT",
     "wave3_apply_completed_groups": [
       6
-    ]
+    ],
+    "current_missing_id_repair_job": "3068010",
+    "current_missing_id_repair_missing_prompts": 1435,
+    "current_missing_id_repair_generated_rows_observed": 112
   },
   "code_review_status": {
-    "updated_at": "2026-05-31 20:52 PDT",
+    "updated_at": "2026-06-01 00:25 PDT",
     "reviewers": [
       "Codex",
       "Claude Code 2.1.159"
@@ -429,8 +441,9 @@
       "Count-based resume now validates that existing ids are a contiguous leading prompt prefix before launching vLLM; unsafe interior-hole chunks are rejected with instructions to use missing-id repair.",
       "Missing-ID repair now refuses OpenMath smoke PROMPT_DATA unless explicitly allowed and also refuses prompt files shorter than the highest requested chunk id.",
       "Qwen3-235B finalizer now accepts replacement conversations, preventing duplicate prompts in the raw 500K pool from reducing the exact-unique final corpus below 500K.",
-      "Safe-w4 repair chain 3065583-3065686 replaced stale jobs 3063256-3063318 after review found unsafe partial-apply/wave4 dependencies.",
-      "Qwen3-30B/235B SpecDec launchers now wait for an in-progress Megatron checkpoint conversion to write iter_0000000/run_config.yaml before submitting another job against the same checkpoint directory."
+      "Safe-w4 repair chain 3065583-3065686 replaced stale jobs 3063256-3063318 after review found unsafe partial-apply/wave4 dependencies; it was later superseded by direct adaptive missing-ID repair job 3068010 and finalizer/train chain 3068014-3068017.",
+      "Qwen3-30B/235B SpecDec launchers now wait for an in-progress Megatron checkpoint conversion to write iter_0000000/run_config.yaml before submitting another job against the same checkpoint directory.",
+      "SpecDec dynamic-K per-position acceptance now validates scheduler tier counters against vLLM num_drafts and num_draft_tokens before allowing those rates to drive the step controller."
     ],
     "validated": [
       "python3 -m py_compile submitters and validator",

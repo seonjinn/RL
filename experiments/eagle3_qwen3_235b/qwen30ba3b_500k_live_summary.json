@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 22:55 PDT",
+  "updated_at": "2026-06-01 00:10 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -928,8 +928,8 @@
     "operational_decision": "Treat K=1 as the current production-quality setting for NeMo-RL. K=2/K=3 should only be enabled behind adaptive depth or long-tail gating if per-position acceptance improves."
   },
   "adaptive_gate_implementation": {
-    "status": "implemented_validated_remotely_step_controller_synced",
-    "updated_at": "2026-05-31 22:55 PDT",
+    "status": "implemented_validated_remotely_counter_and_timeoutfix_synced",
+    "updated_at": "2026-06-01 00:10 PDT",
     "scope": "Taming Long Tail/ReSpec-style adaptive activation and draft-depth selection for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1 plus NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1 plus NeMo-RL step controller runtime controls",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*; SPECDEC_DYNAMIC_DRAFT_* -> VLLM_SPECDEC_DYNAMIC_DRAFT_*",
@@ -981,10 +981,10 @@
     "corrected_eval_interim_vllm_acceptance_draft_tokens": 208347,
     "corrected_eval_interim_vllm_accepted_tokens": 101177,
     "corrected_eval_runner_gate_observation": "Worker logs show the batch gate initially disabled at requests 128/96/84/67, then enabled on long-tail slices such as requests 45, 35, 32, 30, 2, and 63 under request_threshold=64 and token_threshold=2048. The old early summary printed scheduler enabled_ratio=0 because it only displayed the scheduler group; grpo.py has been patched to print runner and scheduler gate groups separately for future jobs.",
-    "megatron_timeout_fix_after_3066594": "Committed and pushed as b88239f. setup_distributed already set the default NCCL process group timeout from NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS/NRL_MEGATRON_NCCL_TIMEOUT_SECONDS; community_import.py now also forwards the same value as distributed_timeout_minutes into Megatron Bridge initialize_model_parallel so expert/model-parallel groups do not remain at the 600s default. Synced to both /lustre/fs1/.../SpecDec-RL and /lustre/fsw/.../SpecDec-RL and py_compile validated remotely.",
+    "megatron_timeout_fix_after_3066594": "Committed/pushed b88239f first, then extended by d948696 after job 3067385 proved the first fix was incomplete. setup_distributed already set the default NCCL process group timeout, but Megatron Bridge initialize_megatron still created model/expert-parallel groups with the 10 minute default. d948696 now sets Megatron Bridge dist.distributed_timeout_minutes / distributed_timeout_seconds_after_init from NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS or NRL_MEGATRON_NCCL_TIMEOUT_SECONDS and calls parallel_state.update_pg_timeout when available. Synced to /lustre/fs1/.../SpecDec-RL and py_compile validated remotely.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_activebatch_jobs.txt",
     "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold-disabled gating without scheduled_spec_decode_tokens deadlock, async spec_decode_gate metric forwarding, explicit metrics_available=0 fallback when gate objects are not reachable, safer launcher defaults that enable the runtime gate with a 4096-token threshold, target-applied remote validation for the new markers, and py_compile validation of generated vLLM runner/scheduler files after runtime patching. Qwen30/Qwen235 launchers now also wait for iter_0000000/run_config.yaml when a checkpoint directory already exists, preventing concurrent conversion races from being mistaken for completed checkpoints.",
-    "known_limit": "This implements adaptive activation, ReSpec-style dynamic draft-depth selection, scheduler-side draft storage capping, and an optional step-level acceptance controller. It is still not the full TLT/ReSpec research system: no online drafter refresh, no reward-weighted KD, and no idle-GPU spot training yet.",
+    "known_limit": "This implements adaptive activation, ReSpec-style dynamic draft-depth selection, scheduler-side draft storage capping, corrected per-position/dynamic-tier metrics, and an optional step-level acceptance controller. It is still not the full TLT/ReSpec research system: no online drafter refresh, no reward-weighted KD, and no idle-GPU spot training yet.",
     "superseded_activebatch_eval_job": "3063331",
     "superseded_activebatch_eval_state": "CANCELLED at 2026-05-31 18:33 PDT after 00:05:18 because it started building the driver environment before the final runner threshold-disabled hardening was synced.",
     "activebatch_followup_jobs": [
@@ -1078,7 +1078,7 @@
     },
     "dynamic_env_step_controller_anchorfix_job": {
       "job_id": "3067385",
-      "state_at_submit_check": "RUNNING at 2026-05-31 23:34 PDT. This is the corrected ReSpec/TLT-style dynamic-depth follow-up after the vLLM 0.11.2 update_draft_token_ids anchor fix: max K=3, scheduler stored-K cap, request gate 64, token gate 2048, active-request caps <=4 -> K3, <=64 -> K2, larger batches -> K1, SPECDEC_DYNAMIC_DRAFT_* propagated through wrapper and Ray actor env, per-position step-controller decrease logic, and separated runner/scheduler early gate summaries. It is still building Ray/uv environments and has not emitted rollout, acceptance, or throughput metrics yet. The driver venv uses an editable mapping to /lustre/fs1/.../SpecDec-RL, so the b88239f Megatron model-parallel timeout fix is visible to the running source tree before policy worker import.",
+      "state_at_submit_check": "FAILED at 2026-06-01 00:03 PDT after Step 1. This run reached rollout and emitted early SpecDec metrics: acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, reporting=16/16; runner gate enabled_ratio=0.0869, scheduler enabled_ratio=0.0299, dynamic_k=2/stored_k=2; the pre-counter-fix per-position summary printed 0.4648,0.2029,0.0004 and the step controller reduced K from (3,2,1) to (1,1,1). It then failed in Megatron EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP _ALLGATHER_BASE Timeout(ms)=600000, so no final NeMo-RL throughput metric is valid from this job. This failure exposed that b88239f did not yet change runtime model/expert-parallel group timeout; d948696 fixes that path.",
       "num_speculative_tokens": 3,
       "request_gate": 64,
       "token_gate": 2048,
@@ -1104,7 +1104,42 @@
     ],
     "cancelled_old_driver_followup_state": "CANCELLED before rollout at 2026-05-31 19:03 PDT after job 3063394 exposed the second-layout runner marker bug; those replacements were later superseded by 3064542 and 3064543 after the adaptive scheduler marker fallback fix.",
     "activebatch_req64_retry_job": "3065713",
-    "activebatch_req64_retry_state": "CANCELLED/SUPERSEDED at 2026-05-31 20:52 PDT because it used the runner code that could deadlock first-draft proposal when scheduled_spec_decode_tokens was empty."
+    "activebatch_req64_retry_state": "CANCELLED/SUPERSEDED at 2026-05-31 20:52 PDT because it used the runner code that could deadlock first-draft proposal when scheduled_spec_decode_tokens was empty.",
+    "dynamic_k_metrics_denominator_fix": {
+      "commits": [
+        "cad3d6c",
+        "d50395f",
+        "1dbdf66"
+      ],
+      "state": "synced_to_remote_overlay_and_live_checkout",
+      "reason": "Dynamic-K per-position acceptance must divide by the number of draft proposals that actually selected each position. cad3d6c added num_drafts_per_pos and acceptance_rate_per_pos; d50395f made dynamic_small/medium/large_selected_count true counters by diffing them against the per-step baseline and summing them across DP workers; 1dbdf66 now validates those tier counters against vLLM num_drafts/num_draft_tokens before letting per-position rates drive the step controller.",
+      "validation": [
+        "local py_compile",
+        "remote live /SpecDec-RL py_compile",
+        "git diff --check"
+      ]
+    },
+    "dynamic_k_counterfix_jobs": [
+      {
+        "job_id": "3068151",
+        "state": "CANCELLED at 2026-06-01 00:08 PDT before rollout metrics",
+        "reason": "submitted after cad3d6c but before d50395f counter aggregation fix; cancelled as invalid for dynamic-K per-position/controller conclusions",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_denomfix_jobs.txt"
+      },
+      {
+        "job_id": "3068178",
+        "state": "RUNNING at 2026-06-01 00:10 PDT",
+        "reason": "submitted after d50395f; may or may not have built after d948696 depending on driver environment timing, so logs must show the timeout update print before using it as timeout-fix evidence",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_counterfix_jobs.txt"
+      },
+      {
+        "job_id": "3068267",
+        "state": "RUNNING at 2026-06-01 00:10 PDT",
+        "reason": "fresh dependency-free run submitted after d948696 sync; this is the primary timeout-fix dynamic-K validation run",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_timeoutfix_jobs.txt"
+      }
+    ],
+    "current_primary_dynamic_k_job": "3068267"
   },
-  "caveat": "Old 30B adaptive jobs 3065811, 3065812, and 3065813 proved SpecDec attachment but failed in Megatron get_logprobs after Step 1. K=1 static replacement 3066594 also proved real long-tail SpecDec activation and Step 1 early vLLM acceptance at 48.56%, but failed before throughput with EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP Timeout(ms)=600000. That exposed a real timeout wiring bug: the default PG timeout was changed, but Megatron model-parallel groups were not. Commit b88239f now forwards the timeout into Megatron Bridge initialize_model_parallel. Dynamic K jobs 3066597 and 3067092 failed before rollout due the stored-K update cap anchor mismatch against vLLM 0.11.2; that anchor is now fixed and smoke-tested against the official vLLM 0.11.2 scheduler source. Job 3067197 was cancelled because it launched before the fix synced. Corrected dynamic-env + stored-K + per-position-controller job 3067385 is running and still in environment build/initialization as of 2026-05-31 23:34 PDT; no new final NeMo-RL throughput metric is available yet beyond previously confirmed 30B K=1 token-pressure result 3060379 at 5696.58 tok/s/GPU and 57.40% acceptance."
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Job 3068151 was cancelled because it was pre-counterfix. Jobs 3068178 and fresh timeout-fix job 3068267 are running as of 2026-06-01 00:10 PDT."
 }
