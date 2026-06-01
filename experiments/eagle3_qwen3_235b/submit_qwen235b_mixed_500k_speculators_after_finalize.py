@@ -106,6 +106,7 @@ def paths() -> dict[str, Path]:
         / "data/mixed_math_nonopenmath_qwen3_235b_conversations_500k_unique_speculators.jsonl",
         "output_dir": root,
         "hidden_states_dir": root / f"hidden_states_{LAYERS_TAG}_500k_global",
+        "hidden_state_manifest": root / f"hidden_states_{LAYERS_TAG}_500k_global/nrl_hidden_state_manifest.json",
         "checkpoint_dir": root / f"checkpoints_train_500k_{LAYERS_TAG}",
         "vllm_tmp_hidden_states": root / f"vllm_tmp_hidden_states_{LAYERS_TAG}_500k",
         "prepare_manifest": root / "nrl_prepare_manifest.json",
@@ -217,6 +218,49 @@ def validate_prepared_outputs(p: dict[str, Path]) -> None:
         print(f"+ wrote bootstrap prepare manifest {manifest_path}", flush=True)
 
 
+def expected_hidden_state_manifest(p: dict[str, Path]) -> dict[str, object]:
+    prepare_manifest = load_json(p["prepare_manifest"])
+    return {
+        "model": MODEL,
+        "seq_length": int(SEQ_LENGTH),
+        "target_layer_ids": [int(item) for item in TARGET_LAYERS.split()],
+        "expected_hidden_states": 500_000,
+        "hidden_states_dir": str(p["hidden_states_dir"]),
+        "prepare_manifest": str(p["prepare_manifest"]),
+        "prepare_manifest_sha256": sha256_file(p["prepare_manifest"]),
+        "speculators_jsonl": prepare_manifest.get("speculators_jsonl"),
+        "speculators_jsonl_sha256": prepare_manifest.get("speculators_jsonl_sha256"),
+    }
+
+
+def write_hidden_state_manifest(p: dict[str, Path]) -> None:
+    manifest_path = p["hidden_state_manifest"]
+    expected = expected_hidden_state_manifest(p)
+    hidden_files = list(p["hidden_states_dir"].glob("hs_*.safetensors"))
+    if manifest_path.exists():
+        actual = load_json(manifest_path)
+        mismatches = [
+            key
+            for key, value in expected.items()
+            if actual.get(key) != value
+        ]
+        if not mismatches:
+            return
+        if hidden_files:
+            raise RuntimeError(
+                "hidden-state manifest does not match current prepared data, "
+                f"but {len(hidden_files)} hidden-state files already exist: {mismatches}"
+            )
+    payload = {
+        **expected,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "created_by": "submit_qwen235b_mixed_500k_speculators_after_finalize.py",
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"+ wrote hidden-state manifest {manifest_path}", flush=True)
+
+
 def common_env(p: dict[str, Path]) -> dict[str, str]:
     return {
         "REPO_ROOT": str(REPO_ROOT),
@@ -226,6 +270,7 @@ def common_env(p: dict[str, Path]) -> dict[str, str]:
         "SPECULATORS_JSONL": str(p["speculators_jsonl"]),
         "OUTPUT_DIR": str(p["output_dir"]),
         "HIDDEN_STATES_DIR": str(p["hidden_states_dir"]),
+        "HIDDEN_STATE_MANIFEST": str(p["hidden_state_manifest"]),
         "CHECKPOINT_DIR": str(p["checkpoint_dir"]),
         "VLLM_TMP_HIDDEN_STATES": str(p["vllm_tmp_hidden_states"]),
         "SEQ_LENGTH": SEQ_LENGTH,
@@ -253,6 +298,7 @@ def common_env(p: dict[str, Path]) -> dict[str, str]:
         "REQUEST_TIMEOUT": "300",
         "MAX_RETRIES": "3",
         "VLLM_EXTRA_ARGS": "--distributed-executor-backend ray --attention-backend TRITON_ATTN --max-num-seqs 1 --max-cudagraph-capture-size 1 --disable-custom-all-reduce",
+        "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "PYTHONPATH",
         "RUN_CLONE": "false",
         "VALIDATE_OUTPUTS": "true",
         "VALIDATE_SOURCE_CONVERSATIONS": "true",
@@ -292,20 +338,10 @@ def submit_sbatch_pipeline(
 
 
 def setup_command(vllm_site: Path) -> str:
-    return f"""python - <<'PY'
-from pathlib import Path
-import site
-paths = [{str(vllm_site)!r}, {str(REPO_ROOT)!r}]
-line = "import sys; [sys.path.insert(0, p) for p in reversed(%r) if p not in sys.path]\\n" % paths
-for site_dir in site.getsitepackages():
-    site_path = Path(site_dir)
-    if not site_path.exists():
-        continue
-    p = site_path / "qwen3_eagle3_speculators_paths.pth"
-    p.write_text(line, encoding="utf-8")
-    print(f"wrote {{p}}")
-PY
-python - <<'PY'
+    setup_pythonpath = (
+        f"{shlex.quote(str(vllm_site))}:{shlex.quote(str(REPO_ROOT))}:${{PYTHONPATH:-}}"
+    )
+    return f"""PYTHONPATH={setup_pythonpath} python - <<'PY'
 import sys
 import vllm
 print("setup vllm", vllm.__version__, vllm.__file__)
@@ -346,7 +382,6 @@ def submit_ray_datagen(
         "MOUNTS": mounts,
         "GPUS_PER_NODE": "4",
         "SETUP_COMMAND": setup_command(vllm_site),
-        "PYTHONPATH": f"{vllm_site}:{REPO_ROOT}:{os.environ.get('PYTHONPATH', '')}",
         "HF_HOME": HF_HOME,
         "HF_DATASETS_CACHE": os.environ.get("HF_DATASETS_CACHE", f"{HF_HOME}/datasets"),
         "TRANSFORMERS_CACHE": os.environ.get("TRANSFORMERS_CACHE", f"{HF_HOME}/hub"),
@@ -356,6 +391,7 @@ def submit_ray_datagen(
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
+        "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "PYTHONPATH",
         "RAY_INCLUDE_DASHBOARD": "False",
         "RAY_USE_EXISTING_ENV": "true",
         "RAY_CLI": "ray",
@@ -425,7 +461,6 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         "MOUNTS": mounts,
         "GPUS_PER_NODE": "4",
         "SETUP_COMMAND": setup_command(vllm_site),
-        "PYTHONPATH": f"{vllm_site}:{REPO_ROOT}:{os.environ.get('PYTHONPATH', '')}",
         "HF_HOME": HF_HOME,
         "HF_DATASETS_CACHE": os.environ.get("HF_DATASETS_CACHE", f"{HF_HOME}/datasets"),
         "TRANSFORMERS_CACHE": os.environ.get("TRANSFORMERS_CACHE", f"{HF_HOME}/hub"),
@@ -435,6 +470,7 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
+        "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "PYTHONPATH",
         "RAY_INCLUDE_DASHBOARD": "False",
         "RAY_USE_EXISTING_ENV": "true",
         "RAY_CLI": "ray",
@@ -500,6 +536,7 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
     validate_inputs(p, allow_pending_finalizer=args.allow_pending_finalizer)
     if args.existing_prepare_job_id and not args.dry_run:
         validate_prepared_outputs(p)
+        write_hidden_state_manifest(p)
     if not args.dry_run:
         (REPO_ROOT / "logs").mkdir(parents=True, exist_ok=True)
         p["report"].parent.mkdir(parents=True, exist_ok=True)

@@ -45,7 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gen-outlier-threshold-s", type=float, default=800.0)
     parser.add_argument("--min-generation-speedup-pct", type=float, default=10.0)
     parser.add_argument("--min-acceptance-rate", type=float, default=0.45)
-    parser.add_argument("--fail-on-missing-spec-metrics", action="store_true")
+    parser.add_argument(
+        "--fail-on-missing-spec-metrics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--fail-if-no-pass", action="store_true")
     return parser.parse_args()
 

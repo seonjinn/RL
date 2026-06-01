@@ -63,8 +63,8 @@ PROM_METRIC_RE = re.compile(
     re.IGNORECASE,
 )
 ACCEPTANCE_RATE_TEXT_RE = re.compile(
-    r"(?:avg\s+draft\s+acceptance\s+rate|per-position\s+acceptance\s+rate|"
-    r"draft\s+acceptance\s+rate|acceptance\s+rate)[^0-9-]*"
+    r"(?:avg\s+draft\s+acceptance\s+rate|draft\s+acceptance\s+rate|"
+    r"acceptance\s+rate)[^0-9-]*"
     r"(-?[0-9]+(?:\.[0-9]+)?)\s*(%)?",
     re.IGNORECASE,
 )
@@ -124,6 +124,15 @@ def normalize_name(name: str) -> str:
 
 def normalize_spec_metric(name: str) -> str:
     normalized = normalize_name(name)
+    if "accept" in normalized and "rate" in normalized and (
+        "per_position" in normalized or re.search(r"(?:^|_)pos_?\d+", normalized)
+    ):
+        pos_match = re.search(r"(?:^|_)pos_?(\d+)", normalized)
+        if pos_match:
+            return f"acceptance_rate_pos_{pos_match.group(1)}"
+        return "acceptance_rate_per_pos"
+    if "metric" in normalized and "available" in normalized:
+        return "metrics_available"
     if "accept" in normalized and "rate" in normalized:
         return "acceptance_rate"
     if "accepted" in normalized and "token" in normalized:
@@ -139,7 +148,9 @@ def normalize_spec_metric(name: str) -> str:
 
 def likely_named_metric(name: str) -> bool:
     # Avoid treating file paths like retro_decoder_spec.py:39 as metrics.
-    if "/" in name or "\\" in name or ".py" in name or len(name) > 96:
+    if "\\" in name or ".py" in name or len(name) > 96:
+        return False
+    if "/" in name and not name.startswith(("spec_decode/", "spec_decode_gate/", "vllm/")):
         return False
     return True
 
@@ -279,7 +290,7 @@ def parse_spec_metrics(line: str, result: ParseResult) -> None:
         add_metric(result.spec_metrics, metric_name, value)
         captured = True
 
-    if "accept" in lower and "rate" in lower:
+    if "accept" in lower and "rate" in lower and "per-position" not in lower:
         match = ACCEPTANCE_RATE_TEXT_RE.search(line)
         if match:
             value = float(match.group(1))
@@ -498,6 +509,35 @@ def gate_result(
             }
         )
         status = "fail"
+    if fail_on_missing_spec_metrics and current["spec_metrics"]:
+        metrics_available = current["spec_metrics"].get("metrics_available", {}).get(
+            "median"
+        )
+        if metrics_available is not None and metrics_available < 0.5:
+            checks.append(
+                {
+                    "name": "spec_metrics_available",
+                    "passed": False,
+                    "value": metrics_available,
+                    "reason": "vLLM reported speculative decoding metrics unavailable",
+                }
+            )
+            status = "fail"
+        draft_tokens = current["spec_metrics"].get("draft_tokens", {}).get("median")
+        if draft_tokens is None:
+            draft_tokens = current["spec_metrics"].get("num_draft_tokens", {}).get(
+                "median"
+            )
+        if draft_tokens is None or draft_tokens <= 0:
+            checks.append(
+                {
+                    "name": "spec_decode_active",
+                    "passed": False,
+                    "value": draft_tokens,
+                    "reason": "no positive draft-token metric was found",
+                }
+            )
+            status = "fail"
 
     return {"status": status, "checks": checks}
 

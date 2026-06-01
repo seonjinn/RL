@@ -705,6 +705,7 @@ class BaseVllmGenerationWorker:
                 "NRL_VLLM_USE_V1",
                 "NCCL_CUMEM_ENABLE",
                 "NCCL_NVLS_ENABLE",
+                "PYTHONPATH",
                 "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
                 "VLLM_ATTENTION_BACKEND",
                 "VLLM_ALLOW_INSECURE_SERIALIZATION",
@@ -715,6 +716,7 @@ class BaseVllmGenerationWorker:
                 "VLLM_DEEP_GEMM_WARMUP",
                 "VLLM_DISABLE_USAGE_STATS",
                 "VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH",
+                "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY",
                 "VLLM_SKIP_P2P_CHECK",
                 "VLLM_SPECDEC_ADAPTIVE_ADJUST_INTERVAL",
                 "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
@@ -3457,6 +3459,15 @@ class BaseVllmGenerationWorker:
 
         load_format = self.cfg["vllm_cfg"]["load_format"]
         if ModelFlag.VLLM_LOAD_FORMAT_AUTO.matches(self.model_name):
+            load_format = "auto"
+        if isinstance(vllm_kwargs.get("speculative_config"), dict):
+            if load_format != "auto":
+                logger.warning(
+                    "Speculative decoding is enabled. Setting load_format to "
+                    "'auto' instead of %r so verifier and drafter weights are "
+                    "loaded from checkpoints rather than dummy weights.",
+                    load_format,
+                )
             load_format = "auto"
 
         if (

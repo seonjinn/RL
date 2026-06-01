@@ -24,6 +24,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-$ARTIFACT_ROOT/speculators/eagle3_openmath_reasoning_c
 HIDDEN_STATES_DIR="${HIDDEN_STATES_DIR:-$OUTPUT_DIR/hidden_states}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 VLLM_TMP_HIDDEN_STATES="${VLLM_TMP_HIDDEN_STATES:-$OUTPUT_DIR/vllm_tmp_hidden_states}"
+HIDDEN_STATE_MANIFEST="${HIDDEN_STATE_MANIFEST:-$HIDDEN_STATES_DIR/nrl_hidden_state_manifest.json}"
 
 SEQ_LENGTH="${SEQ_LENGTH:-8192}"
 MAX_SAMPLES="${MAX_SAMPLES:-50000}"
@@ -154,6 +155,7 @@ echo "SOURCE_CONVERSATIONS=$SOURCE_CONVERSATIONS"
 echo "SPECULATORS_JSONL=$SPECULATORS_JSONL"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 echo "HIDDEN_STATES_DIR=$HIDDEN_STATES_DIR"
+echo "HIDDEN_STATE_MANIFEST=$HIDDEN_STATE_MANIFEST"
 echo "TARGET_LAYER_IDS=$TARGET_LAYER_IDS"
 echo "SPECULATOR_TYPE=$SPECULATOR_TYPE"
 echo "MAX_SAMPLES=$MAX_SAMPLES SAMPLE_OFFSET=$SAMPLE_OFFSET SEQ_LENGTH=$SEQ_LENGTH"
@@ -266,6 +268,44 @@ payload = {
 manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"# Wrote prepare manifest: {manifest_path}")
 PY
+    python3 - "$HIDDEN_STATE_MANIFEST" "$PREPARE_MANIFEST" "$MODEL" "$SEQ_LENGTH" "$TARGET_LAYER_IDS" "$MIN_HIDDEN_STATES" "$HIDDEN_STATES_DIR" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+manifest_path = Path(sys.argv[1])
+prepare_manifest_path = Path(sys.argv[2])
+prepare_manifest = json.loads(prepare_manifest_path.read_text(encoding="utf-8"))
+payload = {
+    "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+    "created_by": "speculators_qwen3_235b_offline_pipeline.sh",
+    "model": sys.argv[3],
+    "seq_length": int(sys.argv[4]),
+    "target_layer_ids": [int(item) for item in sys.argv[5].split()],
+    "expected_hidden_states": int(sys.argv[6]) if sys.argv[6] else 0,
+    "hidden_states_dir": sys.argv[7],
+    "prepare_manifest": str(prepare_manifest_path),
+    "prepare_manifest_sha256": sha256_file(prepare_manifest_path),
+    "speculators_jsonl": prepare_manifest.get("speculators_jsonl"),
+    "speculators_jsonl_sha256": prepare_manifest.get("speculators_jsonl_sha256"),
+}
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"# Wrote hidden-state manifest: {manifest_path}")
+PY
   fi
 fi
 
@@ -274,10 +314,53 @@ check_connector_cmd=(
   'import pathlib, vllm; root=pathlib.Path(vllm.__file__).parent; text="\n".join(p.read_text(errors="ignore") for p in root.rglob("*.py") if p.is_file()); raise SystemExit(0 if "ExampleHiddenStatesConnector" in text and "extract_hidden_states" in text else "vLLM install lacks ExampleHiddenStatesConnector/extract_hidden_states support")'
 )
 
+patch_vllm_ray_runtime_env_cmd=(
+  python3 - "$VLLM_SITE"
+)
+
 if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then
   echo "# Checking vLLM hidden-state extraction support"
   printf '%q ' "${check_connector_cmd[@]}"; printf '\n'
   [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]] || "${check_connector_cmd[@]}"
+
+  if [[ -n "$VLLM_SITE" ]]; then
+    echo "# Patching vLLM Ray worker runtime_env for extracted-site PYTHONPATH"
+    printf '%q ' "${patch_vllm_ray_runtime_env_cmd[@]}"; printf ' <<PY\n'
+  elif [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then
+    echo "# dry-run: VLLM_SITE is empty; skipping extracted-site runtime_env patch"
+  fi
+  if [[ -n "$VLLM_SITE" && "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
+    "${patch_vllm_ray_runtime_env_cmd[@]}" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+vllm_site = Path(sys.argv[1])
+ray_executor = vllm_site / "vllm/v1/executor/ray_executor.py"
+if not ray_executor.exists():
+    raise SystemExit(f"vLLM Ray executor is missing: {ray_executor}")
+text = ray_executor.read_text(encoding="utf-8")
+if "ray_worker_runtime_env" in text:
+    print(f"# vLLM Ray runtime_env patch already present: {ray_executor}")
+else:
+    old = '        self._init_workers_ray(placement_group, runtime_env={"py_executable": "/opt/venv/bin/python"})'
+    new = '''        ray_worker_runtime_env = {"py_executable": "/opt/venv/bin/python"}
+        ray_worker_env_vars = {}
+        for _name in ("PYTHONPATH", "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"):
+            if os.environ.get(_name):
+                ray_worker_env_vars[_name] = os.environ[_name]
+        if ray_worker_env_vars:
+            ray_worker_runtime_env["env_vars"] = ray_worker_env_vars
+        self._init_workers_ray(placement_group, runtime_env=ray_worker_runtime_env)'''
+    if old not in text:
+        raise SystemExit(
+            "Could not patch vLLM Ray executor runtime_env; expected anchor not found"
+        )
+    ray_executor.write_text(text.replace(old, new), encoding="utf-8")
+    print(f"# Patched vLLM Ray runtime_env: {ray_executor}")
+PY
+  fi
 
   vllm_args=(--tensor-parallel-size "$VLLM_TP" --gpu-memory-utilization "$VLLM_GPU_UTIL" --max-model-len "$VLLM_MAX_MODEL_LEN" --port "$VLLM_PORT")
   if [[ "$VLLM_DP" != "1" ]]; then
@@ -351,6 +434,52 @@ fi
 
 if [[ "$RUN_TRAIN" == "true" || "$RUN_TRAIN" == "True" ]]; then
   if [[ "$MIN_HIDDEN_STATES" != "0" && -n "$MIN_HIDDEN_STATES" ]]; then
+    python3 - "$HIDDEN_STATE_MANIFEST" "$PREPARE_MANIFEST" "$MODEL" "$SEQ_LENGTH" "$TARGET_LAYER_IDS" "$MIN_HIDDEN_STATES" "$HIDDEN_STATES_DIR" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+manifest_path = Path(sys.argv[1])
+prepare_manifest_path = Path(sys.argv[2])
+if not prepare_manifest_path.exists():
+    raise SystemExit(f"ERROR: prepare manifest is missing: {prepare_manifest_path}")
+if not manifest_path.exists():
+    raise SystemExit(f"ERROR: hidden-state manifest is missing: {manifest_path}")
+
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+expected = {
+    "model": sys.argv[3],
+    "seq_length": int(sys.argv[4]),
+    "target_layer_ids": [int(item) for item in sys.argv[5].split()],
+    "expected_hidden_states": int(sys.argv[6]),
+    "hidden_states_dir": sys.argv[7],
+    "prepare_manifest": str(prepare_manifest_path),
+    "prepare_manifest_sha256": sha256_file(prepare_manifest_path),
+}
+mismatches = [
+    f"{key}: actual={manifest.get(key)!r} expected={value!r}"
+    for key, value in expected.items()
+    if manifest.get(key) != value
+]
+if mismatches:
+    raise SystemExit(
+        "ERROR: hidden-state manifest does not match current prepared data: "
+        + "; ".join(mismatches)
+    )
+print(f"# Hidden-state manifest validated: {manifest_path}")
+PY
     hidden_state_count="$(find "$HIDDEN_STATES_DIR" -type f -name 'hs_*.safetensors' 2>/dev/null | wc -l | tr -d ' ')"
     echo "# Hidden-state files available: $hidden_state_count; required: $MIN_HIDDEN_STATES"
     if (( hidden_state_count < MIN_HIDDEN_STATES )); then
