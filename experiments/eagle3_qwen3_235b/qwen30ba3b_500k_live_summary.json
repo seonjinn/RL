@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 19:11 PDT",
+  "updated_at": "2026-05-31 19:17 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -914,6 +914,18 @@
       "direct_prompt_overlap": 0,
       "caveat": "Prompt-level lexical check only; not semantic near-duplicate detection."
     }
+  },
+  "k3_acceptance_analysis": {
+    "job_id": "3058169",
+    "num_speculative_tokens": 3,
+    "mean_acceptance_rate": 0.3185,
+    "latest_per_position_acceptance": [
+      0.5511,
+      0.2762,
+      0.1324
+    ],
+    "interpretation": "K=3 is not failing uniformly. The first draft token is accepted at roughly K=1 quality, but the second and third speculative positions collapse. This points to multi-step distribution drift/exposure bias in math CoT decoding: once a draft prefix diverges even slightly from the target model trajectory, deeper speculative tokens are much less likely to match exact verifier tokens.",
+    "operational_decision": "Treat K=1 as the current production-quality setting for NeMo-RL. K=2/K=3 should only be enabled behind adaptive depth or long-tail gating if per-position acceptance improves."
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_activebatch_hardened_running",

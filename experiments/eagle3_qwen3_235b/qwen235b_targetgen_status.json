@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 19:11 PDT",
+  "updated_at": "2026-05-31 19:17 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -292,7 +292,7 @@
       ],
       "rows_before_submit": 477285,
       "missing_total": 22715,
-      "state_at_latest_check": "7 RUNNING at 19:11 PDT; all seven jobs are generating exact missing-id repair rows. Observed temporary repair outputs total 4,635 rows so far, but these are not yet applied to the chunk JSONLs.",
+      "state_at_latest_check": "7 RUNNING at 19:17 PDT; all seven jobs are generating exact missing-id repair rows. Observed temporary repair outputs total 5,036 rows so far, but these are not yet applied to the chunk JSONLs.",
       "job_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen235b_missing_id_repair_jobs.txt",
       "note": "A fresh prompt-id comparison showed every remaining short chunk has interior holes from earlier unordered writes, so count-based resume is unsafe. Active count-based jobs 3061007, 3060998, 3061685, 3061686, and 3061687 were cancelled, then seven exact missing-id repair jobs were submitted in parallel. The count-based resume runner now has a prefix-validation guard and will fail before starting vLLM if a chunk is not a contiguous prompt prefix."
     },
@@ -381,14 +381,14 @@
     "active_missing_id_repair_jobs_observed": 7,
     "complete_chunk_files_observed_ge5000_rows": 12,
     "short_nonzero_chunk_files_observed": 88,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. Seven exact missing-id repair jobs 3062965-3062971 are running and have generated 4,635 temporary repair rows so far. Partial-apply jobs 3063256-3063262, chunk repair jobs 3063263-3063312, finalizer 3063314, and Speculators chain 3063316 -> 3063317_[0-99] -> 3063318 are queued behind the repair wave.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. Seven exact missing-id repair jobs 3062965-3062971 are running and have generated 5,036 temporary repair rows so far. Partial-apply jobs 3063256-3063262, chunk repair jobs 3063263-3063312, finalizer 3063314, and Speculators chain 3063316 -> 3063317_[0-99] -> 3063318 are queued behind the repair wave.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 60,
     "running_targetgen_jobs_observed": 0,
     "completing_targetgen_jobs_observed": 0,
-    "wave3_generated_repair_rows_observed": 4635,
-    "wave3_generated_repair_rows_observed_at": "2026-05-31 19:11 PDT"
+    "wave3_generated_repair_rows_observed": 5036,
+    "wave3_generated_repair_rows_observed_at": "2026-05-31 19:17 PDT"
   },
   "code_review_status": {
     "updated_at": "2026-05-31 15:44 PDT",
