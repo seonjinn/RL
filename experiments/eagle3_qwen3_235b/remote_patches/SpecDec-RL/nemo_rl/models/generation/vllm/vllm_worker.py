@@ -885,6 +885,34 @@ class BaseVllmGenerationWorker:
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD" in content
                     or "specdec_batch_gate_disabled" in content
                 ):
+                    scheduled_token_deadlock_block = (
+                        "            specdec_scheduled_tokens = getattr(\n"
+                        "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
+                        "            )\n"
+                        "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                        "                specdec_scheduled_tokens, \"__len__\"\n"
+                        "            ):\n"
+                        "                specdec_batch_gate_disabled = (\n"
+                        "                    specdec_batch_gate_threshold_disabled\n"
+                        "                    or (\n"
+                        "                        len(specdec_scheduled_tokens) == 0\n"
+                        "                        and specdec_batch_gate_num_requests > 0\n"
+                        "                    )\n"
+                        "                )\n"
+                        "            else:\n"
+                        "                specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
+                    )
+                    threshold_only_block = (
+                        "            specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
+                    )
+                    if scheduled_token_deadlock_block in content:
+                        upgraded_content = content.replace(
+                            scheduled_token_deadlock_block,
+                            threshold_only_block,
+                        )
+                        with open(path, "w") as f:
+                            f.write(upgraded_content)
+                        content = upgraded_content
                     if "specdec_batch_gate_threshold_disabled" not in content:
                         upgraded_content = content.replace(
                             "            specdec_scheduled_tokens = getattr(\n"
@@ -920,21 +948,7 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
-                            "            specdec_scheduled_tokens = getattr(\n"
-                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
-                            "            )\n"
-                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
-                            "                specdec_scheduled_tokens, \"__len__\"\n"
-                            "            ):\n"
-                            "                specdec_batch_gate_disabled = (\n"
-                            "                    specdec_batch_gate_threshold_disabled\n"
-                            "                    or (\n"
-                            "                        len(specdec_scheduled_tokens) == 0\n"
-                            "                        and specdec_batch_gate_num_requests > 0\n"
-                            "                    )\n"
-                            "                )\n"
-                            "            else:\n"
-                            "                specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n",
+                            "            specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n",
                         )
                         if upgraded_content != content:
                             with open(path, "w") as f:
@@ -1176,21 +1190,7 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
-                            "            specdec_scheduled_tokens = getattr(\n"
-                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
-                            "            )\n"
-                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
-                            "                specdec_scheduled_tokens, \"__len__\"\n"
-                            "            ):\n"
-                            "                specdec_batch_gate_disabled = (\n"
-                            "                    specdec_batch_gate_threshold_disabled\n"
-                            "                    or (\n"
-                            "                        len(specdec_scheduled_tokens) == 0\n"
-                            "                        and specdec_batch_gate_num_requests > 0\n"
-                            "                    )\n"
-                            "                )\n"
-                            "            else:\n"
-                            "                specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
+                            "            specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
                             "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
                             "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
                             "            self._nrl_specdec_batch_gate_last_disabled = specdec_batch_gate_disabled\n"
@@ -1319,21 +1319,7 @@ class BaseVllmGenerationWorker:
                             "                    > specdec_batch_gate_token_threshold\n"
                             "                )\n"
                             "            )\n"
-                            "            specdec_scheduled_tokens = getattr(\n"
-                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
-                            "            )\n"
-                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
-                            "                specdec_scheduled_tokens, \"__len__\"\n"
-                            "            ):\n"
-                            "                specdec_batch_gate_disabled = (\n"
-                            "                    specdec_batch_gate_threshold_disabled\n"
-                            "                    or (\n"
-                            "                        len(specdec_scheduled_tokens) == 0\n"
-                            "                        and specdec_batch_gate_num_requests > 0\n"
-                            "                    )\n"
-                            "                )\n"
-                            "            else:\n"
-                            "                specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
+                            "            specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
                             "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
                             "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
                             "            self._nrl_specdec_batch_gate_last_disabled = specdec_batch_gate_disabled\n"
