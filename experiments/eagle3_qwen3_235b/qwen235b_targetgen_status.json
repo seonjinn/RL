@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 03:49 PDT",
+  "updated_at": "2026-06-01 04:10 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -376,7 +376,7 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Initial hidden-state arrays were cancelled after Ray/dashboard, Python venv, vLLM import, memory, and global .pth/opentelemetry contamination issues. Replacement 3071751 connected 8/8 Ray worker units, but vLLM internal Ray actors failed before env update with ModuleNotFoundError: vllm. Current replacement array 3071825_[0-99]%5 and train 3071826 were submitted at 2026-06-01 03:48 PDT after adding a vLLM Ray executor runtime_env.env_vars patch for PYTHONPATH.",
+      "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Initial hidden-state arrays were cancelled after Ray/dashboard, Python venv, vLLM import, memory, and global .pth/opentelemetry contamination issues. Replacement 3071751 connected 8/8 Ray worker units, but vLLM internal Ray actors failed before env update with ModuleNotFoundError: vllm. Current replacement array 3071825_[0-99]%5 and train 3071826 were submitted at 2026-06-01 03:48 PDT after adding a vLLM Ray executor runtime_env.env_vars patch for PYTHONPATH. At 2026-06-01 04:10 PDT, array tasks 0-4 are running, tasks 5-99 are pending on JobArrayTaskLimit, 3071826 is dependency-pending, and hidden-state output count is still 0. The first shard has loaded all 118 target checkpoint shards, attached hidden-state extraction auxiliary layers (1, 46, 90, 94), and is in CUDA graph capture/compile before data_generation_offline starts.",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
       "note": "Replaces cancelled stale chain 3063316 -> 3063317_[0-99] -> 3063318 and failed/cancelled chains 3068016 -> 3068017, 3070670 -> 3070671, and 3071019 -> 3071020. It will train only after the current hidden-state array completes."
@@ -402,7 +402,7 @@
     "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 failed on Ray dashboard startup, replacement 3070670 was cancelled after the older readiness check stayed at 0/8 worker units with 0 hidden-state files, replacement 3071019 was cancelled after the managed Ray venv could not find Python 3.12.13, replacement 3071215 was cancelled after worker-side vLLM import path was not propagated, replacement 3071479 was cancelled after one shard hit Slurm step memory/node-registration startup failures, replacement 3071610 was cancelled after global vLLM path injection shadowed Ray dashboard opentelemetry and kept workers at 0/8, and replacement 3071751 was cancelled after vLLM internal Ray actors failed to import vLLM before env propagation. Current hidden-state array is 3071825_[0-99]%5 with a runtime_env.env_vars PYTHONPATH patch for vLLM Ray workers. Train job 3071826 remains dependency-pending.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 failed on Ray dashboard startup, replacement 3070670 was cancelled after the older readiness check stayed at 0/8 worker units with 0 hidden-state files, replacement 3071019 was cancelled after the managed Ray venv could not find Python 3.12.13, replacement 3071215 was cancelled after worker-side vLLM import path was not propagated, replacement 3071479 was cancelled after one shard hit Slurm step memory/node-registration startup failures, replacement 3071610 was cancelled after global vLLM path injection shadowed Ray dashboard opentelemetry and kept workers at 0/8, and replacement 3071751 was cancelled after vLLM internal Ray actors failed to import vLLM before env propagation. Current hidden-state array is 3071825_[0-99]%5 with a runtime_env.env_vars PYTHONPATH patch for vLLM Ray workers. At 2026-06-01 04:10 PDT, tasks 0-4 are running, hidden-state output count is still 0, the first shard has finished loading 118/118 target checkpoint shards and is compiling CUDA graphs, and train job 3071826 remains dependency-pending.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 50,
@@ -424,7 +424,7 @@
     "current_prepare_job": "3068015",
     "current_prepare_state_observed": "COMPLETED by 2026-06-01 02:49 PDT; output has 500000 examples, 16 arrow shards, token_freq.pt, and state.json",
     "current_hidden_state_array_job": "3071825_[0-99]",
-    "current_hidden_state_array_state_observed": "PENDING at 2026-06-01 03:49 PDT; hidden-state output file count still 0 before startup",
+    "current_hidden_state_array_state_observed": "RUNNING at 2026-06-01 04:10 PDT for tasks 0-4; tasks 5-99 pending on JobArrayTaskLimit; hidden-state output file count still 0 while vLLM finishes CUDA graph capture/compile",
     "current_train_job": "3071826",
     "current_train_state_observed": "PENDING with Dependency"
   },
