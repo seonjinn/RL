@@ -4,10 +4,17 @@ stages:
 default:
   image: alpine:3.20
 
+variables:
+  GIT_DEPTH: "1"
+  GIT_SUBMODULE_STRATEGY: none
+  GIT_LFS_SKIP_SMUDGE: "1"
+  GIT_CLEAN_FLAGS: none
+
 pages:
   stage: deploy
   tags:
     - pages
+  timeout: 2h
   script:
     - test -f experiments/eagle3_qwen3_235b/specdec_math_progress_report.html
     - mkdir -p public

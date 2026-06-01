@@ -270,9 +270,18 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             return {}
 
         metric = {}
+        gate_current = self._read_vllm_specdec_gate_metrics()
+        if gate_current:
+            gate_baseline = getattr(self, "_vllm_specdec_gate_metrics_baseline", None)
+            metric["spec_decode_gate"] = (
+                self._diff_vllm_specdec_gate_metrics(gate_current, gate_baseline)
+                if gate_baseline is not None
+                else gate_current
+            )
         if self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             with self._vllm_metrics_lock:
                 metric = {
+                    **metric,
                     "inflight_batch_sizes": copy.deepcopy(self.inflight_batch_sizes),
                     "num_pending_samples": copy.deepcopy(self.num_pending_samples),
                     "kv_cache_usage_perc": copy.deepcopy(self.kv_cache_usage_perc),
@@ -300,6 +309,9 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         if spec_decode_enabled:
             self._vllm_spec_decode_metrics_baseline = (
                 self._read_vllm_spec_decode_metrics()
+            )
+            self._vllm_specdec_gate_metrics_baseline = (
+                self._read_vllm_specdec_gate_metrics()
             )
         if not self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             return

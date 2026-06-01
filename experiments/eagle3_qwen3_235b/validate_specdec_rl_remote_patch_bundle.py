@@ -39,6 +39,8 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "or spec_decode_enabled",
         "request.logprobs = False",
         "self._vllm_spec_decode_metrics_baseline",
+        "self._vllm_specdec_gate_metrics_baseline",
+        "spec_decode_gate",
     ],
     "nemo_rl/models/generation/vllm/vllm_worker.py": [
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
