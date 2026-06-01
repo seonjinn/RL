@@ -82,6 +82,8 @@ FAIL_ON_DUPLICATE_PROMPTS="${FAIL_ON_DUPLICATE_PROMPTS:-true}"
 DENYLIST_PROMPTS_FROM="${DENYLIST_PROMPTS_FROM:-}"
 INSTALL_SPECULATORS="${INSTALL_SPECULATORS:-true}"
 APPLY_COMPAT_PATCHES="${APPLY_COMPAT_PATCHES:-true}"
+ENFORCE_SPECULATORS_REF="${ENFORCE_SPECULATORS_REF:-true}"
+ALLOW_SPECULATORS_DIRTY="${ALLOW_SPECULATORS_DIRTY:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 
 HF_HOME="${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}"
@@ -167,6 +169,38 @@ echo "VLLM_LAUNCH_EXTRA_ARGS=$VLLM_LAUNCH_EXTRA_ARGS"
 echo "VALIDATE_SOURCE_CONVERSATIONS=$VALIDATE_SOURCE_CONVERSATIONS FAIL_ON_DUPLICATE_PROMPTS=$FAIL_ON_DUPLICATE_PROMPTS"
 echo "DENYLIST_PROMPTS_FROM=$DENYLIST_PROMPTS_FROM"
 echo "RUN_CLONE=$RUN_CLONE RUN_CONVERT=$RUN_CONVERT RUN_PREPARE=$RUN_PREPARE RUN_DATAGEN=$RUN_DATAGEN RUN_TRAIN=$RUN_TRAIN INSTALL_SPECULATORS=$INSTALL_SPECULATORS APPLY_COMPAT_PATCHES=$APPLY_COMPAT_PATCHES"
+echo "ENFORCE_SPECULATORS_REF=$ENFORCE_SPECULATORS_REF ALLOW_SPECULATORS_DIRTY=$ALLOW_SPECULATORS_DIRTY"
+
+if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
+  if [[ ! -d "$SPECULATORS_DIR/.git" ]]; then
+    echo "ERROR: Speculators checkout is missing or not a git repo: $SPECULATORS_DIR" >&2
+    exit 2
+  fi
+  current_speculators_ref="$(git -C "$SPECULATORS_DIR" rev-parse HEAD)"
+  if [[ "$ENFORCE_SPECULATORS_REF" == "true" || "$ENFORCE_SPECULATORS_REF" == "True" ]]; then
+    expected_speculators_ref="$(git -C "$SPECULATORS_DIR" rev-parse "$SPECULATORS_REF")"
+    if [[ "$current_speculators_ref" != "$expected_speculators_ref" ]]; then
+      echo "ERROR: Speculators checkout ref mismatch: actual=$current_speculators_ref expected=$expected_speculators_ref" >&2
+      exit 2
+    fi
+  fi
+  if [[ "$APPLY_COMPAT_PATCHES" != "true" && "$APPLY_COMPAT_PATCHES" != "True" && "$ALLOW_SPECULATORS_DIRTY" != "true" && "$ALLOW_SPECULATORS_DIRTY" != "True" ]]; then
+    if ! git -C "$SPECULATORS_DIR" diff --quiet --ignore-submodules --; then
+      echo "ERROR: Speculators checkout is dirty while APPLY_COMPAT_PATCHES=false" >&2
+      git -C "$SPECULATORS_DIR" status --short >&2
+      exit 2
+    fi
+  fi
+  if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then
+    datagen_help="$(python3 "$SPECULATORS_DIR/scripts/data_generation_offline.py" --help 2>&1 || true)"
+    for required_flag in --start-index --end-index --validate-outputs; do
+      if [[ "$datagen_help" != *"$required_flag"* ]]; then
+        echo "ERROR: Speculators data_generation_offline.py lacks required flag $required_flag" >&2
+        exit 2
+      fi
+    done
+  fi
+fi
 
 if [[ "$VALIDATE_SOURCE_CONVERSATIONS" == "true" || "$VALIDATE_SOURCE_CONVERSATIONS" == "True" ]]; then
   validate_source_cmd=(
@@ -557,6 +591,19 @@ tmp_path = manifest_path.with_name(f"{manifest_path.name}.{os.getpid()}.tmp")
 tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 os.replace(tmp_path, manifest_path)
 print(f"# Wrote hidden-state manifest after datagen: {manifest_path}")
+start = os.environ.get("DATAGEN_START_INDEX")
+end = os.environ.get("DATAGEN_END_INDEX")
+task_id = os.environ.get("SLURM_ARRAY_TASK_ID")
+if start or end or task_id:
+    shard_dir = manifest_path.parent / "shard_manifests"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    shard_name = f"nrl_hidden_state_manifest_shard_{task_id or 'single'}_{start or 'start'}_{end or 'end'}.json"
+    shard_path = shard_dir / shard_name
+    shard_tmp = shard_path.with_name(f"{shard_path.name}.{os.getpid()}.tmp")
+    shard_payload = {**payload, "aggregate_manifest": str(manifest_path)}
+    shard_tmp.write_text(json.dumps(shard_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(shard_tmp, shard_path)
+    print(f"# Wrote per-shard hidden-state manifest after datagen: {shard_path}")
 PY
     cleanup
     trap - EXIT

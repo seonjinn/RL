@@ -326,6 +326,8 @@ def common_env(p: dict[str, Path]) -> dict[str, str]:
         "VALIDATE_OUTPUTS": "true",
         "VALIDATE_SOURCE_CONVERSATIONS": "true",
         "FAIL_ON_DUPLICATE_PROMPTS": "true",
+        "ENFORCE_SPECULATORS_REF": "true",
+        "ALLOW_SPECULATORS_DIRTY": "true",
         "DENYLIST_PROMPTS_FROM": str(p["denylist"]),
         "INSTALL_SPECULATORS": "true",
         "APPLY_COMPAT_PATCHES": "false",

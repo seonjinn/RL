@@ -184,6 +184,9 @@ class ParseResult:
     spec_metrics: dict[str, list[float]] = field(default_factory=dict)
     throughput_metrics: dict[str, list[float]] = field(default_factory=dict)
     spec_lines: list[str] = field(default_factory=list)
+    spec_metric_sources: list[str] = field(default_factory=list)
+    timing_sources: list[str] = field(default_factory=list)
+    standalone_vllm_spec_sources: list[str] = field(default_factory=list)
     evidence: dict[str, bool] = field(
         default_factory=lambda: {
             "speculative_config_seen": False,
@@ -196,6 +199,11 @@ class ParseResult:
 
 def add_metric(bucket: dict[str, list[float]], key: str, value: float) -> None:
     bucket.setdefault(key, []).append(value)
+
+
+def add_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def collect_paths(paths: Iterable[Path]) -> list[Path]:
@@ -247,11 +255,46 @@ def parse_csv(path: Path, result: ParseResult, records: dict[tuple[str, int], St
                     if value in (None, ""):
                         continue
                     record.timings[target_key] = float(value)
+                    add_unique(result.timing_sources, str(path))
     except (OSError, ValueError, csv.Error) as exc:
         result.warnings.append(f"Could not parse CSV {path}: {exc}")
 
 
-def parse_spec_metrics(line: str, result: ParseResult) -> None:
+def is_standalone_vllm_line(lower: str) -> bool:
+    return any(
+        token in lower
+        for token in (
+            "application startup complete",
+            "uvicorn running on",
+            "launch_vllm.py",
+            "get /health",
+            "post /v1/",
+            "openai api server",
+        )
+    )
+
+
+def is_nemo_rl_line(lower: str) -> bool:
+    return any(
+        token in lower
+        for token in (
+            "vllmgenerationworker",
+            "generation worker group",
+            "nemo_rl",
+            "total step time",
+            "========================= step ",
+        )
+    )
+
+
+def parse_spec_metrics(
+    line: str,
+    result: ParseResult,
+    *,
+    source: Path | None = None,
+    standalone_context: bool = False,
+    nemo_context: bool = False,
+) -> None:
     lower = line.lower()
     if "vllm" in lower:
         result.evidence["vllm_seen"] = True
@@ -301,6 +344,10 @@ def parse_spec_metrics(line: str, result: ParseResult) -> None:
                 captured = True
 
     if captured:
+        if source is not None:
+            add_unique(result.spec_metric_sources, str(source))
+            if standalone_context and not nemo_context:
+                add_unique(result.standalone_vllm_spec_sources, str(source))
         if len(result.spec_lines) < 20:
             result.spec_lines.append(line.strip())
     elif any(token in lower for token in ("speculative", "draft", "eagle3")):
@@ -313,6 +360,8 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
     fallback_step = maybe_step_from_filename(path)
     current_step = fallback_step
     synthetic_step = 0
+    standalone_context = False
+    nemo_context = False
 
     try:
         with path.open(errors="replace") as fh:
@@ -320,12 +369,22 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                 line = clean_line(raw_line)
                 if not line.strip():
                     continue
+                lower = line.lower()
+                standalone_context = standalone_context or is_standalone_vllm_line(lower)
+                nemo_context = nemo_context or is_nemo_rl_line(lower)
 
                 step_match = STEP_RE.search(line)
                 if step_match:
                     current_step = int(step_match.group(1))
+                    nemo_context = True
 
-                parse_spec_metrics(line, result)
+                parse_spec_metrics(
+                    line,
+                    result,
+                    source=path,
+                    standalone_context=standalone_context,
+                    nemo_context=nemo_context,
+                )
 
                 throughput_match = THROUGHPUT_RE.search(line)
                 if throughput_match:
@@ -339,6 +398,7 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                         synthetic_step += 1
                     record = record_for_step(records, path, current_step)
                     record.timings["total_step_time"] = float(total_match.group(1))
+                    add_unique(result.timing_sources, str(path))
                     continue
 
                 timing_match = TIMING_RE.search(line)
@@ -354,6 +414,7 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                         synthetic_step += 1
                     record = record_for_step(records, path, current_step)
                     record.timings[key] = float(raw_value)
+                    add_unique(result.timing_sources, str(path))
                     if pct is not None:
                         record.timing_pct[key] = float(pct)
     except OSError as exc:
@@ -428,6 +489,11 @@ def summarize_result(
         "spec_metrics": spec,
         "throughput_metrics": throughput,
         "evidence": result.evidence,
+        "source_provenance": {
+            "spec_metric_sources": result.spec_metric_sources,
+            "timing_sources": result.timing_sources,
+            "standalone_vllm_spec_sources": result.standalone_vllm_spec_sources,
+        },
         "warnings": result.warnings,
         "spec_lines": result.spec_lines,
     }
@@ -439,6 +505,7 @@ def gate_result(
     min_gen_speedup_pct: float | None,
     min_acceptance_rate: float | None,
     fail_on_missing_spec_metrics: bool,
+    allow_standalone_vllm: bool,
 ) -> dict[str, Any]:
     status = "pass"
     checks: list[dict[str, Any]] = []
@@ -539,6 +606,22 @@ def gate_result(
             )
             status = "fail"
 
+    provenance = current.get("source_provenance", {})
+    standalone_sources = provenance.get("standalone_vllm_spec_sources") or []
+    if standalone_sources and not allow_standalone_vllm:
+        checks.append(
+            {
+                "name": "nemo_rl_metric_provenance",
+                "passed": False,
+                "reason": (
+                    "standalone vLLM SpecDec metrics found in current inputs; "
+                    "rerun with --allow-standalone-vllm only for standalone generation reports"
+                ),
+                "sources": standalone_sources[:8],
+            }
+        )
+        status = "fail"
+
     return {"status": status, "checks": checks}
 
 
@@ -555,6 +638,7 @@ def to_jsonable(result: ParseResult, summary: dict[str, Any], gate: dict[str, An
             }
             for step in result.steps
         ],
+        "source_provenance": summary.get("source_provenance", {}),
         "summary": summary,
         "gate": gate,
     }
@@ -692,6 +776,11 @@ def main() -> int:
         default=True,
         help="Fail the gate if acceptance/draft metrics are absent from the logs.",
     )
+    parser.add_argument(
+        "--allow-standalone-vllm",
+        action="store_true",
+        help="Allow standalone vLLM SpecDec metrics in current inputs. Leave unset for NeMo-RL evidence.",
+    )
     args = parser.parse_args()
 
     current_result = analyze(args.paths)
@@ -713,6 +802,7 @@ def main() -> int:
         args.min_generation_speedup_pct,
         args.min_acceptance_rate,
         args.fail_on_missing_spec_metrics,
+        args.allow_standalone_vllm,
     )
 
     rendered = render_table("SpecDec smoke summary", current_summary)
