@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 11:49 PDT",
+  "updated_at": "2026-06-01 11:57 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1336,8 +1336,8 @@
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, then entered policy.get_logprobs. Strict SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then hit a Megatron policy.get_logprobs NCCL watchdog timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP at 2026-06-01 11:06 PDT. This gives a strict early generation-only speedup of 1.2058x, but not final completed-step throughput. Old-gate Dynamic-K job 3075161 produced Step 1 acceptance but showed enabled_ratio=1.0 due the V7 gate bug. Corrected V8 verifier 3076185 failed before rollout because dynamic K token thresholds were reversed (small=2048, medium=1024). The corrected verifier 3076735 was submitted at 2026-06-01 11:47 PDT and is RUNNING as of 11:48 PDT with small=1024, medium=2048, token gate 2048, K=3/2/1, and NRL_STOP_AFTER_GENERATION=true.",
-  "current_primary_dynamic_k_job": "3076735_v8_resubmitted_corrected_thresholds",
+  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, then entered policy.get_logprobs. Strict SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then hit a Megatron policy.get_logprobs NCCL timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP at 2026-06-01 11:06 PDT. This gives a strict early generation-only speedup of 1.2058x, but not final completed-step throughput. Old-gate Dynamic-K job 3075161 produced Step 1 acceptance but showed enabled_ratio=1.0 due the V7 gate bug. Corrected V8 verifier 3076185 failed before rollout because dynamic K token thresholds were reversed. Replacement 3076735 was cancelled because the remote launcher still dropped SPECDEC_EXTRA_OVERRIDES and NRL_STOP_AFTER_GENERATION from the actual run command. The remote launcher is now synced to the fixed version, and r3 job 3076833 is RUNNING with small=1024, medium=2048, token gate 2048, max_total_sequence_length=2048, K=3/2/1, and NRL_STOP_AFTER_GENERATION=true; it was still in driver venv/startup at 2026-06-01 11:57 PDT.",
+  "current_primary_dynamic_k_job": "3076833_v8_resubmitted_r3_with_stop_and_maxlen",
   "batch_gate_v7_review_fix": {
     "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running_step1_generation_seen",
     "updated_at": "2026-06-01 08:37 PDT",
@@ -1533,7 +1533,7 @@
     "logprob_matched_baseline_job": "3075647 submitted at 2026-06-01 10:52 PDT after the async_engine parity review; emitted Step 1 early generation-only metric 4762.42 generated tok/s/GPU, then entered policy.get_logprobs.",
     "diagnostic_baseline_job": "3074777 submitted at 2026-06-01 09:45 PDT after fixing the vllm_worker logger NameError; emitted Step 1 early generation-only metric but is diagnostic-only because async_engine=false was not explicit in the run evidence.",
     "logprob_matched_specdec_job": "3074778 submitted at 2026-06-01 09:45 PDT after fixing the vllm_worker logger NameError; emitted Step 1 early generation-only metric and 57.91% acceptance, then hit Megatron policy.get_logprobs NCCL timeout at 11:06 PDT before final completed-step metric.",
-    "dynamic_k_long_tail_job": "Old-gate job 3075161 submitted at 2026-06-01 10:21 PDT reached Step 1 generation but exposed the V7 gate bug. Corrected V8 verifier 3076185 failed before rollout because dynamic K thresholds were reversed; replacement 3076735 is running as of 2026-06-01 11:48 PDT with NRL_STOP_AFTER_GENERATION=true.",
+    "dynamic_k_long_tail_job": "Old-gate job 3075161 submitted at 2026-06-01 10:21 PDT reached Step 1 generation but exposed the V7 gate bug. Corrected V8 verifier 3076185 failed before rollout because dynamic K thresholds were reversed. Replacement 3076735 was cancelled before rollout because the remote launcher dropped SPECDEC_EXTRA_OVERRIDES and NRL_STOP_AFTER_GENERATION. Fixed r3 verifier 3076833 is RUNNING as of 2026-06-01 11:57 PDT; the actual run command contains NRL_STOP_AFTER_GENERATION=true and policy.max_total_sequence_length=2048, but no rollout metric has been emitted yet.",
     "superseded_failed_logprob_matched_pair": "3074142/3074189 reached Step 1 generation but failed before metrics due to NameError: logger is not defined; invalid for speedup/acceptance."
   },
   "provenance_guard_hardening": {
@@ -1616,16 +1616,16 @@
       "next_phase_observed": "policy.get_logprobs",
       "failure_observed": "NCCL watchdog timeout at 2026-06-01 11:06 PDT in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP during _ALLGATHER_BASE; NumelIn=524288, NumelOut=8388608, timeout=1800000 ms"
     },
-    "note": "Historical baseline 4169.19 tok/s/GPU and diagnostic baseline 3074777 remain useful context. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true. SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance, so the strict early generation-only speedup is 1.2058x. This is not final completed-step throughput because SpecDec 3074778 hit Megatron get_logprobs NCCL timeout before completing the GRPO step. Reduced alltoall-dispatcher smoke jobs 3076036 and 3076041 remain running to test whether completed NeMo-RL steps work when the allgather dispatcher path is avoided. Corrected V8 dynamic-K long-tail verifier 3076735 is running after 3076185 failed pre-rollout on reversed dynamic thresholds.",
+    "note": "Historical baseline 4169.19 tok/s/GPU and diagnostic baseline 3074777 remain useful context. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true. SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance, so the strict early generation-only speedup is 1.2058x. This is not final completed-step throughput because SpecDec 3074778 hit Megatron get_logprobs NCCL timeout before completing the GRPO step. Reduced alltoall-dispatcher smoke jobs 3076036 and 3076041 remain running to test whether completed NeMo-RL steps work when the allgather dispatcher path is avoided. Corrected V8 dynamic-K long-tail verifier 3076833 is running after cancelling invalid r2 job 3076735; it had not emitted rollout metrics as of 2026-06-01 11:57 PDT.",
     "supersedes_baseline_job_id": "3074777",
     "superseded_failed_pair": "3074142/3074189"
   },
   "alltoall_logprob_smoke_jobs": {
-    "updated_at": "2026-06-01 11:48 PDT",
+    "updated_at": "2026-06-01 11:57 PDT",
     "purpose": "Diagnose the repeated Megatron policy.get_logprobs NCCL timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP by avoiding the MoE allgather dispatcher path on a reduced strict NeMo-RL smoke.",
     "baseline_job_id": "3076036",
     "specdec_job_id": "3076041",
-    "status": "baseline 3076036 and SpecDec 3076041 are both RUNNING as of 2026-06-01 11:45 PDT. Both ray-driver logs exist but still have no rollout metrics; last visible state was package install / venv setup.",
+    "status": "baseline 3076036 and SpecDec 3076041 are both RUNNING as of 2026-06-01 11:57 PDT. Both ray-driver logs exist but still have no rollout metrics; last visible state was package install / venv setup.",
     "shape": {
       "num_prompts_per_step": 8,
       "num_generations_per_prompt": 8,
@@ -1643,12 +1643,12 @@
     "next_decision": "If p8/g8 alltoall completes logprobs/training, scale to p64/g32 alltoall for strict baseline-vs-SpecDec generation throughput. If it fails before rollout, inspect dispatcher support/config. If it still fails in logprobs, the next fallback is generation-only NeMo-RL validation before logprobs."
   },
   "longtail_gate_v8_verification": {
-    "updated_at": "2026-06-01 11:49 PDT",
+    "updated_at": "2026-06-01 11:57 PDT",
     "root_cause_found_in_3075161": "Dynamic-K K=3 job 3075161 reached NeMo-RL Step 1 generation with acceptance 57.77% and early generated throughput 5314.79 tok/s/GPU, but gate metrics showed runner enabled_ratio=1.0. Log evidence showed requests=128, tokens=3360, token_threshold=2048, and last_disabled=False, so scheduler all_disabled=false was overriding runner threshold state.",
     "fix": "SpecDec-RL V8 batch gate now sets runner disabled state to runner_threshold_disabled OR scheduler_all_disabled. Qwen30B/Qwen235B SpecDec launchers now require NRL_SPECDEC_BATCH_GATE_PATCH_V8. Older patched vLLM environments fail closed and require rebuild instead of silently using the stale gate.",
-    "verification_job_id": "3076735",
-    "verification_job_name": "qwen30ba3b-main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r2-N4xG4",
-    "verification_status": "RUNNING as of 2026-06-01 11:48 PDT on nvl72151-T[09,11,16,18]. ray-driver.log was not created yet at the first poll, so no rollout, gate, acceptance, or throughput metric yet.",
+    "verification_job_id": "3076833",
+    "verification_job_name": "qwen30ba3b-main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r3-N4xG4",
+    "verification_status": "RUNNING as of 2026-06-01 11:57 PDT after cancelling invalid r2. The actual driver command now includes NRL_STOP_AFTER_GENERATION=true and policy.max_total_sequence_length=2048. Ray driver startup is in progress; no rollout, gate, acceptance, or throughput metric yet.",
     "verification_shape": {
       "num_prompts_per_step": 64,
       "num_generations_per_prompt": 32,
@@ -1665,7 +1665,10 @@
     "failed_verification_job_id": "3076185",
     "failed_verification_status": "FAILED before rollout/generation metrics. VllmGenerationWorker init rejected VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD=2048 with MEDIUM_TOKEN_THRESHOLD=1024 because small must be <= medium.",
     "failed_verification_root_cause": "Experiment launch configuration error, not an acceptance/throughput result. The small and medium dynamic-K token thresholds were reversed.",
-    "launcher_marker_fix": "The live /SpecDec-RL Qwen30B/Qwen235B SpecDec launchers were updated from NRL_SPECDEC_BATCH_GATE_PATCH_V7 to NRL_SPECDEC_BATCH_GATE_PATCH_V8 so preflight matches the actual V8 vllm_worker.py marker."
+    "launcher_marker_fix": "The live /SpecDec-RL Qwen30B/Qwen235B SpecDec launchers were updated from NRL_SPECDEC_BATCH_GATE_PATCH_V7 to NRL_SPECDEC_BATCH_GATE_PATCH_V8 so preflight matches the actual V8 vllm_worker.py marker.",
+    "cancelled_verification_job_id": "3076735",
+    "cancelled_verification_status": "CANCELLED at 2026-06-01 11:52 PDT before rollout metrics because the remote root launcher did not preserve SPECDEC_EXTRA_OVERRIDES and did not pass NRL_STOP_AFTER_GENERATION into the actual run command.",
+    "launcher_extra_override_fix": "Synced fixed Qwen30B/Qwen235B SpecDec launchers to /lustre/.../SpecDec-RL. They now preserve SPECDEC_EXTRA_OVERRIDES/EXTRA_OVERRIDES, pass NRL_STOP_AFTER_GENERATION to the driver command, and require NRL_SPECDEC_BATCH_GATE_PATCH_V8."
   },
   "failed_logprob_matched_pair_3074142_3074189": {
     "baseline_job_id": "3074142",
@@ -1679,11 +1682,11 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 11:45 PDT",
+    "updated_at": "2026-06-01 11:57 PDT",
     "hidden_state_array_job": "3072149_[0-99]%5",
-    "active_tasks": "26-30 running; 31-99 pending on JobArrayTaskLimit",
+    "active_tasks": "31-35 running, 30 completing, 36-99 pending on JobArrayTaskLimit",
     "train_job": "3072524 dependency-pending on hidden-state array completion",
-    "hidden_state_files_observed": 151930,
+    "hidden_state_files_observed": 155000,
     "hidden_state_files_expected": 500000,
     "status": "hidden-state generation is still running; 235B Speculators training has not started yet."
   }

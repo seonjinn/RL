@@ -36,3 +36,17 @@ Using SpecDec drafter: /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3
 Drafter provenance: qwen30ba3b_mixed_math_nonopenmath_500k_speculators
 Submitted batch job 3076735
 job_id=3076735
+# cancelled invalid r2 and resubmitted r3 after preserving SPECDEC_EXTRA_OVERRIDES and NRL_STOP_AFTER_GENERATION Mon Jun  1 11:53:14 PDT 2026
+cancelled_job_id=3076735
+job_name=qwen30ba3b-main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r3-N4xG4
+purpose=Verify corrected V8 long-tail SpecDec gate with generation-only stop; r3 confirms max_total_sequence_length override and stop-after-generation are in the actual run command.
+small_token_threshold=1024
+medium_token_threshold=2048
+max_total_sequence_length=2048
+env NEMO_RL_DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh ACCOUNT=coreai_dlalgo_nemorl NUM_PROMPTS=64 NUM_GENERATIONS=32 TRAIN_GLOBAL_BATCH_SIZE=2048 MAX_STEPS=1 NRL_STOP_AFTER_GENERATION=true NRL_FORCE_REBUILD_VENVS=true NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=600 JOB_TAG=main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r3 DRIVER_UV_PROJECT_ENVIRONMENT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen30ba3b_main_specdec_v8_longtail_gate_r3_py312 NUM_SPECULATIVE_TOKENS=3 SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD=0 SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD=2048 SPECDEC_DYNAMIC_DRAFT_TOKENS=true SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD=1024 SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD=2048 SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS=3 SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS=2 SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS=1 SPECDEC_EXTRA_OVERRIDES=policy.max_total_sequence_length=2048 WANDB_NAME=Qwen30B_A3B_Main_N4xG4_specdec_v8_longtail_gate_k3_p64_g32_1step_r3 bash ./Qwen30BA3B_GB200_Main_SpecDec.sh
+Using SpecDec drafter: /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+Drafter provenance: qwen30ba3b_mixed_math_nonopenmath_500k_speculators
+Submitted batch job 3076833
+job_id=3076833
+# status_poll_pdt=2026-06-01T12:01:24-07:00
+# job 3076833 state=RUNNING; actual command includes NRL_STOP_AFTER_GENERATION=true and policy.max_total_sequence_length=2048; ray-driver is still in venv/startup and has no rollout metrics yet.

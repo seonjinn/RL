@@ -86,7 +86,7 @@ if [[ ! -s "${DRAFT_MODEL}/config.json" ]]; then
   exit 2
 fi
 
-SPECDEC_EXTRA_OVERRIDES=""
+SPECDEC_EXTRA_OVERRIDES="${SPECDEC_EXTRA_OVERRIDES:-${EXTRA_OVERRIDES:-}}"
 if [[ -n "${VLLM_MAX_NUM_SEQS}" ]]; then
   SPECDEC_EXTRA_OVERRIDES+=" ++policy.generation.vllm_kwargs.max_num_seqs=${VLLM_MAX_NUM_SEQS}"
 fi
