@@ -546,17 +546,17 @@
             <td>vLLM standalone <code>bench serve</code></td>
             <td>Qwen3-30B-A3B, ISL/OSL <code>1000/1000</code>, BS <code>1 2 4 8 16</code>, 1 node x 4 GPU allocation, engine TP=<code>1</code></td>
             <td><code>none</code></td>
-            <td><span class="pill warn">pending</span></td>
+            <td><span class="pill warn">running</span></td>
             <td>Resubmitted with <code>HF_HUB_FIX_VERSION=0.36.0</code>. Previous job <code>3078992</code> was cancelled after the container showed <code>huggingface-hub==1.16.1</code> import mismatch.</td>
           </tr>
           <tr>
             <td>SpecDec K=1</td>
-            <td><code>3079766</code></td>
+            <td><code>3079840</code></td>
             <td>vLLM standalone <code>bench serve</code></td>
             <td>Same as baseline</td>
             <td><code>method=eagle3</code>, 500K Qwen3-30B-A3B drafter, K=<code>1</code>, draft TP=<code>1</code></td>
             <td><span class="pill warn">pending</span></td>
-            <td>Resubmitted with <code>HF_HUB_FIX_VERSION=0.36.0</code>. Previous job <code>3078993</code> was cancelled after the same import blocker.</td>
+            <td>Resubmitted with <code>HF_HUB_FIX_VERSION=0.36.0</code> and exported <code>SPECULATIVE_CONFIG</code>; log lines <code>101-102</code> verify the export. Previous job <code>3079766</code> was cancelled because it did not pass <code>--speculative-config</code>; older <code>3078993</code> hit the HF Hub import blocker.</td>
           </tr>
         </tbody>
       </table>

@@ -202,11 +202,11 @@
     }
   ],
   "vllm_standalone_benchmark_current": {
-    "updated_at": "2026-06-01 14:18 PDT",
+    "updated_at": "2026-06-01 14:25 PDT",
     "scope": "vLLM standalone bench serve static benchmark; not NeMo-RL E2E",
     "model": "Qwen/Qwen3-30B-A3B",
     "baseline_job": "3079765",
-    "specdec_job": "3079766",
+    "specdec_job": "3079840",
     "previous_cancelled_jobs": [
       "3078992",
       "3078993"
@@ -238,9 +238,11 @@
       "acceptance_rate_if_exposed_in_vllm_server_logs"
     ],
     "baseline_logs": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_baseline_hffix_20260601_141825",
-    "specdec_logs": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_hffix_20260601_141825",
+    "specdec_logs": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_hffix_export_20260601_142539",
     "hf_hub_fix_version": "0.36.0",
-    "status": "resubmitted with HF_HUB_FIX_VERSION=0.36.0 after cancelling 3078992/3078993; new jobs pending at submission time."
+    "status": "baseline 3079765 running and produced BS=1; invalid spec job 3079766 was cancelled because SPECULATIVE_CONFIG was not exported; replacement SpecDec job 3079840 is running and log lines 101-102 verify exported SPECULATIVE_CONFIG.",
+    "invalid_cancelled_specdec_job": "3079766",
+    "speculative_config_exported": true
   },
   "runs": [
     {
