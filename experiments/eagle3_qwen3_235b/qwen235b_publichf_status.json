@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 16:02 PDT",
+  "updated_at": "2026-06-01 16:08 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -23,7 +23,7 @@
       "job_id": "3080343",
       "submitted_at": "2026-06-01 15:00 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 16:02 PDT",
+      "latest_state": "RUNNING at 16:08 PDT",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "provenance": "manual_diagnostic",
@@ -41,13 +41,13 @@
       "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh",
       "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
       "wandb_name": "Qwen235B_A22B_PublicHF_NVIDIA_Thinking2507_Eagle3_k1_4step_20260601",
-      "latest_observation": "Ray cluster reached 128/128 workers online. The driver connected to Ray, NeMo-RL emitted the speculative-decoding-enabled warning, VllmGenerationWorker env creation finished across workers, and the job entered 235B safetensors model loading. Target checkpoint loading reached 100% Completed | 118/118 on multiple workers, followed by 100% Completed | 1/1 additional shard loads. The job is now capturing CUDA graphs with enforce_eager=false; no acceptance or throughput metric has been emitted yet."
+      "latest_observation": "Ray cluster reached 128/128 workers online. The driver connected to Ray, NeMo-RL emitted the speculative-decoding-enabled warning, and vLLM logged speculative_config with method=eagle3, the NVIDIA PublicHF drafter path, num_speculative_tokens=1, and draft_tensor_parallel_size=1. VllmGenerationWorker env creation finished across workers, target checkpoint loading reached 100% Completed | 118/118 on multiple workers, and extra 1/1 shard loads completed. The job is still before first NeMo-RL metric; no acceptance or throughput metric has been emitted yet. vLLM also warns that tensor_parallel_size=16 exceeds the 4 GPUs reserved per node, so the 235B target TP is spread across nodes; this is expected to run but may depress measured throughput."
     },
     {
       "job_id": "3081230",
       "submitted_at": "2026-06-01 15:22 PDT",
       "state_at_submit_check": "PENDING",
-      "latest_state": "RUNNING at 16:02 PDT on coreai_dlalgo_llm",
+      "latest_state": "RUNNING at 16:08 PDT on coreai_dlalgo_llm",
       "drafter": "RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/RedHatAI_Qwen3-235B-A22B-Thinking-2507-speculator.eagle3",
       "provenance": "manual_diagnostic",
@@ -65,15 +65,15 @@
       "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh",
       "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
       "wandb_name": "Qwen235B_A22B_PublicHF_RedHat_speculator_eagle3_k1_4step_20260601",
-      "latest_observation": "Running on 32 nodes with a separate driver venv to avoid racing the NVIDIA diagnostic environment rebuild. Worker bootstrap reached 128/128 actors online, NeMo-RL emitted the speculative-decoding-enabled warning, VllmGenerationWorker env creation finished across workers, and the job has entered 235B safetensors model loading. Logs show local-path safetensors repo-id warnings for the RedHat drafter path, but engine initialization continued; several workers reached 118/118 target checkpoint shards while others were still near 117/118. No acceptance or throughput metric has been emitted yet."
+      "latest_observation": "Running on 32 nodes with a separate driver venv to avoid racing the NVIDIA diagnostic environment rebuild. Worker bootstrap reached 128/128 actors online, NeMo-RL emitted the speculative-decoding-enabled warning, and vLLM logged speculative_config with method=eagle3, the RedHat local drafter path, num_speculative_tokens=1, and draft_tensor_parallel_size=1. Logs still show local-path safetensors repo-id warnings for the RedHat drafter path, but engine initialization continued. No acceptance or throughput metric has been emitted yet. The same tensor_parallel_size=16 versus 4 GPUs per node warning appears, so any completed throughput must be interpreted with cross-node TP overhead in mind."
     }
   ],
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 241028,
+    "latest_observed_hidden_state_files": 243647,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "task 43 completing, tasks 45-53 running, 54-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT",
+    "latest_observed_array_window": "tasks 46-55 running, 56-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT",
     "rough_eta": "About 5-9h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
