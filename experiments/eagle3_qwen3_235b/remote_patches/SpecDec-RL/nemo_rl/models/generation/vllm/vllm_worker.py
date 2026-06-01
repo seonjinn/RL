@@ -2030,14 +2030,27 @@ class BaseVllmGenerationWorker:
             scheduler = _get_vllm_file("v1/core/sched/scheduler.py")
             with open(scheduler) as f:
                 scheduler_content = f.read()
+            scheduler_original_content = scheduler_content
 
             scheduler_output_gate_marker = (
                 "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1"
             )
 
             def _ensure_scheduler_output_gate_attr(text, path):
-                if scheduler_output_gate_marker in text:
-                    return text, False
+                changed = False
+
+                output_anchor = "        if self.connector is not None:\n"
+                output_attr_block = (
+                    "        # NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1\n"
+                    "        scheduler_output.nrl_specdec_batch_gate_disabled = bool(\n"
+                    "            getattr(\n"
+                    "                self,\n"
+                    "                \"_nrl_specdec_scheduler_gate_output_disabled\",\n"
+                    "                False,\n"
+                    "            )\n"
+                    "        )\n"
+                )
+                output_block = output_attr_block + output_anchor
 
                 reset_anchor = (
                     "        # Spec decode-related.\n"
@@ -2048,12 +2061,14 @@ class BaseVllmGenerationWorker:
                     "        scheduled_spec_decode_tokens: dict[str, list[int]] = {}\n"
                     "        self._nrl_specdec_scheduler_gate_output_disabled = False\n"
                 )
-                if reset_anchor not in text:
+                if reset_block not in text and reset_anchor not in text:
                     raise RuntimeError(
                         "Could not install scheduler output gate attr in "
                         f"{path}; missing scheduled_spec_decode_tokens anchor."
                     )
-                text = text.replace(reset_anchor, reset_block, 1)
+                if reset_block not in text:
+                    text = text.replace(reset_anchor, reset_block, 1)
+                    changed = True
 
                 state_anchor = (
                     "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
@@ -2069,31 +2084,62 @@ class BaseVllmGenerationWorker:
                     "                or disabled\n"
                     "            )\n"
                 )
-                if state_anchor not in text:
+                if state_block not in text and state_anchor not in text:
                     raise RuntimeError(
                         "Could not install scheduler output gate attr in "
                         f"{path}; missing scheduler disabled-state anchor."
                     )
-                text = text.replace(state_anchor, state_block, 1)
+                if state_block not in text:
+                    text = text.replace(state_anchor, state_block, 1)
+                    changed = True
 
-                output_anchor = "        if self.connector is not None:\n"
-                output_block = (
-                    "        # NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1\n"
-                    "        scheduler_output.nrl_specdec_batch_gate_disabled = bool(\n"
-                    "            getattr(\n"
-                    "                self,\n"
-                    "                \"_nrl_specdec_scheduler_gate_output_disabled\",\n"
-                    "                False,\n"
-                    "            )\n"
-                    "        )\n"
-                    "        if self.connector is not None:\n"
+                scheduler_output_pos = text.find(
+                    "        scheduler_output = SchedulerOutput(\n"
                 )
-                if output_anchor not in text:
+                if scheduler_output_pos < 0:
+                    raise RuntimeError(
+                        "Could not install scheduler output gate attr in "
+                        f"{path}; missing SchedulerOutput construction anchor."
+                    )
+
+                if output_block in text[scheduler_output_pos:]:
+                    return text, changed
+
+                if scheduler_output_gate_marker in text:
+                    output_remainder = output_block.split("\n", 1)[1]
+                    malformed_output_block = re.compile(
+                        r"(?m)^[ \t]*# "
+                        + re.escape(scheduler_output_gate_marker)
+                        + r"\n"
+                        + re.escape(output_remainder)
+                    )
+                    text, removed_count = malformed_output_block.subn("", text)
+                    if removed_count:
+                        changed = True
+                        scheduler_output_pos = text.find(
+                            "        scheduler_output = SchedulerOutput(\n"
+                        )
+                    if (
+                        scheduler_output_gate_marker in text
+                        and output_block not in text[scheduler_output_pos:]
+                    ):
+                        raise RuntimeError(
+                            "Found a misplaced scheduler output gate attr patch in "
+                            f"{path}; remove the stale marker or rebuild the Ray "
+                            "vLLM environment."
+                        )
+
+                output_anchor_pos = text.find(output_anchor, scheduler_output_pos)
+                if output_anchor_pos < 0:
                     raise RuntimeError(
                         "Could not install scheduler output gate attr in "
                         f"{path}; missing scheduler_output connector anchor."
                     )
-                text = text.replace(output_anchor, output_block, 1)
+                text = (
+                    text[:output_anchor_pos]
+                    + output_block
+                    + text[output_anchor_pos + len(output_anchor) :]
+                )
                 return text, True
 
             def _has_scheduler_adaptive_lookahead_call(text):
@@ -3244,7 +3290,12 @@ class BaseVllmGenerationWorker:
                     scheduler_content,
                     scheduler,
                 )
-            __import__("py_compile").compile(scheduler, doraise=True)
+            try:
+                __import__("py_compile").compile(scheduler, doraise=True)
+            except Exception:
+                with open(scheduler, "w") as f:
+                    f.write(scheduler_original_content)
+                raise
 
             return applied
 

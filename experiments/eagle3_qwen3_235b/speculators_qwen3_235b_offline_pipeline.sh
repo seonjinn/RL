@@ -48,6 +48,7 @@ FROM_PRETRAINED="${FROM_PRETRAINED:-}"
 NUM_TRAIN_GPUS="${NUM_TRAIN_GPUS:-4}"
 SPECULATORS_DISABLE_TORCH_COMPILE="${SPECULATORS_DISABLE_TORCH_COMPILE:-false}"
 SPECULATORS_FSDP_WRAP_LAYERS="${SPECULATORS_FSDP_WRAP_LAYERS:-true}"
+EXPECTED_SPECULATORS_DIRTY_DIFF_SHA256="${EXPECTED_SPECULATORS_DIRTY_DIFF_SHA256:-5109190d407928c64129db7c8dfcdf33680ececd01edb36234cf54784a996e8c}"
 PREPARE_MANIFEST="${PREPARE_MANIFEST:-$OUTPUT_DIR/nrl_prepare_manifest.json}"
 WRITE_PREPARE_MANIFEST="${WRITE_PREPARE_MANIFEST:-true}"
 VALIDATE_HIDDEN_STATE_COVERAGE="${VALIDATE_HIDDEN_STATE_COVERAGE:-true}"
@@ -96,6 +97,20 @@ export SPECULATORS_FSDP_WRAP_LAYERS
 
 mkdir -p "$ARTIFACT_ROOT/repos" "$OUTPUT_DIR" "$HIDDEN_STATES_DIR" "$CHECKPOINT_DIR" "$VLLM_TMP_HIDDEN_STATES"
 
+compat_patches=(
+  "$SCRIPT_DIR/patches/speculators_transformers_kwargs_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_transformers_past_key_value_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_torch28_distributed_device_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_numpy_int_dataset_index_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_dynamic_cache_config_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_disable_torch_compile_env_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_dflash_disable_torch_compile_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_fsdp_layer_wrap_cache_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_torch28_scatter_index_dtype_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_from_pretrained_no_meta_compat.patch"
+  "$SCRIPT_DIR/patches/speculators_datagen_index_range_compat.patch"
+)
+
 if [[ "$RUN_CLONE" == "true" || "$RUN_CLONE" == "True" ]]; then
   if [[ ! -d "$SPECULATORS_DIR/.git" ]]; then
     git clone --depth 1 "$SPECULATORS_GIT_URL" "$SPECULATORS_DIR"
@@ -105,19 +120,6 @@ if [[ "$RUN_CLONE" == "true" || "$RUN_CLONE" == "True" ]]; then
 fi
 
 if [[ "$APPLY_COMPAT_PATCHES" == "true" || "$APPLY_COMPAT_PATCHES" == "True" ]]; then
-  compat_patches=(
-    "$SCRIPT_DIR/patches/speculators_transformers_kwargs_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_transformers_past_key_value_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_torch28_distributed_device_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_numpy_int_dataset_index_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_dynamic_cache_config_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_disable_torch_compile_env_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_dflash_disable_torch_compile_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_fsdp_layer_wrap_cache_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_torch28_scatter_index_dtype_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_from_pretrained_no_meta_compat.patch"
-    "$SCRIPT_DIR/patches/speculators_datagen_index_range_compat.patch"
-  )
   for compat_patch in "${compat_patches[@]}"; do
     if [[ -f "$compat_patch" ]]; then
       patch_cmd=(git -C "$SPECULATORS_DIR" apply "$compat_patch")
@@ -185,10 +187,40 @@ if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
     fi
   fi
   if [[ "$APPLY_COMPAT_PATCHES" != "true" && "$APPLY_COMPAT_PATCHES" != "True" && "$ALLOW_SPECULATORS_DIRTY" != "true" && "$ALLOW_SPECULATORS_DIRTY" != "True" ]]; then
-    if ! git -C "$SPECULATORS_DIR" diff --quiet --ignore-submodules --; then
-      echo "ERROR: Speculators checkout is dirty while APPLY_COMPAT_PATCHES=false" >&2
-      git -C "$SPECULATORS_DIR" status --short >&2
-      exit 2
+    dirty_status="$(git -C "$SPECULATORS_DIR" status --short)"
+    if [[ -n "$dirty_status" ]]; then
+      known_dirty_files=(
+        "scripts/data_generation_offline.py"
+        "scripts/train.py"
+        "src/speculators/model.py"
+        "src/speculators/models/attention.py"
+        "src/speculators/models/dflash/core.py"
+        "src/speculators/models/eagle3/attention.py"
+        "src/speculators/models/eagle3/core.py"
+        "src/speculators/models/eagle3/model_definitions.py"
+        "src/speculators/train/data.py"
+        "src/speculators/train/utils.py"
+      )
+      known_dirty_regex='^ M (scripts/data_generation_offline.py|scripts/train.py|src/speculators/model.py|src/speculators/models/attention.py|src/speculators/models/dflash/core.py|src/speculators/models/eagle3/attention.py|src/speculators/models/eagle3/core.py|src/speculators/models/eagle3/model_definitions.py|src/speculators/train/data.py|src/speculators/train/utils.py)$'
+      unexpected_dirty="$(printf '%s\n' "$dirty_status" | grep -Ev "$known_dirty_regex" || true)"
+      if [[ -n "$unexpected_dirty" ]]; then
+        echo "ERROR: Speculators checkout has unexpected dirty files while APPLY_COMPAT_PATCHES=false" >&2
+        printf '%s\n' "$dirty_status" >&2
+        exit 2
+      fi
+      if command -v sha256sum >/dev/null 2>&1; then
+        dirty_diff_sha256="$(git -C "$SPECULATORS_DIR" diff --binary --no-ext-diff --no-color | sha256sum | awk '{print $1}')"
+      else
+        dirty_diff_sha256="$(git -C "$SPECULATORS_DIR" diff --binary --no-ext-diff --no-color | shasum -a 256 | awk '{print $1}')"
+      fi
+      if [[ "$dirty_diff_sha256" != "$EXPECTED_SPECULATORS_DIRTY_DIFF_SHA256" ]]; then
+        echo "ERROR: Speculators dirty diff content changed while APPLY_COMPAT_PATCHES=false" >&2
+        echo "actual_dirty_diff_sha256=$dirty_diff_sha256 expected=$EXPECTED_SPECULATORS_DIRTY_DIFF_SHA256" >&2
+        printf '%s\n' "$dirty_status" >&2
+        exit 2
+      fi
+      echo "WARN: Speculators checkout contains known compatibility patches; continuing with APPLY_COMPAT_PATCHES=false diff_sha256=$dirty_diff_sha256" >&2
+      printf '%s\n' "$dirty_status" >&2
     fi
   fi
   if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then

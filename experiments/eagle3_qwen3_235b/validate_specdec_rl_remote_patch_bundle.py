@@ -302,6 +302,7 @@ def check_grpo_generation_indent(checks: list[dict[str, Any]], patch_root: Path)
         '                ):\n'
         '                    policy_generation.clear_vllm_logger_metrics()\n'
         '\n'
+        '                generation_start_s = time.perf_counter()\n'
         '                with timer.time("generation"):\n'
     )
     nested = (
