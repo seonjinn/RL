@@ -2115,18 +2115,45 @@ class BaseVllmGenerationWorker:
                 )
             return parsed
 
+        def _nrl_env_float(name: str, default: float) -> float:
+            value = os.environ.get(name)
+            if value is None or str(value).strip() == "":
+                return default
+            try:
+                parsed = float(str(value).strip())
+            except ValueError as exc:
+                raise RuntimeError(f"{name} must be a float, got {value!r}.") from exc
+            if parsed != parsed:
+                raise RuntimeError(f"{name} must not be NaN, got {value!r}.")
+            return parsed
+
         specdec_batch_gate_threshold = _nrl_env_nonnegative_int(
             "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD"
         )
         specdec_batch_gate_token_threshold = _nrl_env_nonnegative_int(
             "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD"
         )
+        _nrl_env_nonnegative_int("VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL", 256)
         specdec_adaptive_initial_request_threshold = _nrl_env_nonnegative_int(
             "VLLM_SPECDEC_ADAPTIVE_INITIAL_REQUEST_THRESHOLD"
         )
         specdec_adaptive_initial_token_threshold = _nrl_env_nonnegative_int(
             "VLLM_SPECDEC_ADAPTIVE_INITIAL_TOKEN_THRESHOLD"
         )
+        for _nrl_adaptive_int_name, _nrl_adaptive_int_default in (
+            ("VLLM_SPECDEC_ADAPTIVE_ADJUST_INTERVAL", 512),
+            ("VLLM_SPECDEC_ADAPTIVE_REQUEST_STEP", 4),
+            ("VLLM_SPECDEC_ADAPTIVE_TOKEN_STEP", 256),
+            ("VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD", 1),
+            ("VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD", 128),
+            ("VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD", 256),
+            ("VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD", 8192),
+        ):
+            _nrl_env_nonnegative_int(
+                _nrl_adaptive_int_name, _nrl_adaptive_int_default
+            )
+        _nrl_env_float("VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO", 0.35)
+        _nrl_env_float("VLLM_SPECDEC_ADAPTIVE_HYSTERESIS", 0.05)
         specdec_adaptive_gate_mode = os.environ.get(
             "VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off"
         ).lower()

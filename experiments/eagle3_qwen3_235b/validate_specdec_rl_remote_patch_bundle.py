@@ -60,6 +60,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "specdec_scheduled_tokens",
         "specdec_batch_gate_disabled = specdec_batch_gate_disabled or",
         "def _nrl_env_nonnegative_int",
+        "def _nrl_env_float",
         "silently become global SpecDec",
         "_read_vllm_specdec_gate_metrics",
         "spec_decode_gate",
