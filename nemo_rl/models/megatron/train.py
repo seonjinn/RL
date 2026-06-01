@@ -165,6 +165,7 @@ def forward_with_post_processing_fn(
     use_linear_ce_fusion_loss: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
+    use_prepacked_model_label_loss: bool = False,
 ) -> Tuple[torch.Tensor, Callable]:
     """Perform forward pass with pre-processed microbatch and return output tensor and post-processing function.
 
@@ -225,6 +226,7 @@ def forward_with_post_processing_fn(
                 mtp_loss_mask=mtp_loss_mask,
                 straggler_timer=straggler_timer,
                 use_linear_ce_fusion_loss=use_linear_ce_fusion_loss,
+                use_prepacked_model_label_loss=use_prepacked_model_label_loss,
             )
     except Exception:
         # The forward above armed the router-replay action (set_router_replay_forward);
@@ -312,6 +314,7 @@ def megatron_forward_backward(
     use_linear_ce_fusion_loss: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
+    use_prepacked_model_label_loss: bool = False,
 ) -> Any:
     """Execute forward and backward passes using Megatron's utilities.
 
@@ -351,6 +354,7 @@ def megatron_forward_backward(
         use_linear_ce_fusion_loss=use_linear_ce_fusion_loss,
         use_router_replay=use_router_replay,
         router_replay_train=router_replay_train,
+        use_prepacked_model_label_loss=use_prepacked_model_label_loss,
     )
     forward_backward_func = get_forward_backward_func()
     if use_router_replay:

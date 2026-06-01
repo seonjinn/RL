@@ -1,0 +1,212 @@
+# SFT Algorithm Configuration for Nano V3 Megatron-LM offline-packed JSONL.
+sft:
+  max_num_epochs: 10000
+  max_num_steps: 18750
+  val_period: 100000
+  val_batches: 14
+  val_global_batch_size: 64
+  val_micro_batch_size: 1
+  val_at_start: false
+  val_at_end: false
+  seed: 42
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: "results/sft_nanov3_prepacked"
+  metric_name: null
+  higher_is_better: false
+  keep_top_k: 1000000
+  save_period: 120
+  checkpoint_must_save_by: null
+  save_optimizer: true
+
+policy:
+  model_name: /mnt/nanov3_pretrained
+  tokenizer:
+    name: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+    chat_template: "{% for message in messages %}{{ message['content'] }}{% endfor %}"
+    chat_template_kwargs: null
+  train_global_batch_size: 64
+  train_micro_batch_size: 1
+  max_total_sequence_length: 262144
+  precision: "bfloat16"
+  offload_optimizer_for_logprob: false
+
+  dtensor_cfg:
+    enabled: false
+
+  dynamic_batching:
+    enabled: false
+    train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
+    sequence_length_round: 64
+
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
+    algorithm: "modified_first_fit_decreasing"
+    sequence_length_round: 64
+
+  make_sequence_length_divisible_by: ${policy.megatron_cfg.tensor_model_parallel_size}
+  max_grad_norm: 1.0
+
+  optimizer:
+    name: "torch.optim.AdamW"
+    kwargs:
+      lr: 5.0e-6
+      weight_decay: 0.1
+      betas: [0.9, 0.98]
+      eps: 1e-5
+      foreach: false
+      fused: false
+
+  megatron_cfg:
+    enabled: true
+    use_linear_ce_fusion_loss: false
+    linear_ce_fusion_chunk_size: 256
+    force_reconvert_from_hf: false
+    env_vars:
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      UB_TIMEOUT: "720"
+      CUDA_DEVICE_MAX_CONNECTIONS: "1"
+      NVTE_FWD_LAYERNORM_SM_MARGIN: "16"
+      NVTE_BWD_LAYERNORM_SM_MARGIN: "16"
+      NCCL_P2P_NET_CHUNKSIZE: "2097152"
+      NCCL_DEBUG: "WARN"
+      TORCHINDUCTOR_WORKER_START: "fork"
+    empty_unused_memory_level: 0
+    activation_checkpointing: false
+    tensor_model_parallel_size: 8
+    expert_tensor_parallel_size: 1
+    expert_model_parallel_size: 8
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 8
+    pipeline_dtype: ${policy.precision}
+    num_layers_in_first_pipeline_stage: null
+    num_layers_in_last_pipeline_stage: null
+    sequence_parallel: true
+    freeze_moe_router: false
+    moe_router_dtype: fp32
+    moe_router_load_balancing_type: "seq_aux_loss"
+    moe_aux_loss_coeff: 1e-4
+    moe_router_bias_update_rate: 1e-3
+    moe_permute_fusion: true
+    moe_grouped_gemm: true
+    apply_rope_fusion: true
+    bias_activation_fusion: false
+    attention_backend: "flash"
+    gradient_accumulation_fusion: false
+    use_fused_weighted_squared_relu: true
+    cross_entropy_loss_fusion: true
+    cross_entropy_fusion_impl: "native"
+    defer_fp32_logits: false
+    prepacked_sft_loss_mode: "labels"
+    nrl_minimal_loss_metrics: true
+    moe_per_layer_logging: false
+    moe_enable_deepep: false
+    moe_token_dispatcher_type: "alltoall"
+    moe_shared_expert_overlap: true
+
+    peft:
+      enabled: false
+      target_modules: []
+      exclude_modules: []
+      dim: 8
+      alpha: 32
+      dropout: 0.0
+      dropout_position: "post"
+      lora_A_init_method: "xavier"
+      lora_B_init_method: "zero"
+      a2a_experimental: false
+      lora_dtype: None
+
+    optimizer:
+      optimizer: "adam"
+      lr: 5.00001e-5
+      min_lr: 5.0e-5
+      weight_decay: 0.0
+      bf16: true
+      fp16: false
+      params_dtype: "bfloat16"
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      adam_eps: 1e-8
+      sgd_momentum: 0.9
+      use_distributed_optimizer: true
+      use_precision_aware_optimizer: false
+      clip_grad: ${policy.max_grad_norm}
+      optimizer_cpu_offload: false
+      optimizer_offload_fraction: 0.0
+
+    scheduler:
+      start_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      end_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      weight_decay_incr_style: "constant"
+      lr_decay_style: "constant"
+      lr_decay_iters: 11719
+      lr_warmup_iters: 156
+      lr_warmup_init: 3e-7
+
+    distributed_data_parallel_config:
+      grad_reduce_in_fp32: true
+      overlap_grad_reduce: true
+      overlap_param_gather: true
+      bucket_size: null
+      pad_buckets_for_high_nccl_busbw: true
+      data_parallel_sharding_strategy: "none"
+      use_custom_fsdp: false
+
+    fp8_cfg:
+      enabled: false
+      fp8: "e4m3"
+      fp8_recipe: "blockwise"
+      fp8_param: false
+
+data:
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  add_bos: false
+  add_eos: true
+  add_generation_prompt: false
+  shuffle: true
+  num_workers: 2
+  megatron_sft_dp_stride_order: false
+  train:
+    dataset_name: megatron_sft_packed
+    data_path: /mnt/data/math_sft_materialized.jsonl.packed
+    chat_key: messages
+  validation:
+    dataset_name: megatron_sft_packed
+    data_path: /mnt/data/math_sft_materialized.jsonl.packed
+    chat_key: messages
+  default:
+    prompt_file: null
+    system_prompt_file: null
+    megatron_sft_prompt_format: identity
+    megatron_sft_pad_token: "<unk>"
+    megatron_sft_assistant_prefix_len: 0
+    megatron_sft_context_parallel_size: ${policy.megatron_cfg.context_parallel_size}
+
+logger:
+  log_dir: "logs"
+  wandb_enabled: false
+  tensorboard_enabled: true
+  mlflow_enabled: false
+  swanlab_enabled: false
+  monitor_gpus: false
+  wandb:
+    project: "convergence_test"
+    name: "nanov3-main-prepacked"
+  swanlab:
+    project: "convergence_test"
+    name: "nanov3-main-prepacked"
+  tensorboard:
+    log_dir: "tb_logs-sft-nanov3-main-prepacked"
+  mlflow:
+    experiment_name: "sft-dev"
+    run_name: "nanov3-main-prepacked"
+  gpu_monitoring:
+    collection_interval: 10
+    flush_interval: 10
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 64

@@ -657,6 +657,16 @@ class MegatronPolicyWorkerImpl(
 
                     # Forward pass.
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
+                    prepacked_sft_loss_mode = self.cfg["megatron_cfg"].get(
+                        "prepacked_sft_loss_mode", "explicit_logprobs"
+                    )
+                    use_prepacked_model_label_loss = "target_ids" in batch and (
+                        prepacked_sft_loss_mode
+                        in {"megatron_labels", "labels", "model_labels"}
+                    )
+                    use_linear_ce_fusion_loss = self.cfg["megatron_cfg"].get(
+                        "use_linear_ce_fusion_loss", False
+                    ) and not use_prepacked_model_label_loss
                     use_router_replay = _should_use_router_replay(
                         enabled=self._router_replay_enabled,
                         data=batch,
@@ -679,9 +689,8 @@ class MegatronPolicyWorkerImpl(
                             straggler_timer=self.mcore_state.straggler_timer,
                             draft_model=self.draft_model,
                             enable_hidden_capture=draft_enabled,
-                            use_linear_ce_fusion_loss=self.cfg["megatron_cfg"].get(
-                                "use_linear_ce_fusion_loss", False
-                            ),
+                            use_linear_ce_fusion_loss=use_linear_ce_fusion_loss,
+                            use_prepacked_model_label_loss=use_prepacked_model_label_loss,
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
                         )

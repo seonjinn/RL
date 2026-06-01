@@ -334,6 +334,8 @@ class MegatronConfig(TypedDict):
     # Number of tokens per chunk when computing the fused linear CE loss.
     # Smaller values reduce peak memory further but may decrease throughput.
     linear_ce_fusion_chunk_size: NotRequired[int]
+    # For Megatron-LM offline-packed SFT rows, pass target_ids to Megatron as labels.
+    prepacked_sft_loss_mode: NotRequired[str]
     # When mtp_num_layers=0, Multi-Token Prediction is disabled.
     mtp_num_layers: NotRequired[int]
     # MTP loss weight added to the main next-token loss (0.0 disables the MTP loss contribution).

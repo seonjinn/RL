@@ -14,7 +14,7 @@
 import os
 import warnings
 from dataclasses import dataclass, fields
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -31,6 +31,7 @@ from nemo_rl.data.llm_message_utils import (
     add_loss_mask_to_message_log,
     batched_message_log_to_flat_message,
 )
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data.utils import load_dataloader_state
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import (
@@ -60,6 +61,41 @@ def _initial_sft_save_state() -> SFTSaveState:
     return SFTSaveState(
         epoch=0, step=0, total_steps=0, consumed_samples=0, total_valid_tokens=0
     )
+
+
+def _maybe_reorder_megatron_sft_dp_stride(
+    batch: BatchedDataDict[Any],
+    dp_size: int,
+    enabled: bool,
+) -> BatchedDataDict[Any]:
+    """Match Megatron-LM SFT sampler order before NeMo-RL DP sharding."""
+    if not enabled or "packed_cu_seqlens" not in batch:
+        return batch
+
+    total_batch_size = batch.size
+    if total_batch_size % dp_size != 0:
+        raise ValueError(
+            f"Cannot apply Megatron SFT DP-strided order: batch size "
+            f"{total_batch_size} is not divisible by DP size {dp_size}"
+        )
+
+    per_dp_batch_size = total_batch_size // dp_size
+    order = [
+        mb_idx * dp_size + dp_rank
+        for dp_rank in range(dp_size)
+        for mb_idx in range(per_dp_batch_size)
+    ]
+    order_tensor = torch.tensor(order, dtype=torch.long)
+
+    reordered = BatchedDataDict()
+    for key, value in batch.items():
+        if torch.is_tensor(value):
+            reordered[key] = value.index_select(0, order_tensor)
+        elif isinstance(value, PackedTensor):
+            reordered[key] = value.slice(order)
+        else:
+            reordered[key] = [value[i] for i in order]
+    return reordered
 
 
 class SFTConfig(BaseModel, extra="allow"):
@@ -284,32 +320,35 @@ def validate(
 
         policy.prepare_for_training()
         for batch_idx, val_batch in enumerate(val_dataloader):
-            ## add loss mask based on role to every message
-            add_loss_mask_to_message_log(
-                val_batch["message_log"],
-                roles_to_train_on=["assistant"],
-                only_unmask_final=master_config.sft.only_unmask_final,
-            )
+            if "packed_cu_seqlens" in val_batch:
+                val_data = val_batch
+            else:
+                ## add loss mask based on role to every message
+                add_loss_mask_to_message_log(
+                    val_batch["message_log"],
+                    roles_to_train_on=["assistant"],
+                    only_unmask_final=master_config.sft.only_unmask_final,
+                )
 
-            cat_and_padded, input_lengths = batched_message_log_to_flat_message(
-                val_batch["message_log"],
-                pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                make_sequence_length_divisible_by=master_config.policy[
-                    "make_sequence_length_divisible_by"
-                ],
-            )
+                cat_and_padded, input_lengths = batched_message_log_to_flat_message(
+                    val_batch["message_log"],
+                    pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                    make_sequence_length_divisible_by=master_config.policy[
+                        "make_sequence_length_divisible_by"
+                    ],
+                )
 
-            val_data: BatchedDataDict = BatchedDataDict(
-                {
-                    "input_ids": cat_and_padded["token_ids"],
-                    "input_lengths": input_lengths,
-                    "token_mask": cat_and_padded["token_loss_mask"],
-                    "sample_mask": val_batch["loss_multiplier"],
-                }
-            )
+                val_data: BatchedDataDict = BatchedDataDict(
+                    {
+                        "input_ids": cat_and_padded["token_ids"],
+                        "input_lengths": input_lengths,
+                        "token_mask": cat_and_padded["token_loss_mask"],
+                        "sample_mask": val_batch["loss_multiplier"],
+                    }
+                )
 
-            # update multimodal data
-            val_data.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
+                # update multimodal data
+                val_data.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
             # When running validation with drop_last=False, we might end up with a partial batch.
             # Check if we need to pad the final batch to make it divisible by micro_batch_size * dp_size.
             if val_data.size < val_batch_size:
@@ -401,6 +440,9 @@ def sft_train(
     val_at_start = sft_config.val_at_start
     val_at_end = sft_config.val_at_end
     max_num_epochs = sft_config.max_num_epochs
+    megatron_sft_dp_stride_order = master_config.data.get(
+        "megatron_sft_dp_stride_order", False
+    )
 
     # Run validation at the start if configured
     if val_at_start and total_steps == 0:
@@ -438,31 +480,41 @@ def sft_train(
                 # Prepare batch and generate responses
                 print("▶ Preparing batch...")
                 with timer.time("data_processing"):
-                    ## add loss mask based on role to every message
-                    add_loss_mask_to_message_log(
-                        batch["message_log"],
-                        roles_to_train_on=["assistant"],
-                        only_unmask_final=master_config.sft.only_unmask_final,
-                    )
+                    if "packed_cu_seqlens" in batch:
+                        train_data = batch
+                    else:
+                        ## add loss mask based on role to every message
+                        add_loss_mask_to_message_log(
+                            batch["message_log"],
+                            roles_to_train_on=["assistant"],
+                            only_unmask_final=master_config.sft.only_unmask_final,
+                        )
 
-                    cat_and_padded, input_lengths = batched_message_log_to_flat_message(
-                        batch["message_log"],
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                        make_sequence_length_divisible_by=master_config.policy[
-                            "make_sequence_length_divisible_by"
-                        ],
-                    )
+                        cat_and_padded, input_lengths = batched_message_log_to_flat_message(
+                            batch["message_log"],
+                            pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                            make_sequence_length_divisible_by=master_config.policy[
+                                "make_sequence_length_divisible_by"
+                            ],
+                        )
 
-                    train_data: BatchedDataDict = BatchedDataDict(
-                        {
-                            "input_ids": cat_and_padded["token_ids"],
-                            "input_lengths": input_lengths,
-                            "token_mask": cat_and_padded["token_loss_mask"],
-                            "sample_mask": batch["loss_multiplier"],
-                        }
-                    )
-                    train_data.update(
-                        cat_and_padded.get_multimodal_dict(as_tensors=False)
+                        train_data: BatchedDataDict = BatchedDataDict(
+                            {
+                                "input_ids": cat_and_padded["token_ids"],
+                                "input_lengths": input_lengths,
+                                "token_mask": cat_and_padded["token_loss_mask"],
+                                "sample_mask": batch["loss_multiplier"],
+                            }
+                        )
+                        train_data.update(
+                            cat_and_padded.get_multimodal_dict(as_tensors=False)
+                        )
+
+                    dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
+                    train_data = _maybe_reorder_megatron_sft_dp_stride(
+                        train_data,
+                        dp_size,
+                        megatron_sft_dp_stride_order,
                     )
 
                 print("▶ Taking a training step...")

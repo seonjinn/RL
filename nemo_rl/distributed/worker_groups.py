@@ -100,6 +100,41 @@ class MultiWorkerFuture:
             else:
                 object_refs.append(fut)
 
+        if (
+            os.environ.get("NRL_RAY_GET_RETURN_ONLY", "0").lower()
+            in {"1", "true", "yes"}
+            and os.environ.get("NRL_ALLOW_UNSAFE_RAY_GET_RETURN_ONLY", "0").lower()
+            in {"1", "true", "yes"}
+            and not has_generator
+            and self.return_from_workers is not None
+            and self.called_workers is not None
+        ):
+            # Experimental only: this does not propagate exceptions from
+            # non-return workers because ray.wait marks failed refs as ready.
+            # For calls with replicated outputs, most worker results are only
+            # needed as completion barriers. Avoid deserializing those payloads
+            # on the driver; wait for every actor task to finish, then fetch only
+            # the result refs that the caller will consume.
+            _, remaining_refs = ray.wait(
+                object_refs,
+                num_returns=len(object_refs),
+            )
+            if remaining_refs:
+                raise RuntimeError(
+                    "ray.wait returned before all worker refs were ready"
+                )
+            worker_to_result_idx = {
+                worker: idx for idx, worker in enumerate(self.called_workers)
+            }
+            selected_indices = [
+                worker_to_result_idx[worker]
+                for worker in self.return_from_workers
+                if worker in worker_to_result_idx
+            ]
+            selected_refs = [object_refs[idx] for idx in selected_indices]
+            all_results = ray.get(selected_refs)
+            return all_results
+
         # Retrieve the concrete results.
         all_results = ray.get(object_refs)
 
@@ -129,11 +164,43 @@ class MultiWorkerFuture:
         return all_results
 
 
+class NeMoRayWorkerWrapper:
+    """Wrapper actor with explicit compiled-graph entrypoints."""
+
+    def __init__(self, worker_class: Any, *init_args, **init_kwargs):
+        if hasattr(worker_class, "_ray_actor_class"):
+            actual_class = worker_class._ray_actor_class
+        elif hasattr(worker_class, "__ray_metadata__"):
+            actual_class = worker_class.__ray_metadata__.modified_class
+        else:
+            actual_class = worker_class
+        self.worker = actual_class(*init_args, **init_kwargs)
+
+    def train_compiled(self, train_input: dict[str, Any]) -> dict[str, Any]:
+        return self.worker.train(
+            data=train_input["data"],
+            loss_fn=train_input["loss_fn"],
+            eval_mode=train_input.get("eval_mode", False),
+            gbs=train_input.get("gbs"),
+            mbs=train_input.get("mbs"),
+        )
+
+    def execute_method(self, method_name: str, *args, **kwargs):
+        return getattr(self.worker, method_name)(*args, **kwargs)
+
+
 class RayWorkerBuilder:
     @ray.remote
     class IsolatedWorkerInitializer:
-        def __init__(self, ray_actor_class_fqn: str, *init_args, **init_kwargs):
+        def __init__(
+            self,
+            ray_actor_class_fqn: str,
+            use_worker_wrapper: bool,
+            *init_args,
+            **init_kwargs,
+        ):
             self.ray_actor_class_fqn = ray_actor_class_fqn
+            self.use_worker_wrapper = use_worker_wrapper
             self.init_args = init_args
             self.init_kwargs = init_kwargs
 
@@ -216,13 +283,25 @@ class RayWorkerBuilder:
                 placement_group_capture_child_tasks=True,
             )
             options["num_gpus"] = num_gpus
-            worker = worker_class.options(**options).remote(
-                *self.init_args, **worker_kwargs
-            )
+            if self.use_worker_wrapper:
+                worker = ray.remote(**options)(NeMoRayWorkerWrapper).remote(
+                    worker_class, *self.init_args, **worker_kwargs
+                )
+            else:
+                worker = worker_class.options(**options).remote(
+                    *self.init_args, **worker_kwargs
+                )
             return worker
 
-    def __init__(self, ray_actor_class_fqn: str, *args, **kwargs):
+    def __init__(
+        self,
+        ray_actor_class_fqn: str,
+        *args,
+        use_worker_wrapper: bool = False,
+        **kwargs,
+    ):
         self.ray_actor_class_fqn = ray_actor_class_fqn
+        self.use_worker_wrapper = use_worker_wrapper
         self.args = args
         self.kwargs = kwargs
 
@@ -255,7 +334,12 @@ class RayWorkerBuilder:
         initializer_options = {"runtime_env": options["runtime_env"]}
         isolated_initializer = self.IsolatedWorkerInitializer.options(  # type: ignore # @ray.remote call
             **initializer_options
-        ).remote(self.ray_actor_class_fqn, *self.args, **self.kwargs)
+        ).remote(
+            self.ray_actor_class_fqn,
+            self.use_worker_wrapper,
+            *self.args,
+            **self.kwargs,
+        )
 
         # Return the future and the initializer actor
         worker_future = isolated_initializer.create_worker.remote(
@@ -354,6 +438,7 @@ class RayWorkerGroup:
         self.name_prefix = name_prefix
         self.sharding_annotations = sharding_annotations
         self.dp_leader_worker_indices: list[int] = []
+        self._use_worker_wrapper = remote_worker_builder.use_worker_wrapper
 
         # If explicit bundle indices are provided, use those
         if bundle_indices_list is None:
@@ -532,7 +617,14 @@ class RayWorkerGroup:
                     }
                 )
                 # Remove Ray-specific environment variables, let the worker itself set them.
-                worker_env_vars.pop("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", None)
+                # PR #2252 can be enabled explicitly for A/B tests, but it was slower for
+                # the current Nano SFT setup, so preserve the original default.
+                if os.environ.get("NRL_RAY_NOSET_CUDA_VISIBLE_DEVICES", "0") == "1":
+                    worker_env_vars["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
+                else:
+                    worker_env_vars.pop(
+                        "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", None
+                    )
                 worker_env_vars.pop("RAY_CLIENT_MODE", None)
                 worker_env_vars.pop("RAY_JOB_ID", None)
                 worker_env_vars.pop("RAY_LD_PRELOAD", None)
@@ -665,6 +757,24 @@ class RayWorkerGroup:
         """Number of data parallel shards."""
         return len(self.dp_leader_worker_indices)
 
+    def _call_worker_method(
+        self,
+        worker: ray.actor.ActorHandle,
+        method_name: str,
+        *args,
+        **kwargs,
+    ) -> ray.ObjectRef:
+        if self._use_worker_wrapper:
+            return worker.execute_method.remote(method_name, *args, **kwargs)
+        try:
+            method = getattr(worker, method_name)
+        except AttributeError as e:
+            print(
+                f"Supported methods: {list(worker._method_shells.keys())}", flush=True
+            )
+            raise e
+        return method.remote(*args, **kwargs)
+
     def run_single_worker_single_data(
         self,
         method_name: str,
@@ -689,14 +799,7 @@ class RayWorkerGroup:
         )
 
         worker = self.workers[worker_idx]
-        try:
-            method = getattr(worker, method_name)
-        except AttributeError as e:
-            print(
-                f"Supported methods: {list(worker._method_shells.keys())}", flush=True
-            )
-            raise e
-        return method.remote(*args, **kwargs)
+        return self._call_worker_method(worker, method_name, *args, **kwargs)
 
     def run_all_workers_multiple_data(
         self,
@@ -780,18 +883,12 @@ class RayWorkerGroup:
                     break
 
             if should_run:
-                try:
-                    method = getattr(worker, method_name)
-                except AttributeError as e:
-                    print(
-                        f"Supported methods: {list(worker._method_shells.keys())}",
-                        flush=True,
-                    )
-                    raise e
                 worker_args = [arg[data_idx] for arg in args]
                 worker_kwargs = {key: value[data_idx] for key, value in kwargs.items()}
                 futures.append(
-                    method.remote(*worker_args, **worker_kwargs, **common_kwargs)
+                    self._call_worker_method(
+                        worker, method_name, *worker_args, **worker_kwargs, **common_kwargs
+                    )
                 )
                 data_idx += 1
 
@@ -845,15 +942,9 @@ class RayWorkerGroup:
                     break
 
             if should_run:
-                try:
-                    method = getattr(worker, method_name)
-                except AttributeError as e:
-                    print(
-                        f"Supported methods: {list(worker._method_shells.keys())}",
-                        flush=True,
-                    )
-                    raise e
-                futures.append(method.remote(*args, **kwargs))
+                futures.append(
+                    self._call_worker_method(worker, method_name, *args, **kwargs)
+                )
 
         return futures
 
@@ -936,6 +1027,19 @@ class RayWorkerGroup:
                 )
             kwargs = kwargs_after_ray_put
 
+        if (
+            common_kwargs
+            and os.environ.get("NRL_RAY_PUT_COMMON_KWARGS", "0").lower()
+            in {"1", "true", "yes"}
+        ):
+            # Experimental A/B knob: common kwargs are passed to every actor call.
+            # Putting them once avoids repeated driver-side serialization for
+            # objects such as the SFT loss function.
+            common_kwargs = {
+                key: value if isinstance(value, ray.ObjectRef) else ray.put(value)
+                for key, value in common_kwargs.items()
+            }
+
         futures = []
 
         # Validate axes
@@ -993,8 +1097,8 @@ class RayWorkerGroup:
                         }
 
                 # Call the method on the worker with its data slice
-                future = getattr(worker, method_name).remote(
-                    *worker_args, **worker_kwargs, **common_kwargs
+                future = self._call_worker_method(
+                    worker, method_name, *worker_args, **worker_kwargs, **common_kwargs
                 )
                 futures.append(future)
                 called_workers.append(worker_idx)
@@ -1004,8 +1108,8 @@ class RayWorkerGroup:
                     # If make_dummy_calls_to_free_axes is True, just call the method with None
                     worker_args = [None] * len(args)
                     worker_kwargs = {key: None for key in kwargs.keys()}
-                    future = getattr(worker, method_name).remote(
-                        *worker_args, **worker_kwargs, **common_kwargs
+                    future = self._call_worker_method(
+                        worker, method_name, *worker_args, **worker_kwargs, **common_kwargs
                     )
                     futures.append(future)
                     called_workers.append(worker_idx)
