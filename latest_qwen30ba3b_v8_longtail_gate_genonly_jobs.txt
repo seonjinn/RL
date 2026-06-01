@@ -20,3 +20,19 @@ VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD=1024
 VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS=3
 VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS=2
 VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS=1
+# resubmitted corrected dynamic thresholds Mon Jun  1 11:46:28 PDT 2026
+job_name=qwen30ba3b-main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r2-N4xG4
+purpose=Verify corrected V8 long-tail SpecDec gate with generation-only stop; corrected small<=medium token thresholds.
+small_token_threshold=1024
+medium_token_threshold=2048
+env NEMO_RL_DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh ACCOUNT=coreai_dlalgo_nemorl NUM_PROMPTS=64 NUM_GENERATIONS=32 TRAIN_GLOBAL_BATCH_SIZE=2048 MAX_STEPS=1 NRL_STOP_AFTER_GENERATION=true NRL_FORCE_REBUILD_VENVS=true NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=600 JOB_TAG=main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r2 DRIVER_UV_PROJECT_ENVIRONMENT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen30ba3b_main_specdec_v8_longtail_gate_r2_py312 NUM_SPECULATIVE_TOKENS=3 SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD=0 SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD=2048 SPECDEC_DYNAMIC_DRAFT_TOKENS=true SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD=1024 SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD=2048 SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS=3 SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS=2 SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS=1 SPECDEC_EXTRA_OVERRIDES=policy.max_total_sequence_length=2048 WANDB_NAME=Qwen30B_A3B_Main_N4xG4_specdec_v8_longtail_gate_k3_p64_g32_1step_r2 bash ./Qwen30BA3B_GB200_Main_SpecDec.sh 
+# resubmitted after V8 launcher marker fix Mon Jun  1 11:47:07 PDT 2026
+job_name=qwen30ba3b-main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r2-N4xG4
+purpose=Verify corrected V8 long-tail SpecDec gate with generation-only stop; corrected small<=medium token thresholds.
+small_token_threshold=1024
+medium_token_threshold=2048
+env NEMO_RL_DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh ACCOUNT=coreai_dlalgo_nemorl NUM_PROMPTS=64 NUM_GENERATIONS=32 TRAIN_GLOBAL_BATCH_SIZE=2048 MAX_STEPS=1 NRL_STOP_AFTER_GENERATION=true NRL_FORCE_REBUILD_VENVS=true NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=600 JOB_TAG=main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-r2 DRIVER_UV_PROJECT_ENVIRONMENT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen30ba3b_main_specdec_v8_longtail_gate_r2_py312 NUM_SPECULATIVE_TOKENS=3 SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD=0 SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD=2048 SPECDEC_DYNAMIC_DRAFT_TOKENS=true SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD=1024 SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD=2048 SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS=3 SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS=2 SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS=1 SPECDEC_EXTRA_OVERRIDES=policy.max_total_sequence_length=2048 WANDB_NAME=Qwen30B_A3B_Main_N4xG4_specdec_v8_longtail_gate_k3_p64_g32_1step_r2 bash ./Qwen30BA3B_GB200_Main_SpecDec.sh 
+Using SpecDec drafter: /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+Drafter provenance: qwen30ba3b_mixed_math_nonopenmath_500k_speculators
+Submitted batch job 3076735
+job_id=3076735

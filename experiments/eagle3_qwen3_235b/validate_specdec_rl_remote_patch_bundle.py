@@ -52,7 +52,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
         "def _patch_vllm_batch_gated_speculative_decoding()",
         "def _patch_vllm_adaptive_specdec_gate()",
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V8",
         "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
         "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
         "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
@@ -629,7 +629,7 @@ def check_runner_gate_first_draft_guard(
 
     text = read_text(worker)
     required = [
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V8",
         "nrl_specdec_batch_gate_all_disabled",
         "nrl_specdec_batch_gate_eligible_count",
         "specdec_scheduler_all_attr",
