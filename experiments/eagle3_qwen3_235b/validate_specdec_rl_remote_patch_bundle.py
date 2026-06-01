@@ -11,6 +11,7 @@ to be applied there.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -71,6 +72,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_COUNTERS_ON_STORE_V1",
         "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_BY_REQUEST_V1",
         "NRL_SPECDEC_SCHEDULER_STORE_COUNTERS_BEFORE_PER_REQUEST_V1",
+        "NRL_SPECDEC_SCHEDULER_DYNAMIC_POS_COUNTERS_PARTIAL_UPGRADE_V1",
         "NRL_SPECDEC_SCHEDULER_REQUEST_ID_ARITY_GUARD_V1",
         "NRL_SPECDEC_DYNAMIC_STORE_COUNTERS_DIFF_V1",
         "_nrl_specdec_batch_gate_threshold",
@@ -386,6 +388,134 @@ def check_dynamic_request_id_arity_guard(checks: list[dict[str, Any]], patch_roo
         )
 
 
+def _eval_string_expr(node: ast.AST, env: dict[str, str]) -> str:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in env:
+        return env[node.id]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _eval_string_expr(node.left, env) + _eval_string_expr(node.right, env)
+    raise ValueError(f"unsupported string expression: {ast.dump(node, include_attributes=False)}")
+
+
+def _extract_string_assignments(text: str, names: set[str]) -> dict[str, str]:
+    tree = ast.parse(text)
+    env: dict[str, str] = {}
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and hasattr(node, "lineno")
+    ]
+    assignments.sort(key=lambda node: (node.lineno, node.col_offset))
+    for node in assignments:
+        target_names = [
+            target.id for target in node.targets if isinstance(target, ast.Name)
+        ]
+        if not target_names:
+            continue
+        try:
+            value = _eval_string_expr(node.value, env)
+        except ValueError:
+            continue
+        for name in target_names:
+            if name in names or name in {
+                "dynamic_token_count_anchor",
+                "dynamic_pos_count_anchor",
+            }:
+                env[name] = value
+    return {name: env[name] for name in names if name in env}
+
+
+def check_dynamic_position_counter_partial_upgrade(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    worker = patch_root / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker.py"
+    if not worker.exists():
+        add(checks, "source", "dynamic position-counter partial upgrade", "fail", f"missing: {worker}")
+        return
+    text = read_text(worker)
+    required_markers = [
+        "NRL_SPECDEC_SCHEDULER_DYNAMIC_POS_COUNTERS_PARTIAL_UPGRADE_V1",
+        'or "_nrl_specdec_scheduler_dynamic_pos1_selected_count"',
+        "dynamic_pos_count_anchor",
+        "dynamic_pos_count_block",
+    ]
+    missing_markers = [marker for marker in required_markers if marker not in text]
+    wanted = {
+        "dynamic_token_count_anchor",
+        "dynamic_token_count_block",
+        "dynamic_pos_count_anchor",
+        "dynamic_pos_count_block",
+    }
+    try:
+        strings = _extract_string_assignments(text, wanted)
+    except SyntaxError as exc:
+        add(
+            checks,
+            "source",
+            "dynamic position-counter partial upgrade",
+            "fail",
+            "could not parse vLLM worker overlay while checking partial-upgrade guard",
+            error=str(exc),
+        )
+        return
+    missing_assignments = sorted(wanted - strings.keys())
+
+    problems = []
+    if missing_markers:
+        problems.append({"missing_markers": missing_markers})
+    if missing_assignments:
+        problems.append({"missing_assignments": missing_assignments})
+
+    if not problems:
+        clean_upgrade = strings["dynamic_token_count_anchor"].replace(
+            strings["dynamic_token_count_anchor"],
+            strings["dynamic_token_count_block"],
+            1,
+        )
+        partial_upgrade = strings["dynamic_pos_count_anchor"].replace(
+            strings["dynamic_pos_count_anchor"],
+            strings["dynamic_pos_count_block"],
+            1,
+        )
+        clean_expected = [
+            "_nrl_specdec_scheduler_dynamic_small_selected_token_count",
+            "_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count",
+            "range(1, 9)",
+        ]
+        partial_expected = [
+            "_nrl_specdec_scheduler_dynamic_large_selected_token_count",
+            "_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count",
+            "range(1, 9)",
+        ]
+        clean_missing = [
+            snippet for snippet in clean_expected if snippet not in clean_upgrade
+        ]
+        if clean_missing:
+            problems.append({"clean token-counter upgrade": clean_missing})
+        partial_missing = [
+            snippet for snippet in partial_expected if snippet not in partial_upgrade
+        ]
+        if partial_missing:
+            problems.append({"partial position-counter repair": partial_missing})
+
+    if problems:
+        add(
+            checks,
+            "source",
+            "dynamic position-counter partial upgrade",
+            "fail",
+            "partial scheduler upgrades may still miss dynamic per-position denominator counters",
+            problems=problems,
+        )
+    else:
+        add(
+            checks,
+            "source",
+            "dynamic position-counter partial upgrade",
+            "pass",
+            "clean and token-counter-only partial scheduler upgrade snippets both restore dynamic per-position counters",
+        )
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     patch_root = args.patch_root
@@ -415,6 +545,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     check_grpo_generation_indent(checks, patch_root)
     check_python_sources_compile(checks, patch_root)
     check_dynamic_request_id_arity_guard(checks, patch_root)
+    check_dynamic_position_counter_partial_upgrade(checks, patch_root)
 
     if ignored:
         add(

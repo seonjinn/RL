@@ -1,0 +1,25 @@
+# Qwen3-30B-A3B 500K Speculators Eagle3 NeMo-RL eval sweep
+created_at=2026-06-01 02:27:58 PDT
+nemo_rl_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL
+container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh
+draft_root=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+spec_tokens_list=3
+gate_request_threshold=64
+gate_token_threshold=2048
+gate_log_interval=128
+dynamic_draft_tokens=true
+dynamic_draft_small_request_threshold=4
+dynamic_draft_medium_request_threshold=64
+dynamic_draft_small_token_threshold=2048
+dynamic_draft_medium_token_threshold=2048
+dynamic_draft_small_tokens=3
+dynamic_draft_medium_tokens=2
+dynamic_draft_large_tokens=1
+max_steps=8
+num_prompts=64
+num_generations=32
+train_global_batch_size=2048
+specdec_k3_job=3070163
+replaces_failed_job=3069544
+fix=dynamic position-counter partial-upgrade repair

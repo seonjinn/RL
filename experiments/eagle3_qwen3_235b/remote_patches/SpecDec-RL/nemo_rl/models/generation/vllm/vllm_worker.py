@@ -2754,9 +2754,18 @@ class BaseVllmGenerationWorker:
                 if (
                     "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1"
                     in scheduler_content
-                    and "_nrl_specdec_scheduler_dynamic_small_selected_token_count"
-                    not in scheduler_content
+                    and (
+                        "_nrl_specdec_scheduler_dynamic_small_selected_token_count"
+                        not in scheduler_content
+                        or "_nrl_specdec_scheduler_dynamic_pos1_selected_count"
+                        not in scheduler_content
+                    )
                 ):
+                    # NRL_SPECDEC_SCHEDULER_DYNAMIC_POS_COUNTERS_PARTIAL_UPGRADE_V1
+                    # Some reused Ray/vLLM venvs contain the token-denominator
+                    # upgrade but not the per-position selected counters. Repair
+                    # that state explicitly instead of treating token counters as
+                    # proof that the whole denominator upgrade is present.
                     dynamic_token_count_anchor = (
                         "                self._nrl_specdec_scheduler_dynamic_large_selected_count = getattr(\n"
                         "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_count\", 0\n"
@@ -2780,17 +2789,47 @@ class BaseVllmGenerationWorker:
                         "                    self, \"_nrl_specdec_scheduler_dynamic_last_selected_tier\", \"\"\n"
                         "                )\n"
                     )
-                    if dynamic_token_count_anchor not in scheduler_content:
-                        raise RuntimeError(
-                            "Could not upgrade existing adaptive SpecDec scheduler "
-                            f"gate dynamic token counters in {scheduler}; expected "
-                            "selected-count anchor was missing."
-                        )
-                    scheduler_content = scheduler_content.replace(
-                        dynamic_token_count_anchor,
-                        dynamic_token_count_block,
-                        1,
+                    dynamic_pos_count_anchor = (
+                        "                self._nrl_specdec_scheduler_dynamic_large_selected_token_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_token_count\", 0\n"
+                        "                )\n"
                     )
+                    dynamic_pos_count_block = (
+                        dynamic_pos_count_anchor
+                        + "                for _nrl_pos_idx in range(1, 9):\n"
+                        "                    _nrl_pos_name = f\"_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count\"\n"
+                        "                    setattr(self, _nrl_pos_name, getattr(self, _nrl_pos_name, 0))\n"
+                    )
+                    if (
+                        "_nrl_specdec_scheduler_dynamic_small_selected_token_count"
+                        not in scheduler_content
+                    ):
+                        if dynamic_token_count_anchor not in scheduler_content:
+                            raise RuntimeError(
+                                "Could not upgrade existing adaptive SpecDec scheduler "
+                                f"gate dynamic token counters in {scheduler}; expected "
+                                "selected-count anchor was missing."
+                            )
+                        scheduler_content = scheduler_content.replace(
+                            dynamic_token_count_anchor,
+                            dynamic_token_count_block,
+                            1,
+                        )
+                    elif (
+                        "_nrl_specdec_scheduler_dynamic_pos1_selected_count"
+                        not in scheduler_content
+                    ):
+                        if dynamic_pos_count_anchor not in scheduler_content:
+                            raise RuntimeError(
+                                "Could not repair existing adaptive SpecDec scheduler "
+                                f"gate dynamic position counters in {scheduler}; "
+                                "expected token-count anchor was missing."
+                            )
+                        scheduler_content = scheduler_content.replace(
+                            dynamic_pos_count_anchor,
+                            dynamic_pos_count_block,
+                            1,
+                        )
                     with open(scheduler, "w") as f:
                         f.write(scheduler_content)
                 if (

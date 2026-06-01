@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 02:12 PDT",
+  "updated_at": "2026-06-01 02:28 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -360,7 +360,7 @@
       "dependency": "afterok:3068010",
       "time_limit": "00:45:00",
       "gpus_per_node": 4,
-      "state_at_latest_check": "PENDING with Dependency at 2026-06-01 02:12 PDT behind running repair job 3068010.",
+      "state_at_latest_check": "COMPLETED at 2026-06-01 02:23 PDT with exit code 0:0. Final conversations and Speculators JSONL are both exact 500000 rows.",
       "replacement_conversations": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_qwen3_235b_replacement_conversations_dapo100.jsonl",
       "note": "Replaces cancelled stale finalizer 3063314. It validates all 100 qwen3_235b chunk files, builds exact-unique 500K JSONL with the OpenMath denylist, and now includes replacement conversations so duplicate prompts in the 500K prompt pool do not reduce the final count below 500K."
     },
@@ -376,19 +376,19 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_latest_check": "PENDING with Dependency at 2026-06-01 02:12 PDT while repair job 3068010 runs and finalizer 3068014 waits.",
+      "state_at_latest_check": "Prepare job 3068015 RUNNING at 2026-06-01 02:28 PDT on nvl72083-T13; hidden-state array 3068016_[0-99] and train job 3068017 are still dependency-pending.",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
       "note": "Replaces cancelled stale chain 3063316 -> 3063317_[0-99] -> 3063318. It will only run after the repaired corpus and replacement rows validate."
     },
     "safe_w4_missing_id_repair_adaptive_maxtok": {
       "job_id": "3068010",
-      "state_at_latest_check": "RUNNING at 2026-06-01 02:12 PDT on nvl72137-T[08,18]",
+      "state_at_latest_check": "COMPLETED at 2026-06-01 02:18 PDT on nvl72137-T[08,18] with exit code 0:0",
       "missing_prompts": 1435,
-      "generated_rows_observed": 1371,
+      "generated_rows_observed": 1435,
       "missing_prompt_file": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_target_chunks/qwen3_235b_missing_id_repair_safe_w4_g2_05_adaptive_maxtok_missing_prompts.jsonl",
       "generated_output": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_target_chunks/qwen3_235b_missing_id_repair_safe_w4_g2_05_adaptive_maxtok_generated.jsonl",
-      "note": "This direct-vLLM repair uses adaptive max_tokens reduction after HTTP 400 context-window errors. It is filling missing ids for the clean 235B 500K target-response corpus; dependent finalizer/prep/hidden-state/train chain 3068014 -> 3068015 -> 3068016_[0-99] -> 3068017 remains pending on this repair path."
+      "note": "This direct-vLLM repair used adaptive max_tokens reduction after HTTP 400 context-window errors and generated all 1435 missing responses for the clean 235B 500K target-response corpus. Finalizer 3068014 completed successfully and released prepare job 3068015."
     }
   },
   "expected_after_current_wave": {
@@ -398,11 +398,11 @@
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
-    "active_targetgen_jobs_observed": 1,
-    "active_missing_id_repair_jobs_observed": 1,
+    "active_targetgen_jobs_observed": 0,
+    "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. The prior safe wave4 path has been replaced by direct missing-id repair job 3068010 for 1435 missing prompts with adaptive max_tokens; as of 2026-06-01 02:12 PDT it is RUNNING and has generated 1371 repair rows. Dependent finalizer/prep/hidden-state/train chain 3068014 -> 3068015 -> 3068016_[0-99] -> 3068017 remains pending behind this repair path.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 is running; hidden-state array 3068016_[0-99] and train job 3068017 remain dependency-pending.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 50,
@@ -415,7 +415,18 @@
     ],
     "current_missing_id_repair_job": "3068010",
     "current_missing_id_repair_missing_prompts": 1435,
-    "current_missing_id_repair_generated_rows_observed": 1371
+    "current_missing_id_repair_generated_rows_observed": 1435,
+    "current_missing_id_repair_completed": true,
+    "current_finalizer_job": "3068014",
+    "current_finalizer_state_observed": "COMPLETED with exact 500000-row final conversations and 500000-row Speculators JSONL",
+    "final_conversation_rows": 500000,
+    "speculators_rows": 500000,
+    "current_prepare_job": "3068015",
+    "current_prepare_state_observed": "RUNNING on nvl72083-T13 at 2026-06-01 02:28 PDT",
+    "current_hidden_state_array_job": "3068016_[0-99]",
+    "current_hidden_state_array_state_observed": "PENDING with Dependency",
+    "current_train_job": "3068017",
+    "current_train_state_observed": "PENDING with Dependency"
   },
   "code_review_status": {
     "updated_at": "2026-06-01 00:25 PDT",
