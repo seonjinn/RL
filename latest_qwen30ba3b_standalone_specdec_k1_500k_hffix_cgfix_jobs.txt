@@ -14,5 +14,6 @@ baseline_shared_config=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemo
 specdec_shared_config=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/vllm_standalone_qwen30ba3b_specdec_k1_shared_cgfix_20260601_143425.conf
 baseline_shared_logs=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_baseline_shared_20260601_143425
 specdec_shared_logs=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_shared_cgfix_20260601_143425
-specdec_cudagraph_fix=COMPILATION_CONFIG_JSON {"cudagraph_capture_sizes":[2,4,8,16]} with SHARED_SERVER=1 and enforce_eager=false
+specdec_cudagraph_fix=SHARED_SERVER=1 launch line uses cudagraph_capture_sizes including [2,4,8,16], avoiding the previous [1]-only K+1 failure; config files now export COMPILATION_CONFIG_JSON explicitly for future reruns
 baseline_partial_per_batch_3079765=BS1 220.2155 output_tok_s_per_gpu; BS2 403.7873; BS4 666.6193
+shared_partial_bs1=baseline 3080042 230.4893 output_tok_s_per_gpu; specdec 3080041 147.6494 output_tok_s_per_gpu; speedup 0.6406x; acceptance 26.47%; synthetic random vLLM bench serve, not NeMo-RL

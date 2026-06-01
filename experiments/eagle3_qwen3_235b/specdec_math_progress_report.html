@@ -534,6 +534,7 @@
 
     <h2>Standalone vLLM Benchmark</h2>
     <p class="small">This is a separate vLLM-only benchmark. It does not include rewards, logprobs, policy training, weight sync, or any NeMo-RL E2E step work.</p>
+    <p class="small">Partial shared-server result at 14:45 PT: BS=<code>1</code> baseline <code>230.49</code> output tok/s/GPU, SpecDec K=1 <code>147.65</code> output tok/s/GPU, speedup <code>0.641x</code>, acceptance <code>26.47%</code>. This is a synthetic random ISL/OSL <code>1000/1000</code> standalone benchmark, not the NeMo-RL math rollout metric. BS=<code>2</code> and above are still running.</p>
     <div class="table-scroll">
       <table>
         <thead>
@@ -572,9 +573,9 @@
             <td><code>3080041</code></td>
             <td>vLLM standalone <code>bench serve</code></td>
             <td>Same shared-server shape as <code>3080042</code></td>
-            <td><code>method=eagle3</code>, 500K Qwen3-30B-A3B drafter, K=<code>1</code>, CUDA graph capture sizes <code>[2,4,8,16]</code></td>
+            <td><code>method=eagle3</code>, 500K Qwen3-30B-A3B drafter, K=<code>1</code>, shared-server CUDA graph capture sizes include <code>[2,4,8,16]</code></td>
             <td><span class="pill warn">running</span></td>
-            <td>Preserves CUDA graphs while satisfying vLLM SpecDec's <code>K+1</code> capture-size constraint. This is the publishable standalone SpecDec rerun if it completes.</td>
+            <td>Preserves CUDA graphs while satisfying vLLM SpecDec's <code>K+1</code> capture-size constraint. The running launch line used shared-server capture sizes <code>[1,2,4,8,16]</code>, avoiding the previous <code>[1]</code>-only failure.</td>
           </tr>
         </tbody>
       </table>
