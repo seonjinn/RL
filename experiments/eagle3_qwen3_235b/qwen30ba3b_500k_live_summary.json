@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 01:21 PDT",
+  "updated_at": "2026-06-01 02:03 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1160,12 +1160,36 @@
       },
       {
         "job_id": "3068829",
-        "state": "RUNNING at 2026-06-01 01:21 PDT on nvl72007-T[07,10-11,18]; Ray workers 16/16 are connected, uv package setup is building compiled dependencies, and no rollout metrics have been emitted yet",
-        "reason": "dependency-free run submitted after df32edb using the qwen30ba3b_specdec_denomfix_20260531235619 driver venv path to reduce rebuild cost. During its setup window, the live /SpecDec-RL checkout was patched with store-time dynamic selected counters so dynamic per-position denominators are counted when spec_token_ids are actually stored rather than when scheduler lookahead is queried. This is the current primary dynamic-K final-review validation run, but it has not reached Step 1.",
+        "state": "FAILED at 2026-06-01 01:25 PDT before rollout metrics",
+        "reason": "dependency-free run submitted after df32edb using the qwen30ba3b_specdec_denomfix_20260531235619 driver venv path to reduce rebuild cost. It reached Ray workers 16/16 and completed uv package build, but the reused driver venv was broken: transformers import failed with ModuleNotFoundError: transformers.dependency_versions_table. No Step 1 acceptance or throughput metric was emitted. Replaced by fresh-venv store-counter job 3069079.",
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_reusevenv_jobs.txt"
+      },
+      {
+        "job_id": "3069079",
+        "state": "CANCELLED at 2026-06-01 01:36 PDT before rollout metrics",
+        "reason": "fresh-venv replacement submitted after store-time dynamic selected counters were synced to live /SpecDec-RL, but a separate review agent found remaining dynamic-K accounting issues before rollout: selected K/tier state was scheduler-wide instead of per-request, new store-time counters were not step-diffed, and new denominator counters were not summed across DP workers. No Step 1 acceptance or throughput metric was emitted. Replaced by per-request/DP-merge corrected job 3069265.",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_storecounter_freshvenv_jobs.txt"
+      },
+      {
+        "job_id": "3069265",
+        "state": "CANCELLED at 2026-06-01 01:44 PDT before rollout metrics",
+        "reason": "fresh-venv replacement submitted after the first per-request/DP-merge fix, but an immediate local diff review found the generated scheduler update block had regressed: dynamic_tier could be undefined in update_draft_token_ids. No Step 1 acceptance or throughput metric was emitted. Replaced by fix2 job 3069422 after correcting old/new update block generation and syncing live /SpecDec-RL.",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_perrequest_freshvenv_jobs.txt"
+      },
+      {
+        "job_id": "3069422",
+        "state": "CANCELLED at 2026-06-01 01:49 PDT before rollout metrics",
+        "reason": "fresh-venv replacement submitted after the fix2 generated-scheduler correction, but follow-up review found the per-request upgrade still ran before store-counter upgrade for an already dynamic-cap-patched scheduler without store counters. That could leave a partially patched scheduler. No Step 1 acceptance or throughput metric was emitted. Replaced by fix3 job 3069544 after moving store-counter upgrade before per-request conversion and strengthening validator pos8 coverage.",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_perrequest_fix2_freshvenv_jobs.txt"
+      },
+      {
+        "job_id": "3069544",
+        "state": "RUNNING at 2026-06-01 02:03 PDT on nvl72095-T[10,12-14]",
+        "reason": "fresh-venv replacement submitted after fix3: store-time counter upgrade now happens before per-request dynamic-K conversion for already patched schedulers, per-request dynamic selected K/tier state remains enabled, store-time selected counters are step-diffed, denominator counters are DP-summed, and validator checks worker pos8 plus dynamic position comprehension. A follow-up review found no blocking issues; the overlay now also has a request-id arity guard for generated scheduler helper/call-site consistency. Uses K=3 with dynamic small/medium/large tiers 3/2/1, request gate 64, token gate 2048, max_steps=8, GBS=2048, and NRL_FORCE_REBUILD_VENVS=true. It has allocated 4 nodes and is before rollout metrics.",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_perrequest_fix3_freshvenv_jobs.txt"
       }
     ],
-    "current_primary_dynamic_k_job": "3068829"
+    "current_primary_dynamic_k_job": "3069544"
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Jobs 3068178, 3068267, 3068390, 3068522, and 3068578 were cancelled as stale or pre-rollout setup-only runs after review hardening. Job 3068829 is the current primary corrected dynamic-K validation run, submitted after df32edb with a reusable driver venv path; it has Ray workers connected but is still in uv compiled dependency setup as of 2026-06-01 01:21 PDT. A follow-up review patch now moves dynamic selected counters from scheduler lookahead calls to actual draft-token storage."
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Jobs 3068178, 3068267, 3068390, 3068522, 3068578, 3068829, 3069079, 3069265, and 3069422 were cancelled or failed before usable rollout throughput. Job 3069544 is the current primary corrected dynamic-K validation run, running after fix3 store-counter/per-request upgrade ordering and validator hardening as of 2026-06-01 02:03 PDT."
 }

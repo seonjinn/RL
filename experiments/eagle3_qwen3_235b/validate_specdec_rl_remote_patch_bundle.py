@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import py_compile
 import time
 from pathlib import Path
 from typing import Any
@@ -62,10 +63,16 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
         "_nrl_specdec_scheduler_dynamic_last_selected_tokens",
         "_nrl_specdec_scheduler_dynamic_last_selected_tier",
+        "_nrl_specdec_scheduler_dynamic_selected_by_request",
         "_nrl_specdec_scheduler_dynamic_small_selected_count",
         "_nrl_specdec_scheduler_dynamic_small_selected_token_count",
         "_nrl_specdec_scheduler_dynamic_pos1_selected_count",
+        "_nrl_specdec_scheduler_dynamic_pos8_selected_count",
         "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_COUNTERS_ON_STORE_V1",
+        "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_BY_REQUEST_V1",
+        "NRL_SPECDEC_SCHEDULER_STORE_COUNTERS_BEFORE_PER_REQUEST_V1",
+        "NRL_SPECDEC_SCHEDULER_REQUEST_ID_ARITY_GUARD_V1",
+        "NRL_SPECDEC_DYNAMIC_STORE_COUNTERS_DIFF_V1",
         "_nrl_specdec_batch_gate_threshold",
         "_nrl_specdec_batch_gate_token_threshold",
         "specdec_batch_gate_num_requests",
@@ -99,6 +106,10 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "spec_decode_gate_totals",
         "spec_decode_totals[\"metrics_available\"] = True",
         "spec_decode_totals[\"metrics_complete\"]",
+        "NRL_SPECDEC_DYNAMIC_STORE_COUNTERS_DP_MERGE_V1",
+        "dynamic_small_selected_token_count",
+        "f\"dynamic_pos{pos_idx}_selected_count\"",
+        "range(1, 9)",
     ],
     "nemo_rl/algorithms/grpo.py": [
         "def _uses_vllm_specdec_without_generation_logprobs(",
@@ -308,6 +319,73 @@ def check_grpo_generation_indent(checks: list[dict[str, Any]], patch_root: Path)
         )
 
 
+def check_python_sources_compile(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    py_files = [
+        path
+        for path in sorted(patch_root.rglob("*.py"))
+        if path.is_file() and not is_ignored(path, patch_root)
+    ]
+    failures: list[str] = []
+    for path in py_files:
+        try:
+            py_compile.compile(str(path), doraise=True)
+        except py_compile.PyCompileError as exc:
+            failures.append(f"{path.relative_to(patch_root)}: {exc.msg}")
+    if failures:
+        add(
+            checks,
+            "source",
+            "overlay python compile",
+            "fail",
+            "one or more Python overlay files fail py_compile",
+            failures=failures[:8],
+            failure_count=len(failures),
+        )
+    else:
+        add(
+            checks,
+            "source",
+            "overlay python compile",
+            "pass",
+            f"py_compile passed for {len(py_files)} Python overlay files",
+        )
+
+
+def check_dynamic_request_id_arity_guard(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    worker = patch_root / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker.py"
+    if not worker.exists():
+        add(checks, "source", "dynamic request-id arity guard", "fail", f"missing: {worker}")
+        return
+    text = read_text(worker)
+    required = [
+        "NRL_SPECDEC_SCHEDULER_REQUEST_ID_ARITY_GUARD_V1",
+        "def _assert_scheduler_dynamic_request_id_arity",
+        "expected_signature = (",
+        "bad_requestless_call = re.search(",
+        "good_request_call = re.search(",
+        "request\\.request_id",
+        "len\\(num_scheduled_tokens\\)",
+    ]
+    missing = [snippet for snippet in required if snippet not in text]
+    if missing:
+        add(
+            checks,
+            "source",
+            "dynamic request-id arity guard",
+            "fail",
+            "vLLM worker does not enforce generated scheduler request_id helper arity",
+            missing_snippets=missing,
+        )
+    else:
+        add(
+            checks,
+            "source",
+            "dynamic request-id arity guard",
+            "pass",
+            "vLLM worker validates generated scheduler helper signature and request_id call sites",
+        )
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     patch_root = args.patch_root
@@ -335,6 +413,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             )
 
     check_grpo_generation_indent(checks, patch_root)
+    check_python_sources_compile(checks, patch_root)
+    check_dynamic_request_id_arity_guard(checks, patch_root)
 
     if ignored:
         add(

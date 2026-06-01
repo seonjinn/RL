@@ -926,31 +926,30 @@ class VllmGeneration(GenerationInterface):
         spec_decode_reporting_workers = 0
         spec_decode_gate_seen = False
         spec_decode_gate_reporting_workers = 0
+        # NRL_SPECDEC_DYNAMIC_STORE_COUNTERS_DP_MERGE_V1
+        gate_sum_keys = {
+            "checked",
+            "enabled",
+            "disabled",
+            "dynamic_small_selected_count",
+            "dynamic_medium_selected_count",
+            "dynamic_large_selected_count",
+            "dynamic_small_selected_token_count",
+            "dynamic_medium_selected_token_count",
+            "dynamic_large_selected_token_count",
+        } | {
+            f"dynamic_pos{pos_idx}_selected_count" for pos_idx in range(1, 9)
+        }
 
         def merge_gate_group(dst: dict[str, Any], src: dict[str, Any]) -> None:
             dst["num_reporting_objects"] = int(
                 dst.get("num_reporting_objects", 0)
             ) + int(src.get("num_reporting_objects", 0))
-            for key in (
-                "checked",
-                "enabled",
-                "disabled",
-                "dynamic_small_selected_count",
-                "dynamic_medium_selected_count",
-                "dynamic_large_selected_count",
-            ):
+            for key in gate_sum_keys:
                 if key in src:
                     dst[key] = int(dst.get(key, 0)) + int(src.get(key, 0))
             for key, value in src.items():
-                if key in {
-                    "num_reporting_objects",
-                    "checked",
-                    "enabled",
-                    "disabled",
-                    "dynamic_small_selected_count",
-                    "dynamic_medium_selected_count",
-                    "dynamic_large_selected_count",
-                }:
+                if key == "num_reporting_objects" or key in gate_sum_keys:
                     continue
                 if key.endswith("_observed") and isinstance(value, list):
                     values = dst.setdefault(key, [])
