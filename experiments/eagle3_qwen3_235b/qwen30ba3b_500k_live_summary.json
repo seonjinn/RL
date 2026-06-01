@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 07:20 PDT",
+  "updated_at": "2026-06-01 07:44 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -928,8 +928,8 @@
     "operational_decision": "Treat K=1 as the current production-quality setting for NeMo-RL. K=2/K=3 should only be enabled behind adaptive depth or long-tail gating if per-position acceptance improves."
   },
   "adaptive_gate_implementation": {
-    "status": "implemented_validated_remotely_counter_timeoutfix_and_metrictrust_synced",
-    "updated_at": "2026-06-01 07:20 PDT",
+    "status": "implemented_validated_remotely_counter_timeoutfix_metrictrust_review_hardened_synced",
+    "updated_at": "2026-06-01 07:44 PDT",
     "scope": "Taming Long Tail/ReSpec-style adaptive activation and draft-depth selection for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*; SPECDEC_DYNAMIC_DRAFT_* -> VLLM_SPECDEC_DYNAMIC_DRAFT_*",
@@ -1264,7 +1264,7 @@
       },
       {
         "job_id": "3072963",
-        "state": "RUNNING at 2026-06-01 07:20 PDT on nvl72058-T[01,09,12-13]; Step 1 early generation metrics emitted, then entered Megatron logprob inference; final NeMo-RL performance throughput still pending.",
+        "state": "RUNNING at 2026-06-01 07:42 PDT on nvl72058-T[01,09,12-13]; Step 1 early generation metrics emitted, then entered Megatron logprob inference; final NeMo-RL performance throughput still pending.",
         "reason": "fresh K=3 dynamic-K replacement after the V7 first-draft gate fix. It reached Step 1 generation and emitted complete-DP early SpecDec metrics; unlike earlier no-metric states, drafter attachment, runner gate activation, and scheduler gate activation are now visible. It is still in the logprob/training phase, so this is not a final throughput result yet.",
         "latest_step_seen": 1,
         "completed_generation_metrics": 0,
@@ -1325,19 +1325,21 @@
     },
     "batch_gate_v7_review_fix": {
       "state": "patched_validated_synced_and_resubmitted",
-      "updated_at": "2026-06-01 07:20 PDT",
+      "updated_at": "2026-06-01 07:44 PDT",
       "superseded_job": "3072682",
       "replacement_job": "3072963",
       "reason": "V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and prevents partial per-request gating from becoming a whole-batch draft skip.",
       "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt",
-      "state_at_latest_check": "RUNNING on nvl72058-T[01,09,12-13] at 2026-06-01 07:20 PDT; Step 1 early metrics emitted: acceptance 33.91%, early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), runner gate enabled 9.72%, scheduler gate enabled 3.47%; final throughput pending while in Megatron logprob/training."
-    }
+      "state_at_latest_check": "RUNNING on nvl72058-T[01,09,12-13] at 2026-06-01 07:42 PDT; Step 1 early metrics emitted: acceptance 33.91%, early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), runner gate enabled 9.72%, scheduler gate enabled 3.47%; final throughput pending while in Megatron logprob/training. Current-code K=1 validation job 3073673 is also RUNNING with token gate 2048."
+    },
+    "post_review_hardening_commit": "c647865",
+    "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors."
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput in the Megatron logprob/training phase. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs respectively. Job 3072963 is the current primary dynamic-K validation run; as of 2026-06-01 07:20 PDT it emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), and is still in Megatron logprob/training with final throughput pending.",
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput in the Megatron logprob/training phase. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs respectively. Job 3072963 is the current primary dynamic-K validation run; as of 2026-06-01 07:42 PDT it emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), and is still in Megatron logprob/training with final throughput pending. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency.",
   "current_primary_dynamic_k_job": "3072963",
   "batch_gate_v7_review_fix": {
-    "state": "patched_validated_synced_resubmitted_and_step1_early_metrics_seen",
-    "updated_at": "2026-06-01 07:20 PDT",
+    "state": "patched_validated_synced_resubmitted_step1_early_metrics_seen_and_k1_validation_running",
+    "updated_at": "2026-06-01 07:44 PDT",
     "superseded_job": "3072682",
     "replacement_job": "3072963",
     "reason": "A separate review agent found V6 could still convert an empty first scheduled_spec_decode_tokens map into a runner-wide disable. V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and keeps partial per-request gating from becoming a whole-batch draft skip.",
@@ -1357,6 +1359,44 @@
       "runner_enabled_ratio": 0.0972,
       "scheduler_enabled_ratio": 0.0347,
       "final_throughput_status": "pending"
-    }
+    },
+    "current_k1_validation_job": "3073673"
+  },
+  "current_code_k1_validation_job": {
+    "job_id": "3073673",
+    "state_at_submit_check": "RUNNING at 2026-06-01 07:43 PDT",
+    "submitted_after_review_hardening_commit": "c647865",
+    "purpose": "Re-measure best known 30B K=1 token-pressure configuration with the current V7 launch/metric hardening, no Slurm dependency.",
+    "num_speculative_tokens": 1,
+    "request_gate": 0,
+    "token_gate": 2048,
+    "dynamic_k": false,
+    "max_steps": 4,
+    "num_prompts_per_step": 64,
+    "num_generations_per_prompt": 32,
+    "train_global_batch_size": 2048,
+    "draft_root": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193",
+    "result_status": "pending first generation metric"
+  },
+  "post_review_hardening": {
+    "updated_at": "2026-06-01 07:44 PDT",
+    "commit": "c647865",
+    "review_agent": "Einstein",
+    "status": "patched_validated_synced",
+    "fixes": [
+      "30B/235B SpecDec launchers now fail fast unless the actual NeMo-RL checkout contains required V7 SpecDec markers.",
+      "30B launcher defaults to the 500K mixed-math drafter root and refuses the old 50K OpenMath root unless explicitly allowed.",
+      "235B launcher refuses the legacy default drafter unless DRAFT_MODEL is explicitly set or ALLOW_LEGACY_DRAFT_MODEL=true.",
+      "Smoke analyzer acceptance gates now require reliability/complete-metric flags when acceptance thresholds are used.",
+      "Math/SWE launchers and the 30B eval submitter support explicit no-dependency submissions."
+    ],
+    "validated": [
+      "local bash -n for edited shell launchers",
+      "local python3 -m py_compile analyze_specdec_smoke.py",
+      "SpecDec-RL patch bundle validation PASS",
+      "remote /lustre/.../SpecDec-RL marker check PASS for NRL_SPECDEC_BATCH_GATE_PATCH_V7, acceptance_rate_reliable, _repair_specdec_generation_logprobs_if_safe, and NRL_VLLM_OMIT_GENERATION_LOGPROBS",
+      "remote no-dependency dry-run printed zero --dependency arguments",
+      "rsynced to fs1 and fsw roadmap mirrors with matching SHA256"
+    ]
   }
 }
