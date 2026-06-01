@@ -402,7 +402,7 @@
     "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 failed on Ray dashboard startup, replacement 3070670 was cancelled after the older readiness check stayed at 0/8 worker units with 0 hidden-state files, replacement 3071019 was cancelled after the managed Ray venv could not find Python 3.12.13, and existing-Ray replacement 3071215_[0-99] is now the current hidden-state array. Train job 3071216 remains dependency-pending.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 failed on Ray dashboard startup, replacement 3070670 was cancelled after the older readiness check stayed at 0/8 worker units with 0 hidden-state files, replacement 3071019 was cancelled after the managed Ray venv could not find Python 3.12.13, replacement 3071215 was cancelled after worker-side vLLM import path was not propagated, and replacement 3071479 was cancelled after one shard hit Slurm step memory/node-registration startup failures. Current hidden-state array is 3071610_[0-99]%5 with --mem=0, existing Ray, SETUP_COMMAND path injection, RAY_raylet_start_wait_time_s=300, and a prepared-corpus manifest. Train job 3071611 remains dependency-pending.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 50,
@@ -423,9 +423,9 @@
     "speculators_rows": 500000,
     "current_prepare_job": "3068015",
     "current_prepare_state_observed": "COMPLETED by 2026-06-01 02:49 PDT; output has 500000 examples, 16 arrow shards, token_freq.pt, and state.json",
-    "current_hidden_state_array_job": "3071215_[0-99]",
-    "current_hidden_state_array_state_observed": "SUBMITTED/RUNNING at 2026-06-01 03:15 PDT immediately after existing-Ray resubmission; hidden-state output file count still 0 at the first startup check",
-    "current_train_job": "3071216",
+    "current_hidden_state_array_job": "3071610_[0-99]",
+    "current_hidden_state_array_state_observed": "PENDING at 2026-06-01 03:31 PDT after resubmission with max_concurrent_shards=5; hidden-state output file count still 0 before startup",
+    "current_train_job": "3071611",
     "current_train_state_observed": "PENDING with Dependency"
   },
   "code_review_status": {

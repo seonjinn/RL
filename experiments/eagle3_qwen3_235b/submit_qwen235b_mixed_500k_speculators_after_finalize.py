@@ -11,6 +11,7 @@ cache is complete.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -107,6 +108,7 @@ def paths() -> dict[str, Path]:
         "hidden_states_dir": root / f"hidden_states_{LAYERS_TAG}_500k_global",
         "checkpoint_dir": root / f"checkpoints_train_500k_{LAYERS_TAG}",
         "vllm_tmp_hidden_states": root / f"vllm_tmp_hidden_states_{LAYERS_TAG}_500k",
+        "prepare_manifest": root / "nrl_prepare_manifest.json",
         "report": ARTIFACT_ROOT / "reports/qwen3_235b_500k_speculators_submit_summary.json",
         "denylist": ARTIFACT_ROOT / "data/openmath_reasoning_cot_conversations_50k.jsonl",
     }
@@ -123,6 +125,49 @@ def validate_inputs(p: dict[str, Path], *, allow_pending_finalizer: bool) -> Non
         raise RuntimeError("finalized corpus files must have exactly 500000 rows:\n" + "\n".join(f"{item}: {rows}" for item, rows in bad))
 
 
+def load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def expected_prepare_manifest(p: dict[str, Path], *, include_sha256: bool) -> dict[str, object]:
+    speculators_jsonl = p["speculators_jsonl"]
+    source_conversations = p["final_conversations"]
+    manifest: dict[str, object] = {
+        "model": MODEL,
+        "seq_length": int(SEQ_LENGTH),
+        "target_layer_ids": [int(item) for item in TARGET_LAYERS.split()],
+        "speculators_jsonl": str(speculators_jsonl),
+        "speculators_jsonl_size": speculators_jsonl.stat().st_size,
+        "speculators_jsonl_rows": line_count(speculators_jsonl),
+        "source_conversations": str(source_conversations),
+        "source_conversations_size": source_conversations.stat().st_size,
+        "source_conversations_rows": line_count(source_conversations),
+    }
+    if include_sha256:
+        manifest["speculators_jsonl_sha256"] = sha256_file(speculators_jsonl)
+    return manifest
+
+
+def validate_manifest_matches(actual: dict, expected: dict[str, object]) -> None:
+    mismatches = []
+    for key, expected_value in expected.items():
+        if actual.get(key) != expected_value:
+            mismatches.append(f"{key}: actual={actual.get(key)!r} expected={expected_value!r}")
+    if mismatches:
+        raise RuntimeError(
+            "cannot reuse prepare job; prepare manifest does not match current inputs:\n"
+            + "\n".join(mismatches)
+        )
+
+
 def validate_prepared_outputs(p: dict[str, Path]) -> None:
     required = [
         p["output_dir"] / "state.json",
@@ -132,6 +177,44 @@ def validate_prepared_outputs(p: dict[str, Path]) -> None:
     missing = [item for item in required if not item.exists()]
     if missing:
         raise FileNotFoundError("cannot reuse prepare job; prepared outputs are missing:\n" + "\n".join(str(item) for item in missing))
+    dataset_info = load_json(p["output_dir"] / "dataset_info.json")
+    split = (dataset_info.get("splits") or {}).get("train") or {}
+    if split.get("num_examples") != 500_000:
+        raise RuntimeError(f"cannot reuse prepare job; dataset_info train.num_examples={split.get('num_examples')!r} != 500000")
+    checksums = dataset_info.get("download_checksums") or {}
+    spec_info = checksums.get(str(p["speculators_jsonl"]))
+    if not isinstance(spec_info, dict):
+        raise RuntimeError(
+            "cannot reuse prepare job; dataset_info does not reference the current "
+            f"Speculators JSONL: {p['speculators_jsonl']}"
+        )
+    actual_spec_size = p["speculators_jsonl"].stat().st_size
+    if spec_info.get("num_bytes") != actual_spec_size:
+        raise RuntimeError(
+            "cannot reuse prepare job; dataset_info Speculators JSONL size mismatch: "
+            f"actual={spec_info.get('num_bytes')!r} expected={actual_spec_size}"
+        )
+    state = load_json(p["output_dir"] / "state.json")
+    data_files = [item.get("filename") for item in state.get("_data_files", []) if isinstance(item, dict)]
+    if not data_files:
+        raise RuntimeError("cannot reuse prepare job; state.json has no Arrow data files")
+    missing_data = [p["output_dir"] / name for name in data_files if not (p["output_dir"] / name).exists()]
+    if missing_data:
+        raise FileNotFoundError("cannot reuse prepare job; Arrow shards from state.json are missing:\n" + "\n".join(str(item) for item in missing_data[:20]))
+    strict_hash = os.environ.get("STRICT_PREPARE_REUSE_HASH", "true").lower() not in {"0", "false", "no"}
+    expected = expected_prepare_manifest(p, include_sha256=strict_hash)
+    manifest_path = p["prepare_manifest"]
+    if manifest_path.exists():
+        validate_manifest_matches(load_json(manifest_path), expected)
+    else:
+        bootstrap = {
+            **expected,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "created_by": "submit_qwen235b_mixed_500k_speculators_after_finalize.py",
+            "note": "bootstrap manifest for pre-existing prepared outputs after dataset_info/state validation",
+        }
+        manifest_path.write_text(json.dumps(bootstrap, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"+ wrote bootstrap prepare manifest {manifest_path}", flush=True)
 
 
 def common_env(p: dict[str, Path]) -> dict[str, str]:
@@ -150,6 +233,7 @@ def common_env(p: dict[str, Path]) -> dict[str, str]:
         "MAX_SAMPLES": "0",
         "MIN_HIDDEN_STATES": "500000",
         "MINIMUM_VALID_TOKENS": "1",
+        "PREPARE_MANIFEST": str(p["prepare_manifest"]),
         "TARGET_LAYER_IDS": TARGET_LAYERS,
         "DRAFT_VOCAB_SIZE": "32000",
         "SPECULATOR_TYPE": "eagle3",
@@ -276,6 +360,7 @@ def submit_ray_datagen(
         "RAY_USE_EXISTING_ENV": "true",
         "RAY_CLI": "ray",
         "RAY_DEDUP_LOGS": "0",
+        "RAY_raylet_start_wait_time_s": "300",
     }
     cmd = [
         "sbatch",
@@ -283,6 +368,7 @@ def submit_ray_datagen(
         f"--account={ACCOUNT}",
         f"--partition={PARTITION}",
         "--gres=gpu:4",
+        "--mem=0",
         f"--time={datagen_time}",
         f"--job-name=qwen3_235b-speculators-500k-hs-{shard:03d}",
         str(ray_sub),
@@ -353,6 +439,7 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         "RAY_USE_EXISTING_ENV": "true",
         "RAY_CLI": "ray",
         "RAY_DEDUP_LOGS": "0",
+        "RAY_raylet_start_wait_time_s": "300",
     }
     array_spec = f"0-{shards - 1}"
     if max_concurrent > 0:
@@ -363,6 +450,7 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         f"--account={ACCOUNT}",
         f"--partition={PARTITION}",
         "--gres=gpu:4",
+        "--mem=0",
         f"--time={datagen_time}",
         "--job-name=qwen3_235b-speculators-500k-hs",
         f"--array={array_spec}",

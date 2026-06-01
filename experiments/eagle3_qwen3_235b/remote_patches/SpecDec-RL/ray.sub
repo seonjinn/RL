@@ -332,6 +332,10 @@ log-sync-sidecar &
 
 # Patch nsight.py before starting Ray head
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py 2>/dev/null || true
+if [[ -n "\${SETUP_COMMAND:-}" ]]; then
+  echo "[INFO] Running SETUP_COMMAND before Ray head start"
+  bash -lc "\$SETUP_COMMAND"
+fi
 if [[ "$RAY_USE_EXISTING_ENV" == "true" || "$RAY_USE_EXISTING_ENV" == "True" ]]; then
   echo "[INFO] Using existing Ray command: $RAY_CLI"
 else
@@ -448,6 +452,10 @@ log-sync-sidecar &
 
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py 2>/dev/null || true
+if [[ -n "\${SETUP_COMMAND:-}" ]]; then
+  echo "[INFO] Running SETUP_COMMAND before Ray worker start"
+  bash -lc "\$SETUP_COMMAND"
+fi
 if [[ "$RAY_USE_EXISTING_ENV" == "true" || "$RAY_USE_EXISTING_ENV" == "True" ]]; then
   echo "[INFO] Using existing Ray command: $RAY_CLI"
 else

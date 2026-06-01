@@ -47,6 +47,9 @@ FROM_PRETRAINED="${FROM_PRETRAINED:-}"
 NUM_TRAIN_GPUS="${NUM_TRAIN_GPUS:-4}"
 SPECULATORS_DISABLE_TORCH_COMPILE="${SPECULATORS_DISABLE_TORCH_COMPILE:-false}"
 SPECULATORS_FSDP_WRAP_LAYERS="${SPECULATORS_FSDP_WRAP_LAYERS:-true}"
+PREPARE_MANIFEST="${PREPARE_MANIFEST:-$OUTPUT_DIR/nrl_prepare_manifest.json}"
+WRITE_PREPARE_MANIFEST="${WRITE_PREPARE_MANIFEST:-true}"
+VALIDATE_HIDDEN_STATE_COVERAGE="${VALIDATE_HIDDEN_STATE_COVERAGE:-true}"
 
 VLLM_PORT="${VLLM_PORT:-8000}"
 VLLM_TP="${VLLM_TP:-4}"
@@ -219,6 +222,51 @@ if [[ "$RUN_PREPARE" == "true" || "$RUN_PREPARE" == "True" ]]; then
   fi
   printf '%q ' "${prepare_cmd[@]}"; printf '\n'
   [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]] || "${prepare_cmd[@]}"
+  if [[ "$WRITE_PREPARE_MANIFEST" == "true" || "$WRITE_PREPARE_MANIFEST" == "True" ]]; then
+    python3 - "$PREPARE_MANIFEST" "$SPECULATORS_JSONL" "$SOURCE_CONVERSATIONS" "$MODEL" "$SEQ_LENGTH" "$TARGET_LAYER_IDS" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def count_lines(path: Path) -> int:
+    with path.open("rb") as fh:
+        return sum(1 for _ in fh)
+
+
+manifest_path = Path(sys.argv[1])
+speculators_jsonl = Path(sys.argv[2])
+source_conversations = Path(sys.argv[3])
+payload = {
+    "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+    "model": sys.argv[4],
+    "seq_length": int(sys.argv[5]),
+    "target_layer_ids": [int(item) for item in sys.argv[6].split()],
+    "speculators_jsonl": str(speculators_jsonl),
+    "speculators_jsonl_size": speculators_jsonl.stat().st_size,
+    "speculators_jsonl_rows": count_lines(speculators_jsonl),
+    "speculators_jsonl_sha256": sha256_file(speculators_jsonl),
+    "source_conversations": str(source_conversations),
+    "source_conversations_size": source_conversations.stat().st_size if source_conversations.exists() else None,
+    "source_conversations_rows": count_lines(source_conversations) if source_conversations.exists() else None,
+}
+manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"# Wrote prepare manifest: {manifest_path}")
+PY
+  fi
 fi
 
 check_connector_cmd=(
@@ -308,6 +356,52 @@ if [[ "$RUN_TRAIN" == "true" || "$RUN_TRAIN" == "True" ]]; then
     if (( hidden_state_count < MIN_HIDDEN_STATES )); then
       echo "ERROR: not enough hidden-state files for training yet" >&2
       exit 2
+    fi
+    if [[ "$VALIDATE_HIDDEN_STATE_COVERAGE" == "true" || "$VALIDATE_HIDDEN_STATE_COVERAGE" == "True" ]]; then
+      python3 - "$HIDDEN_STATES_DIR" "$MIN_HIDDEN_STATES" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+expected = int(sys.argv[2])
+pattern = re.compile(r"^hs_(\d+)\.safetensors$")
+indices: set[int] = set()
+bad_names: list[str] = []
+empty_files: list[str] = []
+duplicate_numeric_names: list[str] = []
+
+for path in root.glob("hs_*.safetensors"):
+    match = pattern.match(path.name)
+    if not match:
+        bad_names.append(path.name)
+        continue
+    idx = int(match.group(1))
+    if idx in indices:
+        duplicate_numeric_names.append(path.name)
+    indices.add(idx)
+    if path.stat().st_size <= 0:
+        empty_files.append(path.name)
+
+missing = [idx for idx in range(expected) if idx not in indices]
+extras = sorted(idx for idx in indices if idx >= expected)
+problems: list[str] = []
+if bad_names:
+    problems.append(f"malformed hidden-state filenames: {bad_names[:10]}")
+if duplicate_numeric_names:
+    problems.append(f"duplicate numeric hidden-state filenames: {duplicate_numeric_names[:10]}")
+if empty_files:
+    problems.append(f"empty hidden-state files: {empty_files[:10]}")
+if missing:
+    problems.append(f"missing hidden-state indices count={len(missing)} first={missing[:20]}")
+if extras:
+    problems.append(f"unexpected hidden-state indices >= {expected}: count={len(extras)} first={extras[:20]}")
+if problems:
+    raise SystemExit("ERROR: hidden-state coverage validation failed: " + "; ".join(problems))
+print(f"# Hidden-state coverage validated: 0..{expected - 1}")
+PY
     fi
   fi
 

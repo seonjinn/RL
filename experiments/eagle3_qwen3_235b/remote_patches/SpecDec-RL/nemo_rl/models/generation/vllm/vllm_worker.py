@@ -103,7 +103,7 @@ class BaseVllmGenerationWorker:
                 )
                 return
         else:
-            arch_names = ["Eagle3LlamaForCausalLM", "LlamaForCausalLMEagle3"]
+            arch_names = sorted(llama_compatible_arches)
 
         try:
             from vllm.model_executor.models.llama_eagle3 import Eagle3LlamaForCausalLM
@@ -626,6 +626,8 @@ class BaseVllmGenerationWorker:
         # Monkey patches for vLLM behavior. We avoid importing vllm modules
         # here to prevent side effects during initialization and instead
         # locate the files via importlib metadata.
+        os.environ["VLLM_USE_V1"] = "1" if is_vllm_v1_engine_enabled() else "0"
+        os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
         from vllm.logger import init_logger
 
@@ -700,10 +702,12 @@ class BaseVllmGenerationWorker:
                 "HUGGING_FACE_HUB_TOKEN",
                 "NRL_ALLOW_SPECDEC_REQUEST_LOGPROBS",
                 "NRL_VLLM_OMIT_GENERATION_LOGPROBS",
+                "NRL_VLLM_USE_V1",
                 "NCCL_CUMEM_ENABLE",
                 "NCCL_NVLS_ENABLE",
                 "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
                 "VLLM_ATTENTION_BACKEND",
+                "VLLM_ALLOW_INSECURE_SERIALIZATION",
                 "VLLM_CACHE_ROOT",
                 "VLLM_COMPILATION_LEVEL",
                 "VLLM_CUDAGRAPH_CAPTURE_SIZES",
@@ -735,6 +739,7 @@ class BaseVllmGenerationWorker:
                 "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD",
                 "VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS",
                 "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS",
+                "VLLM_USE_V1",
                 "VLLM_USE_RAY_COMPILED_DAG",
                 "VLLM_USE_RAY_SPMD_WORKER",
                 "VLLM_USE_RAY_WRAPPED_PP_COMM",
@@ -3434,9 +3439,6 @@ class BaseVllmGenerationWorker:
         else:
             # For non-parallel mode, explicitly set executor to None to avoid Ray issues
             vllm_kwargs["distributed_executor_backend"] = None
-
-        os.environ["VLLM_USE_V1"] = "1" if is_vllm_v1_engine_enabled() else "0"
-        os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
         # We should use vLLM DP if ep_size > tp_size since EP_SIZE = DP_SIZE * TP_SIZE in vLLM.
         # See details in https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/data_parallel.py
