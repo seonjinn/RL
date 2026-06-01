@@ -1051,7 +1051,8 @@ def _log_specdec_vllm_metrics(
                 f"{float(scheduler.get('enabled_ratio', 0.0)):.4f} "
                 f"last_active_requests={scheduler.get('last_active_requests', 'n/a')} "
                 f"effective_k={scheduler.get('effective_lookahead_tokens', 'n/a')} "
-                f"dynamic_k={scheduler.get('dynamic_last_selected_tokens', 'n/a')}",
+                f"dynamic_k={scheduler.get('dynamic_last_selected_tokens', 'n/a')} "
+                f"stored_k={scheduler.get('dynamic_last_stored_tokens', 'n/a')}",
                 flush=True,
             )
 

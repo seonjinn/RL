@@ -344,6 +344,7 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_gate_effective_lookahead_tokens": "effective_lookahead_tokens",
             "_nrl_specdec_scheduler_dynamic_draft_tokens_enabled": "dynamic_draft_tokens_enabled",
             "_nrl_specdec_scheduler_dynamic_last_selected_tokens": "dynamic_last_selected_tokens",
+            "_nrl_specdec_scheduler_dynamic_last_stored_tokens": "dynamic_last_stored_tokens",
             "_nrl_specdec_scheduler_dynamic_small_request_threshold": "dynamic_small_request_threshold",
             "_nrl_specdec_scheduler_dynamic_medium_request_threshold": "dynamic_medium_request_threshold",
             "_nrl_specdec_scheduler_dynamic_small_token_threshold": "dynamic_small_token_threshold",
@@ -2030,6 +2031,7 @@ class BaseVllmGenerationWorker:
             scheduler_required_markers = [
                 "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
                 "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1",
+                "NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1",
                 "def _nrl_specdec_scheduler_lookahead_tokens",
                 "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
                 "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
@@ -2041,10 +2043,43 @@ class BaseVllmGenerationWorker:
                 "active_requests = max(num_requests, len(self.running))",
                 "_nrl_specdec_scheduler_gate_effective_lookahead_tokens",
                 "_nrl_specdec_scheduler_dynamic_last_selected_tokens",
+                "_nrl_specdec_scheduler_dynamic_last_stored_tokens",
                 "_nrl_specdec_scheduler_dynamic_small_selected_count",
                 "NRL SpecDec scheduler adaptive gate:",
                 "return effective_lookahead_tokens",
             ]
+            update_draft_cap_anchor = (
+                "            # Add newly generated spec token ids to the request.\n"
+                "            if self.structured_output_manager.should_advance(request):\n"
+                "                metadata = request.structured_output_request\n"
+                "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
+                "            request.spec_token_ids = spec_token_ids\n"
+            )
+            update_draft_cap_block = (
+                "            # Add newly generated spec token ids to the request.\n"
+                "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1\n"
+                "            dynamic_draft_cap = getattr(\n"
+                "                self,\n"
+                "                \"_nrl_specdec_scheduler_dynamic_last_selected_tokens\",\n"
+                "                self.num_spec_tokens,\n"
+                "            )\n"
+                "            try:\n"
+                "                dynamic_draft_cap = int(dynamic_draft_cap)\n"
+                "            except (TypeError, ValueError):\n"
+                "                dynamic_draft_cap = self.num_spec_tokens\n"
+                "            dynamic_draft_cap = max(0, min(self.num_spec_tokens, dynamic_draft_cap))\n"
+                "            if dynamic_draft_cap == 0:\n"
+                "                spec_token_ids = []\n"
+                "            elif len(spec_token_ids) > dynamic_draft_cap:\n"
+                "                spec_token_ids = list(spec_token_ids[:dynamic_draft_cap])\n"
+                "            else:\n"
+                "                spec_token_ids = list(spec_token_ids)\n"
+                "            self._nrl_specdec_scheduler_dynamic_last_stored_tokens = len(spec_token_ids)\n"
+                "            if self.structured_output_manager.should_advance(request):\n"
+                "                metadata = request.structured_output_request\n"
+                "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
+                "            request.spec_token_ids = spec_token_ids\n"
+            )
             if "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1" not in scheduler_content:
                 if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" not in scheduler_content:
                     raise RuntimeError(
@@ -2378,6 +2413,17 @@ class BaseVllmGenerationWorker:
                         "Could not install adaptive SpecDec scheduler gate in "
                         f"{scheduler}; expected V5 gate anchors were missing."
                     )
+                if update_draft_cap_anchor not in scheduler_content:
+                    raise RuntimeError(
+                        "Could not install dynamic SpecDec draft update cap in "
+                        f"{scheduler}; expected update_draft_token_ids anchor "
+                        "was missing."
+                    )
+                scheduler_content = scheduler_content.replace(
+                    update_draft_cap_anchor,
+                    update_draft_cap_block,
+                    1,
+                )
                 with open(scheduler, "w") as f:
                     f.write(scheduler_content)
                 applied += 1
@@ -2487,6 +2533,23 @@ class BaseVllmGenerationWorker:
                     scheduler_content = scheduler_content.replace(
                         dynamic_selected_count_anchor,
                         dynamic_selected_count_block,
+                        1,
+                    )
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
+                if (
+                    "NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1"
+                    not in scheduler_content
+                ):
+                    if update_draft_cap_anchor not in scheduler_content:
+                        raise RuntimeError(
+                            "Could not upgrade existing adaptive SpecDec scheduler "
+                            f"with dynamic draft update cap in {scheduler}; "
+                            "expected update_draft_token_ids anchor was missing."
+                        )
+                    scheduler_content = scheduler_content.replace(
+                        update_draft_cap_anchor,
+                        update_draft_cap_block,
                         1,
                     )
                     with open(scheduler, "w") as f:

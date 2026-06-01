@@ -670,6 +670,7 @@ def print_performance_metrics(
                 "adaptive_window_enabled",
                 "dynamic_draft_tokens_enabled",
                 "dynamic_last_selected_tokens",
+                "dynamic_last_stored_tokens",
                 "dynamic_small_request_threshold",
                 "dynamic_medium_request_threshold",
                 "dynamic_small_token_threshold",
