@@ -402,7 +402,7 @@
     "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 is now running shards 0-45 while shards 46-99 remain pending on priority; train job 3068017 remains dependency-pending.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 now has 100/100 shards RUNNING; train job 3068017 remains dependency-pending.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 50,
@@ -424,7 +424,7 @@
     "current_prepare_job": "3068015",
     "current_prepare_state_observed": "COMPLETED by 2026-06-01 02:49 PDT; output has 500000 examples, 16 arrow shards, token_freq.pt, and state.json",
     "current_hidden_state_array_job": "3068016_[0-99]",
-    "current_hidden_state_array_state_observed": "RUNNING shards 0-45 and PENDING shards 46-99 at 2026-06-01 02:49 PDT",
+    "current_hidden_state_array_state_observed": "RUNNING 100/100 array tasks at 2026-06-01 02:51 PDT; hidden-state output file count still 0, so tasks are in startup/model-load phase",
     "current_train_job": "3068017",
     "current_train_state_observed": "PENDING with Dependency"
   },
@@ -472,6 +472,6 @@
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": true,
     "direct_prompt_overlap_verified": true,
-    "note": "The 235B in-house 500K conversation file has passed validation with --denylist-prompts-from openmath_reasoning_cot_conversations_50k.jsonl: 500000 rows, 500000 unique prompts, 0 duplicate prompts, and 0 denylisted OpenMath prompts. Prepare job 3068015 completed and hidden-state array 3068016 is running, so the drafter checkpoint is not trained yet."
+    "note": "The 235B in-house 500K conversation file has passed validation with --denylist-prompts-from openmath_reasoning_cot_conversations_50k.jsonl: 500000 rows, 500000 unique prompts, 0 duplicate prompts, and 0 denylisted OpenMath prompts. Prepare job 3068015 completed and hidden-state array 3068016 has 100/100 tasks running, so the drafter checkpoint is not trained yet."
   }
 }
