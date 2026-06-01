@@ -1258,8 +1258,27 @@ def _maybe_apply_specdec_step_controller(
         for result in results:
             if isinstance(result, dict):
                 updated_objects += int(result.get("updated_objects", 0))
+    if updated_objects <= 0:
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_no_targets": 1,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
+        print(
+            "[SpecDec step controller] "
+            f"step={step} action={action} no-op: no runtime control objects "
+            "were updated",
+            flush=True,
+        )
+        return
     logger.log_metrics(
         {
+            "controller/action_noop": 0,
+            "controller/action_failed_no_targets": 0,
             "controller/action_decrease_k": (
                 1 if action.startswith("decrease_k") else 0
             ),

@@ -135,6 +135,23 @@ if {
       ;;
   esac
 fi
+if {
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD}" ]] ||
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD}" ]] ||
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD}" ]] ||
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD}" ]] ||
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS}" ]] ||
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS}" ]] ||
+  [[ -n "${SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS}" ]]
+}; then
+  case "${SPECDEC_DYNAMIC_DRAFT_TOKENS}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON) ;;
+    *)
+      echo "ERROR: dynamic SpecDec tier settings require SPECDEC_DYNAMIC_DRAFT_TOKENS=true" >&2
+      exit 2
+      ;;
+  esac
+fi
 if [[ -n "${SPECDEC_DISABLE_BY_BATCH_SIZE}" ]]; then
   echo "ERROR: SPECDEC_DISABLE_BY_BATCH_SIZE is not the NeMo-RL long-tail gate. Use SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD or SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD with ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true." >&2
   exit 2

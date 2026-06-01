@@ -663,8 +663,12 @@ def print_performance_metrics(
             "dynamic_selected_draft_tokens",
             "dynamic_selected_count_mismatch",
             "dynamic_selected_draft_token_mismatch",
+            "dynamic_selected_count_near",
+            "dynamic_selected_count_consistent",
         ):
             value = spec_decode_metrics.get(key)
+            if isinstance(value, bool):
+                value = 1 if value else 0
             if isinstance(value, (int, float)):
                 performance_metrics[f"spec_decode/{key}"] = value
 
