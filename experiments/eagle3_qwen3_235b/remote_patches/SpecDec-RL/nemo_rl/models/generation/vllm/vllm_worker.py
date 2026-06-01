@@ -2048,13 +2048,25 @@ class BaseVllmGenerationWorker:
                 "NRL SpecDec scheduler adaptive gate:",
                 "return effective_lookahead_tokens",
             ]
-            update_draft_cap_anchor = (
+            update_draft_cap_anchors = [
                 "            # Add newly generated spec token ids to the request.\n"
                 "            if self.structured_output_manager.should_advance(request):\n"
                 "                metadata = request.structured_output_request\n"
                 "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
-                "            request.spec_token_ids = spec_token_ids\n"
-            )
+                "            request.spec_token_ids = spec_token_ids\n",
+                "            # Add newly generated spec token ids to the request.\n"
+                "            if self.structured_output_manager.should_advance(request):\n"
+                "                metadata = request.structured_output_request\n"
+                "                assert metadata is not None and metadata.grammar is not None\n"
+                "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)\n"
+                "            request.spec_token_ids = spec_token_ids\n",
+                "            # Add newly generated spec token ids to the request.\n"
+                "            if self.structured_output_manager.should_advance(request):\n"
+                "                metadata = request.structured_output_request\n"
+                "                assert metadata is not None\n"
+                "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
+                "            request.spec_token_ids = spec_token_ids\n",
+            ]
             update_draft_cap_block = (
                 "            # Add newly generated spec token ids to the request.\n"
                 "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1\n"
@@ -2413,7 +2425,15 @@ class BaseVllmGenerationWorker:
                         "Could not install adaptive SpecDec scheduler gate in "
                         f"{scheduler}; expected V5 gate anchors were missing."
                     )
-                if update_draft_cap_anchor not in scheduler_content:
+                update_draft_cap_anchor = next(
+                    (
+                        anchor
+                        for anchor in update_draft_cap_anchors
+                        if anchor in scheduler_content
+                    ),
+                    None,
+                )
+                if update_draft_cap_anchor is None:
                     raise RuntimeError(
                         "Could not install dynamic SpecDec draft update cap in "
                         f"{scheduler}; expected update_draft_token_ids anchor "
@@ -2541,7 +2561,15 @@ class BaseVllmGenerationWorker:
                     "NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1"
                     not in scheduler_content
                 ):
-                    if update_draft_cap_anchor not in scheduler_content:
+                    update_draft_cap_anchor = next(
+                        (
+                            anchor
+                            for anchor in update_draft_cap_anchors
+                            if anchor in scheduler_content
+                        ),
+                        None,
+                    )
+                    if update_draft_cap_anchor is None:
                         raise RuntimeError(
                             "Could not upgrade existing adaptive SpecDec scheduler "
                             f"with dynamic draft update cap in {scheduler}; "
