@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 18:41 PDT",
+  "updated_at": "2026-05-31 18:49 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -917,7 +917,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_activebatch_hardened_running",
-    "updated_at": "2026-05-31 18:41 PDT",
+    "updated_at": "2026-05-31 18:49 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -937,7 +937,7 @@
     "superseded_after_agent_review_job": "3062996",
     "superseded_after_agent_review_state": "CANCELLED at 2026-05-31 18:04 PDT before rollout metrics because the agent review identified one more semantic hardening: when vLLM exposes scheduled_spec_decode_tokens, the model runner should treat the scheduler decision as the source of truth instead of applying a second independent adaptive threshold.",
     "corrected_eval_job": "3063394",
-    "corrected_eval_state": "RUNNING at 2026-05-31 18:41 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. No NeMo-RL throughput or acceptance metric has emitted yet.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 18:49 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. No NeMo-RL throughput or acceptance metric has emitted yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_activebatch_jobs.txt",
     "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold_disabled OR scheduled_spec_decode_tokens behavior, and target-applied remote validation for the new markers.",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet.",
@@ -945,8 +945,8 @@
     "superseded_activebatch_eval_state": "CANCELLED at 2026-05-31 18:33 PDT after 00:05:18 because it started building the driver environment before the final runner threshold-disabled hardening was synced.",
     "activebatch_followup_jobs": [
       {
-        "job_id": "3063421",
-        "state_at_submit_check": "RUNNING at 2026-05-31 18:41 PDT",
+        "job_id": "3063616",
+        "state_at_submit_check": "PENDING with Priority at 2026-05-31 18:49 PDT",
         "num_speculative_tokens": 1,
         "request_gate": 32,
         "token_gate": 2048,
@@ -954,15 +954,20 @@
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_activebatch_req32_tok2048_target050_jobs.txt"
       },
       {
-        "job_id": "3063422",
-        "state_at_submit_check": "RUNNING at 2026-05-31 18:41 PDT",
+        "job_id": "3063617",
+        "state_at_submit_check": "PENDING with Priority at 2026-05-31 18:49 PDT",
         "num_speculative_tokens": 1,
         "request_gate": 64,
         "token_gate": 2048,
         "adaptive_target_enabled_ratio": 0.5,
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_activebatch_req64_tok2048_target050_jobs.txt"
       }
-    ]
+    ],
+    "superseded_shared_venv_followup_jobs": [
+      "3063421",
+      "3063422"
+    ],
+    "superseded_shared_venv_followup_state": "CANCELLED at 2026-05-31 18:49 PDT before rollout metrics because both jobs were submitted in the same second and shared one DRIVER_UV_PROJECT_ENVIRONMENT path. The submitter now includes the full job tag plus random suffix in the venv path."
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 was cancelled and remains secondary evidence only. Corrected jobs 3062401, 3062565, and 3062730 failed before rollout on environment/patch-forwarding issues; jobs 3062996, 3063061, and 3063331 were superseded after code review hardening. Replacement active-batch adaptive jobs 3063394, 3063421, and 3063422 are running, but corrected adaptive long-tail NeMo-RL throughput/acceptance results are not available yet."
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 was cancelled and remains secondary evidence only. Corrected jobs 3062401, 3062565, and 3062730 failed before rollout on environment/patch-forwarding issues; jobs 3062996, 3063061, and 3063331 were superseded after code review hardening. Replacement active-batch adaptive job 3063394 is running, while request-gated replacements 3063616 and 3063617 are pending, but corrected adaptive long-tail NeMo-RL throughput/acceptance results are not available yet."
 }

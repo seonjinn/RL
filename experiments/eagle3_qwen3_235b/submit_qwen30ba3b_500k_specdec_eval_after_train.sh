@@ -173,8 +173,8 @@ submit_evals() {
     fi
     local tag="main-specdec-mixed500k-k${token_count}-req${request_gate}-tok${token_gate}-${adaptive_tag}"
     local stamp
-    stamp="$(date '+%Y%m%d%H%M%S')"
-    local env_dir="${NEMO_RL_DIR}/.driver_venvs/qwen30ba3b_main_specdec_mixed500k_k${token_count}_${stamp}"
+    stamp="$(date '+%Y%m%d%H%M%S')_${RANDOM}_${RANDOM}"
+    local env_dir="${NEMO_RL_DIR}/.driver_venvs/qwen30ba3b_${tag}_${stamp}"
     local wandb_name="Qwen30B_A3B_Main_N${NUM_NODES}xG${GPUS_PER_NODE}_specdec_mixed500k_k${token_count}_p${NUM_PROMPTS}_g${NUM_GENERATIONS}_${MAX_STEPS}step_reqgate${request_gate}_tokgate${token_gate}_${adaptive_tag}"
     local tmp
     tmp="$(mktemp)"
