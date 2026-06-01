@@ -1435,12 +1435,13 @@
     "in_house_500k_speculators": "Main result tables require launcher provenance guards to point at the expected mixed non-OpenMath 500K checkpoint root."
   },
   "provenance_guard_hardening": {
-    "updated_at": "2026-06-01 08:06 PDT",
-    "status": "validated_synced",
+    "updated_at": "2026-06-01 08:13 PDT",
+    "status": "validated_synced_legacy_entrypoint_blocked",
     "changes": [
       "Qwen30BA3B_GB200_Main_SpecDec.sh now requires the approved 30B mixed-math 500K Speculators root by default and labels DRAFT_MODEL_PROVENANCE.",
       "Qwen235B_GB200_Main_SpecDec.sh now requires explicit DRAFT_MODEL_PROVENANCE; in-house 500K claims must use the expected 235B 500K checkpoint root.",
-      "Qwen30BA3B_GB200_Main_Baseline.sh now submits ${SCRIPT_DIR}/ray.sub so baseline and SpecDec use the same patched submit file independent of cwd."
+      "Qwen30BA3B_GB200_Main_Baseline.sh now submits ${SCRIPT_DIR}/ray.sub so baseline and SpecDec use the same patched submit file independent of cwd.",
+      "Qwen235B_GB200_SpecDec.sh is now deprecated by default because it used a legacy 50K drafter and patched NeMo-RL in place; users must opt in explicitly for legacy diagnostics."
     ]
   }
 }

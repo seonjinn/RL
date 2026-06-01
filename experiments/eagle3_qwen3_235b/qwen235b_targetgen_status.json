@@ -513,8 +513,8 @@
     "note": "235B in-house Speculators Eagle3 drafter is not training yet; hidden-state extraction is still running. At 2026-06-01 08:06 PDT, the cache had 90779 files (11T), array tasks 16-20 were running, tasks 21-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed, and replacement train job 3072524 remained dependency-pending."
   },
   "provenance_guard_hardening": {
-    "updated_at": "2026-06-01 08:06 PDT",
-    "status": "validated_synced",
-    "note": "235B main SpecDec launcher now requires explicit DRAFT_MODEL_PROVENANCE. A future in-house 500K result must set qwen235b_mixed_math_nonopenmath_500k_speculators and point under the expected 235B 500K checkpoint root; legacy/manual diagnostics require explicit opt-in flags."
+    "updated_at": "2026-06-01 08:13 PDT",
+    "status": "validated_synced_legacy_entrypoint_blocked",
+    "note": "235B main SpecDec launcher now requires explicit DRAFT_MODEL_PROVENANCE. Qwen235B_GB200_SpecDec.sh is deprecated by default because it used a legacy 50K drafter and patched NeMo-RL in place; legacy/manual diagnostics require explicit opt-in flags."
   }
 }

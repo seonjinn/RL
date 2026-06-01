@@ -5,6 +5,13 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if [[ "${ALLOW_DEPRECATED_QWEN235B_SPECDEC_SCRIPT:-false}" != "true" && "${ALLOW_DEPRECATED_QWEN235B_SPECDEC_SCRIPT:-false}" != "True" ]]; then
+    echo "ERROR: Qwen235B_GB200_SpecDec.sh is deprecated because it defaults to a legacy 50K drafter and patches NeMo-RL in place." >&2
+    echo "Use Qwen235B_GB200_Main_SpecDec.sh with explicit DRAFT_MODEL and DRAFT_MODEL_PROVENANCE instead." >&2
+    echo "For a legacy diagnostic only, set ALLOW_DEPRECATED_QWEN235B_SPECDEC_SCRIPT=true." >&2
+    exit 2
+fi
+
 # Source cluster configuration (auto-detect H100/GB200)
 source "${SCRIPT_DIR}/cluster_config.sh"
 setup_cluster_config "batch"
