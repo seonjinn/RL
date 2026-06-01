@@ -186,6 +186,23 @@ add_main_dyncp_rows() {
   submit_job "32k-cp8" 32768 8 8 8 dyncp 8192 1.0 512 2048 "${MAX_STEPS}"
 }
 
+add_nrt_cancelled_short_recovery_rows() {
+  # Rerun only the short rows cancelled by the NRT scheduler before Step 1.
+  submit_job "8k-cp8-nohcp" 8192 8 8 8 nohcp "" "" 512 2048 "${MAX_STEPS}"
+  submit_job "8k-cp8" 8192 8 8 8 dyncp 2048 1.0 512 2048 "${MAX_STEPS}"
+  submit_job "16k-cp8" 16384 8 8 8 dyncp 4096 1.0 512 2048 "${MAX_STEPS}"
+  submit_job "32k-cp8-nohcp" 32768 8 8 8 nohcp "" "" 512 2048 "${MAX_STEPS}"
+  submit_job "32k-cp8" 32768 8 8 8 dyncp 8192 1.0 512 2048 "${MAX_STEPS}"
+  submit_job "49k-cp4-nohcp" 49152 8 4 4 nohcp "" "" 512 2048 "${MAX_STEPS}"
+}
+
+add_nrt_cancelled_long_recovery_rows() {
+  # Rerun only the long rows cancelled by the NRT scheduler before Step 1.
+  submit_job "64k-tp2-cp32-nohcp" 65536 2 32 8 nohcp "" "" 128 512 "${MAX_STEPS}"
+  submit_job "64k-tp2-cp32" 65536 2 32 8 dyncp 4096 1.0 128 512 "${MAX_STEPS}"
+  submit_job "128k-tp4-cp16" 131072 4 16 8 dyncp 8192 1.0 128 512 "${MAX_STEPS}"
+}
+
 add_49k_rows() {
   submit_job "49k-cp4-nohcp" 49152 8 4 4 nohcp "" "" 512 2048 "${MAX_STEPS}"
   submit_job "49k-cp4" 49152 8 4 4 dyncp 16384 1.0 512 2048 "${MAX_STEPS}"
@@ -344,6 +361,12 @@ case "${SUBMIT_SET}" in
   main_dyncp)
     add_main_dyncp_rows
     ;;
+  nrt_cancelled_short_recovery)
+    add_nrt_cancelled_short_recovery_rows
+    ;;
+  nrt_cancelled_long_recovery)
+    add_nrt_cancelled_long_recovery_rows
+    ;;
   49k)
     add_49k_rows
     ;;
@@ -429,7 +452,7 @@ case "${SUBMIT_SET}" in
     add_long_rows
     ;;
   *)
-    echo "Unknown SUBMIT_SET=${SUBMIT_SET}; expected canary, main, main_baseline, 8k_baseline, main_dyncp, 49k, 49k_baseline, 49k_dyncp, 49k_dyncp_threshold_sweep, long, long_no256, 64k, 64k_baseline, 128k, 256k_safe, 256k_safe_baseline, 256k_safe_dyncp, long_baseline, long_dyncp, long_dyncp_safe, 64k_dyncp_threshold_sweep, 128k_dyncp_threshold_sweep, 256k_dyncp_threshold_sweep, long_dyncp_threshold_sweep, step_time_49k, step_time_64k, step_time_128k, step_time, baselines, dyncp, all" >&2
+    echo "Unknown SUBMIT_SET=${SUBMIT_SET}; expected canary, main, main_baseline, 8k_baseline, main_dyncp, nrt_cancelled_short_recovery, nrt_cancelled_long_recovery, 49k, 49k_baseline, 49k_dyncp, 49k_dyncp_threshold_sweep, long, long_no256, 64k, 64k_baseline, 128k, 256k_safe, 256k_safe_baseline, 256k_safe_dyncp, long_baseline, long_dyncp, long_dyncp_safe, 64k_dyncp_threshold_sweep, 128k_dyncp_threshold_sweep, 256k_dyncp_threshold_sweep, long_dyncp_threshold_sweep, step_time_49k, step_time_64k, step_time_128k, step_time, baselines, dyncp, all" >&2
     exit 1
     ;;
 esac

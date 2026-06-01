@@ -369,6 +369,9 @@ fi
 if [[ -n "${GRPO_NUM_GENERATIONS_PER_PROMPT:-}" ]]; then
   EXTRA_OVERRIDES+=" grpo.num_generations_per_prompt=${GRPO_NUM_GENERATIONS_PER_PROMPT}"
 fi
+if [[ "${ENABLE_FLASHINFER_AUTOTUNE:-true}" != "true" ]]; then
+  EXTRA_OVERRIDES+=" ++policy.generation.vllm_kwargs.enable_flashinfer_autotune=false"
+fi
 if [[ -n "${POLICY_TRAIN_GLOBAL_BATCH_SIZE:-}" ]]; then
   EXTRA_OVERRIDES+=" policy.train_global_batch_size=${POLICY_TRAIN_GLOBAL_BATCH_SIZE}"
 fi
