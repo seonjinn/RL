@@ -1190,12 +1190,18 @@
       },
       {
         "job_id": "3070163",
-        "state": "RUNNING at 2026-06-01 02:46 PDT on nvl72063-T[12-15]",
-        "reason": "fresh-venv replacement after adding NRL_SPECDEC_SCHEDULER_DYNAMIC_POS_COUNTERS_PARTIAL_UPGRADE_V1. The runtime scheduler upgrade now repairs the case where token-denominator counters already exist but per-position dynamic selected counters are missing. Uses K=3 with dynamic small/medium/large tiers 3/2/1, request gate 64, token gate 2048, max_steps=8, GBS=2048, and NRL_FORCE_REBUILD_VENVS=true. It has allocated 4 nodes, Ray workers reached 16/16, and the driver is still in uv package/build startup before rollout metrics. Because this job started before b40917f, its acceptance metric should be treated as publishable only if it reports all 16/16 DP workers; b40917f is synced for follow-up jobs.",
+        "state": "FAILED at 2026-06-01 02:54 PDT before rollout metrics",
+        "reason": "fresh-venv replacement after adding the position-counter partial-upgrade repair. It reached Ray workers 16/16 and model/training setup, then failed in vLLM worker init because the runtime scheduler validator looked for the literal marker _nrl_specdec_scheduler_dynamic_pos1_selected_count. The generated scheduler code uses f-string templates for position counters, so the validator was stricter than the generated code. No acceptance or throughput metric was emitted. Replaced by markerfix job 3070995 after changing the guard to accept generated position-counter templates and re-validating the remote overlay.",
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_poscounterfix_freshvenv_jobs.txt"
+      },
+      {
+        "job_id": "3070995",
+        "state": "RUNNING at 2026-06-01 03:11 PDT on nvl72149-T[06-07,13,15]",
+        "reason": "fresh-venv replacement after the markerfix and complete-DP metric trust patches were synced and validate_specdec_rl_remote_patch_bundle.py passed with --require-target-applied. Uses K=3 with dynamic small/medium/large tiers 3/2/1, request gate 64, token gate 2048, max_steps=8, GBS=2048, and NRL_FORCE_REBUILD_VENVS=true. No rollout acceptance or throughput metric has been emitted yet.",
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_markerfix_freshvenv_jobs.txt"
       }
     ],
-    "current_primary_dynamic_k_job": "3070163"
+    "current_primary_dynamic_k_job": "3070995"
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Jobs 3068178, 3068267, 3068390, 3068522, 3068578, 3068829, 3069079, 3069265, 3069422, and 3069544 were cancelled or failed before usable rollout throughput. Job 3070163 is the current primary corrected dynamic-K validation run after the position-counter partial-upgrade repair, running as of 2026-06-01 02:46 PDT before rollout metrics. Review commit b40917f is synced to /SpecDec-RL and requires complete DP metrics for trusted acceptance/controller decisions."
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Jobs 3068178, 3068267, 3068390, 3068522, 3068578, 3068829, 3069079, 3069265, 3069422, 3069544, and 3070163 were cancelled or failed before usable rollout throughput. Job 3070995 is the current primary corrected dynamic-K validation run after the generated-position-counter markerfix and b40917f complete-DP metric trust patch, running as of 2026-06-01 03:11 PDT before rollout metrics."
 }

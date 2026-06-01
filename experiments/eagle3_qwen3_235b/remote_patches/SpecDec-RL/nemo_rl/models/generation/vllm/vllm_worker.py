@@ -2001,6 +2001,18 @@ class BaseVllmGenerationWorker:
                         f"{path} has no verified request_id lookahead call."
                     )
 
+            def _has_scheduler_dynamic_pos_counter_marker(text):
+                # The injected scheduler code creates position counters through
+                # an f-string, so the generated file contains the template, not
+                # literal pos1/pos2 attribute names.
+                return (
+                    "_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count"
+                    in text
+                    or "_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx + 1}_selected_count"
+                    in text
+                    or "_nrl_specdec_scheduler_dynamic_pos1_selected_count" in text
+                )
+
             dynamic_scheduler_lookahead_block = (
                 "            # NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1\n"
                 "            effective_lookahead_tokens = 0 if disabled else self.num_lookahead_tokens\n"
@@ -2142,7 +2154,7 @@ class BaseVllmGenerationWorker:
                 "_nrl_specdec_scheduler_dynamic_last_stored_tokens",
                 "_nrl_specdec_scheduler_dynamic_small_selected_count",
                 "_nrl_specdec_scheduler_dynamic_small_selected_token_count",
-                "_nrl_specdec_scheduler_dynamic_pos1_selected_count",
+                "_nrl_specdec_scheduler_dynamic_pos{_nrl_pos_idx}_selected_count",
                 "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_COUNTERS_ON_STORE_V1",
                 "NRL_SPECDEC_SCHEDULER_DYNAMIC_SELECTED_BY_REQUEST_V1",
                 "NRL SpecDec scheduler adaptive gate:",
@@ -2757,8 +2769,9 @@ class BaseVllmGenerationWorker:
                     and (
                         "_nrl_specdec_scheduler_dynamic_small_selected_token_count"
                         not in scheduler_content
-                        or "_nrl_specdec_scheduler_dynamic_pos1_selected_count"
-                        not in scheduler_content
+                        or not _has_scheduler_dynamic_pos_counter_marker(
+                            scheduler_content
+                        )
                     )
                 ):
                     # NRL_SPECDEC_SCHEDULER_DYNAMIC_POS_COUNTERS_PARTIAL_UPGRADE_V1
@@ -2816,8 +2829,9 @@ class BaseVllmGenerationWorker:
                             1,
                         )
                     elif (
-                        "_nrl_specdec_scheduler_dynamic_pos1_selected_count"
-                        not in scheduler_content
+                        not _has_scheduler_dynamic_pos_counter_marker(
+                            scheduler_content
+                        )
                     ):
                         if dynamic_pos_count_anchor not in scheduler_content:
                             raise RuntimeError(

@@ -34,7 +34,13 @@ ARTIFACT_ROOT = Path(
     )
 )
 PIPELINE_SBATCH = REPO_ROOT / "experiments/eagle3_qwen3_235b/slurm_speculators_offline_pipeline.sbatch"
-RAY_SUB = REPO_ROOT / "scripts/share/ray.sub"
+RAY_SUB = Path(
+    os.environ.get(
+        "RAY_SUB",
+        str(REPO_ROOT / "experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/ray.sub"),
+    )
+)
+FALLBACK_RAY_SUB = REPO_ROOT / "scripts/share/ray.sub"
 PIPELINE_SCRIPT = REPO_ROOT / "experiments/eagle3_qwen3_235b/speculators_qwen3_235b_offline_pipeline.sh"
 RAY_SUB_NO_SINGLETON = REPO_ROOT / "logs/ray_no_singleton_for_speculators.sub"
 
@@ -115,6 +121,17 @@ def validate_inputs(p: dict[str, Path], *, allow_pending_finalizer: bool) -> Non
     bad = [(item, line_count(item)) for item in (p["final_conversations"], p["speculators_jsonl"]) if line_count(item) != 500_000]
     if bad:
         raise RuntimeError("finalized corpus files must have exactly 500000 rows:\n" + "\n".join(f"{item}: {rows}" for item, rows in bad))
+
+
+def validate_prepared_outputs(p: dict[str, Path]) -> None:
+    required = [
+        p["output_dir"] / "state.json",
+        p["output_dir"] / "dataset_info.json",
+        p["output_dir"] / "token_freq.pt",
+    ]
+    missing = [item for item in required if not item.exists()]
+    if missing:
+        raise FileNotFoundError("cannot reuse prepare job; prepared outputs are missing:\n" + "\n".join(str(item) for item in missing))
 
 
 def common_env(p: dict[str, Path]) -> dict[str, str]:
@@ -255,6 +272,7 @@ def submit_ray_datagen(
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
+        "RAY_INCLUDE_DASHBOARD": "False",
         "RAY_DEDUP_LOGS": "0",
     }
     cmd = [
@@ -265,9 +283,10 @@ def submit_ray_datagen(
         "--gres=gpu:4",
         f"--time={datagen_time}",
         f"--job-name=qwen3_235b-speculators-500k-hs-{shard:03d}",
-        f"--dependency={dependency}",
         str(ray_sub),
     ]
+    if dependency:
+        cmd.insert(-1, f"--dependency={dependency}")
     return parse_job_id(run(cmd, env=submit_env, dry_run=dry_run))
 
 
@@ -328,6 +347,7 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
+        "RAY_INCLUDE_DASHBOARD": "False",
         "RAY_DEDUP_LOGS": "0",
     }
     array_spec = f"0-{shards - 1}"
@@ -342,9 +362,10 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         f"--time={datagen_time}",
         "--job-name=qwen3_235b-speculators-500k-hs",
         f"--array={array_spec}",
-        f"--dependency={dependency}",
         str(ray_sub),
     ]
+    if dependency:
+        cmd.insert(-1, f"--dependency={dependency}")
     return parse_job_id(run(cmd, env=submit_env, dry_run=dry_run))
 
 
@@ -356,9 +377,26 @@ def materialize_ray_submit_script(*, dry_run: bool) -> Path:
     """Use ray.sub without singleton so shard jobs can depend only on prepare."""
     if dry_run:
         return RAY_SUB_NO_SINGLETON
-    text = RAY_SUB.read_text(encoding="utf-8")
+    source = RAY_SUB if RAY_SUB.exists() else FALLBACK_RAY_SUB
+    text = source.read_text(encoding="utf-8")
     filtered = "\n".join(
         line for line in text.splitlines() if line.strip() != "#SBATCH --dependency=singleton"
+    )
+    filtered = filtered.replace(
+        "--include-dashboard=True",
+        "--include-dashboard=False",
+    )
+    filtered = filtered.replace(
+        "--include-dashboard=${RAY_INCLUDE_DASHBOARD}",
+        "--include-dashboard=False",
+    )
+    filtered = filtered.replace(
+        "--include-dashboard=${RAY_INCLUDE_DASHBOARD:-True}",
+        "--include-dashboard=False",
+    )
+    filtered = filtered.replace(
+        "--include-dashboard=${RAY_INCLUDE_DASHBOARD:-False}",
+        "--include-dashboard=False",
     )
     RAY_SUB_NO_SINGLETON.write_text(filtered + "\n", encoding="utf-8")
     RAY_SUB_NO_SINGLETON.chmod(0o755)
@@ -368,6 +406,8 @@ def materialize_ray_submit_script(*, dry_run: bool) -> Path:
 def submit(args: argparse.Namespace) -> dict[str, object]:
     p = paths()
     validate_inputs(p, allow_pending_finalizer=args.allow_pending_finalizer)
+    if args.existing_prepare_job_id and not args.dry_run:
+        validate_prepared_outputs(p)
     if not args.dry_run:
         (REPO_ROOT / "logs").mkdir(parents=True, exist_ok=True)
         p["report"].parent.mkdir(parents=True, exist_ok=True)
@@ -384,13 +424,20 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
         "RUN_DATAGEN": "false",
         "RUN_TRAIN": "false",
     }
-    prep_id = submit_sbatch_pipeline(
-        name=f"qwen3_235b-speculators-mixed-500k-prep{suffix}",
-        dependency=finalizer_dependency,
-        time_limit=args.prep_time,
-        env=prep_env,
-        dry_run=args.dry_run,
-    )
+    prepare_job_reused = bool(args.existing_prepare_job_id)
+    if prepare_job_reused:
+        prep_id = args.existing_prepare_job_id
+        print(f"+ reusing existing prepare job {prep_id}; prepared outputs already validated", flush=True)
+        hidden_state_prepare_dependency = ""
+    else:
+        prep_id = submit_sbatch_pipeline(
+            name=f"qwen3_235b-speculators-mixed-500k-prep{suffix}",
+            dependency=finalizer_dependency,
+            time_limit=args.prep_time,
+            env=prep_env,
+            dry_run=args.dry_run,
+        )
+        hidden_state_prepare_dependency = f"afterok:{prep_id}"
 
     if args.individual_shard_jobs:
         shard_ids: list[str] = []
@@ -403,7 +450,7 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
                     shard=shard,
                     start=start,
                     end=end,
-                    dependency=f"afterok:{prep_id}",
+                    dependency=hidden_state_prepare_dependency,
                     env=base,
                     datagen_time=args.datagen_time,
                     num_nodes=args.datagen_nodes,
@@ -418,7 +465,7 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
     else:
         array_id = submit_ray_datagen_array(
             shards=args.shards,
-            dependency=f"afterok:{prep_id}",
+            dependency=hidden_state_prepare_dependency,
             env=base,
             datagen_time=args.datagen_time,
             num_nodes=args.datagen_nodes,
@@ -465,11 +512,15 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
         "hidden_states_dir": str(p["hidden_states_dir"]),
         "checkpoint_dir": str(p["checkpoint_dir"]),
         "prepare_job": prep_id,
+        "prepare_job_reused": prepare_job_reused,
+        "hidden_state_prepare_dependency": hidden_state_prepare_dependency,
         "hidden_state_jobs": hidden_state_jobs,
         "hidden_state_array_job": hidden_state_array_job,
         "train_job": train_id,
         "ray_sub": str(ray_sub),
+        "ray_sub_source": str(RAY_SUB if RAY_SUB.exists() else FALLBACK_RAY_SUB),
         "ray_sub_singleton_removed": True,
+        "ray_include_dashboard": "False",
         "from_pretrained": args.from_pretrained or "",
         "allow_pending_finalizer": args.allow_pending_finalizer,
         "dry_run": args.dry_run,
@@ -484,6 +535,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--finalizer-job-id", default="")
     parser.add_argument("--dependency", default="")
+    parser.add_argument("--existing-prepare-job-id", default="")
     parser.add_argument("--allow-pending-finalizer", action="store_true")
     parser.add_argument("--shards", type=int, default=100)
     parser.add_argument("--datagen-nodes", type=int, default=2)

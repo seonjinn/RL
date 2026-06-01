@@ -440,7 +440,8 @@ def check_dynamic_position_counter_partial_upgrade(checks: list[dict[str, Any]],
     text = read_text(worker)
     required_markers = [
         "NRL_SPECDEC_SCHEDULER_DYNAMIC_POS_COUNTERS_PARTIAL_UPGRADE_V1",
-        'or "_nrl_specdec_scheduler_dynamic_pos1_selected_count"',
+        "def _has_scheduler_dynamic_pos_counter_marker",
+        "not _has_scheduler_dynamic_pos_counter_marker(",
         "dynamic_pos_count_anchor",
         "dynamic_pos_count_block",
     ]
