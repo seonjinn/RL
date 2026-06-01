@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 18:04 PDT",
+  "updated_at": "2026-05-31 18:07 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -917,7 +917,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_hardened_resubmitted_after_agent_review",
-    "updated_at": "2026-05-31 18:04 PDT",
+    "updated_at": "2026-05-31 18:07 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -937,10 +937,10 @@
     "superseded_after_agent_review_job": "3062996",
     "superseded_after_agent_review_state": "CANCELLED at 2026-05-31 18:04 PDT before rollout metrics because the agent review identified one more semantic hardening: when vLLM exposes scheduled_spec_decode_tokens, the model runner should treat the scheduler decision as the source of truth instead of applying a second independent adaptive threshold.",
     "corrected_eval_job": "3063061",
-    "corrected_eval_state": "PENDING at 2026-05-31 18:04 PDT with no dependency after applying the ETP-forwarding guard, scheduler-source-of-truth runner behavior, and stricter adaptive env validation. The target-applied patch validator passes against /lustre/.../SpecDec-RL.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 18:07 PDT with no dependency after applying the ETP-forwarding guard, scheduler-source-of-truth runner behavior, and stricter adaptive env validation. The target-applied patch validator passes against /lustre/.../SpecDec-RL. The job is still building/rebuilding the driver environment and has not emitted NeMo-RL throughput or acceptance metrics yet.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_gate_metrics_eval_jobs_scheduler_source_of_truth.txt",
     "hardening_after_agent_review": "Added adaptive already-present validation for both gpu_model_runner and scheduler patches, extended the patch-bundle validator to require those partial-patch guards, made the runner follow scheduler_output.scheduled_spec_decode_tokens as the source of truth when present, and added fail-fast validation for adaptive target/hysteresis/min/max env values.",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet."
   },
-  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 was cancelled and remains secondary evidence only. Corrected job 3062401 failed before rollout due a target-checkout PY_EXECUTABLES.SGLANG mismatch; job 3062507 was superseded after semantic code review; job 3062565 failed before rollout due a scheduler patch idempotency false positive. Job 3062730 then passed those earlier gates but failed before rollout on duplicate expert_tensor_parallel_size forwarding in Megatron init. Job 3062996 was cancelled before metrics after the scheduler-source-of-truth hardening. Replacement job 3063061 is pending, so the corrected adaptive long-tail NeMo-RL throughput/acceptance result is not available yet."
+  "caveat": "Token-gate 4096 K=1/2/3 runs and token-gate 2048/1024 K=1 follow-ups have final 20-step means. Batch-size-only request-gate 4, 32, and 64 runs reached 20 generation metrics but only show about 1.06x NeMo-RL generation speedup. Hybrid request-gate 96 plus token-gate 2048 completed at 1.0601x. TLT-style request gate 32 completed 8/8 metrics at 1.0675x. V4 gate-hit logging confirms request-only gates are often too strict or too coarse. Token-pressure-only job 3060379 completed eight rollout metrics at 5696.58 tok/s/GPU, 1.3664x, with 57.40% acceptance, consistent with the completed token-gate K=1 path being the strongest current policy. Older-checkout adaptive job 3062282 was cancelled and remains secondary evidence only. Corrected job 3062401 failed before rollout due a target-checkout PY_EXECUTABLES.SGLANG mismatch; job 3062507 was superseded after semantic code review; job 3062565 failed before rollout due a scheduler patch idempotency false positive. Job 3062730 then passed those earlier gates but failed before rollout on duplicate expert_tensor_parallel_size forwarding in Megatron init. Job 3062996 was cancelled before metrics after the scheduler-source-of-truth hardening. Replacement job 3063061 is running, but corrected adaptive long-tail NeMo-RL throughput/acceptance results are not available yet."
 }

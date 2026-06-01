@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 17:58 PDT",
+  "updated_at": "2026-05-31 18:12 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -144,18 +144,18 @@
       "state_at_submit_check": "COMPLETED but chunks remained short",
       "note": "Submitted at 14:28 PDT after verifying the previous completed repair jobs did not fill the last 8 missing rows. Jobs completed, but chunks 005-008 still showed 4997/4999/4997/4999 rows at the 14:47 PDT check, so a third repair wave was submitted with the hardened resume script."
     },
-    "finalizer_after_targetgen": {
-      "job_id": "3061260",
-      "dependency": "afterany on all active qwen3_235b-targetgen-resume jobs observed at submit time",
-      "time_limit": "00:45:00",
-      "gpus_per_node": 4,
-      "state_at_submit_check": "PENDING with Dependency",
-      "note": "The first attempt with 1 GPU was rejected by Slurm QOSMinGRES. The accepted 4-GPU finalizer validates all 100 chunk files, builds the exact-unique 500K 235B training JSONL with the OpenMath denylist, and converts it to Speculators JSONL if the corpus is complete."
-    },
-    "speculators_training_chain_after_finalizer": {
-      "prepare_job": "3061457",
-      "hidden_state_array_job": "3061458_[0-99]",
-      "train_job": "3061459",
+        "finalizer_after_targetgen": {
+            "job_id": "3061260",
+            "dependency": "afterany on all active qwen3_235b-targetgen-resume jobs observed at submit time",
+            "time_limit": "00:45:00",
+            "gpus_per_node": 4,
+            "state_at_latest_check": "FAILED on incomplete corpus",
+            "note": "The first attempt with 1 GPU was rejected by Slurm QOSMinGRES. The accepted 4-GPU finalizer ran after the old dependency chain cleared but failed because the corpus was still incomplete. It has been superseded by finalizer 3063077, which waits for exact missing-ID repair jobs 3062965-3062971 with afterok."
+        },
+        "speculators_training_chain_after_finalizer": {
+            "prepare_job": "3061457",
+            "hidden_state_array_job": "3061458_[0-99]",
+            "train_job": "3061459",
       "dependency": "prepare afterok:3061260, hidden-state array afterok:3061457, train afterok:3061458",
       "shards": 100,
       "datagen_nodes": 2,
@@ -164,9 +164,9 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_submit_check": "PENDING with Dependency",
-      "note": "The first individual-shard submission hit Slurm circular dependency behavior around large fanout. The accepted chain uses a job array and a ray.sub copy with the singleton dependency removed."
-    },
+            "state_at_latest_check": "CANCELLED after finalizer 3061260 failed",
+            "note": "The first individual-shard submission hit Slurm circular dependency behavior around large fanout. The accepted chain used a job array and a ray.sub copy with the singleton dependency removed, but it was cancelled after finalizer 3061260 failed on the incomplete corpus. It has been superseded by the wave3 chain 3063098 -> 3063099_[0-99] -> 3063100."
+        },
     "startup_retry_chunks_020_021_034_041": {
       "failed_job_ids": [
         "3060981",
@@ -290,13 +290,38 @@
         "085-097 except 091",
         "098-099"
       ],
-      "rows_before_submit": 477285,
-      "missing_total": 22715,
-      "state_at_submit_check": "7 RUNNING at 17:58 PDT",
-      "job_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen235b_missing_id_repair_jobs.txt",
-      "note": "A fresh prompt-id comparison showed every remaining short chunk has interior holes from earlier unordered writes, so count-based resume is unsafe. Active count-based jobs 3061007, 3060998, 3061685, 3061686, and 3061687 were cancelled, then seven exact missing-id repair jobs were submitted in parallel. The count-based resume runner now has a prefix-validation guard and will fail before starting vLLM if a chunk is not a contiguous prompt prefix."
-    }
-  },
+            "rows_before_submit": 477285,
+            "missing_total": 22715,
+            "state_at_latest_check": "7 RUNNING at 18:12 PDT; all seven vLLM servers are ready and generated repair output files have started writing rows.",
+            "job_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen235b_missing_id_repair_jobs.txt",
+            "note": "A fresh prompt-id comparison showed every remaining short chunk has interior holes from earlier unordered writes, so count-based resume is unsafe. Active count-based jobs 3061007, 3060998, 3061685, 3061686, and 3061687 were cancelled, then seven exact missing-id repair jobs were submitted in parallel. The count-based resume runner now has a prefix-validation guard and will fail before starting vLLM if a chunk is not a contiguous prompt prefix."
+        },
+        "finalizer_after_missing_id_repair_wave3": {
+            "job_id": "3063077",
+            "dependency": "afterok:3062965:3062966:3062967:3062968:3062969:3062970:3062971",
+            "time_limit": "00:45:00",
+            "gpus_per_node": 4,
+            "state_at_submit_check": "PENDING with Dependency at 18:09 PDT",
+            "note": "This finalizer validates all 100 qwen3_235b chunk files, builds the exact-unique 500K training JSONL with the OpenMath denylist, and converts it to Speculators JSONL only if the repaired corpus is complete."
+        },
+        "speculators_training_chain_after_wave3_finalizer": {
+            "prepare_job": "3063098",
+            "hidden_state_array_job": "3063099_[0-99]",
+            "train_job": "3063100",
+            "dependency": "prepare afterok:3063077, hidden-state array afterok:3063098, train afterok:3063099",
+            "shards": 100,
+            "datagen_nodes": 2,
+            "time_limits": {
+                "prepare": "02:00:00",
+                "hidden_state_array": "04:00:00",
+                "train": "04:00:00"
+            },
+            "state_at_submit_check": "PENDING with Dependency at 18:09 PDT",
+            "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
+            "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
+            "note": "Submitted with --allow-pending-finalizer so the chain is queued now but can only run after finalizer 3063077 succeeds."
+        }
+    },
   "expected_after_current_wave": {
     "records": 500000,
     "chunks": "000-099 exact 5K each if the submitted missing-id repair jobs complete successfully",
@@ -308,7 +333,7 @@
     "active_missing_id_repair_jobs_observed": 7,
     "complete_chunk_files_observed_ge5000_rows": 12,
     "short_nonzero_chunk_files_observed": 88,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. No count-based targetgen writer remains active. Seven exact missing-id repair jobs 3062965-3062971 were all still running at 17:58 PDT. The previous finalizer job 3061260 failed because the corpus was still incomplete, and the dependent Speculators chain 3061457 -> 3061458_[0-99] -> 3061459 was cancelled; that chain must be resubmitted after the missing-id repairs complete and the finalizer validates 500000 unique rows.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. No count-based targetgen writer remains active. Seven exact missing-id repair jobs 3062965-3062971 were all still running at 18:12 PDT and had started writing generated repair rows. The previous finalizer job 3061260 failed because the corpus was still incomplete, and the dependent Speculators chain 3061457 -> 3061458_[0-99] -> 3061459 was cancelled. Replacement finalizer 3063077 and Speculators chain 3063098 -> 3063099_[0-99] -> 3063100 are now queued behind successful repair completion.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 0,
