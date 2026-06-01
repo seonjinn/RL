@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 10:57 PDT",
+  "updated_at": "2026-06-01 11:01 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1336,7 +1336,7 @@
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Final speedup claims still require a strict logprob-matched baseline/specdec rerun to finish. Review agent Nash found baseline 3074777 did not explicitly prove policy.generation.vllm_cfg.async_engine=false, while SpecDec 3074778 did; analyzer now marks 3074777 as diagnostic-only despite its Step 1 early generation metric. Replacement strict baseline 3075647 was submitted at 2026-06-01 10:52 PDT with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and async_engine=false, to compare against SpecDec 3074778. SpecDec 3074778 has emitted Step 1 early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then entered policy.get_logprobs; this is not final performance throughput. Dynamic-K long-tail validation job 3075161 is still RUNNING without rollout metrics as of 10:57 PDT.",
+  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Final speedup claims still require a strict logprob-matched baseline/specdec rerun to finish. Review agent Nash found baseline 3074777 did not explicitly prove policy.generation.vllm_cfg.async_engine=false, while SpecDec 3074778 did; analyzer now marks 3074777 as diagnostic-only despite its Step 1 early generation metric. Replacement strict baseline 3075647 was submitted at 2026-06-01 10:52 PDT with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and async_engine=false, to compare against SpecDec 3074778. SpecDec 3074778 has emitted Step 1 early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then entered policy.get_logprobs; this is not final performance throughput. Dynamic-K long-tail validation job 3075161 is still RUNNING without rollout metrics as of 11:01 PDT.",
   "current_primary_dynamic_k_job": "3072963_failed",
   "batch_gate_v7_review_fix": {
     "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running_step1_generation_seen",
@@ -1402,7 +1402,7 @@
   },
   "logprob_matched_k1_validation_job": {
     "job_id": "3074778",
-    "state_at_latest_check": "RUNNING at 2026-06-01 10:57 PDT on nvl72053-T[04-05,11,17]; Step 1 early generation-only metrics have been observed and the job entered policy.get_logprobs, but no final NeMo-RL generation metric yet.",
+    "state_at_latest_check": "RUNNING at 2026-06-01 11:01 PDT on nvl72053-T[04-05,11,17]; Step 1 early generation-only metrics have been observed and the job entered policy.get_logprobs, but no final NeMo-RL generation metric yet.",
     "purpose": "Strict 30B SpecDec K=1 comparison against replacement baseline job 3075647. Earlier baseline 3074777 is diagnostic-only because it omitted explicit async_engine=false evidence.",
     "num_speculative_tokens": 1,
     "request_gate": 0,
@@ -1441,7 +1441,7 @@
   "dynamic_k3_long_tail_validation_job": {
     "job_id": "3075161",
     "submitted_at": "2026-06-01 10:21 PDT",
-    "state_at_submit_check": "RUNNING at 2026-06-01 10:57 PDT on nvl72148-T[01,04-06]; log exists but no rollout throughput or acceptance metric yet.",
+    "state_at_submit_check": "RUNNING at 2026-06-01 11:01 PDT on nvl72148-T[01,04-06]; log exists but no rollout throughput or acceptance metric yet.",
     "purpose": "Exercise the TLT/ReSpec-style long-tail path instead of only static K=1: token gate 2048, dynamic draft depth enabled, K=3 for small tail batches, K=2 for medium, K=1 for larger eligible batches, and step controller enabled.",
     "num_speculative_tokens": 3,
     "request_gate": 0,
@@ -1531,8 +1531,8 @@
     "drafter_training_mode": "Current measured NeMo-RL jobs use fixed_external_drafter. Online drafter refresh inside the GRPO loop is not implemented.",
     "logprob_matched_baseline_job": "3075647 submitted at 2026-06-01 10:52 PDT after the async_engine parity review; running before metrics.",
     "diagnostic_baseline_job": "3074777 submitted at 2026-06-01 09:45 PDT after fixing the vllm_worker logger NameError; emitted Step 1 early generation-only metric but is diagnostic-only because async_engine=false was not explicit in the run evidence.",
-    "logprob_matched_specdec_job": "3074778 submitted at 2026-06-01 09:45 PDT after fixing the vllm_worker logger NameError; running at 10:57 PDT after Step 1 early generation-only metric and acceptance, before final generation metric.",
-    "dynamic_k_long_tail_job": "3075161 submitted at 2026-06-01 10:21 PDT to validate dynamic K=3/2/1 long-tail gating against baseline 3075647; running at 10:57 PDT before rollout metrics.",
+    "logprob_matched_specdec_job": "3074778 submitted at 2026-06-01 09:45 PDT after fixing the vllm_worker logger NameError; running at 11:01 PDT after Step 1 early generation-only metric and acceptance, before final generation metric.",
+    "dynamic_k_long_tail_job": "3075161 submitted at 2026-06-01 10:21 PDT to validate dynamic K=3/2/1 long-tail gating against baseline 3075647; running at 11:01 PDT before rollout metrics.",
     "superseded_failed_logprob_matched_pair": "3074142/3074189 reached Step 1 generation but failed before metrics due to NameError: logger is not defined; invalid for speedup/acceptance."
   },
   "provenance_guard_hardening": {
@@ -1565,10 +1565,10 @@
     "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
   },
   "logprob_matched_baseline_validation": {
-    "updated_at": "2026-06-01 10:57 PDT",
+    "updated_at": "2026-06-01 11:01 PDT",
     "baseline_job_id": "3075647",
     "baseline_job_name": "qwen30ba3b-main-baseline-logprobmatched-asyncfalse-p64g32-4step-N4xG4",
-    "state": "strict replacement baseline 3075647 is RUNNING at 2026-06-01 10:57 PDT, submitted with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true. SpecDec 3074778 is still RUNNING after Step 1 early generation-only metrics and policy.get_logprobs. Final NeMo-RL completed-step throughput remains pending.",
+    "state": "strict replacement baseline 3075647 is RUNNING at 2026-06-01 11:01 PDT, submitted with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true. Its log exists but has not reached Step 1 generation metrics yet. SpecDec 3074778 is still RUNNING after Step 1 early generation-only metrics and policy.get_logprobs. Final NeMo-RL completed-step throughput remains pending.",
     "purpose": "Apples-to-apples baseline for current 30B SpecDec K=1 validation, with generation logprobs omitted and async_engine explicitly disabled to match vLLM SpecDec behavior.",
     "num_prompts_per_step": 64,
     "num_generations_per_prompt": 32,
@@ -1581,7 +1581,7 @@
     "compare_against_specdec_job": "3074778",
     "superseded_diagnostic_baseline_job": "3074777",
     "superseded_noncomparable_specdec_job": "3073673",
-    "matched_specdec_job_state_at_latest_check": "RUNNING at 2026-06-01 10:57 PDT on nvl72053-T[04-05,11,17]; Step 1 early generation-only 5742.32 tok/s/GPU, acceptance 57.91%, reporting 16/16, then policy.get_logprobs",
+    "matched_specdec_job_state_at_latest_check": "RUNNING at 2026-06-01 11:01 PDT on nvl72053-T[04-05,11,17]; Step 1 early generation-only 5742.32 tok/s/GPU, acceptance 57.91%, reporting 16/16, then policy.get_logprobs",
     "baseline_step1_early_metrics": {
       "status": "pending",
       "job_id": "3075647",
