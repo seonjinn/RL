@@ -1402,7 +1402,7 @@
   },
   "logprob_matched_k1_validation_job": {
     "job_id": "3074778",
-    "state_at_latest_check": "RUNNING at 2026-06-01 11:07 PDT on nvl72053-T[04-05,11,17]; Step 1 early generation-only metrics were observed, then Megatron policy.get_logprobs hit an NCCL watchdog timeout at 2026-06-01 11:06 PDT. No final NeMo-RL completed-step generation metric was emitted.",
+    "state_at_latest_check": "FAILED at 2026-06-01 11:07:54 PDT with exit code 1:0 on nvl72053-T[04-05,11,17]; Step 1 early generation-only metrics were observed, then Megatron policy.get_logprobs hit an NCCL watchdog timeout at 2026-06-01 11:06 PDT. No final NeMo-RL completed-step generation metric was emitted.",
     "purpose": "Strict 30B SpecDec K=1 comparison against replacement baseline job 3075647. Earlier baseline 3074777 is diagnostic-only because it omitted explicit async_engine=false evidence.",
     "num_speculative_tokens": 1,
     "request_gate": 0,
@@ -1582,7 +1582,7 @@
     "compare_against_specdec_job": "3074778",
     "superseded_diagnostic_baseline_job": "3074777",
     "superseded_noncomparable_specdec_job": "3073673",
-    "matched_specdec_job_state_at_latest_check": "RUNNING at 2026-06-01 11:07 PDT on nvl72053-T[04-05,11,17]; Step 1 early generation-only 5742.32 tok/s/GPU, acceptance 57.91%, reporting 16/16, then Megatron policy.get_logprobs NCCL timeout at 11:06 PDT",
+    "matched_specdec_job_state_at_latest_check": "FAILED at 2026-06-01 11:07:54 PDT with exit code 1:0 on nvl72053-T[04-05,11,17]; Step 1 early generation-only 5742.32 tok/s/GPU, acceptance 57.91%, reporting 16/16, then Megatron policy.get_logprobs NCCL timeout at 11:06 PDT",
     "baseline_step1_early_metrics": {
       "status": "pending",
       "job_id": "3075647",
