@@ -535,7 +535,21 @@
 
     <h2>Standalone vLLM Benchmark</h2>
     <p class="small">This is a separate vLLM-only benchmark. It does not include rewards, logprobs, policy training, weight sync, or any NeMo-RL E2E step work.</p>
-    <p class="small">Partial shared-server result at 14:45 PT: BS=<code>1</code> baseline <code>230.49</code> output tok/s/GPU, SpecDec K=1 <code>147.65</code> output tok/s/GPU, speedup <code>0.641x</code>, acceptance <code>26.47%</code>. This is a synthetic random ISL/OSL <code>1000/1000</code> standalone benchmark, not the NeMo-RL math rollout metric. BS=<code>2</code> and above are still running.</p>
+    <p class="small">Completed shared-server result at 15:09 PT. This is a synthetic random ISL/OSL <code>1000/1000</code> standalone benchmark, not the NeMo-RL math rollout metric. SpecDec K=1 is slower at every tested batch size because acceptance is only <code>24-31%</code> and draft overhead dominates.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Batch size</th><th>Baseline output tok/s</th><th>SpecDec output tok/s</th><th>Speedup</th><th>Acceptance</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>1</code></td><td><code>230.49</code></td><td><code>147.65</code></td><td><code>0.641x</code></td><td><code>26.47%</code></td></tr>
+          <tr><td><code>2</code></td><td><code>418.38</code></td><td><code>246.15</code></td><td><code>0.588x</code></td><td><code>26.65%</code></td></tr>
+          <tr><td><code>4</code></td><td><code>696.05</code></td><td><code>452.48</code></td><td><code>0.650x</code></td><td><code>30.61%</code></td></tr>
+          <tr><td><code>8</code></td><td><code>1197.22</code></td><td><code>782.68</code></td><td><code>0.654x</code></td><td><code>27.80%</code></td></tr>
+          <tr><td><code>16</code></td><td><code>1971.87</code></td><td><code>368.29</code></td><td><code>0.187x</code></td><td><code>24.39%</code></td></tr>
+        </tbody>
+      </table>
+    </div>
     <div class="table-scroll">
       <table>
         <thead>
@@ -566,8 +580,8 @@
             <td>vLLM standalone <code>bench serve</code></td>
             <td>Same shape, but one shared server across BS <code>1 2 4 8 16</code></td>
             <td><code>none</code>, CUDA graph capture sizes <code>[1,2,4,8,16]</code></td>
-            <td><span class="pill warn">running</span></td>
-            <td>Paired control for the shared-server SpecDec rerun.</td>
+            <td><span class="pill ok">completed</span></td>
+            <td>Completed as the paired control for the shared-server SpecDec rerun.</td>
           </tr>
           <tr>
             <td>SpecDec K=1 shared/cgfix</td>
@@ -575,8 +589,8 @@
             <td>vLLM standalone <code>bench serve</code></td>
             <td>Same shared-server shape as <code>3080042</code></td>
             <td><code>method=eagle3</code>, 500K Qwen3-30B-A3B drafter, K=<code>1</code>, shared-server CUDA graph capture sizes include <code>[2,4,8,16]</code></td>
-            <td><span class="pill warn">running</span></td>
-            <td>Preserves CUDA graphs while satisfying vLLM SpecDec's <code>K+1</code> capture-size constraint. The running launch line used shared-server capture sizes <code>[1,2,4,8,16]</code>, avoiding the previous <code>[1]</code>-only failure.</td>
+            <td><span class="pill ok">completed</span></td>
+            <td>Preserved CUDA graphs while satisfying vLLM SpecDec's <code>K+1</code> capture-size constraint. It completed successfully, but the synthetic random benchmark was slower than baseline at all batch sizes.</td>
           </tr>
         </tbody>
       </table>
