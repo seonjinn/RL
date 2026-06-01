@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 11:07 PDT",
+  "updated_at": "2026-06-01 11:15 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1566,7 +1566,7 @@
     "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
   },
   "logprob_matched_baseline_validation": {
-    "updated_at": "2026-06-01 11:07 PDT",
+    "updated_at": "2026-06-01 11:15 PDT",
     "baseline_job_id": "3075647",
     "baseline_job_name": "qwen30ba3b-main-baseline-logprobmatched-asyncfalse-p64g32-4step-N4xG4",
     "state": "strict replacement baseline 3075647 is RUNNING at 2026-06-01 11:07 PDT, submitted with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true. Its log exists but has not reached Step 1 generation metrics yet and is still rebuilding worker environments. SpecDec 3074778 emitted Step 1 early generation-only metrics, then hit Megatron policy.get_logprobs NCCL timeout at 11:06 PDT. Strict final completed-step throughput remains pending; strict generation-only comparison becomes possible once baseline 3075647 emits its early generation metric.",
@@ -1610,9 +1610,31 @@
       "next_phase_observed": "policy.get_logprobs",
       "failure_observed": "NCCL watchdog timeout at 2026-06-01 11:06 PDT in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP during _ALLGATHER_BASE; NumelIn=524288, NumelOut=8388608, timeout=1800000 ms"
     },
-    "note": "Historical baseline 4169.19 tok/s/GPU and diagnostic baseline 3074777 remain useful context, but final speedup should use strict baseline 3075647 and SpecDec 3074778 once both complete. Previous matched pair 3074142/3074189 failed before metrics due to a logger NameError; baseline 3074777 emitted early generation-only throughput 4760.56 tok/s/GPU but lacks async_engine=false evidence. SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance, then hit Megatron get_logprobs NCCL timeout before final completed-step throughput. Additional dynamic-K long-tail validation job 3075161 is running with K=3/2/1 tiers and step controller enabled.",
+    "note": "Historical baseline 4169.19 tok/s/GPU and diagnostic baseline 3074777 remain useful context, but final speedup should use strict baseline 3075647 and SpecDec 3074778 once both complete. Previous matched pair 3074142/3074189 failed before metrics due to a logger NameError; baseline 3074777 emitted early generation-only throughput 4760.56 tok/s/GPU but lacks async_engine=false evidence. SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance, then hit Megatron get_logprobs NCCL timeout before final completed-step throughput. Because the timeout is in Megatron MoE allgather, reduced alltoall-dispatcher smoke jobs 3076036 and 3076041 were submitted to test whether completed NeMo-RL steps work when the allgather dispatcher path is avoided. Additional dynamic-K long-tail validation job 3075161 is running with K=3/2/1 tiers and step controller enabled.",
     "supersedes_baseline_job_id": "3074777",
     "superseded_failed_pair": "3074142/3074189"
+  },
+  "alltoall_logprob_smoke_jobs": {
+    "updated_at": "2026-06-01 11:15 PDT",
+    "purpose": "Diagnose the repeated Megatron policy.get_logprobs NCCL timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP by avoiding the MoE allgather dispatcher path on a reduced strict NeMo-RL smoke.",
+    "baseline_job_id": "3076036",
+    "specdec_job_id": "3076041",
+    "status": "submitted; baseline 3076036 is RUNNING as of 2026-06-01 11:15 PDT, SpecDec 3076041 is PENDING",
+    "shape": {
+      "num_prompts_per_step": 8,
+      "num_generations_per_prompt": 8,
+      "train_global_batch_size": 64,
+      "max_steps": 1,
+      "max_total_sequence_length": 2048
+    },
+    "overrides": {
+      "policy.megatron_cfg.moe_token_dispatcher_type": "alltoall",
+      "policy.generation.vllm_cfg.async_engine": "false",
+      "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "true",
+      "NUM_SPECULATIVE_TOKENS": "1 for SpecDec"
+    },
+    "manifest": "latest_qwen30ba3b_alltoall_smoke_jobs.txt",
+    "next_decision": "If p8/g8 alltoall completes logprobs/training, scale to p64/g32 alltoall for strict baseline-vs-SpecDec generation throughput. If it fails before rollout, inspect dispatcher support/config. If it still fails in logprobs, the next fallback is generation-only NeMo-RL validation before logprobs."
   },
   "failed_logprob_matched_pair_3074142_3074189": {
     "baseline_job_id": "3074142",
