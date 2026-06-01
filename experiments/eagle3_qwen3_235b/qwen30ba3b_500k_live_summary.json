@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 08:06 PDT",
+  "updated_at": "2026-06-01 08:21 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1336,7 +1336,7 @@
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency; initialization/dataloader load is visible but no first generation metric has emitted yet. Public HF Eagle3 smoke runs are attach/provenance checks only unless the baseline/config/model family are re-run under identical conditions.",
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency; Ray policy cluster and 16 workers initialized, but no first generation metric has emitted yet. Public HF Eagle3 smoke runs are attach/provenance checks only unless the baseline/config/model family are re-run under identical conditions.",
   "current_primary_dynamic_k_job": "3072963_failed",
   "batch_gate_v7_review_fix": {
     "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running",
@@ -1363,7 +1363,7 @@
       "failure": "NCCL _ALLGATHER_BASE timeout in Megatron get_logprobs; ActorDiedError."
     },
     "current_k1_validation_job": "3073673",
-    "replacement_job_state": "FAILED after Step 1 early metrics due to Megatron get_logprobs NCCL timeout; current K=1 validation job 3073673 is RUNNING and has loaded the NeMo-RL training dataloader but has no Step/generation metric yet."
+    "replacement_job_state": "FAILED after Step 1 early metrics due to Megatron get_logprobs NCCL timeout; current K=1 validation job 3073673 is RUNNING, has initialized Ray policy cluster and 16 workers, but has no Step/generation metric yet."
   },
   "current_code_k1_validation_job": {
     "job_id": "3073673",
@@ -1379,8 +1379,8 @@
     "num_generations_per_prompt": 32,
     "train_global_batch_size": 2048,
     "draft_root": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193",
-    "result_status": "pending first generation metric; initialization and dataloader load observed",
-    "state_at_latest_check": "RUNNING at 2026-06-01 08:06 PDT on nvl72139-T[09,11-12,15]; driver has loaded the 950000-sample NeMo-RL training dataset/dataloader, but no Step/generation/acceptance metric has emitted yet."
+    "result_status": "pending first generation metric; Ray policy cluster and 16 workers initialized",
+    "state_at_latest_check": "RUNNING at 2026-06-01 08:21 PDT on nvl72139-T[09,11-12,15]; driver connected to Ray, loaded the 950000-sample NeMo-RL training dataset/dataloader, initialized the Ray policy cluster on 4 nodes, and initialized 16 workers. No Step/generation/acceptance metric has emitted yet."
   },
   "post_review_hardening": {
     "updated_at": "2026-06-01 07:44 PDT",
