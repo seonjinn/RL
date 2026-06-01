@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 06:35 PDT",
+  "updated_at": "2026-06-01 07:20 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -929,7 +929,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_counter_timeoutfix_and_metrictrust_synced",
-    "updated_at": "2026-06-01 06:31 PDT",
+    "updated_at": "2026-06-01 07:20 PDT",
     "scope": "Taming Long Tail/ReSpec-style adaptive activation and draft-depth selection for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*; SPECDEC_DYNAMIC_DRAFT_* -> VLLM_SPECDEC_DYNAMIC_DRAFT_*",
@@ -1264,13 +1264,48 @@
       },
       {
         "job_id": "3072963",
-        "state": "RUNNING at 2026-06-01 06:35 PDT on nvl72058-T[01,09,12-13]",
-        "reason": "fresh K=3 dynamic-K replacement after the V7 first-draft gate fix; no rollout, acceptance, or throughput metric yet.",
-        "latest_step_seen": 0,
+        "state": "RUNNING at 2026-06-01 07:20 PDT on nvl72058-T[01,09,12-13]; Step 1 early generation metrics emitted, then entered Megatron logprob inference; final NeMo-RL performance throughput still pending.",
+        "reason": "fresh K=3 dynamic-K replacement after the V7 first-draft gate fix. It reached Step 1 generation and emitted complete-DP early SpecDec metrics; unlike earlier no-metric states, drafter attachment, runner gate activation, and scheduler gate activation are now visible. It is still in the logprob/training phase, so this is not a final throughput result yet.",
+        "latest_step_seen": 1,
         "completed_generation_metrics": 0,
-        "acceptance_rate_values": [],
-        "acceptance_rate_mean_so_far": null,
-        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt"
+        "acceptance_rate_values": [
+          0.3391
+        ],
+        "acceptance_rate_mean_so_far": 0.3391,
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt",
+        "draft_tokens_so_far": 423736,
+        "accepted_tokens_so_far": 143708,
+        "per_position_acceptance_latest_summary": [
+          0.4716,
+          0.2089,
+          0.0018
+        ],
+        "early_generation_elapsed_s": 90.9017,
+        "early_total_tokens": 6767480,
+        "early_generated_tokens": 6560989,
+        "early_total_tokens_sec_gpu": 4653.02,
+        "early_generated_tokens_sec_gpu": 4511.04,
+        "early_generated_speedup_vs_baseline": 1.082,
+        "early_metric_provenance": "NeMo-RL Step 1 early console summary from ray-driver.log; separate from final performance table metrics.",
+        "runner_gate_latest": {
+          "enabled_ratio": 0.0972,
+          "checked": 60852,
+          "enabled": 5914,
+          "disabled": 54938,
+          "last_requests": 1,
+          "last_tokens": 1,
+          "last_disabled": false
+        },
+        "scheduler_gate_latest": {
+          "enabled_ratio": 0.0347,
+          "checked": 6415233,
+          "enabled": 222363,
+          "disabled": 6192870,
+          "last_active_requests": 1,
+          "effective_k": 3,
+          "dynamic_k": 3,
+          "stored_k": 3
+        }
       }
     ],
     "current_primary_dynamic_k_job": "3072963",
@@ -1290,21 +1325,38 @@
     },
     "batch_gate_v7_review_fix": {
       "state": "patched_validated_synced_and_resubmitted",
-      "updated_at": "2026-06-01 06:31 PDT",
+      "updated_at": "2026-06-01 07:20 PDT",
       "superseded_job": "3072682",
       "replacement_job": "3072963",
       "reason": "V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and prevents partial per-request gating from becoming a whole-batch draft skip.",
       "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt",
-      "state_at_latest_check": "RUNNING on nvl72058-T[01,09,12-13] at 2026-06-01 06:35 PDT; no rollout metrics yet"
+      "state_at_latest_check": "RUNNING on nvl72058-T[01,09,12-13] at 2026-06-01 07:20 PDT; Step 1 early metrics emitted: acceptance 33.91%, early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), runner gate enabled 9.72%, scheduler gate enabled 3.47%; final throughput pending while in Megatron logprob/training."
     }
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput in the Megatron logprob/training phase. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs respectively. Job 3072963 is the current primary dynamic-K validation run; as of 2026-06-01 06:35 PDT it was running on nvl72058-T[01,09,12-13] with no acceptance or throughput metrics yet.",
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput in the Megatron logprob/training phase. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs respectively. Job 3072963 is the current primary dynamic-K validation run; as of 2026-06-01 07:20 PDT it emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), and is still in Megatron logprob/training with final throughput pending.",
   "current_primary_dynamic_k_job": "3072963",
   "batch_gate_v7_review_fix": {
-    "state": "patched_validated_synced_and_resubmitted",
-    "updated_at": "2026-06-01 06:31 PDT",
+    "state": "patched_validated_synced_resubmitted_and_step1_early_metrics_seen",
+    "updated_at": "2026-06-01 07:20 PDT",
     "superseded_job": "3072682",
     "replacement_job": "3072963",
-    "reason": "A separate review agent found V6 could still convert an empty first scheduled_spec_decode_tokens map into a runner-wide disable. V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and keeps partial per-request gating from becoming a whole-batch draft skip."
+    "reason": "A separate review agent found V6 could still convert an empty first scheduled_spec_decode_tokens map into a runner-wide disable. V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and keeps partial per-request gating from becoming a whole-batch draft skip.",
+    "step1_early_metrics": {
+      "job_id": "3072963",
+      "acceptance_rate": 0.3391,
+      "early_generated_tokens_sec_gpu": 4511.04,
+      "early_total_tokens_sec_gpu": 4653.02,
+      "early_generated_speedup_vs_baseline": 1.082,
+      "draft_tokens": 423736,
+      "accepted_tokens": 143708,
+      "per_position_acceptance": [
+        0.4716,
+        0.2089,
+        0.0018
+      ],
+      "runner_enabled_ratio": 0.0972,
+      "scheduler_enabled_ratio": 0.0347,
+      "final_throughput_status": "pending"
+    }
   }
 }
