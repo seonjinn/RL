@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 19:20 PDT",
+  "updated_at": "2026-05-31 19:22 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -929,7 +929,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_activebatch_hardened_running",
-    "updated_at": "2026-05-31 19:20 PDT",
+    "updated_at": "2026-05-31 19:22 PDT",
     "scope": "Taming Long Tail-style adaptive activation for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*",
@@ -951,7 +951,7 @@
     "failed_activebatch_eval_job": "3063394",
     "failed_activebatch_eval_state": "FAILED before rollout at 2026-05-31 19:01 PDT. The driver hit the semantic validator after patching vLLM gpu_model_runner.py and found that the second supported source layout was missing the specdec_batch_gate_threshold_disabled marker. No NeMo-RL throughput or acceptance metric was emitted. The second-layout patch has been fixed, synced to the remote overlay and active /SpecDec-RL target checkout, and target-applied validation passes.",
     "corrected_eval_job": "3063924",
-    "corrected_eval_state": "RUNNING at 2026-05-31 19:20 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. No NeMo-RL throughput or acceptance metric has emitted yet; Ray is up and the driver is still in native-extension package build before rollout.",
+    "corrected_eval_state": "RUNNING at 2026-05-31 19:22 PDT with no dependency from the hardened /lustre/.../SpecDec-RL checkout. It is K=1, max_steps=8, GBS=2048, request gate 0, token gate 2048, adaptive enabled-ratio target 0.75, and log interval 32. No NeMo-RL throughput or acceptance metric has emitted yet; Ray is up and the driver is still in native-extension package build before rollout.",
     "submitted_eval_out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_adaptive_activebatch_jobs.txt",
     "hardening_after_agent_review": "Added scheduler active-batch gating, scheduler last_active_requests metrics, idempotent upgrade for already-patched V5/adaptive scheduler files, runner threshold_disabled OR scheduled_spec_decode_tokens behavior, async spec_decode_gate metric forwarding, and target-applied remote validation for the new markers.",
     "known_limit": "This implements adaptive activation, not the full TLT research system: no online drafter refresh and no idle-GPU spot training yet.",
@@ -960,7 +960,7 @@
     "activebatch_followup_jobs": [
       {
         "job_id": "3063925",
-        "state_at_submit_check": "RUNNING at 2026-05-31 19:20 PDT with no NeMo-RL throughput or acceptance metric emitted yet; Ray is up and the driver is still in native-extension package build before rollout",
+        "state_at_submit_check": "RUNNING at 2026-05-31 19:22 PDT with no NeMo-RL throughput or acceptance metric emitted yet; Ray is up and the driver is still in native-extension package build before rollout",
         "num_speculative_tokens": 1,
         "request_gate": 32,
         "token_gate": 2048,
@@ -969,7 +969,7 @@
       },
       {
         "job_id": "3063926",
-        "state_at_submit_check": "RUNNING at 2026-05-31 19:20 PDT with no NeMo-RL throughput or acceptance metric emitted yet; Ray is up and the driver is still in native-extension package build before rollout",
+        "state_at_submit_check": "RUNNING at 2026-05-31 19:22 PDT with no NeMo-RL throughput or acceptance metric emitted yet; Ray is up and the driver is still in native-extension package build before rollout",
         "num_speculative_tokens": 1,
         "request_gate": 64,
         "token_gate": 2048,
