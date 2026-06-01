@@ -208,6 +208,9 @@ fi
 if [[ -n "${SBATCH_COMMENT:-}" ]]; then
     SBATCH_ARGS+=(--comment="${SBATCH_COMMENT}")
 fi
+if [[ -n "${SBATCH_DEPENDENCY:-}" ]]; then
+    SBATCH_ARGS+=(--dependency="${SBATCH_DEPENDENCY}")
+fi
 if [[ -n "${SBATCH_MEM:-}" ]]; then
     SBATCH_ARGS+=(--mem="${SBATCH_MEM}")
 fi
