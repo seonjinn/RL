@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 12:16 PDT",
+  "updated_at": "2026-06-01 12:20 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1566,7 +1566,7 @@
     "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
   },
   "logprob_matched_baseline_validation": {
-    "updated_at": "2026-06-01 12:16 PDT",
+    "updated_at": "2026-06-01 12:20 PDT",
     "baseline_job_id": "3075647",
     "baseline_job_name": "qwen30ba3b-main-baseline-logprobmatched-asyncfalse-p64g32-4step-N4xG4",
     "state": "strict replacement baseline 3075647 FAILED after Step 1 generation. It was submitted with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, emitted Step 1 early generation-only throughput 4762.42 generated tok/s/GPU, then failed in policy.get_logprobs at 2026-06-01 12:07 PDT with EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP _ALLGATHER_BASE NCCL timeout. SpecDec 3074778 emitted Step 1 early generation-only metrics, then hit the same failure class at 11:06 PDT. Strict early generation-only comparison is available; final completed-step throughput is blocked by a baseline-reproduced Megatron logprob failure.",
@@ -1673,7 +1673,27 @@
       "e2e_speedup_vs_reduced_alltoall_baseline": 0.973
     },
     "manifest": "latest_qwen30ba3b_alltoall_smoke_jobs.txt",
-    "next_decision": "Scale the same alltoall dispatcher change back to p64/g32 for strict baseline-vs-SpecDec throughput, while keeping this p8/g8 result as functional NeMo-RL proof rather than final performance evidence."
+    "p64g32_followup": {
+      "submitted_at": "2026-06-01 12:19 PDT",
+      "baseline_job_id": "3077214",
+      "specdec_job_id": "3077216",
+      "shape": {
+        "num_prompts_per_step": 64,
+        "num_generations_per_prompt": 32,
+        "train_global_batch_size": 2048,
+        "max_steps": 4,
+        "max_total_sequence_length": 2048
+      },
+      "overrides": {
+        "policy.megatron_cfg.moe_token_dispatcher_type": "alltoall",
+        "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "true",
+        "NRL_FORCE_REBUILD_VENVS": "false",
+        "NUM_SPECULATIVE_TOKENS": "1 for SpecDec"
+      },
+      "manifest": "latest_qwen30ba3b_alltoall_p64g32_strict_jobs.txt",
+      "status": "submitted; waiting for Slurm start and rollout/logprob/training metrics"
+    },
+    "next_decision": "Poll p64/g32 jobs 3077214 and 3077216. If both complete, use their completed NeMo-RL generated tok/s/GPU and E2E tok/s/GPU as the strict alltoall baseline-vs-SpecDec comparison. If p64/g32 still fails, keep p8/g8 as functional proof and inspect scale-specific Megatron/NCCL behavior."
   },
   "longtail_gate_v8_verification": {
     "updated_at": "2026-06-01 12:16 PDT",
