@@ -1005,22 +1005,27 @@ class BaseVllmGenerationWorker:
                         or "else _nrl_specdec_scheduler_lookahead_tokens(" in text
                     )
 
+                static_active_batch_marker = (
+                    "max(len(self.running), len(num_scheduled_tokens) + 1)"
+                )
+                adaptive_active_batch_marker = (
+                    "active_requests = max(num_requests, len(self.running))"
+                )
                 required_markers = [
                     "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                     "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
                     "nrl_specdec_scheduler_gate_threshold",
                     "nrl_specdec_scheduler_gate_token_threshold",
-                    "max(len(self.running), len(num_scheduled_tokens) + 1)",
                 ]
                 if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" in content:
-                    active_batch_marker = (
-                        "max(len(self.running), len(num_scheduled_tokens) + 1)"
-                    )
-                    if active_batch_marker not in content:
+                    if (
+                        static_active_batch_marker not in content
+                        and adaptive_active_batch_marker not in content
+                    ):
                         upgraded_content = content.replace(
                             "(len(num_scheduled_tokens) + 1)",
-                            active_batch_marker,
+                            static_active_batch_marker,
                         )
                         if upgraded_content != content:
                             with open(path, "w") as f:
@@ -1029,6 +1034,11 @@ class BaseVllmGenerationWorker:
                     missing_markers = [
                         marker for marker in required_markers if marker not in content
                     ]
+                    if (
+                        static_active_batch_marker not in content
+                        and adaptive_active_batch_marker not in content
+                    ):
+                        missing_markers.append("active-batch request pressure marker")
                     if not _has_scheduler_lookahead_gate_target(content):
                         missing_markers.append("scheduler lookahead gate target")
                     if missing_markers:
