@@ -1040,7 +1040,7 @@
     },
     "step_controller_followup_job": {
       "job_id": "3066733",
-      "state_at_submit_check": "PENDING at 2026-05-31 22:08 PDT with no dependency. This is the ReSpec/TLT-style acceptance-aware follow-up: max K=3 dynamic-depth plus NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER=true, reducing later-step K caps when total acceptance or pos2/pos3 acceptance is below configured floors.",
+      "state_at_submit_check": "RUNNING at 2026-05-31 22:16 PDT with no dependency. Ray bootstrap completed far enough for the driver log to start, and the driver is building its runtime venv. This is the ReSpec/TLT-style acceptance-aware follow-up: max K=3 dynamic-depth plus NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER=true, reducing later-step K caps when total acceptance or pos2/pos3 acceptance is below configured floors. No rollout throughput or acceptance metric has emitted yet.",
       "num_speculative_tokens": 3,
       "request_gate": 64,
       "token_gate": 2048,
@@ -1061,5 +1061,5 @@
     "activebatch_req64_retry_job": "3065713",
     "activebatch_req64_retry_state": "CANCELLED/SUPERSEDED at 2026-05-31 20:52 PDT because it used the runner code that could deadlock first-draft proposal when scheduled_spec_decode_tokens was empty."
   },
-  "caveat": "Old 30B adaptive jobs 3065811, 3065812, and 3065813 proved SpecDec attachment but failed in Megatron get_logprobs after Step 1. Replacement jobs 3066594 and 3066597 are running with the timeout/telemetry fixes, and step-controller job 3066733 is pending. No new NeMo-RL generation throughput metric is available yet beyond previously confirmed 30B K=1 token-pressure result 3060379 at 5696.58 tok/s/GPU and 57.40% acceptance."
+  "caveat": "Old 30B adaptive jobs 3065811, 3065812, and 3065813 proved SpecDec attachment but failed in Megatron get_logprobs after Step 1. Replacement jobs 3066594, 3066597, and 3066733 are running with the timeout/telemetry fixes; all are still in startup/driver venv build as of 22:16 PDT. No new NeMo-RL generation throughput metric is available yet beyond previously confirmed 30B K=1 token-pressure result 3060379 at 5696.58 tok/s/GPU and 57.40% acceptance."
 }
