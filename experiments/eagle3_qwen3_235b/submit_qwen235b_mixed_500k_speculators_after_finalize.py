@@ -327,10 +327,10 @@ def common_env(p: dict[str, Path]) -> dict[str, str]:
         "VALIDATE_SOURCE_CONVERSATIONS": "true",
         "FAIL_ON_DUPLICATE_PROMPTS": "true",
         "ENFORCE_SPECULATORS_REF": "true",
-        "ALLOW_SPECULATORS_DIRTY": "true",
+        "ALLOW_SPECULATORS_DIRTY": os.environ.get("ALLOW_SPECULATORS_DIRTY", "false"),
         "DENYLIST_PROMPTS_FROM": str(p["denylist"]),
         "INSTALL_SPECULATORS": "true",
-        "APPLY_COMPAT_PATCHES": "false",
+        "APPLY_COMPAT_PATCHES": os.environ.get("APPLY_COMPAT_PATCHES", "true"),
         "SPECULATORS_DISABLE_TORCH_COMPILE": "false",
         "SPECULATORS_FSDP_WRAP_LAYERS": "true",
     }

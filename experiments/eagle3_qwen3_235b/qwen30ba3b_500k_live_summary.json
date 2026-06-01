@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 05:58 PDT",
+  "updated_at": "2026-06-01 06:35 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -929,9 +929,9 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_counter_timeoutfix_and_metrictrust_synced",
-    "updated_at": "2026-06-01 05:58 PDT",
+    "updated_at": "2026-06-01 06:31 PDT",
     "scope": "Taming Long Tail/ReSpec-style adaptive activation and draft-depth selection for NeMo-RL/vLLM SpecDec",
-    "patch_marker": "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1 plus NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1 plus NeMo-RL step controller runtime controls plus NRL_SPECDEC_ACCEPTANCE_REQUIRES_COMPLETE_DP_METRICS_V1",
+    "patch_marker": "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*; SPECDEC_DYNAMIC_DRAFT_* -> VLLM_SPECDEC_DYNAMIC_DRAFT_*",
     "current_behavior": "The vLLM scheduler lookahead gate starts from static request/token thresholds, measures local SpecDec enabled ratios over rolling windows, then tightens or loosens request/token thresholds toward a target enabled ratio. The scheduler request pressure now uses active requests, max(len(self.running), scheduled_requests), instead of scheduled_requests alone, so long-tail activation follows the actual active batch. The model runner now skips draft proposal only when its request/token threshold state says disabled; it no longer treats an empty scheduled_spec_decode_tokens map as a disable signal, because that can deadlock the first EAGLE draft. Adaptive mode fails fast unless at least one positive static or initial request/token threshold is configured, preventing accidental global SpecDec. ReSpec-style dynamic depth now caps both scheduler lookahead and the draft tokens stored back into scheduler request state by active-batch regime, for example K=3 when active requests <=4, K=2 when active requests <=64, and K=1 otherwise. Dynamic-depth environment variables are now explicitly propagated from NeMo-RL VllmGeneration into Ray actor environments, and the 30B eval wrapper preserves SPECDEC_DYNAMIC_DRAFT_* through wrapper submission. The NeMo-RL step controller now uses per-position acceptance floors: weak position 3 lowers only the small-tail K tier from K=3 to K=2, while weak position 2 lowers all tiers that would use a second draft token. Review commit b40917f now marks aggregate acceptance publishable only when all DP workers report and prevents the step controller from changing K on partial DP metrics.",
     "metrics_visibility": "NeMo-RL exposes structured spec_decode_gate metrics in addition to vLLM acceptance counters: scheduler/runner checked, enabled, disabled, enabled_ratio, last scheduled request count, last active request count, last token count, thresholds, adaptive threshold state, dynamic draft-depth state including dynamic_last_selected_tokens and dynamic_last_stored_tokens, and per-position acceptance. The async path now logs SpecDec counters before policy get_logprobs, so Step-level acceptance is preserved even if later Megatron logprob/training fails. The early console summary now prints runner and scheduler gate groups separately and skips empty groups, because job 3066594 showed real runner-side long-tail activation while the previous scheduler-only summary misleadingly printed enabled_ratio=0.",
@@ -1254,30 +1254,57 @@
       },
       {
         "job_id": "3072682",
-        "state": "RUNNING at 2026-06-01 05:58 PDT on nvl72101-T[12-13,17-18]",
-        "reason": "fresh K=3 dynamic-K replacement after the V6 per-request runner gate fix. Uses dynamic small/medium/large tiers 3/2/1, request gate 64, token gate 2048, max_steps=4, GBS=2048, NRL_FORCE_REBUILD_VENVS=true, and no Slurm dependency. It is running and still before rollout metrics at the latest check.",
+        "state": "CANCELLED before rollout metrics at 2026-06-01 06:31 PDT",
+        "reason": "fresh K=3 dynamic-K replacement after the V6 per-request runner gate fix. It was still in build/startup with no acceptance or throughput metrics when a separate review found the remaining first-draft gate risk: an empty initial scheduled_spec_decode_tokens map could still become a runner-wide disable. Cancelled before rollout and replaced by V7 job 3072963.",
         "latest_step_seen": 0,
         "completed_generation_metrics": 0,
         "acceptance_rate_values": [],
         "acceptance_rate_mean_so_far": null,
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v6_jobs.txt"
+      },
+      {
+        "job_id": "3072963",
+        "state": "RUNNING at 2026-06-01 06:35 PDT on nvl72058-T[01,09,12-13]",
+        "reason": "fresh K=3 dynamic-K replacement after the V7 first-draft gate fix; no rollout, acceptance, or throughput metric yet.",
+        "latest_step_seen": 0,
+        "completed_generation_metrics": 0,
+        "acceptance_rate_values": [],
+        "acceptance_rate_mean_so_far": null,
+        "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt"
       }
     ],
-    "current_primary_dynamic_k_job": "3072682",
+    "current_primary_dynamic_k_job": "3072963",
     "scheduler_output_gate_patch_repair": {
       "state": "patched_and_validated",
-      "updated_at": "2026-06-01 05:58 PDT",
+      "updated_at": "2026-06-01 06:10 PDT",
       "failed_job": "3072332",
       "replacement_job": "3072527",
       "reason": "The first patch anchored on the first connector check and could insert scheduler_output.nrl_specdec_batch_gate_disabled before SchedulerOutput existed. The repair anchors after SchedulerOutput construction, removes stale misplaced marker blocks, and restores original scheduler content if final py_compile fails."
     },
     "batch_gate_v6_review_fix": {
+      "state": "superseded_by_v7_before_rollout_metrics",
+      "updated_at": "2026-06-01 06:31 PDT",
+      "superseded_job": "3072682",
+      "replacement_job": "3072963",
+      "reason": "V6 was synced and validated, but a separate review found it could still treat an empty first scheduled_spec_decode_tokens map as a runner-wide disable. Job 3072682 was cancelled before rollout metrics."
+    },
+    "batch_gate_v7_review_fix": {
       "state": "patched_validated_synced_and_resubmitted",
-      "updated_at": "2026-06-01 05:58 PDT",
-      "superseded_job": "3072527",
-      "replacement_job": "3072682",
-      "reason": "Review found scheduler disabled state could conservatively disable draft proposal for the whole runner batch even when scheduled_spec_decode_tokens still contained draft work for some requests. V6 makes scheduled_spec_decode_tokens authoritative for the runner skip decision: if any scheduled draft request remains, the runner keeps proposing; it only skips when the scheduler scheduled no draft requests for a nonempty batch, with fallback to the old global threshold path only when the scheduler token map is unavailable."
+      "updated_at": "2026-06-01 06:31 PDT",
+      "superseded_job": "3072682",
+      "replacement_job": "3072963",
+      "reason": "V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and prevents partial per-request gating from becoming a whole-batch draft skip.",
+      "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt",
+      "state_at_latest_check": "RUNNING on nvl72058-T[01,09,12-13] at 2026-06-01 06:35 PDT; no rollout metrics yet"
     }
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput on a Megatron model/expert-parallel timeout. Jobs 3068178, 3068267, 3068390, 3068522, 3068578, 3068829, 3069079, 3069265, 3069422, 3069544, 3070163, 3072332, and 3072527 were cancelled or failed before usable rollout throughput. Job 3072332 failed before rollout due the initial scheduler-output gate insertion bug in generated vLLM scheduler.py. Job 3072527 was cancelled before rollout after review found the pre-V6 runner gate could suppress all draft proposals even when scheduler per-request gating left some scheduled_spec_decode_tokens. Job 3072682 is the current primary dynamic-K validation run; as of 2026-06-01 05:58 PDT it was running with no acceptance or throughput metrics yet."
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput in the Megatron logprob/training phase. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs respectively. Job 3072963 is the current primary dynamic-K validation run; as of 2026-06-01 06:35 PDT it was running on nvl72058-T[01,09,12-13] with no acceptance or throughput metrics yet.",
+  "current_primary_dynamic_k_job": "3072963",
+  "batch_gate_v7_review_fix": {
+    "state": "patched_validated_synced_and_resubmitted",
+    "updated_at": "2026-06-01 06:31 PDT",
+    "superseded_job": "3072682",
+    "replacement_job": "3072963",
+    "reason": "A separate review agent found V6 could still convert an empty first scheduled_spec_decode_tokens map into a runner-wide disable. V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and keeps partial per-request gating from becoming a whole-batch draft skip."
+  }
 }

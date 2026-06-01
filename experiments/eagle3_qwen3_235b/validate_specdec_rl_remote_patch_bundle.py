@@ -52,7 +52,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
         "def _patch_vllm_batch_gated_speculative_decoding()",
         "def _patch_vllm_adaptive_specdec_gate()",
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V6",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
         "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
         "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
         "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
@@ -85,6 +85,8 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "specdec_batch_gate_num_tokens",
         "specdec_scheduled_token_count",
         "specdec_batch_gate_scheduler_all_disabled",
+        "nrl_specdec_batch_gate_all_disabled",
+        "nrl_specdec_batch_gate_eligible_count",
         "specdec_scheduled_tokens",
         "scheduled_spec_decode_tokens",
         "VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD must be <=",
@@ -540,7 +542,7 @@ def _load_scheduler_output_gate_helper(worker: Path):
                 break
             namespace: dict[str, Any] = {
                 "re": re,
-                "scheduler_output_gate_marker": "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1",
+                "scheduler_output_gate_marker": "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V2",
             }
             exec(textwrap.dedent(source), namespace)
             return namespace["_ensure_scheduler_output_gate_attr"]
@@ -614,6 +616,50 @@ def _discover_vllm_scheduler_source() -> Path | None:
     return None
 
 
+def check_runner_gate_first_draft_guard(
+    checks: list[dict[str, Any]], patch_root: Path
+) -> None:
+    worker = patch_root / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker.py"
+    if not worker.exists():
+        add(checks, "source", "runner first-draft gate guard", "fail", f"missing: {worker}")
+        return
+
+    text = read_text(worker)
+    required = [
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
+        "nrl_specdec_batch_gate_all_disabled",
+        "nrl_specdec_batch_gate_eligible_count",
+        "specdec_scheduler_all_attr",
+        "_nrl_specdec_batch_gate_last_scheduler_eligible_count",
+    ]
+    missing = [snippet for snippet in required if snippet not in text]
+    deadlock_snippet = (
+        "specdec_batch_gate_disabled = (\\n\"\n"
+        "                            \"                    specdec_batch_gate_num_requests > 0\\n\"\n"
+        "                            \"                    and specdec_scheduled_token_count == 0\\n\"\n"
+        "                            \"                )\\n\""
+    )
+    if missing or deadlock_snippet in text:
+        add(
+            checks,
+            "source",
+            "runner first-draft gate guard",
+            "fail",
+            "runner gate may still disable EAGLE before the first draft instead of using explicit scheduler all-disabled state",
+            missing=missing,
+            has_deadlock_snippet=deadlock_snippet in text,
+        )
+        return
+
+    add(
+        checks,
+        "source",
+        "runner first-draft gate guard",
+        "pass",
+        "runner gate uses explicit scheduler all-disabled state and no longer treats an empty scheduled_spec_decode_tokens map as a standalone disable signal",
+    )
+
+
 def check_scheduler_output_gate_runtime_fixture(checks: list[dict[str, Any]], patch_root: Path) -> None:
     worker = patch_root / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker.py"
     if not worker.exists():
@@ -633,7 +679,7 @@ def check_scheduler_output_gate_runtime_fixture(checks: list[dict[str, Any]], pa
         )
         return
 
-    marker = "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1"
+    marker = "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V2"
     scheduler_anchor = "        scheduler_output = SchedulerOutput(\n"
     try:
         fixture = _scheduler_output_gate_fixture()
@@ -653,6 +699,23 @@ def check_scheduler_output_gate_runtime_fixture(checks: list[dict[str, Any]], pa
             raise AssertionError("patched fixture is missing the scheduler-output gate marker")
         if marker in patched[:scheduler_pos]:
             raise AssertionError("scheduler-output gate marker was inserted before SchedulerOutput")
+        required_runtime_attrs = [
+            "nrl_specdec_batch_gate_disabled",
+            "nrl_specdec_batch_gate_all_disabled",
+            "nrl_specdec_batch_gate_eligible_count",
+            "nrl_specdec_batch_gate_checked_count",
+            "_nrl_specdec_scheduler_gate_output_all_disabled",
+            "_nrl_specdec_scheduler_gate_output_checked",
+            "_nrl_specdec_scheduler_gate_output_enabled",
+        ]
+        missing_runtime_attrs = [
+            item for item in required_runtime_attrs if item not in patched
+        ]
+        if missing_runtime_attrs:
+            raise AssertionError(
+                "patched fixture is missing scheduler-output gate attrs: "
+                + ", ".join(missing_runtime_attrs)
+            )
     except Exception as exc:
         add(
             checks,
@@ -669,7 +732,7 @@ def check_scheduler_output_gate_runtime_fixture(checks: list[dict[str, Any]], pa
         "source",
         "scheduler output gate runtime fixture",
         "pass",
-        "runtime helper inserts scheduler_output gate state after SchedulerOutput, is idempotent, and py_compiles",
+        "runtime helper inserts scheduler_output gate state/all-disabled attrs after SchedulerOutput, is idempotent, and py_compiles",
     )
 
     scheduler_source = _discover_vllm_scheduler_source()
@@ -742,6 +805,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     check_python_sources_compile(checks, patch_root)
     check_dynamic_request_id_arity_guard(checks, patch_root)
     check_dynamic_position_counter_partial_upgrade(checks, patch_root)
+    check_runner_gate_first_draft_guard(checks, patch_root)
     check_scheduler_output_gate_runtime_fixture(checks, patch_root)
 
     if ignored:
