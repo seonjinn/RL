@@ -108,6 +108,8 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "spec_decode_gate_totals",
         "spec_decode_totals[\"metrics_available\"] = True",
         "spec_decode_totals[\"metrics_complete\"]",
+        "NRL_SPECDEC_ACCEPTANCE_REQUIRES_COMPLETE_DP_METRICS_V1",
+        "acceptance_rate_reliable",
         "NRL_SPECDEC_DYNAMIC_STORE_COUNTERS_DP_MERGE_V1",
         "dynamic_small_selected_token_count",
         "f\"dynamic_pos{pos_idx}_selected_count\"",
@@ -116,6 +118,9 @@ REQUIRED_FILES: dict[str, list[str]] = {
     "nemo_rl/algorithms/grpo.py": [
         "def _uses_vllm_specdec_without_generation_logprobs(",
         "def _repair_specdec_generation_logprobs_if_safe(",
+        "NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_DP_METRICS_V1",
+        "controller/action_failed_partial_metrics",
+        "next_small = min(max_k, max(next_medium, max(min_k, current_small - 1)))",
         "ray.get(trajectory_collector.set_weight_version.remote(weight_version))",
         "collection_task = trajectory_collector.start_collection.remote(dataloader)",
     ],
@@ -123,6 +128,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "spec_decode_gate_metrics",
         "spec_decode_gate/{group}/{key}",
         "SpecDec Gate Metrics",
+        "spec_decode/acceptance_rate_reliable",
     ],
     "nemo_rl/distributed/virtual_cluster.py": [
         "NRL_RAY_NODE_IP_ADDRESS",

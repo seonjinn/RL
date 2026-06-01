@@ -1059,6 +1059,12 @@ class VllmGeneration(GenerationInterface):
         spec_decode_totals["metrics_complete"] = not spec_decode_totals[
             "metrics_partial"
         ]
+        # NRL_SPECDEC_ACCEPTANCE_REQUIRES_COMPLETE_DP_METRICS_V1
+        # Raw counters are still useful for debugging, but rollout acceptance is
+        # only publishable when every DP worker reports the interval.
+        spec_decode_totals["acceptance_rate_reliable"] = spec_decode_totals[
+            "metrics_complete"
+        ]
         spec_decode_totals["active"] = spec_decode_totals["num_draft_tokens"] > 0
         if spec_decode_totals["num_draft_tokens"] > 0:
             spec_decode_totals["acceptance_rate"] = (
@@ -1221,6 +1227,7 @@ class VllmGeneration(GenerationInterface):
             )
             spec_decode_totals["acceptance_rate_per_pos_reliable"] = (
                 per_pos_denominator_reliable
+                and spec_decode_totals["metrics_complete"]
             )
             spec_decode_totals["acceptance_rate_per_pos"] = [
                 float(accepted) / denominator if denominator > 0 else 0.0

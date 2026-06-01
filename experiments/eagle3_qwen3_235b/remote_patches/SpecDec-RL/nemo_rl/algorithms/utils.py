@@ -556,6 +556,11 @@ def print_performance_metrics(
     if spec_decode_metrics:
         metrics_available = bool(spec_decode_metrics.get("metrics_available", True))
         metrics_partial = bool(spec_decode_metrics.get("metrics_partial", False))
+        acceptance_reliable = (
+            metrics_available
+            and not metrics_partial
+            and bool(spec_decode_metrics.get("acceptance_rate_reliable", True))
+        )
         active = bool(spec_decode_metrics.get("active", False))
         performance_metrics["spec_decode/metrics_available"] = (
             1 if metrics_available else 0
@@ -570,6 +575,9 @@ def print_performance_metrics(
             spec_decode_metrics.get("num_expected_workers", 0)
         )
         performance_metrics["spec_decode/active"] = 1 if active else 0
+        performance_metrics["spec_decode/acceptance_rate_reliable"] = (
+            1 if acceptance_reliable else 0
+        )
         if metrics_partial:
             print(
                 "  • SpecDec Metrics: partial "
@@ -598,13 +606,14 @@ def print_performance_metrics(
         )
         per_pos_reliable = bool(
             spec_decode_metrics.get("acceptance_rate_per_pos_reliable", True)
-        )
+        ) and acceptance_reliable
         print("  • SpecDec Metrics:")
         print(f"    - Active this interval: {active}")
         print(f"    - Drafts: {num_drafts}")
         print(f"    - Draft tokens: {num_draft_tokens}")
         print(f"    - Accepted tokens: {num_accepted_tokens}")
-        print(f"    - Acceptance rate: {acceptance_rate:.4f}")
+        acceptance_note = "" if acceptance_reliable else " (unreliable/partial)"
+        print(f"    - Acceptance rate: {acceptance_rate:.4f}{acceptance_note}")
         print(f"    - Accepted tokens/draft step: {accepted_tokens_per_draft:.4f}")
         print(f"    - Mean target tokens/step: {mean_acceptance_length:.4f}")
         total_num_tokens = float(metrics.get("total_num_tokens", 0) or 0)

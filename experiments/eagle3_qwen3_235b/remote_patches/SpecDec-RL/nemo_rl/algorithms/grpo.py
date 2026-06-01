@@ -1018,6 +1018,13 @@ def _log_specdec_vllm_metrics(
 
     spec_decode = vllm_logger_metrics.get("spec_decode", {})
     if isinstance(spec_decode, dict) and spec_decode.get("metrics_available", True):
+        metrics_complete = bool(
+            spec_decode.get(
+                "metrics_complete",
+                not bool(spec_decode.get("metrics_partial", False)),
+            )
+        )
+        reliability_suffix = "" if metrics_complete else " partial_metrics=true"
         print(
             "[SpecDec early metrics] "
             f"step={step} acceptance_rate="
@@ -1025,7 +1032,8 @@ def _log_specdec_vllm_metrics(
             f"draft_tokens={int(spec_decode.get('num_draft_tokens', 0))} "
             f"accepted_tokens={int(spec_decode.get('num_accepted_tokens', 0))} "
             f"reporting={int(spec_decode.get('num_reporting_workers', 0))}/"
-            f"{int(spec_decode.get('num_expected_workers', 0))}",
+            f"{int(spec_decode.get('num_expected_workers', 0))}"
+            f"{reliability_suffix}",
             flush=True,
         )
         per_pos_rates = _specdec_per_position_acceptance_rates(spec_decode)
@@ -1184,6 +1192,35 @@ def _maybe_apply_specdec_step_controller(
         "metrics_available", True
     ):
         return
+    # NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_DP_METRICS_V1
+    metrics_complete = bool(
+        spec_decode.get(
+            "metrics_complete",
+            not bool(spec_decode.get("metrics_partial", False)),
+        )
+    )
+    if not metrics_complete:
+        reporting_workers = _metric_int(spec_decode, "num_reporting_workers", 0)
+        expected_workers = _metric_int(spec_decode, "num_expected_workers", 0)
+        logger.log_metrics(
+            {
+                "controller/action_noop": 1,
+                "controller/action_failed_partial_metrics": 1,
+                "controller/action_failed_dynamic_disabled": 0,
+                "controller/action_failed_no_targets": 0,
+                "controller/action_failed_runtime_exception": 0,
+                "controller/updated_objects": 0,
+            },
+            step,
+            prefix="specdec",
+        )
+        print(
+            "[SpecDec step controller] "
+            f"step={step} no-op: partial DP metrics "
+            f"({reporting_workers}/{expected_workers} workers)",
+            flush=True,
+        )
+        return
     draft_tokens = _metric_int(spec_decode, "num_draft_tokens", 0)
     min_draft_tokens = _env_int("NRL_SPECDEC_CONTROLLER_MIN_DRAFT_TOKENS", 128)
     if draft_tokens < min_draft_tokens:
@@ -1258,7 +1295,7 @@ def _maybe_apply_specdec_step_controller(
     aggregate_low = acceptance < low_watermark
     if second_pos_low:
         next_medium = max(min_k, current_medium - 1)
-        next_small = min(max(min_k, current_small - 1), next_medium)
+        next_small = min(max_k, max(next_medium, max(min_k, current_small - 1)))
         next_large = min(next_medium, current_large)
         action = "decrease_k_pos2"
     elif third_pos_low:
