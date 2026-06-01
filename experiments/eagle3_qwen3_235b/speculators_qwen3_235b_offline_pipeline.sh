@@ -186,7 +186,7 @@ if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
       exit 2
     fi
   fi
-  if [[ "$APPLY_COMPAT_PATCHES" != "true" && "$APPLY_COMPAT_PATCHES" != "True" && "$ALLOW_SPECULATORS_DIRTY" != "true" && "$ALLOW_SPECULATORS_DIRTY" != "True" ]]; then
+  if [[ "$ALLOW_SPECULATORS_DIRTY" != "true" && "$ALLOW_SPECULATORS_DIRTY" != "True" ]]; then
     dirty_status="$(git -C "$SPECULATORS_DIR" status --short)"
     if [[ -n "$dirty_status" ]]; then
       known_dirty_files=(
@@ -204,7 +204,7 @@ if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
       known_dirty_regex='^ M (scripts/data_generation_offline.py|scripts/train.py|src/speculators/model.py|src/speculators/models/attention.py|src/speculators/models/dflash/core.py|src/speculators/models/eagle3/attention.py|src/speculators/models/eagle3/core.py|src/speculators/models/eagle3/model_definitions.py|src/speculators/train/data.py|src/speculators/train/utils.py)$'
       unexpected_dirty="$(printf '%s\n' "$dirty_status" | grep -Ev "$known_dirty_regex" || true)"
       if [[ -n "$unexpected_dirty" ]]; then
-        echo "ERROR: Speculators checkout has unexpected dirty files while APPLY_COMPAT_PATCHES=false" >&2
+        echo "ERROR: Speculators checkout has unexpected dirty files after compatibility patch handling" >&2
         printf '%s\n' "$dirty_status" >&2
         exit 2
       fi
@@ -214,12 +214,12 @@ if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
         dirty_diff_sha256="$(git -C "$SPECULATORS_DIR" diff --binary --no-ext-diff --no-color | shasum -a 256 | awk '{print $1}')"
       fi
       if [[ "$dirty_diff_sha256" != "$EXPECTED_SPECULATORS_DIRTY_DIFF_SHA256" ]]; then
-        echo "ERROR: Speculators dirty diff content changed while APPLY_COMPAT_PATCHES=false" >&2
+        echo "ERROR: Speculators dirty diff content changed after compatibility patch handling" >&2
         echo "actual_dirty_diff_sha256=$dirty_diff_sha256 expected=$EXPECTED_SPECULATORS_DIRTY_DIFF_SHA256" >&2
         printf '%s\n' "$dirty_status" >&2
         exit 2
       fi
-      echo "WARN: Speculators checkout contains known compatibility patches; continuing with APPLY_COMPAT_PATCHES=false diff_sha256=$dirty_diff_sha256" >&2
+      echo "WARN: Speculators checkout contains approved compatibility patches; continuing with diff_sha256=$dirty_diff_sha256" >&2
       printf '%s\n' "$dirty_status" >&2
     fi
   fi

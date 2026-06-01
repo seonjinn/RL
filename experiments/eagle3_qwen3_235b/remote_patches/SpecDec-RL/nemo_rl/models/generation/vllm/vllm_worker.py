@@ -335,6 +335,9 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_batch_gate_last_num_requests": "last_num_requests",
             "_nrl_specdec_batch_gate_last_num_tokens": "last_num_tokens",
             "_nrl_specdec_batch_gate_last_disabled": "last_disabled",
+            "_nrl_specdec_batch_gate_last_scheduler_disabled": "last_scheduler_disabled",
+            "_nrl_specdec_batch_gate_last_scheduler_all_disabled": "last_scheduler_all_disabled",
+            "_nrl_specdec_batch_gate_last_scheduled_token_count": "last_scheduled_token_count",
             "_nrl_specdec_adaptive_gate_mode": "adaptive_mode",
             "_nrl_specdec_adaptive_request_threshold": "adaptive_request_threshold",
             "_nrl_specdec_adaptive_token_threshold": "adaptive_token_threshold",
@@ -965,7 +968,7 @@ class BaseVllmGenerationWorker:
                     content = f.read()
 
                 required_markers = [
-                    "NRL_SPECDEC_BATCH_GATE_PATCH_V5",
+                    "NRL_SPECDEC_BATCH_GATE_PATCH_V6",
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                     "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
                     "_nrl_specdec_batch_gate_threshold",
@@ -974,10 +977,13 @@ class BaseVllmGenerationWorker:
                     "specdec_batch_gate_num_tokens",
                     "specdec_batch_gate_threshold_disabled",
                     "specdec_batch_gate_scheduler_disabled",
+                    "specdec_batch_gate_scheduler_all_disabled",
                     "specdec_batch_gate_disabled",
                     "specdec_batch_gate_disabled = False",
                     "not specdec_batch_gate_disabled",
                     "_nrl_specdec_batch_gate_last_scheduler_disabled",
+                    "_nrl_specdec_batch_gate_last_scheduler_all_disabled",
+                    "_nrl_specdec_batch_gate_last_scheduled_token_count",
                     "specdec_batch_gate_checked_count",
                     "specdec_batch_gate_log_interval",
                     "NRL SpecDec batch gate:",
@@ -1006,7 +1012,7 @@ class BaseVllmGenerationWorker:
                     threshold_only_block = (
                         "            specdec_batch_gate_disabled = specdec_batch_gate_threshold_disabled\n"
                     )
-                    scheduler_authoritative_block = (
+                    old_scheduler_authoritative_block = (
                         "            specdec_scheduler_gate_attr = getattr(\n"
                         "                scheduler_output, \"nrl_specdec_batch_gate_disabled\", None\n"
                         "            )\n"
@@ -1021,10 +1027,55 @@ class BaseVllmGenerationWorker:
                         "            )\n"
                         "            self._nrl_specdec_batch_gate_last_scheduler_disabled = specdec_batch_gate_scheduler_disabled\n"
                     )
+                    scheduler_per_request_block = (
+                        "            specdec_scheduler_gate_attr = getattr(\n"
+                        "                scheduler_output, \"nrl_specdec_batch_gate_disabled\", None\n"
+                        "            )\n"
+                        "            specdec_batch_gate_scheduler_disabled = False\n"
+                        "            if specdec_scheduler_gate_attr is not None:\n"
+                        "                specdec_batch_gate_scheduler_disabled = bool(\n"
+                        "                    specdec_scheduler_gate_attr\n"
+                        "                )\n"
+                        "            specdec_scheduled_tokens = getattr(\n"
+                        "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
+                        "            )\n"
+                        "            specdec_scheduled_token_count = None\n"
+                        "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                        "                specdec_scheduled_tokens, \"__len__\"\n"
+                        "            ):\n"
+                        "                specdec_scheduled_token_count = len(specdec_scheduled_tokens)\n"
+                        "            if specdec_scheduled_token_count is not None:\n"
+                        "                specdec_batch_gate_scheduler_all_disabled = (\n"
+                        "                    specdec_batch_gate_scheduler_disabled\n"
+                        "                    and specdec_batch_gate_num_requests > 0\n"
+                        "                    and specdec_scheduled_token_count == 0\n"
+                        "                )\n"
+                        "                specdec_batch_gate_disabled = (\n"
+                        "                    specdec_batch_gate_num_requests > 0\n"
+                        "                    and specdec_scheduled_token_count == 0\n"
+                        "                )\n"
+                        "            else:\n"
+                        "                specdec_batch_gate_scheduler_all_disabled = specdec_batch_gate_scheduler_disabled\n"
+                        "                specdec_batch_gate_disabled = (\n"
+                        "                    specdec_batch_gate_threshold_disabled\n"
+                        "                    or specdec_batch_gate_scheduler_disabled\n"
+                        "                )\n"
+                        "            self._nrl_specdec_batch_gate_last_scheduler_disabled = specdec_batch_gate_scheduler_disabled\n"
+                        "            self._nrl_specdec_batch_gate_last_scheduler_all_disabled = specdec_batch_gate_scheduler_all_disabled\n"
+                        "            self._nrl_specdec_batch_gate_last_scheduled_token_count = specdec_scheduled_token_count\n"
+                    )
                     if scheduled_token_deadlock_block in content:
                         upgraded_content = content.replace(
                             scheduled_token_deadlock_block,
-                            scheduler_authoritative_block,
+                            scheduler_per_request_block,
+                        )
+                        with open(path, "w") as f:
+                            f.write(upgraded_content)
+                        content = upgraded_content
+                    if old_scheduler_authoritative_block in content:
+                        upgraded_content = content.replace(
+                            old_scheduler_authoritative_block,
+                            scheduler_per_request_block,
                         )
                         with open(path, "w") as f:
                             f.write(upgraded_content)
@@ -1035,19 +1086,27 @@ class BaseVllmGenerationWorker:
                     ):
                         upgraded_content = content.replace(
                             threshold_only_block,
-                            scheduler_authoritative_block,
+                            scheduler_per_request_block,
                         )
                         with open(path, "w") as f:
                             f.write(upgraded_content)
                         content = upgraded_content
                     if (
-                        "NRL_SPECDEC_BATCH_GATE_PATCH_V4" in content
-                        and "NRL_SPECDEC_BATCH_GATE_PATCH_V5" not in content
+                        "NRL_SPECDEC_BATCH_GATE_PATCH_V6" not in content
+                        and (
+                            "NRL_SPECDEC_BATCH_GATE_PATCH_V4" in content
+                            or "NRL_SPECDEC_BATCH_GATE_PATCH_V5" in content
+                        )
                     ):
-                        upgraded_content = content.replace(
+                        upgraded_content = content
+                        for old_marker in (
                             "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
                             "NRL_SPECDEC_BATCH_GATE_PATCH_V5",
-                        )
+                        ):
+                            upgraded_content = upgraded_content.replace(
+                                old_marker,
+                                "NRL_SPECDEC_BATCH_GATE_PATCH_V6",
+                            )
                         with open(path, "w") as f:
                             f.write(upgraded_content)
                         content = upgraded_content
@@ -1094,11 +1153,33 @@ class BaseVllmGenerationWorker:
                             "                specdec_batch_gate_scheduler_disabled = bool(\n"
                             "                    specdec_scheduler_gate_attr\n"
                             "                )\n"
-                            "            specdec_batch_gate_disabled = (\n"
-                            "                specdec_batch_gate_threshold_disabled\n"
-                            "                or specdec_batch_gate_scheduler_disabled\n"
+                            "            specdec_scheduled_tokens = getattr(\n"
+                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
                             "            )\n"
-                            "            self._nrl_specdec_batch_gate_last_scheduler_disabled = specdec_batch_gate_scheduler_disabled\n",
+                            "            specdec_scheduled_token_count = None\n"
+                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                            "                specdec_scheduled_tokens, \"__len__\"\n"
+                            "            ):\n"
+                            "                specdec_scheduled_token_count = len(specdec_scheduled_tokens)\n"
+                            "            if specdec_scheduled_token_count is not None:\n"
+                            "                specdec_batch_gate_scheduler_all_disabled = (\n"
+                            "                    specdec_batch_gate_scheduler_disabled\n"
+                            "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                    and specdec_scheduled_token_count == 0\n"
+                            "                )\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    specdec_batch_gate_num_requests > 0\n"
+                            "                    and specdec_scheduled_token_count == 0\n"
+                            "                )\n"
+                            "            else:\n"
+                            "                specdec_batch_gate_scheduler_all_disabled = specdec_batch_gate_scheduler_disabled\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    specdec_batch_gate_threshold_disabled\n"
+                            "                    or specdec_batch_gate_scheduler_disabled\n"
+                            "                )\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduler_disabled = specdec_batch_gate_scheduler_disabled\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduler_all_disabled = specdec_batch_gate_scheduler_all_disabled\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduled_token_count = specdec_scheduled_token_count\n",
                         )
                         if upgraded_content != content:
                             with open(path, "w") as f:
@@ -1285,7 +1366,7 @@ class BaseVllmGenerationWorker:
                             "                    spec_decode_metadata,\n"
                             "                    spec_decode_common_attn_metadata,\n"
                             "                )\n",
-                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V5\n"
+                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V6\n"
                             "        specdec_batch_gate_disabled = False\n"
                             "        if self.speculative_config:\n"
                             "            specdec_batch_gate_threshold = getattr(\n"
@@ -1348,11 +1429,33 @@ class BaseVllmGenerationWorker:
                             "                specdec_batch_gate_scheduler_disabled = bool(\n"
                             "                    specdec_scheduler_gate_attr\n"
                             "                )\n"
-                            "            specdec_batch_gate_disabled = (\n"
-                            "                specdec_batch_gate_threshold_disabled\n"
-                            "                or specdec_batch_gate_scheduler_disabled\n"
+                            "            specdec_scheduled_tokens = getattr(\n"
+                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
                             "            )\n"
+                            "            specdec_scheduled_token_count = None\n"
+                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                            "                specdec_scheduled_tokens, \"__len__\"\n"
+                            "            ):\n"
+                            "                specdec_scheduled_token_count = len(specdec_scheduled_tokens)\n"
+                            "            if specdec_scheduled_token_count is not None:\n"
+                            "                specdec_batch_gate_scheduler_all_disabled = (\n"
+                            "                    specdec_batch_gate_scheduler_disabled\n"
+                            "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                    and specdec_scheduled_token_count == 0\n"
+                            "                )\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    specdec_batch_gate_num_requests > 0\n"
+                            "                    and specdec_scheduled_token_count == 0\n"
+                            "                )\n"
+                            "            else:\n"
+                            "                specdec_batch_gate_scheduler_all_disabled = specdec_batch_gate_scheduler_disabled\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    specdec_batch_gate_threshold_disabled\n"
+                            "                    or specdec_batch_gate_scheduler_disabled\n"
+                            "                )\n"
                             "            self._nrl_specdec_batch_gate_last_scheduler_disabled = specdec_batch_gate_scheduler_disabled\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduler_all_disabled = specdec_batch_gate_scheduler_all_disabled\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduled_token_count = specdec_scheduled_token_count\n"
                             "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
                             "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
                             "            self._nrl_specdec_batch_gate_last_disabled = specdec_batch_gate_disabled\n"
@@ -1426,7 +1529,7 @@ class BaseVllmGenerationWorker:
                             "            spec_decode_common_attn_metadata.max_seq_len + self.num_spec_tokens\n"
                             "            <= effective_drafter_max_model_len\n"
                             "        )\n"
-                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V5\n"
+                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V6\n"
                             "        specdec_batch_gate_disabled = False\n"
                             "        if self.speculative_config:\n"
                             "            specdec_batch_gate_threshold = getattr(\n"
@@ -1489,11 +1592,33 @@ class BaseVllmGenerationWorker:
                             "                specdec_batch_gate_scheduler_disabled = bool(\n"
                             "                    specdec_scheduler_gate_attr\n"
                             "                )\n"
-                            "            specdec_batch_gate_disabled = (\n"
-                            "                specdec_batch_gate_threshold_disabled\n"
-                            "                or specdec_batch_gate_scheduler_disabled\n"
+                            "            specdec_scheduled_tokens = getattr(\n"
+                            "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
                             "            )\n"
+                            "            specdec_scheduled_token_count = None\n"
+                            "            if specdec_scheduled_tokens is not None and hasattr(\n"
+                            "                specdec_scheduled_tokens, \"__len__\"\n"
+                            "            ):\n"
+                            "                specdec_scheduled_token_count = len(specdec_scheduled_tokens)\n"
+                            "            if specdec_scheduled_token_count is not None:\n"
+                            "                specdec_batch_gate_scheduler_all_disabled = (\n"
+                            "                    specdec_batch_gate_scheduler_disabled\n"
+                            "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                    and specdec_scheduled_token_count == 0\n"
+                            "                )\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    specdec_batch_gate_num_requests > 0\n"
+                            "                    and specdec_scheduled_token_count == 0\n"
+                            "                )\n"
+                            "            else:\n"
+                            "                specdec_batch_gate_scheduler_all_disabled = specdec_batch_gate_scheduler_disabled\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    specdec_batch_gate_threshold_disabled\n"
+                            "                    or specdec_batch_gate_scheduler_disabled\n"
+                            "                )\n"
                             "            self._nrl_specdec_batch_gate_last_scheduler_disabled = specdec_batch_gate_scheduler_disabled\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduler_all_disabled = specdec_batch_gate_scheduler_all_disabled\n"
+                            "            self._nrl_specdec_batch_gate_last_scheduled_token_count = specdec_scheduled_token_count\n"
                             "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
                             "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
                             "            self._nrl_specdec_batch_gate_last_disabled = specdec_batch_gate_disabled\n"
@@ -1825,9 +1950,9 @@ class BaseVllmGenerationWorker:
                 "NRL SpecDec adaptive gate:",
             ]
             if "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1" not in content:
-                if "NRL_SPECDEC_BATCH_GATE_PATCH_V5" not in content:
+                if "NRL_SPECDEC_BATCH_GATE_PATCH_V6" not in content:
                     raise RuntimeError(
-                        "Adaptive SpecDec gate requires the V5 batch gate to be "
+                        "Adaptive SpecDec gate requires the V6 batch gate to be "
                         f"installed first in {gpu_model_runner}."
                     )
 

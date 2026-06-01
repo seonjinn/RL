@@ -13,9 +13,13 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 import py_compile
+import re
+import tempfile
+import textwrap
 import time
 from pathlib import Path
 from typing import Any
@@ -48,7 +52,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
         "def _patch_vllm_batch_gated_speculative_decoding()",
         "def _patch_vllm_adaptive_specdec_gate()",
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V4",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V6",
         "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
         "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
         "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
@@ -79,6 +83,8 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "_nrl_specdec_batch_gate_token_threshold",
         "specdec_batch_gate_num_requests",
         "specdec_batch_gate_num_tokens",
+        "specdec_scheduled_token_count",
+        "specdec_batch_gate_scheduler_all_disabled",
         "specdec_scheduled_tokens",
         "scheduled_spec_decode_tokens",
         "VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD must be <=",
@@ -524,6 +530,188 @@ def check_dynamic_position_counter_partial_upgrade(checks: list[dict[str, Any]],
         )
 
 
+def _load_scheduler_output_gate_helper(worker: Path):
+    text = read_text(worker)
+    tree = ast.parse(text)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_ensure_scheduler_output_gate_attr":
+            source = ast.get_source_segment(text, node)
+            if source is None:
+                break
+            namespace: dict[str, Any] = {
+                "re": re,
+                "scheduler_output_gate_marker": "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1",
+            }
+            exec(textwrap.dedent(source), namespace)
+            return namespace["_ensure_scheduler_output_gate_attr"]
+    raise RuntimeError("could not find _ensure_scheduler_output_gate_attr in vllm_worker.py")
+
+
+def _compile_text(text: str, filename: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="nrl_specdec_validate_") as tmp:
+        path = Path(tmp) / filename
+        path.write_text(text, encoding="utf-8")
+        py_compile.compile(str(path), doraise=True)
+
+
+def _scheduler_output_gate_fixture() -> str:
+    return textwrap.dedent(
+        """
+        class Scheduler:
+            def schedule(self):
+                if self.connector is not None:
+                    self.connector.before_output()
+
+                # Spec decode-related.
+                scheduled_spec_decode_tokens: dict[str, list[int]] = {}
+
+                if True:
+                    disabled = False
+                    self._nrl_specdec_scheduler_gate_last_disabled = disabled
+
+                scheduler_output = SchedulerOutput(
+                    scheduled_new_reqs=[],
+                )
+
+                if self.connector is not None:
+                    self.connector.after_output(scheduler_output)
+
+                return scheduler_output
+        """
+    ).lstrip()
+
+
+def _discover_vllm_scheduler_source() -> Path | None:
+    env_candidates = [
+        os.environ.get("NRL_VALIDATE_VLLM_SCHEDULER_SOURCE"),
+        os.environ.get("VLLM_SCHEDULER_SOURCE"),
+    ]
+    for candidate in env_candidates:
+        if candidate:
+            path = Path(candidate)
+            if path.exists():
+                return path
+
+    source_roots = []
+    for env_name in ("VLLM_SOURCE_DIR", "VLLM_SITE"):
+        value = os.environ.get(env_name)
+        if value:
+            source_roots.append(Path(value))
+    try:
+        spec = importlib.util.find_spec("vllm")
+    except Exception:
+        spec = None
+    if spec and spec.submodule_search_locations:
+        source_roots.extend(Path(location) for location in spec.submodule_search_locations)
+
+    for root in source_roots:
+        if root.name == "vllm":
+            path = root / "v1" / "core" / "sched" / "scheduler.py"
+        else:
+            path = root / "vllm" / "v1" / "core" / "sched" / "scheduler.py"
+        if path.exists():
+            return path
+    return None
+
+
+def check_scheduler_output_gate_runtime_fixture(checks: list[dict[str, Any]], patch_root: Path) -> None:
+    worker = patch_root / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker.py"
+    if not worker.exists():
+        add(checks, "source", "scheduler output gate runtime fixture", "fail", f"missing: {worker}")
+        return
+
+    try:
+        helper = _load_scheduler_output_gate_helper(worker)
+    except Exception as exc:
+        add(
+            checks,
+            "source",
+            "scheduler output gate runtime fixture",
+            "fail",
+            "could not load runtime scheduler-output gate helper from overlay",
+            error=str(exc),
+        )
+        return
+
+    marker = "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1"
+    scheduler_anchor = "        scheduler_output = SchedulerOutput(\n"
+    try:
+        fixture = _scheduler_output_gate_fixture()
+        patched, changed = helper(fixture, Path("<synthetic_scheduler.py>"))
+        repatched, changed_again = helper(patched, Path("<synthetic_scheduler.py>"))
+        _compile_text(patched, "synthetic_scheduler.py")
+
+        scheduler_pos = patched.find(scheduler_anchor)
+        marker_pos = patched.find(marker)
+        if not changed:
+            raise AssertionError("helper did not report a change for an unpatched scheduler fixture")
+        if changed_again or repatched != patched:
+            raise AssertionError("helper is not idempotent on an already patched scheduler fixture")
+        if scheduler_pos < 0:
+            raise AssertionError("patched fixture lost the SchedulerOutput construction anchor")
+        if marker_pos < 0:
+            raise AssertionError("patched fixture is missing the scheduler-output gate marker")
+        if marker in patched[:scheduler_pos]:
+            raise AssertionError("scheduler-output gate marker was inserted before SchedulerOutput")
+    except Exception as exc:
+        add(
+            checks,
+            "source",
+            "scheduler output gate runtime fixture",
+            "fail",
+            "runtime scheduler-output gate helper failed synthetic insertion/idempotence/compile test",
+            error=str(exc),
+        )
+        return
+
+    add(
+        checks,
+        "source",
+        "scheduler output gate runtime fixture",
+        "pass",
+        "runtime helper inserts scheduler_output gate state after SchedulerOutput, is idempotent, and py_compiles",
+    )
+
+    scheduler_source = _discover_vllm_scheduler_source()
+    if scheduler_source is None:
+        add(
+            checks,
+            "source",
+            "scheduler output gate exact source fixture",
+            "warn",
+            "no vLLM scheduler.py source was visible; set NRL_VALIDATE_VLLM_SCHEDULER_SOURCE to validate an exact generated source file",
+        )
+        return
+
+    try:
+        source_text = read_text(scheduler_source)
+        patched_source, _ = helper(source_text, scheduler_source)
+        _compile_text(patched_source, "scheduler.py")
+        scheduler_pos = patched_source.find(scheduler_anchor)
+        marker_pos = patched_source.find(marker)
+        if scheduler_pos >= 0 and marker_pos >= 0 and marker in patched_source[:scheduler_pos]:
+            raise AssertionError("scheduler-output gate marker was inserted before SchedulerOutput")
+    except Exception as exc:
+        add(
+            checks,
+            "source",
+            "scheduler output gate exact source fixture",
+            "warn",
+            "visible vLLM scheduler.py could not be validated directly; it may be an unpatched upstream source missing earlier gate anchors",
+            path=str(scheduler_source),
+            error=str(exc),
+        )
+    else:
+        add(
+            checks,
+            "source",
+            "scheduler output gate exact source fixture",
+            "pass",
+            "runtime helper also py_compiles on the visible vLLM scheduler.py source",
+            path=str(scheduler_source),
+        )
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     patch_root = args.patch_root
@@ -554,6 +742,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     check_python_sources_compile(checks, patch_root)
     check_dynamic_request_id_arity_guard(checks, patch_root)
     check_dynamic_position_counter_partial_upgrade(checks, patch_root)
+    check_scheduler_output_gate_runtime_fixture(checks, patch_root)
 
     if ignored:
         add(
