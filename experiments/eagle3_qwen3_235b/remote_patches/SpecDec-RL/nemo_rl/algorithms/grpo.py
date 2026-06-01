@@ -996,6 +996,106 @@ def _flatten_numeric_metrics(
     return flat
 
 
+def _token_count(token_ids: Any) -> int:
+    if token_ids is None:
+        return 0
+    if hasattr(token_ids, "numel"):
+        return int(token_ids.numel())
+    try:
+        return len(token_ids)
+    except TypeError:
+        return 0
+
+
+def _message_log_token_counts(message_logs: Any) -> tuple[int, int]:
+    total_tokens = 0
+    generated_tokens = 0
+    for message_log in message_logs or []:
+        for message in message_log or []:
+            if not isinstance(message, dict):
+                continue
+            num_tokens = _token_count(message.get("token_ids"))
+            total_tokens += num_tokens
+            if message.get("role") == "assistant":
+                generated_tokens += num_tokens
+    return total_tokens, generated_tokens
+
+
+def _generation_num_gpus(master_config: dict[str, Any]) -> int:
+    cluster_config = master_config.get("cluster", {})
+    total_num_gpus = int(cluster_config.get("num_nodes", 1)) * int(
+        cluster_config.get("gpus_per_node", 1)
+    )
+    generation_config = master_config.get("policy", {}).get("generation", {})
+    colocated_config = generation_config.get("colocated", {})
+    if colocated_config.get("enabled", True):
+        return max(1, total_num_gpus)
+
+    resources = colocated_config.get("resources", {})
+    generation_num_nodes = int(resources.get("num_nodes") or 1)
+    generation_gpus_per_node = int(
+        resources.get("gpus_per_node") or cluster_config.get("gpus_per_node", 1)
+    )
+    return max(1, generation_num_nodes * generation_gpus_per_node)
+
+
+def _log_early_generation_throughput(
+    repeated_batch: BatchedDataDict,
+    master_config: dict[str, Any],
+    logger: Logger,
+    step: int,
+    generation_time_s: float,
+    prefix: str,
+) -> None:
+    """Log generation throughput before logprob/training failures can hide it."""
+    if generation_time_s <= 0:
+        return
+    try:
+        message_logs = repeated_batch["message_log"]
+    except (KeyError, TypeError):
+        return
+
+    total_tokens, generated_tokens = _message_log_token_counts(message_logs)
+    generation_gpus = _generation_num_gpus(master_config)
+    metrics: dict[str, float | int] = {
+        "generation_time_s": generation_time_s,
+        "generation_gpus": generation_gpus,
+        "total_tokens": total_tokens,
+        "generated_tokens": generated_tokens,
+    }
+    total_tokens_per_sec_per_gpu = None
+    if total_tokens > 0:
+        total_tokens_per_sec_per_gpu = total_tokens / generation_time_s / generation_gpus
+        metrics["tokens_sec_per_gpu"] = total_tokens_per_sec_per_gpu
+    generated_tokens_per_sec_per_gpu = None
+    if generated_tokens > 0:
+        generated_tokens_per_sec_per_gpu = (
+            generated_tokens / generation_time_s / generation_gpus
+        )
+        metrics["generated_tokens_sec_per_gpu"] = generated_tokens_per_sec_per_gpu
+
+    logger.log_metrics(metrics, step, prefix=prefix)
+    print(
+        "[SpecDec early generation] "
+        f"step={step} phase={prefix} generation_time_s={generation_time_s:.4f} "
+        f"generation_gpus={generation_gpus} total_tokens={total_tokens} "
+        f"generated_tokens={generated_tokens}",
+        flush=True,
+    )
+    if total_tokens_per_sec_per_gpu is not None:
+        print(
+            "    - Generation Worker Group "
+            f"(Tokens/sec/gpu): {total_tokens_per_sec_per_gpu:.2f}",
+            flush=True,
+        )
+    if generated_tokens_per_sec_per_gpu is not None:
+        print(
+            "    - Generation Worker Group "
+            f"(Generated tokens/sec/gpu): {generated_tokens_per_sec_per_gpu:.2f}",
+            flush=True,
+        )
+
+
 def _log_specdec_vllm_metrics(
     vllm_logger_metrics: dict[str, Any],
     logger: Logger,
@@ -1675,6 +1775,7 @@ def grpo_train(
                 ):
                     policy_generation.clear_vllm_logger_metrics()
 
+                generation_start_s = time.perf_counter()
                 with timer.time("generation"):
                     # Use NeMo-Gym rollouts if enabled. We cascade NeMo-Gym first since NeMo-Gym requires async rollouts.
                     if _should_use_nemo_gym(master_config):
@@ -1724,6 +1825,15 @@ def grpo_train(
                             ],
                             greedy=False,
                         )
+                generation_time_s = time.perf_counter() - generation_start_s
+                _log_early_generation_throughput(
+                    repeated_batch,
+                    master_config,
+                    logger,
+                    total_steps + 1,
+                    generation_time_s,
+                    "specdec_early_generation",
+                )
 
                 # Keep metric polling out of the generation timer and before
                 # finish_generation(), since vLLM sleep/reset paths may drop
@@ -2631,6 +2741,7 @@ def async_grpo_train(
             with timer.time("total_step_time"):
                 # Sample trajectories from replay buffer
                 print("📦 Sampling from replay buffer...")
+                exposed_generation_start_s = time.perf_counter()
                 with timer.time("exposed_generation"):
                     buffer_size_current = ray.get(replay_buffer.size.remote())
                     print(
@@ -2696,6 +2807,9 @@ def async_grpo_train(
                         k: (sum(v) / len(v) if isinstance(v[0], (int, float)) else v)
                         for k, v in rollout_metrics.items()
                     }
+                exposed_generation_time_s = (
+                    time.perf_counter() - exposed_generation_start_s
+                )
 
                 # Enforce fixed training batch: num_prompts_per_step * num_generations_per_prompt
                 expected_batch_size = (
@@ -2717,6 +2831,14 @@ def async_grpo_train(
                     )
 
                 print(f"Got trajectory batch (size: {repeated_batch.size})")
+                _log_early_generation_throughput(
+                    repeated_batch,
+                    master_config,
+                    logger,
+                    step + 1,
+                    exposed_generation_time_s,
+                    "specdec_early_exposed_generation",
+                )
                 vllm_logger_metrics = _collect_and_log_specdec_vllm_metrics(
                     policy_generation,
                     logger,
