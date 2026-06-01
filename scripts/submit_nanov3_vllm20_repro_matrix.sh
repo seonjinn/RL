@@ -27,6 +27,7 @@ VLLM_DISABLE_CUSTOM_ALL_REDUCE_LONG="${VLLM_DISABLE_CUSTOM_ALL_REDUCE_LONG:-true
 CAP_MAX_TOKENS_TO_CONTEXT="${CAP_MAX_TOKENS_TO_CONTEXT:-auto}"
 MCORE_DISABLE_TORCH_COMPILE_JIT="${MCORE_DISABLE_TORCH_COMPILE_JIT:-false}"
 REPRO_CACHE_ROOT="${REPRO_CACHE_ROOT:-${NEMORL}/.cache_vllm20_repro}"
+ENABLE_FLASHINFER_AUTOTUNE="${ENABLE_FLASHINFER_AUTOTUNE:-auto}"
 
 case "${TARGET_CLUSTER}" in
   cw|cw-dfw)
@@ -40,6 +41,17 @@ case "${TARGET_CLUSTER}" in
     exit 1
     ;;
 esac
+
+if [[ "${ENABLE_FLASHINFER_AUTOTUNE}" == "auto" ]]; then
+  if [[ "${TARGET_CLUSTER}" == "nrt" || "${TARGET_CLUSTER}" == "oci-nrt" ]]; then
+    # On OCI-NRT, FlashInfer MoE autotune can spend tens of minutes profiling
+    # failed tactics before Step 1, which trips the cluster idle reaper. Keep
+    # the production CW default unless the caller opts out explicitly.
+    ENABLE_FLASHINFER_AUTOTUNE="false"
+  else
+    ENABLE_FLASHINFER_AUTOTUNE="true"
+  fi
+fi
 
 if [[ ! -x "${LAUNCHER}" ]]; then
   echo "Launcher is not executable: ${LAUNCHER}" >&2
@@ -133,8 +145,8 @@ submit_job() {
   echo "submit ${job_name_base}: seq=${seq_len} max_new=${max_new_tokens} cap_ctx=${cap_max_tokens_to_context} tp=${tp} cp=${cp} nodes=${nodes} mode=${mode} th=${threshold:-na} mb=${mb:-na} prompts=${prompts} gbs=${train_gbs} steps=${steps}"
 
   if [[ "${DRY_RUN}" == "true" ]]; then
-    printf '  NUM_NODES=%q CP_SIZE=%q POLICY_MAX_TOTAL_SEQUENCE_LENGTH=%q HYBRID_CP_ENABLED=%q HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK=%q HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER=%q NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT=%q MCORE_DISABLE_TORCH_COMPILE_JIT=%q NEMO_RL_ISOLATED_CACHE_ROOT=%q EXTRA_OVERRIDES_APPEND=%q %q\n' \
-      "${nodes}" "${cp}" "${seq_len}" "${hybrid_enabled}" "${threshold_env}" "${mb_env}" "${cap_max_tokens_to_context}" "${MCORE_DISABLE_TORCH_COMPILE_JIT}" "${REPRO_CACHE_ROOT}" "${extra}" "${LAUNCHER}"
+    printf '  NUM_NODES=%q CP_SIZE=%q POLICY_MAX_TOTAL_SEQUENCE_LENGTH=%q HYBRID_CP_ENABLED=%q HYBRID_CP_MAX_SEQLEN_PER_DP_CP_RANK=%q HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER=%q NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT=%q MCORE_DISABLE_TORCH_COMPILE_JIT=%q ENABLE_FLASHINFER_AUTOTUNE=%q NEMO_RL_ISOLATED_CACHE_ROOT=%q EXTRA_OVERRIDES_APPEND=%q %q\n' \
+      "${nodes}" "${cp}" "${seq_len}" "${hybrid_enabled}" "${threshold_env}" "${mb_env}" "${cap_max_tokens_to_context}" "${MCORE_DISABLE_TORCH_COMPILE_JIT}" "${ENABLE_FLASHINFER_AUTOTUNE}" "${REPRO_CACHE_ROOT}" "${extra}" "${LAUNCHER}"
     return
   fi
 
@@ -149,6 +161,7 @@ submit_job() {
   HYBRID_CP_MICROBATCH_BUDGET_MULTIPLIER="${mb_env}" \
   NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT="${cap_max_tokens_to_context}" \
   MCORE_DISABLE_TORCH_COMPILE_JIT="${MCORE_DISABLE_TORCH_COMPILE_JIT}" \
+  ENABLE_FLASHINFER_AUTOTUNE="${ENABLE_FLASHINFER_AUTOTUNE}" \
   WANDB_PROJECT="${WANDB_PROJECT}" \
   WANDB_ENABLED="${WANDB_ENABLED}" \
   EXTRA_OVERRIDES_APPEND="${extra}" \
