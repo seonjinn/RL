@@ -1,7 +1,7 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM-workspace/Megatron-LM
-	url = ssh://git@gitlab-master.nvidia.com:12051/smohsenitahe/megatron-lm.git
-	branch = aroshanghias/reconcile-nano-v3-mlm-pins
+	url = git@github.com:seonjinn/Megatron-LM.git
+	branch = sj/super-v3-omni-vllm20-dynamiccp-mlm
 	shallow = true
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
