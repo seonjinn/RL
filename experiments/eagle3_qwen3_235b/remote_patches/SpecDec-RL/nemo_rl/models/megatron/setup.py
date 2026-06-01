@@ -209,6 +209,29 @@ def destroy_parallel_state():
         pass
 
 
+def _megatron_process_group_timeout_seconds(default: int = 600) -> int:
+    return int(
+        os.environ.get(
+            "NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS",
+            os.environ.get("NRL_MEGATRON_NCCL_TIMEOUT_SECONDS", str(default)),
+        )
+    )
+
+
+def _apply_megatron_process_group_timeout(megatron_cfg: ConfigContainer) -> int:
+    timeout_seconds = _megatron_process_group_timeout_seconds()
+    if timeout_seconds <= 0:
+        return timeout_seconds
+    timeout_minutes = max(1, (timeout_seconds + 59) // 60)
+    dist_cfg = getattr(megatron_cfg, "dist", None)
+    if dist_cfg is not None:
+        if hasattr(dist_cfg, "distributed_timeout_minutes"):
+            dist_cfg.distributed_timeout_minutes = timeout_minutes
+        if hasattr(dist_cfg, "distributed_timeout_seconds_after_init"):
+            dist_cfg.distributed_timeout_seconds_after_init = timeout_seconds
+    return timeout_seconds
+
+
 def setup_distributed() -> None:
     """Handle NCCL settings, dtype mapping, and basic config setup."""
     # Disable dynamo autotune_local_cache to avoid crash when there's already a cache
@@ -219,12 +242,7 @@ def setup_distributed() -> None:
     if torch.cuda.is_available():
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         torch.cuda.set_device(local_rank % torch.cuda.device_count())
-    timeout_seconds = int(
-        os.environ.get(
-            "NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS",
-            os.environ.get("NRL_MEGATRON_NCCL_TIMEOUT_SECONDS", "600"),
-        )
-    )
+    timeout_seconds = _megatron_process_group_timeout_seconds()
     # Need to initialize the process group before calling into Megatron-Bridge,
     # otherwise Megatron-Bridge will try to set an incorrect device.
     torch.distributed.init_process_group(
@@ -674,12 +692,25 @@ def setup_model_and_optimizer(
     state.cfg = megatron_cfg
     # TODO: Freeze state.cfg
 
+    timeout_seconds = _apply_megatron_process_group_timeout(megatron_cfg)
     megatron_cfg.dist.external_gpu_device_mapping = True
     initialize_megatron(
         cfg=megatron_cfg,
         get_embedding_ranks=get_embedding_ranks,
         get_position_embedding_ranks=get_position_embedding_ranks,
     )
+    if timeout_seconds > 0 and hasattr(parallel_state, "update_pg_timeout"):
+        try:
+            parallel_state.update_pg_timeout(timedelta(seconds=timeout_seconds))
+            print(
+                "Updated Megatron model-parallel process group timeout to "
+                f"{timeout_seconds} seconds."
+            )
+        except Exception as exc:
+            warnings.warn(
+                "Unable to update Megatron model-parallel process group timeout "
+                f"after initialization: {exc}"
+            )
 
     if megatron_cfg.ft and megatron_cfg.ft.enable_ft_package:
         fault_tolerance.setup(megatron_cfg, state)
