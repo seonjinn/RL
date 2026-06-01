@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 08:38 PDT",
+  "updated_at": "2026-06-01 08:40 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1448,7 +1448,8 @@
     "public_hf_eagle3_smoke": "Attach/smoke evidence only unless base model, dataset, batch shape, gates, and baseline are matched and re-run.",
     "in_house_500k_speculators": "Main result tables require launcher provenance guards to point at the expected mixed non-OpenMath 500K checkpoint root.",
     "baseline_config_parity": "Required for final speedup claims. The analyzer must prove matching generation-logprob mode plus prompt/generation shape and vLLM batch caps, or mark the comparison non-comparable unless explicitly overridden for legacy diagnostics.",
-    "drafter_training_mode": "Current measured NeMo-RL jobs use fixed_external_drafter. Online drafter refresh inside the GRPO loop is not implemented."
+    "drafter_training_mode": "Current measured NeMo-RL jobs use fixed_external_drafter. Online drafter refresh inside the GRPO loop is not implemented.",
+    "logprob_matched_baseline_job": "3074142 submitted at 2026-06-01 08:40 PDT for final apples-to-apples speedup."
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
@@ -1478,5 +1479,21 @@
       "SpecDec-RL vllm_worker now logs effective generation sampling logprob config once per worker so future reports can prove parity."
     ],
     "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
+  },
+  "logprob_matched_baseline_validation": {
+    "updated_at": "2026-06-01 08:40 PDT",
+    "baseline_job_id": "3074142",
+    "baseline_job_name": "qwen30ba3b-main-baseline-logprobmatched-p64g32-4step-N4xG4",
+    "state": "submitted",
+    "purpose": "Apples-to-apples baseline for current 30B SpecDec K=1 validation, with generation logprobs omitted to match vLLM SpecDec behavior.",
+    "num_prompts_per_step": 64,
+    "num_generations_per_prompt": 32,
+    "train_global_batch_size": 2048,
+    "max_steps": 4,
+    "env": {
+      "NRL_VLLM_OMIT_GENERATION_LOGPROBS": "true"
+    },
+    "compare_against_specdec_job": "3073673",
+    "note": "Historical baseline 4169.19 tok/s/GPU remains useful context, but final speedup should use this logprob-matched baseline once completed."
   }
 }
