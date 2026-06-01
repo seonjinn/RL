@@ -515,6 +515,38 @@ def print_performance_metrics(
             else:
                 print(f"    - Generation Worker {dp_idx:3.0f}: {''.join(timeline)}")
 
+    def specdec_per_position_acceptance_rates(
+        spec_decode: dict[str, Any],
+    ) -> tuple[list[float], list[int]]:
+        rates = spec_decode.get("acceptance_rate_per_pos")
+        denominators = spec_decode.get("num_drafts_per_pos")
+        if isinstance(rates, list) and rates:
+            parsed_rates: list[float] = []
+            parsed_denominators: list[int] = []
+            for idx, rate in enumerate(rates):
+                try:
+                    parsed_rates.append(float(rate))
+                except (TypeError, ValueError):
+                    parsed_rates.append(0.0)
+                if isinstance(denominators, list) and idx < len(denominators):
+                    try:
+                        parsed_denominators.append(int(denominators[idx]))
+                    except (TypeError, ValueError):
+                        parsed_denominators.append(0)
+            return parsed_rates, parsed_denominators
+
+        num_drafts = int(spec_decode.get("num_drafts", 0))
+        if num_drafts <= 0:
+            return [], []
+        accepted_per_pos = spec_decode.get("num_accepted_tokens_per_pos", []) or []
+        parsed_rates = []
+        for accepted in accepted_per_pos:
+            try:
+                parsed_rates.append(float(accepted) / num_drafts)
+            except (TypeError, ValueError):
+                parsed_rates.append(0.0)
+        return parsed_rates, [num_drafts] * len(parsed_rates)
+
     vllm_logger_metrics = metrics.get("vllm_logger_metrics", {})
     spec_decode_metrics = (
         vllm_logger_metrics.get("spec_decode", {})
@@ -593,10 +625,9 @@ def print_performance_metrics(
                 "spec_decode/accepted_tokens_per_total_token"
             ] = accepted_tokens_per_total_token
         if accepted_per_pos:
-            per_pos_rates = [
-                accepted / num_drafts if num_drafts > 0 else 0.0
-                for accepted in accepted_per_pos
-            ]
+            per_pos_rates, per_pos_denominators = specdec_per_position_acceptance_rates(
+                spec_decode_metrics
+            )
             print(
                 "    - Per-position acceptance rate: "
                 + ", ".join(f"{rate:.4f}" for rate in per_pos_rates)
@@ -605,6 +636,10 @@ def print_performance_metrics(
                 performance_metrics[f"spec_decode/acceptance_rate_pos_{idx + 1}"] = (
                     rate
                 )
+                if idx < len(per_pos_denominators):
+                    performance_metrics[f"spec_decode/drafts_pos_{idx + 1}"] = (
+                        per_pos_denominators[idx]
+                    )
         performance_metrics["spec_decode/num_drafts"] = num_drafts
         performance_metrics["spec_decode/num_draft_tokens"] = num_draft_tokens
         performance_metrics["spec_decode/num_accepted_tokens"] = num_accepted_tokens

@@ -1064,6 +1064,49 @@ class VllmGeneration(GenerationInterface):
         else:
             spec_decode_totals["accepted_tokens_per_draft"] = 0.0
             spec_decode_totals["mean_acceptance_length"] = 0.0
+        accepted_per_pos = list(
+            spec_decode_totals.get("num_accepted_tokens_per_pos", []) or []
+        )
+        if accepted_per_pos:
+            per_pos_denominators = [spec_decode_totals["num_drafts"]] * len(
+                accepted_per_pos
+            )
+            scheduler_gate = spec_decode_gate_totals.get("scheduler", {})
+            if isinstance(scheduler_gate, dict):
+                def _gate_int(key: str) -> int:
+                    try:
+                        return int(scheduler_gate.get(key, 0) or 0)
+                    except (TypeError, ValueError):
+                        return 0
+
+                dynamic_tiers = [
+                    (
+                        _gate_int("dynamic_small_selected_count"),
+                        _gate_int("dynamic_small_tokens"),
+                    ),
+                    (
+                        _gate_int("dynamic_medium_selected_count"),
+                        _gate_int("dynamic_medium_tokens"),
+                    ),
+                    (
+                        _gate_int("dynamic_large_selected_count"),
+                        _gate_int("dynamic_large_tokens"),
+                    ),
+                ]
+                if sum(count for count, _ in dynamic_tiers) > 0:
+                    per_pos_denominators = [
+                        sum(
+                            count
+                            for count, selected_tokens in dynamic_tiers
+                            if selected_tokens >= pos + 1
+                        )
+                        for pos in range(len(accepted_per_pos))
+                    ]
+            spec_decode_totals["num_drafts_per_pos"] = per_pos_denominators
+            spec_decode_totals["acceptance_rate_per_pos"] = [
+                float(accepted) / denominator if denominator > 0 else 0.0
+                for accepted, denominator in zip(accepted_per_pos, per_pos_denominators)
+            ]
         vllm_logger_metrics["spec_decode"] = spec_decode_totals
 
         return vllm_logger_metrics

@@ -1028,16 +1028,12 @@ def _log_specdec_vllm_metrics(
             f"{int(spec_decode.get('num_expected_workers', 0))}",
             flush=True,
         )
-        num_drafts = int(spec_decode.get("num_drafts", 0))
-        accepted_per_pos = spec_decode.get("num_accepted_tokens_per_pos", [])
-        if num_drafts > 0 and accepted_per_pos:
-            per_pos_rates = [
-                float(accepted) / num_drafts for accepted in accepted_per_pos[:8]
-            ]
+        per_pos_rates = _specdec_per_position_acceptance_rates(spec_decode)
+        if per_pos_rates:
             print(
                 "[SpecDec early metrics] "
                 f"step={step} per_position_acceptance="
-                + ",".join(f"{rate:.4f}" for rate in per_pos_rates),
+                + ",".join(f"{rate:.4f}" for rate in per_pos_rates[:8]),
                 flush=True,
             )
 
@@ -1124,6 +1120,31 @@ def _metric_int(metrics: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+def _specdec_per_position_acceptance_rates(
+    spec_decode: dict[str, Any],
+) -> list[float]:
+    rates = spec_decode.get("acceptance_rate_per_pos")
+    if isinstance(rates, list) and rates:
+        result = []
+        for rate in rates:
+            try:
+                result.append(float(rate))
+            except (TypeError, ValueError):
+                result.append(0.0)
+        return result
+
+    num_drafts = _metric_int(spec_decode, "num_drafts", 0)
+    if num_drafts <= 0:
+        return []
+    result = []
+    for accepted in spec_decode.get("num_accepted_tokens_per_pos", []) or []:
+        try:
+            result.append(float(accepted) / num_drafts)
+        except (TypeError, ValueError):
+            result.append(0.0)
+    return result
+
+
 def _maybe_apply_specdec_step_controller(
     policy_generation: Optional[GenerationInterface],
     vllm_logger_metrics: dict[str, Any],
@@ -1175,14 +1196,7 @@ def _maybe_apply_specdec_step_controller(
     allow_increase = _env_bool("NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE", False)
     second_pos_floor = _env_float("NRL_SPECDEC_CONTROLLER_POS2_FLOOR", 0.25)
     third_pos_floor = _env_float("NRL_SPECDEC_CONTROLLER_POS3_FLOOR", 0.15)
-    num_drafts = _metric_int(spec_decode, "num_drafts", 0)
-    per_pos = []
-    if num_drafts > 0:
-        for accepted in spec_decode.get("num_accepted_tokens_per_pos", []) or []:
-            try:
-                per_pos.append(float(accepted) / num_drafts)
-            except (TypeError, ValueError):
-                per_pos.append(0.0)
+    per_pos = _specdec_per_position_acceptance_rates(spec_decode)
 
     next_small = current_small
     next_medium = current_medium

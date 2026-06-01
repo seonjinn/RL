@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -404,12 +405,13 @@ def generate_one(
     args: argparse.Namespace,
     messages: list[dict[str, str]],
 ) -> str:
+    max_tokens = args.max_tokens
     payload = {
         "model": args.model,
         "messages": messages,
         "temperature": args.temperature,
         "top_p": args.top_p,
-        "max_tokens": args.max_tokens,
+        "max_tokens": max_tokens,
         "n": 1,
     }
     last_error: Exception | None = None
@@ -420,7 +422,35 @@ def generate_one(
             if content and content.strip():
                 return content
             raise RuntimeError(f"Empty completion response: {result}")
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, KeyError) as exc:
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            match = re.search(
+                r"maximum context length is (\d+) tokens and your request has (\d+) input tokens",
+                body,
+            )
+            if match:
+                max_context = int(match.group(1))
+                input_tokens = int(match.group(2))
+                reduced_max_tokens = max_context - input_tokens
+                if 0 < reduced_max_tokens < max_tokens:
+                    max_tokens = reduced_max_tokens
+                    payload["max_tokens"] = max_tokens
+                    print(
+                        "request max_tokens reduced after context-limit response: "
+                        f"max_tokens={max_tokens} input_tokens={input_tokens} "
+                        f"max_context={max_context}",
+                        file=sys.stderr,
+                    )
+                    continue
+            detail = f"{exc}; body={body[:500]}" if body else str(exc)
+            print(f"request failed attempt={attempt}/{args.retries}: {detail}", file=sys.stderr)
+            if attempt < args.retries:
+                time.sleep(args.retry_sleep)
+        except (urllib.error.URLError, TimeoutError, RuntimeError, KeyError) as exc:
             last_error = exc
             print(f"request failed attempt={attempt}/{args.retries}: {exc}", file=sys.stderr)
             if attempt < args.retries:
