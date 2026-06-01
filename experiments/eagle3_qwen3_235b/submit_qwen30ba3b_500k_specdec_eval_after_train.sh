@@ -10,7 +10,7 @@ SCRIPT_DIR="$ROOT_DIR/experiments/eagle3_qwen3_235b"
 REMOTE_REPO_ROOT="${REMOTE_REPO_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap}"
 NEMO_RL_DIR="${NEMO_RL_DIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL}"
 CONTAINER="${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh}"
-TRAIN_JOB_ID="${TRAIN_JOB_ID-3056818}"
+TRAIN_JOB_ID="${TRAIN_JOB_ID:-}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_nemorl}"
 PARTITION="${PARTITION:-batch}"
 WRAPPER_TIME="${WRAPPER_TIME:-00:30:00}"
@@ -83,9 +83,9 @@ if [[ -z "${SPECDEC_ADAPTIVE_GATE_MODE}" ]] && {
 fi
 
 submit_wrapper() {
-  local dependency=()
-  if [[ -n "$TRAIN_JOB_ID" ]]; then
-    dependency=(--dependency="afterok:${TRAIN_JOB_ID}")
+  local dependency_arg=""
+  if [[ -n "$TRAIN_JOB_ID" && "$TRAIN_JOB_ID" != "none" && "$TRAIN_JOB_ID" != "NONE" ]]; then
+    dependency_arg="--dependency=afterok:${TRAIN_JOB_ID}"
   fi
   local remote_script="$REMOTE_REPO_ROOT/experiments/eagle3_qwen3_235b/$(basename "$0")"
   local wrapped
@@ -122,9 +122,11 @@ submit_wrapper() {
     --job-name="qwen30ba3b-submit-500k-specdec-eval"
     --output="logs/%x_%j.out"
     --error="logs/%x_%j.err"
-    "${dependency[@]}"
-    --wrap "$wrapped"
   )
+  if [[ -n "${dependency_arg}" ]]; then
+    cmd+=("${dependency_arg}")
+  fi
+  cmd+=(--wrap "$wrapped")
   printf '%q ' "${cmd[@]}"
   printf '\n'
   if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then

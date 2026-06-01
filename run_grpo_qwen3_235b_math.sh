@@ -315,6 +315,7 @@ fi
 
 export MOUNTS="${MOUNTS:-/lustre:/lustre,${REPO_ROOT}:${REPO_ROOT},${SCRIPT_DIR}:${SCRIPT_DIR},${ARTIFACT_ROOT}:${ARTIFACT_ROOT}}"
 
+SBATCH_DEPENDENCY_VALUE="${SBATCH_DEPENDENCY-singleton}"
 SBATCH_CMD=(
   sbatch
   --nodes="${NUM_NODES}"
@@ -325,8 +326,10 @@ SBATCH_CMD=(
   --gres=gpu:${NUM_GPU}
   --exclusive
   --mem="${SBATCH_MEM:-0}"
-  --dependency="${SBATCH_DEPENDENCY:-singleton}"
 )
+if [[ -n "${SBATCH_DEPENDENCY_VALUE}" && "${SBATCH_DEPENDENCY_VALUE}" != "none" && "${SBATCH_DEPENDENCY_VALUE}" != "NONE" ]]; then
+  SBATCH_CMD+=(--dependency="${SBATCH_DEPENDENCY_VALUE}")
+fi
 if [[ -n "$SBATCH_EXCLUDE" ]]; then
   SBATCH_CMD+=(--exclude="$SBATCH_EXCLUDE")
 fi

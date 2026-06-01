@@ -542,6 +542,24 @@ def summarize_result(
     }
 
 
+def spec_metric_median(summary: dict[str, Any], *names: str) -> float | None:
+    metrics = summary.get("spec_metrics", {})
+    for name in names:
+        for key in (name, f"spec_decode_{name}"):
+            value = metrics.get(key, {}).get("median")
+            if value is not None:
+                return value
+    for name in names:
+        for key, stats_dict in sorted(metrics.items()):
+            if key.startswith("derived_") and key not in names:
+                continue
+            if key.endswith(f"_{name}"):
+                value = stats_dict.get("median")
+                if value is not None:
+                    return value
+    return None
+
+
 def gate_result(
     current: dict[str, Any],
     baseline: dict[str, Any] | None,
@@ -582,9 +600,12 @@ def gate_result(
             status = "fail"
 
     if min_acceptance_rate is not None:
-        acceptance = current["spec_metrics"].get("acceptance_rate", {}).get("median")
+        acceptance = spec_metric_median(current, "acceptance_rate")
         if acceptance is None:
-            acceptance = current["spec_metrics"].get("derived_acceptance_rate", {}).get("median")
+            acceptance = spec_metric_median(current, "derived_acceptance_rate")
+        reliable = spec_metric_median(current, "acceptance_rate_reliable")
+        complete = spec_metric_median(current, "metrics_complete")
+        partial = spec_metric_median(current, "metrics_partial")
         if acceptance is None:
             passed = not fail_on_missing_spec_metrics
             checks.append(
@@ -598,6 +619,28 @@ def gate_result(
             if not passed:
                 status = "fail"
         else:
+            reliability_fail_reason = None
+            if reliable is None and complete is None and partial is None:
+                if fail_on_missing_spec_metrics:
+                    reliability_fail_reason = "missing reliability metrics"
+            elif reliable is not None and reliable < 0.5:
+                reliability_fail_reason = "acceptance_rate_reliable is false"
+            elif complete is not None and complete < 0.5:
+                reliability_fail_reason = "metrics_complete is false"
+            elif partial is not None and partial >= 0.5:
+                reliability_fail_reason = "metrics are partial"
+            checks.append(
+                {
+                    "name": "acceptance_rate_reliability",
+                    "passed": reliability_fail_reason is None,
+                    "acceptance_rate_reliable": reliable,
+                    "metrics_complete": complete,
+                    "metrics_partial": partial,
+                    "reason": reliability_fail_reason,
+                }
+            )
+            if reliability_fail_reason is not None:
+                status = "fail"
             passed = acceptance >= min_acceptance_rate
             checks.append(
                 {

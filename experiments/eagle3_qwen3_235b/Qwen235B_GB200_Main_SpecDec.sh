@@ -87,6 +87,7 @@ NRL_SPECDEC_CONTROLLER_POS3_FLOOR="${NRL_SPECDEC_CONTROLLER_POS3_FLOOR:-0.15}"
 NRL_SPECDEC_CONTROLLER_MIN_K="${NRL_SPECDEC_CONTROLLER_MIN_K:-1}"
 NRL_SPECDEC_CONTROLLER_MAX_K="${NRL_SPECDEC_CONTROLLER_MAX_K:-${NUM_SPECULATIVE_TOKENS}}"
 NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE="${NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE:-false}"
+REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
 WANDB_NAME="${WANDB_NAME:-Qwen235B_A22B_Main_N${NUM_NODES}xG${GPUS_PER_NODE}_specdec_k${NUM_SPECULATIVE_TOKENS}_p${NUM_PROMPTS}_g${NUM_GENERATIONS}_${MAX_STEPS}step}"
 
 if [[ -z "${SPECDEC_ADAPTIVE_GATE_MODE}" ]] && {
@@ -183,13 +184,29 @@ if [[ ! -s "${SCRIPT_DIR}/ray.sub" ]]; then
   echo "ERROR: patched ray.sub not found at ${SCRIPT_DIR}/ray.sub" >&2
   exit 2
 fi
+if [[ "${REQUIRE_SPECDEC_RL_PATCHES}" == "true" || "${REQUIRE_SPECDEC_RL_PATCHES}" == "True" ]]; then
+  require_patch_marker() {
+    local file="$1"
+    local marker="$2"
+    if [[ ! -s "${file}" ]] || ! grep -q "${marker}" "${file}"; then
+      echo "ERROR: required SpecDec-RL patch marker '${marker}' is missing from ${file}" >&2
+      echo "Use NEMO_RL_DIR=/lustre/fs1/.../SpecDec-RL with the current patch bundle, or set REQUIRE_SPECDEC_RL_PATCHES=false only for diagnostics." >&2
+      exit 2
+    fi
+  }
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_SPECDEC_BATCH_GATE_PATCH_V7"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_generation.py" "acceptance_rate_reliable"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/algorithms/grpo.py" "_repair_specdec_generation_logprobs_if_safe"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_VLLM_OMIT_GENERATION_LOGPROBS"
+fi
 if [[ ! -s "${DRAFT_MODEL}/config.json" ]]; then
   echo "ERROR: DRAFT_MODEL is not a valid HF checkpoint: ${DRAFT_MODEL}" >&2
   exit 2
 fi
 if [[ "${DRAFT_MODEL}" == "${DEFAULT_LEGACY_DRAFT_MODEL}" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
-  echo "WARNING: using legacy default DRAFT_MODEL=${DRAFT_MODEL}" >&2
-  echo "Set DRAFT_MODEL explicitly for 500k/public-HF result claims, or ALLOW_LEGACY_DRAFT_MODEL=true to silence this warning." >&2
+  echo "ERROR: refusing to use legacy default DRAFT_MODEL=${DRAFT_MODEL}" >&2
+  echo "Set DRAFT_MODEL explicitly for 500k/public-HF result claims, or ALLOW_LEGACY_DRAFT_MODEL=true for an explicit legacy diagnostic run." >&2
+  exit 2
 fi
 
 SPECDEC_EXTRA_OVERRIDES=""

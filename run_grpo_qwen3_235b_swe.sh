@@ -567,6 +567,7 @@ GYM_CODE="${GYM_CODE:-${REPO_ROOT}/3rdparty/Gym-workspace/Gym}"
 export MOUNTS="/lustre:/lustre,$PWD:$PWD,${GYM_CODE}:/opt/nemo-rl/3rdparty/Gym-workspace/Gym"
 
 # ================ 提交任务 ================
+SBATCH_DEPENDENCY_VALUE="${SBATCH_DEPENDENCY-singleton}"
 SBATCH_CMD=(
   sbatch
   --nodes="${NUM_ACTOR_NODES}"
@@ -577,9 +578,11 @@ SBATCH_CMD=(
   --gres=gpu:${NUM_GPU}
   --exclusive
   --mem="${SBATCH_MEM:-0}"
-  --dependency="${SBATCH_DEPENDENCY:-singleton}"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"60","reason":"data_loading","description":"Async GRPO RL training: training GPUs idle during rollout collection (~30min) and validation each step"}}'
 )
+if [[ -n "${SBATCH_DEPENDENCY_VALUE}" && "${SBATCH_DEPENDENCY_VALUE}" != "none" && "${SBATCH_DEPENDENCY_VALUE}" != "NONE" ]]; then
+  SBATCH_CMD+=(--dependency="${SBATCH_DEPENDENCY_VALUE}")
+fi
 if [[ -n "$SBATCH_EXCLUDE" ]]; then
   SBATCH_CMD+=(--exclude="$SBATCH_EXCLUDE")
 fi
