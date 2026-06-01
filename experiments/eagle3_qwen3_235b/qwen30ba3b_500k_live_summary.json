@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 08:53 PDT",
+  "updated_at": "2026-06-01 09:32 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1401,7 +1401,7 @@
   },
   "logprob_matched_k1_validation_job": {
     "job_id": "3074189",
-    "state_at_submit_check": "RUNNING at 2026-06-01 08:53 PDT on nvl72115-T[08-09,11,16]",
+    "state_at_latest_check": "RUNNING at 2026-06-01 09:32 PDT on nvl72115-T[08-09,11,16]; vLLM workers loaded target/drafter, completed CUDA Graph capture, and Megatron policy worker venvs finished building. MegatronPolicyWorker initialization/compile is active with GPUs at 100%. No NeMo-RL Step 1 generation metric emitted yet.",
     "purpose": "Apples-to-apples 30B SpecDec K=1 comparison against logprob-matched baseline job 3074142.",
     "num_speculative_tokens": 1,
     "request_gate": 0,
@@ -1473,7 +1473,7 @@
     "baseline_config_parity": "Required for final speedup claims. The analyzer must prove matching generation-logprob mode plus prompt/generation shape and vLLM batch caps, or mark the comparison non-comparable unless explicitly overridden for legacy diagnostics.",
     "drafter_training_mode": "Current measured NeMo-RL jobs use fixed_external_drafter. Online drafter refresh inside the GRPO loop is not implemented.",
     "logprob_matched_baseline_job": "3074142 submitted at 2026-06-01 08:40 PDT for final apples-to-apples speedup.",
-    "logprob_matched_specdec_job": "3074189 submitted at 2026-06-01 08:48 PDT after fixing the 500K eval wrapper default to NRL_VLLM_OMIT_GENERATION_LOGPROBS=true; running at 2026-06-01 08:53 PDT with command-line evidence for the true setting."
+    "logprob_matched_specdec_job": "3074189 submitted at 2026-06-01 08:48 PDT after fixing the 500K eval wrapper default to NRL_VLLM_OMIT_GENERATION_LOGPROBS=true; running at 2026-06-01 09:32 PDT with command-line evidence for the true setting, target/drafter loading complete, policy-worker init/compile active, and no NeMo-RL generation metric yet."
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
@@ -1505,10 +1505,10 @@
     "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
   },
   "logprob_matched_baseline_validation": {
-    "updated_at": "2026-06-01 08:53 PDT",
+    "updated_at": "2026-06-01 09:32 PDT",
     "baseline_job_id": "3074142",
     "baseline_job_name": "qwen30ba3b-main-baseline-logprobmatched-p64g32-4step-N4xG4",
-    "state": "baseline running; matched SpecDec running",
+    "state": "baseline and matched SpecDec both running in Megatron policy worker initialization/compile with GPUs active; neither has emitted Step 1 generation throughput yet",
     "purpose": "Apples-to-apples baseline for current 30B SpecDec K=1 validation, with generation logprobs omitted to match vLLM SpecDec behavior.",
     "num_prompts_per_step": 64,
     "num_generations_per_prompt": 32,
@@ -1519,7 +1519,7 @@
     },
     "compare_against_specdec_job": "3074189",
     "superseded_noncomparable_specdec_job": "3073673",
-    "matched_specdec_job_state_at_submit_check": "RUNNING at 2026-06-01 08:53 PDT on nvl72115-T[08-09,11,16]",
-    "note": "Historical baseline 4169.19 tok/s/GPU remains useful context, but final speedup should use baseline 3074142 and SpecDec 3074189 once both complete. Job 3073673 remains useful for early acceptance evidence but launched with NRL_VLLM_OMIT_GENERATION_LOGPROBS=false."
+    "matched_specdec_job_state_at_latest_check": "RUNNING at 2026-06-01 09:32 PDT on nvl72115-T[08-09,11,16]",
+    "note": "Historical baseline 4169.19 tok/s/GPU remains useful context, but final speedup should use baseline 3074142 and SpecDec 3074189 once both complete. At the latest check, baseline 3074142 had initialized vLLM and lm_policy workers and was compiling/initializing MegatronPolicyWorker with GPUs active; SpecDec 3074189 had initialized vLLM workers, loaded the Eagle3 drafter, captured CUDA Graphs, built Megatron policy worker envs, and was also in MegatronPolicyWorker initialization/compile with GPUs active. Job 3073673 remains useful for early acceptance evidence but launched with NRL_VLLM_OMIT_GENERATION_LOGPROBS=false."
   }
 }
