@@ -1166,21 +1166,30 @@ def _maybe_apply_specdec_step_controller(
             except (TypeError, ValueError):
                 per_pos.append(0.0)
 
-    low_quality = acceptance < low_watermark
-    if current_small >= 2 and len(per_pos) >= 2:
-        low_quality = low_quality or per_pos[1] < second_pos_floor
-    if current_small >= 3 and len(per_pos) >= 3:
-        low_quality = low_quality or per_pos[2] < third_pos_floor
-
     next_small = current_small
     next_medium = current_medium
     next_large = current_large
     action = "hold"
-    if low_quality and current_small > min_k:
+    second_pos_low = (
+        current_small >= 2 and len(per_pos) >= 2 and per_pos[1] < second_pos_floor
+    )
+    third_pos_low = (
+        current_small >= 3 and len(per_pos) >= 3 and per_pos[2] < third_pos_floor
+    )
+    aggregate_low = acceptance < low_watermark
+    if second_pos_low:
+        next_medium = max(min_k, current_medium - 1)
+        next_small = min(max(min_k, current_small - 1), next_medium)
+        next_large = min(next_medium, current_large)
+        action = "decrease_k_pos2"
+    elif third_pos_low:
+        next_small = max(current_medium, max(min_k, current_small - 1))
+        action = "decrease_k_pos3"
+    elif aggregate_low and not per_pos and current_small > min_k:
         next_small = max(min_k, current_small - 1)
         next_medium = min(next_small, max(min_k, current_medium - 1))
         next_large = min(next_medium, current_large)
-        action = "decrease_k"
+        action = "decrease_k_aggregate"
     elif allow_increase and acceptance > high_watermark and current_small < max_k:
         next_small = min(max_k, current_small + 1)
         next_medium = min(next_small, max(current_medium, min(next_small, 2)))
@@ -1211,7 +1220,18 @@ def _maybe_apply_specdec_step_controller(
                 updated_objects += int(result.get("updated_objects", 0))
     logger.log_metrics(
         {
-            "controller/action_decrease_k": 1 if action == "decrease_k" else 0,
+            "controller/action_decrease_k": (
+                1 if action.startswith("decrease_k") else 0
+            ),
+            "controller/action_decrease_k_pos2": (
+                1 if action == "decrease_k_pos2" else 0
+            ),
+            "controller/action_decrease_k_pos3": (
+                1 if action == "decrease_k_pos3" else 0
+            ),
+            "controller/action_decrease_k_aggregate": (
+                1 if action == "decrease_k_aggregate" else 0
+            ),
             "controller/action_increase_k": 1 if action == "increase_k" else 0,
             "controller/next_small_tokens": next_small,
             "controller/next_medium_tokens": next_medium,
