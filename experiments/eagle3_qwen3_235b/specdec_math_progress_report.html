@@ -425,9 +425,9 @@
     </div>
 
     <div class="banner">
-      <h2>Live Update: 2026-06-01 04:10 PT</h2>
+      <h2>Live Update: 2026-06-01 04:22 PT</h2>
       <p>30B dynamic-K validation job <code>3070995</code> is running and has now reached real NeMo-RL Step 1 generation. It emitted complete-DP SpecDec metrics: aggregate acceptance <code>33.36%</code>, draft tokens <code>362,572</code>, accepted tokens <code>120,960</code>, per-position acceptance <code>46.48%</code>/<code>20.29%</code>/<code>0.04%</code>. The long-tail gate is active: runner enabled ratio is <code>8.69%</code> and scheduler enabled ratio is <code>2.99%</code>, so SpecDec is mostly disabled during the large-batch region and enabled only late in the tail. This is a partial result only; final baseline-relative throughput for <code>3070995</code> is pending until later NeMo-RL generation metrics are emitted. The best confirmed 30B result is still K=1 token-pressure job <code>3060379</code>: <code>5696.58 tok/s/GPU</code>, <code>1.3664x</code> vs baseline, <code>57.40%</code> acceptance.</p>
-      <p>235B in-house Speculators training is in hidden-state generation, not training yet. Current array <code>3071825_[0-99]%5</code> has tasks <code>0-4</code> running and tasks <code>5-99</code> pending on <code>JobArrayTaskLimit</code>; train job <code>3071826</code> is dependency-pending. The first shard loaded all <code>118/118</code> target checkpoint shards, attached extraction layers <code>1,46,90,94</code>, and is compiling/capturing CUDA graphs before <code>data_generation_offline</code>. Hidden-state file count is still <code>0</code>.</p>
+      <p>235B in-house Speculators training is still in hidden-state generation, not training yet. Array <code>3071825_[0-99]%5</code> was cancelled after the first hidden-state request exposed a vLLM extracted-site shape bug: <code>extract_hidden_states</code> returned <code>[batch,1,1]</code> draft tokens where vLLM expects <code>[batch,1]</code>. That bug is now patched in the shared vLLM site and pipeline as <code>NRL_EXTRACT_HIDDEN_STATES_DRAFT_SHAPE_PATCH_V1</code>. New array <code>3072149_[0-99]%5</code> is running with tasks <code>0-4</code> active and <code>5-99</code> pending on <code>JobArrayTaskLimit</code>; train job <code>3072150</code> is dependency-pending. Hidden-state file count is still <code>0</code> while the first shards are in preflight/startup.</p>
     </div>
 
     <div class="banner">
@@ -682,7 +682,7 @@
         </tr>
         <tr>
           <td>Is there an active 235B SpecDec job now?</td>
-          <td>No active 235B NeMo-RL SpecDec evaluation job is running as of <code>2026-06-01 02:51 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is target-response generation for the clean in-house 500K Speculators path. Direct adaptive missing-ID repair job <code>3068010</code> completed successfully with <code>1435/1435</code> repair rows. Finalizer <code>3068014</code> completed successfully and produced exact <code>500000</code>-row final conversation and Speculators JSONL files. The final 500K file has <code>0</code> duplicate prompts and <code>0</code> OpenMath-denylisted prompts. Prepare job <code>3068015</code> completed and wrote <code>16</code> arrow shards plus <code>token_freq.pt</code>. Hidden-state array <code>3068016</code> has <code>100/100</code> tasks running, and train job <code>3068017</code> remains dependency-pending.</td>
+          <td>No active 235B NeMo-RL SpecDec evaluation job is running as of <code>2026-06-01 04:22 PT</code>. Completed K=1 job <code>3055926</code> attached the Eagle3 drafter and produced 20 rollout metrics; K=2 retry <code>3057118</code> attached the drafter but stalled before any NeMo-RL throughput metric. The active 235B work is clean in-house 500K Speculators training. Finalizer <code>3068014</code> produced exact <code>500000</code>-row conversation and Speculators JSONL files; prepare job <code>3068015</code> completed with <code>16</code> arrow shards plus <code>token_freq.pt</code>. Hidden-state array <code>3072149_[0-99]%5</code> is running after the vLLM <code>extract_hidden_states</code> shape fix, and train job <code>3072150</code> remains dependency-pending.</td>
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
@@ -972,7 +972,7 @@
     <h2>235B In-House Drafter Corpus</h2>
     <div class="banner">
       <h2>Current Data Status</h2>
-      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response generation is being repaired from the same mixed non-OpenMath prompt pool used by the clean 30B run. Direct adaptive missing-ID repair job <code>3068010</code> completed <code>1435/1435</code> repair rows as of <code>2026-06-01 02:28 PT</code>. Finalizer <code>3068014</code> completed successfully and produced exact <code>500000</code>-row final conversation and Speculators JSONL files. Prepare job <code>3068015</code> is running; hidden-state array <code>3068016_[0-99]</code> and train job <code>3068017</code> remain dependency-pending.</p>
+      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response repair and finalization are complete. Finalizer <code>3068014</code> produced exact <code>500000</code>-row conversation and Speculators JSONL files, and prepare job <code>3068015</code> completed with <code>16</code> arrow shards plus <code>token_freq.pt</code>. The current stage is hidden-state extraction: array <code>3072149_[0-99]%5</code> is running after patching the vLLM <code>extract_hidden_states</code> draft-token shape; train job <code>3072150</code> remains dependency-pending.</p>
     </div>
     <table>
       <thead>
@@ -1001,13 +1001,13 @@
         </tr>
         <tr>
           <td>Finalize 235B corpus</td>
-          <td><span class="pill info">queued after repair</span></td>
+          <td><span class="pill ok">complete</span></td>
           <td>Finalizer job <code>3068014</code> completed successfully and validated all 100 chunks. It built the exact-unique <code>500000</code>-row conversation JSONL with the OpenMath denylist plus replacement rows, then converted it to a <code>500000</code>-row Speculators JSONL before training.</td>
         </tr>
         <tr>
           <td>235B Speculators training chain</td>
-          <td><span class="pill info">queued</span></td>
-          <td>The active dependent chain is prepare <code>3068015</code> running now, then hidden-state array <code>3068016_[0-99]</code>, then train <code>3068017</code> after prepare and hidden-state completion.</td>
+          <td><span class="pill info">hidden-state extraction</span></td>
+          <td>The active chain is prepare <code>3068015</code> complete, hidden-state array <code>3072149_[0-99]%5</code> running, then train <code>3072150</code> after hidden-state completion. Previous array <code>3071825</code> was cancelled after exposing the vLLM extracted-site draft-token shape bug.</td>
         </tr>
         <tr>
           <td>Clean 235B training claim</td>
@@ -1425,7 +1425,7 @@
       <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
       <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
       <div>30B 500K live summary: <code>experiments/eagle3_qwen3_235b/qwen30ba3b_500k_live_summary.json</code></div>
-      <div>235B target-response generation status: <code>experiments/eagle3_qwen3_235b/qwen235b_targetgen_status.json</code>. Current state: direct adaptive missing-ID repair job <code>3068010</code> completed <code>1435/1435</code> repair rows, finalizer <code>3068014</code> produced exact <code>500000</code>-row final conversation and Speculators JSONL files, and prepare job <code>3068015</code> is running. Hidden-state array <code>3068016_[0-99]</code> and train job <code>3068017</code> remain dependency-pending.</div>
+      <div>235B target-response generation status: <code>experiments/eagle3_qwen3_235b/qwen235b_targetgen_status.json</code>. Current state: finalizer <code>3068014</code> produced exact <code>500000</code>-row final conversation and Speculators JSONL files, prepare job <code>3068015</code> completed, hidden-state array <code>3072149_[0-99]%5</code> is running, and train job <code>3072150</code> remains dependency-pending.</div>
       <div>235B finalize scripts: <code>experiments/eagle3_qwen3_235b/finalize_qwen235b_mixed_500k_corpus.sh</code> and <code>experiments/eagle3_qwen3_235b/submit_qwen235b_finalize_after_targetgen.sh</code>.</div>
       <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code>. Final n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means: <code>5604.28</code>, <code>5004.48</code>, <code>4908.22</code>.</div>
       <div>30B 500K stricter long-tail eval jobs: K=1 token gate <code>2048</code> job <code>3058759</code>, K=1 token gate <code>1024</code> job <code>3058762</code>. Final n=<code>20</code>/<code>20</code> generated tok/s/GPU means: <code>5596.71</code>, <code>5578.08</code>. Batch-size-only request gate jobs stayed near <code>1.06x</code>. V4 token-pressure job <code>3060379</code> is current best at <code>1.3664x</code>; V4 request-gate32 job <code>3060401</code> completed at <code>1.0675x</code>. Jobs <code>3065811</code>/<code>3065812</code>/<code>3065813</code> showed Step 1 vLLM acceptance but failed in Megatron logprob. K=1 static job <code>3066594</code> and dynamic-K job <code>3067385</code> both reached Step 1 but failed before throughput with the old runtime model-parallel timeout. The timeout path is now fixed by <code>d948696</code>, dynamic tier counter aggregation is fixed by <code>d50395f</code>, denominator sanity gating is fixed by <code>1dbdf66</code>, controller metric/env safety is fixed by <code>7ee3f1e</code>/<code>df32edb</code>, partial position-counter upgrade is fixed by <code>7f1e801</code>, and complete-DP metric trust is fixed by <code>b40917f</code>. Current primary validation job is <code>3070163</code>; jobs <code>3068829</code>/<code>3069079</code>/<code>3069265</code>/<code>3069422</code> had no rollout metrics.</div>

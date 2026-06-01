@@ -62,6 +62,7 @@ DEFAULT_VLLM_SITE="$ARTIFACT_ROOT/python_site/vllm_0_17_0_extract_py312"
 if [[ -z "$VLLM_SITE" && -d "$DEFAULT_VLLM_SITE/vllm" ]]; then
   VLLM_SITE="$DEFAULT_VLLM_SITE"
 fi
+VLLM_STARTUP_TIMEOUT="${VLLM_STARTUP_TIMEOUT:-3600}"
 VLLM_LAUNCH_EXTRA_ARGS="${VLLM_LAUNCH_EXTRA_ARGS:-}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 CONCURRENCY="${CONCURRENCY:-16}"
@@ -280,6 +281,10 @@ patch_vllm_ray_runtime_env_cmd=(
   python3 - "$VLLM_SITE"
 )
 
+patch_vllm_extract_hidden_states_shape_cmd=(
+  python3 - "$VLLM_SITE"
+)
+
 if [[ "$RUN_DATAGEN" == "true" || "$RUN_DATAGEN" == "True" ]]; then
   if [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then
     echo "# dry-run: skipping hidden-state manifest preflight"
@@ -326,6 +331,8 @@ if manifest_path.exists():
         for key, value in expected.items()
         if manifest.get(key) != value
     ]
+    if not has_hidden_files:
+        print("# Hidden-state manifest exists but no hidden-state files exist; datagen will replace it")
     if mismatches and has_hidden_files:
         raise SystemExit(
             "ERROR: hidden-state manifest does not match current prepared data "
@@ -333,7 +340,7 @@ if manifest_path.exists():
         )
     if mismatches:
         print("# Hidden-state manifest will be replaced after datagen")
-    else:
+    elif has_hidden_files:
         print(f"# Hidden-state manifest matches prepared data: {manifest_path}")
 elif has_hidden_files:
     raise SystemExit(
@@ -388,6 +395,45 @@ else:
 PY
   fi
 
+  if [[ -n "$VLLM_SITE" ]]; then
+    echo "# Patching vLLM extract_hidden_states draft-token shape"
+    printf '%q ' "${patch_vllm_extract_hidden_states_shape_cmd[@]}"; printf ' <<PY\n'
+  elif [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then
+    echo "# dry-run: VLLM_SITE is empty; skipping extract_hidden_states shape patch"
+  fi
+  if [[ -n "$VLLM_SITE" && "$DRY_RUN" != "true" && "$DRY_RUN" != "True" ]]; then
+    "${patch_vllm_extract_hidden_states_shape_cmd[@]}" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+vllm_site = Path(sys.argv[1])
+extract_path = vllm_site / "vllm/v1/spec_decode/extract_hidden_states.py"
+if not extract_path.exists():
+    raise SystemExit(f"vLLM extract_hidden_states proposer is missing: {extract_path}")
+text = extract_path.read_text(encoding="utf-8")
+marker = "NRL_EXTRACT_HIDDEN_STATES_DRAFT_SHAPE_PATCH_V1"
+if marker in text:
+    print(f"# vLLM extract_hidden_states shape patch already present: {extract_path}")
+else:
+    old = "        return sampled_token_ids.unsqueeze(-1), kv_connector_output\n"
+    new = (
+        f"        # {marker}: vLLM sampled_token_ids is already [batch, 1].\n"
+        "        if sampled_token_ids.ndim == 1:\n"
+        "            sampled_token_ids = sampled_token_ids.unsqueeze(-1)\n"
+        "        return sampled_token_ids, kv_connector_output\n"
+    )
+    if old not in text:
+        raise SystemExit(
+            "Could not patch extract_hidden_states draft-token shape; "
+            "expected return anchor not found"
+        )
+    extract_path.write_text(text.replace(old, new), encoding="utf-8")
+    print(f"# Patched vLLM extract_hidden_states shape: {extract_path}")
+PY
+  fi
+
   vllm_args=(--tensor-parallel-size "$VLLM_TP" --gpu-memory-utilization "$VLLM_GPU_UTIL" --max-model-len "$VLLM_MAX_MODEL_LEN" --port "$VLLM_PORT")
   if [[ "$VLLM_DP" != "1" ]]; then
     vllm_args+=(--data-parallel-size "$VLLM_DP")
@@ -426,7 +472,23 @@ PY
     }
     trap cleanup EXIT
 
+    vllm_startup_deadline=$((SECONDS + VLLM_STARTUP_TIMEOUT))
     until curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; do
+      if ! kill -0 "$VLLM_PID" 2>/dev/null; then
+        set +e
+        wait "$VLLM_PID"
+        vllm_status=$?
+        set -e
+        if (( vllm_status == 0 )); then
+          vllm_status=1
+        fi
+        echo "ERROR: vLLM exited before health check succeeded; status=$vllm_status" >&2
+        exit "$vllm_status"
+      fi
+      if (( SECONDS >= vllm_startup_deadline )); then
+        echo "ERROR: timed out waiting ${VLLM_STARTUP_TIMEOUT}s for vLLM health check" >&2
+        exit 124
+      fi
       sleep 5
     done
 

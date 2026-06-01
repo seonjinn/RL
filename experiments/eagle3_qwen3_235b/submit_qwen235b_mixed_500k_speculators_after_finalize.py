@@ -208,6 +208,12 @@ def validate_prepared_outputs(p: dict[str, Path]) -> None:
     if manifest_path.exists():
         validate_manifest_matches(load_json(manifest_path), expected)
     else:
+        if strict_hash:
+            raise RuntimeError(
+                "cannot reuse prepare job in strict mode because prepare manifest is missing: "
+                f"{manifest_path}. Re-run prepare or set STRICT_PREPARE_REUSE_HASH=false "
+                "only after manually verifying the prepared Arrow data."
+            )
         bootstrap = {
             **expected,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
@@ -238,6 +244,13 @@ def validate_hidden_state_manifest_reuse_safety(p: dict[str, Path]) -> None:
     expected = expected_hidden_state_manifest(p)
     hidden_files = list(p["hidden_states_dir"].glob("hs_*.safetensors"))
     if manifest_path.exists():
+        if not hidden_files:
+            print(
+                "+ hidden-state manifest exists but no hidden-state files exist; "
+                "datagen will write a fresh manifest",
+                flush=True,
+            )
+            return
         actual = load_json(manifest_path)
         mismatches = [
             key
@@ -302,9 +315,11 @@ def common_env(p: dict[str, Path]) -> dict[str, str]:
         "VLLM_TP": "8",
         "VLLM_DP": "1",
         "VLLM_GPU_UTIL": "0.82",
+        "VLLM_USE_V1": os.environ.get("VLLM_USE_V1", "1"),
         "CONCURRENCY": "16",
         "REQUEST_TIMEOUT": "300",
         "MAX_RETRIES": "3",
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
         "VLLM_EXTRA_ARGS": "--distributed-executor-backend ray --attention-backend TRITON_ATTN --max-num-seqs 1 --max-cudagraph-capture-size 1 --disable-custom-all-reduce",
         "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "PYTHONPATH",
         "RUN_CLONE": "false",
@@ -396,6 +411,7 @@ def submit_ray_datagen(
         "VLLM_CACHE_ROOT": os.environ.get("VLLM_CACHE_ROOT", str(ARTIFACT_ROOT / "vllm_cache")),
         "VLLM_DISABLE_USAGE_STATS": "1",
         "VLLM_USE_V1": os.environ.get("VLLM_USE_V1", "1"),
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": os.environ.get("VLLM_ALLREDUCE_USE_SYMM_MEM", "0"),
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
@@ -474,7 +490,8 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         "TRANSFORMERS_CACHE": os.environ.get("TRANSFORMERS_CACHE", f"{HF_HOME}/hub"),
         "VLLM_CACHE_ROOT": os.environ.get("VLLM_CACHE_ROOT", str(ARTIFACT_ROOT / "vllm_cache")),
         "VLLM_DISABLE_USAGE_STATS": "1",
-        "VLLM_USE_V1": os.environ.get("VLLM_USE_V1", "0"),
+        "VLLM_USE_V1": os.environ.get("VLLM_USE_V1", "1"),
+        "VLLM_ALLREDUCE_USE_SYMM_MEM": os.environ.get("VLLM_ALLREDUCE_USE_SYMM_MEM", "0"),
         "VLLM_USE_RAY_COMPILED_DAG": os.environ.get("VLLM_USE_RAY_COMPILED_DAG", "0"),
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
