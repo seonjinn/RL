@@ -1480,6 +1480,157 @@ def _has_nonempty_multimodal_payload(multimodal_data: dict[str, Any]) -> bool:
     return False
 
 
+_ZERO_LOSS_COMPUTE_MASK_TENSOR_KEYS = frozenset(
+    {
+        "attention_mask",
+        "advantages",
+        "generation_logprobs",
+        "loss_mask",
+        "mtp_loss_mask",
+        "prev_logprobs",
+        "reference_policy_logprobs",
+        "token_mask",
+    }
+)
+
+
+def _mask_packed_tensor_zero_loss_rows(
+    packed: PackedTensor,
+    invalid_rows: torch.Tensor,
+) -> PackedTensor:
+    """Replace zero-loss logical rows with None while preserving batch length."""
+    invalid = invalid_rows.detach().cpu().tolist()
+    if len(packed) != len(invalid):
+        return packed
+
+    if packed._dedup_indices is not None:
+        tensors = [None, *packed.tensors]
+        dedup_indices = [
+            0 if is_invalid else packed._dedup_indices[idx] + 1
+            for idx, is_invalid in enumerate(invalid)
+        ]
+        return PackedTensor(tensors, packed.dim_to_pack, dedup_indices=dedup_indices)
+
+    tensors = [
+        None if is_invalid else tensor
+        for tensor, is_invalid in zip(packed.tensors, invalid)
+    ]
+    return PackedTensor(tensors, packed.dim_to_pack)
+
+
+def _collapse_zero_loss_rows_for_compute(
+    train_data: BatchedDataDict,
+    *,
+    pad_token_id: int | None,
+    label: str,
+) -> int:
+    """Keep zero-loss rows in the batch but make their forward compute tiny."""
+    sample_mask = train_data.get("sample_mask")
+    if not torch.is_tensor(sample_mask):
+        return 0
+
+    invalid_rows = sample_mask <= 0
+    if not bool(invalid_rows.any().item()):
+        return 0
+
+    batch_size = int(sample_mask.shape[0])
+    pad_value = 0 if pad_token_id is None else int(pad_token_id)
+
+    if "input_ids" in train_data and torch.is_tensor(train_data["input_ids"]):
+        input_ids = train_data["input_ids"].clone()
+        input_ids[invalid_rows.to(device=input_ids.device)] = pad_value
+        train_data["input_ids"] = input_ids
+
+    for key in ("input_lengths", "expanded_lengths"):
+        value = train_data.get(key)
+        if torch.is_tensor(value):
+            masked_value = value.clone()
+            masked_value[invalid_rows.to(device=value.device)] = 1
+            train_data[key] = masked_value
+
+    for key in _ZERO_LOSS_COMPUTE_MASK_TENSOR_KEYS:
+        value = train_data.get(key)
+        if torch.is_tensor(value) and value.shape[0] == batch_size:
+            masked_value = value.clone()
+            masked_value[invalid_rows.to(device=value.device)] = 0
+            train_data[key] = masked_value
+
+    for key, value in list(train_data.items()):
+        if isinstance(value, PackedTensor):
+            train_data[key] = _mask_packed_tensor_zero_loss_rows(value, invalid_rows)
+
+    num_invalid = int(invalid_rows.sum().item())
+    suffix = f" ({label})" if label else ""
+    print(
+        f"▶ Zero-loss compute guard{suffix}: "
+        f"collapsed {num_invalid}/{batch_size} masked samples to length 1",
+        flush=True,
+    )
+    return num_invalid
+
+
+def _format_length_stats(
+    values: torch.Tensor | None,
+    valid_rows: torch.Tensor,
+) -> str | None:
+    if not torch.is_tensor(values) or values.ndim != 1:
+        return None
+    if values.shape[0] != valid_rows.shape[0] or values.numel() == 0:
+        return None
+
+    detached = values.detach()
+    valid = valid_rows.to(device=detached.device)
+    valid_values = detached[valid]
+    all_mean = float(detached.to(torch.float32).mean().item())
+    all_max = int(detached.max().item())
+    if valid_values.numel() == 0:
+        return f"all_mean={all_mean:.2f} all_max={all_max} valid_mean=0.00 valid_max=0"
+
+    valid_mean = float(valid_values.to(torch.float32).mean().item())
+    valid_max = int(valid_values.max().item())
+    return (
+        f"all_mean={all_mean:.2f} all_max={all_max} "
+        f"valid_mean={valid_mean:.2f} valid_max={valid_max}"
+    )
+
+
+def _print_sequence_length_debug(
+    train_data: BatchedDataDict,
+    *,
+    label: str,
+) -> None:
+    sample_mask = train_data.get("sample_mask")
+    if torch.is_tensor(sample_mask) and sample_mask.ndim == 1:
+        valid_rows = sample_mask.detach() > 0
+    else:
+        lengths = train_data.get("input_lengths")
+        if not torch.is_tensor(lengths) or lengths.ndim != 1:
+            return
+        valid_rows = torch.ones(
+            lengths.shape[0],
+            dtype=torch.bool,
+            device=lengths.device,
+        )
+
+    parts = [
+        f"rows={int(valid_rows.shape[0])}",
+        f"valid_rows={int(valid_rows.sum().item())}",
+    ]
+    for key in ("input_lengths", "expanded_lengths"):
+        stats = _format_length_stats(train_data.get(key), valid_rows)
+        if stats is not None:
+            parts.append(f"{key}({stats})")
+
+    token_mask = train_data.get("token_mask")
+    if torch.is_tensor(token_mask) and token_mask.shape[0] == valid_rows.shape[0]:
+        token_values = token_mask.detach()
+        valid = valid_rows.to(device=token_values.device)
+        parts.append(f"token_mask_sum={float(token_values.sum().item()):.0f}")
+        parts.append(f"valid_token_mask_sum={float(token_values[valid].sum().item()):.0f}")
+
+    print(f"[sequence-length-debug:{label}] " + " ".join(parts), flush=True)
+
+
 
 def refit_policy_generation(
     policy: ColocatablePolicyInterface,
@@ -2817,6 +2968,22 @@ def grpo_train(
                         temporal_patch_size=_T_trunc,
                     )
 
+                _print_sequence_length_debug(train_data, label="sync/pre_zero_loss_guard")
+                _collapse_zero_loss_rows_for_compute(
+                    train_data,
+                    pad_token_id=tokenizer.pad_token_id,
+                    label="sync",
+                )
+                _print_sequence_length_debug(train_data, label="sync/post_zero_loss_guard")
+                extra_multimodal_data = train_data.get_multimodal_dict(
+                    as_tensors=False,
+                    pixel_dtype=(
+                        torch.bfloat16
+                        if deduplicate_multimodal_data
+                        else None
+                    ),
+                )
+
                 if skip_prev_logprobs:
                     print("▶ Skipping prev_logprobs (force_on_policy_ratio=True)...", flush=True)
                 else:
@@ -2906,6 +3073,14 @@ def grpo_train(
                     # Update sample_mask if masking was applied
                     if seq_error_result["updated_sample_mask"] is not None:
                         train_data["sample_mask"] = seq_error_result["updated_sample_mask"]
+                        if num_masked_seqs > 0:
+                            # Seq-error masking happens after logprob compute, so collapse
+                            # newly masked rows before advantage/training compute.
+                            _collapse_zero_loss_rows_for_compute(
+                                train_data,
+                                pad_token_id=tokenizer.pad_token_id,
+                                label="sync/post_seq_error_mask",
+                            )
 
                     _debug_print_seq_error_by_modality(
                         seq_error_result=seq_error_result,
@@ -4220,6 +4395,13 @@ def async_grpo_train(
                         master_config,
                         label="async",
                     )
+                    _print_sequence_length_debug(train_data, label="async/pre_zero_loss_guard")
+                    _collapse_zero_loss_rows_for_compute(
+                        train_data,
+                        pad_token_id=tokenizer.pad_token_id,
+                        label="async",
+                    )
+                    _print_sequence_length_debug(train_data, label="async/post_zero_loss_guard")
 
                 # Training phase (same as sync version)
                 # Skip prev_logprobs computation when force_on_policy_ratio=True
@@ -4298,6 +4480,14 @@ def async_grpo_train(
                     # Update sample_mask if masking was applied
                     if seq_error_result["updated_sample_mask"] is not None:
                         train_data["sample_mask"] = seq_error_result["updated_sample_mask"]
+                        if num_masked_seqs > 0:
+                            # Seq-error masking happens after logprob compute, so collapse
+                            # newly masked rows before advantage/training compute.
+                            _collapse_zero_loss_rows_for_compute(
+                                train_data,
+                                pad_token_id=tokenizer.pad_token_id,
+                                label="async/post_seq_error_mask",
+                            )
 
                     _debug_print_seq_error_by_modality(
                         seq_error_result=seq_error_result,

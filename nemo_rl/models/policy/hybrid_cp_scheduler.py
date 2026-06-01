@@ -12,23 +12,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections import deque
+import os
+from collections import Counter, deque
 from functools import lru_cache
 from math import ceil, log2
 from typing import Callable, List, Tuple
 
 import torch
 
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict, SlicedDataDict
 from nemo_rl.models.policy.hybrid_cp_config import HybridCPConfig
+from nemo_rl.models.policy.hcp_dummy import (
+    get_input_sequence_width,
+    make_empty_hcp_dummy_tensor,
+)
+
+
+def _round_up_to_power_of_two(value: int) -> int:
+    value = max(1, int(value))
+    return 1 << (value - 1).bit_length()
 
 
 class BalancedCPScheduler:
     """Pure-python workload balancer for head-node hybrid CP scheduling."""
 
-    def __init__(self, max_seq_len_per_rank: int, total_hdp_gpus: int):
+    def __init__(
+        self,
+        max_seq_len_per_rank: int,
+        total_hdp_gpus: int,
+        min_cp_size: int = 1,
+    ):
         self.max_seq_len_per_rank = max_seq_len_per_rank
         self.total_hdp_gpus = total_hdp_gpus
+        self.min_cp_size = _round_up_to_power_of_two(min_cp_size)
+        if self.min_cp_size > self.total_hdp_gpus:
+            raise ValueError(
+                f"Minimum local CP size {self.min_cp_size} exceeds available HCP ranks "
+                f"({self.total_hdp_gpus}). Reduce expert_model_parallel_size, increase "
+                "tensor_model_parallel_size, or increase DPxCP capacity."
+            )
 
     @lru_cache(maxsize=128)
     def gpus_needed(self, seq_len: int) -> int:
@@ -39,7 +62,10 @@ class BalancedCPScheduler:
                 f"max_seq_len_per_rank must be positive, got {self.max_seq_len_per_rank}"
             )
 
-        required = max(1, 2 ** ceil(log2(seq_len / self.max_seq_len_per_rank)))
+        required = max(
+            self.min_cp_size,
+            2 ** ceil(log2(seq_len / self.max_seq_len_per_rank)),
+        )
         if required > self.total_hdp_gpus:
             raise ValueError(
                 f"Sequence length {seq_len} requires local CP size {required}, "
@@ -230,20 +256,29 @@ class HeadNodeHCPScheduler:
         dp_size: int,
         cp_size: int,
         max_seq_len: int,
+        min_local_cp_size: int = 1,
     ):
         self.hcp_config = hcp_config
         self.dp_size = dp_size
         self.cp_size = cp_size
         self.max_seq_len = max_seq_len
         self.hdp_size = dp_size * cp_size
+        self.min_local_cp_size = _round_up_to_power_of_two(min_local_cp_size)
+        if self.min_local_cp_size > self.hdp_size:
+            raise ValueError(
+                f"Minimum local CP size {self.min_local_cp_size} exceeds DPxCP capacity "
+                f"({self.hdp_size}). Reduce expert_model_parallel_size, increase "
+                "tensor_model_parallel_size, or increase DP/CP size."
+            )
         self.max_seqlen_per_dp_cp_rank = (
             hcp_config.max_seqlen_per_dp_cp_rank
             if hcp_config.max_seqlen_per_dp_cp_rank is not None
-            else max_seq_len // cp_size
+            else max(1, max_seq_len // cp_size)
         )
         self.scheduler = BalancedCPScheduler(
             max_seq_len_per_rank=self.max_seqlen_per_dp_cp_rank,
             total_hdp_gpus=self.hdp_size,
+            min_cp_size=self.min_local_cp_size,
         )
 
     def extract_sequence_lengths(
@@ -262,6 +297,49 @@ class HeadNodeHCPScheduler:
             return self._schedule_full_cp_samples(seq_lengths)
         sample_id_seqlens = [(idx, seq_len) for idx, seq_len in enumerate(seq_lengths)]
         return self.scheduler.get_groups_and_subsamples(sample_id_seqlens)
+
+    def _debug_log_schedule(
+        self,
+        seq_length_key: str,
+        seq_lengths: list[int],
+        sample_id_groups: list[list[list[int]]],
+        sample_local_cp_size: list[int],
+    ) -> None:
+        if os.environ.get("NRL_HCP_DEBUG", "0") != "1":
+            return
+
+        if seq_lengths:
+            seq_min = min(seq_lengths)
+            seq_max = max(seq_lengths)
+            seq_mean = sum(seq_lengths) / len(seq_lengths)
+        else:
+            seq_min = seq_max = seq_mean = 0
+        non_empty_hdp_counts = [
+            sum(1 for rank_samples in round_assignments if rank_samples)
+            for round_assignments in sample_id_groups
+        ]
+        non_empty_min = min(non_empty_hdp_counts) if non_empty_hdp_counts else 0
+        non_empty_max = max(non_empty_hdp_counts) if non_empty_hdp_counts else 0
+        non_empty_mean = (
+            sum(non_empty_hdp_counts) / len(non_empty_hdp_counts)
+            if non_empty_hdp_counts
+            else 0
+        )
+        local_cp_hist = dict(sorted(Counter(sample_local_cp_size).items()))
+        print(
+            "[HCP_SCHED_DEBUG] "
+            f"seq_key={seq_length_key} samples={len(seq_lengths)} "
+            f"seq_min={seq_min} seq_mean={seq_mean:.1f} seq_max={seq_max} "
+            f"dp={self.dp_size} cp={self.cp_size} hdp={self.hdp_size} "
+            f"max_seq_per_dp_cp_rank={self.max_seqlen_per_dp_cp_rank} "
+            f"min_local_cp={self.min_local_cp_size} "
+            f"rounds={len(sample_id_groups)} "
+            f"non_empty_hdp_min={non_empty_min} "
+            f"non_empty_hdp_mean={non_empty_mean:.1f} "
+            f"non_empty_hdp_max={non_empty_max} "
+            f"local_cp_hist={local_cp_hist}",
+            flush=True,
+        )
 
     def _schedule_full_cp_samples(self, seq_lengths: list[int]) -> tuple[list, list]:
         """Diagnostic mode: run every sample on the full static CP group."""
@@ -330,18 +408,19 @@ class HeadNodeHCPScheduler:
                 # microbatches can participate in collectives without counting
                 # toward loss or throughput normalization.
                 shards[hdp_rank] = data.slice(0, 1)
-                if "sample_mask" in shards[hdp_rank]:
-                    shards[hdp_rank]["sample_mask"] = torch.zeros_like(
-                        shards[hdp_rank]["sample_mask"]
-                    )
-                if "token_mask" in shards[hdp_rank]:
-                    shards[hdp_rank]["token_mask"] = torch.zeros_like(
-                        shards[hdp_rank]["token_mask"]
-                    )
-                if "input_lengths" in shards[hdp_rank]:
-                    shards[hdp_rank]["input_lengths"] = torch.ones_like(
-                        shards[hdp_rank]["input_lengths"]
-                    )
+                input_sequence_width = get_input_sequence_width(shards[hdp_rank])
+                for key, value in list(shards[hdp_rank].items()):
+                    if isinstance(value, PackedTensor):
+                        shards[hdp_rank].pop(key, None)
+                    elif (
+                        key in BatchedDataDict.ADDITIONAL_OPTIONAL_KEY_TENSORS
+                        and torch.is_tensor(value)
+                    ):
+                        shards[hdp_rank].pop(key, None)
+                    elif torch.is_tensor(value):
+                        shards[hdp_rank][key] = make_empty_hcp_dummy_tensor(
+                            key, value, input_sequence_width
+                        )
                 local_cp_sizes = [1]
             shards[hdp_rank]["sample_id_groups"] = sample_id_groups
             shards[hdp_rank]["shard_sample_ids"] = sample_ids
@@ -358,6 +437,12 @@ class HeadNodeHCPScheduler:
         seq_lengths = self.extract_sequence_lengths(data, seq_length_key)
         _, sample_id_groups = self.schedule_samples(seq_lengths)
         sample_local_cp_size = self._sample_local_cp_sizes(sample_id_groups, data.size)
+        self._debug_log_schedule(
+            seq_length_key,
+            seq_lengths,
+            sample_id_groups,
+            sample_local_cp_size,
+        )
         return self.shard_data_by_hdp_rank(
             data,
             sample_id_groups,

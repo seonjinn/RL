@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+import math
 from copy import deepcopy
 
 import pytest
@@ -1242,6 +1243,46 @@ def test_masked_mean_all_zeros():
     mask = torch.zeros_like(values)
     result = masked_mean(values, mask, dim=1)
     torch.testing.assert_allclose(result, torch.tensor([0.0, 0.0]))
+
+
+def test_masked_mean_ignores_masked_nan_values():
+    """Masked-out NaNs should not poison the mean."""
+    values = torch.tensor([1.0, float("nan"), 3.0])
+    mask = torch.tensor([1.0, 0.0, 1.0])
+
+    result = masked_mean(values, mask)
+    torch.testing.assert_close(result, torch.tensor(2.0))
+
+
+def test_clipped_pg_loss_clamps_extreme_log_ratios_before_exp():
+    cfg = deepcopy(basic_pg_loss_test_config)
+    cfg["token_level_loss"] = False
+    cfg["sequence_level_importance_ratios"] = True
+    loss_fn = ClippedPGLossFn(cfg)
+
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[0, 1, 2]], dtype=torch.long),
+            "token_mask": torch.tensor([[0.0, 1.0, 1.0]]),
+            "sample_mask": torch.tensor([1.0]),
+            "advantages": torch.tensor([[0.0, 0.0, 0.0]]),
+            "prev_logprobs": torch.tensor([[0.0, -1000.0, -1000.0]]),
+            "generation_logprobs": torch.zeros((1, 3)),
+        }
+    )
+    precomputed_logprobs = torch.zeros((1, 2))
+    next_token_logits = torch.zeros((1, 3, 4))
+
+    loss, metrics = loss_fn(
+        next_token_logits,
+        data,
+        global_valid_seqs=torch.tensor(1.0),
+        global_valid_toks=torch.tensor(2.0),
+        precomputed_logprobs=precomputed_logprobs,
+    )
+
+    assert torch.isfinite(loss)
+    assert math.isfinite(metrics["loss"])
 
 
 def test_clipped_pg_loss_dual_clip():

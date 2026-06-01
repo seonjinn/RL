@@ -25,6 +25,7 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 # Debug flag used by MPOLossFn (ported from Nemo-RL-Super-Omni). Set NRL_DEBUG=1 to
 # enable verbose per-step diagnostics inside _compute_token_logprobs / __call__.
 _DEBUG = os.environ.get("NRL_DEBUG", "0") == "1"
+_PG_LOG_RATIO_CLAMP = float(os.environ.get("NEMO_RL_PG_LOG_RATIO_CLAMP", "20.0"))
 
 from nemo_rl.distributed.model_utils import (
     ChunkedDistributedEntropy,
@@ -379,10 +380,20 @@ class ClippedPGLossFn(LossFunction):
             ratios_clamped = ratios
         elif not self.disable_ppo_ratio:
             log_ratios = curr_logprobs - prev_logprobs
+            # Extreme logprob mismatches can overflow exp() and later produce
+            # `0 * inf = nan` when a zero-advantage token is present. PPO
+            # clipping already bounds useful ratio effects; keep the raw
+            # ratio finite before constructing unclipped/clipped losses.
+            log_ratios = torch.nan_to_num(
+                log_ratios,
+                nan=0.0,
+                posinf=_PG_LOG_RATIO_CLAMP,
+                neginf=-_PG_LOG_RATIO_CLAMP,
+            ).clamp(min=-_PG_LOG_RATIO_CLAMP, max=_PG_LOG_RATIO_CLAMP)
             if self.sequence_level_importance_ratios:
                 seq_log_ratio_mean = masked_mean(
                     log_ratios,
-                    token_mask,
+                    mask,
                     dim=-1,
                 ).unsqueeze(-1)
                 seq_ratio = seq_log_ratio_mean.exp()

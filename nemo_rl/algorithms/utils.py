@@ -178,6 +178,9 @@ def masked_mean(
     global_normalization_factor: Optional[torch.Tensor | float] = None,
 ):
     """Computes the mean of a microbatch, using a global statistic as the normalization factor."""
+    # `0 * NaN` is still NaN in PyTorch. Ignore masked-out values before the
+    # multiply so invalid padded/zero-loss rows cannot poison valid loss terms.
+    values = torch.where(mask != 0, values, torch.zeros_like(values))
     normalization_factor = (
         torch.sum(mask, dim=dim)
         if global_normalization_factor is None

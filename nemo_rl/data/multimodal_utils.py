@@ -65,9 +65,6 @@ class PackedTensor:
         if isinstance(tensors, torch.Tensor):
             self.tensors: list[Optional[torch.Tensor]] = [tensors]
         elif isinstance(tensors, list):
-            assert len(tensors) > 0, (
-                "Input tensors to PackedTensor must be a non-empty list"
-            )
             self.tensors: list[Optional[torch.Tensor]] = tensors
         else:
             raise ValueError(
@@ -75,15 +72,17 @@ class PackedTensor:
             )
         self.dim_to_pack = dim_to_pack
         if dedup_indices is not None:
-            assert len(dedup_indices) > 0, (
-                "dedup_indices must be non-empty when provided"
-            )
-            assert min(dedup_indices) >= 0, (
-                "dedup_indices must contain only non-negative values"
-            )
-            assert max(dedup_indices) < len(self.tensors), (
-                "dedup_indices cannot reference out-of-range unique tensor indices"
-            )
+            if len(dedup_indices) == 0:
+                assert len(self.tensors) == 0, (
+                    "empty dedup_indices require an empty tensor list"
+                )
+            else:
+                assert min(dedup_indices) >= 0, (
+                    "dedup_indices must contain only non-negative values"
+                )
+                assert max(dedup_indices) < len(self.tensors), (
+                    "dedup_indices cannot reference out-of-range unique tensor indices"
+                )
         self._dedup_indices = dedup_indices
         if debug_enabled():
             write_stage(

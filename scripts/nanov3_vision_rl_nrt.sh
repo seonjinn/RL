@@ -32,6 +32,7 @@ JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20-nrt-full4h}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
+GRPO_MAX_NUM_STEPS="${GRPO_MAX_NUM_STEPS:-${MAX_STEPS:-}}"
 MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/hanrongy/project/nemotron_omni/checkpoints/mpo-nanov3omni-mmpr-nanov2-filtered-conv3d-0303/step_400}}"
 CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-${SOURCE_NEMORL}/.cache/mmpr_tiny}}"
 WANDB_PROJECT="${WANDB_PROJECT:-sna-nemotron-omni-dynamiccp}"
@@ -71,6 +72,7 @@ export NUM_NODES
 CONTAINER_ROOT="${CONTAINER_ROOT:-/lustre/fs1/portfolios/llmservice/projects/llmservice_fm_vision/users/aroshanghias/containers}"
 export CONTAINER="${CONTAINER:-${CONTAINER_ROOT}/super-omni-20260527-d58a158.sqsh}"
 export MOUNTS="${MOUNTS:-/lustre:/lustre,/home}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # Trust the baked /opt/ray_venvs/<actor>/ in the container so
 # create_local_venv() short-circuits and we don't re-resolve nemo-rl
@@ -112,6 +114,7 @@ export NRL_DEBUG="${NRL_DEBUG:-0}"
 export NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES="${NEMO_RL_VLLM_PRECOMPUTED_IMG_SIZES:-0}"
 export NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES="${NEMO_RL_VLLM_DERIVE_MAX_NUM_PATCHES:-0}"
 export NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT="${NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT:-0}"
+export MCORE_DISABLE_TORCH_COMPILE_JIT="${MCORE_DISABLE_TORCH_COMPILE_JIT:-false}"
 export USE_REPO_VLLM="${USE_REPO_VLLM:-0}"
 if [[ "${USE_REPO_VLLM}" == "1" ]]; then
   SOURCE_VLLM_DIR="${SOURCE_VLLM_DIR:-${SOURCE_NEMORL}/3rdparty/vllm}"
@@ -162,6 +165,7 @@ if [[ "${SNAPSHOT_CODE_LOWER}" == "1" || "${SNAPSHOT_CODE_LOWER}" == "true" || "
     --exclude='.env'
     --exclude='.venv/'
     --exclude='.cache/'
+    --exclude='.cache*/'
     --exclude='.tmp/'
     --exclude='.pytest_cache/'
     --exclude='.mypy_cache/'
@@ -173,6 +177,7 @@ if [[ "${SNAPSHOT_CODE_LOWER}" == "1" || "${SNAPSHOT_CODE_LOWER}" == "true" || "
     --exclude='slurm-*.out'
     --exclude='wandb/'
     --exclude='logs/'
+    --exclude='*-logs/'
     --exclude='results/'
     --exclude='jobs/'
     --exclude='checkpoints/'
@@ -218,6 +223,101 @@ fi
 # The precompiled wheel location is build-time metadata from build-custom-vllm.sh.
 # Do not leak it into vLLM20 runtime, where it is reported as an unknown env var.
 unset VLLM_PRECOMPILED_WHEEL_LOCATION
+
+if [[ "${NEMO_RL_GPU_KEEPALIVE_SECONDS:-0}" != "0" ]]; then
+  read -r -d '' GPU_KEEPALIVE_SETUP <<'SETUPEOF' || true
+if [[ "${NEMO_RL_GPU_KEEPALIVE_SECONDS:-0}" != "0" ]]; then
+  KEEPALIVE_PYTHON="${NEMO_RL_GPU_KEEPALIVE_PYTHON:-/opt/nemo_rl_venv/bin/python}"
+  if [[ ! -x "${KEEPALIVE_PYTHON}" ]]; then
+    KEEPALIVE_PYTHON="python3"
+  fi
+  "${KEEPALIVE_PYTHON}" - "${NEMO_RL_GPU_KEEPALIVE_SECONDS}" <<'PY' &
+import os
+import subprocess
+import sys
+
+seconds = float(sys.argv[1])
+if seconds <= 0:
+    raise SystemExit(0)
+
+try:
+    import torch
+    num_gpus = torch.cuda.device_count()
+except Exception as exc:
+    print(f"[GPU_KEEPALIVE] disabled before startup: {exc}", flush=True)
+    raise SystemExit(0)
+
+driver_log = os.path.join(os.environ.get("LOG_DIR", ""), "ray-driver.log")
+
+worker = r"""
+import os
+import sys
+import time
+
+seconds = float(sys.argv[1])
+gpu = sys.argv[2]
+driver_log = sys.argv[3]
+matrix_size = int(os.environ.get("NEMO_RL_GPU_KEEPALIVE_MATRIX_SIZE", "4096"))
+host_sleep = float(os.environ.get("NEMO_RL_GPU_KEEPALIVE_HOST_SLEEP", "0.0"))
+sleep_cycles = int(os.environ.get("NEMO_RL_GPU_KEEPALIVE_CYCLES", "20000000"))
+sync_every = max(1, int(os.environ.get("NEMO_RL_GPU_KEEPALIVE_SYNC_EVERY", "8")))
+
+def should_stop():
+    if not driver_log:
+        return False
+    try:
+        size = os.path.getsize(driver_log)
+        with open(driver_log, "rb") as f:
+            f.seek(max(0, size - 131072))
+            tail = f.read()
+        return b"========================= Step 1/" in tail
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+try:
+    import torch
+    torch.cuda.set_device(0)
+    a = torch.randn((matrix_size, matrix_size), device="cuda", dtype=torch.float16)
+    b = torch.randn((matrix_size, matrix_size), device="cuda", dtype=torch.float16)
+    end = time.time() + seconds
+    iters = 0
+    use_cuda_sleep = hasattr(torch.cuda, "_sleep")
+    while time.time() < end:
+        if should_stop():
+            print(f"[GPU_KEEPALIVE] gpu={gpu} stopping at Step 1", flush=True)
+            break
+        if use_cuda_sleep:
+            torch.cuda._sleep(sleep_cycles)
+        else:
+            c = a @ b
+        if iters % sync_every == 0:
+            torch.cuda.synchronize()
+        iters += 1
+        if host_sleep > 0:
+            time.sleep(host_sleep)
+    torch.cuda.synchronize()
+    print(f"[GPU_KEEPALIVE] gpu={gpu} finished after {seconds:.0f}s", flush=True)
+except Exception as exc:
+    print(f"[GPU_KEEPALIVE] gpu={gpu} disabled: {exc}", flush=True)
+"""
+
+for gpu in range(num_gpus):
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    subprocess.Popen([sys.executable, "-c", worker, str(seconds), str(gpu), driver_log], env=env)
+
+print(f"[GPU_KEEPALIVE] launched on {num_gpus} GPU(s) for {seconds:.0f}s", flush=True)
+PY
+fi
+SETUPEOF
+  if [[ -n "${SETUP_COMMAND:-}" ]]; then
+    SETUP_COMMAND="${GPU_KEEPALIVE_SETUP}"$'\n'"${SETUP_COMMAND}"
+  else
+    SETUP_COMMAND="${GPU_KEEPALIVE_SETUP}"
+  fi
+fi
 export SETUP_COMMAND
 
 EXTRA_OVERRIDES=""
@@ -251,6 +351,18 @@ fi
 if [[ -n "${GRPO_MAX_NUM_STEPS:-}" ]]; then
   EXTRA_OVERRIDES+=" grpo.max_num_steps=${GRPO_MAX_NUM_STEPS}"
 fi
+if [[ -n "${GRPO_SEED:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.seed=${GRPO_SEED}"
+fi
+if [[ -n "${VLLM_MAX_MODEL_LEN:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.max_model_len=${VLLM_MAX_MODEL_LEN}"
+fi
+if [[ -n "${GENERATION_MAX_NEW_TOKENS:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.generation.max_new_tokens=${GENERATION_MAX_NEW_TOKENS}"
+fi
+if [[ -n "${GENERATION_MIN_NEW_TOKENS:-}" ]]; then
+  EXTRA_OVERRIDES+=" +policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"
+fi
 if [[ -n "${GRPO_NUM_PROMPTS_PER_STEP:-}" ]]; then
   EXTRA_OVERRIDES+=" grpo.num_prompts_per_step=${GRPO_NUM_PROMPTS_PER_STEP}"
 fi
@@ -274,6 +386,9 @@ fi
 # read this key). The recipes-derived omni YAML doesn't define it, so inject
 # the super-side default (false) here so the run reaches Step 1.
 EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
+# In this branch, true means Gym/logging owns response logging and GRPO skips
+# the expensive per-step train_data_step*.jsonl dump.
+EXTRA_OVERRIDES+=" +env.should_log_nemo_gym_responses=${NEMO_GYM_LOG_RESPONSES:-true}"
 # Resume the same wandb run instead of starting a new one when WANDB_RUN_ID
 # is set. Use Hydra's `+` so the keys are added (they aren't in the YAML).
 # Pair WANDB_RESUME=allow with a pre-chosen id to chain a fresh run + N
@@ -292,6 +407,7 @@ PYTHONPATH_ROOTS="${VLLM_PYTHONPATH_PREFIX}${NEMORL}:${NEMORL}/3rdparty/Megatron
 export COMMAND="\
 mkdir -p '${HF_HOME}' '${HF_MODULES_CACHE}' '${NRL_MEGATRON_CHECKPOINT_DIR}' '${TRITON_CACHE_DIR}' '${TMPDIR}' '${RESULTS_DIR}' '${CACHE_DIR}' && \
 export PYTHONPATH=${PYTHONPATH_ROOTS}\${PYTHONPATH:+:\$PYTHONPATH} && \
+export MCORE_DISABLE_TORCH_COMPILE_JIT='${MCORE_DISABLE_TORCH_COMPILE_JIT}' && \
 uv run --no-sync examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
@@ -306,12 +422,33 @@ ${EXTRA_OVERRIDES}"
 
 cd "${NEMORL}"
 
-sbatch \
-    --nodes=${NUM_NODES} \
-    --account=${SBATCH_ACCOUNT} \
-    --job-name=${JOB_NAME} \
-    --partition=${SBATCH_PARTITION} \
-    --time=${SBATCH_TIME} \
-    --gres=gpu:${GPUS_PER_NODE} \
-    --output="${LOGS_DIR}/%x_%j.log" \
-    ray.sub
+SBATCH_ARGS=(
+    --nodes="${NUM_NODES}"
+    --account="${SBATCH_ACCOUNT}"
+    --job-name="${JOB_NAME}"
+    --partition="${SBATCH_PARTITION}"
+    --time="${SBATCH_TIME}"
+    --gres="gpu:${GPUS_PER_NODE}"
+    --output="${LOGS_DIR}/%x_%j.log"
+)
+
+if [[ -n "${SBATCH_SWITCHES:-}" ]]; then
+    SBATCH_ARGS+=(--switches="${SBATCH_SWITCHES}")
+fi
+if [[ -n "${SBATCH_NODELIST:-}" ]]; then
+    SBATCH_ARGS+=(--nodelist="${SBATCH_NODELIST}")
+fi
+if [[ -n "${SBATCH_EXCLUDE:-}" ]]; then
+    SBATCH_ARGS+=(--exclude="${SBATCH_EXCLUDE}")
+fi
+if [[ -n "${SBATCH_CONSTRAINT:-}" ]]; then
+    SBATCH_ARGS+=(--constraint="${SBATCH_CONSTRAINT}")
+fi
+if [[ -n "${SBATCH_COMMENT:-}" ]]; then
+    SBATCH_ARGS+=(--comment="${SBATCH_COMMENT}")
+fi
+if [[ -n "${SBATCH_MEM:-}" ]]; then
+    SBATCH_ARGS+=(--mem="${SBATCH_MEM}")
+fi
+
+sbatch "${SBATCH_ARGS[@]}" ray.sub

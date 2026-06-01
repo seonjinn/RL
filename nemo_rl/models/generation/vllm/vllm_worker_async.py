@@ -1223,6 +1223,12 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
 
             # Create sampling parameters
             top_k = self.cfg["top_k"] if self.cfg["top_k"] is not None else -1
+            sampling_params_kwargs = {}
+            if self.cfg.get("min_new_tokens") is not None:
+                sampling_params_kwargs["min_tokens"] = min(
+                    int(self.cfg["min_new_tokens"]),
+                    int(self.cfg["max_new_tokens"]),
+                )
             sampling_params = self.SamplingParams(
                 temperature=self.cfg["temperature"] if not greedy else 0,
                 top_p=self.cfg["top_p"],
@@ -1232,6 +1238,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 stop=final_stop_strings,
                 include_stop_str_in_output=True,  # returning stop strings like hf
                 bad_words=self.cfg.get("bad_words") or None,
+                **sampling_params_kwargs,
             )
 
             request_id = str(uuid.uuid4())

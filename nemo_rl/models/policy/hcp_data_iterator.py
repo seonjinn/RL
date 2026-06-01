@@ -20,6 +20,10 @@ from megatron.core import parallel_state
 
 from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.policy.hcp_dummy import (
+    get_input_sequence_width,
+    make_empty_hcp_dummy_tensor,
+)
 
 
 _HCP_BATCH_METADATA_KEYS = frozenset(
@@ -166,6 +170,7 @@ class HCPGroupIterator:
         dummy = BatchedDataDict()
         optional_mm_tensor_keys = set(BatchedDataDict.ADDITIONAL_OPTIONAL_KEY_TENSORS)
         source_idx = 0 if self.data.size > 0 else None
+        input_sequence_width = get_input_sequence_width(self.data)
 
         for key, value in self.data.items():
             if key in _HCP_BATCH_METADATA_KEYS:
@@ -175,22 +180,22 @@ class HCPGroupIterator:
 
             if torch.is_tensor(value):
                 if value.shape[0] > 0:
-                    row = value[source_idx : source_idx + 1].clone()
-                    if torch.is_floating_point(row) or torch.is_complex(row):
-                        row.zero_()
-                    else:
-                        row.fill_(0)
+                    row = make_empty_hcp_dummy_tensor(
+                        key,
+                        value[source_idx : source_idx + 1].clone(),
+                        input_sequence_width,
+                    )
                 else:
-                    row = torch.zeros(
-                        (1, *value.shape[1:]),
-                        dtype=value.dtype,
-                        device=value.device,
+                    row = make_empty_hcp_dummy_tensor(
+                        key,
+                        torch.zeros(
+                            (1, *value.shape[1:]),
+                            dtype=value.dtype,
+                            device=value.device,
+                        ),
+                        input_sequence_width,
                     )
 
-                if key == "input_lengths":
-                    row.fill_(1)
-                elif key in {"sample_mask", "token_mask"}:
-                    row.zero_()
                 dummy[key] = row
             elif isinstance(value, list) and value:
                 dummy[key] = [deepcopy(value[0])]

@@ -18,6 +18,7 @@ JOB_NAME_BASE="${JOB_NAME_BASE:-image-grpo-vllm20}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S-%3N)}"
 JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
+GRPO_MAX_NUM_STEPS="${GRPO_MAX_NUM_STEPS:-${MAX_STEPS:-}}"
 MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-}}"
 CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-}}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-omni}"
@@ -68,7 +69,8 @@ export CACHE_ROOT="${CACHE_ROOT:-${NEMORL}/.cache}"
 export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
 export HF_MODULES_CACHE="${HF_MODULES_CACHE:-${HF_HOME}/modules}"
 export NRL_MEGATRON_CHECKPOINT_DIR="${NRL_MEGATRON_CHECKPOINT_DIR:-${HF_HOME}/nemo_rl}"
-export TMPDIR="${TMPDIR:-/tmp/nrl-${RUN_ID}}"
+RUN_ID_SHORT="${RUN_ID_SHORT:-$(printf '%s' "${JOB_NAME}" | cksum | awk '{print $1}')}"
+export TMPDIR="${TMPDIR:-/tmp/nrl-${RUN_ID_SHORT}}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR}/triton}"
 export NEMO_RL_TRAIN_STEP_MEM_DIAG="${NEMO_RL_TRAIN_STEP_MEM_DIAG:-1}"
 
@@ -78,6 +80,8 @@ export NVTE_BWD_LAYERNORM_SM_MARGIN="${NVTE_BWD_LAYERNORM_SM_MARGIN:-16}"
 export NEMO_RL_LOG_GPU_MEMORY="${NEMO_RL_LOG_GPU_MEMORY:-0}"
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 export NRL_IGNORE_VERSION_MISMATCH="${NRL_IGNORE_VERSION_MISMATCH:-true}"
+export NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT="${NEMO_RL_VLLM_CAP_MAX_TOKENS_TO_CONTEXT:-0}"
+export MCORE_DISABLE_TORCH_COMPILE_JIT="${MCORE_DISABLE_TORCH_COMPILE_JIT:-false}"
 
 # Auth for the private flashinfer-cubin index, only used if NRL_VENVS_TRUST_EXISTING=0.
 if [[ -z "${GITLAB_FLASHINFER_TOKEN:-}" && -f "${HOME}/.config/glab-cli/config.yml" ]]; then
@@ -126,6 +130,18 @@ fi
 if [[ -n "${GRPO_MAX_NUM_STEPS:-}" ]]; then
   EXTRA_OVERRIDES+=" grpo.max_num_steps=${GRPO_MAX_NUM_STEPS}"
 fi
+if [[ -n "${GRPO_SEED:-}" ]]; then
+  EXTRA_OVERRIDES+=" grpo.seed=${GRPO_SEED}"
+fi
+if [[ -n "${VLLM_MAX_MODEL_LEN:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.max_model_len=${VLLM_MAX_MODEL_LEN}"
+fi
+if [[ -n "${GENERATION_MAX_NEW_TOKENS:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.generation.max_new_tokens=${GENERATION_MAX_NEW_TOKENS}"
+fi
+if [[ -n "${GENERATION_MIN_NEW_TOKENS:-}" ]]; then
+  EXTRA_OVERRIDES+=" +policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"
+fi
 # FlashInfer fused-MoE autotuner is noisy but ~2x faster on NemotronH MoE.
 # Set ENABLE_FLASHINFER_AUTOTUNE=false to opt out for cleaner logs.
 [[ "${ENABLE_FLASHINFER_AUTOTUNE:-true}" != "true" ]] && \
@@ -152,6 +168,7 @@ PYTHON_RUNNER="${PYTHON_RUNNER:-uv run --no-sync}"
 export COMMAND="\
 mkdir -p '${HF_HOME}' '${HF_MODULES_CACHE}' '${NRL_MEGATRON_CHECKPOINT_DIR}' '${TRITON_CACHE_DIR}' '${TMPDIR}' '${RESULTS_DIR}' && \
 export PYTHONPATH=${PYTHONPATH_ROOTS}\${PYTHONPATH:+:\$PYTHONPATH} && \
+export MCORE_DISABLE_TORCH_COMPILE_JIT='${MCORE_DISABLE_TORCH_COMPILE_JIT}' && \
 ${PYTHON_RUNNER} examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
@@ -166,11 +183,32 @@ ${EXTRA_OVERRIDES}"
 
 cd "${NEMORL}"
 
-sbatch \
-    --nodes=${NUM_NODES} \
-    --account=${SBATCH_ACCOUNT} \
-    --job-name=${JOB_NAME} \
-    --partition=${SBATCH_PARTITION} \
-    --time=${SBATCH_TIME} \
-    --gres=gpu:${GPUS_PER_NODE} \
-    ray.sub
+SBATCH_ARGS=(
+    --nodes="${NUM_NODES}"
+    --account="${SBATCH_ACCOUNT}"
+    --job-name="${JOB_NAME}"
+    --partition="${SBATCH_PARTITION}"
+    --time="${SBATCH_TIME}"
+    --gres="gpu:${GPUS_PER_NODE}"
+)
+
+if [[ -n "${SBATCH_SWITCHES:-}" ]]; then
+    SBATCH_ARGS+=(--switches="${SBATCH_SWITCHES}")
+fi
+if [[ -n "${SBATCH_NODELIST:-}" ]]; then
+    SBATCH_ARGS+=(--nodelist="${SBATCH_NODELIST}")
+fi
+if [[ -n "${SBATCH_EXCLUDE:-}" ]]; then
+    SBATCH_ARGS+=(--exclude="${SBATCH_EXCLUDE}")
+fi
+if [[ -n "${SBATCH_CONSTRAINT:-}" ]]; then
+    SBATCH_ARGS+=(--constraint="${SBATCH_CONSTRAINT}")
+fi
+if [[ -n "${SBATCH_COMMENT:-}" ]]; then
+    SBATCH_ARGS+=(--comment="${SBATCH_COMMENT}")
+fi
+if [[ -n "${SBATCH_MEM:-}" ]]; then
+    SBATCH_ARGS+=(--mem="${SBATCH_MEM}")
+fi
+
+sbatch "${SBATCH_ARGS[@]}" ray.sub

@@ -420,6 +420,13 @@ class LossPostProcessor:
             if local_cp_group is not None
             else get_context_parallel_group()
         )
+        if data_dict.get("_hcp_is_dummy", False):
+            def _zero_dummy_hcp_loss(output_tensor: torch.Tensor) -> tuple[torch.Tensor, dict[str, Any]]:
+                zero = torch.nan_to_num(output_tensor.float(), nan=0.0).sum() * 0.0
+                return zero, {"loss": zero.detach()}
+
+            return _zero_dummy_hcp_loss
+
         loss_data = _strip_hcp_metadata_for_loss(data_dict)
         if pack_sequences and packed_seq_params is not None:
             fuse_loss = self.cfg["sequence_packing"].get("fuse_loss", False)

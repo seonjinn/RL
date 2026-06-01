@@ -310,8 +310,12 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             "max_seqlen_per_dp_cp_rank", None
         )
         if max_seqlen_per_dp_cp_rank is None:
-            max_seqlen_per_dp_cp_rank = max_seq_len // cp_size
+            max_seqlen_per_dp_cp_rank = max(1, max_seq_len // cp_size)
         max_seqlen_per_dp_cp_rank *= token_budget_scale
+        megatron_cfg = self.cfg["megatron_cfg"]
+        tp_size = max(1, int(megatron_cfg.get("tensor_model_parallel_size", 1)))
+        ep_size = max(1, int(megatron_cfg.get("expert_model_parallel_size", 1)))
+        min_local_cp_size = max(1, (ep_size + tp_size - 1) // tp_size)
 
         return HeadNodeHCPScheduler(
             hcp_config=HybridCPConfig(
@@ -331,6 +335,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             dp_size=dp_size,
             cp_size=cp_size,
             max_seq_len=max_seq_len,
+            min_local_cp_size=min_local_cp_size,
         )
 
     def _get_sharding_axes(self) -> tuple[list[str], list[str], list[str]]:
@@ -419,8 +424,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                     data,
                     token_budget_scale=max(1, self.cfg["logprob_batch_size"]),
                 )
+                seq_length_key = (
+                    "expanded_lengths" if "expanded_lengths" in data else "input_lengths"
+                )
                 sharded_data = hcp_scheduler.schedule_and_shard(
-                    data, seq_length_key="input_lengths"
+                    data, seq_length_key=seq_length_key
                 )
                 nested_sharded_data = self._nest_hcp_shards(sharded_data)
                 unsorted_data_indices = list(range(data.size))
@@ -504,8 +512,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                         else self.cfg["logprob_batch_size"],
                     ),
                 )
+                seq_length_key = (
+                    "expanded_lengths" if "expanded_lengths" in data else "input_lengths"
+                )
                 sharded_data = hcp_scheduler.schedule_and_shard(
-                    data, seq_length_key="input_lengths"
+                    data, seq_length_key=seq_length_key
                 )
                 nested_sharded_data = self._nest_hcp_shards(sharded_data)
                 unsorted_data_indices = list(range(data.size))
@@ -587,8 +598,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                         else self.cfg["logprob_batch_size"],
                     ),
                 )
+                seq_length_key = (
+                    "expanded_lengths" if "expanded_lengths" in data else "input_lengths"
+                )
                 sharded_data = hcp_scheduler.schedule_and_shard(
-                    data, seq_length_key="input_lengths"
+                    data, seq_length_key=seq_length_key
                 )
                 nested_sharded_data = self._nest_hcp_shards(sharded_data)
                 unsorted_data_indices = list(range(data.size))
@@ -686,15 +700,25 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                     batch_data = data.slice(
                         batch_idx * batch_size, (batch_idx + 1) * batch_size
                     )
+                    seq_length_key = (
+                        "expanded_lengths"
+                        if "expanded_lengths" in batch_data
+                        else "input_lengths"
+                    )
                     sharded_data = hcp_scheduler.schedule_and_shard(
-                        batch_data, seq_length_key="input_lengths"
+                        batch_data, seq_length_key=seq_length_key
                     )
                     nested_sharded_data = self._nest_hcp_shards(sharded_data)
 
                 if self.flops_tracker is not None:
                     for shard in sharded_data:
-                        if shard.size > 0 and "input_lengths" in shard:
-                            self.flops_tracker.track_batch(shard["input_lengths"].tolist())
+                        seq_length_key = (
+                            "expanded_lengths"
+                            if "expanded_lengths" in shard
+                            else "input_lengths"
+                        )
+                        if shard.size > 0 and seq_length_key in shard:
+                            self.flops_tracker.track_batch(shard[seq_length_key].tolist())
 
                 with (
                     timer.time("policy_training/submit_training_futures")

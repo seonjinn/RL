@@ -453,6 +453,10 @@ class BaseVllmGenerationWorker:
         max_tokens = (
             max_new_tokens if max_new_tokens is not None else self.cfg["max_new_tokens"]
         )
+        min_tokens = self.cfg.get("min_new_tokens")
+        sampling_params_kwargs = {}
+        if min_tokens is not None:
+            sampling_params_kwargs["min_tokens"] = min(int(min_tokens), int(max_tokens))
 
         return self.SamplingParams(
             temperature=temperature,
@@ -464,6 +468,7 @@ class BaseVllmGenerationWorker:
             stop=stop_strings,
             include_stop_str_in_output=True,
             bad_words=self.cfg.get("bad_words") or None,
+            **sampling_params_kwargs,
         )
 
     def start_gpu_profiling(self) -> None:
@@ -923,6 +928,11 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
 
         # Read generation parameters from config
         top_k = self.cfg["top_k"] if self.cfg["top_k"] is not None else -1
+        sampling_params_kwargs = {}
+        if self.cfg.get("min_new_tokens") is not None:
+            sampling_params_kwargs["min_tokens"] = min(
+                int(self.cfg["min_new_tokens"]), int(self.cfg["max_new_tokens"])
+            )
         sampling_params = self.SamplingParams(
             temperature=self.cfg["temperature"] if not greedy else 0,
             top_p=self.cfg["top_p"],
@@ -932,6 +942,7 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
             stop=stop_strings,
             include_stop_str_in_output=True,  # returning stop strings like hf
             bad_words=self.cfg.get("bad_words") or None,
+            **sampling_params_kwargs,
         )
 
         # Generate outputs

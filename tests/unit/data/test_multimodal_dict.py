@@ -326,6 +326,69 @@ def test_packedtensor_all_none():
     assert pt.as_tensor() is None
 
 
+def test_packedtensor_empty_slice_from_plain_tensor_list():
+    tensors = [torch.ones(1, 2), torch.full((1, 2), 2.0)]
+    pt = PackedTensor(tensors, dim_to_pack=0)
+
+    empty = pt.slice([])
+
+    assert len(empty) == 0
+    assert empty.tensors == []
+    assert empty._dedup_indices is None
+    assert empty.as_tensor() is None
+
+
+def test_packedtensor_empty_slice_from_deduped_tensor_list():
+    tensors, prompt_indices = _make_repeated_prompt_tensors(
+        num_prompts=2, repeats_per_prompt=2
+    )
+    deduped = PackedTensor(tensors, dim_to_pack=0).deduplicate(prompt_indices)
+
+    empty = deduped.slice([])
+
+    assert len(empty) == 0
+    assert empty.tensors == []
+    assert empty._dedup_indices == []
+    assert empty.as_tensor() is None
+
+
+def test_packedtensor_concat_preserves_empty_shards():
+    empty = PackedTensor([], dim_to_pack=0)
+    non_empty = PackedTensor([torch.ones(1, 2)], dim_to_pack=0)
+
+    merged = PackedTensor.concat([empty, non_empty])
+
+    assert len(merged) == 1
+    assert torch.equal(merged.as_tensor(), non_empty.as_tensor())
+
+
+def test_packedtensor_concat_preserves_empty_deduped_shards():
+    tensors, prompt_indices = _make_repeated_prompt_tensors(
+        num_prompts=2, repeats_per_prompt=2
+    )
+    deduped = PackedTensor(tensors, dim_to_pack=0).deduplicate(prompt_indices)
+    empty_deduped = deduped.slice([])
+    non_empty_deduped = deduped.slice([0, 1])
+
+    merged = PackedTensor.concat([empty_deduped, non_empty_deduped])
+
+    assert merged._dedup_indices == non_empty_deduped._dedup_indices
+    assert torch.equal(merged.as_tensor(), non_empty_deduped.as_tensor())
+
+
+def test_packedtensor_concat_preserves_plain_empty_with_deduped_shard():
+    tensors, prompt_indices = _make_repeated_prompt_tensors(
+        num_prompts=2, repeats_per_prompt=2
+    )
+    deduped = PackedTensor(tensors, dim_to_pack=0).deduplicate(prompt_indices)
+    plain_empty = PackedTensor([], dim_to_pack=0)
+
+    merged = PackedTensor.concat([plain_empty, deduped])
+
+    assert merged._dedup_indices == deduped._dedup_indices
+    assert torch.equal(merged.as_tensor(), deduped.as_tensor())
+
+
 def test_packedtensor_with_none_entry():
     original = PackedTensor([torch.randn(2, 3), None], dim_to_pack=0)
     empty = PackedTensor.empty_like(original)
