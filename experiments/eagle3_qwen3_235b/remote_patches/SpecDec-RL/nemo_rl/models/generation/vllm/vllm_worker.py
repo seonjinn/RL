@@ -1803,20 +1803,11 @@ class BaseVllmGenerationWorker:
             """Add an adaptive controller to the already-installed batch gate.
 
             The V4 gate is a static long-tail guard. This patch keeps the same
-            correctness boundary, but lets the scheduler lookahead gate and the
-            model runner proposal gate tune thresholds toward a target
-            enabled-ratio. The controllers are deliberately local to each vLLM
-            worker process: if the adaptive controller is disabled, the static
-            V4/V5 behavior is unchanged.
+            correctness boundary while installing a single scheduler helper used
+            by static, adaptive, and dynamic-K modes. When adaptive mode is off,
+            the thresholds remain the static V4/V5 values, but scheduler gate
+            decisions are still propagated to the model runner.
             """
-
-            mode = os.environ.get("VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off").lower()
-            dynamic_mode = os.environ.get(
-                "VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS", "0"
-            ).lower()
-            dynamic_requested = dynamic_mode in {"1", "true", "yes", "y", "on"}
-            if mode in {"", "0", "off", "false", "no"} and not dynamic_requested:
-                return 0
 
             applied = 0
             gpu_model_runner = _get_vllm_file("v1/worker/gpu_model_runner.py")

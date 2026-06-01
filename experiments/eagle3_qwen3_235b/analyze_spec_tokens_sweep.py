@@ -24,7 +24,7 @@ DEFAULT_CLUSTER_REPO = Path(
         ),
     )
 )
-SPEC_JOB_RE = re.compile(r"specdec_tokens_(\d+)_job")
+SPEC_JOB_RE = re.compile(r"specdec_(?:tokens_|k)(\d+)_job")
 
 
 def parse_args() -> argparse.Namespace:

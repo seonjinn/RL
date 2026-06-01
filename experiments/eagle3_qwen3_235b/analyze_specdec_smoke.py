@@ -276,6 +276,18 @@ def is_standalone_vllm_line(lower: str) -> bool:
     )
 
 
+def is_standalone_vllm_server_line(lower: str) -> bool:
+    return any(
+        token in lower
+        for token in (
+            "application startup complete",
+            "uvicorn running",
+            "/health",
+            "openai api server",
+        )
+    )
+
+
 def is_nemo_rl_line(lower: str) -> bool:
     return any(
         token in lower
@@ -364,7 +376,8 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
     synthetic_step = 0
     standalone_context = False
     nemo_context = False
-    file_saw_standalone = False
+    file_saw_strong_standalone = False
+    file_saw_weak_standalone = False
     file_saw_nemo = False
 
     try:
@@ -374,9 +387,18 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                 if not line.strip():
                     continue
                 lower = line.lower()
-                line_is_standalone = is_standalone_vllm_line(lower)
+                line_is_strong_standalone = is_standalone_vllm_line(lower)
+                line_is_weak_standalone = is_standalone_vllm_server_line(lower)
                 line_is_nemo = is_nemo_rl_line(lower)
-                file_saw_standalone = file_saw_standalone or line_is_standalone
+                line_is_standalone = line_is_strong_standalone or (
+                    line_is_weak_standalone and not file_saw_nemo
+                )
+                file_saw_strong_standalone = (
+                    file_saw_strong_standalone or line_is_strong_standalone
+                )
+                file_saw_weak_standalone = (
+                    file_saw_weak_standalone or line_is_weak_standalone
+                )
                 file_saw_nemo = file_saw_nemo or line_is_nemo
                 standalone_context = standalone_context or line_is_standalone
                 nemo_context = nemo_context or line_is_nemo
@@ -432,8 +454,10 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                         record.timing_pct[key] = float(pct)
     except OSError as exc:
         result.warnings.append(f"Could not read {path}: {exc}")
-    if file_saw_standalone and file_saw_nemo:
+    if file_saw_strong_standalone and file_saw_nemo:
         add_unique(result.mixed_context_sources, str(path))
+    elif file_saw_weak_standalone and not file_saw_nemo:
+        add_unique(result.standalone_vllm_throughput_sources, str(path))
 
 
 def analyze(paths: list[Path]) -> ParseResult:

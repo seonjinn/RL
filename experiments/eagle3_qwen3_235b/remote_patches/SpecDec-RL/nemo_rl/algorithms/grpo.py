@@ -1046,6 +1046,9 @@ def _log_early_generation_throughput(
     step: int,
     generation_time_s: float,
     prefix: str,
+    *,
+    emit_worker_throughput: bool = True,
+    time_metric_name: str = "generation_time_s",
 ) -> None:
     """Log generation throughput before logprob/training failures can hide it."""
     if generation_time_s <= 0:
@@ -1056,41 +1059,43 @@ def _log_early_generation_throughput(
         return
 
     total_tokens, generated_tokens = _message_log_token_counts(message_logs)
-    generation_gpus = _generation_num_gpus(master_config)
     metrics: dict[str, float | int] = {
-        "generation_time_s": generation_time_s,
-        "generation_gpus": generation_gpus,
+        time_metric_name: generation_time_s,
         "total_tokens": total_tokens,
         "generated_tokens": generated_tokens,
     }
+    generation_gpus = 0
+    if emit_worker_throughput:
+        generation_gpus = _generation_num_gpus(master_config)
+        metrics["generation_gpus"] = generation_gpus
     total_tokens_per_sec_per_gpu = None
-    if total_tokens > 0:
+    if emit_worker_throughput and total_tokens > 0:
         total_tokens_per_sec_per_gpu = total_tokens / generation_time_s / generation_gpus
         metrics["tokens_sec_per_gpu"] = total_tokens_per_sec_per_gpu
     generated_tokens_per_sec_per_gpu = None
-    if generated_tokens > 0:
+    if emit_worker_throughput and generated_tokens > 0:
         generated_tokens_per_sec_per_gpu = (
             generated_tokens / generation_time_s / generation_gpus
         )
         metrics["generated_tokens_sec_per_gpu"] = generated_tokens_per_sec_per_gpu
 
     logger.log_metrics(metrics, step, prefix=prefix)
+    phase_label = "generation" if emit_worker_throughput else "sample_window"
     print(
-        "[SpecDec early generation] "
-        f"step={step} phase={prefix} generation_time_s={generation_time_s:.4f} "
-        f"generation_gpus={generation_gpus} total_tokens={total_tokens} "
-        f"generated_tokens={generated_tokens}",
+        f"[SpecDec early {phase_label}] "
+        f"step={step} phase={prefix} elapsed_s={generation_time_s:.4f} "
+        f"total_tokens={total_tokens} generated_tokens={generated_tokens}",
         flush=True,
     )
     if total_tokens_per_sec_per_gpu is not None:
         print(
-            "    - Generation Worker Group "
+            "    - Early Generation Worker Group "
             f"(Tokens/sec/gpu): {total_tokens_per_sec_per_gpu:.2f}",
             flush=True,
         )
     if generated_tokens_per_sec_per_gpu is not None:
         print(
-            "    - Generation Worker Group "
+            "    - Early Generation Worker Group "
             f"(Generated tokens/sec/gpu): {generated_tokens_per_sec_per_gpu:.2f}",
             flush=True,
         )
@@ -2837,7 +2842,9 @@ def async_grpo_train(
                     logger,
                     step + 1,
                     exposed_generation_time_s,
-                    "specdec_early_exposed_generation",
+                    "specdec_early_replay_sample",
+                    emit_worker_throughput=False,
+                    time_metric_name="sample_window_time_s",
                 )
                 vllm_logger_metrics = _collect_and_log_specdec_vllm_metrics(
                     policy_generation,
