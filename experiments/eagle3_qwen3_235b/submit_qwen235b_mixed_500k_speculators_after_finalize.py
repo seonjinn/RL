@@ -273,6 +273,8 @@ def submit_ray_datagen(
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
         "RAY_INCLUDE_DASHBOARD": "False",
+        "RAY_USE_EXISTING_ENV": "true",
+        "RAY_CLI": "ray",
         "RAY_DEDUP_LOGS": "0",
     }
     cmd = [
@@ -348,6 +350,8 @@ bash {shlex.quote(str(PIPELINE_SCRIPT))}"""
         "VLLM_USE_RAY_SPMD_WORKER": os.environ.get("VLLM_USE_RAY_SPMD_WORKER", "0"),
         "VLLM_USE_RAY_WRAPPED_PP_COMM": os.environ.get("VLLM_USE_RAY_WRAPPED_PP_COMM", "0"),
         "RAY_INCLUDE_DASHBOARD": "False",
+        "RAY_USE_EXISTING_ENV": "true",
+        "RAY_CLI": "ray",
         "RAY_DEDUP_LOGS": "0",
     }
     array_spec = f"0-{shards - 1}"
@@ -521,6 +525,7 @@ def submit(args: argparse.Namespace) -> dict[str, object]:
         "ray_sub_source": str(RAY_SUB if RAY_SUB.exists() else FALLBACK_RAY_SUB),
         "ray_sub_singleton_removed": True,
         "ray_include_dashboard": "False",
+        "ray_use_existing_env": "true",
         "from_pretrained": args.from_pretrained or "",
         "allow_pending_finalizer": args.allow_pending_finalizer,
         "dry_run": args.dry_run,
