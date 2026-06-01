@@ -256,7 +256,14 @@ class BaseVllmGenerationWorker:
                 continue
             baseline_group = baseline.get(group, {}) if isinstance(baseline, dict) else {}
             diff_group = diff.setdefault(group, {})
-            for key in ("checked", "enabled", "disabled"):
+            for key in (
+                "checked",
+                "enabled",
+                "disabled",
+                "dynamic_small_selected_count",
+                "dynamic_medium_selected_count",
+                "dynamic_large_selected_count",
+            ):
                 diff_group[key] = max(
                     0,
                     int(current_group.get(key, 0))
@@ -333,6 +340,9 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_gate_checked_count": "checked",
             "_nrl_specdec_scheduler_gate_enabled_count": "enabled",
             "_nrl_specdec_scheduler_gate_disabled_count": "disabled",
+            "_nrl_specdec_scheduler_dynamic_small_selected_count": "dynamic_small_selected_count",
+            "_nrl_specdec_scheduler_dynamic_medium_selected_count": "dynamic_medium_selected_count",
+            "_nrl_specdec_scheduler_dynamic_large_selected_count": "dynamic_large_selected_count",
         }
         scheduler_values = {
             "_nrl_specdec_scheduler_gate_threshold": "request_threshold",
@@ -352,9 +362,6 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_dynamic_small_tokens": "dynamic_small_tokens",
             "_nrl_specdec_scheduler_dynamic_medium_tokens": "dynamic_medium_tokens",
             "_nrl_specdec_scheduler_dynamic_large_tokens": "dynamic_large_tokens",
-            "_nrl_specdec_scheduler_dynamic_small_selected_count": "dynamic_small_selected_count",
-            "_nrl_specdec_scheduler_dynamic_medium_selected_count": "dynamic_medium_selected_count",
-            "_nrl_specdec_scheduler_dynamic_large_selected_count": "dynamic_large_selected_count",
             "_nrl_specdec_scheduler_adaptive_mode": "adaptive_mode",
             "_nrl_specdec_scheduler_adaptive_request_threshold": "adaptive_request_threshold",
             "_nrl_specdec_scheduler_adaptive_token_threshold": "adaptive_token_threshold",

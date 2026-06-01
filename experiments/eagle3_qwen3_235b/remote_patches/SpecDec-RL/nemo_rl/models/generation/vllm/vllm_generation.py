@@ -931,11 +931,26 @@ class VllmGeneration(GenerationInterface):
             dst["num_reporting_objects"] = int(
                 dst.get("num_reporting_objects", 0)
             ) + int(src.get("num_reporting_objects", 0))
-            for key in ("checked", "enabled", "disabled"):
+            for key in (
+                "checked",
+                "enabled",
+                "disabled",
+                "dynamic_small_selected_count",
+                "dynamic_medium_selected_count",
+                "dynamic_large_selected_count",
+            ):
                 if key in src:
                     dst[key] = int(dst.get(key, 0)) + int(src.get(key, 0))
             for key, value in src.items():
-                if key in {"num_reporting_objects", "checked", "enabled", "disabled"}:
+                if key in {
+                    "num_reporting_objects",
+                    "checked",
+                    "enabled",
+                    "disabled",
+                    "dynamic_small_selected_count",
+                    "dynamic_medium_selected_count",
+                    "dynamic_large_selected_count",
+                }:
                     continue
                 if key.endswith("_observed") and isinstance(value, list):
                     values = dst.setdefault(key, [])
