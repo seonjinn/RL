@@ -16,6 +16,7 @@ import copy
 import fcntl
 import gc
 import json
+import logging
 import os
 import re
 import sys
@@ -38,6 +39,9 @@ from nemo_rl.models.generation.vllm.utils import format_prompt_for_vllm_generati
 from nemo_rl.models.huggingface.common import ModelFlag
 from nemo_rl.models.policy.utils import is_vllm_v1_engine_enabled
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
+
+
+logger = logging.getLogger(__name__)
 
 
 # Use a base class to share some functions to avoid code duplication.
