@@ -276,6 +276,19 @@ def import_model_from_hf_name(
             model_parallel_kwargs["expert_tensor_parallel_size"] = megatron_config[
                 "expert_tensor_parallel_size"
             ]
+    timeout_seconds = int(
+        os.environ.get(
+            "NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS",
+            os.environ.get("NRL_MEGATRON_NCCL_TIMEOUT_SECONDS", "0"),
+        )
+    )
+    if timeout_seconds > 0 and _call_accepts_kwarg(
+        model_provider.initialize_model_parallel,
+        "distributed_timeout_minutes",
+    ):
+        model_parallel_kwargs["distributed_timeout_minutes"] = max(
+            1, (timeout_seconds + 59) // 60
+        )
     model_provider.initialize_model_parallel(seed=0, **model_parallel_kwargs)
     provide_distributed_model = getattr(
         model_provider, "provide_distributed_model", None
