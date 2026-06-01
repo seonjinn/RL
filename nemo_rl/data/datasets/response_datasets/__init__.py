@@ -36,6 +36,9 @@ from nemo_rl.data.datasets.response_datasets.intent import (
     IntentBenchDataset,
     IntentTrainDataset,
 )
+from nemo_rl.data.datasets.response_datasets.megatron_sft_packed import (
+    MegatronSFTPackedDataset,
+)
 from nemo_rl.data.datasets.response_datasets.mmpr_tiny import MMPRTinyDataset
 from nemo_rl.data.datasets.response_datasets.nemogym_dataset import NemoGymDataset
 from nemo_rl.data.datasets.response_datasets.nemotron_cascade2_sft import (
@@ -146,6 +149,7 @@ __all__ = [
     "IntentBenchDataset",
     "IntentTrainDataset",
     "MMPRTinyDataset",
+    "MegatronSFTPackedDataset",
     "NemoGymDataset",
     "NemotronCascade2SFTMathDataset",
     "OasstDataset",

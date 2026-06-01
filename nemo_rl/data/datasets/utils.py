@@ -115,9 +115,14 @@ def load_dataset_from_path(
         ".parquet": "parquet",
         ".txt": "text",
     }
-    suffix = os.path.splitext(data_path)[-1]
+    path = Path(data_path)
+    suffixes = list(reversed(path.suffixes if path.is_file() else [path.suffix]))
+    dataset_type = next(
+        (FILEEXT2TYPE[suffix] for suffix in suffixes if suffix in FILEEXT2TYPE),
+        None,
+    )
     # load from local file (not save_to_disk format)
-    if dataset_type := FILEEXT2TYPE.get(suffix):
+    if dataset_type:
         assert data_subset is None, (
             "data_subset is only supported for huggingface datasets"
         )

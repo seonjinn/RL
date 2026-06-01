@@ -1227,6 +1227,69 @@ def _get_tokens_on_this_cp_rank(
     return ids
 
 
+def _get_packed_thd_partitioned_indices(
+    cu_seqlens: torch.Tensor,
+    total_tokens: int,
+    cp_size: int,
+    cp_rank: int,
+    *,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """Return Megatron-LM compatible packed THD CP indices."""
+    if cp_size == 1:
+        return torch.arange(total_tokens, device=device, dtype=torch.long)
+
+    valid_cu = cu_seqlens[cu_seqlens >= 0].to(device=device, dtype=torch.long)
+    chunks = []
+    denom = cp_size * 2
+    for start, end in zip(valid_cu[:-1], valid_cu[1:]):
+        seq_len = int((end - start).item())
+        if seq_len == 0:
+            continue
+        if seq_len % denom != 0:
+            raise ValueError(
+                "Packed THD sequence length must be divisible by "
+                f"2 * cp_size for Megatron-LM CP partitioning: "
+                f"seq_len={seq_len}, cp_size={cp_size}"
+            )
+        shard_size = seq_len // denom
+        left_start = start + cp_rank * shard_size
+        left_end = left_start + shard_size
+        right_end = end - cp_rank * shard_size
+        right_start = right_end - shard_size
+        chunks.append(
+            torch.arange(left_start, left_end, device=device, dtype=torch.long)
+        )
+        chunks.append(
+            torch.arange(right_start, right_end, device=device, dtype=torch.long)
+        )
+
+    if not chunks:
+        return torch.empty(0, device=device, dtype=torch.long)
+    return torch.cat(chunks)
+
+
+def _get_packed_tokens_on_this_cp_rank(
+    input_ids: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    cp_rank: int,
+    cp_size: int,
+    seq_dim: int = 1,
+) -> torch.Tensor:
+    """Get packed THD tokens on this CP rank using Megatron-LM indexing."""
+    if cp_size == 1:
+        return input_ids
+    total_tokens = input_ids.shape[seq_dim]
+    index = _get_packed_thd_partitioned_indices(
+        cu_seqlens,
+        total_tokens,
+        cp_size,
+        cp_rank,
+        device=input_ids.device,
+    )
+    return input_ids.index_select(seq_dim, index)
+
+
 def allgather_cp_sharded_tensor(
     tensor, cp_group, seq_dim=1
 ):  # , unpadded_seqlen=None):

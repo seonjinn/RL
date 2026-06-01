@@ -26,7 +26,10 @@ from megatron.core.utils import StragglerDetector
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction, LossType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
-from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
+from nemo_rl.distributed.model_utils import (
+    _get_packed_tokens_on_this_cp_rank,
+    _get_tokens_on_this_cp_rank,
+)
 from nemo_rl.models.megatron.common import _round_up_to_multiple
 from nemo_rl.utils.r3_trace import (
     r3_trace_verify_forward_enabled,
@@ -180,7 +183,11 @@ def get_microbatch_iterator(
     if seq_length_key is None and cfg["sequence_packing"]["enabled"]:
         seq_length_key = "input_lengths"
 
-    if cfg["dynamic_batching"]["enabled"]:
+    if "packed_cu_seqlens" in data:
+        raw_iterator = data.make_microbatch_iterator(1)
+        data_iterator_len = data.size
+        micro_batch_size = 1
+    elif cfg["dynamic_batching"]["enabled"]:
         raw_iterator = data.make_microbatch_iterator_with_dynamic_shapes()
         data_iterator_len = data.get_microbatch_iterator_dynamic_shapes_len()
     elif cfg["sequence_packing"]["enabled"]:
@@ -273,7 +280,41 @@ def process_microbatch(
         cu_seqlens_padded = None
         mtp_loss_mask = None
 
-        if pack_sequences:
+        if "packed_cu_seqlens" in data_dict:
+            assert input_ids.shape[0] == 1, (
+                "Megatron SFT prepacked microbatches must contain one packed row. "
+                "Set policy.train_micro_batch_size=1."
+            )
+            cu_len = int(data_dict["packed_cu_seqlens_lengths"][0].item())
+            cu_seqlens = data_dict["packed_cu_seqlens"][0, :cu_len].to(torch.int32)
+            cu_seqlens_padded = cu_seqlens
+            max_seqlen = int(data_dict["packed_max_seqlens"][0].item())
+            input_ids_cp_sharded = _get_packed_tokens_on_this_cp_rank(
+                input_ids,
+                cu_seqlens,
+                get_context_parallel_rank(),
+                get_context_parallel_world_size(),
+                seq_dim=1,
+            )
+            if "position_ids" in data_dict:
+                position_ids = _get_packed_tokens_on_this_cp_rank(
+                    data_dict["position_ids"],
+                    cu_seqlens,
+                    get_context_parallel_rank(),
+                    get_context_parallel_world_size(),
+                    seq_dim=1,
+                )
+            packed_seq_params = PackedSeqParams(
+                cu_seqlens_q=cu_seqlens_padded,
+                cu_seqlens_kv=cu_seqlens_padded,
+                cu_seqlens_q_padded=None,
+                cu_seqlens_kv_padded=None,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_kv=max_seqlen,
+                qkv_format="thd",
+            )
+            attention_mask = None
+        elif pack_sequences:
             # For packed sequences with padded input, we need sequence lengths
             assert seq_length_key is not None, (
                 "seq_length_key must be provided for packed sequences"
@@ -650,9 +691,12 @@ def process_global_batch(
     if "token_mask" not in batch:
         local_valid_toks = local_valid_seqs * batch["input_ids"].shape[1]
     else:
-        local_valid_toks = torch.sum(
-            batch["token_mask"][:, 1:] * batch["sample_mask"].unsqueeze(-1)
+        token_mask = (
+            batch["token_mask"]
+            if "target_ids" in batch
+            else batch["token_mask"][:, 1:]
         )
+        local_valid_toks = torch.sum(token_mask * batch["sample_mask"].unsqueeze(-1))
 
     to_reduce = torch.tensor([local_valid_seqs, local_valid_toks]).cuda()
     torch.distributed.all_reduce(to_reduce, group=dp_group)
@@ -1255,6 +1299,8 @@ def get_and_validate_seqlen(data: BatchedDataDict[Any]):
     sequence_dim = 1
     seq_dim_size = data["input_ids"].shape[sequence_dim]
     for k, v in data.items():
+        if k in {"packed_cu_seqlens"}:
+            continue
         if torch.is_tensor(v) and len(v.shape) > 1:
             assert v.shape[sequence_dim] == seq_dim_size, (
                 f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape} for key {k}"

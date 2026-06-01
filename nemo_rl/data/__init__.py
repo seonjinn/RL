@@ -31,6 +31,11 @@ class ResponseDatasetConfig(TypedDict):
     split_validation_size: NotRequired[float]
     # Seed for train/validation split when split_validation_size > 0
     seed: NotRequired[int]
+    chat_key: NotRequired[str]
+    megatron_sft_prompt_format: NotRequired[str | None]
+    megatron_sft_pad_token: NotRequired[str | None]
+    megatron_sft_assistant_prefix_len: NotRequired[int]
+    megatron_sft_context_parallel_size: NotRequired[int]
 
 
 class PreferenceDatasetConfig(TypedDict):
@@ -62,6 +67,9 @@ class DataConfig(TypedDict):
     use_multiple_dataloader: NotRequired[bool]
     num_prompts_per_dataloader: NotRequired[int]
     custom_dataloader: NotRequired[str]
+    # Match Megatron-LM SFT's strided sampler order before NeMo-RL's DP sharding.
+    megatron_sft_dp_stride_order: NotRequired[bool]
+    megatron_sft_dp_stride_order_in_collate: NotRequired[bool]
     # dataset configs
     train: ResponseDatasetConfig | PreferenceDatasetConfig | list[ResponseDatasetConfig]
     validation: NotRequired[
