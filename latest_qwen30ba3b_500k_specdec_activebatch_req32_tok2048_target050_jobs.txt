@@ -1,5 +1,5 @@
 # Qwen3-30B-A3B 500K Speculators Eagle3 NeMo-RL eval sweep
-created_at=2026-05-31 19:31:01 PDT
+created_at=2026-05-31 19:59:50 PDT
 train_job=3056818
 nemo_rl_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL
 container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh
@@ -25,4 +25,4 @@ max_steps=8
 num_prompts=64
 num_generations=32
 train_global_batch_size=2048
-specdec_k1_job=3064542
+specdec_k1_job=3064871

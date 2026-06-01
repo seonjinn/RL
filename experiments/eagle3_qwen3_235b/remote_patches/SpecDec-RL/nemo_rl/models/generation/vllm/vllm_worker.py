@@ -1676,7 +1676,7 @@ class BaseVllmGenerationWorker:
                         f"installed first in {gpu_model_runner}."
                     )
 
-                init_anchor = "            specdec_batch_gate_disabled = (\n"
+                init_anchor = "            specdec_batch_gate_threshold_disabled = (\n"
                 init_block = (
                     "            # NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1\n"
                     "            specdec_adaptive_gate_mode = getattr(\n"
@@ -1836,8 +1836,8 @@ class BaseVllmGenerationWorker:
                     "                    self._nrl_specdec_adaptive_window_enabled = adaptive_window_enabled\n"
                 )
 
-                patched = content.replace(init_anchor, init_block + init_anchor)
-                patched = patched.replace(adapt_anchor, adapt_block + adapt_anchor)
+                patched = content.replace(init_anchor, init_block + init_anchor, 1)
+                patched = patched.replace(adapt_anchor, adapt_block + adapt_anchor, 1)
                 if patched == content:
                     raise RuntimeError(
                         "Could not install adaptive SpecDec gate in "
@@ -1861,6 +1861,7 @@ class BaseVllmGenerationWorker:
                         f"in {gpu_model_runner}; missing markers: "
                         + ", ".join(missing_markers)
                     )
+            __import__("py_compile").compile(gpu_model_runner, doraise=True)
 
             scheduler = _get_vllm_file("v1/core/sched/scheduler.py")
             with open(scheduler) as f:
@@ -2278,6 +2279,7 @@ class BaseVllmGenerationWorker:
                         f"in {scheduler}; missing markers: "
                         + ", ".join(missing_markers)
                     )
+            __import__("py_compile").compile(scheduler, doraise=True)
 
             return applied
 
