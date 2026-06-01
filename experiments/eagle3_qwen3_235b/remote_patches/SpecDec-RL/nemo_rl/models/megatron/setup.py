@@ -15,6 +15,7 @@
 import os
 import time
 import warnings
+from datetime import timedelta
 from inspect import signature
 from typing import Any, Optional, TypeVar
 
@@ -218,8 +219,17 @@ def setup_distributed() -> None:
     if torch.cuda.is_available():
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         torch.cuda.set_device(local_rank % torch.cuda.device_count())
-    # Need to initialize the process group before calling into Megatron-Bridge, otherwise Megatron-Bridge will try to set an incorrect device
-    torch.distributed.init_process_group("nccl")
+    timeout_seconds = int(
+        os.environ.get(
+            "NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS",
+            os.environ.get("NRL_MEGATRON_NCCL_TIMEOUT_SECONDS", "600"),
+        )
+    )
+    # Need to initialize the process group before calling into Megatron-Bridge,
+    # otherwise Megatron-Bridge will try to set an incorrect device.
+    torch.distributed.init_process_group(
+        "nccl", timeout=timedelta(seconds=timeout_seconds)
+    )
 
 
 def validate_and_set_config(

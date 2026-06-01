@@ -974,6 +974,262 @@ def _repair_specdec_generation_logprobs_if_safe(
     )
 
 
+def _flatten_numeric_metrics(
+    metrics: Any, prefix: str = "", max_list_values: int = 16
+) -> dict[str, float | int]:
+    """Flatten scalar/list numeric metrics for logger backends."""
+    flat: dict[str, float | int] = {}
+    if isinstance(metrics, bool):
+        flat[prefix] = 1 if metrics else 0
+    elif isinstance(metrics, int | float):
+        flat[prefix] = metrics
+    elif isinstance(metrics, dict):
+        for key, value in metrics.items():
+            child_prefix = f"{prefix}/{key}" if prefix else str(key)
+            flat.update(_flatten_numeric_metrics(value, child_prefix, max_list_values))
+    elif isinstance(metrics, list):
+        for idx, value in enumerate(metrics[:max_list_values]):
+            if isinstance(value, bool):
+                flat[f"{prefix}/{idx}"] = 1 if value else 0
+            elif isinstance(value, int | float):
+                flat[f"{prefix}/{idx}"] = value
+    return flat
+
+
+def _log_specdec_vllm_metrics(
+    vllm_logger_metrics: dict[str, Any],
+    logger: Logger,
+    step: int,
+    prefix: str,
+) -> None:
+    """Persist SpecDec counters before logprob/training can fail."""
+    if not isinstance(vllm_logger_metrics, dict) or not vllm_logger_metrics:
+        return
+
+    flat_metrics = _flatten_numeric_metrics(
+        {
+            key: vllm_logger_metrics[key]
+            for key in ("spec_decode", "spec_decode_gate")
+            if key in vllm_logger_metrics
+        }
+    )
+    if flat_metrics:
+        logger.log_metrics(flat_metrics, step, prefix=prefix)
+
+    spec_decode = vllm_logger_metrics.get("spec_decode", {})
+    if isinstance(spec_decode, dict) and spec_decode.get("metrics_available", True):
+        print(
+            "[SpecDec early metrics] "
+            f"step={step} acceptance_rate="
+            f"{float(spec_decode.get('acceptance_rate', 0.0)):.4f} "
+            f"draft_tokens={int(spec_decode.get('num_draft_tokens', 0))} "
+            f"accepted_tokens={int(spec_decode.get('num_accepted_tokens', 0))} "
+            f"reporting={int(spec_decode.get('num_reporting_workers', 0))}/"
+            f"{int(spec_decode.get('num_expected_workers', 0))}",
+            flush=True,
+        )
+        num_drafts = int(spec_decode.get("num_drafts", 0))
+        accepted_per_pos = spec_decode.get("num_accepted_tokens_per_pos", [])
+        if num_drafts > 0 and accepted_per_pos:
+            per_pos_rates = [
+                float(accepted) / num_drafts for accepted in accepted_per_pos[:8]
+            ]
+            print(
+                "[SpecDec early metrics] "
+                f"step={step} per_position_acceptance="
+                + ",".join(f"{rate:.4f}" for rate in per_pos_rates),
+                flush=True,
+            )
+
+    spec_decode_gate = vllm_logger_metrics.get("spec_decode_gate", {})
+    if isinstance(spec_decode_gate, dict):
+        scheduler = spec_decode_gate.get("scheduler", {})
+        if isinstance(scheduler, dict) and scheduler:
+            print(
+                "[SpecDec early gate] "
+                f"step={step} enabled_ratio="
+                f"{float(scheduler.get('enabled_ratio', 0.0)):.4f} "
+                f"last_active_requests={scheduler.get('last_active_requests', 'n/a')} "
+                f"effective_k={scheduler.get('effective_lookahead_tokens', 'n/a')} "
+                f"dynamic_k={scheduler.get('dynamic_last_selected_tokens', 'n/a')}",
+                flush=True,
+            )
+
+
+def _collect_and_log_specdec_vllm_metrics(
+    policy_generation: Optional[GenerationInterface],
+    logger: Logger,
+    step: int,
+    prefix: str,
+) -> dict[str, Any]:
+    if policy_generation is None or not hasattr(
+        policy_generation, "get_vllm_logger_metrics"
+    ):
+        return {}
+    vllm_logger_metrics = policy_generation.get_vllm_logger_metrics()
+    _log_specdec_vllm_metrics(vllm_logger_metrics, logger, step, prefix)
+    return vllm_logger_metrics
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return default
+
+
+def _metric_int(metrics: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(metrics.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _maybe_apply_specdec_step_controller(
+    policy_generation: Optional[GenerationInterface],
+    vllm_logger_metrics: dict[str, Any],
+    logger: Logger,
+    step: int,
+) -> None:
+    """ReSpec/TLT-style step controller for draft depth in later rollouts."""
+    if not _env_bool("NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER", False):
+        return
+    if policy_generation is None or not hasattr(
+        policy_generation, "set_specdec_runtime_controls"
+    ):
+        return
+    if not isinstance(vllm_logger_metrics, dict):
+        return
+
+    spec_decode = vllm_logger_metrics.get("spec_decode", {})
+    if not isinstance(spec_decode, dict) or not spec_decode.get(
+        "metrics_available", True
+    ):
+        return
+    draft_tokens = _metric_int(spec_decode, "num_draft_tokens", 0)
+    min_draft_tokens = _env_int("NRL_SPECDEC_CONTROLLER_MIN_DRAFT_TOKENS", 128)
+    if draft_tokens < min_draft_tokens:
+        return
+
+    gate = vllm_logger_metrics.get("spec_decode_gate", {})
+    scheduler = gate.get("scheduler", {}) if isinstance(gate, dict) else {}
+    if not isinstance(scheduler, dict):
+        scheduler = {}
+
+    min_k = max(1, _env_int("NRL_SPECDEC_CONTROLLER_MIN_K", 1))
+    max_k = max(min_k, _env_int("NRL_SPECDEC_CONTROLLER_MAX_K", 3))
+    current_small = min(
+        max_k, max(min_k, _metric_int(scheduler, "dynamic_small_tokens", max_k))
+    )
+    current_medium = min(
+        current_small,
+        max(min_k, _metric_int(scheduler, "dynamic_medium_tokens", min(max_k, 2))),
+    )
+    current_large = min(
+        current_medium,
+        max(min_k, _metric_int(scheduler, "dynamic_large_tokens", min_k)),
+    )
+
+    acceptance = float(spec_decode.get("acceptance_rate", 0.0))
+    low_watermark = _env_float("NRL_SPECDEC_CONTROLLER_LOW_ACCEPTANCE", 0.45)
+    high_watermark = _env_float("NRL_SPECDEC_CONTROLLER_HIGH_ACCEPTANCE", 0.62)
+    allow_increase = _env_bool("NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE", False)
+    second_pos_floor = _env_float("NRL_SPECDEC_CONTROLLER_POS2_FLOOR", 0.25)
+    third_pos_floor = _env_float("NRL_SPECDEC_CONTROLLER_POS3_FLOOR", 0.15)
+    num_drafts = _metric_int(spec_decode, "num_drafts", 0)
+    per_pos = []
+    if num_drafts > 0:
+        for accepted in spec_decode.get("num_accepted_tokens_per_pos", []) or []:
+            try:
+                per_pos.append(float(accepted) / num_drafts)
+            except (TypeError, ValueError):
+                per_pos.append(0.0)
+
+    low_quality = acceptance < low_watermark
+    if current_small >= 2 and len(per_pos) >= 2:
+        low_quality = low_quality or per_pos[1] < second_pos_floor
+    if current_small >= 3 and len(per_pos) >= 3:
+        low_quality = low_quality or per_pos[2] < third_pos_floor
+
+    next_small = current_small
+    next_medium = current_medium
+    next_large = current_large
+    action = "hold"
+    if low_quality and current_small > min_k:
+        next_small = max(min_k, current_small - 1)
+        next_medium = min(next_small, max(min_k, current_medium - 1))
+        next_large = min(next_medium, current_large)
+        action = "decrease_k"
+    elif allow_increase and acceptance > high_watermark and current_small < max_k:
+        next_small = min(max_k, current_small + 1)
+        next_medium = min(next_small, max(current_medium, min(next_small, 2)))
+        next_large = min(next_medium, current_large)
+        action = "increase_k"
+
+    if action == "hold":
+        return
+
+    controls = {
+        "scheduler_dynamic_small_tokens": next_small,
+        "scheduler_dynamic_medium_tokens": next_medium,
+        "scheduler_dynamic_large_tokens": next_large,
+    }
+    try:
+        results = policy_generation.set_specdec_runtime_controls(controls)
+    except Exception as exc:
+        print(
+            f"[SpecDec step controller] step={step} action={action} failed: {exc}",
+            flush=True,
+        )
+        return
+
+    updated_objects = 0
+    if isinstance(results, list):
+        for result in results:
+            if isinstance(result, dict):
+                updated_objects += int(result.get("updated_objects", 0))
+    logger.log_metrics(
+        {
+            "controller/action_decrease_k": 1 if action == "decrease_k" else 0,
+            "controller/action_increase_k": 1 if action == "increase_k" else 0,
+            "controller/next_small_tokens": next_small,
+            "controller/next_medium_tokens": next_medium,
+            "controller/next_large_tokens": next_large,
+            "controller/updated_objects": updated_objects,
+        },
+        step,
+        prefix="specdec",
+    )
+    print(
+        "[SpecDec step controller] "
+        f"step={step} action={action} acceptance={acceptance:.4f} "
+        f"k=({current_small},{current_medium},{current_large})->"
+        f"({next_small},{next_medium},{next_large}) "
+        f"updated_objects={updated_objects}",
+        flush=True,
+    )
+
+
 def _should_use_nemo_gym(master_config: MasterConfig) -> bool:
     """Determine if NeMo-Gym should be used for rollouts and validation based on the configuration."""
     env_config = master_config.get("env") or dict()
@@ -1307,6 +1563,18 @@ def grpo_train(
                     vllm_logger_metrics = policy_generation.get_vllm_logger_metrics()
                 else:
                     vllm_logger_metrics = {}
+                _log_specdec_vllm_metrics(
+                    vllm_logger_metrics,
+                    logger,
+                    total_steps + 1,
+                    "specdec_pre_finish",
+                )
+                _maybe_apply_specdec_step_controller(
+                    policy_generation,
+                    vllm_logger_metrics,
+                    logger,
+                    total_steps + 1,
+                )
 
                 with timer.time("generation_finish"):
                     policy_generation.finish_generation()
@@ -2278,6 +2546,18 @@ def async_grpo_train(
                     )
 
                 print(f"Got trajectory batch (size: {repeated_batch.size})")
+                vllm_logger_metrics = _collect_and_log_specdec_vllm_metrics(
+                    policy_generation,
+                    logger,
+                    step + 1,
+                    "specdec_pre_logprob",
+                )
+                _maybe_apply_specdec_step_controller(
+                    policy_generation,
+                    vllm_logger_metrics,
+                    logger,
+                    step + 1,
+                )
 
                 print("▶ Processing rewards...")
                 with timer.time("reward_calculation"):
@@ -2401,7 +2681,6 @@ def async_grpo_train(
                     train_results = policy.train(train_data, loss_fn)
 
                 print("🔄 Synchronizing policy weights to trajectory collector…")
-                vllm_logger_metrics = None
                 if NEED_REFIT:
                     # Measure pending-generation wait as exposed_generation time
                     print("🔄 Coordinating with trajectory collector before refit...")
@@ -2410,14 +2689,15 @@ def async_grpo_train(
 
                     # Collect vLLM logger metrics for performance reporting
                     # inflight batch sizes and num pending samples are collected from each vLLM worker
-                    if policy_generation is not None and hasattr(
-                        policy_generation, "get_vllm_logger_metrics"
-                    ):
+                    if not vllm_logger_metrics:
                         vllm_logger_metrics = (
-                            policy_generation.get_vllm_logger_metrics()
+                            _collect_and_log_specdec_vllm_metrics(
+                                policy_generation,
+                                logger,
+                                step + 1,
+                                "specdec_pre_refit",
+                            )
                         )
-                    else:
-                        vllm_logger_metrics = {}
 
                     # Only the actual refit/weight transfer should be counted as weight_sync
                     print("🔄 Performing policy generation refit...")

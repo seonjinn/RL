@@ -1060,6 +1060,31 @@ class VllmGeneration(GenerationInterface):
 
         return vllm_logger_metrics
 
+    def set_specdec_runtime_controls(
+        self, controls: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Update adaptive SpecDec controls on vLLM DP leader workers."""
+        vllm_kwargs = self.cfg.get("vllm_kwargs", {})
+        speculative_config = (
+            vllm_kwargs.get("speculative_config")
+            if isinstance(vllm_kwargs, dict)
+            else None
+        )
+        if not isinstance(speculative_config, dict) or not controls:
+            return []
+
+        futures: list[ray.ObjectRef] = []
+        for dp_idx in range(self.worker_group.dp_size):
+            worker_idx = self.worker_group.get_dp_leader_worker_idx(dp_idx)
+            futures.append(
+                self.worker_group.run_single_worker_single_data(
+                    "set_specdec_runtime_controls",
+                    worker_idx=worker_idx,
+                    controls=controls,
+                )
+            )
+        return ray.get(futures)
+
     def clear_vllm_logger_metrics(self) -> None:
         vllm_kwargs = self.cfg.get("vllm_kwargs", {})
         speculative_config = (

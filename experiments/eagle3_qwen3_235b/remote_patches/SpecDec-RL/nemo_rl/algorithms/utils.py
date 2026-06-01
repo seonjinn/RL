@@ -601,6 +601,10 @@ def print_performance_metrics(
                 "    - Per-position acceptance rate: "
                 + ", ".join(f"{rate:.4f}" for rate in per_pos_rates)
             )
+            for idx, rate in enumerate(per_pos_rates):
+                performance_metrics[f"spec_decode/acceptance_rate_pos_{idx + 1}"] = (
+                    rate
+                )
         performance_metrics["spec_decode/num_drafts"] = num_drafts
         performance_metrics["spec_decode/num_draft_tokens"] = num_draft_tokens
         performance_metrics["spec_decode/num_accepted_tokens"] = num_accepted_tokens
@@ -664,6 +668,18 @@ def print_performance_metrics(
                 "adaptive_last_enabled_ratio",
                 "adaptive_window_checked",
                 "adaptive_window_enabled",
+                "dynamic_draft_tokens_enabled",
+                "dynamic_last_selected_tokens",
+                "dynamic_small_request_threshold",
+                "dynamic_medium_request_threshold",
+                "dynamic_small_token_threshold",
+                "dynamic_medium_token_threshold",
+                "dynamic_small_tokens",
+                "dynamic_medium_tokens",
+                "dynamic_large_tokens",
+                "dynamic_small_selected_count",
+                "dynamic_medium_selected_count",
+                "dynamic_large_selected_count",
             ):
                 value = group_metrics.get(key)
                 if isinstance(value, bool):

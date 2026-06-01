@@ -437,6 +437,51 @@ class BaseVllmGenerationWorker:
         result["spec_decode"] = spec_decode
         return result
 
+    def set_specdec_runtime_controls(self, controls: dict[str, Any]) -> dict[str, Any]:
+        """Best-effort runtime update for adaptive SpecDec gate/depth controls."""
+        attr_map = {
+            "scheduler_dynamic_small_tokens": "_nrl_specdec_scheduler_dynamic_small_tokens",
+            "scheduler_dynamic_medium_tokens": "_nrl_specdec_scheduler_dynamic_medium_tokens",
+            "scheduler_dynamic_large_tokens": "_nrl_specdec_scheduler_dynamic_large_tokens",
+            "scheduler_dynamic_small_request_threshold": "_nrl_specdec_scheduler_dynamic_small_request_threshold",
+            "scheduler_dynamic_medium_request_threshold": "_nrl_specdec_scheduler_dynamic_medium_request_threshold",
+            "scheduler_dynamic_small_token_threshold": "_nrl_specdec_scheduler_dynamic_small_token_threshold",
+            "scheduler_dynamic_medium_token_threshold": "_nrl_specdec_scheduler_dynamic_medium_token_threshold",
+            "scheduler_adaptive_request_threshold": "_nrl_specdec_scheduler_adaptive_request_threshold",
+            "scheduler_adaptive_token_threshold": "_nrl_specdec_scheduler_adaptive_token_threshold",
+            "scheduler_adaptive_target_enabled_ratio": "_nrl_specdec_scheduler_adaptive_target_enabled_ratio",
+            "runner_adaptive_request_threshold": "_nrl_specdec_adaptive_request_threshold",
+            "runner_adaptive_token_threshold": "_nrl_specdec_adaptive_token_threshold",
+            "runner_adaptive_target_enabled_ratio": "_nrl_specdec_adaptive_target_enabled_ratio",
+        }
+        applied: dict[str, Any] = {}
+        updated_objects = 0
+        for obj in self._iter_vllm_gate_metric_objects():
+            attrs = vars(obj)
+            updated_this_object = False
+            for key, attr in attr_map.items():
+                if key not in controls or attr not in attrs:
+                    continue
+                value = controls[key]
+                if attr.endswith("_enabled_ratio"):
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if value < 0:
+                        continue
+                setattr(obj, attr, value)
+                applied[key] = value
+                updated_this_object = True
+            if updated_this_object:
+                updated_objects += 1
+        return {"updated_objects": updated_objects, "applied": applied}
+
     @staticmethod
     def configure_worker(
         num_gpus: int | float, bundle_indices: Optional[tuple[int, list[int]]] = None
@@ -1929,6 +1974,15 @@ class BaseVllmGenerationWorker:
                 "                self._nrl_specdec_scheduler_dynamic_large_tokens = _nrl_dynamic_int(\n"
                 "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS\", 1\n"
                 "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_small_selected_count = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_small_selected_count\", 0\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_medium_selected_count = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_medium_selected_count\", 0\n"
+                "                )\n"
+                "                self._nrl_specdec_scheduler_dynamic_large_selected_count = getattr(\n"
+                "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_count\", 0\n"
+                "                )\n"
                 "            if dynamic_enabled and effective_lookahead_tokens > 0:\n"
                 "                small_request_threshold = getattr(\n"
                 "                    self, \"_nrl_specdec_scheduler_dynamic_small_request_threshold\", 4\n"
@@ -2398,6 +2452,42 @@ class BaseVllmGenerationWorker:
                     )
                     scheduler_content = scheduler_content.replace(
                         static_return, "            return effective_lookahead_tokens\n", 1
+                    )
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
+                if (
+                    "NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1"
+                    in scheduler_content
+                    and "_nrl_specdec_scheduler_dynamic_small_selected_count"
+                    not in scheduler_content
+                ):
+                    dynamic_selected_count_anchor = (
+                        "                self._nrl_specdec_scheduler_dynamic_large_tokens = _nrl_dynamic_int(\n"
+                        "                    \"VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS\", 1\n"
+                        "                )\n"
+                    )
+                    dynamic_selected_count_block = (
+                        dynamic_selected_count_anchor
+                        + "                self._nrl_specdec_scheduler_dynamic_small_selected_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_small_selected_count\", 0\n"
+                        "                )\n"
+                        "                self._nrl_specdec_scheduler_dynamic_medium_selected_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_medium_selected_count\", 0\n"
+                        "                )\n"
+                        "                self._nrl_specdec_scheduler_dynamic_large_selected_count = getattr(\n"
+                        "                    self, \"_nrl_specdec_scheduler_dynamic_large_selected_count\", 0\n"
+                        "                )\n"
+                    )
+                    if dynamic_selected_count_anchor not in scheduler_content:
+                        raise RuntimeError(
+                            "Could not upgrade existing adaptive SpecDec scheduler "
+                            f"gate dynamic counters in {scheduler}; expected dynamic "
+                            "config anchor was missing."
+                        )
+                    scheduler_content = scheduler_content.replace(
+                        dynamic_selected_count_anchor,
+                        dynamic_selected_count_block,
+                        1,
                     )
                     with open(scheduler, "w") as f:
                         f.write(scheduler_content)
