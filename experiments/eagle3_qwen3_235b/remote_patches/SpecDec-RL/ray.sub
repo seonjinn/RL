@@ -107,7 +107,7 @@ if ray_use_existing_env; then
     fi
   fi
 else
-  RAY_VENV=${RAY_VENV:-/tmp/nemo_rl_ray_${RAY_PYTHON_VENV_TAG}_${RAY_VERSION}}
+  RAY_VENV=${RAY_VENV:-/tmp/nemo_rl_ray_${SLURM_JOB_ID:-manual}_${RAY_PYTHON_VENV_TAG}_${RAY_VERSION}}
   RAY_CLI="${RAY_VENV}/bin/ray"
 fi
 
