@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 15:05 PDT",
+  "updated_at": "2026-06-01 15:07 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -23,6 +23,7 @@
       "job_id": "3080343",
       "submitted_at": "2026-06-01 15:00 PDT",
       "state_at_submit_check": "RUNNING",
+      "latest_state": "RUNNING at 15:06 PDT",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "provenance": "manual_diagnostic",
@@ -40,13 +41,13 @@
       "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh",
       "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
       "wandb_name": "Qwen235B_A22B_PublicHF_NVIDIA_Thinking2507_Eagle3_k1_4step_20260601",
-      "latest_observation": "Ray bootstrap in progress; no acceptance metric yet."
+      "latest_observation": "Ray driver is rebuilding the NeMo-RL Python environment because NRL_FORCE_REBUILD_VENVS=true. No vLLM acceptance or throughput metric has been emitted yet."
     }
   ],
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%5",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 205435,
+    "latest_observed_hidden_state_files": 209980,
     "latest_observed_array_window": "tasks 41-45 running, 46-99 pending on JobArrayTaskLimit",
     "rough_eta": "About 16-20h for remaining hidden-state extraction plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
