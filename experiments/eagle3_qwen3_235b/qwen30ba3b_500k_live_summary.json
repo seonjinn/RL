@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 14:45 PDT",
+  "updated_at": "2026-06-01 14:46 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -2106,20 +2106,19 @@
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-01 14:35 PDT",
+    "updated_at": "2026-06-01 14:46 PDT",
     "stage": "hidden_state_extraction",
-    "hidden_state_count": 203361,
+    "hidden_state_count": 204999,
     "target_hidden_state_count": 500000,
-    "hidden_state_count_fraction": 0.406722,
+    "hidden_state_count_fraction": 0.409998,
     "array_job": "3072149_[0-99]%5",
     "active_tasks": [
-      "37",
-      "38",
-      "39",
-      "40",
-      "41"
+      "42",
+      "43",
+      "44",
+      "45"
     ],
-    "pending_tasks": "42-99 pending on JobArrayTaskLimit",
+    "pending_tasks": "46-99 pending on JobArrayTaskLimit",
     "train_job": "3072524",
     "train_job_state": "PENDING Dependency",
     "repair_jobs": [
