@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 02:10 PDT",
+  "updated_at": "2026-06-01 02:12 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1184,12 +1184,12 @@
       },
       {
         "job_id": "3069544",
-        "state": "RUNNING at 2026-06-01 02:10 PDT on nvl72095-T[10,12-14]",
+        "state": "RUNNING at 2026-06-01 02:12 PDT on nvl72095-T[10,12-14]",
         "reason": "fresh-venv replacement submitted after fix3: store-time counter upgrade now happens before per-request dynamic-K conversion for already patched schedulers, per-request dynamic selected K/tier state remains enabled, store-time selected counters are step-diffed, denominator counters are DP-summed, and validator checks worker pos8 plus dynamic position comprehension. A follow-up review found no blocking issues; the overlay now also has a request-id arity guard for generated scheduler helper/call-site consistency. Uses K=3 with dynamic small/medium/large tiers 3/2/1, request gate 64, token gate 2048, max_steps=8, GBS=2048, and NRL_FORCE_REBUILD_VENVS=true. It has allocated 4 nodes and is before rollout metrics.",
         "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_perrequest_fix3_freshvenv_jobs.txt"
       }
     ],
     "current_primary_dynamic_k_job": "3069544"
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Jobs 3068178, 3068267, 3068390, 3068522, 3068578, 3068829, 3069079, 3069265, and 3069422 were cancelled or failed before usable rollout throughput. Job 3069544 is the current primary corrected dynamic-K validation run, running after fix3 store-counter/per-request upgrade ordering and validator hardening as of 2026-06-01 02:10 PDT."
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3067385 reached Step 1 with acceptance_rate=0.3336 but failed before throughput on a 600s Megatron model/expert-parallel NCCL timeout; this exposed that the earlier timeout fix did not reach runtime Megatron model-parallel process groups. d948696 now applies the timeout to Megatron Bridge dist config and calls update_pg_timeout. Jobs 3068178, 3068267, 3068390, 3068522, 3068578, 3068829, 3069079, 3069265, and 3069422 were cancelled or failed before usable rollout throughput. Job 3069544 is the current primary corrected dynamic-K validation run, running after fix3 store-counter/per-request upgrade ordering and validator hardening as of 2026-06-01 02:12 PDT."
 }
