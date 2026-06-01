@@ -52,6 +52,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, default=5000)
     parser.add_argument("--start-chunk", type=int, default=0, help="First chunk index to submit.")
     parser.add_argument("--chunks", type=int, default=10)
+    parser.add_argument(
+        "--chunk-list",
+        default="",
+        help=(
+            "Comma-separated chunk indexes or ranges to submit, e.g. "
+            "'10,12,20-23'. When set, this replaces --start-chunk/--chunks."
+        ),
+    )
     parser.add_argument("--waves", type=int, default=1)
     parser.add_argument("--wave-limit", type=int, default=1000)
     parser.add_argument("--start-wave", type=int, default=1)
@@ -69,6 +77,43 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
+
+
+def parse_chunk_list(value: str) -> list[int] | None:
+    if not value.strip():
+        return None
+
+    chunks: list[int] = []
+    seen: set[int] = set()
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if "-" in item:
+            start_text, end_text = item.split("-", 1)
+            try:
+                start = int(start_text)
+                end = int(end_text)
+            except ValueError as exc:
+                raise SystemExit(f"invalid --chunk-list range: {item!r}") from exc
+            if start > end:
+                raise SystemExit(f"invalid --chunk-list descending range: {item!r}")
+            values = range(start, end + 1)
+        else:
+            try:
+                values = (int(item),)
+            except ValueError as exc:
+                raise SystemExit(f"invalid --chunk-list item: {item!r}") from exc
+        for chunk in values:
+            if chunk < 0:
+                raise SystemExit(f"invalid negative chunk index in --chunk-list: {chunk}")
+            if chunk not in seen:
+                seen.add(chunk)
+                chunks.append(chunk)
+
+    if not chunks:
+        raise SystemExit("--chunk-list did not contain any valid chunk indexes")
+    return chunks
 
 
 def run_submit(env: dict[str, str], dry_run: bool) -> tuple[str | None, str]:
@@ -97,10 +142,13 @@ def main() -> int:
     prompt_data = args.prompt_data or str(artifact_root / "data" / "mixed_math_nonopenmath_500k_prompts.jsonl")
     chunk_dir = Path(args.chunk_dir or artifact_root / "data" / "mixed_target_chunks")
     report_dir = Path(args.report_dir or artifact_root / "reports" / "mixed_target_chunks")
+    chunk_indices = parse_chunk_list(args.chunk_list) or list(
+        range(args.start_chunk, args.start_chunk + args.chunks)
+    )
 
     previous = [item for item in args.previous_job_ids.split(",") if item]
-    if previous and len(previous) != args.chunks:
-        raise SystemExit("--previous-job-ids must contain one job id per chunk")
+    if previous and len(previous) != len(chunk_indices):
+        raise SystemExit("--previous-job-ids must contain one job id per submitted chunk")
     if not previous and not args.allow_no_previous_dependency:
         raise SystemExit(
             "--previous-job-ids is required for the first submitted resume wave. "
@@ -109,11 +157,11 @@ def main() -> int:
         )
 
     submitted: list[dict[str, str | int | None]] = []
-    deps: list[str | None] = previous if previous else [None] * args.chunks
+    deps: list[str | None] = previous if previous else [None] * len(chunk_indices)
 
     for wave in range(args.start_wave, args.start_wave + args.waves):
         next_deps: list[str | None] = []
-        for dep_index, chunk_index in enumerate(range(args.start_chunk, args.start_chunk + args.chunks)):
+        for dep_index, chunk_index in enumerate(chunk_indices):
             output = chunk_dir / f"{args.model_label}_{chunk_index:03d}.jsonl"
             tag = f"{args.model_label}_{chunk_index:03d}_resume_w{wave}"
             env = {
@@ -182,6 +230,7 @@ def main() -> int:
         "model_label": args.model_label,
         "chunk_size": args.chunk_size,
         "start_chunk": args.start_chunk,
+        "chunk_list": chunk_indices,
         "wave_limit": args.wave_limit,
         "waves": args.waves,
         "dry_run": args.dry_run,

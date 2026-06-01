@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from inspect import signature
+from inspect import getsource, signature
 from typing import Any, Optional
 
 from megatron.bridge import AutoBridge
@@ -27,6 +27,15 @@ def _call_accepts_kwarg(func, name: str) -> bool:
     except (TypeError, ValueError):
         return False
     return name in params or any(param.kind == param.VAR_KEYWORD for param in params.values())
+
+
+def _provider_forwards_expert_tensor_parallel_size(model_provider) -> bool:
+    """Return whether Bridge already forwards ETP to Megatron-Core."""
+    try:
+        source = getsource(model_provider.initialize_model_parallel)
+    except (OSError, TypeError):
+        return False
+    return "expert_tensor_parallel_size" in source
 
 
 def _hf_tokenizer_kwargs(bridge) -> Optional[dict[str, Any]]:
@@ -258,13 +267,15 @@ def import_model_from_hf_name(
     model_parallel_kwargs = {}
     if megatron_config is not None:
         # Older Bridge finalize can recouple MoE ETP to TP; restore the runtime
-        # import parallelism and pass ETP through the mixin's **kwargs path.
+        # import parallelism. Some Bridge versions already forward ETP from the
+        # provider attribute, while older ones require the mixin's **kwargs path.
         model_provider.expert_tensor_parallel_size = megatron_config[
             "expert_tensor_parallel_size"
         ]
-        model_parallel_kwargs["expert_tensor_parallel_size"] = megatron_config[
-            "expert_tensor_parallel_size"
-        ]
+        if not _provider_forwards_expert_tensor_parallel_size(model_provider):
+            model_parallel_kwargs["expert_tensor_parallel_size"] = megatron_config[
+                "expert_tensor_parallel_size"
+            ]
     model_provider.initialize_model_parallel(seed=0, **model_parallel_kwargs)
     provide_distributed_model = getattr(
         model_provider, "provide_distributed_model", None

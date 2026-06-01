@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 17:22 PDT",
+  "updated_at": "2026-05-31 17:58 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -270,24 +270,50 @@
       ],
       "state_at_submit_check": "COMPLETED at 15:36 PDT",
       "note": "The repair script computes missing IDs from the expected chunk prompt IDs, generates only those prompts into a temporary JSONL, then appends them to the original chunk files. First attempt 3061970 failed before generation because Ray head srun could not allocate memory. Retry job 3061996 ran with sbatch --mem=0 and CPUS_PER_WORKER=64, completed in 17 minutes, and filled the 8 missing rows. Finalizer job 3061260 remains dependency-pending on the still-running target-generation jobs."
+    },
+    "missing_id_repair_chunks_010_099_wave3": {
+      "job_ids": [
+        "3062965",
+        "3062966",
+        "3062967",
+        "3062968",
+        "3062969",
+        "3062970",
+        "3062971"
+      ],
+      "chunks": [
+        "010-018",
+        "019-027",
+        "028-037",
+        "038-043",
+        "044-084 except 068",
+        "085-097 except 091",
+        "098-099"
+      ],
+      "rows_before_submit": 477285,
+      "missing_total": 22715,
+      "state_at_submit_check": "7 RUNNING at 17:58 PDT",
+      "job_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen235b_missing_id_repair_jobs.txt",
+      "note": "A fresh prompt-id comparison showed every remaining short chunk has interior holes from earlier unordered writes, so count-based resume is unsafe. Active count-based jobs 3061007, 3060998, 3061685, 3061686, and 3061687 were cancelled, then seven exact missing-id repair jobs were submitted in parallel. The count-based resume runner now has a prefix-validation guard and will fail before starting vLLM if a chunk is not a contiguous prompt prefix."
     }
   },
   "expected_after_current_wave": {
     "records": 500000,
-    "chunks": "000-099 exact 5K each if all submitted jobs complete successfully",
-    "current_rows_observed": 466914,
+    "chunks": "000-099 exact 5K each if the submitted missing-id repair jobs complete successfully",
+    "current_rows_observed": 477285,
     "current_chunk_files_observed": 100,
     "current_nonzero_chunk_files": 100,
     "missing_chunk_files_observed": [],
-    "active_targetgen_jobs_observed": 59,
-    "complete_chunk_files_observed_ge5000_rows": 11,
-    "short_nonzero_chunk_files_observed": 89,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest per-chunk line-count sweep observed 466914/500000 rows at 17:22 PDT. At that queue check, targetgen had 58 running jobs, 1 completing job, and the finalizer/training chain had 4 dependency-pending jobs. Targeted missing-ID repair job 3061996 had completed and chunks 005-008 are full. Finalizer 3061260 waits on the active target-generation jobs, and the Speculators training chain 3061457 -> 3061458_[0-99] -> 3061459 remains queued after the finalizer succeeds.",
+    "active_targetgen_jobs_observed": 0,
+    "active_missing_id_repair_jobs_observed": 7,
+    "complete_chunk_files_observed_ge5000_rows": 12,
+    "short_nonzero_chunk_files_observed": 88,
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. No count-based targetgen writer remains active. Seven exact missing-id repair jobs 3062965-3062971 were all still running at 17:58 PDT. The previous finalizer job 3061260 failed because the corpus was still incomplete, and the dependent Speculators chain 3061457 -> 3061458_[0-99] -> 3061459 was cancelled; that chain must be resubmitted after the missing-id repairs complete and the finalizer validates 500000 unique rows.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 0,
-    "running_targetgen_jobs_observed": 58,
-    "completing_targetgen_jobs_observed": 1
+    "running_targetgen_jobs_observed": 0,
+    "completing_targetgen_jobs_observed": 0
   },
   "code_review_status": {
     "updated_at": "2026-05-31 15:44 PDT",
@@ -308,7 +334,9 @@
       "Finalizer submitter now prints that dependency discovery is a submission-time squeue snapshot.",
       "SpecDec-RL overlay validator now checks the current NRL_SPECDEC_BATCH_GATE_PATCH_V4 marker and the grpo generation-block indentation invariant.",
       "Added a missing-ID repair path for chunks that have interior gaps from earlier unordered concurrent writes, avoiding unsafe count-based resume.",
-      "Direct vLLM submit wrapper now requests sbatch --mem=0 by default and forwards CPUS_PER_WORKER=64 to Ray, fixing the missing-ID repair Ray startup memory failure."
+      "Direct vLLM submit wrapper now requests sbatch --mem=0 by default and forwards CPUS_PER_WORKER=64 to Ray, fixing the missing-ID repair Ray startup memory failure.",
+      "Resume submitter now supports explicit --chunk-list ranges for exact inactive chunk targeting.",
+      "Count-based resume now validates that existing ids are a contiguous leading prompt prefix before launching vLLM; unsafe interior-hole chunks are rejected with instructions to use missing-id repair."
     ],
     "validated": [
       "python3 -m py_compile submitters and validator",

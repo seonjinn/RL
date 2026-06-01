@@ -1085,26 +1085,27 @@ class BaseVllmGenerationWorker:
                             "                specdec_batch_gate_num_tokens = sum(\n"
                             "                    scheduler_output.num_scheduled_tokens\n"
                             "                )\n"
-                            "            specdec_batch_gate_disabled = (\n"
-                            "                (\n"
-                            "                    specdec_batch_gate_threshold > 0\n"
-                            "                    and specdec_batch_gate_num_requests > specdec_batch_gate_threshold\n"
-                            "                )\n"
-                            "                or (\n"
-                            "                    specdec_batch_gate_token_threshold > 0\n"
-                            "                    and specdec_batch_gate_num_tokens\n"
-                            "                    > specdec_batch_gate_token_threshold\n"
-                            "                )\n"
-                            "            )\n"
                             "            specdec_scheduled_tokens = getattr(\n"
                             "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
                             "            )\n"
                             "            if specdec_scheduled_tokens is not None and hasattr(\n"
                             "                specdec_scheduled_tokens, \"__len__\"\n"
                             "            ):\n"
-                            "                specdec_batch_gate_disabled = specdec_batch_gate_disabled or (\n"
+                            "                specdec_batch_gate_disabled = (\n"
                             "                    len(specdec_scheduled_tokens) == 0\n"
                             "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                )\n"
+                            "            else:\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    (\n"
+                            "                        specdec_batch_gate_threshold > 0\n"
+                            "                        and specdec_batch_gate_num_requests > specdec_batch_gate_threshold\n"
+                            "                    )\n"
+                            "                    or (\n"
+                            "                        specdec_batch_gate_token_threshold > 0\n"
+                            "                        and specdec_batch_gate_num_tokens\n"
+                            "                        > specdec_batch_gate_token_threshold\n"
+                            "                    )\n"
                             "                )\n"
                             "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
                             "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
@@ -1223,26 +1224,27 @@ class BaseVllmGenerationWorker:
                             "                specdec_batch_gate_num_tokens = sum(\n"
                             "                    scheduler_output.num_scheduled_tokens\n"
                             "                )\n"
-                            "            specdec_batch_gate_disabled = (\n"
-                            "                (\n"
-                            "                    specdec_batch_gate_threshold > 0\n"
-                            "                    and specdec_batch_gate_num_requests > specdec_batch_gate_threshold\n"
-                            "                )\n"
-                            "                or (\n"
-                            "                    specdec_batch_gate_token_threshold > 0\n"
-                            "                    and specdec_batch_gate_num_tokens\n"
-                            "                    > specdec_batch_gate_token_threshold\n"
-                            "                )\n"
-                            "            )\n"
                             "            specdec_scheduled_tokens = getattr(\n"
                             "                scheduler_output, \"scheduled_spec_decode_tokens\", None\n"
                             "            )\n"
                             "            if specdec_scheduled_tokens is not None and hasattr(\n"
                             "                specdec_scheduled_tokens, \"__len__\"\n"
                             "            ):\n"
-                            "                specdec_batch_gate_disabled = specdec_batch_gate_disabled or (\n"
+                            "                specdec_batch_gate_disabled = (\n"
                             "                    len(specdec_scheduled_tokens) == 0\n"
                             "                    and specdec_batch_gate_num_requests > 0\n"
+                            "                )\n"
+                            "            else:\n"
+                            "                specdec_batch_gate_disabled = (\n"
+                            "                    (\n"
+                            "                        specdec_batch_gate_threshold > 0\n"
+                            "                        and specdec_batch_gate_num_requests > specdec_batch_gate_threshold\n"
+                            "                    )\n"
+                            "                    or (\n"
+                            "                        specdec_batch_gate_token_threshold > 0\n"
+                            "                        and specdec_batch_gate_num_tokens\n"
+                            "                        > specdec_batch_gate_token_threshold\n"
+                            "                    )\n"
                             "                )\n"
                             "            self._nrl_specdec_batch_gate_last_num_requests = specdec_batch_gate_num_requests\n"
                             "            self._nrl_specdec_batch_gate_last_num_tokens = specdec_batch_gate_num_tokens\n"
@@ -1569,6 +1571,16 @@ class BaseVllmGenerationWorker:
             with open(gpu_model_runner) as f:
                 content = f.read()
 
+            runner_required_markers = [
+                "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
+                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
+                "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
+                "_nrl_specdec_adaptive_request_threshold",
+                "_nrl_specdec_adaptive_token_threshold",
+                "_nrl_specdec_adaptive_window_checked",
+                "_nrl_specdec_adaptive_window_enabled",
+                "NRL SpecDec adaptive gate:",
+            ]
             if "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1" not in content:
                 if "NRL_SPECDEC_BATCH_GATE_PATCH_V4" not in content:
                     raise RuntimeError(
@@ -1751,11 +1763,40 @@ class BaseVllmGenerationWorker:
                 with open(gpu_model_runner, "w") as f:
                     f.write(patched)
                 applied += 1
+            else:
+                missing_markers = [
+                    marker for marker in runner_required_markers if marker not in content
+                ]
+                if missing_markers:
+                    raise RuntimeError(
+                        "Found a partial vLLM adaptive SpecDec runner-gate patch "
+                        f"in {gpu_model_runner}; missing markers: "
+                        + ", ".join(missing_markers)
+                    )
 
             scheduler = _get_vllm_file("v1/core/sched/scheduler.py")
             with open(scheduler) as f:
                 scheduler_content = f.read()
 
+            def _has_scheduler_adaptive_lookahead_call(text):
+                return (
+                    "num_lookahead_tokens=_nrl_specdec_scheduler_lookahead_tokens("
+                    in text
+                    or "else _nrl_specdec_scheduler_lookahead_tokens(" in text
+                )
+
+            scheduler_required_markers = [
+                "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
+                "def _nrl_specdec_scheduler_lookahead_tokens",
+                "VLLM_SPECDEC_ADAPTIVE_GATE_MODE",
+                "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
+                "_nrl_specdec_scheduler_adaptive_request_threshold",
+                "_nrl_specdec_scheduler_adaptive_token_threshold",
+                "_nrl_specdec_scheduler_adaptive_window_checked",
+                "_nrl_specdec_scheduler_gate_effective_lookahead_tokens",
+                "NRL SpecDec scheduler adaptive gate:",
+                "return 0 if disabled else self.num_lookahead_tokens",
+            ]
             if "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1" not in scheduler_content:
                 if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" not in scheduler_content:
                     raise RuntimeError(
@@ -2089,6 +2130,20 @@ class BaseVllmGenerationWorker:
                 with open(scheduler, "w") as f:
                     f.write(scheduler_content)
                 applied += 1
+            else:
+                missing_markers = [
+                    marker
+                    for marker in scheduler_required_markers
+                    if marker not in scheduler_content
+                ]
+                if not _has_scheduler_adaptive_lookahead_call(scheduler_content):
+                    missing_markers.append("adaptive scheduler lookahead call")
+                if missing_markers:
+                    raise RuntimeError(
+                        "Found a partial vLLM adaptive SpecDec scheduler-gate patch "
+                        f"in {scheduler}; missing markers: "
+                        + ", ".join(missing_markers)
+                    )
 
             return applied
 
@@ -2115,7 +2170,13 @@ class BaseVllmGenerationWorker:
                 )
             return parsed
 
-        def _nrl_env_float(name: str, default: float) -> float:
+        def _nrl_env_float(
+            name: str,
+            default: float,
+            *,
+            min_value: float | None = None,
+            max_value: float | None = None,
+        ) -> float:
             value = os.environ.get(name)
             if value is None or str(value).strip() == "":
                 return default
@@ -2125,6 +2186,16 @@ class BaseVllmGenerationWorker:
                 raise RuntimeError(f"{name} must be a float, got {value!r}.") from exc
             if parsed != parsed:
                 raise RuntimeError(f"{name} must not be NaN, got {value!r}.")
+            if parsed in {float("inf"), float("-inf")}:
+                raise RuntimeError(f"{name} must be finite, got {value!r}.")
+            if min_value is not None and parsed < min_value:
+                raise RuntimeError(
+                    f"{name} must be >= {min_value}, got {value!r}."
+                )
+            if max_value is not None and parsed > max_value:
+                raise RuntimeError(
+                    f"{name} must be <= {max_value}, got {value!r}."
+                )
             return parsed
 
         specdec_batch_gate_threshold = _nrl_env_nonnegative_int(
@@ -2144,16 +2215,44 @@ class BaseVllmGenerationWorker:
             ("VLLM_SPECDEC_ADAPTIVE_ADJUST_INTERVAL", 512),
             ("VLLM_SPECDEC_ADAPTIVE_REQUEST_STEP", 4),
             ("VLLM_SPECDEC_ADAPTIVE_TOKEN_STEP", 256),
-            ("VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD", 1),
-            ("VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD", 128),
-            ("VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD", 256),
-            ("VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD", 8192),
         ):
             _nrl_env_nonnegative_int(
                 _nrl_adaptive_int_name, _nrl_adaptive_int_default
             )
-        _nrl_env_float("VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO", 0.35)
-        _nrl_env_float("VLLM_SPECDEC_ADAPTIVE_HYSTERESIS", 0.05)
+        specdec_adaptive_min_request_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD", 1
+        )
+        specdec_adaptive_max_request_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD", 128
+        )
+        specdec_adaptive_min_token_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD", 256
+        )
+        specdec_adaptive_max_token_threshold = _nrl_env_nonnegative_int(
+            "VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD", 8192
+        )
+        if specdec_adaptive_min_request_threshold > specdec_adaptive_max_request_threshold:
+            raise RuntimeError(
+                "VLLM_SPECDEC_ADAPTIVE_MIN_REQUEST_THRESHOLD must be <= "
+                "VLLM_SPECDEC_ADAPTIVE_MAX_REQUEST_THRESHOLD."
+            )
+        if specdec_adaptive_min_token_threshold > specdec_adaptive_max_token_threshold:
+            raise RuntimeError(
+                "VLLM_SPECDEC_ADAPTIVE_MIN_TOKEN_THRESHOLD must be <= "
+                "VLLM_SPECDEC_ADAPTIVE_MAX_TOKEN_THRESHOLD."
+            )
+        _nrl_env_float(
+            "VLLM_SPECDEC_ADAPTIVE_TARGET_ENABLED_RATIO",
+            0.35,
+            min_value=0.0,
+            max_value=1.0,
+        )
+        _nrl_env_float(
+            "VLLM_SPECDEC_ADAPTIVE_HYSTERESIS",
+            0.05,
+            min_value=0.0,
+            max_value=1.0,
+        )
         specdec_adaptive_gate_mode = os.environ.get(
             "VLLM_SPECDEC_ADAPTIVE_GATE_MODE", "off"
         ).lower()
