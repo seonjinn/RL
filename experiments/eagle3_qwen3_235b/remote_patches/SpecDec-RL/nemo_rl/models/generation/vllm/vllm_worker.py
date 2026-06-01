@@ -940,18 +940,27 @@ class BaseVllmGenerationWorker:
                 with open(path) as f:
                     content = f.read()
 
+                def _has_scheduler_lookahead_gate_target(text):
+                    return (
+                        "num_lookahead_tokens=(" in text
+                        or "num_lookahead_tokens=_nrl_specdec_scheduler_lookahead_tokens("
+                        in text
+                        or "else _nrl_specdec_scheduler_lookahead_tokens(" in text
+                    )
+
                 required_markers = [
                     "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                     "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
                     "nrl_specdec_scheduler_gate_threshold",
                     "nrl_specdec_scheduler_gate_token_threshold",
-                    "num_lookahead_tokens=(",
                 ]
                 if "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5" in content:
                     missing_markers = [
                         marker for marker in required_markers if marker not in content
                     ]
+                    if not _has_scheduler_lookahead_gate_target(content):
+                        missing_markers.append("scheduler lookahead gate target")
                     if missing_markers:
                         raise RuntimeError(
                             "Found a partial vLLM SpecDec scheduler-gate patch "
@@ -987,6 +996,8 @@ class BaseVllmGenerationWorker:
                             for marker in required_markers
                             if marker not in patched_content
                         ]
+                        if not _has_scheduler_lookahead_gate_target(patched_content):
+                            missing_markers.append("scheduler lookahead gate target")
                         if missing_markers:
                             raise RuntimeError(
                                 "Applied vLLM SpecDec scheduler-gate patch to "
