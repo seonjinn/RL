@@ -22,7 +22,7 @@ GRPO_SEED="${GRPO_SEED:-42}"
 GENERATION_MAX_NEW_TOKENS="${GENERATION_MAX_NEW_TOKENS:-}"
 GENERATION_MIN_NEW_TOKENS="${GENERATION_MIN_NEW_TOKENS:-}"
 WALLCLOCK_GENERATION_MAX_NEW_TOKENS="${WALLCLOCK_GENERATION_MAX_NEW_TOKENS:-8192}"
-COMMON_EXTRA_OVERRIDES="${COMMON_EXTRA_OVERRIDES:-policy.megatron_cfg.scheduler.lr_warmup_iters=0 policy.generation.vllm_cfg.enforce_eager=false +policy.generation.vllm_cfg.enable_prefix_caching=true}"
+COMMON_EXTRA_OVERRIDES="${COMMON_EXTRA_OVERRIDES:-policy.megatron_cfg.scheduler.lr_warmup_iters=0 policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_cfg.enable_prefix_caching=true}"
 VLLM_DISABLE_CUSTOM_ALL_REDUCE_LONG="${VLLM_DISABLE_CUSTOM_ALL_REDUCE_LONG:-true}"
 CAP_MAX_TOKENS_TO_CONTEXT="${CAP_MAX_TOKENS_TO_CONTEXT:-auto}"
 MCORE_DISABLE_TORCH_COMPILE_JIT="${MCORE_DISABLE_TORCH_COMPILE_JIT:-false}"
@@ -118,7 +118,7 @@ submit_job() {
   extra+=" policy.generation.vllm_cfg.max_model_len=${seq_len}"
   extra+=" policy.generation.max_new_tokens=${max_new_tokens}"
   # The launcher already maps GENERATION_MIN_NEW_TOKENS to the Hydra override.
-  # Duplicating it here creates two "+policy.generation.min_new_tokens" entries
+  # Duplicating it here creates two policy.generation.min_new_tokens entries
   # and Hydra rejects the second append.
   extra+=" checkpointing.enabled=false"
   extra+=" checkpointing.checkpoint_must_save_by=null"

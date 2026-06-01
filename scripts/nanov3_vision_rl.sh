@@ -140,17 +140,17 @@ if [[ -n "${GENERATION_MAX_NEW_TOKENS:-}" ]]; then
   EXTRA_OVERRIDES+=" policy.generation.max_new_tokens=${GENERATION_MAX_NEW_TOKENS}"
 fi
 if [[ -n "${GENERATION_MIN_NEW_TOKENS:-}" ]]; then
-  EXTRA_OVERRIDES+=" +policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"
+  EXTRA_OVERRIDES+=" ++policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"
 fi
 # FlashInfer fused-MoE autotuner is noisy but ~2x faster on NemotronH MoE.
 # Set ENABLE_FLASHINFER_AUTOTUNE=false to opt out for cleaner logs.
 [[ "${ENABLE_FLASHINFER_AUTOTUNE:-true}" != "true" ]] && \
   EXTRA_OVERRIDES+=" ++policy.generation.vllm_kwargs.enable_flashinfer_autotune=false"
 # Required by super-side grpo.py, missing from the recipes-derived omni YAML.
-EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
+EXTRA_OVERRIDES+=" ++grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
 # Set WANDB_RUN_ID (and WANDB_RESUME) to chain runs into one wandb entry.
 [[ -n "${WANDB_RUN_ID:-}" ]] && \
-  EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
+  EXTRA_OVERRIDES+=" ++logger.wandb.id=${WANDB_RUN_ID} ++logger.wandb.resume=${WANDB_RESUME:-must}"
 [[ -n "${EXTRA_OVERRIDES_APPEND:-}" ]] && \
   EXTRA_OVERRIDES+=" ${EXTRA_OVERRIDES_APPEND}"
 

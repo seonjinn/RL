@@ -361,7 +361,7 @@ if [[ -n "${GENERATION_MAX_NEW_TOKENS:-}" ]]; then
   EXTRA_OVERRIDES+=" policy.generation.max_new_tokens=${GENERATION_MAX_NEW_TOKENS}"
 fi
 if [[ -n "${GENERATION_MIN_NEW_TOKENS:-}" ]]; then
-  EXTRA_OVERRIDES+=" +policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"
+  EXTRA_OVERRIDES+=" ++policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"
 fi
 if [[ -n "${GRPO_NUM_PROMPTS_PER_STEP:-}" ]]; then
   EXTRA_OVERRIDES+=" grpo.num_prompts_per_step=${GRPO_NUM_PROMPTS_PER_STEP}"
@@ -377,24 +377,24 @@ if [[ -n "${GRPO_VAL_PERIOD:-}" ]]; then
 fi
 # Match DFW's vLLM runtime settings while keeping current NRT code/infra.
 EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.enforce_eager=${VLLM_ENFORCE_EAGER:-false}"
-EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING:-true}"
+EXTRA_OVERRIDES+=" ++policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING:-true}"
 EXTRA_OVERRIDES+=" policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS:-32768}"
 if [[ -n "${VLLM_LOAD_FORMAT:-}" ]]; then
-  EXTRA_OVERRIDES+=" +policy.generation.vllm_cfg.load_format=${VLLM_LOAD_FORMAT}"
+  EXTRA_OVERRIDES+=" ++policy.generation.vllm_cfg.load_format=${VLLM_LOAD_FORMAT}"
 fi
 # This repo's grpo.py requires grpo.val_at_end (recipes' grpo.py doesn't
 # read this key). The recipes-derived omni YAML doesn't define it, so inject
 # the super-side default (false) here so the run reaches Step 1.
-EXTRA_OVERRIDES+=" +grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
+EXTRA_OVERRIDES+=" ++grpo.val_at_end=${GRPO_VAL_AT_END:-false}"
 # In this branch, true means Gym/logging owns response logging and GRPO skips
 # the expensive per-step train_data_step*.jsonl dump.
-EXTRA_OVERRIDES+=" +env.should_log_nemo_gym_responses=${NEMO_GYM_LOG_RESPONSES:-true}"
+EXTRA_OVERRIDES+=" ++env.should_log_nemo_gym_responses=${NEMO_GYM_LOG_RESPONSES:-true}"
 # Resume the same wandb run instead of starting a new one when WANDB_RUN_ID
-# is set. Use Hydra's `+` so the keys are added (they aren't in the YAML).
+# is set. Use Hydra's `++` so the keys are added or overridden safely.
 # Pair WANDB_RESUME=allow with a pre-chosen id to chain a fresh run + N
 # continuations under one wandb run (first to start creates, rest attach).
 if [[ -n "${WANDB_RUN_ID:-}" ]]; then
-  EXTRA_OVERRIDES+=" +logger.wandb.id=${WANDB_RUN_ID} +logger.wandb.resume=${WANDB_RESUME:-must}"
+  EXTRA_OVERRIDES+=" ++logger.wandb.id=${WANDB_RUN_ID} ++logger.wandb.resume=${WANDB_RESUME:-must}"
 fi
 if [[ -n "${EXTRA_OVERRIDES_APPEND:-}" ]]; then
   EXTRA_OVERRIDES+=" ${EXTRA_OVERRIDES_APPEND}"
