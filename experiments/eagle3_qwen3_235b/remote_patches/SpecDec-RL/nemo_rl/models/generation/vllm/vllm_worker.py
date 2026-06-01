@@ -2052,6 +2052,14 @@ class BaseVllmGenerationWorker:
                 "            # Add newly generated spec token ids to the request.\n"
                 "            if self.structured_output_manager.should_advance(request):\n"
                 "                metadata = request.structured_output_request\n"
+                "                request.spec_token_ids = metadata.grammar.validate_tokens(  # type: ignore[union-attr]\n"
+                "                    spec_token_ids\n"
+                "                )\n"
+                "            else:\n"
+                "                request.spec_token_ids = spec_token_ids\n",
+                "            # Add newly generated spec token ids to the request.\n"
+                "            if self.structured_output_manager.should_advance(request):\n"
+                "                metadata = request.structured_output_request\n"
                 "                spec_token_ids = metadata.grammar.validate_tokens(spec_token_ids)  # type: ignore[union-attr]\n"
                 "            request.spec_token_ids = spec_token_ids\n",
                 "            # Add newly generated spec token ids to the request.\n"

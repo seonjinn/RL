@@ -1043,18 +1043,36 @@ def _log_specdec_vllm_metrics(
 
     spec_decode_gate = vllm_logger_metrics.get("spec_decode_gate", {})
     if isinstance(spec_decode_gate, dict):
-        scheduler = spec_decode_gate.get("scheduler", {})
-        if isinstance(scheduler, dict) and scheduler:
-            print(
+        for group_name in ("runner", "scheduler"):
+            bucket = spec_decode_gate.get(group_name, {})
+            if not isinstance(bucket, dict):
+                continue
+            checked = int(bucket.get("checked", 0))
+            reporting = int(bucket.get("num_reporting_objects", 0))
+            if checked <= 0 and reporting <= 0:
+                continue
+            common = (
                 "[SpecDec early gate] "
-                f"step={step} enabled_ratio="
-                f"{float(scheduler.get('enabled_ratio', 0.0)):.4f} "
-                f"last_active_requests={scheduler.get('last_active_requests', 'n/a')} "
-                f"effective_k={scheduler.get('effective_lookahead_tokens', 'n/a')} "
-                f"dynamic_k={scheduler.get('dynamic_last_selected_tokens', 'n/a')} "
-                f"stored_k={scheduler.get('dynamic_last_stored_tokens', 'n/a')}",
-                flush=True,
+                f"step={step} group={group_name} "
+                f"enabled_ratio={float(bucket.get('enabled_ratio', 0.0)):.4f} "
+                f"checked={checked} "
+                f"enabled={int(bucket.get('enabled', 0))} "
+                f"disabled={int(bucket.get('disabled', 0))} "
             )
+            if group_name == "runner":
+                detail = (
+                    f"last_requests={bucket.get('last_num_requests', 'n/a')} "
+                    f"last_tokens={bucket.get('last_num_tokens', 'n/a')} "
+                    f"last_disabled={bucket.get('last_disabled', 'n/a')}"
+                )
+            else:
+                detail = (
+                    f"last_active_requests={bucket.get('last_active_requests', 'n/a')} "
+                    f"effective_k={bucket.get('effective_lookahead_tokens', 'n/a')} "
+                    f"dynamic_k={bucket.get('dynamic_last_selected_tokens', 'n/a')} "
+                    f"stored_k={bucket.get('dynamic_last_stored_tokens', 'n/a')}"
+                )
+            print(common + detail, flush=True)
 
 
 def _collect_and_log_specdec_vllm_metrics(
