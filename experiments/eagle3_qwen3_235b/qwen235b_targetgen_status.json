@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-31 19:41 PDT",
+  "updated_at": "2026-05-31 19:44 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -292,7 +292,7 @@
       ],
       "rows_before_submit": 477285,
       "missing_total": 22715,
-      "state_at_latest_check": "6 RUNNING and 1 COMPLETED at 19:41 PDT. Jobs 3062965-3062970 are still generating exact missing-id repair rows; group 6 job 3062971 completed, and apply job 3063262 completed. Observed temporary repair outputs total 6,751 rows so far. Official chunk JSONLs still contain 478,197 rows after the group 6 apply.",
+      "state_at_latest_check": "6 RUNNING and 1 COMPLETED at 19:44 PDT. Jobs 3062965-3062970 are still generating exact missing-id repair rows; group 6 job 3062971 completed, and apply job 3063262 completed. Observed temporary repair outputs total 6,934 rows so far. Official chunk JSONLs still contain 478,197 rows after the group 6 apply.",
       "job_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen235b_missing_id_repair_jobs.txt",
       "note": "A fresh prompt-id comparison showed every remaining short chunk has interior holes from earlier unordered writes, so count-based resume is unsafe. Active count-based jobs 3061007, 3060998, 3061685, 3061686, and 3061687 were cancelled, then seven exact missing-id repair jobs were submitted in parallel. The count-based resume runner now has a prefix-validation guard and will fail before starting vLLM if a chunk is not a contiguous prompt prefix."
     },
@@ -341,7 +341,7 @@
       "job_count": 50,
       "dependency": "afterok on the corresponding partial-apply job for each group",
       "time_limit": "04:00:00",
-      "state_at_latest_check": "PENDING with Dependency at 19:41 PDT; group 6 apply completed and its downstream chunk jobs are now eligible according to their dependencies",
+      "state_at_latest_check": "PENDING with Dependency at 19:44 PDT; group 6 apply completed and its downstream chunk jobs are now eligible according to their dependencies",
       "note": "The previous 7 large continuation groups were replaced with 50 smaller chunk/small-group jobs so slow chunks can progress in parallel and any remaining holes can be isolated."
     },
     "finalizer_after_missing_id_repair_wave4_chunk": {
@@ -349,7 +349,7 @@
       "dependency": "afterany on chunk repair jobs 3063263-3063312",
       "time_limit": "00:45:00",
       "gpus_per_node": 4,
-      "state_at_latest_check": "PENDING with Dependency at 19:41 PDT",
+      "state_at_latest_check": "PENDING with Dependency at 19:44 PDT",
       "note": "Validates all 100 qwen3_235b chunk files, builds exact-unique 500K JSONL with the OpenMath denylist, and converts to Speculators JSONL only if the repaired corpus is complete."
     },
     "speculators_training_chain_after_wave4_finalizer": {
@@ -364,7 +364,7 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_latest_check": "PENDING with Dependency at 19:41 PDT",
+      "state_at_latest_check": "PENDING with Dependency at 19:44 PDT",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
       "note": "Queued behind the wave4 finalizer; it will only run after the final corpus validates."
@@ -381,14 +381,14 @@
     "active_missing_id_repair_jobs_observed": 6,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. Jobs 3062965-3062970 are still running and job 3062971 completed; observed temporary repair outputs total 6,751 rows so far. Group 6 reached 912/912 temporary rows and apply job 3063262 completed, increasing official rows to 478197 and complete chunk files to 14. Remaining partial-apply jobs 3063256-3063261, chunk repair jobs 3063263-3063312, finalizer 3063314, and Speculators chain 3063316 -> 3063317_[0-99] -> 3063318 are queued behind the repair wave.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Latest exact-id sweep observed 477285/500000 rows and 22715 missing ids at 17:52 PDT. Jobs 3062965-3062970 are still running and job 3062971 completed; observed temporary repair outputs total 6,934 rows so far. Group 6 reached 912/912 temporary rows and apply job 3063262 completed, increasing official rows to 478197 and complete chunk files to 14. Remaining partial-apply jobs 3063256-3063261, chunk repair jobs 3063263-3063312, finalizer 3063314, and Speculators chain 3063316 -> 3063317_[0-99] -> 3063318 are queued behind the repair wave.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 60,
     "running_targetgen_jobs_observed": 0,
     "completing_targetgen_jobs_observed": 0,
-    "wave3_generated_repair_rows_observed": 6751,
-    "wave3_generated_repair_rows_observed_at": "2026-05-31 19:41 PDT",
+    "wave3_generated_repair_rows_observed": 6934,
+    "wave3_generated_repair_rows_observed_at": "2026-05-31 19:44 PDT",
     "wave3_apply_completed_groups": [
       6
     ]
