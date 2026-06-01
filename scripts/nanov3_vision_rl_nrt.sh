@@ -43,7 +43,7 @@ LOGS_DIR="${LOGS_DIR:-${RESULTS_DIR}/logs}"
 mkdir -p "${LOGS_DIR}" "${RESULTS_DIR}"
 export BASE_LOG_DIR="${BASE_LOG_DIR:-${LOGS_DIR}}"
 
-SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-llmservice_fm_vision}"
+SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-nemotron_omni_vision}"
 # Full validation run default. Override SBATCH_TIME from the environment for
 # shorter probes.
 SBATCH_TIME="${SBATCH_TIME:-4:00:00}"
