@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 16:40 PDT",
+  "updated_at": "2026-06-01 16:42 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -71,7 +71,7 @@
       "job_id": "3084952",
       "submitted_at": "2026-06-01 16:26 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 16:40 PDT on coreai_dlalgo_llm",
+      "latest_state": "RUNNING at 16:42 PDT on coreai_dlalgo_llm",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -92,7 +92,7 @@
       "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/3084952-logs/ray-driver.log",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_corrected_20260601",
-      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. At 16:40 PDT the job was still RUNNING after about 15 minutes. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM worker envs finished initialization, and target safetensors loading was in progress with several workers at 5/118 shards. No acceptance-rate or throughput metric had been emitted yet, and no actual error line was observed.",
+      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. At 16:42 PDT the job was still RUNNING after about 16 minutes. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM worker envs finished initialization, and target safetensors loading was in progress with workers observed around 18/118 shards. No acceptance-rate or throughput metric had been emitted yet, and no actual error line was observed.",
       "latest_metric_counts": {
         "acceptance_or_draft_lines": 0,
         "throughput_lines": 0,
@@ -103,9 +103,9 @@
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 261894,
+    "latest_observed_hidden_state_files": 265187,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 46-55 running, 56-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 16:37 PDT",
+    "latest_observed_array_window": "task 47 completing, tasks 51-59 running, tasks 60-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 16:42 PDT",
     "rough_eta": "About 5-9h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
