@@ -1,0 +1,11 @@
+submitted_at=2026-06-01 14:01:13 PDT
+baseline_job=3078992
+specdec_job=3078993
+model=Qwen/Qwen3-30B-A3B
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+speculative_config={"method":"eagle3","model":"/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0","num_speculative_tokens":1,"draft_tensor_parallel_size":1}
+scope=vLLM standalone serve static benchmark, not NeMo-RL E2E
+scenario=short ISL=1000 OSL=1000 batch_sizes="1 2 4 8 16" num_prompts_multiplier=10
+allocation=1 node x 4 GPUs, vLLM TP=1
+baseline_logs=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_baseline_20260601_140112
+specdec_logs=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_k1_500k_20260601_140112
