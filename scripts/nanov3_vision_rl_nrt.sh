@@ -409,6 +409,7 @@ PYTHONPATH_ROOTS="${VLLM_PYTHONPATH_PREFIX}${NEMORL}:${NEMORL}/3rdparty/Megatron
 # against the same project so the two runs land side-by-side.
 export COMMAND="\
 mkdir -p '${HF_HOME}' '${HF_MODULES_CACHE}' '${NRL_MEGATRON_CHECKPOINT_DIR}' '${TRITON_CACHE_DIR}' '${TMPDIR}' '${RESULTS_DIR}' '${CACHE_DIR}' && \
+if [[ ! -e '${NEMORL}/3rdparty/vllm' && -d /opt/nemo-rl/3rdparty/vllm ]]; then mkdir -p '${NEMORL}/3rdparty' && ln -s /opt/nemo-rl/3rdparty/vllm '${NEMORL}/3rdparty/vllm'; fi && \
 export PYTHONPATH=${PYTHONPATH_ROOTS}\${PYTHONPATH:+:\$PYTHONPATH} && \
 export MCORE_DISABLE_TORCH_COMPILE_JIT='${MCORE_DISABLE_TORCH_COMPILE_JIT}' && \
 uv run --no-sync examples/run_vlm_grpo.py --config '${CONFIG_PATH}' \
