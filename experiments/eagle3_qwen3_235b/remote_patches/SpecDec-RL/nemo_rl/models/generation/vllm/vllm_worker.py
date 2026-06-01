@@ -2040,6 +2040,71 @@ class BaseVllmGenerationWorker:
             with open(scheduler) as f:
                 scheduler_content = f.read()
 
+            scheduler_output_gate_marker = (
+                "NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1"
+            )
+
+            def _ensure_scheduler_output_gate_attr(text, path):
+                if scheduler_output_gate_marker in text:
+                    return text, False
+
+                reset_anchor = (
+                    "        # Spec decode-related.\n"
+                    "        scheduled_spec_decode_tokens: dict[str, list[int]] = {}\n"
+                )
+                reset_block = (
+                    "        # Spec decode-related.\n"
+                    "        scheduled_spec_decode_tokens: dict[str, list[int]] = {}\n"
+                    "        self._nrl_specdec_scheduler_gate_output_disabled = False\n"
+                )
+                if reset_anchor not in text:
+                    raise RuntimeError(
+                        "Could not install scheduler output gate attr in "
+                        f"{path}; missing scheduled_spec_decode_tokens anchor."
+                    )
+                text = text.replace(reset_anchor, reset_block, 1)
+
+                state_anchor = (
+                    "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
+                )
+                state_block = (
+                    "            self._nrl_specdec_scheduler_gate_last_disabled = disabled\n"
+                    "            self._nrl_specdec_scheduler_gate_output_disabled = (\n"
+                    "                getattr(\n"
+                    "                    self,\n"
+                    "                    \"_nrl_specdec_scheduler_gate_output_disabled\",\n"
+                    "                    False,\n"
+                    "                )\n"
+                    "                or disabled\n"
+                    "            )\n"
+                )
+                if state_anchor not in text:
+                    raise RuntimeError(
+                        "Could not install scheduler output gate attr in "
+                        f"{path}; missing scheduler disabled-state anchor."
+                    )
+                text = text.replace(state_anchor, state_block, 1)
+
+                output_anchor = "        if self.connector is not None:\n"
+                output_block = (
+                    "        # NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V1\n"
+                    "        scheduler_output.nrl_specdec_batch_gate_disabled = bool(\n"
+                    "            getattr(\n"
+                    "                self,\n"
+                    "                \"_nrl_specdec_scheduler_gate_output_disabled\",\n"
+                    "                False,\n"
+                    "            )\n"
+                    "        )\n"
+                    "        if self.connector is not None:\n"
+                )
+                if output_anchor not in text:
+                    raise RuntimeError(
+                        "Could not install scheduler output gate attr in "
+                        f"{path}; missing scheduler_output connector anchor."
+                    )
+                text = text.replace(output_anchor, output_block, 1)
+                return text, True
+
             def _has_scheduler_adaptive_lookahead_call(text):
                 return (
                     "num_lookahead_tokens=_nrl_specdec_scheduler_lookahead_tokens("
@@ -2228,6 +2293,8 @@ class BaseVllmGenerationWorker:
                 "_nrl_specdec_scheduler_adaptive_token_threshold",
                 "_nrl_specdec_scheduler_adaptive_window_checked",
                 "_nrl_specdec_scheduler_gate_last_active_requests",
+                "_nrl_specdec_scheduler_gate_output_disabled",
+                scheduler_output_gate_marker,
                 "active_requests = max(num_requests, len(self.running))",
                 "_nrl_specdec_scheduler_gate_effective_lookahead_tokens",
                 "_nrl_specdec_scheduler_dynamic_last_selected_tokens",
@@ -3163,6 +3230,12 @@ class BaseVllmGenerationWorker:
                     )
                     with open(scheduler, "w") as f:
                         f.write(scheduler_content)
+                scheduler_content, output_gate_attr_changed = (
+                    _ensure_scheduler_output_gate_attr(scheduler_content, scheduler)
+                )
+                if output_gate_attr_changed:
+                    with open(scheduler, "w") as f:
+                        f.write(scheduler_content)
                 missing_markers = [
                     marker
                     for marker in scheduler_required_markers
@@ -3454,9 +3527,6 @@ class BaseVllmGenerationWorker:
                 batch_gate_patch_status = _patch_vllm_batch_gated_speculative_decoding()
                 adaptive_gate_patch_status = (
                     _patch_vllm_adaptive_specdec_gate()
-                    if specdec_adaptive_gate_requested
-                    or specdec_dynamic_draft_tokens_requested
-                    else 0
                 )
             else:
                 batch_gate_patch_status = 0

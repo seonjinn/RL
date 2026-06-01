@@ -50,6 +50,14 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--allow-standalone-vllm",
+        action="store_true",
+        help=(
+            "Allow standalone vLLM SpecDec metrics in the same report. "
+            "Leave disabled for NeMo-RL throughput reports."
+        ),
+    )
     parser.add_argument("--fail-if-no-pass", action="store_true")
     return parser.parse_args()
 
@@ -131,6 +139,7 @@ def analyze_one(
         args.min_generation_speedup_pct,
         args.min_acceptance_rate,
         args.fail_on_missing_spec_metrics,
+        args.allow_standalone_vllm,
     )
     return summary, gate
 

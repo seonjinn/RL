@@ -187,6 +187,8 @@ class ParseResult:
     spec_metric_sources: list[str] = field(default_factory=list)
     timing_sources: list[str] = field(default_factory=list)
     standalone_vllm_spec_sources: list[str] = field(default_factory=list)
+    standalone_vllm_throughput_sources: list[str] = field(default_factory=list)
+    mixed_context_sources: list[str] = field(default_factory=list)
     evidence: dict[str, bool] = field(
         default_factory=lambda: {
             "speculative_config_seen": False,
@@ -264,12 +266,12 @@ def is_standalone_vllm_line(lower: str) -> bool:
     return any(
         token in lower
         for token in (
-            "application startup complete",
-            "uvicorn running on",
             "launch_vllm.py",
-            "get /health",
-            "post /v1/",
-            "openai api server",
+            "standalone vllm",
+            "standalone_vllm",
+            "vllm standalone",
+            "vllm serve",
+            "vllm.entrypoints.openai.api_server",
         )
     )
 
@@ -362,6 +364,8 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
     synthetic_step = 0
     standalone_context = False
     nemo_context = False
+    file_saw_standalone = False
+    file_saw_nemo = False
 
     try:
         with path.open(errors="replace") as fh:
@@ -370,13 +374,18 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                 if not line.strip():
                     continue
                 lower = line.lower()
-                standalone_context = standalone_context or is_standalone_vllm_line(lower)
-                nemo_context = nemo_context or is_nemo_rl_line(lower)
+                line_is_standalone = is_standalone_vllm_line(lower)
+                line_is_nemo = is_nemo_rl_line(lower)
+                file_saw_standalone = file_saw_standalone or line_is_standalone
+                file_saw_nemo = file_saw_nemo or line_is_nemo
+                standalone_context = standalone_context or line_is_standalone
+                nemo_context = nemo_context or line_is_nemo
 
                 step_match = STEP_RE.search(line)
                 if step_match:
                     current_step = int(step_match.group(1))
                     nemo_context = True
+                    file_saw_nemo = True
 
                 parse_spec_metrics(
                     line,
@@ -390,6 +399,10 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                 if throughput_match:
                     key = normalize_name(throughput_match.group(1))
                     add_metric(result.throughput_metrics, key, float(throughput_match.group(2)))
+                    if standalone_context and not nemo_context:
+                        add_unique(
+                            result.standalone_vllm_throughput_sources, str(path)
+                        )
 
                 total_match = TOTAL_RE.search(line)
                 if total_match:
@@ -419,6 +432,8 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                         record.timing_pct[key] = float(pct)
     except OSError as exc:
         result.warnings.append(f"Could not read {path}: {exc}")
+    if file_saw_standalone and file_saw_nemo:
+        add_unique(result.mixed_context_sources, str(path))
 
 
 def analyze(paths: list[Path]) -> ParseResult:
@@ -493,6 +508,8 @@ def summarize_result(
             "spec_metric_sources": result.spec_metric_sources,
             "timing_sources": result.timing_sources,
             "standalone_vllm_spec_sources": result.standalone_vllm_spec_sources,
+            "standalone_vllm_throughput_sources": result.standalone_vllm_throughput_sources,
+            "mixed_context_sources": result.mixed_context_sources,
         },
         "warnings": result.warnings,
         "spec_lines": result.spec_lines,
@@ -608,16 +625,26 @@ def gate_result(
 
     provenance = current.get("source_provenance", {})
     standalone_sources = provenance.get("standalone_vllm_spec_sources") or []
-    if standalone_sources and not allow_standalone_vllm:
+    standalone_throughput_sources = (
+        provenance.get("standalone_vllm_throughput_sources") or []
+    )
+    mixed_context_sources = provenance.get("mixed_context_sources") or []
+    if (
+        (standalone_sources or standalone_throughput_sources or mixed_context_sources)
+        and not allow_standalone_vllm
+    ):
         checks.append(
             {
                 "name": "nemo_rl_metric_provenance",
                 "passed": False,
                 "reason": (
-                    "standalone vLLM SpecDec metrics found in current inputs; "
+                    "standalone vLLM metrics or mixed standalone/NeMo-RL log contexts "
+                    "found in current inputs; "
                     "rerun with --allow-standalone-vllm only for standalone generation reports"
                 ),
                 "sources": standalone_sources[:8],
+                "throughput_sources": standalone_throughput_sources[:8],
+                "mixed_context_sources": mixed_context_sources[:8],
             }
         )
         status = "fail"
