@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 07:44 PDT",
+  "updated_at": "2026-06-01 07:52 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -929,7 +929,7 @@
   },
   "adaptive_gate_implementation": {
     "status": "implemented_validated_remotely_counter_timeoutfix_metrictrust_review_hardened_synced",
-    "updated_at": "2026-06-01 07:44 PDT",
+    "updated_at": "2026-06-01 07:52 PDT",
     "scope": "Taming Long Tail/ReSpec-style adaptive activation and draft-depth selection for NeMo-RL/vLLM SpecDec",
     "patch_marker": "NRL_SPECDEC_BATCH_GATE_PATCH_V7",
     "launch_env_prefix": "SPECDEC_ADAPTIVE_GATE_* -> VLLM_SPECDEC_ADAPTIVE_*; SPECDEC_DYNAMIC_DRAFT_* -> VLLM_SPECDEC_DYNAMIC_DRAFT_*",
@@ -1264,7 +1264,7 @@
       },
       {
         "job_id": "3072963",
-        "state": "RUNNING at 2026-06-01 07:42 PDT on nvl72058-T[01,09,12-13]; Step 1 early generation metrics emitted, then entered Megatron logprob inference; final NeMo-RL performance throughput still pending.",
+        "state": "FAILED at 2026-06-01 07:50 PDT after Step 1 early metrics; Megatron get_logprobs NCCL _ALLGATHER_BASE timeout after 1800s caused ActorDiedError. No final throughput.",
         "reason": "fresh K=3 dynamic-K replacement after the V7 first-draft gate fix. It reached Step 1 generation and emitted complete-DP early SpecDec metrics; unlike earlier no-metric states, drafter attachment, runner gate activation, and scheduler gate activation are now visible. It is still in the logprob/training phase, so this is not a final throughput result yet.",
         "latest_step_seen": 1,
         "completed_generation_metrics": 0,
@@ -1325,21 +1325,22 @@
     },
     "batch_gate_v7_review_fix": {
       "state": "patched_validated_synced_and_resubmitted",
-      "updated_at": "2026-06-01 07:44 PDT",
+      "updated_at": "2026-06-01 07:52 PDT",
       "superseded_job": "3072682",
       "replacement_job": "3072963",
       "reason": "V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and prevents partial per-request gating from becoming a whole-batch draft skip.",
       "out_file": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/latest_qwen30ba3b_500k_specdec_dynamick_v7_jobs.txt",
-      "state_at_latest_check": "RUNNING on nvl72058-T[01,09,12-13] at 2026-06-01 07:42 PDT; Step 1 early metrics emitted: acceptance 33.91%, early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), runner gate enabled 9.72%, scheduler gate enabled 3.47%; final throughput pending while in Megatron logprob/training. Current-code K=1 validation job 3073673 is also RUNNING with token gate 2048."
+      "state_at_latest_check": "FAILED at 2026-06-01 07:50 PDT after Step 1 early metrics. MegatronPolicyWorker get_logprobs hit NCCL watchdog timeout on _ALLGATHER_BASE in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP after 1800000 ms, then Ray reported ActorDiedError. Current-code K=1 validation job 3073673 is RUNNING and has not reached Step 1 metrics yet."
     },
     "post_review_hardening_commit": "c647865",
-    "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors."
+    "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
+    "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, draft_tokens=362572, accepted_tokens=120960, runner enabled_ratio=0.0869, and scheduler enabled_ratio=0.0299, then failed before final throughput in the Megatron logprob/training phase. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs respectively. Job 3072963 is the current primary dynamic-K validation run; as of 2026-06-01 07:42 PDT it emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), and is still in Megatron logprob/training with final throughput pending. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency.",
-  "current_primary_dynamic_k_job": "3072963",
+  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency and has not reached the first generation metric yet.",
+  "current_primary_dynamic_k_job": "3072963_failed",
   "batch_gate_v7_review_fix": {
-    "state": "patched_validated_synced_resubmitted_step1_early_metrics_seen_and_k1_validation_running",
-    "updated_at": "2026-06-01 07:44 PDT",
+    "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running",
+    "updated_at": "2026-06-01 07:52 PDT",
     "superseded_job": "3072682",
     "replacement_job": "3072963",
     "reason": "A separate review agent found V6 could still convert an empty first scheduled_spec_decode_tokens map into a runner-wide disable. V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and keeps partial per-request gating from becoming a whole-batch draft skip.",
@@ -1358,9 +1359,11 @@
       ],
       "runner_enabled_ratio": 0.0972,
       "scheduler_enabled_ratio": 0.0347,
-      "final_throughput_status": "pending"
+      "final_throughput_status": "failed_before_final_throughput",
+      "failure": "NCCL _ALLGATHER_BASE timeout in Megatron get_logprobs; ActorDiedError."
     },
-    "current_k1_validation_job": "3073673"
+    "current_k1_validation_job": "3073673",
+    "replacement_job_state": "FAILED during Megatron get_logprobs after Step 1 generation; NCCL _ALLGATHER_BASE timed out after 1800s."
   },
   "current_code_k1_validation_job": {
     "job_id": "3073673",
@@ -1376,7 +1379,8 @@
     "num_generations_per_prompt": 32,
     "train_global_batch_size": 2048,
     "draft_root": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193",
-    "result_status": "pending first generation metric"
+    "result_status": "pending first generation metric",
+    "state_at_latest_check": "RUNNING at 2026-06-01 07:51 PDT; still building/installing runtime dependencies, no Step metric yet."
   },
   "post_review_hardening": {
     "updated_at": "2026-06-01 07:44 PDT",
@@ -1398,5 +1402,28 @@
       "remote no-dependency dry-run printed zero --dependency arguments",
       "rsynced to fs1 and fsw roadmap mirrors with matching SHA256"
     ]
+  },
+  "dynamic_k_3072963_failure": {
+    "job_id": "3072963",
+    "state": "FAILED",
+    "failed_at": "2026-06-01 07:50 PDT",
+    "exit_code": "1:0",
+    "phase": "Megatron policy.get_logprobs after Step 1 generation",
+    "root_cause_observed": "NCCL watchdog timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP during _ALLGATHER_BASE; Ray MegatronPolicyWorker actors then died with ActorDiedError.",
+    "timeout_ms": 1800000,
+    "timed_out_collective": "WorkNCCL SeqNum=14017 OpType=_ALLGATHER_BASE NumelIn=524288 NumelOut=8388608",
+    "publishable_metrics": "Step 1 early generation metrics only; no final NeMo-RL performance throughput was produced.",
+    "early_acceptance_rate": 0.3391,
+    "early_generated_tokens_sec_gpu": 4511.04,
+    "early_generated_speedup_vs_baseline": 1.082,
+    "draft_tokens": 423736,
+    "accepted_tokens": 143708,
+    "per_position_acceptance": [
+      0.4716,
+      0.2089,
+      0.0018
+    ],
+    "runner_enabled_ratio": 0.0972,
+    "scheduler_enabled_ratio": 0.0347
   }
 }
