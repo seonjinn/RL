@@ -402,7 +402,7 @@
     "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 14,
     "short_nonzero_chunk_files_observed": 86,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 is running; hidden-state array 3068016_[0-99] and train job 3068017 remain dependency-pending.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Hidden-state array 3068016 is now running shards 0-45 while shards 46-99 remain pending on priority; train job 3068017 remains dependency-pending.",
     "min_nonzero_rows_observed": 3565,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 50,
@@ -422,9 +422,9 @@
     "final_conversation_rows": 500000,
     "speculators_rows": 500000,
     "current_prepare_job": "3068015",
-    "current_prepare_state_observed": "RUNNING on nvl72083-T13 at 2026-06-01 02:28 PDT",
+    "current_prepare_state_observed": "COMPLETED by 2026-06-01 02:49 PDT; output has 500000 examples, 16 arrow shards, token_freq.pt, and state.json",
     "current_hidden_state_array_job": "3068016_[0-99]",
-    "current_hidden_state_array_state_observed": "PENDING with Dependency",
+    "current_hidden_state_array_state_observed": "RUNNING shards 0-45 and PENDING shards 46-99 at 2026-06-01 02:49 PDT",
     "current_train_job": "3068017",
     "current_train_state_observed": "PENDING with Dependency"
   },
@@ -454,7 +454,8 @@
       "Qwen3-235B finalizer now accepts replacement conversations, preventing duplicate prompts in the raw 500K pool from reducing the exact-unique final corpus below 500K.",
       "Safe-w4 repair chain 3065583-3065686 replaced stale jobs 3063256-3063318 after review found unsafe partial-apply/wave4 dependencies; it was later superseded by direct adaptive missing-ID repair job 3068010 and finalizer/train chain 3068014-3068017.",
       "Qwen3-30B/235B SpecDec launchers now wait for an in-progress Megatron checkpoint conversion to write iter_0000000/run_config.yaml before submitting another job against the same checkpoint directory.",
-      "SpecDec dynamic-K per-position acceptance now validates scheduler tier counters against vLLM num_drafts and num_draft_tokens before allowing those rates to drive the step controller."
+      "SpecDec dynamic-K per-position acceptance now validates scheduler tier counters against vLLM num_drafts and num_draft_tokens before allowing those rates to drive the step controller.",
+      "SpecDec aggregate acceptance is now marked reliable only when all DP workers report, and the dynamic-K step controller refuses partial-DP metrics."
     ],
     "validated": [
       "python3 -m py_compile submitters and validator",
@@ -469,8 +470,8 @@
     ]
   },
   "clean_split_status": {
-    "openmath_denylist_applied_to_final_merge": false,
-    "direct_prompt_overlap_verified": false,
-    "note": "The 235B in-house path is still target-generation work. The final merged 500K file must be built with the same OpenMath denylist and normalized prompt overlap validation used for the clean 30B run before any leakage-clean claim."
+    "openmath_denylist_applied_to_final_merge": true,
+    "direct_prompt_overlap_verified": true,
+    "note": "The 235B in-house 500K conversation file has passed validation with --denylist-prompts-from openmath_reasoning_cot_conversations_50k.jsonl: 500000 rows, 500000 unique prompts, 0 duplicate prompts, and 0 denylisted OpenMath prompts. Prepare job 3068015 completed and hidden-state array 3068016 is running, so the drafter checkpoint is not trained yet."
   }
 }
