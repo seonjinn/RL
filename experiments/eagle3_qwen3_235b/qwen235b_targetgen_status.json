@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 08:21 PDT",
+  "updated_at": "2026-06-01 08:38 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -500,21 +500,33 @@
   },
   "current_500k_speculators_training_chain": {
     "state": "hidden_state_extraction_running",
-    "updated_at": "2026-06-01 08:21 PDT",
+    "updated_at": "2026-06-01 08:38 PDT",
     "prepare_job": "3068015",
     "hidden_state_array_job": "3072149_[0-99]%5",
     "repair_jobs": "3072518-3072523 completed successfully for shards 005-010",
     "replacement_train_job": "3072524",
-    "hidden_state_files_observed": 94416,
-    "hidden_state_dir_size": "11T",
-    "active_array_tasks": "3072149_16-20 running at 2026-06-01 08:21 PDT",
+    "hidden_state_files_observed": 100860,
+    "hidden_state_dir_size": "12T",
+    "active_array_tasks": "3072149_16-20 running at 2026-06-01 08:38 PDT",
     "pending_array_tasks": "3072149_[21-99%5] pending on JobArrayTaskLimit",
     "train_state": "3072524 dependency-pending on main array completion; repair dependencies are satisfied",
-    "note": "235B in-house Speculators Eagle3 drafter is not training yet; hidden-state extraction is still running. At 2026-06-01 08:21 PDT, the cache had 94416 files (11T), array tasks 16-20 were running, tasks 21-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed, and replacement train job 3072524 remained dependency-pending."
+    "note": "235B in-house Speculators Eagle3 drafter is not training yet; hidden-state extraction is still running. At 2026-06-01 08:38 PDT, the cache had 100860 files (12T), array tasks 16-20 were running, tasks 21-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed, and replacement train job 3072524 remained dependency-pending."
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
     "status": "validated_synced_legacy_entrypoint_blocked",
     "note": "235B main SpecDec launcher now requires explicit DRAFT_MODEL_PROVENANCE. Qwen235B_GB200_SpecDec.sh is deprecated by default because it used a legacy 50K drafter and patched NeMo-RL in place; legacy/manual diagnostics require explicit opt-in flags."
+  },
+  "nemo_rl_specdec_training_mode_review": {
+    "updated_at": "2026-06-01 08:38 PDT",
+    "review_agent": "Pascal",
+    "drafter_training_mode_for_current_nemo_rl_jobs": "fixed_external_drafter",
+    "online_drafter_training_inside_grpo": "not_implemented",
+    "note": "The 235B 500K chain is offline Speculators Eagle3 training: finalize target responses, prepare, extract hidden states, train a drafter checkpoint, then attach that fixed checkpoint to vLLM speculative_config.model for NeMo-RL evaluation. The drafter is not refreshed after each GRPO step in the current measured path."
+  },
+  "pipeline_status": {
+    "current_hidden_state_files_observed": 100860,
+    "current_hidden_state_size_observed": "12T",
+    "current_hidden_state_array_state_observed": "RUNNING at 2026-06-01 08:38 PDT: main array tasks 16-20 running, tasks 21-99 pending on JobArrayTaskLimit; repair jobs 3072518-3072523 completed for shards 005-010; hidden-state output file count 100860, size 12T."
   }
 }

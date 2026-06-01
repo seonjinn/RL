@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 08:21 PDT",
+  "updated_at": "2026-06-01 08:38 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -1336,11 +1336,11 @@
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best confirmed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x baseline, 57.40% acceptance. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency; Ray policy cluster and 16 workers initialized, but no first generation metric has emitted yet. Public HF Eagle3 smoke runs are attach/provenance checks only unless the baseline/config/model family are re-run under identical conditions.",
+  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, 57.40% acceptance. A separate review found possible generation-logprob mismatch between historical baseline and SpecDec runs, so final speedup claims now require a logprob-matched baseline rerun. Dynamic K has not yet produced a valid final throughput result. Job 3070995 reached Step 1 with acceptance_rate=0.3336, then failed before final throughput. Jobs 3072332, 3072527, and 3072682 were superseded before usable rollout metrics by scheduler-output insertion, V6 runner-gate, and V7 first-draft gate repairs. Job 3072963 emitted Step 1 early metrics with acceptance_rate=0.3391 and early generated throughput 4511.04 tok/s/GPU (1.0820x baseline), then failed in Megatron get_logprobs with an NCCL _ALLGATHER_BASE timeout after 1800s. Job 3073673 is running the post-review-hardened K=1 token-gate2048 validation with no dependency; Step 1 early generation emitted acceptance_rate=0.5791 and early generated throughput 5777.31 tok/s/GPU, then entered policy.get_logprobs. This is not yet final NeMo-RL throughput. Public HF Eagle3 smoke runs are attach/provenance checks only unless the baseline/config/model family are re-run under identical conditions.",
   "current_primary_dynamic_k_job": "3072963_failed",
   "batch_gate_v7_review_fix": {
-    "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running",
-    "updated_at": "2026-06-01 07:52 PDT",
+    "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running_step1_generation_seen",
+    "updated_at": "2026-06-01 08:37 PDT",
     "superseded_job": "3072682",
     "replacement_job": "3072963",
     "reason": "A separate review agent found V6 could still convert an empty first scheduled_spec_decode_tokens map into a runner-wide disable. V7 propagates explicit scheduler all-disabled and eligible-count attributes, validates the first-draft guard, and keeps partial per-request gating from becoming a whole-batch draft skip.",
@@ -1363,7 +1363,7 @@
       "failure": "NCCL _ALLGATHER_BASE timeout in Megatron get_logprobs; ActorDiedError."
     },
     "current_k1_validation_job": "3073673",
-    "replacement_job_state": "FAILED after Step 1 early metrics due to Megatron get_logprobs NCCL timeout; current K=1 validation job 3073673 is RUNNING, has initialized Ray policy cluster and 16 workers, but has no Step/generation metric yet."
+    "replacement_job_state": "FAILED after Step 1 early metrics due to Megatron get_logprobs NCCL timeout; current K=1 validation job 3073673 is RUNNING and has emitted Step 1 early generation metrics, then entered policy.get_logprobs."
   },
   "current_code_k1_validation_job": {
     "job_id": "3073673",
@@ -1379,8 +1379,22 @@
     "num_generations_per_prompt": 32,
     "train_global_batch_size": 2048,
     "draft_root": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193",
-    "result_status": "pending first generation metric; Ray policy cluster and 16 workers initialized",
-    "state_at_latest_check": "RUNNING at 2026-06-01 08:21 PDT on nvl72139-T[09,11-12,15]; driver connected to Ray, loaded the 950000-sample NeMo-RL training dataset/dataloader, initialized the Ray policy cluster on 4 nodes, and initialized 16 workers. No Step/generation/acceptance metric has emitted yet."
+    "result_status": "step1 early generation metrics emitted; final throughput pending policy.get_logprobs/training",
+    "state_at_latest_check": "RUNNING at 2026-06-01 08:38 PDT on nvl72139-T[09,11-12,15]; Step 1 generation completed and emitted early metrics, then entered policy.get_logprobs. No completed-step final generated tok/s/GPU metric yet.",
+    "step1_early_metrics": {
+      "status": "early_generation_only_not_final_throughput",
+      "acceptance_rate": 0.5791,
+      "early_total_tokens_sec_gpu": 5958.59,
+      "early_generated_tokens_sec_gpu": 5777.31,
+      "early_generated_speedup_vs_historical_baseline": 1.3857152108682984,
+      "draft_tokens": 4165064,
+      "accepted_tokens": 2411996,
+      "reporting_workers": "16/16",
+      "runner_enabled_ratio": 1.0,
+      "scheduler_enabled_ratio": 1.0,
+      "gate": "request_gate=0 token_gate=2048 K=1 static; effectively enabled for all Step 1 proposal checks",
+      "next_phase_observed": "policy.get_logprobs"
+    }
   },
   "post_review_hardening": {
     "updated_at": "2026-06-01 07:44 PDT",
@@ -1427,12 +1441,14 @@
     "scheduler_enabled_ratio": 0.0347
   },
   "result_provenance_rules": {
-    "updated_at": "2026-06-01 08:06 PDT",
+    "updated_at": "2026-06-01 08:30 PDT",
     "completed_nemo_rl_generation_metric": "Comparable to baseline generated tok/s/GPU only when the normal NeMo-RL completed-step generation metric is emitted.",
     "early_generation_only_metric": "Partial rollout evidence only; logged before Megatron get_logprobs/training and not counted as final throughput if the step later fails.",
     "full_e2e_step_metric": "Tracked separately from generated tok/s/GPU because it includes logprobs/reward/training phases.",
     "public_hf_eagle3_smoke": "Attach/smoke evidence only unless base model, dataset, batch shape, gates, and baseline are matched and re-run.",
-    "in_house_500k_speculators": "Main result tables require launcher provenance guards to point at the expected mixed non-OpenMath 500K checkpoint root."
+    "in_house_500k_speculators": "Main result tables require launcher provenance guards to point at the expected mixed non-OpenMath 500K checkpoint root.",
+    "baseline_config_parity": "Required for final speedup claims. The analyzer must prove matching generation-logprob mode plus prompt/generation shape and vLLM batch caps, or mark the comparison non-comparable unless explicitly overridden for legacy diagnostics.",
+    "drafter_training_mode": "Current measured NeMo-RL jobs use fixed_external_drafter. Online drafter refresh inside the GRPO loop is not implemented."
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
@@ -1443,5 +1459,24 @@
       "Qwen30BA3B_GB200_Main_Baseline.sh now submits ${SCRIPT_DIR}/ray.sub so baseline and SpecDec use the same patched submit file independent of cwd.",
       "Qwen235B_GB200_SpecDec.sh is now deprecated by default because it used a legacy 50K drafter and patched NeMo-RL in place; users must opt in explicitly for legacy diagnostics."
     ]
+  },
+  "review_agent_pascal_findings": {
+    "updated_at": "2026-06-01 08:30 PDT",
+    "review_agent": "Pascal",
+    "status": "patched_synced_pending_commit",
+    "highest_risk_findings": [
+      "Historical speedup comparisons may be inflated if the baseline requested vLLM generation logprobs while SpecDec did not.",
+      "remote_worktree_edit is stale scratch code and must not be used for confirmed SpecDec results.",
+      "Current NeMo-RL jobs evaluate a fixed external drafter; online drafter training inside the GRPO loop is not implemented.",
+      "Analyzers should fail closed unless baseline/current generation-logprob mode and batch shape are comparable."
+    ],
+    "local_fixes": [
+      "30B and 235B baseline launchers now default NRL_VLLM_OMIT_GENERATION_LOGPROBS=true for fair throughput comparison.",
+      "30B and 235B main baseline/SpecDec launchers refuse to run from remote_worktree_edit scratch paths.",
+      "30B main SpecDec launcher now also defaults NRL_VLLM_OMIT_GENERATION_LOGPROBS=true explicitly.",
+      "analyze_specdec_smoke.py and analyze_spec_tokens_sweep.py now parse run-config evidence and fail speedup gates when generation-logprob parity cannot be proven, unless explicitly overridden for legacy diagnostics.",
+      "SpecDec-RL vllm_worker now logs effective generation sampling logprob config once per worker so future reports can prove parity."
+    ],
+    "required_follow_up": "Rerun the baseline with NRL_VLLM_OMIT_GENERATION_LOGPROBS=true and the same prompt/generation shape before publishing final speedup; keep current 3060379 as best observed historical NeMo-RL generation result until then."
   }
 }

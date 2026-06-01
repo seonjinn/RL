@@ -13,6 +13,11 @@ if [[ ! -f "${SCRIPT_DIR}/examples/run_grpo.py" ]]; then
   echo "ERROR: could not locate NeMo-RL repo root from ${SCRIPT_PATH_DIR}; set NEMO_RL_DIR" >&2
   exit 2
 fi
+if [[ "$(cd "${SCRIPT_DIR}" && pwd -P)" == *"/remote_worktree_edit"* ]]; then
+  echo "ERROR: refusing to launch from stale scratch tree: ${SCRIPT_DIR}" >&2
+  echo "Use the maintained SpecDec-RL checkout/overlay instead." >&2
+  exit 2
+fi
 
 NUM_NODES="${NUM_NODES:-32}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"

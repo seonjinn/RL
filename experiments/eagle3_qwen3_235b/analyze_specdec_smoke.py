@@ -68,6 +68,41 @@ ACCEPTANCE_RATE_TEXT_RE = re.compile(
     r"(-?[0-9]+(?:\.[0-9]+)?)\s*(%)?",
     re.IGNORECASE,
 )
+ENV_ASSIGN_RE = re.compile(
+    r"(?:^|[\s'\"{,])([A-Z][A-Z0-9_]+)=([^\\\s,'\"\]}]+)"
+)
+HYDRA_ASSIGN_RE = re.compile(
+    r"(?:^|[\s'\",])(\+{0,2}[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)=([^\\\s,'\"\]}]+)"
+)
+LOGPROB_CONFIG_RE = re.compile(
+    r"(spec_decode_requested|omit_generation_logprobs|"
+    r"force_specdec_request_logprobs|request_logprobs)=([A-Za-z0-9_.-]+)"
+)
+CONFIG_KEY_ALIASES = {
+    "policy.generation.vllm_kwargs.max_num_seqs": "VLLM_MAX_NUM_SEQS",
+    "policy.generation.vllm_kwargs.max_num_batched_tokens": "VLLM_MAX_NUM_BATCHED_TOKENS",
+}
+RUN_CONFIG_KEYS = {
+    "NRL_VLLM_OMIT_GENERATION_LOGPROBS",
+    "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS",
+    "VLLM_MAX_NUM_SEQS",
+    "VLLM_MAX_NUM_BATCHED_TOKENS",
+    "VLLM_ATTENTION_BACKEND",
+    "grpo.num_prompts_per_step",
+    "grpo.num_generations_per_prompt",
+    "policy.train_global_batch_size",
+    "policy.generation.max_new_tokens",
+    "policy.generation.vllm_cfg.enforce_eager",
+}
+BASELINE_EXACT_MATCH_KEYS = (
+    "grpo.num_prompts_per_step",
+    "grpo.num_generations_per_prompt",
+    "policy.train_global_batch_size",
+    "policy.generation.max_new_tokens",
+    "policy.generation.vllm_cfg.enforce_eager",
+    "VLLM_MAX_NUM_SEQS",
+    "VLLM_MAX_NUM_BATCHED_TOKENS",
+)
 
 
 def clean_line(line: str) -> str:
@@ -198,6 +233,7 @@ class ParseResult:
             "vllm_seen": False,
         }
     )
+    run_config: dict[str, list[str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -208,6 +244,46 @@ def add_metric(bucket: dict[str, list[float]], key: str, value: float) -> None:
 def add_unique(values: list[str], value: str) -> None:
     if value not in values:
         values.append(value)
+
+
+def clean_config_value(value: str) -> str:
+    return value.strip().strip("\\").strip(",").strip("'\"")
+
+
+def canonical_config_key(key: str) -> str:
+    cleaned = key.lstrip("+")
+    return CONFIG_KEY_ALIASES.get(cleaned, cleaned)
+
+
+def add_config_value(result: ParseResult, key: str, value: str) -> None:
+    value = clean_config_value(value)
+    if not value:
+        return
+    bucket = result.run_config.setdefault(key, [])
+    if value not in bucket:
+        bucket.append(value)
+
+
+def parse_run_config(line: str, result: ParseResult) -> None:
+    for match in ENV_ASSIGN_RE.finditer(line):
+        key, value = match.groups()
+        if key in RUN_CONFIG_KEYS:
+            add_config_value(result, key, value)
+
+    for match in HYDRA_ASSIGN_RE.finditer(line):
+        key, value = match.groups()
+        key = canonical_config_key(key)
+        if key in RUN_CONFIG_KEYS:
+            add_config_value(result, key, value)
+
+    lower = line.lower()
+    if "generation sampling logprob config" in lower or "specdec effective config" in lower:
+        for key, value in LOGPROB_CONFIG_RE.findall(line):
+            if key == "request_logprobs":
+                key = "effective_generation_request_logprobs"
+            else:
+                key = f"effective_{key}"
+            add_config_value(result, key, value)
 
 
 def collect_paths(paths: Iterable[Path]) -> list[Path]:
@@ -389,6 +465,7 @@ def parse_text_log(path: Path, result: ParseResult, records: dict[tuple[str, int
                 if not line.strip():
                     continue
                 lower = line.lower()
+                parse_run_config(line, result)
                 line_is_strong_standalone = is_standalone_vllm_line(lower)
                 line_is_weak_standalone = is_standalone_vllm_server_line(lower)
                 line_is_nemo = is_nemo_rl_line(lower)
@@ -537,6 +614,7 @@ def summarize_result(
             "standalone_vllm_throughput_sources": result.standalone_vllm_throughput_sources,
             "mixed_context_sources": result.mixed_context_sources,
         },
+        "run_config": {key: values for key, values in sorted(result.run_config.items())},
         "warnings": result.warnings,
         "spec_lines": result.spec_lines,
     }
@@ -560,6 +638,115 @@ def spec_metric_median(summary: dict[str, Any], *names: str) -> float | None:
     return None
 
 
+def config_values(summary: dict[str, Any], key: str) -> list[str]:
+    values = summary.get("run_config", {}).get(key, [])
+    return list(values) if isinstance(values, list) else []
+
+
+def single_config_value(summary: dict[str, Any], key: str) -> str | None:
+    values = config_values(summary, key)
+    return values[-1] if values else None
+
+
+def boolish(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def generation_request_logprobs(summary: dict[str, Any]) -> tuple[bool | None, str]:
+    effective = boolish(single_config_value(summary, "effective_generation_request_logprobs"))
+    if effective is not None:
+        return effective, "effective_generation_request_logprobs"
+
+    force = boolish(single_config_value(summary, "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS"))
+    if force is True:
+        return True, "NRL_VLLM_SPECDEC_REQUEST_LOGPROBS"
+
+    omit = boolish(single_config_value(summary, "NRL_VLLM_OMIT_GENERATION_LOGPROBS"))
+    if omit is True:
+        return False, "NRL_VLLM_OMIT_GENERATION_LOGPROBS"
+    if omit is False:
+        return True, "NRL_VLLM_OMIT_GENERATION_LOGPROBS"
+
+    if summary.get("evidence", {}).get("speculative_config_seen") and force is not True:
+        return False, "specdec_default_without_request_logprobs"
+
+    return None, "missing_logprob_mode_evidence"
+
+
+def baseline_compatibility_check(
+    current: dict[str, Any], baseline: dict[str, Any]
+) -> dict[str, Any]:
+    mismatches: list[dict[str, str | None]] = []
+    missing: list[dict[str, str | None]] = []
+
+    current_request_logprobs, current_source = generation_request_logprobs(current)
+    baseline_request_logprobs, baseline_source = generation_request_logprobs(baseline)
+    if current_request_logprobs is None or baseline_request_logprobs is None:
+        missing.append(
+            {
+                "field": "generation_request_logprobs",
+                "current_source": current_source,
+                "baseline_source": baseline_source,
+            }
+        )
+    elif current_request_logprobs != baseline_request_logprobs:
+        mismatches.append(
+            {
+                "field": "generation_request_logprobs",
+                "current": str(current_request_logprobs),
+                "baseline": str(baseline_request_logprobs),
+            }
+        )
+
+    for key in BASELINE_EXACT_MATCH_KEYS:
+        current_value = single_config_value(current, key)
+        baseline_value = single_config_value(baseline, key)
+        if current_value is None and baseline_value is None:
+            continue
+        if current_value is None or baseline_value is None:
+            missing.append(
+                {
+                    "field": key,
+                    "current": current_value,
+                    "baseline": baseline_value,
+                }
+            )
+        elif current_value != baseline_value:
+            mismatches.append(
+                {
+                    "field": key,
+                    "current": current_value,
+                    "baseline": baseline_value,
+                }
+            )
+
+    passed = not mismatches and baseline_request_logprobs is not None and current_request_logprobs is not None
+    reason = None
+    if mismatches:
+        reason = "baseline/current generation configs differ"
+    elif baseline_request_logprobs is None or current_request_logprobs is None:
+        reason = "missing generation logprob mode evidence"
+
+    return {
+        "name": "baseline_config_compatibility",
+        "passed": passed,
+        "reason": reason,
+        "current_generation_request_logprobs": current_request_logprobs,
+        "baseline_generation_request_logprobs": baseline_request_logprobs,
+        "current_logprob_source": current_source,
+        "baseline_logprob_source": baseline_source,
+        "mismatches": mismatches,
+        "missing_context": missing,
+    }
+
+
 def gate_result(
     current: dict[str, Any],
     baseline: dict[str, Any] | None,
@@ -567,11 +754,18 @@ def gate_result(
     min_acceptance_rate: float | None,
     fail_on_missing_spec_metrics: bool,
     allow_standalone_vllm: bool,
+    require_comparable_baseline_config: bool = True,
 ) -> dict[str, Any]:
     status = "pass"
     checks: list[dict[str, Any]] = []
 
     current_gen = current["timing"].get("exposed_generation", {}).get("median")
+    if baseline is not None:
+        compatibility = baseline_compatibility_check(current, baseline)
+        checks.append(compatibility)
+        if require_comparable_baseline_config and not compatibility["passed"]:
+            status = "fail"
+
     if baseline is not None and min_gen_speedup_pct is not None:
         baseline_gen = baseline["timing"].get("exposed_generation", {}).get("median")
         if baseline_gen and current_gen is not None:
@@ -735,6 +929,7 @@ def to_jsonable(result: ParseResult, summary: dict[str, Any], gate: dict[str, An
             for step in result.steps
         ],
         "source_provenance": summary.get("source_provenance", {}),
+        "run_config": summary.get("run_config", {}),
         "summary": summary,
         "gate": gate,
     }
@@ -785,6 +980,15 @@ def render_table(title: str, summary: dict[str, Any]) -> str:
         lines.append("Warnings:")
         for warning in summary["warnings"]:
             lines.append(f"- {warning}")
+
+    if summary.get("run_config"):
+        lines.append("")
+        lines.append("Run config evidence:")
+        for key, values in sorted(summary["run_config"].items()):
+            rendered_values = ", ".join(values[:3])
+            if len(values) > 3:
+                rendered_values += ", ..."
+            lines.append(f"- {key}: {rendered_values}")
 
     return "\n".join(lines)
 
@@ -877,6 +1081,14 @@ def main() -> int:
         action="store_true",
         help="Allow standalone vLLM SpecDec metrics in current inputs. Leave unset for NeMo-RL evidence.",
     )
+    parser.add_argument(
+        "--allow-unmatched-baseline-config",
+        action="store_true",
+        help=(
+            "Allow speedup reporting even when baseline/current generation-logprob "
+            "or batch-shape parity cannot be proven. Use only for legacy diagnostics."
+        ),
+    )
     args = parser.parse_args()
 
     current_result = analyze(args.paths)
@@ -899,6 +1111,7 @@ def main() -> int:
         args.min_acceptance_rate,
         args.fail_on_missing_spec_metrics,
         args.allow_standalone_vllm,
+        not args.allow_unmatched_baseline_config,
     )
 
     rendered = render_table("SpecDec smoke summary", current_summary)

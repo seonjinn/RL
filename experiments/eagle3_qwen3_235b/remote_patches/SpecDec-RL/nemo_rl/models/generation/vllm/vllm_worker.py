@@ -4087,6 +4087,17 @@ class BaseVllmGenerationWorker:
         request_logprobs = (not spec_decode_requested) or force_logprobs
         if omit_generation_logprobs:
             request_logprobs = False
+        if not getattr(self, "_nrl_sampling_logprob_config_logged", False):
+            logger.info(
+                "NeMo-RL generation sampling logprob config: "
+                "spec_decode_requested=%s omit_generation_logprobs=%s "
+                "force_specdec_request_logprobs=%s request_logprobs=%s",
+                spec_decode_requested,
+                omit_generation_logprobs,
+                force_logprobs,
+                request_logprobs,
+            )
+            self._nrl_sampling_logprob_config_logged = True
 
         return self.SamplingParams(
             temperature=temperature,

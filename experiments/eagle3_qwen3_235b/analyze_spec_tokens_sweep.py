@@ -58,6 +58,14 @@ def parse_args() -> argparse.Namespace:
             "Leave disabled for NeMo-RL throughput reports."
         ),
     )
+    parser.add_argument(
+        "--allow-unmatched-baseline-config",
+        action="store_true",
+        help=(
+            "Allow speedup reporting even when baseline/current generation-logprob "
+            "or batch-shape parity cannot be proven. Use only for legacy diagnostics."
+        ),
+    )
     parser.add_argument("--fail-if-no-pass", action="store_true")
     return parser.parse_args()
 
@@ -140,6 +148,7 @@ def analyze_one(
         args.min_acceptance_rate,
         args.fail_on_missing_spec_metrics,
         args.allow_standalone_vllm,
+        not args.allow_unmatched_baseline_config,
     )
     return summary, gate
 

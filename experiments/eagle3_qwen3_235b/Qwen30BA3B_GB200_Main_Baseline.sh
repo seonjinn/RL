@@ -13,6 +13,11 @@ if [[ ! -f "${SCRIPT_DIR}/examples/run_grpo.py" ]]; then
   echo "ERROR: could not locate NeMo-RL repo root from ${SCRIPT_PATH_DIR}; set NEMO_RL_DIR" >&2
   exit 2
 fi
+if [[ "$(cd "${SCRIPT_DIR}" && pwd -P)" == *"/remote_worktree_edit"* ]]; then
+  echo "ERROR: refusing to launch from stale scratch tree: ${SCRIPT_DIR}" >&2
+  echo "Use the maintained SpecDec-RL checkout/overlay instead." >&2
+  exit 2
+fi
 
 NUM_NODES="${NUM_NODES:-4}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
@@ -35,6 +40,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-sync-grpo-gb200_oci-benchmark}"
 UV_PYTHON="${UV_PYTHON:-3.12.13}"
 DRIVER_UV_PROJECT_ENVIRONMENT="${DRIVER_UV_PROJECT_ENVIRONMENT:-${SCRIPT_DIR}/.driver_venvs/qwen30ba3b_main_baseline_py312}"
 NRL_VLLM_DISABLE_LOG_STATS="${NRL_VLLM_DISABLE_LOG_STATS:-false}"
+NRL_VLLM_OMIT_GENERATION_LOGPROBS="${NRL_VLLM_OMIT_GENERATION_LOGPROBS:-true}"
 VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-TRITON_ATTN}"
 VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-}"
 VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-}"
@@ -71,6 +77,7 @@ NRL_MEGATRON_CHECKPOINT_DIR=${NRL_MEGATRON_CHECKPOINT_DIR} \
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=${NRL_MEGATRON_NCCL_TIMEOUT_SECONDS} \
 VLLM_ATTENTION_BACKEND=${VLLM_ATTENTION_BACKEND} \
 NRL_VLLM_DISABLE_LOG_STATS=${NRL_VLLM_DISABLE_LOG_STATS} \
+NRL_VLLM_OMIT_GENERATION_LOGPROBS=${NRL_VLLM_OMIT_GENERATION_LOGPROBS} \
 uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${SCRIPT_DIR} python ./examples/run_grpo.py \
 --config ${CONFIG_FILE} \
 cluster.num_nodes=${NUM_NODES} \
