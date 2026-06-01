@@ -50,6 +50,10 @@ if [[ ! -s "${CONTAINER}" ]]; then
   echo "ERROR: container not found: ${CONTAINER}" >&2
   exit 2
 fi
+if [[ ! -s "${SCRIPT_DIR}/ray.sub" ]]; then
+  echo "ERROR: patched ray.sub not found at ${SCRIPT_DIR}/ray.sub" >&2
+  exit 2
+fi
 
 VLLM_EXTRA_OVERRIDES=""
 if [[ -n "${VLLM_MAX_NUM_SEQS}" ]]; then
@@ -104,4 +108,4 @@ sbatch \
   ${SBATCH_RESOURCE_ARGS} \
   ${SBATCH_EXTRA_ARGS} \
   --segment "${SEGMENT}" \
-  ray.sub
+  "${SCRIPT_DIR}/ray.sub"

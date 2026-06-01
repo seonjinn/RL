@@ -46,6 +46,8 @@ DEFAULT_500K_DRAFT_ROOT="/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagl
 LEGACY_50K_DRAFT_ROOT="/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_openmath_reasoning_cot_50k/checkpoints_train_50k_layers48_mlen8193_finalpatch"
 DRAFT_ROOT="${DRAFT_ROOT:-${DEFAULT_500K_DRAFT_ROOT}}"
 DRAFT_MODEL="${DRAFT_MODEL:-}"
+DRAFT_MODEL_PROVENANCE="${DRAFT_MODEL_PROVENANCE:-qwen30ba3b_mixed_math_nonopenmath_500k_speculators}"
+REQUIRE_500K_DRAFT_MODEL="${REQUIRE_500K_DRAFT_MODEL:-true}"
 SPECDEC_METHOD="${SPECDEC_METHOD:-eagle3}"
 NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-3}"
 DRAFT_TP="${DRAFT_TP:-1}"
@@ -214,11 +216,36 @@ if [[ -z "${DRAFT_MODEL}" || ! -s "${DRAFT_MODEL}/config.json" ]]; then
   echo "ERROR: DRAFT_MODEL is not ready. Set DRAFT_MODEL or wait for a checkpoint under: ${DRAFT_ROOT}" >&2
   exit 2
 fi
-if [[ "${DRAFT_ROOT}" == "${LEGACY_50K_DRAFT_ROOT}" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
-  echo "ERROR: refusing to use legacy 50K OpenMath drafter by default: ${DRAFT_ROOT}" >&2
+
+path_is_within() {
+  local child="${1%/}"
+  local parent="${2%/}"
+  [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
+}
+
+if {
+  path_is_within "${DRAFT_ROOT}" "${LEGACY_50K_DRAFT_ROOT}" ||
+  path_is_within "${DRAFT_MODEL}" "${LEGACY_50K_DRAFT_ROOT}" ||
+  [[ "${DRAFT_ROOT}" == *"/openmath_reasoning_cot_50k/"* || "${DRAFT_MODEL}" == *"/openmath_reasoning_cot_50k/"* ]]
+} && [[ "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
+  echo "ERROR: refusing to use legacy 50K/OpenMath drafter by default: ${DRAFT_MODEL}" >&2
   echo "Set DRAFT_ROOT/DRAFT_MODEL to the intended checkpoint, or ALLOW_LEGACY_DRAFT_MODEL=true for an explicit legacy diagnostic run." >&2
   exit 2
 fi
+if [[ "${REQUIRE_500K_DRAFT_MODEL}" == "true" || "${REQUIRE_500K_DRAFT_MODEL}" == "True" ]]; then
+  if ! path_is_within "${DRAFT_MODEL}" "${DEFAULT_500K_DRAFT_ROOT}"; then
+    echo "ERROR: DRAFT_MODEL is outside the approved 30B mixed-math 500K Speculators root: ${DRAFT_MODEL}" >&2
+    echo "Expected prefix: ${DEFAULT_500K_DRAFT_ROOT}" >&2
+    echo "For a clearly labeled diagnostic run, set REQUIRE_500K_DRAFT_MODEL=false and DRAFT_MODEL_PROVENANCE=<reason>." >&2
+    exit 2
+  fi
+fi
+if [[ -z "${DRAFT_MODEL_PROVENANCE}" ]]; then
+  echo "ERROR: DRAFT_MODEL_PROVENANCE must label the drafter source." >&2
+  exit 2
+fi
+echo "Using SpecDec drafter: ${DRAFT_MODEL}"
+echo "Drafter provenance: ${DRAFT_MODEL_PROVENANCE}"
 
 SPECDEC_EXTRA_OVERRIDES=""
 if [[ -n "${VLLM_MAX_NUM_SEQS}" ]]; then
@@ -271,6 +298,7 @@ VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH=${ENABLE_RUNTIME_SPECDEC_GATE_PATCH
 VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=${VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL} \
 NRL_VLLM_DISABLE_LOG_STATS=${NRL_VLLM_DISABLE_LOG_STATS} \
 NRL_VLLM_OMIT_GENERATION_LOGPROBS=${NRL_VLLM_OMIT_GENERATION_LOGPROBS} \
+NRL_SPECDEC_DRAFT_MODEL_PROVENANCE=${DRAFT_MODEL_PROVENANCE} \
 NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER=${NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER} \
 NRL_SPECDEC_CONTROLLER_MIN_DRAFT_TOKENS=${NRL_SPECDEC_CONTROLLER_MIN_DRAFT_TOKENS} \
 NRL_SPECDEC_CONTROLLER_LOW_ACCEPTANCE=${NRL_SPECDEC_CONTROLLER_LOW_ACCEPTANCE} \

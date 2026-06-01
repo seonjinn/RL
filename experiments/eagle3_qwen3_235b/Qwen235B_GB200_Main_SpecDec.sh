@@ -44,7 +44,10 @@ MAX_STEPS="${MAX_STEPS:-20}"
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS="${NRL_MEGATRON_NCCL_TIMEOUT_SECONDS:-1800}"
 
 DEFAULT_LEGACY_DRAFT_MODEL="/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_openmath50k_dapo16k_continued/checkpoints_from50k_dapo16k_e3_lr5e5_layers93_mlen8193_cachefix_r2/2"
+EXPECTED_500K_DRAFT_ROOT="/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193"
 DRAFT_MODEL="${DRAFT_MODEL:-${DEFAULT_LEGACY_DRAFT_MODEL}}"
+DRAFT_MODEL_PROVENANCE="${DRAFT_MODEL_PROVENANCE:-}"
+REQUIRE_DRAFT_MODEL_PROVENANCE="${REQUIRE_DRAFT_MODEL_PROVENANCE:-true}"
 SPECDEC_METHOD="${SPECDEC_METHOD:-eagle3}"
 NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-3}"
 DRAFT_TP="${DRAFT_TP:-1}"
@@ -203,11 +206,53 @@ if [[ ! -s "${DRAFT_MODEL}/config.json" ]]; then
   echo "ERROR: DRAFT_MODEL is not a valid HF checkpoint: ${DRAFT_MODEL}" >&2
   exit 2
 fi
+
+path_is_within() {
+  local child="${1%/}"
+  local parent="${2%/}"
+  [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
+}
+
 if [[ "${DRAFT_MODEL}" == "${DEFAULT_LEGACY_DRAFT_MODEL}" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
   echo "ERROR: refusing to use legacy default DRAFT_MODEL=${DRAFT_MODEL}" >&2
-  echo "Set DRAFT_MODEL explicitly for 500k/public-HF result claims, or ALLOW_LEGACY_DRAFT_MODEL=true for an explicit legacy diagnostic run." >&2
+  echo "Set DRAFT_MODEL explicitly for the in-house 500K checkpoint after training, or ALLOW_LEGACY_DRAFT_MODEL=true for an explicit legacy diagnostic run." >&2
   exit 2
 fi
+if [[ "${REQUIRE_DRAFT_MODEL_PROVENANCE}" == "true" || "${REQUIRE_DRAFT_MODEL_PROVENANCE}" == "True" ]]; then
+  case "${DRAFT_MODEL_PROVENANCE}" in
+    qwen235b_mixed_math_nonopenmath_500k_speculators)
+      if ! path_is_within "${DRAFT_MODEL}" "${EXPECTED_500K_DRAFT_ROOT}"; then
+        echo "ERROR: DRAFT_MODEL_PROVENANCE=${DRAFT_MODEL_PROVENANCE} but DRAFT_MODEL is outside the expected 235B 500K root." >&2
+        echo "DRAFT_MODEL=${DRAFT_MODEL}" >&2
+        echo "Expected prefix: ${EXPECTED_500K_DRAFT_ROOT}" >&2
+        exit 2
+      fi
+      ;;
+    legacy_diagnostic)
+      if [[ "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
+        echo "ERROR: legacy_diagnostic provenance requires ALLOW_LEGACY_DRAFT_MODEL=true." >&2
+        exit 2
+      fi
+      ;;
+    manual_diagnostic)
+      if [[ "${ALLOW_NON_STANDARD_DRAFT_MODEL:-false}" != "true" && "${ALLOW_NON_STANDARD_DRAFT_MODEL:-false}" != "True" ]]; then
+        echo "ERROR: manual_diagnostic provenance requires ALLOW_NON_STANDARD_DRAFT_MODEL=true." >&2
+        exit 2
+      fi
+      ;;
+    "")
+      echo "ERROR: DRAFT_MODEL_PROVENANCE is required for 235B SpecDec main runs." >&2
+      echo "Use qwen235b_mixed_math_nonopenmath_500k_speculators for the in-house 500K checkpoint, legacy_diagnostic for explicit legacy checks, or manual_diagnostic for non-result diagnostics." >&2
+      exit 2
+      ;;
+    *)
+      echo "ERROR: unknown DRAFT_MODEL_PROVENANCE=${DRAFT_MODEL_PROVENANCE}" >&2
+      exit 2
+      ;;
+  esac
+fi
+echo "Using SpecDec drafter: ${DRAFT_MODEL}"
+echo "Drafter provenance: ${DRAFT_MODEL_PROVENANCE:-unverified}"
 
 SPECDEC_EXTRA_OVERRIDES=""
 if [[ -n "${VLLM_MAX_NUM_SEQS}" ]]; then
@@ -262,6 +307,7 @@ VLLM_ENABLE_RUNTIME_SPECDEC_BATCH_GATE_PATCH=${ENABLE_RUNTIME_SPECDEC_GATE_PATCH
 VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=${VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL} \
 NRL_VLLM_DISABLE_LOG_STATS=${NRL_VLLM_DISABLE_LOG_STATS} \
 NRL_VLLM_OMIT_GENERATION_LOGPROBS=${NRL_VLLM_OMIT_GENERATION_LOGPROBS} \
+NRL_SPECDEC_DRAFT_MODEL_PROVENANCE=${DRAFT_MODEL_PROVENANCE:-unverified} \
 NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER=${NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER} \
 NRL_SPECDEC_CONTROLLER_MIN_DRAFT_TOKENS=${NRL_SPECDEC_CONTROLLER_MIN_DRAFT_TOKENS} \
 NRL_SPECDEC_CONTROLLER_LOW_ACCEPTANCE=${NRL_SPECDEC_CONTROLLER_LOW_ACCEPTANCE} \
