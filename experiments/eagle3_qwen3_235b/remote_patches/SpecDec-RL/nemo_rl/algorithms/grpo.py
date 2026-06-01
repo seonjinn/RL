@@ -1929,6 +1929,20 @@ def grpo_train(
                 with timer.time("generation_finish"):
                     policy_generation.finish_generation()
 
+                if _env_bool("NRL_STOP_AFTER_GENERATION", False):
+                    logger.log_metrics(
+                        {"stopped_after_generation": 1},
+                        total_steps + 1,
+                        prefix="diagnostic",
+                    )
+                    print(
+                        "[NRL diagnostic] NRL_STOP_AFTER_GENERATION=true; "
+                        "stopping after generation_finish before reward, "
+                        "logprob, and training.",
+                        flush=True,
+                    )
+                    return
+
                 repeated_batch = scale_rewards(
                     repeated_batch, master_config["grpo"]["reward_scaling"]
                 )

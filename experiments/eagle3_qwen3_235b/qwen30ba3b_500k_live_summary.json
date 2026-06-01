@@ -1615,11 +1615,11 @@
     "superseded_failed_pair": "3074142/3074189"
   },
   "alltoall_logprob_smoke_jobs": {
-    "updated_at": "2026-06-01 11:15 PDT",
+    "updated_at": "2026-06-01 11:25 PDT",
     "purpose": "Diagnose the repeated Megatron policy.get_logprobs NCCL timeout in EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP by avoiding the MoE allgather dispatcher path on a reduced strict NeMo-RL smoke.",
     "baseline_job_id": "3076036",
     "specdec_job_id": "3076041",
-    "status": "submitted; baseline 3076036 is RUNNING as of 2026-06-01 11:15 PDT, SpecDec 3076041 is PENDING",
+    "status": "submitted; baseline 3076036 and SpecDec 3076041 are both RUNNING as of 2026-06-01 11:25 PDT, but neither has emitted ray-driver.log yet",
     "shape": {
       "num_prompts_per_step": 8,
       "num_generations_per_prompt": 8,
@@ -1635,6 +1635,27 @@
     },
     "manifest": "latest_qwen30ba3b_alltoall_smoke_jobs.txt",
     "next_decision": "If p8/g8 alltoall completes logprobs/training, scale to p64/g32 alltoall for strict baseline-vs-SpecDec generation throughput. If it fails before rollout, inspect dispatcher support/config. If it still fails in logprobs, the next fallback is generation-only NeMo-RL validation before logprobs."
+  },
+  "longtail_gate_v8_verification": {
+    "updated_at": "2026-06-01 11:25 PDT",
+    "root_cause_found_in_3075161": "Dynamic-K K=3 job 3075161 reached NeMo-RL Step 1 generation with acceptance 57.77% and early generated throughput 5314.79 tok/s/GPU, but gate metrics showed runner enabled_ratio=1.0. Log evidence showed requests=128, tokens=3360, token_threshold=2048, and last_disabled=False, so scheduler all_disabled=false was overriding runner threshold state.",
+    "fix": "SpecDec-RL V8 batch gate now sets runner disabled state to runner_threshold_disabled OR scheduler_all_disabled. Qwen30B/Qwen235B SpecDec launchers now require NRL_SPECDEC_BATCH_GATE_PATCH_V8. Older patched vLLM environments fail closed and require rebuild instead of silently using the stale gate.",
+    "verification_job_id": "3076185",
+    "verification_job_name": "qwen30ba3b-main-specdec-v8-longtail-gate-genonly-k3-p64g32-1step-N4xG4",
+    "verification_status": "RUNNING as of 2026-06-01 11:25 PDT; no ray-driver.log yet",
+    "verification_shape": {
+      "num_prompts_per_step": 64,
+      "num_generations_per_prompt": 32,
+      "train_global_batch_size": 2048,
+      "max_steps": 1,
+      "max_total_sequence_length": 2048,
+      "NRL_STOP_AFTER_GENERATION": true,
+      "NRL_FORCE_REBUILD_VENVS": true,
+      "num_speculative_tokens": 3,
+      "token_gate": 2048,
+      "dynamic_k_tiers": "3/2/1"
+    },
+    "success_criteria": "A valid long-tail run must show gate enabled_ratio below 1.0, disabled_count above 0 for large active batches, nonzero enabled_count during tail, and early NeMo-RL generation throughput/acceptance before the diagnostic stop."
   },
   "failed_logprob_matched_pair_3074142_3074189": {
     "baseline_job_id": "3074142",
