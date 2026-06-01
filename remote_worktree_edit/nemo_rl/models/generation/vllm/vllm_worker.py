@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# WARNING: this is an older scratch copy, not the maintained SpecDec-RL overlay.
+# Current jobs should use experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/.
+
 import copy
 import fcntl
 import gc

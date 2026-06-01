@@ -124,6 +124,8 @@ def normalize_name(name: str) -> str:
 
 def normalize_spec_metric(name: str) -> str:
     normalized = normalize_name(name)
+    if "reliable" in normalized:
+        return normalized
     if "accept" in normalized and "rate" in normalized and (
         "per_position" in normalized or re.search(r"(?:^|_)pos_?\d+", normalized)
     ):

@@ -33,15 +33,24 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SPECDEC_RL_DIR="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL"
 LEGACY_SWE_REPO_ROOT="/lustre/fsw/portfolios/coreai/users/sna/repos/nemo-rl-qwen-swe"
-if [ -d "${LEGACY_SWE_REPO_ROOT}" ]; then
-  DEFAULT_REPO_ROOT="${LEGACY_SWE_REPO_ROOT}"
-elif [ -d "${DEFAULT_SPECDEC_RL_DIR}" ]; then
+USE_LEGACY_SWE_REPO_ROOT="${USE_LEGACY_SWE_REPO_ROOT:-false}"
+REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
+if [ -d "${DEFAULT_SPECDEC_RL_DIR}" ]; then
   DEFAULT_REPO_ROOT="${DEFAULT_SPECDEC_RL_DIR}"
+elif [[ "${USE_LEGACY_SWE_REPO_ROOT}" == "true" || "${USE_LEGACY_SWE_REPO_ROOT}" == "True" ]] && [ -d "${LEGACY_SWE_REPO_ROOT}" ]; then
+  DEFAULT_REPO_ROOT="${LEGACY_SWE_REPO_ROOT}"
 else
   DEFAULT_REPO_ROOT="${SCRIPT_DIR}"
 fi
 
 REPO_ROOT="${REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
+if [[ "${REQUIRE_SPECDEC_RL_PATCHES}" == "true" || "${REQUIRE_SPECDEC_RL_PATCHES}" == "True" ]]; then
+  if [[ "${REPO_ROOT}" == "${LEGACY_SWE_REPO_ROOT}" ]]; then
+    echo "ERROR: REPO_ROOT points at the legacy SWE repo, which may not contain the current SpecDec-RL patches." >&2
+    echo "Set REPO_ROOT=${DEFAULT_SPECDEC_RL_DIR}, or set REQUIRE_SPECDEC_RL_PATCHES=false for a non-SpecDec SWE run." >&2
+    exit 2
+  fi
+fi
 CONFIG_FILE="${CONFIG_FILE:-${SCRIPT_DIR}/grpo_qwen3_235b_swe.yaml}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${REPO_ROOT}/results}"
 ENV_FILE="${ENV_FILE:-${SCRIPT_DIR}/env.sh}"

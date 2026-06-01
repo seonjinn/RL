@@ -43,7 +43,8 @@ TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-$((NUM_PROMPTS * NUM_GENERAT
 MAX_STEPS="${MAX_STEPS:-20}"
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS="${NRL_MEGATRON_NCCL_TIMEOUT_SECONDS:-1800}"
 
-DRAFT_MODEL="${DRAFT_MODEL:-/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_openmath50k_dapo16k_continued/checkpoints_from50k_dapo16k_e3_lr5e5_layers93_mlen8193_cachefix_r2/2}"
+DEFAULT_LEGACY_DRAFT_MODEL="/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_openmath50k_dapo16k_continued/checkpoints_from50k_dapo16k_e3_lr5e5_layers93_mlen8193_cachefix_r2/2"
+DRAFT_MODEL="${DRAFT_MODEL:-${DEFAULT_LEGACY_DRAFT_MODEL}}"
 SPECDEC_METHOD="${SPECDEC_METHOD:-eagle3}"
 NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-3}"
 DRAFT_TP="${DRAFT_TP:-1}"
@@ -185,6 +186,10 @@ fi
 if [[ ! -s "${DRAFT_MODEL}/config.json" ]]; then
   echo "ERROR: DRAFT_MODEL is not a valid HF checkpoint: ${DRAFT_MODEL}" >&2
   exit 2
+fi
+if [[ "${DRAFT_MODEL}" == "${DEFAULT_LEGACY_DRAFT_MODEL}" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
+  echo "WARNING: using legacy default DRAFT_MODEL=${DRAFT_MODEL}" >&2
+  echo "Set DRAFT_MODEL explicitly for 500k/public-HF result claims, or ALLOW_LEGACY_DRAFT_MODEL=true to silence this warning." >&2
 fi
 
 SPECDEC_EXTRA_OVERRIDES=""
