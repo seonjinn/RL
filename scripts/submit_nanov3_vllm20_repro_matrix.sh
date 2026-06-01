@@ -126,7 +126,7 @@ submit_job() {
     extra+=" policy.logprob_chunk_size=${LONG_LOGPROB_CHUNK_SIZE:-128}"
     extra+=" policy.generation.vllm_kwargs.max_num_batched_tokens=${LONG_VLLM_MAX_NUM_BATCHED_TOKENS:-32768}"
     if [[ "${VLLM_DISABLE_CUSTOM_ALL_REDUCE_LONG}" == "true" && "${extra}" != *"disable_custom_all_reduce"* ]]; then
-      extra+=" +policy.generation.vllm_kwargs.disable_custom_all_reduce=true"
+      extra+=" ++policy.generation.vllm_kwargs.disable_custom_all_reduce=true"
     fi
   fi
 
