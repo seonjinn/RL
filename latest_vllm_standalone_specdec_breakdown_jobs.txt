@@ -11,4 +11,4 @@ logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/v
 output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333/breakdown.json
 profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333/profile
 speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333/speculative_config.json
-status=3115084 submitted
+status=3115084 FAILED after 00:04:34 with exit 1. The previous JSON quoting issue is fixed; this failure is a vLLM standalone engine init/compile issue during Eagle3 drafter dummy_run: torch._dynamo BackendCompilerFailed, AssertionError "VllmBackend can only be called once". No breakdown.json was produced. Next retry should disable or relax vLLM compile for the standalone breakdown path, or run the timing attribution with eager/instrumented ranges.

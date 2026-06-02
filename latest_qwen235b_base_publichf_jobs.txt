@@ -1,0 +1,41 @@
+# Qwen3-235B-A22B base PublicHF Eagle3 exact-pair NeMo-RL jobs
+
+# submitted Tue Jun  2 10:49 PDT 2026
+hf_repo=nvidia/Qwen3-235B-A22B-Eagle3
+hf_repo_url=https://huggingface.co/nvidia/Qwen3-235B-A22B-Eagle3
+hf_commit=33f3c01ce807376d1171301b9a148b1b28f239ba
+hf_base_model=Qwen/Qwen3-235B-A22B
+hf_files=config.json,hf_quant_config.json,model.safetensors
+local_drafter=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Eagle3
+local_drafter_size=model.safetensors 593M
+local_drafter_architecture=LlamaForCausalLMEagle3
+local_drafter_eagle_aux_layers=1,46,90
+
+baseline_job_id=3115167
+baseline_job_name=qwen235b-base-a22b-baseline-20step-N32xG4
+baseline_target_model=Qwen/Qwen3-235B-A22B
+baseline_wandb_name=Qwen235B_A22B_Main_N32xG4_baseline_p16_g32_20step
+
+specdec_k1_job_id=3115169
+specdec_k1_job_name=qwen235b-base-a22b-publichf-k1-20step-N32xG4
+specdec_k1_wandb_name=Qwen235B_A22B_PublicHF_Eagle3_K1_20step_always_on_20260602
+
+specdec_k3_job_id=3115168
+specdec_k3_job_name=qwen235b-base-a22b-publichf-k3-20step-N32xG4
+specdec_k3_wandb_name=Qwen235B_A22B_PublicHF_Eagle3_K3_20step_always_on_20260602
+
+account=coreai_dlalgo_llm
+num_nodes=32
+gpus_per_node=4
+num_prompts_per_step=16
+num_generations_per_prompt=32
+train_global_batch_size=512
+max_steps=20
+sequence_packing=true
+NRL_FORCE_REBUILD_VENVS=true
+container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
+specdec_gate_mode=always_on
+VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=0
+VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
+
+status=3115167 baseline, 3115169 K1, and 3115168 K3 are PENDING at 2026-06-02 10:49 PDT. These are the first clean exact-pair NeMo-RL tests for nvidia/Qwen3-235B-A22B-Eagle3 with target Qwen/Qwen3-235B-A22B. No acceptance or throughput result exists yet.
