@@ -38,4 +38,4 @@ specdec_gate_mode=always_on
 VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=0
 VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
 
-status=3115167 baseline is RUNNING at 2026-06-02 10:56 PDT; 3115169 K1 and 3115168 K3 are still PENDING. These are the first clean exact-pair NeMo-RL tests for nvidia/Qwen3-235B-A22B-Eagle3 with target Qwen/Qwen3-235B-A22B. No W&B URL, acceptance, or throughput result exists yet for the base exact-pair jobs.
+status=3115167 baseline and 3115168 K3 are RUNNING at 2026-06-02 11:07 PDT; 3115169 K1 is still PENDING due Priority. These are the first clean exact-pair NeMo-RL tests for nvidia/Qwen3-235B-A22B-Eagle3 with target Qwen/Qwen3-235B-A22B. Baseline W&B URL is https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/bg1d6wyh. No acceptance or throughput result exists yet for the base exact-pair jobs.

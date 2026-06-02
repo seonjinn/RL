@@ -54,4 +54,4 @@ publichf_VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=0
 publichf_VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
 publichf_NRL_FORCE_REBUILD_VENVS=true
 publichf_container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
-publichf_status=3115042 and 3115043 RUNNING at 2026-06-02 10:56 PDT. W&B URLs are available; driver logs are still in startup/init and have not emitted rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput yet.
+publichf_status=3115042 and 3115043 RUNNING at 2026-06-02 11:06 PDT. W&B URLs are available; driver logs are still in startup/init and have not emitted rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput yet.

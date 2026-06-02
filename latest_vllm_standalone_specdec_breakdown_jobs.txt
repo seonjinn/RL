@@ -1,6 +1,6 @@
 # vLLM standalone SpecDec timing breakdown
-submitted_at=2026-06-02 10:56:29 PDT
-job_id=3115305
+submitted_at=2026-06-02 11:04:15 PDT
+job_id=3115354
 job_name=vllm-specdec-breakdown-q30-k1
 model=Qwen/Qwen3-30B-A3B
 draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
@@ -8,8 +8,10 @@ num_speculative_tokens=1
 enforce_eager=true
 scope=vLLM standalone LLM.generate torch-profiler breakdown, not NeMo-RL E2E
 figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
-logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_20260602_105623
-output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_20260602_105623/breakdown.json
-profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_20260602_105623/profile
-speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_20260602_105623/speculative_config.json
-status=3115305 submitted
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_profiler_20260602_110409
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_profiler_20260602_110409/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_profiler_20260602_110409/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_eager_profiler_20260602_110409/speculative_config.json
+previous_retry=3115305 FAILED after 00:04:14 because vLLM start_profile requires profiler_config; VLLM_TORCH_PROFILER_DIR alone was ignored.
+fix=standalone_vllm_specdec_breakdown.py now passes LLM profiler_config={profiler: torch, torch_profiler_dir: profile_dir}; slurm-3115354.out confirms profiler_config is accepted by vLLM 0.17.0.
+status=3115354 RUNNING at 2026-06-02 11:06 PDT; engine initialization is in progress and breakdown.json has not been produced yet.

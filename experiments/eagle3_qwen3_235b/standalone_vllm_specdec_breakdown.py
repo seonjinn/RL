@@ -174,6 +174,11 @@ def build_llm(args: argparse.Namespace, capture_sizes: list[int]):
         kwargs["distributed_executor_backend"] = args.distributed_executor_backend
     if args.attention_backend:
         kwargs["attention_backend"] = args.attention_backend
+    if not args.disable_vllm_profiler:
+        kwargs["profiler_config"] = {
+            "profiler": "torch",
+            "torch_profiler_dir": str(Path(args.profile_dir).resolve()),
+        }
     if args.speculative_config:
         kwargs["speculative_config"] = load_json_arg(args.speculative_config)
     return LLM(**kwargs)
@@ -201,6 +206,11 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--tag", default="")
     parser.add_argument("--compilation-config-json")
+    parser.add_argument(
+        "--disable-vllm-profiler",
+        action="store_true",
+        help="Skip LLM profiler_config and record only wall-clock latency.",
+    )
     args = parser.parse_args()
 
     profile_dir = Path(args.profile_dir)
@@ -248,6 +258,7 @@ def main() -> None:
                         "batch_sizes": batch_sizes,
                         "capture_sizes": capture_sizes,
                         "profile_dir": str(profile_dir),
+                        "vllm_profiler_enabled": not args.disable_vllm_profiler,
                         "bucket_definition": [
                             "drafting",
                             "verification",
