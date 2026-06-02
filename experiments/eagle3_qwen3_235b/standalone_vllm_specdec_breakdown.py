@@ -278,12 +278,12 @@ def main() -> None:
             llm.generate(prompts, sampling_params)
 
         before = set(trace_files(profile_dir))
-        if hasattr(llm, "start_profile"):
+        if not args.disable_vllm_profiler and hasattr(llm, "start_profile"):
             llm.start_profile()
         started = time.perf_counter()
         llm.generate(prompts, sampling_params)
         latency_s = time.perf_counter() - started
-        if hasattr(llm, "stop_profile"):
+        if not args.disable_vllm_profiler and hasattr(llm, "stop_profile"):
             llm.stop_profile()
 
         time.sleep(2.0)

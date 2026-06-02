@@ -38,4 +38,4 @@ specdec_gate_mode=always_on
 VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=0
 VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
 
-status=3115167 baseline and 3115168 K3 are RUNNING at 2026-06-02 11:07 PDT; 3115169 K1 is still PENDING due Priority. These are the first clean exact-pair NeMo-RL tests for nvidia/Qwen3-235B-A22B-Eagle3 with target Qwen/Qwen3-235B-A22B. Baseline W&B URL is https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/bg1d6wyh. No acceptance or throughput result exists yet for the base exact-pair jobs.
+status=3115167 baseline FAILED after Ray workers connected but before rollout when the Ray driver enroot step exited nonzero; SpecDec K3 3115168 and SpecDec K1 3115169 both FAILED before rollout when Ray worker sruns died during startup. These exact-base NeMo-RL jobs produced no acceptance or throughput result and should not be used for performance conclusions. Baseline W&B URL is https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/bg1d6wyh.

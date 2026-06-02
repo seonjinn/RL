@@ -1,23 +1,18 @@
 # vLLM standalone SpecDec timing breakdown
-submitted_at=2026-06-02 11:23:49 PDT
-job_id=3115808
-job_name=vllm-baseline-qwen3-235b-a22b-k0
+submitted_at=2026-06-02 11:41:59 PDT
+job_id=3116058
+job_name=vllm-baseline-qwen235b_a22b-k0
 enable_specdec=false
 model=Qwen/Qwen3-235B-A22B
 draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
 num_speculative_tokens=0
 enforce_eager=false
 disable_vllm_profiler=true
-scope=vLLM standalone LLM.generate boundary sweep, not NeMo-RL E2E
-purpose=Find batch-size boundary where Qwen3-235B baseline throughput changes; compare against matching PublicHF Eagle3 K=1 SpecDec job 3115807.
-batch_sizes=1 2 4 8 16 32
-isl=1000
-osl=512
-tp=4
-pp=1
+scope=vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E
 figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
-logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_20260602
-output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_20260602/breakdown.json
-profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_20260602/profile
-speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_20260602/speculative_config.json
-status=3115808 RUNNING at 2026-06-02 11:24 PDT.
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_clean_20260602
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_clean_20260602/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_clean_20260602/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_baseline_boundary_bs1-32_cuda_graph_clean_20260602/speculative_config.json
+previous_jobs=3115808 FAILED because profiler-disabled sweep still called llm.start_profile(); 3116012 CANCELLED because it had profiler-off but instrumentation hook still enabled, which could distort wall-clock performance.
+status=3116058 RUNNING at 2026-06-02 11:43 PDT. This is the clean CUDA-graph, profiler-off, instrumentation-off wall-clock boundary sweep.

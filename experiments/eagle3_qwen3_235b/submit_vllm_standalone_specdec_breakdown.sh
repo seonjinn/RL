@@ -38,14 +38,21 @@ case "${ENFORCE_EAGER}" in
   1|true|TRUE|yes|YES|y|Y|on|ON) EAGER_ARG="--enforce-eager" ;;
 esac
 PROFILER_ARG=""
+BREAKDOWN_INSTRUMENTATION=1
+BENCHMARK_SCOPE="vLLM standalone LLM.generate torch-profiler breakdown, not NeMo-RL E2E"
 case "${DISABLE_VLLM_PROFILER}" in
-  1|true|TRUE|yes|YES|y|Y|on|ON) PROFILER_ARG="--disable-vllm-profiler" ;;
+  1|true|TRUE|yes|YES|y|Y|on|ON)
+    PROFILER_ARG="--disable-vllm-profiler"
+    BREAKDOWN_INSTRUMENTATION=0
+    BENCHMARK_SCOPE="vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E"
+    ;;
 esac
 
 SPECULATIVE_ARG=""
 SPECULATIVE_CONFIG=""
+ENABLE_SPECDEC_NORMALIZED=true
 case "${ENABLE_SPECDEC}" in
-  0|false|FALSE|no|NO|n|N|off|OFF) ;;
+  0|false|FALSE|False|no|NO|No|n|N|off|OFF|Off) ENABLE_SPECDEC_NORMALIZED=false ;;
   *)
     SPECULATIVE_ARG="--speculative-config '@${LOGS_DIR}/speculative_config.json'"
     SPECULATIVE_CONFIG="$(python3 - <<PY
@@ -68,7 +75,7 @@ scp -q "$SCRIPT_DIR/specdec_breakdown_instrumentation/sitecustomize.py" "$REMOTE
 remote_cmd=$(cat <<EOF
 cd '$REMOTE_REPO'
 mkdir -p vllm-runs '$LOGS_DIR' '$JOB_CACHE_DIR'
-if [[ '${ENABLE_SPECDEC}' =~ ^(1|true|TRUE|yes|YES|y|Y|on|ON)$ ]]; then
+if [[ '${ENABLE_SPECDEC_NORMALIZED}' == 'true' ]]; then
 cat > '${LOGS_DIR}/speculative_config.json' <<'SPECJSON'
 ${SPECULATIVE_CONFIG}
 SPECJSON
@@ -95,7 +102,7 @@ export VLLM_DISABLE_COMPILE_CACHE=1
 export VLLM_ALLOW_INSECURE_SERIALIZATION=1
 export VLLM_USE_FLASHINFER_SAMPLER=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export SPECDEC_BREAKDOWN_INSTRUMENTATION=1
+export SPECDEC_BREAKDOWN_INSTRUMENTATION=${BREAKDOWN_INSTRUMENTATION}
 export SPECDEC_BREAKDOWN_WRAP_TARGET=1
 
 srun --nodes=1 --ntasks=1 \\
@@ -136,7 +143,7 @@ job_id="$(ssh "$REMOTE_HOST" "$remote_cmd" | tail -n 1)"
   echo "num_speculative_tokens=${NUM_SPECULATIVE_TOKENS}"
   echo "enforce_eager=${ENFORCE_EAGER}"
   echo "disable_vllm_profiler=${DISABLE_VLLM_PROFILER}"
-  echo "scope=vLLM standalone LLM.generate torch-profiler breakdown, not NeMo-RL E2E"
+  echo "scope=${BENCHMARK_SCOPE}"
   echo "figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads"
   echo "logs_dir=${LOGS_DIR}"
   echo "output_json=${LOGS_DIR}/breakdown.json"

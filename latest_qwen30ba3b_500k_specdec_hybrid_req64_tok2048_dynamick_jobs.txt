@@ -39,4 +39,4 @@ patches=megatron_policy_worker signature-based Megatron-Bridge mp_group compatib
 wandb_name=Qwen30BA3B_500K_Eagle3_DynK_Req64Tok2048_Patched_20step_20260602
 stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3115813.out
 previous_failed_job=3115653 failed before driver launch because Slurm could not create the driver step: Memory required by task is not available.
-status=3115813 RUNNING at 2026-06-02 11:24 PDT. No gate, acceptance, step-time, generation-time, E2E throughput, or generation throughput metrics have been emitted yet.
+status=3115813 RUNNING at 2026-06-02 11:31 PDT. Ray workers reached 16/16, the driver launched, connected to Ray, and emitted the Speculative decoding warning. The job is still initializing; no gate, acceptance, step-time, generation-time, E2E throughput, or generation throughput metrics have been emitted yet. This run started before the driver srun CPU default was raised from 1 to 16, so use it primarily for functional regression; final E2E performance should use a rerun with the updated launcher.
