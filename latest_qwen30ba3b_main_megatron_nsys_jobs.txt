@@ -1,0 +1,33 @@
+# Qwen3-30B-A3B main Megatron policy nsys profiling
+# Created: 2026-06-02
+# Requested config: examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+# Requested profile: Megatron policy worker, NRL_NSYS_PROFILE_STEP_RANGE=2:5, max_steps=10
+
+main checkout:
+  path=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft
+  branch=main
+  commit=333864d refactor: rename auto-research skill to nemo-rl-auto-research (#2661)
+
+failed run:
+  job_id=3118576
+  job_name=qwen30ba3b-main-megpolicy-nsys-s2to5-ms10
+  account=coreai_dlalgo_nemorl
+  nodes=4
+  gpus_per_node=4
+  max_steps=10
+  nsys_profile_step_range=2:5
+  nsys_worker_patterns=megatron_policy_worker
+  status=FAILED before GRPO started
+  log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/logs/qwen30ba3b_grpo_nsys_main_megatron_step2to5_max10/3118576-logs/ray-driver.log
+  failure_summary=causal-conv1d source build hit CUDA mismatch: detected nvcc CUDA 12.9, but uv installed PyTorch CUDA 13.0 for main's Python 3.13/CUDA13 dependency stack.
+  nsys_files=none; profiling never reached step 2
+
+remediation:
+  nightly_download_job=3118930
+  job_name=nemo-rl-nightly-main-20260602
+  target_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft
+  expected_container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/nemo_rl_nightly_20260602.sqsh
+  reason=main pyproject requires Python >=3.13.13 and CUDA13 packages; existing 20260502 sqsh exposes CUDA 12.9 build toolchain.
+
+next_action:
+  Wait for job 3118930 to complete. Verify the new sqsh has CUDA 13-compatible nvcc/toolchain. Then resubmit the same nsys run from the main checkout with NRL_FORCE_REBUILD_VENVS=true.
