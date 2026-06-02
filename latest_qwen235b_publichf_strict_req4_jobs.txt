@@ -40,6 +40,10 @@ v9b_retry_purpose=Retry 3103018 after third-party workspace restoration, same st
 v9_patch_validation=PASS for source and target /lustre/.../SpecDec-RL; markers include NRL_SPECDEC_BATCH_GATE_PATCH_V9 and NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1
 v9b_retry_state=FAILED before rollout metrics at 2026-06-02 00:26 PDT; reached target/drafter loading and Megatron checkpoint save, then MegatronPolicyWorker failed with KeyError: 'moe_enable_deepep'
 strict_req4_specdec_v9c_retry_job=3105964
-v9c_retry_state=RUNNING at 2026-06-02 01:11 PDT on coreai_dlalgo_llm for 00:28:22; no dependency chain; submitted with explicit policy.megatron_cfg.moe_enable_deepep=false; driver fresh uv environment has built packages and has no rollout metrics yet
+v9c_retry_state=FAILED at 2026-06-02 01:34 PDT after 00:51:14 elapsed; ExitCode 1:0; no completed rollout metrics. Failure class: Hydra/OmegaConf structured-config parse rejected policy.megatron_cfg.moe_enable_deepep=false because the key is not in struct; launcher must append these extra Megatron cfg keys with +/++ syntax.
 v9c_slurm_stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/slurm-3105964.out
 v9c_ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/3105964-logs/ray-driver.log
+strict_req4_specdec_v9d_retry_job=3106959
+v9d_retry_state=RUNNING at 2026-06-02 01:45 PDT on coreai_dlalgo_llm for 00:06:55; no dependency chain; submitted from /lustre/.../SpecDec-RL with ++policy.megatron_cfg.moe_enable_deepep=false, ++policy.megatron_cfg.moe_token_dispatcher_type=alltoall, and ++policy.megatron_cfg.moe_shared_expert_overlap=false; no rollout metrics yet
+v9d_slurm_stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3106959.out
+v9d_ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3106959-logs/ray-driver.log
