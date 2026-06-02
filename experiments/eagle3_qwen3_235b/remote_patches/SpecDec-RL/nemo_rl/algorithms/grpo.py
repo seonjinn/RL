@@ -1164,6 +1164,8 @@ def _log_specdec_vllm_metrics(
             reporting = int(bucket.get("num_reporting_objects", 0))
             if checked <= 0 and reporting <= 0:
                 continue
+            enabled_req_avg = float(bucket.get("enabled_request_avg", 0.0))
+            disabled_req_avg = float(bucket.get("disabled_request_avg", 0.0))
             common = (
                 "[SpecDec early gate] "
                 f"step={step} group={group_name} "
@@ -1176,11 +1178,25 @@ def _log_specdec_vllm_metrics(
                 detail = (
                     f"last_requests={bucket.get('last_num_requests', 'n/a')} "
                     f"last_tokens={bucket.get('last_num_tokens', 'n/a')} "
-                    f"last_disabled={bucket.get('last_disabled', 'n/a')}"
+                    f"last_disabled={bucket.get('last_disabled', 'n/a')} "
+                    f"enabled_req_avg={enabled_req_avg:.2f} "
+                    f"disabled_req_avg={disabled_req_avg:.2f} "
+                    f"last_enabled_requests={bucket.get('last_enabled_num_requests', 'n/a')} "
+                    f"last_disabled_requests={bucket.get('last_disabled_num_requests', 'n/a')}"
                 )
             else:
+                enabled_active_req_avg = float(
+                    bucket.get("enabled_active_request_avg", 0.0)
+                )
+                disabled_active_req_avg = float(
+                    bucket.get("disabled_active_request_avg", 0.0)
+                )
                 detail = (
                     f"last_active_requests={bucket.get('last_active_requests', 'n/a')} "
+                    f"enabled_active_req_avg={enabled_active_req_avg:.2f} "
+                    f"disabled_active_req_avg={disabled_active_req_avg:.2f} "
+                    f"last_enabled_active_requests={bucket.get('last_enabled_active_requests', 'n/a')} "
+                    f"last_disabled_active_requests={bucket.get('last_disabled_active_requests', 'n/a')} "
                     f"effective_k={bucket.get('effective_lookahead_tokens', 'n/a')} "
                     f"dynamic_k={bucket.get('dynamic_last_selected_tokens', 'n/a')} "
                     f"stored_k={bucket.get('dynamic_last_stored_tokens', 'n/a')}"

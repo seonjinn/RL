@@ -271,6 +271,12 @@ class BaseVllmGenerationWorker:
                 "dynamic_small_selected_token_count",
                 "dynamic_medium_selected_token_count",
                 "dynamic_large_selected_token_count",
+                "enabled_request_sum",
+                "disabled_request_sum",
+                "enabled_token_sum",
+                "disabled_token_sum",
+                "enabled_active_request_sum",
+                "disabled_active_request_sum",
             ) + tuple(
                 f"dynamic_pos{pos_idx}_selected_count" for pos_idx in range(1, 9)
             )
@@ -285,6 +291,18 @@ class BaseVllmGenerationWorker:
                 diff_group["enabled_ratio"] = (
                     float(diff_group.get("enabled", 0)) / checked
                 )
+            for prefix, count_key in (
+                ("enabled_request", "enabled"),
+                ("disabled_request", "disabled"),
+                ("enabled_token", "enabled"),
+                ("disabled_token", "disabled"),
+                ("enabled_active_request", "enabled"),
+                ("disabled_active_request", "disabled"),
+            ):
+                total = float(diff_group.get(f"{prefix}_sum", 0.0))
+                count = int(diff_group.get(count_key, 0))
+                if count > 0:
+                    diff_group[f"{prefix}_avg"] = total / count
         return diff
 
     def _iter_vllm_gate_metric_objects(self):
@@ -332,6 +350,10 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_batch_gate_checked_count": "checked",
             "_nrl_specdec_batch_gate_enabled_count": "enabled",
             "_nrl_specdec_batch_gate_disabled_count": "disabled",
+            "_nrl_specdec_batch_gate_enabled_request_sum": "enabled_request_sum",
+            "_nrl_specdec_batch_gate_disabled_request_sum": "disabled_request_sum",
+            "_nrl_specdec_batch_gate_enabled_token_sum": "enabled_token_sum",
+            "_nrl_specdec_batch_gate_disabled_token_sum": "disabled_token_sum",
         }
         runner_values = {
             "_nrl_specdec_batch_gate_threshold": "request_threshold",
@@ -339,6 +361,10 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_batch_gate_last_num_requests": "last_num_requests",
             "_nrl_specdec_batch_gate_last_num_tokens": "last_num_tokens",
             "_nrl_specdec_batch_gate_last_disabled": "last_disabled",
+            "_nrl_specdec_batch_gate_last_enabled_num_requests": "last_enabled_num_requests",
+            "_nrl_specdec_batch_gate_last_disabled_num_requests": "last_disabled_num_requests",
+            "_nrl_specdec_batch_gate_last_enabled_num_tokens": "last_enabled_num_tokens",
+            "_nrl_specdec_batch_gate_last_disabled_num_tokens": "last_disabled_num_tokens",
             "_nrl_specdec_batch_gate_last_scheduler_disabled": "last_scheduler_disabled",
             "_nrl_specdec_batch_gate_last_scheduler_all_disabled": "last_scheduler_all_disabled",
             "_nrl_specdec_batch_gate_last_scheduled_token_count": "last_scheduled_token_count",
@@ -355,6 +381,12 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_gate_checked_count": "checked",
             "_nrl_specdec_scheduler_gate_enabled_count": "enabled",
             "_nrl_specdec_scheduler_gate_disabled_count": "disabled",
+            "_nrl_specdec_scheduler_gate_enabled_request_sum": "enabled_request_sum",
+            "_nrl_specdec_scheduler_gate_disabled_request_sum": "disabled_request_sum",
+            "_nrl_specdec_scheduler_gate_enabled_active_request_sum": "enabled_active_request_sum",
+            "_nrl_specdec_scheduler_gate_disabled_active_request_sum": "disabled_active_request_sum",
+            "_nrl_specdec_scheduler_gate_enabled_token_sum": "enabled_token_sum",
+            "_nrl_specdec_scheduler_gate_disabled_token_sum": "disabled_token_sum",
             "_nrl_specdec_scheduler_dynamic_small_selected_count": "dynamic_small_selected_count",
             "_nrl_specdec_scheduler_dynamic_medium_selected_count": "dynamic_medium_selected_count",
             "_nrl_specdec_scheduler_dynamic_large_selected_count": "dynamic_large_selected_count",
@@ -377,6 +409,12 @@ class BaseVllmGenerationWorker:
             "_nrl_specdec_scheduler_gate_last_active_requests": "last_active_requests",
             "_nrl_specdec_scheduler_gate_last_num_tokens": "last_num_tokens",
             "_nrl_specdec_scheduler_gate_last_disabled": "last_disabled",
+            "_nrl_specdec_scheduler_gate_last_enabled_num_requests": "last_enabled_num_requests",
+            "_nrl_specdec_scheduler_gate_last_disabled_num_requests": "last_disabled_num_requests",
+            "_nrl_specdec_scheduler_gate_last_enabled_active_requests": "last_enabled_active_requests",
+            "_nrl_specdec_scheduler_gate_last_disabled_active_requests": "last_disabled_active_requests",
+            "_nrl_specdec_scheduler_gate_last_enabled_num_tokens": "last_enabled_num_tokens",
+            "_nrl_specdec_scheduler_gate_last_disabled_num_tokens": "last_disabled_num_tokens",
             "_nrl_specdec_scheduler_gate_effective_lookahead_tokens": "effective_lookahead_tokens",
             "_nrl_specdec_scheduler_dynamic_draft_tokens_enabled": "dynamic_draft_tokens_enabled",
             "_nrl_specdec_scheduler_dynamic_last_selected_tokens": "dynamic_last_selected_tokens",
@@ -1519,10 +1557,26 @@ class BaseVllmGenerationWorker:
                             "                self._nrl_specdec_batch_gate_disabled_count = getattr(\n"
                             "                    self, \"_nrl_specdec_batch_gate_disabled_count\", 0\n"
                             "                ) + 1\n"
+                            "                self._nrl_specdec_batch_gate_disabled_request_sum = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_disabled_request_sum\", 0\n"
+                            "                ) + specdec_batch_gate_num_requests\n"
+                            "                self._nrl_specdec_batch_gate_disabled_token_sum = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_disabled_token_sum\", 0\n"
+                            "                ) + specdec_batch_gate_num_tokens\n"
+                            "                self._nrl_specdec_batch_gate_last_disabled_num_requests = specdec_batch_gate_num_requests\n"
+                            "                self._nrl_specdec_batch_gate_last_disabled_num_tokens = specdec_batch_gate_num_tokens\n"
                             "            else:\n"
                             "                self._nrl_specdec_batch_gate_enabled_count = getattr(\n"
                             "                    self, \"_nrl_specdec_batch_gate_enabled_count\", 0\n"
                             "                ) + 1\n"
+                            "                self._nrl_specdec_batch_gate_enabled_request_sum = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_enabled_request_sum\", 0\n"
+                            "                ) + specdec_batch_gate_num_requests\n"
+                            "                self._nrl_specdec_batch_gate_enabled_token_sum = getattr(\n"
+                            "                    self, \"_nrl_specdec_batch_gate_enabled_token_sum\", 0\n"
+                            "                ) + specdec_batch_gate_num_tokens\n"
+                            "                self._nrl_specdec_batch_gate_last_enabled_num_requests = specdec_batch_gate_num_requests\n"
+                            "                self._nrl_specdec_batch_gate_last_enabled_num_tokens = specdec_batch_gate_num_tokens\n"
                             "            specdec_batch_gate_log_interval = getattr(\n"
                             "                self, \"_nrl_specdec_batch_gate_log_interval\", None\n"
                             "            )\n"
@@ -2852,10 +2906,34 @@ class BaseVllmGenerationWorker:
                     "                self._nrl_specdec_scheduler_gate_disabled_count = getattr(\n"
                     "                    self, \"_nrl_specdec_scheduler_gate_disabled_count\", 0\n"
                     "                ) + 1\n"
+                    "                self._nrl_specdec_scheduler_gate_disabled_request_sum = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_disabled_request_sum\", 0\n"
+                    "                ) + num_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_disabled_active_request_sum = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_disabled_active_request_sum\", 0\n"
+                    "                ) + active_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_disabled_token_sum = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_disabled_token_sum\", 0\n"
+                    "                ) + num_tokens\n"
+                    "                self._nrl_specdec_scheduler_gate_last_disabled_num_requests = num_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_last_disabled_active_requests = active_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_last_disabled_num_tokens = num_tokens\n"
                     "            else:\n"
                     "                self._nrl_specdec_scheduler_gate_enabled_count = getattr(\n"
                     "                    self, \"_nrl_specdec_scheduler_gate_enabled_count\", 0\n"
                     "                ) + 1\n"
+                    "                self._nrl_specdec_scheduler_gate_enabled_request_sum = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_enabled_request_sum\", 0\n"
+                    "                ) + num_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_enabled_active_request_sum = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_enabled_active_request_sum\", 0\n"
+                    "                ) + active_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_enabled_token_sum = getattr(\n"
+                    "                    self, \"_nrl_specdec_scheduler_gate_enabled_token_sum\", 0\n"
+                    "                ) + num_tokens\n"
+                    "                self._nrl_specdec_scheduler_gate_last_enabled_num_requests = num_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_last_enabled_active_requests = active_requests\n"
+                    "                self._nrl_specdec_scheduler_gate_last_enabled_num_tokens = num_tokens\n"
                     "            if adaptive_mode not in {\"\", \"0\", \"off\", \"false\", \"no\"}:\n"
                     "                adaptive_window_checked = getattr(\n"
                     "                    self, \"_nrl_specdec_scheduler_adaptive_window_checked\", 0\n"
