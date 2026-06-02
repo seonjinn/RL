@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Speculative Decoding Background and Current Observations</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --text: #1d2430;
+      --muted: #5c6675;
+      --line: #d9dee7;
+      --blue: #2f6fdd;
+      --teal: #138b7e;
+      --green: #2b8a3e;
+      --red: #c0392b;
+      --orange: #c77700;
+      --purple: #7357d8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121418;
+        --panel: #1c2027;
+        --text: #e9edf3;
+        --muted: #a7b0bf;
+        --line: #333946;
+        --blue: #7aa7ff;
+        --teal: #4fd2bf;
+        --green: #69c779;
+        --red: #ff8178;
+        --orange: #ffbd5f;
+        --purple: #aa99ff;
+      }
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.2;
+    }
+    h1 {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 22px;
+      margin-bottom: 14px;
+    }
+    h3 {
+      font-size: 16px;
+      margin: 18px 0 8px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    code {
+      background: color-mix(in srgb, var(--line), transparent 50%);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 22px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .full {
+      grid-column: 1 / -1;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .takeaways {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 22px 0;
+    }
+    .takeaway {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .takeaway strong {
+      display: block;
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .chart {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr) 74px;
+      gap: 10px;
+      align-items: center;
+      font-size: 13px;
+    }
+    .bar-track {
+      height: 18px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--line), transparent 55%);
+    }
+    .bar {
+      height: 100%;
+      min-width: 2px;
+      background: var(--blue);
+    }
+    .bar.teal { background: var(--teal); }
+    .bar.green { background: var(--green); }
+    .bar.red { background: var(--red); }
+    .bar.orange { background: var(--orange); }
+    .bar.purple { background: var(--purple); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .key {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      background: var(--blue);
+    }
+    .swatch.teal { background: var(--teal); }
+    .swatch.green { background: var(--green); }
+    .swatch.red { background: var(--red); }
+    .swatch.orange { background: var(--orange); }
+    .swatch.purple { background: var(--purple); }
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      overflow: visible;
+    }
+    .axis, .gridline {
+      stroke: var(--line);
+      stroke-width: 1;
+    }
+    .axis-label, .point-label {
+      fill: var(--muted);
+      font-size: 11px;
+    }
+    .line-blue { stroke: var(--blue); fill: none; stroke-width: 2.5; }
+    .line-teal { stroke: var(--teal); fill: none; stroke-width: 2.5; }
+    .line-purple { stroke: var(--purple); fill: none; stroke-width: 2.5; }
+    .dot-blue { fill: var(--blue); }
+    .dot-teal { fill: var(--teal); }
+    .dot-purple { fill: var(--purple); }
+    @media (max-width: 860px) {
+      .grid, .takeaways {
+        grid-template-columns: 1fr;
+      }
+      .bar-row {
+        grid-template-columns: 96px minmax(0, 1fr) 62px;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Speculative Decoding: Background, Speedup Drivers, and Current Results</h1>
+  <p class="subtitle">Draft for Google Docs/team sharing. Updated June 2, 2026. Primary reference: arXiv 2601.11580v2 execution-time breakdown framing.</p>
+
+  <section class="takeaways">
+    <div class="takeaway">
+      <strong>1.366x</strong>
+      <span class="muted">Best confirmed Qwen3-30B-A3B NeMo-RL generation speedup, K=1 token-pressure, 57.40% acceptance.</span>
+    </div>
+    <div class="takeaway">
+      <strong>0.986x</strong>
+      <span class="muted">Qwen3-235B PublicHF always-on generation speedup despite 65.71% acceptance.</span>
+    </div>
+    <div class="takeaway">
+      <strong>2.145x</strong>
+      <span class="muted">Qwen3-8B vLLM standalone K=3 speedup at batch size 32.</span>
+    </div>
+    <div class="takeaway">
+      <strong>0.0137%</strong>
+      <span class="muted">Scheduler enabled ratio for 30B request<=8 long-tail gate; too conservative for large average speedup.</span>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card full">
+      <h2>Core Message</h2>
+      <p>Acceptance rate is necessary, but it is not sufficient. SpecDec helps only when accepted draft tokens save more target-model work than the added drafter, verification, rejection sampling, scheduler, cache, and CUDA Graph overhead. This is why the Figure 4-style breakdown in arXiv 2601.11580v2 is the right lens: separate drafting, verification, rejection sampling, and other vLLM overheads before claiming a speedup.</p>
+    </div>
+
+    <div class="card">
+      <h2>Qwen3-8B vLLM Standalone Speedup</h2>
+      <p class="muted">Static-batch generation only. Not NeMo-RL E2E.</p>
+      <div class="legend">
+        <span class="key"><span class="swatch"></span>K=1</span>
+        <span class="key"><span class="swatch teal"></span>K=3</span>
+      </div>
+      <div class="chart">
+        <div class="bar-row"><span>bs=1 K=1</span><div class="bar-track"><div class="bar" style="width:45.8%"></div></div><span>0.982x</span></div>
+        <div class="bar-row"><span>bs=1 K=3</span><div class="bar-track"><div class="bar teal" style="width:82.4%"></div></div><span>1.768x</span></div>
+        <div class="bar-row"><span>bs=2 K=1</span><div class="bar-track"><div class="bar" style="width:31.5%"></div></div><span>0.676x</span></div>
+        <div class="bar-row"><span>bs=2 K=3</span><div class="bar-track"><div class="bar teal" style="width:42.2%"></div></div><span>0.906x</span></div>
+        <div class="bar-row"><span>bs=4 K=1</span><div class="bar-track"><div class="bar" style="width:52.3%"></div></div><span>1.122x</span></div>
+        <div class="bar-row"><span>bs=4 K=3</span><div class="bar-track"><div class="bar teal" style="width:93.5%"></div></div><span>2.006x</span></div>
+        <div class="bar-row"><span>bs=8 K=1</span><div class="bar-track"><div class="bar" style="width:49.5%"></div></div><span>1.062x</span></div>
+        <div class="bar-row"><span>bs=8 K=3</span><div class="bar-track"><div class="bar teal" style="width:87.7%"></div></div><span>1.882x</span></div>
+        <div class="bar-row"><span>bs=16 K=1</span><div class="bar-track"><div class="bar" style="width:54.5%"></div></div><span>1.169x</span></div>
+        <div class="bar-row"><span>bs=16 K=3</span><div class="bar-track"><div class="bar teal" style="width:92.5%"></div></div><span>1.984x</span></div>
+        <div class="bar-row"><span>bs=32 K=1</span><div class="bar-track"><div class="bar" style="width:62.1%"></div></div><span>1.331x</span></div>
+        <div class="bar-row"><span>bs=32 K=3</span><div class="bar-track"><div class="bar teal" style="width:100%"></div></div><span>2.145x</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Qwen3-235B vLLM Standalone K=1</h2>
+      <p class="muted">Generation only. CUDA Graph on, custom all-reduce disabled.</p>
+      <div class="chart">
+        <div class="bar-row"><span>bs=1</span><div class="bar-track"><div class="bar green" style="width:93.7%"></div></div><span>1.194x</span></div>
+        <div class="bar-row"><span>bs=2</span><div class="bar-track"><div class="bar green" style="width:94.9%"></div></div><span>1.210x</span></div>
+        <div class="bar-row"><span>bs=4</span><div class="bar-track"><div class="bar green" style="width:88.2%"></div></div><span>1.125x</span></div>
+        <div class="bar-row"><span>bs=8</span><div class="bar-track"><div class="bar green" style="width:92.6%"></div></div><span>1.181x</span></div>
+        <div class="bar-row"><span>bs=16</span><div class="bar-track"><div class="bar green" style="width:95.7%"></div></div><span>1.220x</span></div>
+        <div class="bar-row"><span>bs=32</span><div class="bar-track"><div class="bar green" style="width:100%"></div></div><span>1.275x</span></div>
+      </div>
+    </div>
+
+    <div class="card full">
+      <h2>NeMo-RL Generation Speedup Summary</h2>
+      <p class="muted">Full GRPO or rollout measurements. These are not equivalent to standalone vLLM throughput.</p>
+      <div class="chart">
+        <div class="bar-row"><span>30B baseline</span><div class="bar-track"><div class="bar" style="width:73.2%"></div></div><span>1.000x</span></div>
+        <div class="bar-row"><span>30B best K=1</span><div class="bar-track"><div class="bar green" style="width:100%"></div></div><span>1.366x</span></div>
+        <div class="bar-row"><span>30B req<=8</span><div class="bar-track"><div class="bar orange" style="width:76.9%"></div></div><span>1.051x</span></div>
+        <div class="bar-row"><span>30B alltoall</span><div class="bar-track"><div class="bar teal" style="width:81.8%"></div></div><span>1.117x</span></div>
+        <div class="bar-row"><span>235B always-on</span><div class="bar-track"><div class="bar red" style="width:72.2%"></div></div><span>0.986x</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Generation speedup</th><th>Acceptance</th><th>Interpretation</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>30B best K=1 token-pressure, job 3060379</td><td>1.366x</td><td>57.40%</td><td>Best confirmed NeMo-RL generation result.</td></tr>
+          <tr><td>30B request<=8 gate, job 3116841</td><td>1.051x</td><td>54.67%</td><td>Gate works, but enabled ratio is too small.</td></tr>
+          <tr><td>30B alltoall full-shape</td><td>1.117x</td><td>57.28%</td><td>Generation improves, E2E is flat because non-generation work dominates.</td></tr>
+          <tr><td>235B PublicHF always-on, job 3084952</td><td>0.986x</td><td>65.71%</td><td>High acceptance but wrong load regime; always-on SpecDec loses.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>Acceptance Rate Projection</h2>
+      <p>K=1 ideal upper bound is approximately <code>1 + acceptance</code>. Our best 30B K=1 run gives an overhead efficiency of about 0.64, so a practical same-regime estimate is <code>1 + 0.64 * acceptance</code>.</p>
+      <div class="legend">
+        <span class="key"><span class="swatch"></span>Ideal K=1</span>
+        <span class="key"><span class="swatch teal"></span>30B-calibrated K=1</span>
+        <span class="key"><span class="swatch purple"></span>Ideal K=3</span>
+      </div>
+      <svg viewBox="0 0 900 330" role="img" aria-label="Acceptance rate to projected speedup chart">
+        <line class="axis" x1="60" y1="280" x2="850" y2="280"></line>
+        <line class="axis" x1="60" y1="40" x2="60" y2="280"></line>
+        <line class="gridline" x1="60" y1="240" x2="850" y2="240"></line>
+        <line class="gridline" x1="60" y1="200" x2="850" y2="200"></line>
+        <line class="gridline" x1="60" y1="160" x2="850" y2="160"></line>
+        <line class="gridline" x1="60" y1="120" x2="850" y2="120"></line>
+        <line class="gridline" x1="60" y1="80" x2="850" y2="80"></line>
+        <text class="axis-label" x="22" y="284">1.0x</text>
+        <text class="axis-label" x="22" y="244">1.5x</text>
+        <text class="axis-label" x="22" y="204">2.0x</text>
+        <text class="axis-label" x="22" y="164">2.5x</text>
+        <text class="axis-label" x="22" y="124">3.0x</text>
+        <text class="axis-label" x="22" y="84">3.5x</text>
+        <text class="axis-label" x="70" y="305">30%</text>
+        <text class="axis-label" x="195" y="305">40%</text>
+        <text class="axis-label" x="320" y="305">50%</text>
+        <text class="axis-label" x="445" y="305">60%</text>
+        <text class="axis-label" x="570" y="305">70%</text>
+        <text class="axis-label" x="695" y="305">80%</text>
+        <text class="axis-label" x="820" y="305">90%</text>
+        <polyline class="line-blue" points="80,256 205,248 330,240 455,232 580,224 705,216 830,208"></polyline>
+        <polyline class="line-teal" points="80,264.7 205,259.6 330,254.5 455,249.4 580,244.3 705,239.2 830,234.1"></polyline>
+        <polyline class="line-purple" points="80,246.6 205,230.1 330,210.0 455,193.9 580,157.4 705,121.0 830,84.9"></polyline>
+        <circle class="dot-blue" cx="330" cy="240" r="4"></circle>
+        <circle class="dot-teal" cx="401" cy="251.6" r="5"></circle>
+        <text class="point-label" x="410" y="248">30B observed: 57.40%, 1.366x</text>
+        <circle class="dot-purple" cx="393" cy="198.5" r="4"></circle>
+        <text class="point-label" x="402" y="195">Ideal K=3 crosses 2x near 55%</text>
+      </svg>
+      <table>
+        <thead>
+          <tr><th>Acceptance</th><th>Ideal K=1</th><th>30B-calibrated K=1</th><th>Ideal K=2</th><th>Ideal K=3</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>40%</td><td>1.400x</td><td>1.255x</td><td>1.560x</td><td>1.624x</td></tr>
+          <tr><td>50%</td><td>1.500x</td><td>1.319x</td><td>1.750x</td><td>1.875x</td></tr>
+          <tr><td>57.40%</td><td>1.574x</td><td>1.366x</td><td>1.904x</td><td>2.093x</td></tr>
+          <tr><td>60%</td><td>1.600x</td><td>1.383x</td><td>1.960x</td><td>2.176x</td></tr>
+          <tr><td>70%</td><td>1.700x</td><td>1.447x</td><td>2.190x</td><td>2.533x</td></tr>
+          <tr><td>80%</td><td>1.800x</td><td>1.511x</td><td>2.440x</td><td>2.952x</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">The K=2/K=3 columns are ideal upper bounds with uniform per-position acceptance. Real K=3 requires high acceptance on later positions; aggregate acceptance alone can be misleading.</p>
+    </div>
+
+    <div class="card full">
+      <h2>Recommended Next Actions</h2>
+      <ol>
+        <li>Produce a Figure 4-style vLLM timing breakdown: drafting, verification, rejection sampling, and other overheads.</li>
+        <li>Keep CUDA Graph enabled for performance runs.</li>
+        <li>Use load-aware gating instead of always-on SpecDec: active requests, scheduled tokens, and per-position acceptance should all matter.</li>
+        <li>Prefer K=1/K=2 until later-position acceptance supports K=3.</li>
+        <li>Report generation speedup and E2E speedup separately for every NeMo-RL run.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+</body>
+</html>
