@@ -39,3 +39,25 @@ VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=0
 VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
 
 status=3115167 baseline FAILED after Ray workers connected but before rollout when the Ray driver enroot step exited nonzero; SpecDec K3 3115168 and SpecDec K1 3115169 both FAILED before rollout when Ray worker sruns died during startup. These exact-base NeMo-RL jobs produced no acceptance or throughput result and should not be used for performance conclusions. Baseline W&B URL is https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/bg1d6wyh.
+
+# submitted Tue Jun  2 12:29 PDT 2026 after Qwen3-235B standalone boundary showed K=1 speedup through bs=32
+specdec_k1_req32_job_id=3116849
+specdec_k1_req32_job_name=qwen235b-publichf-a22b-k1-req32-20step-N32xG4
+specdec_k1_req32_target_model=Qwen/Qwen3-235B-A22B
+specdec_k1_req32_draft_model=nvidia/Qwen3-235B-A22B-Eagle3
+specdec_k1_req32_draft_model_provenance=public_hf_qwen235b_a22b_eagle3
+specdec_k1_req32_account=coreai_dlalgo_llm
+specdec_k1_req32_num_nodes=32
+specdec_k1_req32_gpus_per_node=4
+specdec_k1_req32_num_prompts_per_step=16
+specdec_k1_req32_num_generations_per_prompt=32
+specdec_k1_req32_train_global_batch_size=512
+specdec_k1_req32_max_steps=20
+specdec_k1_req32_num_speculative_tokens=1
+specdec_k1_req32_gate_request_threshold=32
+specdec_k1_req32_gate_token_threshold=0
+specdec_k1_req32_NRL_FORCE_REBUILD_VENVS=true
+specdec_k1_req32_driver_srun_cpus_per_task=8
+specdec_k1_req32_driver_srun_mem=128G
+specdec_k1_req32_build_parallelism=MAX_JOBS=4,CMAKE_BUILD_PARALLEL_LEVEL=4,NVTE_BUILD_MAX_JOBS=4,NINJAFLAGS=-j4,MAKEFLAGS=-j4
+specdec_k1_req32_status=RUNNING at 2026-06-02 12:30 PDT; no rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput metric yet.

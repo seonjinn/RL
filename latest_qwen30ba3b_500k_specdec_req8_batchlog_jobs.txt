@@ -1,7 +1,11 @@
-timestamp=2026-06-02 12:11:42 PDT
-job_id=3116714
-status=RUNNING at 2026-06-02 12:21 PDT on nvl72131-T[09,12,14,16]. Ray driver is alive and forced venv rebuild/dependency setup is still in progress. 308 packages installed; native extension builds for flash-attn, grouped-gemm, causal-conv1d, mamba-ssm, and transformer-engine-torch are still running. No generation step or new enabled_req_avg/active request gate line has emitted yet.
+timestamp=2026-06-02 12:30:47 PDT
 purpose=Qwen3-30B-A3B NeMo-RL long-tail SpecDec K=1 with request<=8 gate and driver-visible enabled/disabled batch-size metrics.
+
+failed_first_attempt_job_id=3116714
+failed_first_attempt_status=FAILED before generation after 00:11:01. Root cause was not SpecDec logic; the Ray driver step used --mem=32G and hit native extension build OOM under NRL_FORCE_REBUILD_VENVS=true. ray-driver.log shows repeated "c++: fatal error: Killed signal terminated program cc1plus", "RuntimeError: Error compiling objects for extension", and slurmstepd reported 16 oom_kill events in StepId=3116714.30.
+
+retry_job_id=3116841
+retry_status=RUNNING at 2026-06-02 12:30 PDT on 4 nodes. It is in Ray/container startup and has not emitted generation metrics yet.
 account=coreai_dlalgo_nemorl
 partition=batch
 nodes=4
@@ -23,9 +27,12 @@ sequence_packing=true
 moe_enable_deepep=false
 moe_token_dispatcher_type=alltoall
 nrl_force_rebuild_venvs=true
-driver_srun_cpus_per_task=16
+driver_srun_cpus_per_task=8
+driver_srun_mem=128G
+build_parallelism=MAX_JOBS=4,CMAKE_BUILD_PARALLEL_LEVEL=4,NVTE_BUILD_MAX_JOBS=4,NINJAFLAGS=-j4,MAKEFLAGS=-j4
+driver_uv_project_environment=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen30ba3b_main_specdec_req8_batchlog_py312_r2
 ray_log_sync_frequency=60
-wandb_name=Qwen30BA3B_500K_Eagle3_K1_Req8_BatchLog_20step_20260602
-stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3116714.out
-ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3116714-logs/ray-driver.log
+wandb_name=Qwen30BA3B_500K_Eagle3_K1_Req8_BatchLog_20step_r2_20260602
+stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3116841.out
+ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3116841-logs/ray-driver.log
 expected_driver_log_fields=[SpecDec early gate] enabled_req_avg disabled_req_avg last_enabled_requests last_disabled_requests enabled_active_req_avg disabled_active_req_avg last_enabled_active_requests last_disabled_active_requests

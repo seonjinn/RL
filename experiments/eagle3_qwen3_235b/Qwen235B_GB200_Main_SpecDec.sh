@@ -96,6 +96,13 @@ NRL_SPECDEC_CONTROLLER_POS3_FLOOR="${NRL_SPECDEC_CONTROLLER_POS3_FLOOR:-0.15}"
 NRL_SPECDEC_CONTROLLER_MIN_K="${NRL_SPECDEC_CONTROLLER_MIN_K:-1}"
 NRL_SPECDEC_CONTROLLER_MAX_K="${NRL_SPECDEC_CONTROLLER_MAX_K:-${NUM_SPECULATIVE_TOKENS}}"
 NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE="${NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE:-false}"
+DRIVER_SRUN_CPUS_PER_TASK="${DRIVER_SRUN_CPUS_PER_TASK:-8}"
+DRIVER_SRUN_MEM="${DRIVER_SRUN_MEM:-128G}"
+MAX_JOBS="${MAX_JOBS:-4}"
+CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+NVTE_BUILD_MAX_JOBS="${NVTE_BUILD_MAX_JOBS:-4}"
+NINJAFLAGS="${NINJAFLAGS:--j4}"
+MAKEFLAGS="${MAKEFLAGS:--j4}"
 REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
 MOE_ENABLE_DEEPEP="${MOE_ENABLE_DEEPEP:-false}"
 MOE_TOKEN_DISPATCHER_TYPE="${MOE_TOKEN_DISPATCHER_TYPE:-alltoall}"
@@ -212,7 +219,11 @@ if [[ "${REQUIRE_SPECDEC_RL_PATCHES}" == "true" || "${REQUIRE_SPECDEC_RL_PATCHES
   require_patch_marker "${SCRIPT_DIR}/nemo_rl/algorithms/grpo.py" "_repair_specdec_generation_logprobs_if_safe"
   require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_VLLM_OMIT_GENERATION_LOGPROBS"
 fi
-if [[ ! -s "${DRAFT_MODEL}/config.json" ]]; then
+is_hf_repo_id() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
+
+if [[ ! -s "${DRAFT_MODEL}/config.json" ]] && ! is_hf_repo_id "${DRAFT_MODEL}"; then
   echo "ERROR: DRAFT_MODEL is not a valid HF checkpoint: ${DRAFT_MODEL}" >&2
   exit 2
 fi
@@ -250,6 +261,13 @@ if [[ "${REQUIRE_DRAFT_MODEL_PROVENANCE}" == "true" || "${REQUIRE_DRAFT_MODEL_PR
         exit 2
       fi
       ;;
+    public_hf_qwen235b_a22b_eagle3)
+      if [[ "${DRAFT_MODEL}" != "nvidia/Qwen3-235B-A22B-Eagle3" ]]; then
+        echo "ERROR: DRAFT_MODEL_PROVENANCE=${DRAFT_MODEL_PROVENANCE} requires DRAFT_MODEL=nvidia/Qwen3-235B-A22B-Eagle3." >&2
+        echo "DRAFT_MODEL=${DRAFT_MODEL}" >&2
+        exit 2
+      fi
+      ;;
     legacy_diagnostic)
       if [[ "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "true" && "${ALLOW_LEGACY_DRAFT_MODEL:-false}" != "True" ]]; then
         echo "ERROR: legacy_diagnostic provenance requires ALLOW_LEGACY_DRAFT_MODEL=true." >&2
@@ -264,7 +282,7 @@ if [[ "${REQUIRE_DRAFT_MODEL_PROVENANCE}" == "true" || "${REQUIRE_DRAFT_MODEL_PR
       ;;
     "")
       echo "ERROR: DRAFT_MODEL_PROVENANCE is required for 235B SpecDec main runs." >&2
-      echo "Use qwen235b_mixed_math_nonopenmath_500k_speculators for the in-house 500K checkpoint, legacy_diagnostic for explicit legacy checks, or manual_diagnostic for non-result diagnostics." >&2
+      echo "Use qwen235b_mixed_math_nonopenmath_500k_speculators for the in-house 500K checkpoint, public_hf_qwen235b_a22b_eagle3 for nvidia/Qwen3-235B-A22B-Eagle3, legacy_diagnostic for explicit legacy checks, or manual_diagnostic for non-result diagnostics." >&2
       exit 2
       ;;
     *)
@@ -315,6 +333,11 @@ append_specdec_adaptive_gate_env "VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS" "${S
 append_specdec_adaptive_gate_env "VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS" "${SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS}"
 
 COMMAND="NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true} \
+MAX_JOBS=${MAX_JOBS} \
+CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL} \
+NVTE_BUILD_MAX_JOBS=${NVTE_BUILD_MAX_JOBS} \
+NINJAFLAGS=${NINJAFLAGS} \
+MAKEFLAGS=${MAKEFLAGS} \
 RAY_CGRAPH_GET_TIMEOUT=${RAY_CGRAPH_GET_TIMEOUT} \
 RAY_CGRAPH_get_timeout=${RAY_CGRAPH_GET_TIMEOUT} \
 UV_PYTHON=${UV_PYTHON} \
@@ -384,6 +407,8 @@ NRL_MEGATRON_CHECKPOINT_DIR="${NRL_MEGATRON_CHECKPOINT_DIR}" \
 UV_PYTHON="${UV_PYTHON}" \
 RAY_VERSION="${RAY_VERSION}" \
 DRIVER_UV_PROJECT_ENVIRONMENT="${DRIVER_UV_PROJECT_ENVIRONMENT}" \
+DRIVER_SRUN_CPUS_PER_TASK="${DRIVER_SRUN_CPUS_PER_TASK}" \
+DRIVER_SRUN_MEM="${DRIVER_SRUN_MEM}" \
 GPUS_PER_NODE="${GPUS_PER_NODE}" \
 MOUNTS="${MOUNTS}" \
 COMMAND="${COMMAND}" \
