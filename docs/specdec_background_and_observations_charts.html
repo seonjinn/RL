@@ -572,7 +572,7 @@
     <div class="card full">
       <h2>Recommended Next Actions</h2>
       <ol>
-        <li>Produce a Figure 4-style vLLM timing breakdown: drafting, verification, rejection sampling, and other overheads.</li>
+        <li>Produce a Figure 4-style vLLM timing breakdown and record standalone acceptance counters: drafted tokens, accepted tokens, per-position accepted tokens, acceptance rate, and mean acceptance length.</li>
         <li>Keep CUDA Graph enabled for performance runs.</li>
         <li>Use load-aware gating instead of always-on SpecDec: active requests, scheduled tokens, and per-position acceptance should all matter.</li>
         <li>Prefer K=1/K=2 until later-position acceptance supports K=3.</li>

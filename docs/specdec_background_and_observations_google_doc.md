@@ -400,7 +400,7 @@ Status: NeMo-RL baseline job 3119388 and SpecDec K=3 job 3119389 are running as 
 
 1. Build a Figure 4-style timing breakdown for our vLLM standalone runs.
 
-   We should report drafting, verification, rejection sampling, and other vLLM overheads separately. This will show whether the bottleneck is drafter cost, verification cost, or scheduler/runtime overhead.
+   We should report drafting, verification, rejection sampling, and other vLLM overheads separately. This will show whether the bottleneck is drafter cost, verification cost, or scheduler/runtime overhead. The standalone benchmark script now also records vLLM SpecDec acceptance counters when the runtime exposes them, so future standalone rows can include `num_draft_tokens`, `num_accepted_tokens`, per-position accepted tokens, acceptance rate, and mean acceptance length beside throughput.
 
 2. Keep CUDA Graph enabled.
 

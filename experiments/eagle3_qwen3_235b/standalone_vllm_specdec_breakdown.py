@@ -119,6 +119,122 @@ def load_prompt_token_ids(
     return prompts
 
 
+def accumulate_spec_decode_metric(metrics: dict[str, Any], metric: Any) -> bool:
+    name = getattr(metric, "name", "")
+    if name == "vllm:spec_decode_num_drafts":
+        metrics["num_drafts"] += int(getattr(metric, "value", 0))
+        return True
+    if name == "vllm:spec_decode_num_draft_tokens":
+        metrics["num_draft_tokens"] += int(getattr(metric, "value", 0))
+        return True
+    if name == "vllm:spec_decode_num_accepted_tokens":
+        metrics["num_accepted_tokens"] += int(getattr(metric, "value", 0))
+        return True
+    if name == "vllm:spec_decode_num_accepted_tokens_per_pos":
+        values = list(getattr(metric, "values", []) or [])
+        if not values and hasattr(metric, "value"):
+            values = [getattr(metric, "value", 0)]
+        current = metrics["num_accepted_tokens_per_pos"]
+        if len(current) < len(values):
+            current.extend([0] * (len(values) - len(current)))
+        for idx, value in enumerate(values):
+            current[idx] += int(value)
+        return True
+    return False
+
+
+def get_vllm_metrics_snapshot(llm: Any) -> list[Any]:
+    if hasattr(llm, "get_metrics"):
+        try:
+            metrics = llm.get_metrics()
+            if metrics is not None:
+                return list(metrics)
+        except Exception:
+            pass
+
+    try:
+        from vllm.v1.metrics.reader import get_metrics_snapshot
+    except Exception:
+        return []
+    try:
+        return list(get_metrics_snapshot())
+    except Exception:
+        return []
+
+
+def read_spec_decode_metrics(llm: Any) -> dict[str, Any]:
+    metrics = {
+        "metrics_available": False,
+        "num_drafts": 0,
+        "num_draft_tokens": 0,
+        "num_accepted_tokens": 0,
+        "num_accepted_tokens_per_pos": [],
+    }
+    saw_metric = False
+    for metric in get_vllm_metrics_snapshot(llm):
+        saw_metric = accumulate_spec_decode_metric(metrics, metric) or saw_metric
+    if not saw_metric:
+        return {}
+    metrics["metrics_available"] = True
+    metrics["active"] = metrics["num_draft_tokens"] > 0
+    return metrics
+
+
+def diff_spec_decode_metrics(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    if not current:
+        return {}
+    diff = {
+        "metrics_available": bool(current.get("metrics_available", True)),
+        "active": False,
+        "num_drafts": max(
+            0, int(current.get("num_drafts", 0)) - int(baseline.get("num_drafts", 0))
+        ),
+        "num_draft_tokens": max(
+            0,
+            int(current.get("num_draft_tokens", 0))
+            - int(baseline.get("num_draft_tokens", 0)),
+        ),
+        "num_accepted_tokens": max(
+            0,
+            int(current.get("num_accepted_tokens", 0))
+            - int(baseline.get("num_accepted_tokens", 0)),
+        ),
+        "num_accepted_tokens_per_pos": [],
+    }
+    current_pos = list(current.get("num_accepted_tokens_per_pos", []) or [])
+    baseline_pos = list(baseline.get("num_accepted_tokens_per_pos", []) or [])
+    max_len = max(len(current_pos), len(baseline_pos))
+    for idx in range(max_len):
+        cur = int(current_pos[idx]) if idx < len(current_pos) else 0
+        base = int(baseline_pos[idx]) if idx < len(baseline_pos) else 0
+        diff["num_accepted_tokens_per_pos"].append(max(0, cur - base))
+
+    diff["active"] = diff["num_draft_tokens"] > 0
+    if diff["num_draft_tokens"] > 0:
+        diff["acceptance_rate"] = (
+            diff["num_accepted_tokens"] / diff["num_draft_tokens"]
+        )
+    else:
+        diff["acceptance_rate"] = 0.0
+    if diff["num_drafts"] > 0:
+        diff["accepted_tokens_per_draft"] = (
+            diff["num_accepted_tokens"] / diff["num_drafts"]
+        )
+        diff["mean_acceptance_length"] = 1.0 + diff["accepted_tokens_per_draft"]
+    else:
+        diff["accepted_tokens_per_draft"] = 0.0
+        diff["mean_acceptance_length"] = 0.0
+    accepted_per_pos = list(diff.get("num_accepted_tokens_per_pos", []) or [])
+    if accepted_per_pos and diff["num_drafts"] > 0:
+        diff["acceptance_rate_per_pos"] = [
+            accepted / diff["num_drafts"] for accepted in accepted_per_pos
+        ]
+    return diff
+
+
 def classify_event(name: str) -> str | None:
     lowered = name.lower()
     if "specdec_breakdown.drafting" in lowered:
@@ -380,6 +496,7 @@ def main() -> None:
             llm.generate(prompts, sampling_params)
 
         before = set(trace_files(profile_dir))
+        metric_baseline = read_spec_decode_metrics(llm)
         if not args.disable_vllm_profiler and hasattr(llm, "start_profile"):
             llm.start_profile()
         started = time.perf_counter()
@@ -387,6 +504,10 @@ def main() -> None:
         latency_s = time.perf_counter() - started
         if not args.disable_vllm_profiler and hasattr(llm, "stop_profile"):
             llm.stop_profile()
+        spec_decode_metrics = diff_spec_decode_metrics(
+            read_spec_decode_metrics(llm),
+            metric_baseline,
+        )
 
         time.sleep(2.0)
         after = set(trace_files(profile_dir))
@@ -398,13 +519,22 @@ def main() -> None:
             "output_tok_s": bs * args.osl / latency_s,
             "output_tok_s_per_gpu": bs * args.osl / latency_s / total_gpus,
             "breakdown": breakdown,
+            "spec_decode_metrics": spec_decode_metrics,
         }
         rows.append(row)
         flush()
+        acceptance_msg = ""
+        if spec_decode_metrics:
+            acceptance_msg = (
+                f" acceptance={spec_decode_metrics.get('acceptance_rate', 0.0):.2%}"
+                f" drafted={spec_decode_metrics.get('num_draft_tokens', 0)}"
+                f" accepted={spec_decode_metrics.get('num_accepted_tokens', 0)}"
+            )
         print(
             f"bs={bs} latency={latency_s:.3f}s "
             f"out/gpu={row['output_tok_s_per_gpu']:.2f} "
             f"coverage={breakdown['attribution_coverage_pct']:.1f}%"
+            f"{acceptance_msg}"
         )
 
     flush()
