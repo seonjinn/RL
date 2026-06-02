@@ -96,9 +96,11 @@ status=3114676 FAILED after 00:28:44 with exit 1; no rollout/gate metrics. The n
 full_rl_k1_job_id=3115045
 full_rl_k1_job_name=qwen30ba3b-500k-k1-longtail-req4-N4xG4
 full_rl_k1_wandb_name=Qwen30BA3B_500K_Eagle3_K1_20step_longtail_req4_20260602
+full_rl_k1_wandb_url=https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/8iosg2ym
 full_rl_k3_job_id=3115044
 full_rl_k3_job_name=qwen30ba3b-500k-k3-longtail-req4-N4xG4
 full_rl_k3_wandb_name=Qwen30BA3B_500K_Eagle3_K3_20step_longtail_req4_20260602
+full_rl_k3_wandb_url=https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/bbws00oy
 full_rl_model=Qwen/Qwen3-30B-A3B
 full_rl_drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
 full_rl_drafter_provenance=qwen30ba3b_mixed_math_nonopenmath_500k_speculators
@@ -116,4 +118,4 @@ full_rl_VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=16
 full_rl_NRL_FORCE_REBUILD_VENVS=true
 full_rl_container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
 full_rl_launcher_fix=Qwen30BA3B_GB200_Main_SpecDec.sh now forces policy.sequence_packing.enabled=true plus moe_enable_deepep=false, moe_token_dispatcher_type=alltoall, moe_shared_expert_overlap=false to avoid the latest NeMo-RL missing-MoE-key failure.
-full_rl_status=3115044 and 3115045 RUNNING at 2026-06-02 10:40 PDT; waiting for long-tail gate logs, per-step acceptance, step-time, generation-time, E2E throughput, and generation throughput.
+full_rl_status=3115044 and 3115045 RUNNING at 2026-06-02 10:56 PDT. W&B URLs are available; driver logs confirm Qwen3-30B-A3B target, 500K drafter, request gate 4/token gate 0, sequence packing, and MoE alltoall overrides. No long-tail gate logs, per-step acceptance, step-time, generation-time, E2E throughput, or generation throughput have been emitted yet.
