@@ -50,3 +50,13 @@ Submitted batch job 3078630
 # Ray/vLLM runtime environment setup, including nccl4py/triton downloads.
 # 3078630 RUNNING for 00:07:30; ray-driver.log exists and is still in
 # setup. No NeMo-RL rollout throughput, acceptance, or Step 1 metric yet.
+
+# final parsed status:
+# 3078629 baseline completed 4/4 steps. Mean total step 240.21s,
+# mean generation 37.33s, mean E2E 1004.69 tok/s/GPU, and mean
+# generation throughput 6068.62 generated tok/s/GPU.
+# 3078630 SpecDec K=1 completed 4/4 steps. Mean total step 241.13s,
+# mean generation 33.71s, mean E2E 1001.70 tok/s/GPU, mean generation
+# throughput 6776.01 generated tok/s/GPU, and acceptance 57.28%.
+# Net: generation throughput speedup 1.1166x, generation-time speedup
+# 1.1077x, E2E throughput 0.9970x, and E2E step-time speedup 0.9962x.
