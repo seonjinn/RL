@@ -60,4 +60,4 @@ specdec_k1_req32_NRL_FORCE_REBUILD_VENVS=true
 specdec_k1_req32_driver_srun_cpus_per_task=8
 specdec_k1_req32_driver_srun_mem=128G
 specdec_k1_req32_build_parallelism=MAX_JOBS=4,CMAKE_BUILD_PARALLEL_LEVEL=4,NVTE_BUILD_MAX_JOBS=4,NINJAFLAGS=-j4,MAKEFLAGS=-j4
-specdec_k1_req32_status=RUNNING at 2026-06-02 13:16 PDT; all 128 vLLM policy workers initialized, target and 1-shard PublicHF Eagle3 drafter loading progressed, and workers are capturing CUDA graphs for mixed prefill-decode and decode paths. No rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput metric yet.
+specdec_k1_req32_status=RUNNING at 2026-06-02 13:20 PDT; all 128 vLLM policy workers initialized, target and 1-shard PublicHF Eagle3 drafter loaded/capturing graphs, and worker runtime-env rebuild activity is still visible. No rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput metric yet.
