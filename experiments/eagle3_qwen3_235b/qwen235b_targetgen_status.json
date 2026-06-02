@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 19:38 PDT",
+  "updated_at": "2026-06-01 19:43 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -376,7 +376,7 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Current hidden-state array 3072149_[0-99]%10 is running; at 2026-06-01 19:38 PDT tasks 71-80 were running, tasks 81-99 were pending on JobArrayTaskLimit, and the latest completed count observed was 372293 hidden-state files. Shards 005-010 initially failed a too-strict Speculators dirty-check; the pipeline now always validates the approved full dirty diff hash after compatibility patch handling, and repair jobs 3072518-3072523 completed successfully for those shards. Original dependency train 3072150 was superseded; replacement train 3072524 is dependency-pending on the main array; repair dependencies are satisfied.",
+      "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Current hidden-state array 3072149_[0-99]%10 is running; at 2026-06-01 19:43 PDT tasks 71-80 were running, tasks 81-99 were pending on JobArrayTaskLimit, and the latest completed count observed was 374253 hidden-state files. Shards 005-010 initially failed a too-strict Speculators dirty-check; the pipeline now always validates the approved full dirty diff hash after compatibility patch handling, and repair jobs 3072518-3072523 completed successfully for those shards. Original dependency train 3072150 was superseded; replacement train 3072524 is dependency-pending on the main array; repair dependencies are satisfied.",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
       "note": "Replaces cancelled stale chain 3063316 -> 3063317_[0-99] -> 3063318 and failed/cancelled chains 3068016 -> 3068017, 3070670 -> 3070671, 3071019 -> 3071020, plus superseded train 3072150. It will train only after the current hidden-state array completes; shard repair jobs 3072518-3072523 are complete.",
@@ -389,9 +389,9 @@
         "3072522",
         "3072523"
       ],
-      "hidden_state_files_observed": 372293,
+      "hidden_state_files_observed": 374253,
       "hidden_state_size_observed": "12T",
-      "latest_check_time": "2026-06-01 19:38 PDT"
+      "latest_check_time": "2026-06-01 19:43 PDT"
     },
     "safe_w4_missing_id_repair_adaptive_maxtok": {
       "job_id": "3068010",
@@ -414,7 +414,7 @@
     "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 100,
     "short_nonzero_chunk_files_observed": 0,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Replacement 3071825_[0-99]%5 was cancelled after the first vLLM hidden-state request exposed the extract_hidden_states draft-token shape bug. Current hidden-state array is 3072149_[0-99]%10 after patching the shared vLLM site and pipeline with NRL_EXTRACT_HIDDEN_STATES_DRAFT_SHAPE_PATCH_V1 and raising ArrayTaskThrottle from 5 to 10. At 2026-06-01 19:38 PDT, tasks 71-80 were running, tasks 81-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed for shards 005-010, and replacement train job 3072524 remained dependency-pending. The latest completed file count observed was 372293. The previous directory size observation at 105000 files was 12T; a fresh du was not completed because it is slow on the active file tree. The Speculators dirty-check now validates the approved full diff hash even on the default APPLY_COMPAT_PATCHES=true path.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Replacement 3071825_[0-99]%5 was cancelled after the first vLLM hidden-state request exposed the extract_hidden_states draft-token shape bug. Current hidden-state array is 3072149_[0-99]%10 after patching the shared vLLM site and pipeline with NRL_EXTRACT_HIDDEN_STATES_DRAFT_SHAPE_PATCH_V1 and raising ArrayTaskThrottle from 5 to 10. At 2026-06-01 19:43 PDT, tasks 71-80 were running, tasks 81-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed for shards 005-010, and replacement train job 3072524 remained dependency-pending. The latest completed file count observed was 374253. The previous directory size observation at 105000 files was 12T; a fresh du was not completed because it is slow on the active file tree. The Speculators dirty-check now validates the approved full diff hash even on the default APPLY_COMPAT_PATCHES=true path.",
     "min_nonzero_rows_observed": 5000,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 0,
@@ -436,11 +436,11 @@
     "current_prepare_job": "3068015",
     "current_prepare_state_observed": "COMPLETED by 2026-06-01 02:49 PDT; output has 500000 examples, 16 arrow shards, token_freq.pt, and state.json",
     "current_hidden_state_array_job": "3072149_[0-99]",
-    "current_hidden_state_array_state_observed": "RUNNING at 2026-06-01 19:38 PDT: tasks 71-80 running, tasks 81-99 pending on JobArrayTaskLimit after ArrayTaskThrottle was raised to 10; repair jobs 3072518-3072523 completed for shards 005-010; latest completed hidden-state output file count observed was 372293. Previous size observation at 105000 files was 12T.",
+    "current_hidden_state_array_state_observed": "RUNNING at 2026-06-01 19:43 PDT: tasks 71-80 running, tasks 81-99 pending on JobArrayTaskLimit after ArrayTaskThrottle was raised to 10; repair jobs 3072518-3072523 completed for shards 005-010; latest completed hidden-state output file count observed was 374253. Previous size observation at 105000 files was 12T.",
     "current_train_job": "3072524",
     "current_train_state_observed": "PENDING with Dependency on afterany:3072149; repair afterok dependencies 3072518-3072523 are satisfied",
     "superseded_train_job": "3072150",
-    "current_hidden_state_files_observed": 372293,
+    "current_hidden_state_files_observed": 374253,
     "current_hidden_state_size_observed": "12T observed earlier at 105000 files; fresh du pending",
     "chunk_count_revalidated_at": "2026-06-01 08:06 PDT",
     "chunk_count_revalidation": "100 qwen3_235b chunk files, total 500000 rows, min 5000, max 5000, 100 complete, 0 short."
@@ -500,17 +500,17 @@
   },
   "current_500k_speculators_training_chain": {
     "state": "hidden_state_extraction_running",
-    "updated_at": "2026-06-01 19:38 PDT",
+    "updated_at": "2026-06-01 19:43 PDT",
     "prepare_job": "3068015",
     "hidden_state_array_job": "3072149_[0-99]%10",
     "repair_jobs": "3072518-3072523 completed successfully for shards 005-010",
     "replacement_train_job": "3072524",
-    "hidden_state_files_observed": 372293,
+    "hidden_state_files_observed": 374253,
     "hidden_state_dir_size": "12T observed earlier at 105000 files; fresh du pending",
-    "active_array_tasks": "3072149_71-80 running at 2026-06-01 19:38 PDT",
+    "active_array_tasks": "3072149_71-80 running at 2026-06-01 19:43 PDT",
     "pending_array_tasks": "3072149_[81-99%10] pending on JobArrayTaskLimit",
     "train_state": "3072524 dependency-pending on main array completion; repair dependencies are satisfied",
-    "note": "235B in-house Speculators Eagle3 drafter is not training yet; hidden-state extraction is still running. At 2026-06-01 19:38 PDT, tasks 71-80 were running, tasks 81-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed, replacement train job 3072524 remained dependency-pending, and the latest completed file count observed was 372293."
+    "note": "235B in-house Speculators Eagle3 drafter is not training yet; hidden-state extraction is still running. At 2026-06-01 19:43 PDT, tasks 71-80 were running, tasks 81-99 were pending on JobArrayTaskLimit, repair jobs 3072518-3072523 had completed, replacement train job 3072524 remained dependency-pending, and the latest completed file count observed was 374253."
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
@@ -525,8 +525,8 @@
     "note": "The 235B 500K chain is offline Speculators Eagle3 training: finalize target responses, prepare, extract hidden states, train a drafter checkpoint, then attach that fixed checkpoint to vLLM speculative_config.model for NeMo-RL evaluation. The drafter is not refreshed after each GRPO step in the current measured path."
   },
   "pipeline_status": {
-    "current_hidden_state_files_observed": 372293,
+    "current_hidden_state_files_observed": 374253,
     "current_hidden_state_size_observed": "12T observed earlier at 105000 files; fresh du pending",
-    "current_hidden_state_array_state_observed": "RUNNING at 2026-06-01 19:38 PDT: tasks 71-80 running, tasks 81-99 pending on JobArrayTaskLimit after ArrayTaskThrottle was raised to 10; repair jobs 3072518-3072523 completed for shards 005-010; latest completed hidden-state output file count observed was 372293."
+    "current_hidden_state_array_state_observed": "RUNNING at 2026-06-01 19:43 PDT: tasks 71-80 running, tasks 81-99 pending on JobArrayTaskLimit after ArrayTaskThrottle was raised to 10; repair jobs 3072518-3072523 completed for shards 005-010; latest completed hidden-state output file count observed was 374253."
   }
 }

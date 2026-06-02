@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 19:38 PDT",
+  "updated_at": "2026-06-01 19:43 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -260,7 +260,7 @@
       "job_id": "3092445",
       "submitted_at": "2026-06-01 18:54 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 19:38 PDT on coreai_dlalgo_llm",
+      "latest_state": "RUNNING at 19:43 PDT on coreai_dlalgo_llm",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -284,7 +284,7 @@
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3092445-logs/ray-driver.log",
       "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3092445.out",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_rebuild_20260601",
-      "latest_observation": "Resubmitted without dependency after cancelling startup_token-stalled job 3090318. slurm-3092445.out confirms NRL_FORCE_REBUILD_VENVS=true, UV_PYTHON=3.12.13, a fresh driver venv, policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, request gate 4, token gate 0, the NVIDIA PublicHF Eagle3 drafter, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. At 19:38 PDT it was RUNNING on nvl72059-T[01-16],nvl72154-T[01-16]. slurm-3092445.out confirms Ray workers connected at 128/128 before driver launch. ray-driver.log exists and has progressed past driver venv setup: the driver connected to Ray at 19:14, logged that speculative decoding is enabled, and is still building Ray runtime environments including the math environment across workers. The log mtime is 19:37 and size is about 269 KB. There is still no rollout, acceptance metric, throughput metric, or repeated startup_token error."
+      "latest_observation": "Resubmitted without dependency after cancelling startup_token-stalled job 3090318. slurm-3092445.out confirms NRL_FORCE_REBUILD_VENVS=true, UV_PYTHON=3.12.13, a fresh driver venv, policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, request gate 4, token gate 0, the NVIDIA PublicHF Eagle3 drafter, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. At 19:43 PDT it was RUNNING on nvl72059-T[01-16],nvl72154-T[01-16]. slurm-3092445.out confirms Ray workers connected at 128/128 before driver launch. ray-driver.log exists and has progressed past driver venv setup: the driver connected to Ray at 19:14, logged that speculative decoding is enabled, and is still building Ray runtime environments including the math environment across workers. The log mtime is 19:42 and size is about 356 KB. There is still no rollout, acceptance metric, throughput metric, or repeated startup_token error."
     }
   ],
   "matched_baseline_run": {
@@ -342,9 +342,9 @@
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 372293,
+    "latest_observed_hidden_state_files": 374253,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 71-80 running, tasks 81-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 19:38 PDT",
+    "latest_observed_array_window": "tasks 71-80 running, tasks 81-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 19:43 PDT",
     "rough_eta": "About 4-7h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
