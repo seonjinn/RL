@@ -19,12 +19,16 @@ purpose=Verify lower-batch-only SpecDec activation after job 3084952 showed toke
 matched_baseline_job=3088636
 strict_req4_specdec_job=3089565
 strict_req4_specdec_retry_job=3090318
+strict_req4_specdec_rebuild_retry_job=3092445
 submit_state=PENDING Priority at 2026-06-01 17:59 PDT
 superseded_state=3089565 CANCELLED at 2026-06-01 18:12 PDT because the remote launcher missed policy.model_name and would have used YAML default Qwen/Qwen3-235B-A22B.
-latest_state=3090318 RUNNING at 2026-06-01 18:44 PDT on nvl72163-T[01-16],nvl72168-T[01-16]
-ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3090318-logs/ray-driver.log
-slurm_stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3090318.out
-target_override_confirmed=policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 in slurm-3090318.out
-gate_env_confirmed=VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4,VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0 in slurm-3090318.out
-latest_metric_status=no rollout metric yet
-matched_baseline_partial_metric=3088636 Step 1-2 total_step_time_s=601.46,328.15 generation_generated_tokens_sec_gpu=70.14,47.63 generation_tokens_sec_gpu=71.31,49.14 mean_generated_tokens_sec_gpu=58.89 at 2026-06-01 18:44 PDT
+startup_token_failed_state=3090318 CANCELLED at 2026-06-01 18:54 PDT after ray-driver.log repeatedly showed TypeError: connect() got an unexpected keyword argument 'startup_token' while vllm_policy workers were registering.
+latest_state=3092445 RUNNING at 2026-06-01 19:02 PDT on nvl72059-T[01-16],nvl72154-T[01-16]; ray-driver.log exists and is still in venv/dependency setup, no rollout metric or startup_token recurrence yet
+ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3092445-logs/ray-driver.log
+slurm_stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3092445.out
+rebuild_env_confirmed=NRL_FORCE_REBUILD_VENVS=true,UV_PYTHON=3.12.13,DRIVER_UV_PROJECT_ENVIRONMENT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen235b_publichf_strict_req4_rebuild_20260601_py312 in slurm-3092445.out
+target_override_confirmed=policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 in slurm-3092445.out
+gate_env_confirmed=VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4,VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0 in slurm-3092445.out
+latest_metric_status=3092445 running; no rollout metric yet
+matched_baseline_final_metric=3088636 Step 1-4 total_step_time_s=601.46,328.15,440.40,438.79 generation_generated_tokens_sec_gpu=70.14,47.63,69.31,58.85 generation_tokens_sec_gpu=71.31,49.14,70.60,60.04 e2e_tokens_sec_gpu=40.05,38.07,54.31,46.46 mean_generated_tokens_sec_gpu=61.48 mean_e2e_tokens_sec_gpu=44.72 mean_total_step_time_s=452.20 at 2026-06-01 18:59 PDT
+publichf_3084952_vs_matched_baseline=always-enabled diagnostic only: generation_speedup=0.986x e2e_throughput_speedup=0.975x e2e_step_time_speedup=0.952x; strict lower-batch-only speedup pending 3092445
