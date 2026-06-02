@@ -282,6 +282,18 @@ add_49k_cp1_diagnostic_rows() {
   submit_job "49k-tp8-ep8-cp4" 49152 8 4 4 dyncp 49152 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
 }
 
+add_49k_cp1_threshold_sweep_rows() {
+  submit_job "49k-tp8-ep8-cp4-nohcp" 49152 8 4 4 nohcp "" "" 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+  submit_job "49k-tp8-ep8-cp4-th24576" 49152 8 4 4 dyncp 24576 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+  submit_job "49k-tp8-ep8-cp4-th32768" 49152 8 4 4 dyncp 32768 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+  submit_job "49k-tp8-ep8-cp4-th49152" 49152 8 4 4 dyncp 49152 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+}
+
+add_49k_cp1_threshold_missing_rows() {
+  submit_job "49k-tp8-ep8-cp4-th24576" 49152 8 4 4 dyncp 24576 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+  submit_job "49k-tp8-ep8-cp4-th32768" 49152 8 4 4 dyncp 32768 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+}
+
 add_long_rows() {
   add_64k_rows
   add_128k_rows
@@ -448,6 +460,12 @@ case "${SUBMIT_SET}" in
   49k_cp1_diagnostic)
     add_49k_cp1_diagnostic_rows
     ;;
+  49k_cp1_threshold_sweep)
+    add_49k_cp1_threshold_sweep_rows
+    ;;
+  49k_cp1_threshold_missing)
+    add_49k_cp1_threshold_missing_rows
+    ;;
   long)
     add_long_rows
     ;;
@@ -521,7 +539,7 @@ case "${SUBMIT_SET}" in
     add_long_rows
     ;;
   *)
-    echo "Unknown SUBMIT_SET=${SUBMIT_SET}; expected canary, main, main_baseline, 8k_baseline, main_dyncp, nrt_cancelled_short_recovery, nrt_cancelled_long_recovery, nrt_reaper_recovery_exact, nrt_missing_dyncp_recovery, nrt_strict_missing_pairs, 49k, 49k_baseline, 49k_dyncp, 49k_dyncp_threshold_sweep, long, long_no256, 64k, 64k_baseline, 128k, 256k_safe, 256k_safe_baseline, 256k_safe_dyncp, long_baseline, long_dyncp, long_dyncp_safe, 64k_dyncp_threshold_sweep, 128k_dyncp_threshold_sweep, 256k_dyncp_threshold_sweep, long_dyncp_threshold_sweep, step_time_49k, step_time_64k, step_time_128k, step_time, baselines, dyncp, all" >&2
+    echo "Unknown SUBMIT_SET=${SUBMIT_SET}; expected canary, main, main_baseline, 8k_baseline, main_dyncp, nrt_cancelled_short_recovery, nrt_cancelled_long_recovery, nrt_reaper_recovery_exact, nrt_missing_dyncp_recovery, nrt_strict_missing_pairs, 49k, 49k_baseline, 49k_dyncp, 49k_dyncp_threshold_sweep, 49k_cp1_diagnostic, 49k_cp1_threshold_sweep, 49k_cp1_threshold_missing, long, long_no256, 64k, 64k_baseline, 128k, 256k_safe, 256k_safe_baseline, 256k_safe_dyncp, long_baseline, long_dyncp, long_dyncp_safe, 64k_dyncp_threshold_sweep, 128k_dyncp_threshold_sweep, 256k_dyncp_threshold_sweep, long_dyncp_threshold_sweep, step_time_49k, step_time_64k, step_time_128k, step_time, baselines, dyncp, all" >&2
     exit 1
     ;;
 esac
