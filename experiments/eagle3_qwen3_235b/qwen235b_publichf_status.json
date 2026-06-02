@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 22:33 PDT",
+  "updated_at": "2026-06-01 22:46 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -299,7 +299,7 @@
       "job_id": "3103018",
       "submitted_at": "2026-06-01 22:32 PDT",
       "state_at_submit_check": "RUNNING at 2026-06-01 22:33 PDT on coreai_dlalgo_llm; no dependency; 32 nodes allocated",
-      "latest_state": "RUNNING in Prolog/startup at submit check; no rollout metrics yet",
+      "latest_state": "FAILED at 2026-06-01 22:38 PDT after 00:04:56 elapsed on coreai_dlalgo_llm; ExitCode 1:0",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -323,8 +323,48 @@
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3103018-logs/ray-driver.log",
       "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3103018.out",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_v9_20260601",
-      "latest_observation": "Submitted after syncing the guarded launcher and V9 SpecDec-RL patch to the remote checkout. V9 validation passes and includes NRL_SPECDEC_BATCH_GATE_PATCH_V9 plus NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1. This retry keeps the 3092445 strict request gate shape but uses a new venv and launcher preflight requiring V9. At the first submit check the job was RUNNING with 32 nodes allocated, no dependency, and no rollout metrics yet.",
-      "purpose": "Measure strict lower-batch-only PublicHF 235B SpecDec throughput after fixing the all-disabled speculative path suspected from 3092445."
+      "latest_observation": "Submitted after syncing the guarded launcher and V9 SpecDec-RL patch to the remote checkout. The Slurm job reached 128/128 Ray workers and started the driver, but failed during forced driver venv build before NeMo-RL rollout. ray-driver.log shows FileNotFoundError from megatron-bridge setup because 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/pyproject.toml was missing from the restored SpecDec-RL checkout. This is a checkout/third-party workspace restoration error, not a SpecDec throughput or drafter-quality result. The 3rdparty workspaces were restored from /lustre/.../nemo-rl with rsync, and V9b retry 3103227 was submitted.",
+      "purpose": "Measure strict lower-batch-only PublicHF 235B SpecDec throughput after fixing the all-disabled speculative path suspected from 3092445.",
+      "failure_summary": {
+        "terminal_state": "FAILED",
+        "elapsed": "00:04:56",
+        "exit_code": "1:0",
+        "no_completed_rollout_metric": true,
+        "failure_class": "driver venv build failure / missing Megatron-Bridge pyproject.toml",
+        "evidence": "ray-driver.log: FileNotFoundError: [megatron-bridge][setup] Megatron-Bridge/pyproject.toml not found",
+        "interpretation": "The V9 SpecDec path was not exercised; restore third-party workspace and retry."
+      }
+    },
+    {
+      "job_id": "3103227",
+      "submitted_at": "2026-06-01 22:41 PDT",
+      "state_at_submit_check": "RUNNING at 2026-06-01 22:46 PDT on coreai_dlalgo_llm; 32 nodes allocated; 128/128 Ray workers connected",
+      "latest_state": "RUNNING; driver venv build passed Megatron-Bridge and Megatron-LM build, dependency installation in progress; no rollout metrics yet",
+      "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
+      "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
+      "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+      "provenance": "manual_diagnostic_strict_long_tail_v9_retry_after_3rdparty_restore",
+      "num_speculative_tokens": 1,
+      "max_steps": 4,
+      "num_prompts_per_step": 16,
+      "num_generations_per_prompt": 32,
+      "train_global_batch_size": 512,
+      "sequence_packing": true,
+      "specdec_gate": {
+        "request_threshold": 4,
+        "token_threshold": 0,
+        "note": "Strict lower-batch-only diagnostic retry after restoring third-party workspaces. Draft work should be enabled only when active requests are <=4."
+      },
+      "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh",
+      "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
+      "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
+      "driver_uv_project_environment": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen235b_publichf_strict_req4_v9b_20260601_py312",
+      "force_rebuild_venvs": true,
+      "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3103227-logs/ray-driver.log",
+      "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3103227.out",
+      "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_v9b_20260601",
+      "latest_observation": "After restoring 3rdparty workspaces, this V9b retry reached 128/128 Ray workers and started the driver. ray-driver.log confirms megatron-bridge and megatron-core were built successfully from the restored workspaces, so the 3103018 missing-pyproject failure is fixed. The driver is still installing dependencies and has not reached NeMo-RL rollout, acceptance, or throughput metrics yet.",
+      "purpose": "Measure strict lower-batch-only PublicHF 235B SpecDec throughput after V9 all-disabled path fix and third-party workspace restoration."
     }
   ],
   "matched_baseline_run": {
@@ -387,11 +427,11 @@
       "94": "3101471",
       "96": "3101472"
     },
-    "latest_observed_hidden_state_files": 459275,
+    "latest_observed_hidden_state_files": 479316,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 86-93 plus 95 and 97 running, tasks 98-99 pending on JobArrayTaskLimit, and repair jobs 3101471/3101472 running for shards 94/96; observed at 2026-06-01 22:07 PDT",
-    "rough_eta": "Roughly the final 8% of hidden-state extraction remained at the 22:07 poll; ETA is queue/restart dependent, then train 3101473 starts only after the main array and repair jobs 3101471/3101472 finish successfully.",
-    "note": "Shards 94 and 96 failed earlier at Ray srun startup with memory-allocation errors and were resubmitted as repair jobs 3101471 and 3101472; both were RUNNING at 22:07 PDT. Superseded train job 3072524 was cancelled before it could start on an incomplete hidden-state cache; replacement train job 3101473 depends on afterany:3072149 and afterok:3101471:3101472. Latest hidden-state count is 459275; size is 51T observed at 459275 files on 2026-06-01 22:07 PDT. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough.",
-    "latest_observed_hidden_state_size": "51T observed at 459275 files on 2026-06-01 22:07 PDT"
+    "latest_observed_array_window": "tasks 91-93 plus 95 and 97-99 running, repair jobs 3101471/3101472 running for shards 94/96, and train 3101473 dependency-pending; observed at 2026-06-01 22:42 PDT",
+    "rough_eta": "Roughly the final 4.1% of hidden-state files remained at the 22:42 poll; ETA is queue/restart dependent, then train 3101473 starts only after the main array and repair jobs 3101471/3101472 finish successfully.",
+    "note": "Shards 94 and 96 failed earlier at Ray srun startup with memory-allocation errors and were resubmitted as repair jobs 3101471 and 3101472; both were RUNNING at 22:42 PDT. Superseded train job 3072524 was cancelled before it could start on an incomplete hidden-state cache; replacement train job 3101473 depends on afterany:3072149 and afterok:3101471:3101472. Latest hidden-state count is 479316; latest full size scan remained about 51T. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough.",
+    "latest_observed_hidden_state_size": "51T last full size scan; latest file count 479316 at 2026-06-01 22:42 PDT"
   }
 }
