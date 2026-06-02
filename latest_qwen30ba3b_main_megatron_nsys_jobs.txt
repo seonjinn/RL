@@ -8,6 +8,15 @@ main checkout:
   branch=main
   commit=333864d refactor: rename auto-research skill to nemo-rl-auto-research (#2661)
 
+saved reusable launcher:
+  local_path=/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_worktree_edit/scripts/Qwen30BA3B_GB200_Main_MegatronPolicy_Nsys.sh
+  remote_path=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/Qwen30BA3B_GB200_Main_MegatronPolicy_Nsys.sh
+  defaults=config examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml, max_steps=10, nsys_profile_step_range=2:5, worker=megatron_policy_worker, num_prompts_per_step=64, num_generations_per_prompt=32, train_global_batch_size=2048, sequence_packing=true, dispatcher=alltoall, NRL_FORCE_REBUILD_VENVS=true
+
+older full-shape seqpack+alltoall launcher:
+  local_path=/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_worktree_edit/scripts/Qwen30BA3B_GB200_Main_Baseline_Alltoall_Nsys_FullShape.sh
+  remote_path=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260526/Qwen30BA3B_GB200_Main_Baseline_Alltoall_Nsys_FullShape.sh
+
 failed run:
   job_id=3118576
   job_name=qwen30ba3b-main-megpolicy-nsys-s2to5-ms10
