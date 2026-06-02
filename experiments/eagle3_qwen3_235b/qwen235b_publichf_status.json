@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-02 00:47 PDT",
+  "updated_at": "2026-06-02 00:58 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -372,7 +372,7 @@
       "job_id": "3105964",
       "submitted_at": "2026-06-02 00:37 PDT",
       "state_at_submit_check": "PENDING at 2026-06-02 00:37 PDT on coreai_dlalgo_llm; no dependency chain",
-      "latest_state": "RUNNING at 2026-06-02 00:47 PDT on 32 nodes; no Slurm stdout or rollout metrics visible yet",
+      "latest_state": "RUNNING at 2026-06-02 00:58 PDT on 32 nodes; driver is still building/downloading the forced fresh uv environment, no rollout metrics yet",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -394,8 +394,10 @@
       "driver_uv_project_environment": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen235b_publichf_strict_req4_v9c_20260602_py312",
       "force_rebuild_venvs": true,
       "explicit_moe_enable_deepep_override": false,
+      "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/slurm-3105964.out",
+      "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/3105964-logs/ray-driver.log",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_v9c_20260602",
-      "latest_observation": "Submitted after adding explicit policy.megatron_cfg.moe_enable_deepep=false to the maintained 235B main baseline and SpecDec launchers. This directly addresses the 3103227 MegatronPolicyWorker KeyError before rollout. At the 00:47 PDT poll the job was RUNNING for 4:15 on 32 nodes, but the expected Slurm stdout and ray-driver log were not visible yet, so there are still no acceptance or throughput metrics.",
+      "latest_observation": "Submitted after adding explicit policy.megatron_cfg.moe_enable_deepep=false to the maintained 235B main baseline and SpecDec launchers. This directly addresses the 3103227 MegatronPolicyWorker KeyError before rollout. At the 00:58 PDT poll the job was RUNNING for 15:57 on 32 nodes. scontrol shows stdout at /lustre/.../Nemo-RL_Qwen3_Roadmap/slurm-3105964.out and driver log at /lustre/.../Nemo-RL_Qwen3_Roadmap/3105964-logs/ray-driver.log. The Slurm command confirms policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, policy.megatron_cfg.moe_enable_deepep=false, request gate 4, token gate 0, CUDA Graph mode via enforce_eager=false, sequence packing, GBS512, and matching NVIDIA PublicHF Eagle3 drafter. The driver is still in forced fresh uv environment build/download, so there are still no Epoch/Step, acceptance, gate, or throughput metrics.",
       "purpose": "Measure strict lower-batch-only PublicHF 235B SpecDec throughput after adding the missing moe_enable_deepep override."
     }
   ],
@@ -487,11 +489,11 @@
       329404
     ],
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "100-shard hidden-state array completed, and exact hs_*.safetensors coverage reached 500000/500000 by 2026-06-02 00:09 PDT. The first missing-id repair wave 3104698-3104701 did not write files because VLLM_MAX_MODEL_LEN=8192 rejected 8192-token inputs plus one requested output token. Repair retry jobs 3105107-3105110 cleared the afterok dependency, and train 3105111 was RUNNING with latest observed global_step=6196 at 2026-06-02 00:47 PDT.",
+    "latest_observed_array_window": "100-shard hidden-state array completed, and exact hs_*.safetensors coverage reached 500000/500000 by 2026-06-02 00:09 PDT. The first missing-id repair wave 3104698-3104701 did not write files because VLLM_MAX_MODEL_LEN=8192 rejected 8192-token inputs plus one requested output token. Repair retry jobs 3105107-3105110 cleared the afterok dependency, and train 3105111 was RUNNING with latest observed global_step=12683 at 2026-06-02 00:58 PDT.",
     "rough_eta": "Training is now running; next observation should parse checkpoint output, validation loss, and final checkpoint selection from 3105111.",
     "note": "Shards 94 and 96 failed earlier at Ray srun startup with memory-allocation errors and were repaired by jobs 3101471 and 3101472. Superseded train 3101473 was cancelled before start after exact coverage found four missing ids. Superseded train 3104702 was cancelled after the first repair wave failed on vLLM max-model-len validation. Replacement train 3105111 runs with VALIDATE_HIDDEN_STATE_COVERAGE=true. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough.",
     "latest_observed_hidden_state_size": "51T last full size scan; exact hs_*.safetensors count 500000 at 2026-06-02 00:22 PDT",
     "first_loss_observation": "3105111 stdout shows global_step=0 train/loss=32.031 and global_step=1 train/loss=31.797.",
-    "latest_loss_observation": "By global_step=6196, recent train/loss values were roughly 5.729-7.320 with latest observed train/loss=5.932."
+    "latest_loss_observation": "By global_step=12683, recent train/loss values were roughly 4.717-7.527 with latest observed train/loss=4.717."
   }
 }
