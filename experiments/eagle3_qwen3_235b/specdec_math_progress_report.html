@@ -535,7 +535,7 @@
 
     <h2>SpecDec Timing Breakdown</h2>
     <p class="small">The current pipeline can explain acceptance and gate behavior, but not yet a precise wall-clock split between drafter generation and target verification. That split matters for 235B because high acceptance alone did not produce speedup.</p>
-    <p class="small"><strong>Update, 2026-06-02 01:23 PT:</strong> submitted 30B profiling job <code>3106783</code> to capture <code>vllm_generation_worker</code> nsys traces for K=1, token gate <code>2048</code>, profile window <code>2:4</code>. Earlier nsys runs profiled <code>megatron_policy_worker</code>, so they cannot cleanly separate drafter generation from target verification.</p>
+    <p class="small"><strong>Update, 2026-06-02 01:29 PT:</strong> submitted corrected 30B profiling job <code>3106841</code> to capture <code>vllm_generation_worker</code> nsys traces for K=1, token gate <code>2048</code>, profile window <code>2:4</code>, with Ray log sync enabled every 30 seconds. The earlier job <code>3106783</code> was cancelled because the nsys artifact sync env was not propagated. Earlier completed nsys runs profiled <code>megatron_policy_worker</code>, so they cannot cleanly separate drafter generation from target verification.</p>
     <div class="table-scroll">
       <table>
         <thead>
@@ -545,8 +545,8 @@
           <tr><td>Did the drafter run?</td><td><code>num_draft_tokens</code>, <code>num_drafts</code>, <code>active</code></td><td>None for activity/volume.</td><td>Already collected from vLLM metric snapshots.</td></tr>
           <tr><td>Were draft tokens accepted?</td><td><code>num_accepted_tokens</code>, <code>acceptance_rate</code>, per-position acceptance</td><td>None for acceptance quality when all DP workers report.</td><td>Continue using complete-DP reliability guard.</td></tr>
           <tr><td>Was SpecDec enabled only in the long tail?</td><td>scheduler/runner gate <code>checked</code>, <code>enabled</code>, <code>disabled</code>, <code>enabled_ratio</code>, request/token thresholds</td><td>Per-request timing while gate toggles.</td><td>Keep gate counters and add request-bucket timing if needed.</td></tr>
-          <tr><td>How much time did drafter generation take?</td><td>Not separated by current NeMo-RL logs.</td><td>Drafter forward GPU time and host scheduling time.</td><td>Job <code>3106783</code> targets <code>vllm_generation_worker</code> nsys traces; add internal timers only if the trace lacks draft ranges.</td></tr>
-          <tr><td>How much time did verifier/target verification take?</td><td>Only total generation elapsed and aggregate vLLM forward/execute style metrics when enabled.</td><td>Verifier forward GPU time, accept/reject sampling time, and post-step copy/scheduler time.</td><td>Use job <code>3106783</code> to inspect target execution/verification ranges, then add explicit vLLM timers if needed.</td></tr>
+          <tr><td>How much time did drafter generation take?</td><td>Not separated by current NeMo-RL logs.</td><td>Drafter forward GPU time and host scheduling time.</td><td>Job <code>3106841</code> targets <code>vllm_generation_worker</code> nsys traces; add internal timers only if the trace lacks draft ranges.</td></tr>
+          <tr><td>How much time did verifier/target verification take?</td><td>Only total generation elapsed and aggregate vLLM forward/execute style metrics when enabled.</td><td>Verifier forward GPU time, accept/reject sampling time, and post-step copy/scheduler time.</td><td>Use job <code>3106841</code> to inspect target execution/verification ranges, then add explicit vLLM timers if needed.</td></tr>
         </tbody>
       </table>
     </div>
