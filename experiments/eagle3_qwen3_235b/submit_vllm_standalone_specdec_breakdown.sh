@@ -22,9 +22,14 @@ ISL="${ISL:-1000}"
 OSL="${OSL:-1000}"
 BATCH_SIZES="${BATCH_SIZES:-1 2 4}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
+ENFORCE_EAGER="${ENFORCE_EAGER:-true}"
 TAG="${TAG:-qwen30ba3b_standalone_specdec_breakdown_k${NUM_SPECULATIVE_TOKENS}_$(date +%Y%m%d_%H%M%S)}"
 LOGS_DIR="${LOGS_DIR:-${LOG_ROOT}/${TAG}}"
 JOB_FILE="${JOB_FILE:-${ROOT_DIR}/latest_vllm_standalone_specdec_breakdown_jobs.txt}"
+EAGER_ARG=""
+case "${ENFORCE_EAGER}" in
+  1|true|TRUE|yes|YES|y|Y|on|ON) EAGER_ARG="--enforce-eager" ;;
+esac
 
 SPECULATIVE_CONFIG="$(python3 - <<PY
 import json
@@ -83,6 +88,7 @@ srun --nodes=1 --ntasks=1 \\
     python3 standalone_vllm_specdec_breakdown.py \\
     --model '${MODEL}' \\
     --speculative-config '@${LOGS_DIR}/speculative_config.json' \\
+    ${EAGER_ARG} \\
     --tp ${TP} --pp ${PP} \\
     --distributed-executor-backend none \\
     --attention-backend TRITON_ATTN \\
@@ -105,6 +111,7 @@ job_id="$(ssh "$REMOTE_HOST" "$remote_cmd" | tail -n 1)"
   echo "model=${MODEL}"
   echo "draft_model=${DRAFT_MODEL}"
   echo "num_speculative_tokens=${NUM_SPECULATIVE_TOKENS}"
+  echo "enforce_eager=${ENFORCE_EAGER}"
   echo "scope=vLLM standalone LLM.generate torch-profiler breakdown, not NeMo-RL E2E"
   echo "figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads"
   echo "logs_dir=${LOGS_DIR}"

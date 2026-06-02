@@ -168,6 +168,8 @@ def build_llm(args: argparse.Namespace, capture_sizes: list[int]):
         "seed": 0,
         "compilation_config": compilation_config,
     }
+    if args.enforce_eager:
+        kwargs["enforce_eager"] = True
     if args.distributed_executor_backend != "none":
         kwargs["distributed_executor_backend"] = args.distributed_executor_backend
     if args.attention_backend:
@@ -188,6 +190,7 @@ def main() -> None:
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--kv-cache-dtype", default="auto")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.82)
+    parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--max-model-len", type=int)
     parser.add_argument("--max-num-batched-tokens", type=int)
     parser.add_argument("--isl", type=int, default=1000)
