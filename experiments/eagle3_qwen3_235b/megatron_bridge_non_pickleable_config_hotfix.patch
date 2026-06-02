@@ -1,0 +1,47 @@
+*** Begin Patch
+*** Update File: 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src/megatron/bridge/models/conversion/utils.py
+@@
+ import copy
+ import functools
++import pickle
+ import re
+ import types
+ from typing import Iterable, List, Optional, Tuple
+@@
+     raise ValueError(f"Parameter '{param_name}' not found in model at VP stage {vp_stage}")
+ 
+ 
++def _is_torch_process_group(obj):
++    cls = type(obj)
++    return cls.__name__ == "ProcessGroup" and "distributed" in cls.__module__
++
++
++def _is_pickleable_leaf(obj):
++    try:
++        pickle.dumps(obj)
++    except Exception:
++        return False
++    return True
++
++
+ def remove_non_pickleables(obj, max_depth: int = 3, current_depth: int = 0):
+     """Remove non-pickleable objects from a configuration object recursively.
+@@
+     Returns:
+         The cleaned object with non-pickleables removed
+     """
+ 
++    if _is_torch_process_group(obj):
++        return None
++
+     # Stop recursion if max depth reached
+     if current_depth >= max_depth:
+-        return obj
++        return obj if _is_pickleable_leaf(obj) else None
+@@
+-    # For primitive types and other safe objects, return as-is
+-    return obj
++    # For primitive types and other safe objects, return as-is. Drop any
++    # remaining non-pickleable leaves before broadcast_object_list.
++    return obj if _is_pickleable_leaf(obj) else None
+*** End Patch
