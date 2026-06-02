@@ -63,6 +63,12 @@ NeMo-RL GRPO:
     retry_status=Submitted at 2026-06-02 14:38 PDT. Both are RUNNING as of 2026-06-02 14:46 PDT. Ray cluster startup succeeded: baseline 3119388 and SpecDec K=3 3119389 both reached actors online 4/4. They are still in driver uv dependency/native-extension setup with 0 GRPO step metrics so far.
     metrics=No NeMo-RL GRPO step, throughput, or acceptance metrics emitted yet. The completed numbers above are vLLM standalone only.
 
+  status_update_2026-06-02_14:55_PDT:
+    retry_jobs=3119388 baseline r2, 3119389 SpecDec K=3 request-gated r2.
+    retry_status=Both jobs remain RUNNING. Baseline elapsed about 00:15:03; SpecDec K=3 elapsed about 00:15:02.
+    current_phase=Driver uv dependency/native-extension setup. Logs show package install completed and native builds running, including flash-attn, nv-grouped-gemm, causal-conv1d, mamba-ssm, and transformer-engine-torch.
+    metrics=Still no NeMo-RL GRPO Step, throughput, generation time, or SpecDec acceptance metrics from 3119389. Therefore there is not yet a NeMo-RL K=3 result to compare against baseline.
+
   3118323 baseline
     job_name=qwen3-8b-qwen3-8b-baseline-publichf-target-N1xG4
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3118323.out
@@ -72,7 +78,7 @@ NeMo-RL GRPO:
     job_name=qwen3-8b-qwen3-8b-baseline-r2-N1xG4
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3119388.out
     driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_baseline_py312_r2
-    status=RUNNING at 2026-06-02 14:46 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.
+    status=RUNNING at 2026-06-02 14:55 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.
 
   3118324 SpecDec K=3, request-gated long-tail
     job_name=qwen3-8b-qwen3-8b-publichf-eagle3-k3-req8-N1xG4
@@ -93,4 +99,4 @@ NeMo-RL GRPO:
     drafter=RedHatAI/Qwen3-8B-speculator.eagle3
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3119389.out
     driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_publichf_specdec_py312_r2
-    status=RUNNING at 2026-06-02 14:46 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.
+    status=RUNNING at 2026-06-02 14:55 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.

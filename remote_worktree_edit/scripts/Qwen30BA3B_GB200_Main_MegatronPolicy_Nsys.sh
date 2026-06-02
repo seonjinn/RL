@@ -102,24 +102,31 @@ echo "[NSYS] worker_patterns=${NRL_NSYS_WORKER_PATTERNS}"
 echo "[NSYS] max_steps=${MAX_STEPS}"
 echo "[NSYS] NRL_FORCE_REBUILD_VENVS=true"
 
-uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${NEMO_RL_DIR} python ./examples/run_grpo.py \\
-  --config ${CONFIG_FILE} \\
-  cluster.num_nodes=${NUM_NODES} \\
-  cluster.gpus_per_node=${GPUS_PER_NODE} \\
-  grpo.async_grpo.enabled=false \\
-  grpo.val_period=1000 \\
-  checkpointing.enabled=false \\
-  grpo.num_prompts_per_step=${NUM_PROMPTS} \\
-  grpo.num_generations_per_prompt=${NUM_GENERATIONS} \\
-  policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE} \\
-  policy.sequence_packing.enabled=true \\
-  policy.megatron_cfg.moe_enable_deepep=false \\
-  policy.megatron_cfg.moe_token_dispatcher_type=alltoall \\
-  grpo.max_num_steps=${MAX_STEPS} \\
-  logger.wandb_enabled=true \\
-  logger.wandb.project=${WANDB_PROJECT} \\
-  logger.wandb.name=${WANDB_NAME} \\
-  ${EXTRA_OVERRIDES}
+RUN_ARGS=(
+  --config ${CONFIG_FILE}
+  cluster.num_nodes=${NUM_NODES}
+  cluster.gpus_per_node=${GPUS_PER_NODE}
+  grpo.async_grpo.enabled=false
+  grpo.val_period=1000
+  checkpointing.enabled=false
+  grpo.num_prompts_per_step=${NUM_PROMPTS}
+  grpo.num_generations_per_prompt=${NUM_GENERATIONS}
+  policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}
+  policy.sequence_packing.enabled=true
+  policy.megatron_cfg.moe_enable_deepep=false
+  policy.megatron_cfg.moe_token_dispatcher_type=alltoall
+  grpo.max_num_steps=${MAX_STEPS}
+  logger.wandb_enabled=true
+  logger.wandb.project=${WANDB_PROJECT}
+  logger.wandb.name=${WANDB_NAME}
+)
+if [[ -n "${EXTRA_OVERRIDES}" ]]; then
+  # shellcheck disable=SC2206
+  EXTRA_ARGS=( ${EXTRA_OVERRIDES} )
+  RUN_ARGS+=("\${EXTRA_ARGS[@]}")
+fi
+
+uv run --python ${UV_PYTHON} --locked --extra mcore --directory ${NEMO_RL_DIR} python ./examples/run_grpo.py "\${RUN_ARGS[@]}"
 EOF
 
 echo "=========================================="
