@@ -37,8 +37,13 @@ def main() -> int:
     parser.add_argument("--datagen-time", default="01:00:00")
     parser.add_argument("--datagen-nodes", type=int, default=2)
     parser.add_argument("--train-time", default="04:00:00")
-    parser.add_argument("--job-suffix", default="-missing4-repair")
+    parser.add_argument("--job-suffix", default="-missing4-repair-mlen8193")
     parser.add_argument("--vllm-site", default=str(base.ARTIFACT_ROOT / "python_site/vllm_0_17_0_extract_py312"))
+    parser.add_argument(
+        "--vllm-max-model-len",
+        default="8193",
+        help="vLLM serving context length for repair requests. Keep SEQ_LENGTH at 8192, but use 8193 so 8192-token samples can request one hidden-state output token.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -53,6 +58,7 @@ def main() -> int:
 
     ray_sub = base.materialize_ray_submit_script(dry_run=args.dry_run)
     common = base.common_env(paths)
+    common["VLLM_MAX_MODEL_LEN"] = str(args.vllm_max_model_len)
 
     repair_jobs: dict[str, str] = {}
     for idx in missing_ids:
@@ -94,6 +100,7 @@ def main() -> int:
         "repair_jobs": repair_jobs,
         "replacement_train_job": train_id,
         "replacement_train_dependency": dependency,
+        "vllm_max_model_len": str(args.vllm_max_model_len),
         "superseded_train_job": "3101473",
         "hidden_states_dir": str(paths["hidden_states_dir"]),
         "checkpoint_dir": str(paths["checkpoint_dir"]),

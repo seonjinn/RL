@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 23:43 PDT",
+  "updated_at": "2026-06-02 00:00 PDT",
   "scope": "Qwen3-235B-A22B Thinking math target-response generation for in-house Speculators Eagle3 drafter training",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "prompt_pool": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl",
@@ -367,8 +367,8 @@
     "speculators_training_chain_after_wave4_finalizer": {
       "prepare_job": "3068015",
       "hidden_state_array_job": "3072149_[0-99]",
-      "train_job": "3104702",
-      "dependency": "prepare 3068015 was reused after successful completion; hidden-state array 3072149 was submitted dependency-free after validating prepared outputs; original train 3072150 was cancelled after shards 005-010 failed the dirty-check; repair jobs 3072518-3072523 cover shards 005-010; train 3072524 was cancelled after shards 94 and 96 failed at Ray srun startup; repair jobs 3101471 and 3101472 cover shards 94 and 96; train 3101473 was cancelled before start after exact hidden-state coverage found four missing ids; replacement train 3104702 depends on afterok:3104698:3104699:3104700:3104701",
+      "train_job": "3105111",
+      "dependency": "prepare 3068015 was reused after successful completion; hidden-state array 3072149 was submitted dependency-free after validating prepared outputs; original train 3072150 was cancelled after shards 005-010 failed the dirty-check; repair jobs 3072518-3072523 cover shards 005-010; train 3072524 was cancelled after shards 94 and 96 failed at Ray srun startup; repair jobs 3101471 and 3101472 cover shards 94 and 96; train 3101473 was cancelled before start after exact hidden-state coverage found four missing ids; first missing-id train 3104702 was cancelled after repair jobs 3104698/3104699/3104701 hit vLLM max-model-len validation and 3104700 was cancelled; replacement train 3105111 depends on afterok:3105107:3105108:3105109:3105110",
       "shards": 100,
       "datagen_nodes": 2,
       "time_limits": {
@@ -376,15 +376,16 @@
         "hidden_state_array": "04:00:00",
         "train": "04:00:00"
       },
-      "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Hidden-state array 3072149_[0-99]%10 completed, but exact coverage validation at 2026-06-01 23:30 PDT found 499996 hs_*.safetensors files and four missing ids: 178153, 272847, 324589, and 329404. Train 3101473 was cancelled before start. Missing-id repair jobs 3104698, 3104699, 3104700, and 3104701 were submitted at 23:34 PDT with one-sample DATAGEN_START_INDEX/DATAGEN_END_INDEX ranges. At the 23:43 PDT poll all four repair jobs were RUNNING, exact coverage was still 499996/500000, and replacement train 3104702 was dependency-pending on afterok:3104698:3104699:3104700:3104701 with coverage validation enabled.",
+      "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Hidden-state array 3072149_[0-99]%10 completed, but exact coverage validation at 2026-06-01 23:30 PDT found 499996 hs_*.safetensors files and four missing ids: 178153, 272847, 324589, and 329404. Train 3101473 was cancelled before start. First missing-id repair jobs 3104698, 3104699, and 3104701 completed with exit 0 but did not write files because vLLM rejected the 8192-token prompts under VLLM_MAX_MODEL_LEN=8192; 3104700 was cancelled for the same expected issue, and train 3104702 was cancelled. New repair jobs 3105107, 3105108, 3105109, and 3105110 were submitted at 23:50 PDT with VLLM_MAX_MODEL_LEN=8193, and replacement train 3105111 is dependency-pending on afterok:3105107:3105108:3105109:3105110 with coverage validation enabled.",
       "checkpoint_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193",
       "hidden_states_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-      "note": "Replaces cancelled stale chain 3063316 -> 3063317_[0-99] -> 3063318 and failed/cancelled chains 3068016 -> 3068017, 3070670 -> 3070671, 3071019 -> 3071020, plus superseded trains 3072150, 3072524, and 3101473. It will train after missing-id repair jobs 3104698-3104701 complete successfully; repair jobs 3072518-3072523 and 3101471/3101472 are complete.",
+      "note": "Replaces cancelled stale chain 3063316 -> 3063317_[0-99] -> 3063318 and failed/cancelled chains 3068016 -> 3068017, 3070670 -> 3070671, 3071019 -> 3071020, plus superseded trains 3072150, 3072524, 3101473, and 3104702. It will train after VLLM_MAX_MODEL_LEN=8193 missing-id repair jobs 3105107-3105110 complete successfully; repair jobs 3072518-3072523 and 3101471/3101472 are complete.",
       "superseded_train_job": "3072524",
       "superseded_train_jobs": [
         "3072150",
         "3072524",
-        "3101473"
+        "3101473",
+        "3104702"
       ],
       "repair_hidden_state_jobs": [
         "3072518",
@@ -398,13 +399,24 @@
         "3104698",
         "3104699",
         "3104700",
-        "3104701"
+        "3104701",
+        "3105107",
+        "3105108",
+        "3105109",
+        "3105110"
       ],
       "completed_hidden_state_repair_jobs": {
         "94": "3101471",
         "96": "3101472"
       },
-      "active_train_job": "3104702",
+      "failed_missing_hidden_state_repair_jobs": {
+        "178153": "3104698",
+        "272847": "3104699",
+        "324589": "3104700",
+        "329404": "3104701"
+      },
+      "failed_missing_hidden_state_repair_root_cause": "VLLM_MAX_MODEL_LEN=8192 rejects 8192-token prompts when one output token is requested; use VLLM_MAX_MODEL_LEN=8193 for repairs.",
+      "active_train_job": "3105111",
       "hidden_state_files_observed": 499996,
       "missing_hidden_state_ids": [
         178153,
@@ -413,13 +425,14 @@
         329404
       ],
       "missing_hidden_state_repair_jobs": {
-        "178153": "3104698",
-        "272847": "3104699",
-        "324589": "3104700",
-        "329404": "3104701"
+        "178153": "3105107",
+        "272847": "3105108",
+        "324589": "3105109",
+        "329404": "3105110"
       },
-      "hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-01 23:30 PDT",
-      "latest_check_time": "2026-06-01 23:43 PDT"
+      "repair_vllm_max_model_len": 8193,
+      "hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-02 00:00 PDT",
+      "latest_check_time": "2026-06-02 00:00 PDT"
     },
     "safe_w4_missing_id_repair_adaptive_maxtok": {
       "job_id": "3068010",
@@ -442,7 +455,7 @@
     "active_missing_id_repair_jobs_observed": 0,
     "complete_chunk_files_observed_ge5000_rows": 100,
     "short_nonzero_chunk_files_observed": 0,
-    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Replacement 3071825_[0-99]%5 was cancelled after the first vLLM hidden-state request exposed the extract_hidden_states draft-token shape bug. Current hidden-state array 3072149_[0-99]%10 completed, but exact coverage validation found 499996 hs_*.safetensors files and missing ids 178153, 272847, 324589, and 329404. Train 3101473 was cancelled before start. Missing-id repair jobs 3104698-3104701 were submitted at 2026-06-01 23:34 PDT, and replacement train job 3104702 waits on afterok for those repairs with coverage validation enabled. The Speculators dirty-check now validates the approved full diff hash even on the default APPLY_COMPAT_PATCHES=true path.",
+    "note": "Count only includes qwen3_235b_*.jsonl files under data/mixed_target_chunks; qwen3_30ba3b_* files in the same artifact tree are intentionally excluded. Direct missing-id repair job 3068010 for 1435 missing prompts completed successfully at 2026-06-01 02:18 PDT and generated 1435 repair rows. Finalizer 3068014 completed at 2026-06-01 02:23 PDT and produced exact 500000-row final conversation and Speculators JSONL files. Prepare job 3068015 completed successfully by 2026-06-01 02:49 PDT, writing 16 arrow shards plus token_freq.pt. Replacement 3071825_[0-99]%5 was cancelled after the first vLLM hidden-state request exposed the extract_hidden_states draft-token shape bug. Current hidden-state array 3072149_[0-99]%10 completed, but exact coverage validation found 499996 hs_*.safetensors files and missing ids 178153, 272847, 324589, and 329404. Train 3101473 was cancelled before start. First missing-id repair jobs 3104698/3104699/3104701 hit vLLM 8192-context validation and did not write files, 3104700 was cancelled, and train 3104702 was cancelled. New VLLM_MAX_MODEL_LEN=8193 repair jobs 3105107-3105110 were submitted at 2026-06-01 23:50 PDT, and replacement train job 3105111 waits on afterok for those repairs with coverage validation enabled. The Speculators dirty-check now validates the approved full diff hash even on the default APPLY_COMPAT_PATCHES=true path.",
     "min_nonzero_rows_observed": 5000,
     "max_rows_observed": 5000,
     "pending_continuation_jobs_observed": 0,
@@ -464,12 +477,12 @@
     "current_prepare_job": "3068015",
     "current_prepare_state_observed": "COMPLETED by 2026-06-01 02:49 PDT; output has 500000 examples, 16 arrow shards, token_freq.pt, and state.json",
     "current_hidden_state_array_job": "3072149_[0-99]",
-    "current_hidden_state_array_state_observed": "COMPLETED, but exact coverage had four missing hs ids at 2026-06-01 23:30 PDT; missing-id repairs 3104698-3104701 are active/pending.",
-    "current_train_job": "3104702",
-    "current_train_state_observed": "PENDING with Dependency on afterok:3104698:3104699:3104700:3104701; superseded train 3101473 was cancelled before starting on incomplete coverage",
+    "current_hidden_state_array_state_observed": "COMPLETED, but exact coverage had four missing hs ids. First missing-id repairs 3104698-3104701 failed/cancelled at the 8192-token context boundary; retry repairs 3105107-3105110 are running with VLLM_MAX_MODEL_LEN=8193.",
+    "current_train_job": "3105111",
+    "current_train_state_observed": "PENDING with Dependency on afterok:3105107:3105108:3105109:3105110; superseded trains 3101473 and 3104702 were cancelled before training",
     "superseded_train_job": "3072150",
     "current_hidden_state_files_observed": 499996,
-    "current_hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-01 23:30 PDT",
+    "current_hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-02 00:00 PDT",
     "chunk_count_revalidated_at": "2026-06-01 08:06 PDT",
     "chunk_count_revalidation": "100 qwen3_235b chunk files, total 500000 rows, min 5000, max 5000, 100 complete, 0 short."
   },
@@ -524,38 +537,48 @@
   "clean_split_status": {
     "openmath_denylist_applied_to_final_merge": true,
     "direct_prompt_overlap_verified": true,
-    "note": "The 235B in-house 500K conversation file has passed validation with --denylist-prompts-from openmath_reasoning_cot_conversations_50k.jsonl: 500000 rows, 500000 unique prompts, 0 duplicate prompts, and 0 denylisted OpenMath prompts. Prepare job 3068015 completed. Hidden-state array 3072149 is running after the vLLM extract_hidden_states shape fix; the drafter checkpoint is not trained yet.",
+    "note": "The 235B in-house 500K conversation file has passed validation with --denylist-prompts-from openmath_reasoning_cot_conversations_50k.jsonl: 500000 rows, 500000 unique prompts, 0 duplicate prompts, and 0 denylisted OpenMath prompts. Prepare job 3068015 completed. Hidden-state array 3072149 completed after the vLLM extract_hidden_states shape fix, but exact coverage is still 499996/500000 while four missing-id repairs run. The drafter checkpoint is not trained yet.",
     "current_hidden_state_files_observed": 499996,
-    "current_hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-01 23:30 PDT",
-    "current_hidden_state_array_state_observed": "COMPLETED, but exact coverage had four missing hs ids at 2026-06-01 23:30 PDT; missing-id repairs 3104698-3104701 are active/pending and replacement train 3104702 is dependency-pending."
+    "current_hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-02 00:00 PDT",
+    "current_hidden_state_array_state_observed": "COMPLETED, but exact coverage had four missing hs ids; first repair wave failed on VLLM_MAX_MODEL_LEN=8192, and replacement repairs 3105107-3105110 are running with VLLM_MAX_MODEL_LEN=8193."
   },
   "current_500k_speculators_training_chain": {
     "state": "missing_hidden_state_repair_running",
-    "updated_at": "2026-06-01 23:43 PDT",
+    "updated_at": "2026-06-02 00:00 PDT",
     "prepare_job": "3068015",
     "hidden_state_array_job": "3072149_[0-99]%10",
-    "repair_jobs": "3072518-3072523 completed successfully for shards 005-010; 3101471 and 3101472 completed successfully for shards 94 and 96; missing-id repairs 3104698-3104701 are RUNNING for ids 178153, 272847, 324589, and 329404",
-    "replacement_train_job": "3104702",
-    "superseded_train_job": "3101473",
+    "repair_jobs": "3072518-3072523 completed successfully for shards 005-010; 3101471 and 3101472 completed successfully for shards 94 and 96; first missing-id repairs 3104698-3104701 did not produce the missing files because VLLM_MAX_MODEL_LEN=8192 rejected 8192-token prompts; replacement repairs 3105107-3105110 are running with VLLM_MAX_MODEL_LEN=8193",
+    "replacement_train_job": "3105111",
+    "superseded_train_jobs": [
+      "3101473",
+      "3104702"
+    ],
     "hidden_state_files_observed": 499996,
-    "hidden_state_dir_size": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-01 23:30 PDT",
+    "hidden_state_dir_size": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-02 00:00 PDT",
     "active_array_tasks": "none; 3072149_98 and 3072149_99 completed",
     "pending_array_tasks": "none; missing-id repair jobs are now the active dependency",
-    "running_repair_jobs": {
+    "failed_repair_jobs": {
       "178153": "3104698",
       "272847": "3104699",
       "324589": "3104700",
       "329404": "3104701"
     },
-    "train_state": "3104702 dependency-pending on afterok:3104698:3104699:3104700:3104701; superseded train 3101473 was cancelled before starting",
-    "note": "235B in-house Speculators Eagle3 drafter is not training yet. The 100-shard hidden-state array completed, but exact coverage found four missing ids. Missing-id repair jobs 3104698-3104701 are running, and replacement train 3104702 will start only after those repairs succeed; train coverage validation remains enabled.",
+    "running_repair_jobs": {
+      "178153": "3105107",
+      "272847": "3105108",
+      "324589": "3105109",
+      "329404": "3105110"
+    },
+    "repair_vllm_max_model_len": 8193,
+    "train_state": "3105111 dependency-pending on afterok:3105107:3105108:3105109:3105110; superseded trains 3101473 and 3104702 were cancelled before training",
+    "note": "235B in-house Speculators Eagle3 drafter is not training yet. The 100-shard hidden-state array completed, but exact coverage found four missing ids. The first one-sample repair wave used VLLM_MAX_MODEL_LEN=8192 and failed on 8192-token prompts; the replacement repair wave uses VLLM_MAX_MODEL_LEN=8193. Train 3105111 will start only after repairs 3105107-3105110 succeed; train coverage validation remains enabled.",
     "completed_repair_jobs": {
       "94": "3101471",
       "96": "3101472"
     },
-    "hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-01 23:30 PDT",
-    "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Hidden-state array 3072149_[0-99]%10 completed, but exact coverage validation found missing ids 178153, 272847, 324589, and 329404. Missing-id repair jobs 3104698-3104701 are running, exact coverage remains 499996/500000, and replacement train 3104702 is dependency-pending on afterok for those repairs.",
-    "latest_check_time": "2026-06-01 23:43 PDT"
+    "hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-02 00:00 PDT",
+    "state_at_latest_check": "Prepare job 3068015 completed by 2026-06-01 02:49 PDT with 500000 prepared examples. Hidden-state array 3072149_[0-99]%10 completed, but exact coverage validation found missing ids 178153, 272847, 324589, and 329404. First missing-id repairs 3104698-3104701 did not produce files because vLLM rejected 8192-token prompts with VLLM_MAX_MODEL_LEN=8192. Replacement repairs 3105107-3105110 are running with VLLM_MAX_MODEL_LEN=8193, exact coverage remains 499996/500000, and replacement train 3105111 is dependency-pending on afterok for those repairs.",
+    "latest_check_time": "2026-06-02 00:00 PDT"
   },
   "provenance_guard_hardening": {
     "updated_at": "2026-06-01 08:13 PDT",
@@ -571,7 +594,7 @@
   },
   "pipeline_status": {
     "current_hidden_state_files_observed": 499996,
-    "current_hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-01 23:30 PDT",
-    "current_hidden_state_array_state_observed": "COMPLETED, but exact coverage had four missing hs ids; missing-id repairs 3104698-3104701 are active/pending and replacement train 3104702 is dependency-pending."
+    "current_hidden_state_size_observed": "51T last full size scan; exact hs_*.safetensors count 499996 at 2026-06-02 00:00 PDT",
+    "current_hidden_state_array_state_observed": "COMPLETED, but exact coverage had four missing hs ids; first missing-id repairs 3104698-3104701 failed at the 8192-token context boundary, retry repairs 3105107-3105110 are running with VLLM_MAX_MODEL_LEN=8193, and replacement train 3105111 is dependency-pending."
   }
 }

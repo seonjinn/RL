@@ -11,17 +11,28 @@
     324589,
     329404
   ],
-  "superseded_train_job": "3101473",
-  "superseded_train_action": "cancelled before start after coverage check found missing hidden-state ids",
-  "repair_jobs": {
+  "superseded_train_jobs": [
+    "3101473",
+    "3104702"
+  ],
+  "superseded_train_action": "3101473 was cancelled before start after coverage check found missing hidden-state ids. 3104702 was cancelled after the first repair wave hit vLLM max-model-len validation and did not write the missing files.",
+  "failed_repair_jobs": {
     "178153": "3104698",
     "272847": "3104699",
     "324589": "3104700",
     "329404": "3104701"
   },
-  "replacement_train_job": "3104702",
-  "replacement_train_dependency": "afterok:3104698:3104699:3104700:3104701",
+  "failed_repair_root_cause": "The first repair wave used VLLM_MAX_MODEL_LEN=8192. The four missing samples have 8192 input tokens and request 1 output/hidden-state token, so vLLM rejected them because max input length was 8191.",
+  "repair_jobs": {
+    "178153": "3105107",
+    "272847": "3105108",
+    "324589": "3105109",
+    "329404": "3105110"
+  },
+  "repair_vllm_max_model_len": 8193,
+  "replacement_train_job": "3105111",
+  "replacement_train_dependency": "afterok:3105107:3105108:3105109:3105110",
   "replacement_train_validation": "VALIDATE_HIDDEN_STATE_COVERAGE=true; train should fail closed unless hs_0..hs_499999 are all present.",
-  "latest_queue_observation": "At 2026-06-01 23:43 PDT, all four repair jobs 3104698, 3104699, 3104700, and 3104701 were RUNNING; replacement train 3104702 was still PENDING Dependency.",
-  "latest_hidden_state_coverage_observation": "At 2026-06-01 23:43 PDT, exact hs_*.safetensors count was still 499996 and the missing ids were still 178153, 272847, 324589, and 329404; the repair jobs were in startup and had not written the missing files yet."
+  "latest_queue_observation": "At 2026-06-02 00:00 PDT, repair jobs 3105107, 3105108, 3105109, and 3105110 were RUNNING; replacement train 3105111 was PENDING Dependency.",
+  "latest_hidden_state_coverage_observation": "At 2026-06-02 00:00 PDT, exact hs_*.safetensors count was still 499996 and the missing ids were still 178153, 272847, 324589, and 329404."
 }

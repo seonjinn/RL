@@ -2124,11 +2124,21 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 23:43 PDT",
+    "updated_at": "2026-06-02 00:00 PDT",
     "hidden_state_array_job": "3072149_[0-99]%10",
-    "active_tasks": "missing-id repair jobs 3104698, 3104699, 3104700, and 3104701 are RUNNING; earlier shard repair jobs 3101471/3101472 completed for shards 94/96",
-    "train_job": "3104702 dependency-pending on afterok:3104698:3104699:3104700:3104701",
-    "superseded_train_job": "3101473 cancelled before start after exact coverage check found missing hidden-state ids",
+    "active_tasks": "missing-id repair retry jobs 3105107, 3105108, 3105109, and 3105110 are RUNNING with VLLM_MAX_MODEL_LEN=8193; earlier shard repair jobs 3101471/3101472 completed for shards 94/96",
+    "train_job": "3105111 dependency-pending on afterok:3105107:3105108:3105109:3105110",
+    "superseded_train_jobs": [
+      "3101473 cancelled before start after exact coverage check found missing hidden-state ids",
+      "3104702 cancelled after first missing-id repair wave hit vLLM max-model-len validation"
+    ],
+    "failed_missing_hidden_state_repair_jobs": {
+      "178153": "3104698",
+      "272847": "3104699",
+      "324589": "3104700",
+      "329404": "3104701"
+    },
+    "failed_missing_hidden_state_repair_root_cause": "The first repair wave used VLLM_MAX_MODEL_LEN=8192. These samples have 8192 input tokens and request one output/hidden-state token, so vLLM rejected them because max input length was 8191.",
     "hidden_state_files_observed": 499996,
     "hidden_state_files_expected": 500000,
     "missing_hidden_state_ids": [
@@ -2137,7 +2147,7 @@
       324589,
       329404
     ],
-    "status": "100-shard hidden-state array completed, but exact hs_*.safetensors coverage is 499996/500000. Four one-sample repairs are running; 235B Speculators training has not started yet.",
+    "status": "100-shard hidden-state array completed, but exact hs_*.safetensors coverage is 499996/500000. Four one-sample repairs are running in the retry wave with VLLM_MAX_MODEL_LEN=8193; 235B Speculators training has not started yet.",
     "hidden_state_file_extension": ".safetensors"
   },
   "hybridep_specdec_interpretation": {
@@ -2161,22 +2171,25 @@
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-01 23:43 PDT",
-    "stage": "missing_hidden_state_repair",
+    "updated_at": "2026-06-02 00:00 PDT",
+    "stage": "missing_hidden_state_repair_mlen8193_running",
     "hidden_state_count": 499996,
     "target_hidden_state_count": 500000,
     "hidden_state_count_fraction": 0.999992,
     "array_job": "3072149_[0-99]%10",
     "active_tasks": [
-      "repair 3104698 for id 178153",
-      "repair 3104699 for id 272847",
-      "repair 3104700 for id 324589",
-      "repair 3104701 for id 329404"
+      "repair 3105107 for id 178153 with VLLM_MAX_MODEL_LEN=8193",
+      "repair 3105108 for id 272847 with VLLM_MAX_MODEL_LEN=8193",
+      "repair 3105109 for id 324589 with VLLM_MAX_MODEL_LEN=8193",
+      "repair 3105110 for id 329404 with VLLM_MAX_MODEL_LEN=8193"
     ],
     "pending_tasks": "replacement train waits on all four missing-id repair jobs",
-    "train_job": "3104702",
+    "train_job": "3105111",
     "train_job_state": "PENDING Dependency",
-    "superseded_train_job": "3101473",
+    "superseded_train_jobs": [
+      "3101473",
+      "3104702"
+    ],
     "missing_hidden_state_ids": [
       178153,
       272847,
@@ -2195,17 +2208,29 @@
       "3104698",
       "3104699",
       "3104700",
-      "3104701"
+      "3104701",
+      "3105107",
+      "3105108",
+      "3105109",
+      "3105110"
     ],
     "completed_repair_jobs": {
       "94": "3101471",
       "96": "3101472"
     },
-    "running_repair_jobs": {
+    "failed_missing_hidden_state_repair_jobs": {
       "178153": "3104698",
       "272847": "3104699",
       "324589": "3104700",
       "329404": "3104701"
-    }
+    },
+    "failed_missing_hidden_state_repair_root_cause": "VLLM_MAX_MODEL_LEN=8192 was too short for 8192-token inputs plus one requested output/hidden-state token.",
+    "running_repair_jobs": {
+      "178153": "3105107",
+      "272847": "3105108",
+      "324589": "3105109",
+      "329404": "3105110"
+    },
+    "repair_vllm_max_model_len": 8193
   }
 }
