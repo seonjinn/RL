@@ -25,6 +25,7 @@ BATCH_SIZES="${BATCH_SIZES:-1 2 4}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 ENFORCE_EAGER="${ENFORCE_EAGER:-true}"
 DISABLE_VLLM_PROFILER="${DISABLE_VLLM_PROFILER:-false}"
+DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
 MODEL_LABEL="${MODEL_LABEL:-$(printf '%s' "$MODEL" | tr '/:' '__' | tr -cd 'A-Za-z0-9_.-')}"
 JOB_KIND="specdec"
 case "${ENABLE_SPECDEC}" in
@@ -45,6 +46,14 @@ case "${DISABLE_VLLM_PROFILER}" in
     PROFILER_ARG="--disable-vllm-profiler"
     BREAKDOWN_INSTRUMENTATION=0
     BENCHMARK_SCOPE="vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E"
+    ;;
+esac
+CUSTOM_ALL_REDUCE_ARG=""
+CUSTOM_ALL_REDUCE_ENV=0
+case "${DISABLE_CUSTOM_ALL_REDUCE}" in
+  1|true|TRUE|yes|YES|y|Y|on|ON)
+    CUSTOM_ALL_REDUCE_ARG="--disable-custom-all-reduce"
+    CUSTOM_ALL_REDUCE_ENV=1
     ;;
 esac
 
@@ -99,6 +108,7 @@ export HF_DATASETS_CACHE=\$HF_HOME/cache
 export HUGGINGFACE_HUB_CACHE=\$HF_HOME/hub
 export VLLM_USE_V1=1
 export VLLM_DISABLE_COMPILE_CACHE=1
+export VLLM_DISABLE_CUSTOM_ALL_REDUCE=${CUSTOM_ALL_REDUCE_ENV}
 export VLLM_ALLOW_INSECURE_SERIALIZATION=1
 export VLLM_USE_FLASHINFER_SAMPLER=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -118,6 +128,7 @@ srun --nodes=1 --ntasks=1 \\
     ${SPECULATIVE_ARG} \\
     ${EAGER_ARG} \\
     ${PROFILER_ARG} \\
+    ${CUSTOM_ALL_REDUCE_ARG} \\
     --tp ${TP} --pp ${PP} \\
     --distributed-executor-backend none \\
     --attention-backend TRITON_ATTN \\
@@ -143,6 +154,7 @@ job_id="$(ssh "$REMOTE_HOST" "$remote_cmd" | tail -n 1)"
   echo "num_speculative_tokens=${NUM_SPECULATIVE_TOKENS}"
   echo "enforce_eager=${ENFORCE_EAGER}"
   echo "disable_vllm_profiler=${DISABLE_VLLM_PROFILER}"
+  echo "disable_custom_all_reduce=${DISABLE_CUSTOM_ALL_REDUCE}"
   echo "scope=${BENCHMARK_SCOPE}"
   echo "figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads"
   echo "logs_dir=${LOGS_DIR}"

@@ -174,6 +174,8 @@ def build_llm(args: argparse.Namespace, capture_sizes: list[int]):
         kwargs["distributed_executor_backend"] = args.distributed_executor_backend
     if args.attention_backend:
         kwargs["attention_backend"] = args.attention_backend
+    if args.disable_custom_all_reduce:
+        kwargs["disable_custom_all_reduce"] = True
     if not args.disable_vllm_profiler:
         kwargs["profiler_config"] = {
             "profiler": "torch",
@@ -192,6 +194,7 @@ def main() -> None:
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--distributed-executor-backend", default="none")
     parser.add_argument("--attention-backend", default=None)
+    parser.add_argument("--disable-custom-all-reduce", action="store_true")
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--kv-cache-dtype", default="auto")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.82)
@@ -259,6 +262,7 @@ def main() -> None:
                         "capture_sizes": capture_sizes,
                         "profile_dir": str(profile_dir),
                         "vllm_profiler_enabled": not args.disable_vllm_profiler,
+                        "disable_custom_all_reduce": args.disable_custom_all_reduce,
                         "bucket_definition": [
                             "drafting",
                             "verification",
