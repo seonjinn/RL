@@ -499,14 +499,18 @@
 
     <div class="card full">
       <h2>235B In-House 500K Decode-Heavy Sweeps</h2>
-      <p class="muted">The short-decode sweep above is complete. Decode-heavy is still running and should not be interpreted as a completed speedup result yet.</p>
+      <p class="muted">The first decode-heavy sweep completed with synthetic dummy token IDs. Treat that as overhead evidence only, not as a math-domain drafter result. OpenMath-prompt decode-heavy jobs are now submitted.</p>
       <table>
         <thead>
           <tr><th>Run</th><th>Job</th><th>Target / drafter</th><th>Shape</th><th>vLLM / parallelism</th><th>Server</th><th>Status</th></tr>
         </thead>
         <tbody>
-          <tr><td>Decode-heavy baseline</td><td>3119864</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>nvl72150-T13</td><td>Running after retry. Earlier 3119825 failed because max_num_batched_tokens was below max_model_len.</td></tr>
-          <tr><td>Decode-heavy in-house 500K K=1</td><td>3119827</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72082-T17</td><td>Running.</td></tr>
+          <tr><td>Synthetic decode-heavy baseline</td><td>3119864</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>nvl72150-T13</td><td>Completed. Dummy prompts only.</td></tr>
+          <tr><td>Synthetic decode-heavy in-house 500K K=1</td><td>3119827</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72082-T17</td><td>Completed. Negative, 0.656x-0.690x; dummy prompts only.</td></tr>
+          <tr><td>Synthetic decode-heavy 20k baseline</td><td>3120128</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=32768</td><td>nvl72004-T01</td><td>Running.</td></tr>
+          <tr><td>Synthetic decode-heavy 20k in-house 500K K=1</td><td>3120648</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72155-T08</td><td>Running.</td></tr>
+          <tr><td>OpenMath decode-heavy baseline</td><td>3120705</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>Pending</td><td>Submitted with real OpenMath prompts.</td></tr>
+          <tr><td>OpenMath decode-heavy in-house 500K K=1</td><td>3120704</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>Pending</td><td>Submitted with real OpenMath prompts.</td></tr>
         </tbody>
       </table>
     </div>

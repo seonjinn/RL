@@ -258,16 +258,20 @@ Use these charts when converting this Markdown into a Google Doc or slide. The s
    | Our Qwen3-30B best generation | 1.366x | NeMo-RL generation |
    | Our Qwen3-235B PublicHF always-on generation | 0.986x | NeMo-RL generation |
 
-4. Pending Qwen3-235B in-house 500K decode-heavy standalone sweeps
+4. Qwen3-235B in-house 500K decode-heavy standalone sweeps
 
-   The short-decode in-house 500K sweep is now complete. The decode-heavy shape is intentionally `ISL=1024`, `OSL=10000`, batch sizes `1/2/4/8`, because long decode is the regime where SpecDec should have the best chance to pay off.
+   The short-decode in-house 500K sweep is complete. The first decode-heavy `ISL=1024`, `OSL=10000` sweep also completed, but it used synthetic dummy token IDs rather than real math prompts. That result is useful as overhead evidence only; it should not be treated as a math-domain drafter result. The benchmark script now supports `PROMPT_JSONL`, and matched OpenMath-prompt decode-heavy baseline/SpecDec jobs have been submitted.
 
    | Run | Job | Shape | Status |
    |---|---:|---|---|
    | Thinking-2507 short-decode baseline | 3119759 | ISL=1000, OSL=512, bs=1-32 | Completed |
    | Thinking-2507 in-house 500K K=1 | 3119760 | ISL=1000, OSL=512, bs=1-32 | Completed |
-   | Thinking-2507 decode-heavy baseline | 3119864 | ISL=1024, OSL=10000, bs=1-8 | Running |
-   | Thinking-2507 decode-heavy in-house 500K K=1 | 3119827 | ISL=1024, OSL=10000, bs=1-8 | Running |
+   | Thinking-2507 synthetic decode-heavy baseline | 3119864 | ISL=1024, OSL=10000, bs=1-8 | Completed; dummy prompts |
+   | Thinking-2507 synthetic decode-heavy in-house 500K K=1 | 3119827 | ISL=1024, OSL=10000, bs=1-8 | Completed; dummy prompts, 0.656x-0.690x |
+   | Thinking-2507 synthetic decode-heavy 20k baseline | 3120128 | ISL=1024, OSL=20000, bs=1-4 | Running |
+   | Thinking-2507 synthetic decode-heavy 20k in-house 500K K=1 | 3120648 | ISL=1024, OSL=20000, bs=1-4 | Running |
+   | Thinking-2507 OpenMath decode-heavy baseline | 3120705 | ISL=1024, OSL=10000, bs=1-4 | Pending |
+   | Thinking-2507 OpenMath decode-heavy in-house 500K K=1 | 3120704 | ISL=1024, OSL=10000, bs=1-4 | Pending |
 
 5. vLLM standalone Qwen3-235B Thinking-2507 in-house 500K short-decode speedup
 
@@ -336,7 +340,7 @@ Scope: standalone vLLM LLM.generate wall-clock sweep, CUDA Graph on, custom all-
 | 16 | 378.33 | 455.70 | 1.204x |
 | 32 | 609.62 | 860.76 | 1.412x |
 
-Observation: the in-house 500K Thinking-2507 drafter shows clear short-decode standalone benefit, especially at batch size 32. The more relevant decode-heavy `ISL=1024`, `OSL=10000` sweep is still running and should be used to test the long-decode regime.
+Observation: the in-house 500K Thinking-2507 drafter shows clear short-decode standalone benefit, especially at batch size 32. The synthetic decode-heavy sweep was negative, but it used dummy token IDs, so the next meaningful check is the submitted OpenMath-prompt decode-heavy run.
 
 ### NeMo-RL: Qwen3-30B-A3B In-House 500K Eagle3
 

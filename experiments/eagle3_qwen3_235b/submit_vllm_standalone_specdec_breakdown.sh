@@ -21,6 +21,8 @@ PP="${PP:-1}"
 GPUS="${GPUS:-4}"
 ISL="${ISL:-1000}"
 OSL="${OSL:-1000}"
+PROMPT_JSONL="${PROMPT_JSONL:-}"
+PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
 BATCH_SIZES="${BATCH_SIZES:-1 2 4}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-}"
@@ -66,6 +68,11 @@ MAX_NUM_BATCHED_TOKENS_ARG=""
 if [[ -n "${MAX_NUM_BATCHED_TOKENS}" ]]; then
   MAX_NUM_BATCHED_TOKENS_ARG="--max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS}"
 fi
+PROMPT_JSONL_ARG=""
+if [[ -n "${PROMPT_JSONL}" ]]; then
+  PROMPT_JSONL_ARG="--prompt-jsonl ${PROMPT_JSONL}"
+fi
+PROMPT_OFFSET_ARG="--prompt-offset ${PROMPT_OFFSET}"
 
 SPECULATIVE_ARG=""
 SPECULATIVE_CONFIG=""
@@ -144,6 +151,8 @@ srun --nodes=1 --ntasks=1 \\
     --attention-backend TRITON_ATTN \\
     --gpu-memory-utilization 0.82 \\
     --isl ${ISL} --osl ${OSL} \\
+    ${PROMPT_JSONL_ARG} \\
+    ${PROMPT_OFFSET_ARG} \\
     ${MAX_MODEL_LEN_ARG} \\
     ${MAX_NUM_BATCHED_TOKENS_ARG} \\
     --batch-sizes ${BATCH_SIZES} \\
@@ -166,6 +175,8 @@ job_id="$(ssh "$REMOTE_HOST" "$remote_cmd" | tail -n 1)"
   echo "num_speculative_tokens=${NUM_SPECULATIVE_TOKENS}"
   echo "max_model_len=${MAX_MODEL_LEN:-auto}"
   echo "max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS:-auto}"
+  echo "prompt_jsonl=${PROMPT_JSONL:-synthetic_dummy_ids}"
+  echo "prompt_offset=${PROMPT_OFFSET}"
   echo "enforce_eager=${ENFORCE_EAGER}"
   echo "disable_vllm_profiler=${DISABLE_VLLM_PROFILER}"
   echo "disable_custom_all_reduce=${DISABLE_CUSTOM_ALL_REDUCE}"

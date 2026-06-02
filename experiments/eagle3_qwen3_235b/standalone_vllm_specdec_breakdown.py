@@ -43,6 +43,82 @@ def load_json_arg(value: str) -> dict[str, Any]:
     return json.loads(value)
 
 
+def extract_prompt_messages(row: dict[str, Any]) -> list[dict[str, str]]:
+    messages = row.get("messages")
+    if isinstance(messages, list):
+        prompt_messages: list[dict[str, str]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", ""))
+            if role == "assistant":
+                break
+            content = message.get("content")
+            if role and isinstance(content, str):
+                prompt_messages.append({"role": role, "content": content})
+        if prompt_messages:
+            return prompt_messages
+
+    for key in ("prompt", "question", "problem", "input"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return [{"role": "user", "content": value}]
+
+    raise ValueError(f"could not extract prompt from row keys={sorted(row)}")
+
+
+def tokenize_prompt(tokenizer: Any, row: dict[str, Any], token_limit: int) -> list[int]:
+    messages = extract_prompt_messages(row)
+    if hasattr(tokenizer, "apply_chat_template"):
+        try:
+            ids = tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+        except Exception:
+            text = "\n".join(message["content"] for message in messages)
+            ids = tokenizer.encode(text, add_special_tokens=True)
+    else:
+        text = "\n".join(message["content"] for message in messages)
+        ids = tokenizer.encode(text, add_special_tokens=True)
+
+    ids = list(ids)
+    if token_limit > 0 and len(ids) > token_limit:
+        ids = ids[-token_limit:]
+    if not ids:
+        raise ValueError("tokenized prompt is empty")
+    return ids
+
+
+def load_prompt_token_ids(
+    tokenizer: Any,
+    prompt_jsonl: str | None,
+    count: int,
+    token_limit: int,
+    offset: int,
+) -> list[list[int]]:
+    if not prompt_jsonl:
+        return [list(range(token_limit)) for _ in range(count)]
+
+    prompt_path = Path(prompt_jsonl)
+    prompts: list[list[int]] = []
+    with prompt_path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f):
+            if line_no < offset:
+                continue
+            if len(prompts) >= count:
+                break
+            if not line.strip():
+                continue
+            prompts.append(tokenize_prompt(tokenizer, json.loads(line), token_limit))
+    if len(prompts) < count:
+        raise ValueError(
+            f"only loaded {len(prompts)} prompts from {prompt_path}, need {count}"
+        )
+    return prompts
+
+
 def classify_event(name: str) -> str | None:
     lowered = name.lower()
     if "specdec_breakdown.drafting" in lowered:
@@ -204,6 +280,14 @@ def main() -> None:
     parser.add_argument("--isl", type=int, default=1000)
     parser.add_argument("--osl", type=int, default=1000)
     parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 2, 4])
+    parser.add_argument(
+        "--prompt-jsonl",
+        help=(
+            "Optional JSONL prompt source. If omitted, the benchmark uses "
+            "synthetic prompt_token_ids for legacy synthetic-boundary runs."
+        ),
+    )
+    parser.add_argument("--prompt-offset", type=int, default=0)
     parser.add_argument("--warmup-repeats", type=int, default=1)
     parser.add_argument("--profile-dir", required=True)
     parser.add_argument("--output", required=True)
@@ -231,6 +315,7 @@ def main() -> None:
     )
 
     llm = build_llm(args, capture_sizes=capture_sizes)
+    tokenizer = llm.get_tokenizer()
     sampling_params = SamplingParams(
         min_tokens=args.osl,
         max_tokens=args.osl,
@@ -238,8 +323,15 @@ def main() -> None:
         temperature=0.0,
         seed=0,
     )
-    dummy_ids = list(range(args.isl))
+    prompt_token_ids = load_prompt_token_ids(
+        tokenizer=tokenizer,
+        prompt_jsonl=args.prompt_jsonl,
+        count=max(batch_sizes),
+        token_limit=args.isl,
+        offset=args.prompt_offset,
+    )
     total_gpus = args.tp * args.pp
+    prompt_lengths = [len(ids) for ids in prompt_token_ids]
 
     rows: list[dict[str, Any]] = []
     output = Path(args.output)
@@ -258,6 +350,9 @@ def main() -> None:
                         "total_gpus": total_gpus,
                         "isl": args.isl,
                         "osl": args.osl,
+                        "prompt_jsonl": args.prompt_jsonl,
+                        "prompt_offset": args.prompt_offset,
+                        "prompt_token_lengths": prompt_lengths,
                         "batch_sizes": batch_sizes,
                         "capture_sizes": capture_sizes,
                         "profile_dir": str(profile_dir),
@@ -277,7 +372,10 @@ def main() -> None:
         )
 
     for bs in batch_sizes:
-        prompts = [{"prompt_token_ids": dummy_ids} for _ in range(bs)]
+        prompts = [
+            {"prompt_token_ids": prompt_token_ids[i % len(prompt_token_ids)]}
+            for i in range(bs)
+        ]
         for _ in range(args.warmup_repeats):
             llm.generate(prompts, sampling_params)
 

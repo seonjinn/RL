@@ -19,3 +19,8 @@ profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sn
 speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x10000_bs1-8_mbt16384_cuda_graph_no_custom_ar_20260602/speculative_config.json
 status=3119864 submitted
 previous_failed_job=3119825 FAILED after 00:01:25 before model load. Root cause: decode-heavy OSL=10000 made max_model_len=12048, but the launcher default max_num_batched_tokens was only 11024. vLLM rejected this because max_num_batched_tokens must be at least max_model_len. Retry 3119864 sets MAX_NUM_BATCHED_TOKENS=16384.
+completion=3119864 COMPLETED on nvl72150-T13
+prompt_jsonl=synthetic_dummy_ids
+results_tok_s_per_gpu=bs1:22.53,bs2:44.71,bs4:87.76,bs8:169.92
+results_latency_s=bs1:110.99,bs2:111.84,bs4:113.94,bs8:117.70
+note=This is a synthetic dummy-prompt baseline, not an OpenMath prompt result.
