@@ -1,0 +1,23 @@
+# vLLM standalone SpecDec timing breakdown
+submitted_at=2026-06-02 11:23:49 PDT
+job_id=3115807
+job_name=vllm-specdec-qwen3-235b-a22b-k1
+enable_specdec=true
+model=Qwen/Qwen3-235B-A22B
+draft_model=nvidia/Qwen3-235B-A22B-Eagle3
+num_speculative_tokens=1
+enforce_eager=false
+disable_vllm_profiler=true
+scope=vLLM standalone LLM.generate boundary sweep, not NeMo-RL E2E
+purpose=Find batch-size boundary where PublicHF Eagle3 K=1 SpecDec is net-positive or net-negative against matching baseline job 3115808.
+batch_sizes=1 2 4 8 16 32
+isl=1000
+osl=512
+tp=4
+pp=1
+figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_publichf_eagle3_k1_boundary_bs1-32_cuda_graph_20260602
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_publichf_eagle3_k1_boundary_bs1-32_cuda_graph_20260602/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_publichf_eagle3_k1_boundary_bs1-32_cuda_graph_20260602/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_a22b_vllm_publichf_eagle3_k1_boundary_bs1-32_cuda_graph_20260602/speculative_config.json
+status=3115807 RUNNING at 2026-06-02 11:24 PDT.

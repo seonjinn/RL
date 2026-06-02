@@ -441,7 +441,7 @@
   <section id="overview" class="page active">
     <div class="banner summary-hero">
       <h2>Executive Summary</h2>
-      <p>The current conclusion is clear. Qwen3-30B-A3B shows real NeMo-RL generation-phase speedup, but not 2x. Qwen3-235B PublicHF has high acceptance, but the completed 4-step always-on run is slower than the matched baseline. Four fresh 20-step NeMo-RL runs are active for the Thinking-2507 pair: 235B PublicHF K=<code>1</code>/<code>2</code> always-on jobs <code>3115042</code>/<code>3115043</code>, and 30B 500K drafter long-tail request-gate K=<code>1</code>/<code>3</code> jobs <code>3115045</code>/<code>3115044</code>. The exact base-model public drafter <code>nvidia/Qwen3-235B-A22B-Eagle3</code> has now been downloaded and queued with target <code>Qwen/Qwen3-235B-A22B</code>: baseline <code>3115167</code>, K=<code>1</code> <code>3115169</code>, and K=<code>3</code> <code>3115168</code>. The 235B in-house 500K drafter training is complete, but its first eval <code>3114678</code> failed before rollout metrics during worker environment build.</p>
+      <p>The current conclusion is clear. Qwen3-30B-A3B shows real NeMo-RL generation-phase speedup, but not 2x. Qwen3-235B PublicHF has high acceptance, but the completed 4-step always-on run is slower than the matched baseline. The lower-batch gate has now been verified on Qwen3-30B-A3B: failed diagnostic jobs <code>3115044</code>/<code>3115045</code> showed large batches disabled and tail requests enabled before hitting a Megatron-Bridge API mismatch in policy training. Compatibility fixes are applied and patched 20-step NeMo-RL replacements are running: strict request gate K=<code>1</code> job <code>3115812</code>, and TLT/ReSpec-style hybrid request/token gate + dynamic-K job <code>3115813</code>. Qwen3-235B standalone vLLM boundary sweeps are also running: baseline <code>3115808</code> and PublicHF Eagle3 K=<code>1</code> <code>3115807</code>.</p>
       <div class="takeaways">
         <div class="takeaway">
           <strong>Qwen3-30B-A3B</strong>
@@ -470,12 +470,14 @@
           <tr><td>235B base exact baseline</td><td><code>3115167</code></td><td><code>Qwen/Qwen3-235B-A22B</code>, no drafter</td><td>-</td><td>-</td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill info">RUNNING</span></td></tr>
           <tr><td>235B base exact PublicHF</td><td><code>3115169</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>request <code>0</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill warn">PENDING</span></td></tr>
           <tr><td>235B base exact PublicHF</td><td><code>3115168</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>3</code></td><td>request <code>0</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill info">RUNNING</span></td></tr>
-          <tr><td>30B 500K long-tail</td><td><code>3115045</code><br><a href="https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/8iosg2ym">W&amp;B</a></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>1</code></td><td>request <code>4</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
-          <tr><td>30B 500K long-tail</td><td><code>3115044</code><br><a href="https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/bbws00oy">W&amp;B</a></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>3</code></td><td>request <code>4</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>30B 500K long-tail</td><td><code>3115812</code></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>1</code></td><td>request <code>4</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>30B 500K hybrid dynamic-K</td><td><code>3115813</code></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>3/2/1</code></td><td>request <code>64</code>, token <code>2048</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>235B vLLM boundary baseline</td><td><code>3115808</code></td><td><code>Qwen/Qwen3-235B-A22B</code></td><td><code>0</code></td><td>batch sweep <code>1/2/4/8/16/32</code></td><td>standalone</td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>235B vLLM boundary SpecDec</td><td><code>3115807</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>batch sweep <code>1/2/4/8/16/32</code></td><td>standalone</td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
         </tbody>
       </table>
     </div>
-    <p class="small">All active/pending NeMo-RL runs use <code>NRL_FORCE_REBUILD_VENVS=true</code>, <code>--time=04:00:00</code>, sequence packing enabled, and container <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh</code>. As of 11:07 PT, jobs <code>3115042</code>/<code>3115043</code>/<code>3115044</code>/<code>3115045</code>/<code>3115167</code>/<code>3115168</code> are still in startup/init and have not emitted rollout acceptance or throughput metrics; <code>3115169</code> is pending due priority. The base A22B public drafter was downloaded at HF commit <code>33f3c01c</code>, local path <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Eagle3</code>, with <code>model.safetensors</code> size <code>593M</code>. The 30B launcher was updated to add <code>++policy.megatron_cfg.moe_enable_deepep=false</code>, <code>++policy.megatron_cfg.moe_token_dispatcher_type=alltoall</code>, and <code>++policy.megatron_cfg.moe_shared_expert_overlap=false</code>.</p>
+    <p class="small">All active NeMo-RL replacements use <code>NRL_FORCE_REBUILD_VENVS=true</code>, <code>--time=04:00:00</code>, sequence packing enabled, and container <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh</code>. As of 11:24 PT, patched jobs <code>3115812</code>/<code>3115813</code> are running in startup and have not emitted rollout acceptance or throughput metrics. The earlier request-gate diagnostics <code>3115044</code>/<code>3115045</code> failed only after proving gate behavior, due <code>logical_and_across_model_parallel_group(..., mp_group=...)</code> not matching the older Megatron-Bridge API inside the 2026-05-02 nightly container. The compatibility patch dispatches by function signature and does not touch generation, verifier, acceptance, or loss logic. The launcher also now gives administrative <code>srun</code> steps small explicit CPU/memory requests so driver startup does not inherit job-level <code>--mem=0</code>.</p>
 
     <h2>Decision Points</h2>
     <div class="table-scroll conclusion-table">
@@ -488,7 +490,7 @@
             <td>Do we have 2x generation speedup?</td>
             <td><span class="pill warn">Not yet</span></td>
             <td>30B best is <code>1.366x</code>. 235B PublicHF always-on is <code>0.986x</code>.</td>
-            <td>Wait for active 30B request-gate jobs <code>3115045</code>/<code>3115044</code> and active 235B 20-step jobs <code>3115042</code>/<code>3115043</code>.</td>
+            <td>Wait for patched 30B jobs <code>3115812</code>/<code>3115813</code>, active 235B 20-step jobs <code>3115042</code>/<code>3115043</code>, and vLLM boundary jobs <code>3115808</code>/<code>3115807</code>.</td>
           </tr>
           <tr>
             <td>Why is 235B slower despite high acceptance?</td>
@@ -505,8 +507,8 @@
           <tr>
             <td>Is long-tail gating verified?</td>
             <td><span class="pill warn">Partially</span></td>
-            <td><code>3092445</code> proved large-batch disable but failed before throughput. <code>3106959</code> timed out before rollout. <code>3114676</code> failed before gate metrics due the latest 30B MoE config gap.</td>
-            <td>Replacement 30B full-GRPO long-tail runs <code>3115045</code>/<code>3115044</code> are active after adding sequence packing and MoE alltoall overrides.</td>
+            <td><code>3115044</code> showed large batches disabled and tail requests enabled: K=3 acceptance <code>32.35%</code> before policy training failed. <code>3115045</code> showed K=1 acceptance <code>64.74%</code> before the same API mismatch.</td>
+            <td>Patched full-GRPO replacements <code>3115812</code>/<code>3115813</code> are running to confirm the same gate behavior through 20 NeMo-RL steps.</td>
           </tr>
           <tr>
             <td>Can we split drafter vs verifier execution time?</td>

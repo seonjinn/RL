@@ -14,6 +14,7 @@ LOG_ROOT="${LOG_ROOT:-${REMOTE_REPO}/vllm-runs}"
 
 MODEL="${MODEL:-Qwen/Qwen3-30B-A3B}"
 DRAFT_MODEL="${DRAFT_MODEL:-/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0}"
+ENABLE_SPECDEC="${ENABLE_SPECDEC:-true}"
 NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-1}"
 TP="${TP:-1}"
 PP="${PP:-1}"
@@ -23,15 +24,31 @@ OSL="${OSL:-1000}"
 BATCH_SIZES="${BATCH_SIZES:-1 2 4}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 ENFORCE_EAGER="${ENFORCE_EAGER:-true}"
-TAG="${TAG:-qwen30ba3b_standalone_specdec_breakdown_k${NUM_SPECULATIVE_TOKENS}_$(date +%Y%m%d_%H%M%S)}"
+DISABLE_VLLM_PROFILER="${DISABLE_VLLM_PROFILER:-false}"
+MODEL_LABEL="${MODEL_LABEL:-$(printf '%s' "$MODEL" | tr '/:' '__' | tr -cd 'A-Za-z0-9_.-')}"
+JOB_KIND="specdec"
+case "${ENABLE_SPECDEC}" in
+  0|false|FALSE|no|NO|n|N|off|OFF) JOB_KIND="baseline" ;;
+esac
+TAG="${TAG:-${MODEL_LABEL}_standalone_${JOB_KIND}_breakdown_k${NUM_SPECULATIVE_TOKENS}_$(date +%Y%m%d_%H%M%S)}"
 LOGS_DIR="${LOGS_DIR:-${LOG_ROOT}/${TAG}}"
 JOB_FILE="${JOB_FILE:-${ROOT_DIR}/latest_vllm_standalone_specdec_breakdown_jobs.txt}"
 EAGER_ARG=""
 case "${ENFORCE_EAGER}" in
   1|true|TRUE|yes|YES|y|Y|on|ON) EAGER_ARG="--enforce-eager" ;;
 esac
+PROFILER_ARG=""
+case "${DISABLE_VLLM_PROFILER}" in
+  1|true|TRUE|yes|YES|y|Y|on|ON) PROFILER_ARG="--disable-vllm-profiler" ;;
+esac
 
-SPECULATIVE_CONFIG="$(python3 - <<PY
+SPECULATIVE_ARG=""
+SPECULATIVE_CONFIG=""
+case "${ENABLE_SPECDEC}" in
+  0|false|FALSE|no|NO|n|N|off|OFF) ;;
+  *)
+    SPECULATIVE_ARG="--speculative-config '@${LOGS_DIR}/speculative_config.json'"
+    SPECULATIVE_CONFIG="$(python3 - <<PY
 import json
 print(json.dumps({
   "method": "eagle3",
@@ -41,6 +58,8 @@ print(json.dumps({
 }))
 PY
 )"
+    ;;
+esac
 
 ssh "$REMOTE_HOST" "mkdir -p '$REMOTE_REPO/specdec_breakdown_instrumentation' '$LOGS_DIR'"
 scp -q "$SCRIPT_DIR/standalone_vllm_specdec_breakdown.py" "$REMOTE_HOST:$REMOTE_REPO/standalone_vllm_specdec_breakdown.py"
@@ -49,13 +68,15 @@ scp -q "$SCRIPT_DIR/specdec_breakdown_instrumentation/sitecustomize.py" "$REMOTE
 remote_cmd=$(cat <<EOF
 cd '$REMOTE_REPO'
 mkdir -p vllm-runs '$LOGS_DIR' '$JOB_CACHE_DIR'
+if [[ '${ENABLE_SPECDEC}' =~ ^(1|true|TRUE|yes|YES|y|Y|on|ON)$ ]]; then
 cat > '${LOGS_DIR}/speculative_config.json' <<'SPECJSON'
 ${SPECULATIVE_CONFIG}
 SPECJSON
+fi
 sbatch --parsable \\
   --partition='$PARTITION' \\
   --account='$ACCOUNT' \\
-  --job-name='vllm-specdec-breakdown-q30-k${NUM_SPECULATIVE_TOKENS}' \\
+  --job-name='vllm-${JOB_KIND}-${MODEL_LABEL}-k${NUM_SPECULATIVE_TOKENS}' \\
   --nodes=1 \\
   --gres=gpu:${GPUS} \\
   --ntasks-per-node=1 \\
@@ -87,8 +108,9 @@ srun --nodes=1 --ntasks=1 \\
     export PYTHONPATH='${LOGS_DIR}/pydeps:${REMOTE_REPO}/specdec_breakdown_instrumentation':\\\${PYTHONPATH:-}; \\
     python3 standalone_vllm_specdec_breakdown.py \\
     --model '${MODEL}' \\
-    --speculative-config '@${LOGS_DIR}/speculative_config.json' \\
+    ${SPECULATIVE_ARG} \\
     ${EAGER_ARG} \\
+    ${PROFILER_ARG} \\
     --tp ${TP} --pp ${PP} \\
     --distributed-executor-backend none \\
     --attention-backend TRITON_ATTN \\
@@ -107,11 +129,13 @@ job_id="$(ssh "$REMOTE_HOST" "$remote_cmd" | tail -n 1)"
   echo "# vLLM standalone SpecDec timing breakdown"
   echo "submitted_at=$(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "job_id=${job_id}"
-  echo "job_name=vllm-specdec-breakdown-q30-k${NUM_SPECULATIVE_TOKENS}"
+  echo "job_name=vllm-${JOB_KIND}-${MODEL_LABEL}-k${NUM_SPECULATIVE_TOKENS}"
+  echo "enable_specdec=${ENABLE_SPECDEC}"
   echo "model=${MODEL}"
   echo "draft_model=${DRAFT_MODEL}"
   echo "num_speculative_tokens=${NUM_SPECULATIVE_TOKENS}"
   echo "enforce_eager=${ENFORCE_EAGER}"
+  echo "disable_vllm_profiler=${DISABLE_VLLM_PROFILER}"
   echo "scope=vLLM standalone LLM.generate torch-profiler breakdown, not NeMo-RL E2E"
   echo "figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads"
   echo "logs_dir=${LOGS_DIR}"

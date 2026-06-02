@@ -130,6 +130,12 @@ MAX_WORKER_PORT=${MAX_WORKER_PORT:-54513}
 # Number seconds to sync logs from /tmp/ray/session_*/logs to $LOG_DIR/ray/
 RAY_LOG_SYNC_FREQUENCY=${RAY_LOG_SYNC_FREQUENCY:-}
 ########################################################
+ADMIN_SRUN_CPUS_PER_TASK=${ADMIN_SRUN_CPUS_PER_TASK:-1}
+ADMIN_SRUN_MEM=${ADMIN_SRUN_MEM:-4G}
+DRIVER_SRUN_CPUS_PER_TASK=${DRIVER_SRUN_CPUS_PER_TASK:-1}
+DRIVER_SRUN_MEM=${DRIVER_SRUN_MEM:-32G}
+ADMIN_SRUN_RESOURCE_ARGS="--overlap --ntasks=1 --cpus-per-task=${ADMIN_SRUN_CPUS_PER_TASK} --mem=${ADMIN_SRUN_MEM}"
+DRIVER_SRUN_RESOURCE_ARGS="--overlap --ntasks=1 --cpus-per-task=${DRIVER_SRUN_CPUS_PER_TASK} --mem=${DRIVER_SRUN_MEM}"
 
 # Unset UV_CACHE_DIR to avoid local cache directory interferring with the container cache
 unset UV_CACHE_DIR
@@ -498,7 +504,7 @@ EOF
 done
 
 # Then we wait here for the file to be created by the head node container
-while check_srun_processes && ! srun --overlap --nodes=1 --ntasks=1 -w $head_node test -f $LOG_DIR/STARTED_RAY_HEAD; do
+while check_srun_processes && ! srun $ADMIN_SRUN_RESOURCE_ARGS --nodes=1 -w $head_node test -f $LOG_DIR/STARTED_RAY_HEAD; do
   echo "[INFO][$(date)] Waiting for head node container to start..."
   sleep 2
 done
@@ -508,7 +514,7 @@ done
 # We do so by querying the number of worker_units in the ray cluster and asserting = NUM_ACTORS
 get_container_pid() {
   local node=$1
-  srun --overlap --nodes=1 -w "$node" bash -c "enroot list -f | awk 'NR>1 && \$2 ~ /^[0-9]+\$/ {print \$2; exit}'"
+  srun $ADMIN_SRUN_RESOURCE_ARGS --nodes=1 -w "$node" bash -c "enroot list -f | awk 'NR>1 && \$2 ~ /^[0-9]+\$/ {print \$2; exit}'"
 }
 
 extract_worker_units() {
@@ -518,7 +524,7 @@ extract_worker_units() {
     return
   fi
 
-  status_output=$(srun --overlap --nodes=1 -w "$head_node" enroot exec "$head_container_pid" "$RAY_CLI" status --address "$ip_head")
+  status_output=$(srun $ADMIN_SRUN_RESOURCE_ARGS --nodes=1 -w "$head_node" enroot exec "$head_container_pid" "$RAY_CLI" status --address "$ip_head")
   if echo "$status_output" | grep -q "worker_units"; then
     worker_units=$(echo "$status_output" | grep "worker_units" | awk -F'[/. ]' '{print $4}')
     echo $worker_units
@@ -554,7 +560,7 @@ if [[ -n "$COMMAND" ]]; then
     touch "$LOG_DIR/ENDED"
     exit 1
   fi
-  srun --overlap --nodes=1 -w "$head_node" -o $LOG_DIR/ray-driver.log enroot exec "$head_container_pid" bash -lc "cd '$CONTAINER_CWD' && export RAY_ADDRESS='$ip_head'; export NRL_RAY_NODE_IP_ADDRESS='$head_node_ip'; export RAY_NODE_IP_ADDRESS='$head_node_ip'; export TMPDIR='$RAY_TEMP_DIR'; export RAY_TMPDIR='$RAY_TEMP_DIR'; $COMMAND"
+  srun $DRIVER_SRUN_RESOURCE_ARGS --nodes=1 -w "$head_node" -o $LOG_DIR/ray-driver.log enroot exec "$head_container_pid" bash -lc "cd '$CONTAINER_CWD' && export RAY_ADDRESS='$ip_head'; export NRL_RAY_NODE_IP_ADDRESS='$head_node_ip'; export RAY_NODE_IP_ADDRESS='$head_node_ip'; export TMPDIR='$RAY_TEMP_DIR'; export RAY_TMPDIR='$RAY_TEMP_DIR'; $COMMAND"
 else
   echo "[INFO]: Ray Cluster is idled, run this on the slurm head node to get a shell to the head node:"
   cat <<EOF >$SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh

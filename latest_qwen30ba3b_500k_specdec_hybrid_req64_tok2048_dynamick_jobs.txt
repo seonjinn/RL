@@ -1,0 +1,42 @@
+# Qwen3-30B-A3B 500K Speculators Eagle3 hybrid long-tail dynamic-K run
+
+submitted_at=2026-06-02 11:24 PDT
+job_id=3115813
+job_name=qwen30ba3b-500k-k3-hybrid-req64-tok2048-dynk-patched-N4xG4
+purpose=Check TLT/ReSpec-style long-tail SpecDec on the smaller 30B target while full 235B jobs are expensive. This is a hybrid request/token gate plus dynamic draft-depth run, not always-on SpecDec.
+model=Qwen/Qwen3-30B-A3B
+drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+drafter_provenance=qwen30ba3b_mixed_math_nonopenmath_500k_speculators
+account=coreai_dlalgo_nemorl
+num_nodes=4
+gpus_per_node=4
+num_prompts_per_step=64
+num_generations_per_prompt=32
+train_global_batch_size=2048
+max_steps=20
+num_speculative_tokens=3
+sequence_packing=true
+moe_enable_deepep=false
+moe_token_dispatcher_type=alltoall
+moe_shared_expert_overlap=false
+NRL_FORCE_REBUILD_VENVS=true
+container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
+
+gate_mode=hybrid_long_tail_dynamic_k
+VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=64
+VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=2048
+VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=16
+VLLM_SPECDEC_DYNAMIC_DRAFT_TOKENS=true
+VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_REQUEST_THRESHOLD=4
+VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_REQUEST_THRESHOLD=64
+VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKEN_THRESHOLD=2048
+VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKEN_THRESHOLD=2048
+VLLM_SPECDEC_DYNAMIC_DRAFT_SMALL_TOKENS=3
+VLLM_SPECDEC_DYNAMIC_DRAFT_MEDIUM_TOKENS=2
+VLLM_SPECDEC_DYNAMIC_DRAFT_LARGE_TOKENS=1
+
+patches=megatron_policy_worker signature-based Megatron-Bridge mp_group compatibility; ray.sub admin/driver srun resource request fix
+wandb_name=Qwen30BA3B_500K_Eagle3_DynK_Req64Tok2048_Patched_20step_20260602
+stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3115813.out
+previous_failed_job=3115653 failed before driver launch because Slurm could not create the driver step: Memory required by task is not available.
+status=3115813 RUNNING at 2026-06-02 11:24 PDT. No gate, acceptance, step-time, generation-time, E2E throughput, or generation throughput metrics have been emitted yet.

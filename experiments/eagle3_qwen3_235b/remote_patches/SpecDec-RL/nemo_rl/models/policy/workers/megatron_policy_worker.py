@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import inspect
 import os
 import re
 import warnings
@@ -118,6 +119,35 @@ from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.packed_tensor import packed_broadcast_producer
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _supports_keyword_arg(fn: Any, keyword: str) -> bool:
+    try:
+        return keyword in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+_LOGICAL_AND_SUPPORTS_MP_GROUP = _supports_keyword_arg(
+    logical_and_across_model_parallel_group, "mp_group"
+)
+_REDUCE_MAX_STAT_SUPPORTS_MP_GROUP = _supports_keyword_arg(
+    reduce_max_stat_across_model_parallel_group, "mp_group"
+)
+
+
+def _logical_and_across_model_parallel_group(input_value: bool, mp_group: Any) -> bool:
+    if _LOGICAL_AND_SUPPORTS_MP_GROUP:
+        return logical_and_across_model_parallel_group(input_value, mp_group=mp_group)
+    return logical_and_across_model_parallel_group(input_value)
+
+
+def _reduce_max_stat_across_model_parallel_group(
+    stat: Optional[float], mp_group: Any
+) -> Optional[float]:
+    if _REDUCE_MAX_STAT_SUPPORTS_MP_GROUP:
+        return reduce_max_stat_across_model_parallel_group(stat, mp_group=mp_group)
+    return reduce_max_stat_across_model_parallel_group(stat)
 
 
 @ray.remote(
@@ -379,15 +409,15 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
 
                 # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
                 # so we must gather across mp ranks
-                update_successful = logical_and_across_model_parallel_group(
+                update_successful = _logical_and_across_model_parallel_group(
                     update_successful, mp_group=pg_collection.mp
                 )
                 # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
                 # so we must gather across mp ranks
-                grad_norm: float = reduce_max_stat_across_model_parallel_group(
+                grad_norm: float = _reduce_max_stat_across_model_parallel_group(
                     grad_norm, mp_group=pg_collection.mp
                 )
-                num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
+                num_zeros_in_grad: float = _reduce_max_stat_across_model_parallel_group(
                     num_zeros_in_grad, mp_group=pg_collection.mp
                 )
 

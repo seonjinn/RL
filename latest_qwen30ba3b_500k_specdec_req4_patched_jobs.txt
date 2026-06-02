@@ -1,0 +1,34 @@
+# Qwen3-30B-A3B 500K Speculators Eagle3 strict request-gate run
+
+submitted_at=2026-06-02 11:24 PDT
+job_id=3115812
+job_name=qwen30ba3b-500k-k1-longtail-req4-patched-N4xG4
+purpose=Confirm TLT-style lower-batch-only SpecDec inside full NeMo-RL after patching Megatron-Bridge API compatibility.
+model=Qwen/Qwen3-30B-A3B
+drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+drafter_provenance=qwen30ba3b_mixed_math_nonopenmath_500k_speculators
+account=coreai_dlalgo_nemorl
+num_nodes=4
+gpus_per_node=4
+num_prompts_per_step=64
+num_generations_per_prompt=32
+train_global_batch_size=2048
+max_steps=20
+num_speculative_tokens=1
+sequence_packing=true
+moe_enable_deepep=false
+moe_token_dispatcher_type=alltoall
+moe_shared_expert_overlap=false
+NRL_FORCE_REBUILD_VENVS=true
+container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
+
+gate_mode=strict_request_long_tail
+VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4
+VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
+VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=16
+
+patches=megatron_policy_worker signature-based Megatron-Bridge mp_group compatibility; ray.sub admin/driver srun resource request fix
+wandb_name=Qwen30BA3B_500K_Eagle3_K1_Req4_LongTail_Patched_20step_20260602
+stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3115812.out
+previous_failed_job=3115045 reached Step 1 acceptance 64.74%, then failed in policy training due logical_and_across_model_parallel_group unexpected mp_group keyword.
+status=3115812 RUNNING at 2026-06-02 11:24 PDT. No completed 20-step metrics yet.
