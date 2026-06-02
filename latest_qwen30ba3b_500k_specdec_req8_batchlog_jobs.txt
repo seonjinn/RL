@@ -1,11 +1,11 @@
-timestamp=2026-06-02 13:00:38 PDT
+timestamp=2026-06-02 13:04:44 PDT
 purpose=Qwen3-30B-A3B NeMo-RL long-tail SpecDec K=1 with request<=8 gate and driver-visible enabled/disabled batch-size metrics.
 
 failed_first_attempt_job_id=3116714
 failed_first_attempt_status=FAILED before generation after 00:11:01. Root cause was not SpecDec logic; the Ray driver step used --mem=32G and hit native extension build OOM under NRL_FORCE_REBUILD_VENVS=true. ray-driver.log shows repeated "c++: fatal error: Killed signal terminated program cc1plus", "RuntimeError: Error compiling objects for extension", and slurmstepd reported 16 oom_kill events in StepId=3116714.30.
 
 retry_job_id=3116841
-retry_status=RUNNING at 2026-06-02 13:00 PDT on 4 nodes. All workers are connected, the driver is running with --cpus-per-task=8 --mem=128G. Forced rebuild completed enough to initialize all 16 VllmGenerationWorker actors; the job is loading safetensors checkpoint shards. No generation metrics or enabled_req_avg/active request gate fields yet.
+retry_status=RUNNING at 2026-06-02 13:04 PDT on 4 nodes. All workers are connected, the driver is running with --cpus-per-task=8 --mem=128G. Forced rebuild completed enough to initialize all 16 VllmGenerationWorker actors. The job loaded the target and drafter, captured CUDA graphs, and has not emitted generation metrics or enabled_req_avg/active request gate fields yet.
 account=coreai_dlalgo_nemorl
 partition=batch
 nodes=4
