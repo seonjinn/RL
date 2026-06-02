@@ -316,8 +316,47 @@ runs:
       location: "setup_reference_model_state -> get_model -> _ddp_wrap -> broadcast_params -> torch.distributed.broadcast"
       note: "Failure happened before any training step metrics were emitted, so there is no valid HybridEP GBS2048 profiling result yet."
 
+  - id: "specdec_vllm_generation_worker_k1_tokgate2048"
+    slurm_job_id: 3106783
+    job_name: "qwen30ba3b-specdec-vllm-nsys-k1-tokgate2048-N4xG4"
+    account: "coreai_dlalgo_nemorl"
+    workdir: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL"
+    state_at_submission: "PENDING"
+    submitted_at: "2026-06-02 01:23 PDT"
+    purpose: "Capture vLLM generation-side nsys ranges for SpecDec drafter/verification timing breakdown."
+    local_script: "experiments/eagle3_qwen3_235b/Qwen30BA3B_GB200_Main_SpecDec_VllmNsys.sh"
+    remote_script: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/Qwen30BA3B_GB200_Main_SpecDec_VllmNsys.sh"
+    config_file: "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+    drafter:
+      method: "eagle3"
+      provenance: "qwen30ba3b_mixed_math_nonopenmath_500k_speculators"
+      path: "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0"
+      num_speculative_tokens: 1
+    shape:
+      num_prompts_per_step: 64
+      num_generations_per_prompt: 32
+      generated_samples_per_step: 2048
+      train_global_batch_size: 2048
+      max_num_steps: 4
+    specdec_gate:
+      request_threshold: 0
+      token_threshold: 2048
+      runtime_patch_enabled: true
+    nsys:
+      profile_step_range: "2:4"
+      intended_profiled_steps: [2, 3]
+      worker_patterns:
+        - "vllm_generation_worker"
+      expected_artifact_root: "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3106783-logs/ray/*/logs/nsight"
+      artifact_status: "pending"
+    expected_ranges:
+      - "vllm generation worker actor/runtime ranges"
+      - "vLLM GPU model runner draft proposal range if present in the installed vLLM build"
+      - "target model execution/verification ranges from the same generation worker trace"
+
 notes:
   - "The completed profiling result is HybridEP without sequence packing."
   - "The original sequence-packing baseline with allgather failed before the nsys window."
   - "The alltoall sequence-packing run was submitted to test whether the baseline path can run with variable-length packed sequences."
   - "The p8/g8/GBS64 shape was chosen for short nsys smoke profiling. It should not be used as the final baseline-vs-feature throughput comparison against the full performance recipe."
+  - "Job 3106783 is the first dedicated SpecDec vLLM generation-worker nsys run; previous nsys runs targeted megatron_policy_worker and cannot separate drafter generation from target verification."
