@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 18:03 PDT",
+  "updated_at": "2026-06-01 18:39 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -92,7 +92,7 @@
       "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/3084952-logs/ray-driver.log",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_corrected_20260601",
-      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. The job completed 4/4 steps at 17:50 PDT with ExitCode 0:0. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM V1 engine initialization with enforce_eager=false and CUDA Graph mode, target safetensors loading to 118/118, and the observed 1/1 drafter safetensors load. Steps 1-4 emitted completed Generation Worker Group and E2E metrics. Generated throughput is 63.70, 43.39, 73.58, and 61.78 generated tok/s/GPU with acceptance 62.82%, 69.01%, 65.82%, and 65.20%. Mean generated throughput is 60.61 tok/s/GPU, mean acceptance is 65.71%, mean E2E throughput is 43.60 tok/s/GPU, and mean total step time is 475.04s. Scheduler gate metrics show enabled_ratio=1.0 and disabled=0 for all 4 steps, and runner logs show active requests ranging from 1 to 64 with per-worker scheduled tokens up to 128 under token_threshold=4096. This confirms the drafter is active, but also proves this token threshold was too loose to demonstrate lower-batch-only activation. Matched Thinking-2507 baseline job 3088636 is RUNNING and still has no rollout throughput metric, so strict speedup should wait for its baseline throughput and E2E step-time comparison.",
+      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. The job completed 4/4 steps at 17:50 PDT with ExitCode 0:0. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM V1 engine initialization with enforce_eager=false and CUDA Graph mode, target safetensors loading to 118/118, and the observed 1/1 drafter safetensors load. Steps 1-4 emitted completed Generation Worker Group and E2E metrics. Generated throughput is 63.70, 43.39, 73.58, and 61.78 generated tok/s/GPU with acceptance 62.82%, 69.01%, 65.82%, and 65.20%. Mean generated throughput is 60.61 tok/s/GPU, mean acceptance is 65.71%, mean E2E throughput is 43.60 tok/s/GPU, and mean total step time is 475.04s. Scheduler gate metrics show enabled_ratio=1.0 and disabled=0 for all 4 steps, and runner logs show active requests ranging from 1 to 64 with per-worker scheduled tokens up to 128 under token_threshold=4096. This confirms the drafter is active, but also proves this token threshold was too loose to demonstrate lower-batch-only activation. Matched Thinking-2507 baseline job 3088636 now has a Step 1 baseline metric, but strict speedup should still wait for matching multi-step baseline and strict-gate SpecDec metrics.",
       "early_generation_metric": {
         "step": 1,
         "phase": "specdec_early_generation",
@@ -175,7 +175,7 @@
         "mean_acceptance_rate": 0.6571,
         "mean_e2e_tokens_per_sec_per_gpu": 43.60,
         "mean_total_step_time_s": 475.04,
-        "matched_baseline_status": "pending; job 3088636 has no rollout metric yet"
+        "matched_baseline_status": "partial; job 3088636 has Step 1 baseline metric only"
       },
       "gate_metrics_observation": {
         "steps_observed": [
@@ -198,11 +198,11 @@
       "job_id": "3089565",
       "submitted_at": "2026-06-01 17:58 PDT",
       "state_at_submit_check": "PENDING",
-      "latest_state": "RUNNING at 18:03 PDT on coreai_dlalgo_llm",
+      "latest_state": "CANCELLED at 18:12 PDT",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
-      "provenance": "manual_diagnostic_strict_long_tail",
+      "provenance": "manual_diagnostic_strict_long_tail_non_publishable",
       "num_speculative_tokens": 1,
       "max_steps": 4,
       "num_prompts_per_step": 16,
@@ -217,15 +217,59 @@
       "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh",
       "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
       "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
+      "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3089565-logs/ray-driver.log",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_20260601",
-      "latest_observation": "Submitted to verify the TLT/ReSpec-style long-tail policy in NeMo-RL: active-request gate=4 and token gate=0. At 18:03 PDT it was RUNNING for about 4 minutes on nvl72084-T[01-16],nvl72105-T[02-04,06-18], with no driver rollout metrics yet."
+      "latest_observation": "Cancelled after checking slurm-3089565.out: the remote launcher was stale and missed policy.model_name=${TARGET_MODEL_ID}, so the run would have used YAML default target Qwen/Qwen3-235B-A22B with the Thinking-2507 drafter. Gate envs were present, but the target/drafter mismatch makes any result non-publishable. Fixed retry job 3090318 supersedes it."
+    },
+    {
+      "job_id": "3090318",
+      "submitted_at": "2026-06-01 18:12 PDT",
+      "state_at_submit_check": "PENDING Priority",
+      "latest_state": "RUNNING at 18:39 PDT on coreai_dlalgo_llm",
+      "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
+      "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
+      "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+      "provenance": "manual_diagnostic_strict_long_tail",
+      "num_speculative_tokens": 1,
+      "max_steps": 4,
+      "num_prompts_per_step": 16,
+      "num_generations_per_prompt": 32,
+      "train_global_batch_size": 512,
+      "sequence_packing": true,
+      "specdec_gate": {
+        "request_threshold": 4,
+        "token_threshold": 0,
+        "note": "Strict lower-batch-only diagnostic. The run should enable draft work only when active requests are <=4."
+      },
+      "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh",
+      "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
+      "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
+      "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3090318-logs/ray-driver.log",
+      "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3090318.out",
+      "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_fixed_20260601",
+      "latest_observation": "Submitted after syncing the fixed launcher to the remote SpecDec-RL workdir. slurm-3090318.out confirms policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, the NVIDIA PublicHF Eagle3 drafter path, VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4, VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. At 18:39 PDT it was RUNNING for about 26 minutes on nvl72163-T[01-16],nvl72168-T[01-16]. Driver log had 2433 lines and still no rollout or acceptance metric."
     }
   ],
   "matched_baseline_run": {
     "job_id": "3088636",
     "submitted_at": "2026-06-01 17:36 PDT",
-    "latest_state": "RUNNING at 18:03 PDT on coreai_dlalgo_llm",
-    "startup_status": "Driver log exists and is still building/downloading dependencies; no rollout or throughput metric yet.",
+    "latest_state": "RUNNING at 18:39 PDT on coreai_dlalgo_llm",
+    "startup_status": "Driver log exists; vLLM policy workers initialized 128/128 and target override policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 is visible. Step 1 baseline Training Results are now present; no multi-step mean yet.",
+    "partial_metrics": {
+      "steps_observed": [
+        1
+      ],
+      "total_step_time_s": [
+        601.46
+      ],
+      "generation_tokens_sec_gpu": [
+        71.31
+      ],
+      "generation_generated_tokens_sec_gpu": [
+        70.14
+      ],
+      "note": "Step 1 only from matched Thinking-2507 baseline job 3088636. Do not use as a final matched speedup until the strict-gate SpecDec job and multi-step baseline metrics are available."
+    },
     "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
     "num_prompts_per_step": 16,
     "num_generations_per_prompt": 32,
@@ -239,10 +283,10 @@
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 311993,
+    "latest_observed_hidden_state_files": 337331,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 56-65 running, tasks 66-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 17:56 PDT",
-    "rough_eta": "About 4-8h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
+    "latest_observed_array_window": "tasks 63-72 running, tasks 73-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 18:39 PDT",
+    "rough_eta": "About 4-7h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
 }

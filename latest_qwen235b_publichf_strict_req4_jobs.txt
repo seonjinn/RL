@@ -18,6 +18,13 @@ gate_token_threshold=0
 purpose=Verify lower-batch-only SpecDec activation after job 3084952 showed token_threshold=4096 never disabled draft work.
 matched_baseline_job=3088636
 strict_req4_specdec_job=3089565
+strict_req4_specdec_retry_job=3090318
 submit_state=PENDING Priority at 2026-06-01 17:59 PDT
-latest_state=RUNNING at 2026-06-01 18:03 PDT on nvl72084-T[01-16],nvl72105-T[02-04,06-18]
+superseded_state=3089565 CANCELLED at 2026-06-01 18:12 PDT because the remote launcher missed policy.model_name and would have used YAML default Qwen/Qwen3-235B-A22B.
+latest_state=3090318 RUNNING at 2026-06-01 18:39 PDT on nvl72163-T[01-16],nvl72168-T[01-16]
+ray_driver_log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3090318-logs/ray-driver.log
+slurm_stdout=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3090318.out
+target_override_confirmed=policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 in slurm-3090318.out
+gate_env_confirmed=VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4,VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0 in slurm-3090318.out
 latest_metric_status=no rollout metric yet
+matched_baseline_partial_metric=3088636 Step 1 total_step_time_s=601.46 generation_generated_tokens_sec_gpu=70.14 generation_tokens_sec_gpu=71.31 at 2026-06-01 18:39 PDT
