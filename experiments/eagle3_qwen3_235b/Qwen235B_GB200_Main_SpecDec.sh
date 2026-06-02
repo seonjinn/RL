@@ -97,6 +97,7 @@ NRL_SPECDEC_CONTROLLER_MIN_K="${NRL_SPECDEC_CONTROLLER_MIN_K:-1}"
 NRL_SPECDEC_CONTROLLER_MAX_K="${NRL_SPECDEC_CONTROLLER_MAX_K:-${NUM_SPECULATIVE_TOKENS}}"
 NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE="${NRL_SPECDEC_CONTROLLER_ALLOW_INCREASE:-false}"
 REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
+MOE_ENABLE_DEEPEP="${MOE_ENABLE_DEEPEP:-false}"
 WANDB_NAME="${WANDB_NAME:-Qwen235B_A22B_Main_N${NUM_NODES}xG${GPUS_PER_NODE}_specdec_k${NUM_SPECULATIVE_TOKENS}_p${NUM_PROMPTS}_g${NUM_GENERATIONS}_${MAX_STEPS}step}"
 
 if [[ -z "${SPECDEC_ADAPTIVE_GATE_MODE}" ]] && {
@@ -353,6 +354,7 @@ policy.megatron_cfg.expert_model_parallel_size=16 \
 policy.megatron_cfg.pipeline_model_parallel_size=8 \
 policy.megatron_cfg.context_parallel_size=2 \
 policy.megatron_cfg.sequence_parallel=true \
+policy.megatron_cfg.moe_enable_deepep=${MOE_ENABLE_DEEPEP} \
 grpo.async_grpo.enabled=false \
 grpo.val_period=1000 \
 checkpointing.enabled=false \

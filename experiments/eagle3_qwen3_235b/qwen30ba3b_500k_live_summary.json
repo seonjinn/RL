@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-02 00:31 PDT",
+  "updated_at": "2026-06-02 00:39 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -2124,10 +2124,10 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-02 00:22 PDT",
+    "updated_at": "2026-06-02 00:39 PDT",
     "hidden_state_array_job": "3072149_[0-99]%10",
     "active_tasks": "missing-id repair retry jobs 3105107, 3105108, 3105109, and 3105110 reached COMPLETING with VLLM_MAX_MODEL_LEN=8193 and exact hs_*.safetensors coverage is now 500000/500000; earlier shard repair jobs 3101471/3101472 completed for shards 94/96",
-    "train_job": "3105111 RUNNING; coverage validation passed with 500000/500000 hidden-state files and training reached global_step=1247 by 00:22 PDT",
+    "train_job": "3105111 RUNNING; coverage validation passed with 500000/500000 hidden-state files and training reached global_step=2772 by 00:22 PDT",
     "superseded_train_jobs": [
       "3101473 cancelled before start after exact coverage check found missing hidden-state ids",
       "3104702 cancelled after first missing-id repair wave hit vLLM max-model-len validation"
@@ -2148,7 +2148,7 @@
       324589,
       329404
     ],
-    "status": "100-shard hidden-state array completed and the four one-sample repairs with VLLM_MAX_MODEL_LEN=8193 raised exact hs_*.safetensors coverage to 500000/500000. 235B Speculators training job 3105111 is RUNNING and loss has dropped from the initial 31-32 range to roughly 7.5-10 by global_step=1247.",
+    "status": "100-shard hidden-state array completed and the four one-sample repairs with VLLM_MAX_MODEL_LEN=8193 raised exact hs_*.safetensors coverage to 500000/500000. 235B Speculators training job 3105111 is RUNNING and loss has dropped from the initial 31-32 range to roughly 6.4-7.1 by global_step=2772.",
     "hidden_state_file_extension": ".safetensors"
   },
   "hybridep_specdec_interpretation": {
@@ -2172,7 +2172,7 @@
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
   "specdec_speedup_gap_analysis": {
-    "updated_at": "2026-06-02 00:22 PDT",
+    "updated_at": "2026-06-02 00:39 PDT",
     "summary": "The current NeMo-RL results do not show SpecRL/ReSpec/TLT-like multi-x generation gains because K=1 acceptance around 57% only gives an ideal no-overhead bound near 1.57x, K>1 acceptance collapses, and the full GRPO step often spends most time outside rollout generation.",
     "k1_upper_bound_intuition": {
       "acceptance_rate": 0.574,
@@ -2222,13 +2222,13 @@
     },
     "current_gap_vs_specdec_rl_papers": [
       "The measured path uses a fixed offline drafter, not online drafter refresh inside GRPO.",
-      "Strict lower-batch-only gating is implemented in the patched path, but the 235B strict PublicHF throughput retry 3103227 failed before rollout metrics with KeyError: 'moe_enable_deepep'. No strict lower-batch-only 235B throughput/acceptance result exists yet.",
+      "Strict lower-batch-only gating is implemented in the patched path, but the 235B strict PublicHF throughput retry 3103227 failed before rollout metrics with KeyError: 'moe_enable_deepep'. Corrected retry 3105964 is queued with policy.megatron_cfg.moe_enable_deepep=false. No strict lower-batch-only 235B throughput/acceptance result exists yet.",
       "Dynamic K needs reliable late-position acceptance; current K=2/K=3 math results show that later draft positions are too weak.",
       "Current full-shape NeMo-RL E2E speedup is bounded by generation fraction because rewards, logprobs, and policy training dominate many steps."
     ]
   },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-02 00:22 PDT",
+    "updated_at": "2026-06-02 00:39 PDT",
     "stage": "speculators_training_running_after_hidden_state_repair",
     "hidden_state_count": 500000,
     "target_hidden_state_count": 500000,
@@ -2239,7 +2239,7 @@
     ],
     "pending_tasks": "none for hidden-state coverage; monitor running training job 3105111 for checkpoint output and final validation loss",
     "train_job": "3105111",
-    "train_job_state": "RUNNING at 2026-06-02 00:22 PDT; latest observed global_step=1247",
+    "train_job_state": "RUNNING at 2026-06-02 00:22 PDT; latest observed global_step=2772",
     "first_loss_observation": {
       "observed_at": "2026-06-02 00:18 PDT",
       "global_step_0_train_loss": 32.031,
@@ -2250,9 +2250,9 @@
       "loss_0_step1": 10.562,
       "loss_1_step1": 10.562,
       "loss_2_step1": 10.688,
-      "latest_observed_global_step": 1247,
-      "latest_observed_train_loss": 9.049,
-      "latest_observed_loss_range": "recent train/loss values around global_step 1216-1247 are roughly 7.467 to 10.234",
+      "latest_observed_global_step": 2772,
+      "latest_observed_train_loss": 6.648,
+      "latest_observed_loss_range": "recent train/loss values around global_step 2765-2772 are roughly 6.416 to 7.092",
       "note": "The 235B 500K Speculators training loop is active and the loss has dropped substantially from the first logged steps, but final convergence should be judged from the completed epoch/checkpoint."
     },
     "superseded_train_jobs": [

@@ -33,8 +33,8 @@
   "replacement_train_job": "3105111",
   "replacement_train_dependency": "afterok:3105107:3105108:3105109:3105110",
   "replacement_train_validation": "VALIDATE_HIDDEN_STATE_COVERAGE=true; train should fail closed unless hs_0..hs_499999 are all present.",
-  "latest_queue_observation": "At 2026-06-02 00:22 PDT, replacement train 3105111 was RUNNING at latest observed global_step=1247. Repair jobs 3105107, 3105108, 3105109, and 3105110 had cleared the afterok dependency.",
+  "latest_queue_observation": "At 2026-06-02 00:22 PDT, replacement train 3105111 was RUNNING at latest observed global_step=2772. Repair jobs 3105107, 3105108, 3105109, and 3105110 had cleared the afterok dependency.",
   "latest_hidden_state_coverage_observation": "At 2026-06-02 00:22 PDT, exact hs_*.safetensors count was 500000/500000. The four previously missing ids 178153, 272847, 324589, and 329404 are now covered.",
   "first_loss_observation": "3105111 stdout shows global_step=0 train/loss=32.031 and global_step=1 train/loss=31.797.",
-  "latest_loss_observation": "By global_step=1247, recent train/loss values were roughly 7.467-10.234 with latest observed train/loss=9.049. This indicates the training loop is actively learning; final convergence should be judged after the epoch/checkpoint completes."
+  "latest_loss_observation": "By global_step=2772, recent train/loss values were roughly 6.416-7.092 with latest observed train/loss=6.648. This indicates the training loop is actively learning; final convergence should be judged after the epoch/checkpoint completes."
 }
