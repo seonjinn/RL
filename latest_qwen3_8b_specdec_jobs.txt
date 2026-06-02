@@ -28,6 +28,25 @@ vLLM standalone static-batch sweep:
     drafter=RedHatAI/Qwen3-8B-speculator.eagle3
     dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen3_8b_vllm_spec_k3_bs1-32_cuda_graph_20260602_133138
 
+vLLM standalone result, completed 2026-06-02 13:36 PDT:
+  metric=output tokens/sec/GPU
+  acceptance_rate=not emitted by this standalone script; NeMo-RL rollout metrics will provide acceptance counters.
+
+  bs  baseline  K=1      K=1 speedup  K=3       K=3 speedup
+  1   245.68    241.20   0.982x       434.45    1.768x
+  2   482.62    326.17   0.676x       437.35    0.906x
+  4   855.50    959.64   1.122x       1716.56   2.006x
+  8   1792.27   1903.83  1.062x       3372.17   1.882x
+  16  3219.52   3764.53  1.169x       6388.47   1.984x
+  32  5349.54   7121.34  1.331x       11475.60  2.145x
+
+  Interpretation:
+    K=3 is clearly beneficial from bs=4 upward in this static standalone setup.
+    K=1 is weaker and only becomes materially useful at higher batch sizes.
+    bs=2 is an outlier/worse for both K=1 and K=3, so the NeMo long-tail gate should
+    be validated with actual rollout request counts rather than assuming all small
+    batches benefit.
+
 NeMo-RL GRPO:
   num_nodes=1
   gpus_per_node=4
@@ -48,4 +67,3 @@ NeMo-RL GRPO:
     token_gate_threshold=4096
     drafter=RedHatAI/Qwen3-8B-speculator.eagle3
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3118324.out
-
