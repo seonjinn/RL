@@ -50,3 +50,23 @@ Submitted batch job 3076833
 job_id=3076833
 # status_poll_pdt=2026-06-01T12:01:24-07:00
 # job 3076833 state=RUNNING; actual command includes NRL_STOP_AFTER_GENERATION=true and policy.max_total_sequence_length=2048; ray-driver is still in venv/startup and has no rollout metrics yet.
+
+# submitted V9 one-step gate-transition probe Tue Jun  2 01:50:00 PDT 2026
+job_name=qwen30ba3b-longtail-gate-probe-req64-tok2048-log1-genonly-N4xG4
+job_id=3107122
+purpose=Pin down the decode-iteration point where long-tail gate starts enabling SpecDec, using Qwen3-30B-A3B instead of 235B for faster evidence.
+model=Qwen/Qwen3-30B-A3B
+drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+num_prompts_per_step=64
+num_generations_per_prompt=32
+train_global_batch_size=2048
+max_steps=1
+num_speculative_tokens=1
+max_total_sequence_length=2048
+NRL_STOP_AFTER_GENERATION=true
+NRL_FORCE_REBUILD_VENVS=false
+VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=64
+VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=2048
+VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=1
+expected_evidence=worker log should show gate disabled while active requests or scheduled tokens exceed thresholds, then enabled once the decode tail falls under request<=64 and token<=2048; NeMo-RL early metrics should show nonzero draft_tokens and acceptance if enabled.
+status=3107122 RUNNING on nvl72047-T[07,14-15,17] at 2026-06-02 02:00 PDT; driver is still preparing the Python environment/building dependencies, so rollout/gate metrics are not available yet.

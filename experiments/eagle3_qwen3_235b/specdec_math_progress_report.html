@@ -518,6 +518,7 @@
 
     <h2>30B Lower-Batch Gate Tests</h2>
     <p class="small">Yes, Qwen3-30B-A3B was tested with small-batch-only/runtime gates. Request-count-only gating worked functionally, but it did not produce the best speedup. The strongest observed policy was token-pressure gating, which is closer to "enable SpecDec only when the decode work is underfilled enough to benefit."</p>
+    <p class="small"><strong>Gate-transition probe, 2026-06-02 01:50 PT:</strong> submitted Qwen3-30B-A3B job <code>3107122</code> with request gate <code>64</code>, token gate <code>2048</code>, K=<code>1</code>, <code>MAX_STEPS=1</code>, <code>NRL_STOP_AFTER_GENERATION=true</code>, and <code>VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=1</code>. This run is designed to answer exactly when SpecDec turns on inside a generation step: worker logs should show disabled checks while active requests/tokens exceed the thresholds, then enabled checks once the decode tail falls under the thresholds.</p>
     <div class="table-scroll">
       <table>
         <thead>
