@@ -55,12 +55,12 @@ NeMo-RL GRPO:
   train_global_batch_size=2048
   max_steps=20
 
-  status_update_2026-06-02_14:38_PDT:
+  status_update_2026-06-02_14:46_PDT:
     jobs=3118323,3118324 were cancelled after remaining stale in driver dependency rebuild. Both ray-driver logs stopped updating around 14:03-14:04 PDT with no GRPO Step, no NeMo-RL throughput, and no acceptance metrics. They should not be used as performance results.
     root_cause=The Qwen3-8B launchers did not pass the same driver rebuild resource/build-parallelism safeguards used by the 30B/235B launchers. They lacked DRIVER_SRUN_MEM=128G plus MAX_JOBS/CMAKE_BUILD_PARALLEL_LEVEL/NVTE_BUILD_MAX_JOBS/NINJAFLAGS/MAKEFLAGS caps.
     fix=Patched Qwen3_8B_GB200_Main_Baseline.sh and Qwen3_8B_GB200_Main_SpecDec.sh to pass DRIVER_SRUN_CPUS_PER_TASK=8, DRIVER_SRUN_MEM=128G, MAX_JOBS=4, CMAKE_BUILD_PARALLEL_LEVEL=4, NVTE_BUILD_MAX_JOBS=4, NINJAFLAGS=-j4, MAKEFLAGS=-j4 into ray.sub / uv build.
     retry_jobs=3119388 baseline r2, 3119389 SpecDec K=3 request-gated r2.
-    retry_status=Submitted at 2026-06-02 14:38 PDT, both PENDING due Priority.
+    retry_status=Submitted at 2026-06-02 14:38 PDT. Both are RUNNING as of 2026-06-02 14:46 PDT. Ray cluster startup succeeded: baseline 3119388 and SpecDec K=3 3119389 both reached actors online 4/4. They are still in driver uv dependency/native-extension setup with 0 GRPO step metrics so far.
     metrics=No NeMo-RL GRPO step, throughput, or acceptance metrics emitted yet. The completed numbers above are vLLM standalone only.
 
   3118323 baseline
@@ -72,7 +72,7 @@ NeMo-RL GRPO:
     job_name=qwen3-8b-qwen3-8b-baseline-r2-N1xG4
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3119388.out
     driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_baseline_py312_r2
-    status=PENDING at 2026-06-02 14:38 PDT.
+    status=RUNNING at 2026-06-02 14:46 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.
 
   3118324 SpecDec K=3, request-gated long-tail
     job_name=qwen3-8b-qwen3-8b-publichf-eagle3-k3-req8-N1xG4
@@ -93,4 +93,4 @@ NeMo-RL GRPO:
     drafter=RedHatAI/Qwen3-8B-speculator.eagle3
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3119389.out
     driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_publichf_specdec_py312_r2
-    status=PENDING at 2026-06-02 14:38 PDT.
+    status=RUNNING at 2026-06-02 14:46 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.

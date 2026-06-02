@@ -37,6 +37,23 @@ remediation:
   target_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft
   expected_container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/nemo_rl_nightly_20260602.sqsh
   reason=main pyproject requires Python >=3.13.13 and CUDA13 packages; existing 20260502 sqsh exposes CUDA 12.9 build toolchain.
+  status=COMPLETED. /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/nemo_rl_nightly_20260602.sqsh exists, size about 28G, and nemo_rl_nightly.sqsh symlink points to it.
 
-next_action:
-  Wait for job 3118930 to complete. Verify the new sqsh has CUDA 13-compatible nvcc/toolchain. Then resubmit the same nsys run from the main checkout with NRL_FORCE_REBUILD_VENVS=true.
+retry run:
+  job_id=3119417
+  submitted_at=2026-06-02 14:41 PDT
+  job_name=qwen30ba3b-main-megpolicy-nsys-s2to5-ms10-gbs2048
+  account=coreai_dlalgo_nemorl
+  nodes=4
+  gpus_per_node=4
+  config=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/nemo_rl_nightly_20260602.sqsh
+  max_steps=10
+  nsys_profile_step_range=2:5
+  nsys_worker_patterns=megatron_policy_worker
+  num_prompts_per_step=64
+  num_generations_per_prompt=32
+  train_global_batch_size=2048
+  status=RUNNING as of 2026-06-02 14:46 PDT on 4 nodes nvl72082-T[01,06-07,13]. Driver started with CPython 3.13.13 and is building/setting up the main-branch venv; no GRPO or nsys artifact yet.
+  log_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/logs/qwen30ba3b_grpo_nsys_main_megatron_step2to5_max10/3119417-logs
+  expected_artifacts=nsys reports from Megatron policy workers during steps 2:5 once GRPO reaches the profiling window.
