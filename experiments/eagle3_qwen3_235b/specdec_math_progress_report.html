@@ -168,6 +168,38 @@
       margin-top: 14px;
     }
     .banner p { margin-top: 6px; }
+    .summary-hero {
+      border-left-color: var(--green);
+      margin-bottom: 14px;
+    }
+    .takeaways {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .takeaway {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 116px;
+    }
+    .takeaway strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+      font-size: 14px;
+    }
+    .takeaway p { font-size: 13px; }
+    .conclusion-table table { min-width: 900px; }
+    details.detail-log > summary {
+      cursor: pointer;
+      font-weight: 740;
+      color: var(--ink);
+      list-style-position: inside;
+    }
+    details.detail-log[open] > summary { margin-bottom: 8px; }
     .status-row {
       display: grid;
       grid-template-columns: 160px 1fr 170px;
@@ -368,7 +400,7 @@
     @media (max-width: 900px) {
       header { display: block; }
       .toolbar { justify-content: flex-start; margin-top: 12px; }
-      .grid, .grid.two, .split, .contract-flow { grid-template-columns: 1fr; }
+      .grid, .grid.two, .split, .contract-flow, .takeaways { grid-template-columns: 1fr; }
       .contract-arrow { min-height: 18px; }
       .status-row { grid-template-columns: 1fr; }
       .flow { grid-template-columns: 1fr; }
@@ -387,7 +419,7 @@
   <header>
     <div>
       <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
-      <p class="sub">Updated 2026-06-02 00:00 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+      <p class="sub">Updated 2026-06-02 00:22 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
     </div>
     <div class="toolbar">
       <label class="theme-toggle" title="Switch light or dark mode">
@@ -401,12 +433,66 @@
     <button class="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button class="tab" data-tab="q30">Qwen3-30B-A3B</button>
     <button class="tab" data-tab="q235">Qwen3-235B</button>
-    <button class="tab" data-tab="data">Dataset & Training</button>
+    <button class="tab" data-tab="data">Dataset &amp; Training</button>
     <button class="tab" data-tab="parallel">500K Parallel Plan</button>
     <button class="tab" data-tab="links">Artifacts</button>
   </nav>
 
   <section id="overview" class="page active">
+    <div class="banner summary-hero">
+      <h2>결론 요약</h2>
+      <p>현재까지의 결론은 단순합니다. 30B는 NeMo-RL generation phase에서 유의미한 speedup이 확인됐지만 2x는 아닙니다. 235B는 acceptance가 높아도 always-on large-batch SpecDec에서는 baseline보다 느렸고, long-tail only gating 결과는 아직 완료 metric이 필요합니다. 235B in-house 500K drafter training은 정상 진행 중입니다.</p>
+      <div class="takeaways">
+        <div class="takeaway">
+          <strong>Qwen3-30B-A3B</strong>
+          <p>500K Speculators Eagle3 training 완료. best NeMo-RL generation speedup은 <code>1.366x</code>, acceptance는 <code>57.40%</code>. E2E speedup은 약 <code>1.096x</code>로 작습니다.</p>
+        </div>
+        <div class="takeaway">
+          <strong>Qwen3-235B PublicHF</strong>
+          <p>acceptance <code>65.71%</code>인데 generation은 <code>0.986x</code>, E2E는 <code>0.975x</code>. 이유는 SpecDec가 large batch에서도 항상 켜졌고 overhead가 이득을 먹었기 때문입니다.</p>
+        </div>
+        <div class="takeaway">
+          <strong>Qwen3-235B In-house 500K</strong>
+          <p>hidden-state coverage <code>500000/500000</code>. training job <code>3105111</code> 진행 중이며 latest observed global step <code>1247</code>, recent loss는 <code>7.467-10.234</code> 범위입니다.</p>
+        </div>
+      </div>
+    </div>
+
+    <h2>Decision Points</h2>
+    <div class="table-scroll conclusion-table">
+      <table>
+        <thead>
+          <tr><th>질문</th><th>현재 답</th><th>근거</th><th>다음 액션</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>2x generation speedup이 나왔나?</td>
+            <td><span class="pill warn">아직 아님</span></td>
+            <td>30B best는 <code>1.366x</code>. 235B PublicHF always-on은 <code>0.986x</code>.</td>
+            <td>lower-batch-only gate가 실제 rollout metric까지 가는지 확인.</td>
+          </tr>
+          <tr>
+            <td>235B acceptance가 높은데 왜 느린가?</td>
+            <td><span class="pill info">quality보다 overhead 문제</span></td>
+            <td><code>3084952</code>는 acceptance <code>65.71%</code>지만 gate가 <code>enabled_ratio=1.0</code>, <code>disabled=0</code>.</td>
+            <td>large batch에서는 disable하고 long-tail에서만 enable해야 함.</td>
+          </tr>
+          <tr>
+            <td>235B in-house drafter는 어디까지 왔나?</td>
+            <td><span class="pill ok">training running</span></td>
+            <td><code>3105111</code> running, hidden states <code>500000/500000</code>, latest observed step <code>1247</code>.</td>
+            <td>checkpoint/validation loss 완료 후 NeMo-RL K=1, K=2 평가.</td>
+          </tr>
+          <tr>
+            <td>long-tail gating은 검증됐나?</td>
+            <td><span class="pill warn">부분 검증</span></td>
+            <td><code>3092445</code>는 large-batch disable을 증명했지만 throughput 전에 실패. <code>3103227</code>은 running.</td>
+            <td><code>3103227</code>의 completed Step, acceptance, throughput metric 대기.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="grid">
       <div class="card">
         <div class="label">235B baseline</div>
@@ -430,20 +516,22 @@
       </div>
     </div>
 
-    <div class="banner">
-      <h2>Live Update: 2026-06-02 00:18 PT</h2>
-      <p>Current status split: Qwen3-30B-A3B 500K Speculators Eagle3 is the healthy measured path, and strict p64/g32 alltoall baseline/SpecDec jobs completed <code>4/4</code> steps. SpecDec K=1 improved generation time and generated tok/s/GPU, but E2E was still flat because logprobs/training dominate the GRPO step. Qwen3-235B in-house 500K training is now running: target-response finalization and Speculators prepare are complete, the 100-shard hidden-state array completed, exact coverage is <code>500000/500000</code>, and replacement train <code>3105111</code> has emitted first losses (<code>32.031</code> at global step <code>0</code>, <code>31.797</code> at global step <code>1</code>). Public HF 235B Eagle3 is verified to attach and draft in NeMo-RL: corrected NVIDIA PublicHF job <code>3084952</code> completed <code>4/4</code> with mean generated throughput <code>60.61 tok/s/GPU</code>, mean E2E <code>43.60 tok/s/GPU</code>, and mean acceptance <code>65.71%</code>. Matched Thinking-2507 baseline job <code>3088636</code> has <code>4/4</code> baseline metrics, mean generated throughput <code>61.48</code>, mean E2E <code>44.72</code>, and mean total step <code>452.20s</code>. The always-enabled PublicHF diagnostic is therefore slower than this matched baseline: generation throughput <code>0.986x</code>, E2E throughput <code>0.975x</code>, and E2E step-time speedup <code>0.952x</code>. Strict lower-batch-only job <code>3092445</code> produced gate evidence but no throughput result because it failed in the all-disabled speculative path. V9b retry <code>3103227</code> is running with the same PublicHF drafter/target, request gate <code>4</code>, token gate <code>0</code>, forced venv rebuild, and V9 all-disabled path guards; at 00:15 it was still running after <code>01:32:31</code>, had reached <code>128/128</code> Ray workers, showed target/drafter loading, and had no Epoch/Step, gate, acceptance, or throughput metrics yet.</p>
+    <details class="banner detail-log">
+      <summary>Detailed debug timeline</summary>
+      <h2>Live Update: 2026-06-02 00:22 PT</h2>
+      <p>Current status split: Qwen3-30B-A3B 500K Speculators Eagle3 is the healthy measured path, and strict p64/g32 alltoall baseline/SpecDec jobs completed <code>4/4</code> steps. SpecDec K=1 improved generation time and generated tok/s/GPU, but E2E was still flat because logprobs/training dominate the GRPO step. Qwen3-235B in-house 500K training is actively running: target-response finalization and Speculators prepare are complete, the 100-shard hidden-state array completed, exact coverage is <code>500000/500000</code>, and replacement train <code>3105111</code> reached latest observed global step <code>1247</code>. Its loss dropped from the first logged <code>32.031</code>/<code>31.797</code> to recent values around <code>7.467-10.234</code>, latest observed <code>9.049</code>. Public HF 235B Eagle3 is verified to attach and draft in NeMo-RL: corrected NVIDIA PublicHF job <code>3084952</code> completed <code>4/4</code> with mean generated throughput <code>60.61 tok/s/GPU</code>, mean E2E <code>43.60 tok/s/GPU</code>, and mean acceptance <code>65.71%</code>. Matched Thinking-2507 baseline job <code>3088636</code> has <code>4/4</code> baseline metrics, mean generated throughput <code>61.48</code>, mean E2E <code>44.72</code>, and mean total step <code>452.20s</code>. The always-enabled PublicHF diagnostic is therefore slower than this matched baseline: generation throughput <code>0.986x</code>, E2E throughput <code>0.975x</code>, and E2E step-time speedup <code>0.952x</code>. Strict lower-batch-only job <code>3092445</code> produced gate evidence but no throughput result because it failed in the all-disabled speculative path. V9b retry <code>3103227</code> is running with the same PublicHF drafter/target, request gate <code>4</code>, token gate <code>0</code>, forced venv rebuild, and V9 all-disabled path guards; at 00:22 it was still running after <code>01:39:50</code>, had reached policy worker/checkpoint-save setup, and had no completed Epoch/Step, gate, acceptance, or throughput metrics yet.</p>
       <p>Review of <code>3075161</code> exposed a long-tail gate bug: even when the runner observed <code>requests=128</code>, <code>tokens=3360</code>, and token gate <code>2048</code>, the old V7 runner let scheduler <code>all_disabled=false</code> override the runner threshold, so the gate stayed <code>enabled_ratio=1.0</code>. The live <code>/SpecDec-RL</code> checkout now has V9 gate logic and launcher marker checks. V9 keeps the async event branch reachable when a large batch is disabled and zeroes draft ids before scheduler copy on all-disabled batches. Corrected r3 verifier <code>3076833</code> completed successfully with <code>NRL_STOP_AFTER_GENERATION=true</code>, <code>policy.max_total_sequence_length=2048</code>, K=<code>3/2/1</code> dynamic tiers, and token gate <code>2048</code>. It produced early generation metrics: acceptance <code>57.65%</code>, generated throughput <code>6669.63 tok/s/GPU</code>, draft tokens <code>2,287,959</code>, accepted tokens <code>1,319,121</code>, and <code>16/16</code> reporting workers. Runner gate evidence now includes <code>disabled=16</code> out of <code>21,977</code> checks, so threshold disables are visible; scheduler enabled ratio is still <code>1.0</code>, and the per-position denominator is marked unreliable. This verifies the generation-side long-tail path, not full GRPO throughput.</p>
       <p>Current NeMo-RL SpecDec launchers are runtime-gated, not unconditional always-on SpecDec. The default main-run policy is token-pressure gating: request gate <code>0</code>, token gate <code>4096</code>, and <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code>. The completed 235B PublicHF K=1 run was configured this way, but observed scheduler gate metrics stayed <code>enabled_ratio=1.0</code> and <code>disabled=0</code> for all <code>4</code> steps. Runner logs showed active requests from <code>1</code> to <code>64</code> and scheduled tokens up to only <code>128</code> per worker, so token gate <code>4096</code> was too loose for this workload. Strict lower-batch-only job <code>3089565</code> was cancelled because its remote launcher was stale and missed <code>policy.model_name=${TARGET_MODEL_ID}</code>. Fixed retry <code>3090318</code> confirmed the right target/gate settings but then stalled before rollout with repeated Ray worker <code>startup_token</code> registration failures, so it was cancelled at 18:54. Rebuild retry <code>3092445</code> ran with <code>NRL_FORCE_REBUILD_VENVS=true</code>, request gate <code>4</code>, token gate <code>0</code>, matching target <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>, and the NVIDIA PublicHF Eagle3 drafter. It reached Step <code>1/4</code> generation and proved large-batch disable semantics: vLLM logged <code>checked=1 disabled=1 enabled=0</code>, <code>requests=64</code>, <code>tokens=1856</code>, <code>request_threshold=4</code>, and dumped <code>scheduled_spec_decode_tokens={}</code>. It then failed after <code>03:08:55</code> with <code>RayChannelTimeoutError</code> and <code>RAY_CGRAPH_get_timeout=3600</code>, ending in <code>RuntimeError: Failed to unpickle serialized exception</code>. This is a stability bug in the all-disabled speculative_config path, not a drafter acceptance or throughput result.</p>
       <p>30B dynamic-K validation job <code>3070995</code> reached real NeMo-RL Step 1 generation, emitted complete-DP SpecDec metrics, then failed before final throughput in the Megatron logprob/training phase. Its publishable partial metrics remain: acceptance <code>33.36%</code>, draft tokens <code>362,572</code>, accepted tokens <code>120,960</code>, per-position acceptance <code>46.48%</code>/<code>20.29%</code>/<code>0.04%</code>, runner gate enabled ratio <code>8.69%</code>, and scheduler gate enabled ratio <code>2.99%</code>. Follow-up reviews fixed scheduler-output propagation first, then found one more first-draft risk: V6 could treat an empty initial <code>scheduled_spec_decode_tokens</code> map as a runner-wide disable. V7 now propagates explicit <code>nrl_specdec_batch_gate_all_disabled</code> and <code>nrl_specdec_batch_gate_eligible_count</code>, and keeps early NeMo-RL generation throughput logging separate from final throughput parsing.</p>
       <p>Current 30B dynamic-K rerun <code>3072963</code> failed after real Step 1 generation. It emitted complete-DP early metrics: acceptance <code>33.91%</code>, early generated throughput <code>4511.04 tok/s/GPU</code> (<code>1.082x</code> vs baseline <code>4169.19</code>), draft tokens <code>423,736</code>, accepted tokens <code>143,708</code>, per-position acceptance <code>47.16%</code>/<code>20.89%</code>/<code>0.18%</code>, runner gate enabled ratio <code>9.72%</code>, and scheduler gate enabled ratio <code>3.47%</code>. It produced no final NeMo-RL performance throughput because Megatron <code>policy.get_logprobs</code> hit an NCCL watchdog timeout in <code>EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP</code>: <code>_ALLGATHER_BASE</code> ran for <code>1,800,087 ms</code>, then Ray reported <code>ActorDiedError</code>.</p>
       <p>Post-review hardening is committed and synced. A follow-up launcher patch now enforces drafter provenance, and separate review agents found two remaining correctness risks: baseline launchers did not prove <code>async_engine=false</code>, and dynamic-K could be misused without a long-tail threshold. The launchers, analyzer, and patch validator now fail closed on these cases. Baseline <code>3074777</code> emitted Step 1 early generation-only throughput <code>4760.56 tok/s/GPU</code>, but is now diagnostic-only because its run evidence lacked explicit <code>policy.generation.vllm_cfg.async_engine=false</code>. Strict replacement baseline <code>3075647</code> emitted Step 1 early generation-only throughput <code>4762.42 tok/s/GPU</code> with <code>NRL_VLLM_OMIT_GENERATION_LOGPROBS=true</code> and <code>async_engine=false</code>, then failed in <code>policy.get_logprobs</code> with the same Megatron <code>EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP</code> <code>_ALLGATHER_BASE</code> NCCL watchdog timeout at 12:07. SpecDec <code>3074778</code> emitted Step 1 early generation-only throughput <code>5742.32 tok/s/GPU</code>, acceptance <code>57.91%</code>, draft tokens <code>4,165,064</code>, accepted tokens <code>2,411,996</code>, and <code>16/16</code> reporting workers, then hit the same logprob failure class at 11:06. The strict generation-only comparison is therefore <code>1.206x</code> for SpecDec K=1, while final completed-step throughput remains blocked by a baseline-reproduced logprob path failure rather than a SpecDec-only failure.</p>
       <p>The failure signature has now been tested directly on a reduced alltoall-dispatcher smoke. Baseline <code>3076036</code> and SpecDec K=1 <code>3076041</code> both completed <code>Step 1/1</code> with <code>num_prompts_per_step=8</code>, <code>num_generations_per_prompt=8</code>, <code>train_global_batch_size=64</code>, <code>max_steps=1</code>, <code>policy.max_total_sequence_length=2048</code>, and <code>policy.megatron_cfg.moe_token_dispatcher_type=alltoall</code>. Baseline <code>3076036</code> reached final step metrics: generation <code>609.78 generated tok/s/GPU</code>, E2E <code>95.15 tok/s/GPU</code>, total step <code>79.15s</code>. SpecDec <code>3076041</code> also passed rewards, logprobs, and policy training, with acceptance <code>58.88%</code>, draft tokens <code>71,188</code>, accepted tokens <code>41,914</code>, generation <code>507.92 generated tok/s/GPU</code>, E2E <code>92.57 tok/s/GPU</code>, and total step <code>81.26s</code>. The first p64/g32 alltoall follow-up <code>3077214</code>/<code>3077216</code> did not produce comparable metrics: baseline failed before rollout in <code>MegatronPolicyWorker</code> import with a TransformerEngine/Triton JIT error, and SpecDec was cancelled after repeated Ray <code>startup_token</code> worker-registration failures. Repaired r2 jobs <code>3078476</code>/<code>3078477</code> repeated the worker-registration stall with <code>NRL_FORCE_REBUILD_VENVS=false</code> and were cancelled after r3 replacements were submitted. Fresh r3 p64/g32 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code> steps with <code>NRL_FORCE_REBUILD_VENVS=true</code>: baseline mean <code>240.21s</code> total, <code>37.33s</code> generation, <code>1004.69</code> E2E tok/s/GPU, <code>6068.62</code> generated tok/s/GPU; SpecDec K=1 mean <code>241.13s</code> total, <code>33.71s</code> generation, <code>1001.70</code> E2E tok/s/GPU, <code>6776.01</code> generated tok/s/GPU, and <code>57.28%</code> acceptance.</p>
-      <p>235B in-house Speculators training is now running. Array <code>3072149_[0-99]%10</code> completed, and the second one-sample repair wave with <code>VLLM_MAX_MODEL_LEN=8193</code> raised exact coverage from <code>499996</code> to <code>500000</code> <code>hs_*.safetensors</code> files. Replacement train <code>3105111</code> cleared <code>afterok:3105107:3105108:3105109:3105110</code>, passed coverage validation, and logged <code>train/loss=32.031</code> at global step <code>0</code> plus <code>train/loss=31.797</code> at global step <code>1</code>. Cache size remains about <code>51T</code>.</p>
+      <p>235B in-house Speculators training is now running and learning. Array <code>3072149_[0-99]%10</code> completed, and the second one-sample repair wave with <code>VLLM_MAX_MODEL_LEN=8193</code> raised exact coverage from <code>499996</code> to <code>500000</code> <code>hs_*.safetensors</code> files. Replacement train <code>3105111</code> cleared <code>afterok:3105107:3105108:3105109:3105110</code>, passed coverage validation, and reached latest observed global step <code>1247</code>. Recent <code>train/loss</code> values around steps <code>1216-1247</code> are roughly <code>7.467-10.234</code>, down from initial <code>31-32</code>. Cache size remains about <code>51T</code>.</p>
       <p>Public HF 235B fast path: <code>nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3</code> downloaded successfully. The earlier NVIDIA job <code>3080343</code> did attach Eagle3, but it inherited the YAML default target <code>Qwen/Qwen3-235B-A22B</code> because the launcher did not pass <code>policy.model_name=${TARGET_MODEL_ID}</code>; it was cancelled at 16:26 because the attached drafter was for <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>. RedHat fallback job <code>3081230</code> failed before metrics when Megatron workers treated an incomplete checkpoint directory as complete and then could not find <code>iter_0000000/run_config.yaml</code>. Corrected job <code>3084952</code> completed at 17:50 on <code>coreai_dlalgo_llm</code>, K=<code>1</code>, GBS <code>512</code>, token gate <code>4096</code>, and the matching Thinking-2507 target/drafter pair. Matched baseline job <code>3088636</code> now has <code>4/4</code> baseline throughput, and the always-enabled PublicHF result is slightly slower. Because <code>3084952</code> never disabled its gate, strict request-gate job <code>3090318</code> was tried with request gate <code>4</code>, token gate <code>0</code>, then cancelled for the Ray <code>startup_token</code> venv mismatch. Rebuild retry <code>3092445</code> proved strict large-batch disable but failed before any completed rollout metric due to a Ray/vLLM timeout in the all-disabled speculative path.</p>
-    </div>
+    </details>
 
-    <div class="banner">
+    <details class="banner detail-log">
+      <summary>How to read the numbers</summary>
       <h2>Result Provenance Rules</h2>
       <table>
         <thead>
@@ -459,12 +547,13 @@
           <tr><td>Baseline/config parity</td><td><span class="pill warn">required</span></td><td>Future speedup gates must prove matching generation-logprob mode, prompt/generation batch shape, and vLLM batch caps. Historical <code>1.3664x</code> remains the best observed NeMo-RL generation result, but the final comparison should be repeated against a logprob-matched baseline.</td></tr>
         </tbody>
       </table>
-    </div>
+    </details>
 
-    <div class="banner">
+    <details class="banner detail-log">
+      <summary>Context before latest update</summary>
       <h2>Context Before Latest Live Update</h2>
       <p>30B is the healthy path right now: the clean 500K Speculators Eagle3 drafter trained successfully, and completed NeMo-RL sweeps show real rollout Generation speedup. Best observed completed result is K=1 token-pressure job <code>3060379</code>: <code>5696.58 generated tok/s/GPU</code>, <code>1.3664x</code> Generation-throughput speedup, <code>1.3466x</code> Generation-time speedup, <code>1.0957x</code> E2E-throughput speedup, and <code>1.0782x</code> E2E step-time speedup versus historical baseline <code>3056050</code>, with <code>57.40%</code> acceptance. Strict p64/g32 alltoall jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code> steps: SpecDec improves mean generation time <code>37.33s -> 33.71s</code> and generation throughput <code>6068.62 -> 6776.01 generated tok/s/GPU</code>, but E2E is still slightly slower (<code>240.21s -> 241.13s</code>, <code>1004.69 -> 1001.70 tok/s/GPU</code>) because logprobs/training dominate the total GRPO step. Reduced alltoall smoke jobs <code>3076036</code>/<code>3076041</code> prove the full 1-step NeMo-RL loop works at p8/g8, but are not the final p64/g32 shape. For 235B, target-response finalization and prepare are complete; hidden-state array <code>3072149_[0-99]%10</code> completed, exact coverage is now <code>500000/500000</code> after the <code>VLLM_MAX_MODEL_LEN=8193</code> repair wave, and replacement train <code>3105111</code> is running.</p>
-    </div>
+    </details>
 
     <h2>500K Eval Snapshot</h2>
     <p class="small">Final 20-step NeMo-RL metrics for token gate <code>4096</code>, compared with historical mixed baseline <code>3056050</code>. Baseline means from <code>3056050-logs/ray-driver.log</code>: E2E step <code>236.43s</code>, generation <code>96.33s</code>, E2E <code>1758.32 tok/s/GPU</code>, generation <code>4169.19 generated tok/s/GPU</code>.</p>
@@ -646,7 +735,7 @@
           </tr>
           <tr>
             <td>235B expectation</td>
-            <td>235B in-house 500K drafter is still in hidden-state extraction and has not produced a clean 500K-trained NeMo-RL E2E result yet.</td>
+            <td>235B in-house 500K drafter is training now and has not produced a clean 500K-trained NeMo-RL E2E result yet.</td>
             <td>HybridEP should be tested with 235B once the drafter is trained, but it should be reported as E2E acceleration, not Generation-throughput improvement.</td>
           </tr>
         </tbody>
@@ -868,11 +957,11 @@
         </tr>
         <tr>
           <td>Is there an active 235B SpecDec job now?</td>
-          <td>Corrected Public HF 235B NeMo-RL SpecDec diagnostic <code>3084952</code> completed <code>4/4</code> with target <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code> and NVIDIA PublicHF Eagle3 K=<code>1</code>. Mean generated throughput is <code>60.61 tok/s/GPU</code>, mean E2E is <code>43.60 tok/s/GPU</code>, and mean acceptance is <code>65.71%</code>. Scheduler gate metrics are <code>enabled_ratio=1.0</code> and <code>disabled=0</code> for all steps, so this job is not evidence that only the lower-batch tail was accelerated. Matched baseline job <code>3088636</code> emitted <code>4/4</code> metrics with mean <code>61.48 generated tok/s/GPU</code>, mean E2E <code>44.72 tok/s/GPU</code>, and mean total step <code>452.20s</code>, so the always-enabled PublicHF diagnostic is slower than the matched baseline. Rebuild retry <code>3092445</code> proved strict large-batch disable, then failed before any completed rollout metric with <code>RayChannelTimeoutError</code> in the all-disabled speculative path. V9b strict-gate retry <code>3103227</code> is running and has passed target/drafter loading, but has not emitted Step, acceptance, or throughput metrics yet. The active in-house 235B work is clean 500K Speculators training: hidden-state array <code>3072149_[0-99]%10</code> completed, exact coverage is <code>500000/500000</code>, and replacement train <code>3105111</code> is running with first losses logged.</td>
+          <td>Corrected Public HF 235B NeMo-RL SpecDec diagnostic <code>3084952</code> completed <code>4/4</code> with target <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code> and NVIDIA PublicHF Eagle3 K=<code>1</code>. Mean generated throughput is <code>60.61 tok/s/GPU</code>, mean E2E is <code>43.60 tok/s/GPU</code>, and mean acceptance is <code>65.71%</code>. Scheduler gate metrics are <code>enabled_ratio=1.0</code> and <code>disabled=0</code> for all steps, so this job is not evidence that only the lower-batch tail was accelerated. Matched baseline job <code>3088636</code> emitted <code>4/4</code> metrics with mean <code>61.48 generated tok/s/GPU</code>, mean E2E <code>44.72 tok/s/GPU</code>, and mean total step <code>452.20s</code>, so the always-enabled PublicHF diagnostic is slower than the matched baseline. Rebuild retry <code>3092445</code> proved strict large-batch disable, then failed before any completed rollout metric with <code>RayChannelTimeoutError</code> in the all-disabled speculative path. V9b strict-gate retry <code>3103227</code> is running and has passed target/drafter loading plus policy worker/checkpoint-save setup, but has not emitted completed Step, acceptance, or throughput metrics yet. The active in-house 235B work is clean 500K Speculators training: hidden-state array <code>3072149_[0-99]%10</code> completed, exact coverage is <code>500000/500000</code>, and replacement train <code>3105111</code> is running at latest observed global step <code>1247</code>.</td>
         </tr>
         <tr>
           <td>What is the next long-tail experiment?</td>
-          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> also completed and stay around <code>1.34x</code>. Corrected V8 verifier <code>3076833</code> completed the generation-side long-tail diagnostic. Strict p64/g32 alltoall r3 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code>; SpecDec improved generation throughput but was flat E2E. For 235B PublicHF, matched baseline <code>3088636</code> is complete; strict request-gate job <code>3092445</code> failed before throughput after proving large-batch disable, and V9 retry <code>3103018</code> failed before rollout due to missing third-party workspace files; V9b retry <code>3103227</code> is running after restoration and has passed the previous Megatron-Bridge build failure point.</td>
+          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> also completed and stay around <code>1.34x</code>. Corrected V8 verifier <code>3076833</code> completed the generation-side long-tail diagnostic. Strict p64/g32 alltoall r3 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code>; SpecDec improved generation throughput but was flat E2E. For 235B PublicHF, matched baseline <code>3088636</code> is complete; strict request-gate job <code>3092445</code> failed before throughput after proving large-batch disable, and V9 retry <code>3103018</code> failed before rollout due to missing third-party workspace files; V9b retry <code>3103227</code> is running after restoration and is past the previous build/model-load failure points, but has no completed rollout metrics yet.</td>
         </tr>
         <tr>
           <td>Is the patch bundle current?</td>
@@ -1151,14 +1240,14 @@
         <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. Legacy K=1 completed 20/20 steps at <code>66.16 tok/s/GPU</code>, slightly below the <code>66.78</code> baseline. Corrected PublicHF K=1 job <code>3084952</code> completed <code>4/4</code> with mean <code>60.61</code> generated tok/s/GPU and mean <code>43.60</code> E2E tok/s/GPU, but its gate was effectively always-on and it is slower than matched baseline: generation <code>0.986x</code>, E2E <code>0.975x</code>. Rebuild strict request-gate job <code>3092445</code> proved lower-batch gating disables large batches, but failed before throughput metrics with a Ray/vLLM timeout in the all-disabled speculative path.</td></tr>
         <tr><td>What is K=1 acceptance?</td><td>Legacy completed K=1 driver step-summary acceptance mean is <code>54.6%</code> across <code>20</code> parsed rollout summaries. Corrected PublicHF K=1 job <code>3084952</code> has mean acceptance <code>65.71%</code> across <code>4</code> completed steps.</td></tr>
         <tr><td>Is the K=2 drafter attached?</td><td>Yes. Retry job <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and entered Step 1 rollout. It produced no NeMo-RL rollout throughput or acceptance metric and was cancelled after stalling.</td></tr>
-        <tr><td>Next debug</td><td>Do not count K=2 strict gate or <code>3092445</code> as throughput results. For PublicHF K=1, the matched Thinking-2507 baseline <code>3088636</code> is complete, and <code>3092445</code> now identifies the next code fix: all-disabled speculative_config batches need a stable baseline fallback or metadata-path repair. For the in-house 235B drafter, continue hidden-state extraction and train once the <code>3072149</code> array completes.</td></tr>
+        <tr><td>Next debug</td><td>Do not count K=2 strict gate or <code>3092445</code> as throughput results. For PublicHF K=1, the matched Thinking-2507 baseline <code>3088636</code> is complete, and <code>3092445</code> now identifies the next code fix: all-disabled speculative_config batches need a stable baseline fallback or metadata-path repair. For the in-house 235B drafter, wait for train job <code>3105111</code> to finish, then evaluate the resulting checkpoint in NeMo-RL with K=1 and K=2.</td></tr>
       </tbody>
     </table>
 
     <h2>235B In-House Drafter Corpus</h2>
     <div class="banner">
       <h2>Current Data Status</h2>
-      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response repair and finalization are complete. Finalizer <code>3068014</code> produced exact <code>500000</code>-row conversation and Speculators JSONL files, and prepare job <code>3068015</code> completed with <code>16</code> arrow shards plus <code>token_freq.pt</code>. The 100-shard hidden-state array <code>3072149_[0-99]%10</code> completed after the vLLM <code>extract_hidden_states</code> draft-token shape patch, and exact coverage is now <code>500000/500000</code>. First missing-id repair jobs <code>3104698</code>, <code>3104699</code>, <code>3104700</code>, and <code>3104701</code> failed to write ids <code>178153</code>, <code>272847</code>, <code>324589</code>, and <code>329404</code> because <code>VLLM_MAX_MODEL_LEN=8192</code> rejected 8192-token inputs with one requested output token. Retry repairs <code>3105107</code>, <code>3105108</code>, <code>3105109</code>, and <code>3105110</code> used <code>VLLM_MAX_MODEL_LEN=8193</code> and raised coverage to full. Replacement train <code>3105111</code> waits for Slurm afterok release.</p>
+      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response repair and finalization are complete. Finalizer <code>3068014</code> produced exact <code>500000</code>-row conversation and Speculators JSONL files, and prepare job <code>3068015</code> completed with <code>16</code> arrow shards plus <code>token_freq.pt</code>. The 100-shard hidden-state array <code>3072149_[0-99]%10</code> completed after the vLLM <code>extract_hidden_states</code> draft-token shape patch, and exact coverage is now <code>500000/500000</code>. First missing-id repair jobs <code>3104698</code>, <code>3104699</code>, <code>3104700</code>, and <code>3104701</code> failed to write ids <code>178153</code>, <code>272847</code>, <code>324589</code>, and <code>329404</code> because <code>VLLM_MAX_MODEL_LEN=8192</code> rejected 8192-token inputs with one requested output token. Retry repairs <code>3105107</code>, <code>3105108</code>, <code>3105109</code>, and <code>3105110</code> used <code>VLLM_MAX_MODEL_LEN=8193</code> and raised coverage to full. Replacement train <code>3105111</code> is running and has reached latest observed global step <code>1247</code>.</p>
     </div>
     <table>
       <thead>
@@ -1192,20 +1281,20 @@
         </tr>
         <tr>
           <td>235B Speculators training chain</td>
-          <td><span class="pill info">hidden-state extraction</span></td>
-          <td>The active chain is prepare <code>3068015</code> complete, hidden-state array <code>3072149_[0-99]%10</code> complete, completed repair jobs <code>3072518-3072523</code> for shards <code>005-010</code>, completed repair jobs <code>3101471</code>/<code>3101472</code> for shards <code>94</code>/<code>96</code>, failed first missing-id repair wave <code>3104698-3104701</code> due <code>VLLM_MAX_MODEL_LEN=8192</code>, running retry repairs <code>3105107-3105110</code> with <code>VLLM_MAX_MODEL_LEN=8193</code>, then train <code>3105111</code> after exact coverage reaches <code>500000/500000</code>. Previous array <code>3071825</code> was cancelled after exposing the vLLM extracted-site draft-token shape bug; trains <code>3072150</code>, <code>3072524</code>, <code>3101473</code>, and <code>3104702</code> were superseded before the current retry split.</td>
+          <td><span class="pill ok">training running</span></td>
+          <td>The active chain is prepare <code>3068015</code> complete, hidden-state array <code>3072149_[0-99]%10</code> complete, completed repair jobs <code>3072518-3072523</code> for shards <code>005-010</code>, completed repair jobs <code>3101471</code>/<code>3101472</code> for shards <code>94</code>/<code>96</code>, and completed one-sample repairs <code>3105107-3105110</code> with <code>VLLM_MAX_MODEL_LEN=8193</code>. Exact coverage is <code>500000/500000</code>. Replacement train <code>3105111</code> is running and has reached latest observed global step <code>1247</code>; recent losses are roughly <code>7.467-10.234</code>, down from the initial <code>31-32</code>. Previous array <code>3071825</code> and trains <code>3072150</code>, <code>3072524</code>, <code>3101473</code>, and <code>3104702</code> were superseded.</td>
         </tr>
         <tr>
           <td>Clean 235B training claim</td>
           <td><span class="pill ok">validated</span></td>
-          <td>The final 235B merge used <code>openmath_reasoning_cot_conversations_50k.jsonl</code> as the denylist and passed normalized prompt validation: <code>500000</code> rows, <code>500000</code> unique prompts, <code>0</code> duplicate prompts, and <code>0</code> denylisted OpenMath prompts. The drafter checkpoint is still not trained because hidden-state extraction is in progress.</td>
+          <td>The final 235B merge used <code>openmath_reasoning_cot_conversations_50k.jsonl</code> as the denylist and passed normalized prompt validation: <code>500000</code> rows, <code>500000</code> unique prompts, <code>0</code> duplicate prompts, and <code>0</code> denylisted OpenMath prompts. The drafter checkpoint is not final yet because train job <code>3105111</code> is still running.</td>
         </tr>
       </tbody>
     </table>
   </section>
 
   <section id="data" class="page">
-    <h2>Data & Training Pipeline</h2>
+    <h2>Data &amp; Training Pipeline</h2>
     <div class="grid">
       <div class="card">
         <div class="label">Training corpus</div>
@@ -1611,7 +1700,7 @@
       <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
       <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
       <div>30B 500K live summary: <code>experiments/eagle3_qwen3_235b/qwen30ba3b_500k_live_summary.json</code></div>
-      <div>235B target-response generation status: <code>experiments/eagle3_qwen3_235b/qwen235b_targetgen_status.json</code>. Current state: finalizer <code>3068014</code> produced exact <code>500000</code>-row final conversation and Speculators JSONL files, prepare job <code>3068015</code> completed, hidden-state array <code>3072149</code> completed, exact coverage is <code>500000/500000</code>, and replacement train job <code>3105111</code> is running with first losses logged.</div>
+      <div>235B target-response generation status: <code>experiments/eagle3_qwen3_235b/qwen235b_targetgen_status.json</code>. Current state: finalizer <code>3068014</code> produced exact <code>500000</code>-row final conversation and Speculators JSONL files, prepare job <code>3068015</code> completed, hidden-state array <code>3072149</code> completed, exact coverage is <code>500000/500000</code>, and replacement train job <code>3105111</code> is running at latest observed global step <code>1247</code>.</div>
       <div>235B missing hidden-state repair summary: <code>experiments/eagle3_qwen3_235b/qwen235b_hidden_state_missing4_repair_summary.json</code>.</div>
       <div>235B hidden-state repair summary: <code>experiments/eagle3_qwen3_235b/qwen235b_hidden_state_repair_94_96_summary.json</code>.</div>
       <div>235B Public HF diagnostic status: <code>experiments/eagle3_qwen3_235b/qwen235b_publichf_status.json</code>. Corrected NVIDIA Thinking-2507 PublicHF job <code>3084952</code> completed <code>4/4</code> with K=<code>1</code>, GBS <code>512</code>, and token gate <code>4096</code>. Superseded NVIDIA job <code>3080343</code> was cancelled because it used target <code>Qwen/Qwen3-235B-A22B</code> with a Thinking-2507 drafter; RedHat fallback <code>3081230</code> failed before metrics on the incomplete Megatron checkpoint <code>run_config.yaml</code> race; strict-gate job <code>3089565</code> was cancelled because the remote launcher missed the explicit target override. Completed metrics: mean generated tok/s/GPU <code>60.61</code>, mean E2E tok/s/GPU <code>43.60</code>, and mean acceptance <code>65.71%</code>. Gate metrics stayed <code>enabled_ratio=1.0</code>, <code>disabled=0</code>. Matched baseline job <code>3088636</code> now has <code>4/4</code> mean <code>61.48 generated tok/s/GPU</code> and <code>44.72 E2E tok/s/GPU</code>, so the always-enabled PublicHF diagnostic is slower; strict lower-batch job <code>3090318</code> was cancelled after Ray <code>startup_token</code> worker-registration failures; rebuild job <code>3092445</code> ran with request gate <code>4</code>, token gate <code>0</code>, forced venv rebuild, correct target override, and matching drafter. It proved large-batch disable with <code>scheduled_spec_decode_tokens={}</code> but failed before rollout throughput with <code>RayChannelTimeoutError</code> and <code>RAY_CGRAPH_get_timeout=3600</code>. V9 retry <code>3103018</code> failed before rollout during driver venv build because a third-party workspace was incomplete; V9b retry <code>3103227</code> is running after restoring the workspace, with the same strict gate and a new V9-guarded venv.</div>
