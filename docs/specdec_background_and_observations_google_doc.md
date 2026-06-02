@@ -19,6 +19,32 @@ Our current observations match that framing.
 
 The practical conclusion is that our next optimization target should not be "maximize acceptance" in isolation. It should be "enable SpecDec only when the expected target-side savings exceed the drafter plus verification overhead." That means runtime gating based on active requests, scheduled-token pressure, draft-position acceptance, and measured generation-time contribution.
 
+## External Results Versus Our Current Results
+
+Recent papers report larger speedups than our NeMo-RL runs, but most of those numbers come from smaller models, generation-only inference, model-free reuse, online drafter adaptation, or long-tail-only activation. The table below keeps the comparison compact and separates the metric type.
+
+| Work | Scale / scope | Reported benefit | Acceptance metric | Why it differs from our current NeMo-RL results |
+|---|---|---:|---|---|
+| FastGRPO | 7B-8B GRPO training | 2.35x-2.72x E2E training; often 2.6x-3.0x generation | Accepted length around 3.7-4.6 after online draft learning | Smaller dense targets and online draft learning. Our current measured 30B/235B path mostly uses offline drafters, and 235B NeMo-RL has high system overhead. |
+| SPEC-RL | 1.7B-14B rollout systems | 2.31x average rollout speedup | Reused prefix length / generated-token reduction | Uses prefix reuse and generated-token reduction rather than a direct Eagle3 token-acceptance setup. Not a 235B full GRPO measurement. |
+| ReSpec | Qwen2.5 3B/7B/14B RL | 1.50x-1.84x average E2E training speedup | Acceptance length trend | Main contribution is online/reward-weighted drafter adaptation to prevent acceptance collapse during RL. Our fixed offline drafter can drift as the policy changes. |
+| NeMo RL SD paper | Measured Qwen3-8B; simulated Qwen3-235B | 8B measured: 1.5x-1.8x generation, 1.35x-1.41x E2E. 235B is simulation/projection. | Acceptance length 2.77-3.32 at k=3 | Public measured RL result is 8B. The 235B result is not a measured full-training run, so it should be used as a target model, not a direct comparison. |
+| DREAM-R | Qwen3-VL-235B inference/speculative reasoning | 1.60x-2.31x inference latency on Q235B examples | Reasoning-step acceptance 39%-71% with K=4 | Inference-only, not E2E RL training. It uses a fixed K=4 speculative reasoning setup and a multimodal verifier, so its acceptance metric is not our token-level NeMo-RL metric. |
+| TLT | 7B-70B GRPO / long-tail systems | About 1.7x-2.1x E2E; Qwen-32B microbench around 3.5x-3.65x | Accept length / token accept-rate plots | It explicitly targets underfilled long-tail phases. Our 235B always-on run enabled SpecDec in every step, which is exactly the regime TLT-style gating tries to avoid. |
+| Learning to Draft | 8B-32B inference control | 2.24x-4.32x inference speedup | Acceptance length about 3.1-8.5 | This is RL for speculative-decoding control, not RL post-training rollout acceleration. It is still useful for dynamic-K and policy-conditioned drafting ideas. |
+
+### Key Differences That Explain the Gap
+
+- Metric mismatch: several papers report inference or rollout-generation speedup, while our most important question is NeMo-RL end-to-end GRPO step speedup.
+- Acceptance metric mismatch: papers often report average accepted length, not token acceptance percentage. A 60% token acceptance rate at K=1 is much weaker than an accepted length of 3-4.
+- Model-scale mismatch: most measured public RL-training results are below 70B. Public 235B evidence is mostly inference or simulation.
+- Draft-depth mismatch: several high-speedup results rely on useful K=3/K=4 acceptance. Our strongest healthy NeMo-RL result is K=1, whose practical ceiling is much lower.
+- Online adaptation mismatch: FastGRPO and ReSpec emphasize continuously adapting the drafter as the target distribution changes. Our current 500K Eagle3 drafters are offline checkpoints unless explicitly configured otherwise.
+- Load-regime mismatch: TLT/ReSpec-style systems avoid using SpecDec when the verifier is already saturated. Our Qwen3-235B PublicHF NeMo-RL run had 65.71% acceptance but was always-on, and still slowed down versus baseline.
+- System-overhead mismatch: NeMo-RL includes refit, logprobs, reward, policy training, Ray/vLLM scheduling, CUDA Graph behavior, and checkpoint/export overhead. Standalone vLLM wins can disappear in the full loop.
+
+The practical interpretation is not that our acceptance is "bad." It is that our current system has not yet combined high accepted length, low overhead, online adaptation, and load-aware activation in one measured NeMo-RL run.
+
 ## Background: What Speculative Decoding Does
 
 Speculative decoding uses two models:
@@ -36,6 +62,35 @@ For rollout acceleration, this is attractive because generation can be a large p
 - scheduler and metadata overhead,
 - KV-cache and CUDA Graph interaction costs,
 - possible loss of efficiency at larger batch sizes.
+
+## What Is Different About EAGLE-3
+
+Classic speculative decoding usually attaches an independent small language model to the target model. The small model reads the same token prefix and directly proposes future token IDs. The target model then verifies those proposed tokens. This can work, but the drafter has to approximate the target distribution from tokens alone, so it can drift when the target model or RL policy distribution changes.
+
+EAGLE-style drafters are more target-aware. Instead of only reading token IDs, the drafter is trained using hidden states from the target model. It learns to propose future tokens from target-model representations, so it is better aligned with the verifier for the same parameter budget. In EAGLE-3, the drafter can use multiple target-layer features, such as early, middle, and late hidden states, rather than only one final hidden state. In our Qwen3-235B in-house checkpoint, the config records auxiliary hidden-state layer IDs `[1, 46, 90]`.
+
+The practical consequence is:
+
+- Classic draft LM: simpler, independent, easier to plug in, but often needs a strong small LM to keep acceptance high.
+- EAGLE/EAGLE-3: more coupled to the target model and training pipeline, but can be much cheaper for the same acceptance because it uses target hidden-state features.
+- For RL: EAGLE-3 still needs domain and distribution match. If the target policy changes during GRPO, an offline EAGLE-3 drafter can become stale unless we use online adaptation or refresh training data.
+
+```text
+Classic speculative decoding
+
+token prefix
+  -> independent small draft LM
+  -> proposed token IDs
+  -> target verifier accepts/rejects
+
+EAGLE-3 speculative decoding
+
+token prefix
+  -> target hidden states from selected layers
+  -> lightweight hidden-state-conditioned EAGLE-3 drafter
+  -> proposed token IDs
+  -> target verifier accepts/rejects
+```
 
 ## What Determines SpecDec Performance Benefit
 
@@ -153,6 +208,82 @@ Use the projection as a decision rule, not as a claim of guaranteed speedup:
 - Track per-position acceptance, not only aggregate acceptance.
 - Track gate enabled ratio. A high acceptance rate on a tiny number of draft attempts will not move average throughput.
 
+## Visual Summary To Recreate In Google Docs
+
+Use these charts when converting this Markdown into a Google Doc or slide. The same data is also rendered in `docs/specdec_background_and_observations_charts.html`.
+
+1. vLLM standalone Qwen3-8B speedup by batch size
+
+   Chart type: grouped bar chart.
+
+   | Batch size | K=1 speedup | K=3 speedup |
+   |---:|---:|---:|
+   | 1 | 0.982x | 1.768x |
+   | 2 | 0.676x | 0.906x |
+   | 4 | 1.122x | 2.006x |
+   | 8 | 1.062x | 1.882x |
+   | 16 | 1.169x | 1.984x |
+   | 32 | 1.331x | 2.145x |
+
+   Metadata to show beside the chart: target `Qwen/Qwen3-8B`, drafter `RedHatAI/Qwen3-8B-speculator.eagle3`, vLLM `v0.20.2`, ISL/OSL `1000/512`, TP/PP `1/1`, one GPU used, one node allocated with four GPUs, servers baseline `nvl72129-T05`, K=1 `nvl72160-T17`, K=3 `nvl72103-T17`, CUDA Graph on, profiler off.
+
+2. vLLM standalone Qwen3-235B PublicHF speedup by batch size
+
+   Chart type: single-series bar chart.
+
+   | Batch size | K=1 speedup |
+   |---:|---:|
+   | 1 | 1.194x |
+   | 2 | 1.210x |
+   | 4 | 1.125x |
+   | 8 | 1.181x |
+   | 16 | 1.220x |
+   | 32 | 1.275x |
+
+   Metadata to show beside the chart: target `Qwen/Qwen3-235B-A22B`, drafter `nvidia/Qwen3-235B-A22B-Eagle3`, vLLM `v0.17.0`, ISL/OSL `1000/512`, TP/PP `4/1`, four GPUs on one node, servers baseline `nvl72142-T07`, SpecDec `nvl72087-T18`, CUDA Graph on, profiler off, custom all-reduce disabled.
+
+3. External papers versus our measured results
+
+   Chart type: horizontal bar chart. Label each bar with the scope.
+
+   | Result | Speedup | Scope |
+   |---|---:|---|
+   | FastGRPO best E2E | 2.72x | 7B-8B GRPO training |
+   | SPEC-RL average rollout | 2.31x | 1.7B-14B rollout |
+   | ReSpec average E2E | 1.84x | 3B-14B training |
+   | NeMo RL SD measured 8B generation | 1.80x | Qwen3-8B rollout generation |
+   | DREAM-R Q235B best | 2.31x | Qwen3-VL-235B inference |
+   | TLT upper E2E summary | 2.10x | 7B-70B GRPO, long-tail enabled |
+   | Learning to Draft best | 4.32x | inference control, not RL rollout training |
+   | Our Qwen3-30B best generation | 1.366x | NeMo-RL generation |
+   | Our Qwen3-235B PublicHF always-on generation | 0.986x | NeMo-RL generation |
+
+4. Pending Qwen3-235B in-house 500K decode-heavy standalone sweeps
+
+   The short-decode in-house 500K sweep is now complete. The decode-heavy shape is intentionally `ISL=1024`, `OSL=10000`, batch sizes `1/2/4/8`, because long decode is the regime where SpecDec should have the best chance to pay off.
+
+   | Run | Job | Shape | Status |
+   |---|---:|---|---|
+   | Thinking-2507 short-decode baseline | 3119759 | ISL=1000, OSL=512, bs=1-32 | Completed |
+   | Thinking-2507 in-house 500K K=1 | 3119760 | ISL=1000, OSL=512, bs=1-32 | Completed |
+   | Thinking-2507 decode-heavy baseline | 3119864 | ISL=1024, OSL=10000, bs=1-8 | Running |
+   | Thinking-2507 decode-heavy in-house 500K K=1 | 3119827 | ISL=1024, OSL=10000, bs=1-8 | Running |
+
+5. vLLM standalone Qwen3-235B Thinking-2507 in-house 500K short-decode speedup
+
+   Chart type: single-series bar chart.
+
+   | Batch size | Baseline tok/s/GPU | SpecDec tok/s/GPU | Speedup |
+   |---:|---:|---:|---:|
+   | 1 | 27.68 | 32.56 | 1.176x |
+   | 2 | 55.50 | 61.56 | 1.109x |
+   | 4 | 106.30 | 124.06 | 1.167x |
+   | 8 | 204.39 | 245.13 | 1.199x |
+   | 16 | 378.33 | 455.70 | 1.204x |
+   | 32 | 609.62 | 860.76 | 1.412x |
+
+   Metadata to show beside the chart: target `Qwen/Qwen3-235B-A22B-Thinking-2507`, drafter in-house 500K Eagle3 checkpoint, vLLM `v0.17.0`, ISL/OSL `1000/512`, TP/PP `4/1`, four GPUs on one node, servers baseline `nvl72114-T16`, SpecDec `nvl72171-T07`, CUDA Graph on, profiler off, custom all-reduce disabled. This is vLLM standalone generation, not NeMo-RL E2E.
+
 ## Current Measurements
 
 ### vLLM Standalone: Qwen3-8B Public Eagle3
@@ -188,6 +319,24 @@ Scope: standalone vLLM LLM.generate wall-clock sweep, CUDA Graph on, custom all-
 | 32 | 843.53 | 1.275x |
 
 Observation: standalone 235B K=1 does show generation-only benefit across tested batch sizes. This is useful boundary evidence, but it does not prove NeMo-RL GRPO speedup.
+
+### vLLM Standalone: Qwen3-235B Thinking-2507 In-House 500K Eagle3
+
+Target: Qwen/Qwen3-235B-A22B-Thinking-2507
+
+Drafter: in-house mixed-math non-OpenMath 500K Eagle3 checkpoint
+Scope: standalone vLLM LLM.generate wall-clock sweep, CUDA Graph on, custom all-reduce disabled, not NeMo-RL end-to-end.
+
+| Batch size | Baseline tok/s/GPU | K=1 tok/s/GPU | K=1 speedup |
+|---:|---:|---:|---:|
+| 1 | 27.68 | 32.56 | 1.176x |
+| 2 | 55.50 | 61.56 | 1.109x |
+| 4 | 106.30 | 124.06 | 1.167x |
+| 8 | 204.39 | 245.13 | 1.199x |
+| 16 | 378.33 | 455.70 | 1.204x |
+| 32 | 609.62 | 860.76 | 1.412x |
+
+Observation: the in-house 500K Thinking-2507 drafter shows clear short-decode standalone benefit, especially at batch size 32. The more relevant decode-heavy `ISL=1024`, `OSL=10000` sweep is still running and should be used to test the long-decode regime.
 
 ### NeMo-RL: Qwen3-30B-A3B In-House 500K Eagle3
 
@@ -268,6 +417,16 @@ Status: NeMo-RL baseline job 3119388 and SpecDec K=3 job 3119389 are running as 
 6. Continue 8B NeMo-RL K=3 as a low-cost sanity check.
 
    Since standalone 8B K=3 is strong, the running NeMo-RL K=3 job is a useful way to test whether our NeMo-RL integration and long-tail gating can convert standalone benefits into rollout benefits at small model scale.
+
+## Google Docs Import Notes
+
+Google Docs can import Markdown directly. The clean workflow is:
+
+1. Upload this `.md` file to Google Drive.
+2. Right-click the uploaded file.
+3. Select **Open with -> Google Docs**.
+
+Inside Google Docs, Markdown can also be pasted through **Paste from Markdown**, and a Google Doc can be exported through **File -> Download -> Markdown (.md)**. Source: Google Docs Editors Help, "Use Markdown in Google Docs, Slides, & Drawings" (https://support.google.com/docs/answer/12014036).
 
 ## Bottom Line
 

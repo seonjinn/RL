@@ -1,0 +1,18 @@
+# vLLM standalone SpecDec timing breakdown
+submitted_at=2026-06-02 15:17:03 PDT
+job_id=3119827
+job_name=vllm-specdec-qwen235b_thinking2507_inhouse500k_decodeheavy-k1
+enable_specdec=true
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193/0
+num_speculative_tokens=1
+enforce_eager=false
+disable_vllm_profiler=true
+disable_custom_all_reduce=true
+scope=vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E
+figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_decodeheavy_1024x10000_bs1-8_cuda_graph_no_custom_ar_20260602
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_decodeheavy_1024x10000_bs1-8_cuda_graph_no_custom_ar_20260602/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_decodeheavy_1024x10000_bs1-8_cuda_graph_no_custom_ar_20260602/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_decodeheavy_1024x10000_bs1-8_cuda_graph_no_custom_ar_20260602/speculative_config.json
+status=3119827 submitted

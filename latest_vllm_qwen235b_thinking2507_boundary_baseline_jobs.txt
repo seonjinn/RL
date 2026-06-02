@@ -1,0 +1,19 @@
+# vLLM standalone SpecDec timing breakdown
+submitted_at=2026-06-02 15:08:32 PDT
+job_id=3119759
+job_name=vllm-baseline-qwen235b_thinking2507-k0
+enable_specdec=false
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193/0
+num_speculative_tokens=0
+enforce_eager=false
+disable_vllm_profiler=true
+disable_custom_all_reduce=true
+scope=vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E
+figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_boundary_bs1-32_cuda_graph_no_custom_ar_20260602
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_boundary_bs1-32_cuda_graph_no_custom_ar_20260602/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_boundary_bs1-32_cuda_graph_no_custom_ar_20260602/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_boundary_bs1-32_cuda_graph_no_custom_ar_20260602/speculative_config.json
+status=3119759 submitted
+status=3119759 COMPLETED at 2026-06-02 15:21 PDT with ExitCode 0:0. Matched Thinking-2507 short-decode baseline rows: bs=1 latency=4.6238s output_tok_s_per_gpu=27.68; bs=2 latency=4.6125s output_tok_s_per_gpu=55.50; bs=4 latency=4.8166s output_tok_s_per_gpu=106.30; bs=8 latency=5.0101s output_tok_s_per_gpu=204.39; bs=16 latency=5.4133s output_tok_s_per_gpu=378.33; bs=32 latency=6.7189s output_tok_s_per_gpu=609.62.

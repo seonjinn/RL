@@ -23,6 +23,8 @@ ISL="${ISL:-1000}"
 OSL="${OSL:-1000}"
 BATCH_SIZES="${BATCH_SIZES:-1 2 4}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-}"
 ENFORCE_EAGER="${ENFORCE_EAGER:-true}"
 DISABLE_VLLM_PROFILER="${DISABLE_VLLM_PROFILER:-false}"
 DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
@@ -56,6 +58,14 @@ case "${DISABLE_CUSTOM_ALL_REDUCE}" in
     CUSTOM_ALL_REDUCE_ENV=1
     ;;
 esac
+MAX_MODEL_LEN_ARG=""
+if [[ -n "${MAX_MODEL_LEN}" ]]; then
+  MAX_MODEL_LEN_ARG="--max-model-len ${MAX_MODEL_LEN}"
+fi
+MAX_NUM_BATCHED_TOKENS_ARG=""
+if [[ -n "${MAX_NUM_BATCHED_TOKENS}" ]]; then
+  MAX_NUM_BATCHED_TOKENS_ARG="--max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS}"
+fi
 
 SPECULATIVE_ARG=""
 SPECULATIVE_CONFIG=""
@@ -134,6 +144,8 @@ srun --nodes=1 --ntasks=1 \\
     --attention-backend TRITON_ATTN \\
     --gpu-memory-utilization 0.82 \\
     --isl ${ISL} --osl ${OSL} \\
+    ${MAX_MODEL_LEN_ARG} \\
+    ${MAX_NUM_BATCHED_TOKENS_ARG} \\
     --batch-sizes ${BATCH_SIZES} \\
     --profile-dir '${LOGS_DIR}/profile' \\
     --output '${LOGS_DIR}/breakdown.json' \\
@@ -152,6 +164,8 @@ job_id="$(ssh "$REMOTE_HOST" "$remote_cmd" | tail -n 1)"
   echo "model=${MODEL}"
   echo "draft_model=${DRAFT_MODEL}"
   echo "num_speculative_tokens=${NUM_SPECULATIVE_TOKENS}"
+  echo "max_model_len=${MAX_MODEL_LEN:-auto}"
+  echo "max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS:-auto}"
   echo "enforce_eager=${ENFORCE_EAGER}"
   echo "disable_vllm_profiler=${DISABLE_VLLM_PROFILER}"
   echo "disable_custom_all_reduce=${DISABLE_CUSTOM_ALL_REDUCE}"

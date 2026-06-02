@@ -1,0 +1,19 @@
+# vLLM standalone SpecDec timing breakdown
+submitted_at=2026-06-02 15:08:49 PDT
+job_id=3119760
+job_name=vllm-specdec-qwen235b_thinking2507_inhouse500k-k1
+enable_specdec=true
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193/0
+num_speculative_tokens=1
+enforce_eager=false
+disable_vllm_profiler=true
+disable_custom_all_reduce=true
+scope=vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E
+figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_boundary_bs1-32_cuda_graph_no_custom_ar_20260602
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_boundary_bs1-32_cuda_graph_no_custom_ar_20260602/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_boundary_bs1-32_cuda_graph_no_custom_ar_20260602/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_boundary_bs1-32_cuda_graph_no_custom_ar_20260602/speculative_config.json
+status=3119760 submitted
+status=3119760 COMPLETED at 2026-06-02 15:25 PDT with ExitCode 0:0. In-house 500K Eagle3 K=1 rows versus matched Thinking-2507 baseline 3119759: bs=1 latency=3.9316s output_tok_s_per_gpu=32.56 speedup=1.176x; bs=2 latency=4.1585s output_tok_s_per_gpu=61.56 speedup=1.109x; bs=4 latency=4.1271s output_tok_s_per_gpu=124.06 speedup=1.167x; bs=8 latency=4.1774s output_tok_s_per_gpu=245.13 speedup=1.199x; bs=16 latency=4.4942s output_tok_s_per_gpu=455.70 speedup=1.204x; bs=32 latency=4.7586s output_tok_s_per_gpu=860.76 speedup=1.412x. This is vLLM standalone LLM.generate, ISL=1000, OSL=512, TP=4, PP=1, CUDA Graph on, profiler off, custom all-reduce disabled; it is not NeMo-RL E2E.

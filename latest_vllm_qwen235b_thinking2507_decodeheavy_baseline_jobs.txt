@@ -1,0 +1,21 @@
+# vLLM standalone SpecDec timing breakdown
+submitted_at=2026-06-02 15:21:11 PDT
+job_id=3119864
+job_name=vllm-baseline-qwen235b_thinking2507_decodeheavy-k0
+enable_specdec=false
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193/0
+num_speculative_tokens=0
+max_model_len=auto
+max_num_batched_tokens=16384
+enforce_eager=false
+disable_vllm_profiler=true
+disable_custom_all_reduce=true
+scope=vLLM standalone LLM.generate wall-clock batch-size sweep, not NeMo-RL E2E
+figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x10000_bs1-8_mbt16384_cuda_graph_no_custom_ar_20260602
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x10000_bs1-8_mbt16384_cuda_graph_no_custom_ar_20260602/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x10000_bs1-8_mbt16384_cuda_graph_no_custom_ar_20260602/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x10000_bs1-8_mbt16384_cuda_graph_no_custom_ar_20260602/speculative_config.json
+status=3119864 submitted
+previous_failed_job=3119825 FAILED after 00:01:25 before model load. Root cause: decode-heavy OSL=10000 made max_model_len=12048, but the launcher default max_num_batched_tokens was only 11024. vLLM rejected this because max_num_batched_tokens must be at least max_model_len. Retry 3119864 sets MAX_NUM_BATCHED_TOKENS=16384.
