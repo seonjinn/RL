@@ -372,7 +372,7 @@ Observation: This is the most important negative result. Acceptance is high, but
 
 Target: Qwen/Qwen3-8B  
 Drafter: RedHatAI/Qwen3-8B-speculator.eagle3  
-Status: NeMo-RL baseline job 3119388 and SpecDec K=3 job 3119389 are running as of June 2, 2026. No GRPO step, acceptance, or throughput metric has been emitted yet. The only completed 8B results so far are standalone vLLM results.
+Status: NeMo-RL baseline job 3119388 and SpecDec K=3 job 3119389 failed before Step 1 with `KeyError: 'moe_enable_deepep'` in MegatronPolicyWorker setup. This was a recipe/config mismatch, not a SpecDec runtime result. The 30B launchers already passed explicit MoE dispatcher compatibility overrides, while the 8B launchers did not. The 8B launchers were patched with `++policy.megatron_cfg.moe_enable_deepep=false`, `++policy.megatron_cfg.moe_token_dispatcher_type=alltoall`, and `++policy.megatron_cfg.moe_shared_expert_overlap=false`; r3 jobs 3120873 baseline and 3120874 SpecDec K=3 are running as of June 2, 2026. No 8B NeMo-RL throughput or acceptance metric is available yet. The only completed 8B results so far are standalone vLLM results.
 
 ## Why We Are Not Seeing 2x in NeMo-RL Yet
 

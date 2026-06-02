@@ -392,6 +392,22 @@
     </div>
 
     <div class="card">
+      <h2>Qwen3-8B NeMo-RL Status</h2>
+      <p class="muted">The standalone K=3 result is strong, but NeMo-RL has not produced rollout throughput yet.</p>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Job</th><th>Status</th><th>Reason / next action</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Baseline r2</td><td>3119388</td><td>Failed before Step 1</td><td>Megatron setup hit <code>KeyError: moe_enable_deepep</code>.</td></tr>
+          <tr><td>SpecDec K=3 r2</td><td>3119389</td><td>Failed before Step 1</td><td>Same config mismatch; no acceptance or throughput metric.</td></tr>
+          <tr><td>Baseline r3</td><td>3120873</td><td>Running</td><td>Launcher now passes explicit MoE dispatcher compatibility overrides.</td></tr>
+          <tr><td>SpecDec K=3 r3</td><td>3120874</td><td>Running</td><td>Request-gated long-tail SpecDec with the same compatibility fix.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
       <h2>Qwen3-235B vLLM Standalone K=1</h2>
       <p class="muted">Generation only. CUDA Graph on, custom all-reduce disabled.</p>
       <div class="meta-grid">

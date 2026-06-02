@@ -75,6 +75,16 @@ NeMo-RL GRPO:
     current_phase=Driver uv dependency/native-extension setup is still progressing. Logs now show flash-attn, transformer-engine-torch, and nv-grouped-gemm built on both baseline and SpecDec drivers.
     metrics=Still no NeMo-RL GRPO Step, throughput, generation time, or SpecDec acceptance metrics from 3119389. No NeMo-RL K=3 result is available yet.
 
+  status_update_2026-06-02_16:14_PDT:
+    retry_jobs=3119388 baseline r2, 3119389 SpecDec K=3 request-gated r2.
+    retry_status=FAILED before any GRPO Step, throughput, generation time, or acceptance metric.
+    root_cause=Both jobs reached Ray actors and MegatronPolicyWorker creation, then failed in nemo_rl/models/megatron/setup.py::_apply_moe_config with KeyError: 'moe_enable_deepep'. This is a NeMo-RL/Megatron config mismatch: the qwen3-8b recipe inherits MoE defaults from grpo_math_1B.yaml but does not define the newer fields now read unconditionally by setup.py.
+    why_30ba3b_worked=The maintained Qwen3-30B-A3B launchers already pass explicit MoE dispatcher overrides such as ++policy.megatron_cfg.moe_enable_deepep=false and ++policy.megatron_cfg.moe_token_dispatcher_type=alltoall. The 8B launchers did not.
+    fix=Patched Qwen3_8B_GB200_Main_Baseline.sh and Qwen3_8B_GB200_Main_SpecDec.sh to add ++policy.megatron_cfg.moe_enable_deepep=false, ++policy.megatron_cfg.moe_token_dispatcher_type=alltoall, and ++policy.megatron_cfg.moe_shared_expert_overlap=false.
+    retry_jobs=3120873 baseline r3, 3120874 SpecDec K=3 request-gated r3.
+    retry_status=Submitted at 2026-06-02 16:13 PDT with NRL_FORCE_REBUILD_VENVS=true and 4h walltime. Both are RUNNING: baseline on nvl72108-T05, SpecDec on nvl72171-T08.
+    metrics=No r3 rollout metrics yet; jobs have just started.
+
   3118323 baseline
     job_name=qwen3-8b-qwen3-8b-baseline-publichf-target-N1xG4
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3118323.out
@@ -84,7 +94,13 @@ NeMo-RL GRPO:
     job_name=qwen3-8b-qwen3-8b-baseline-r2-N1xG4
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3119388.out
     driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_baseline_py312_r2
-    status=RUNNING at 2026-06-02 14:57 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.
+    status=FAILED before Step 1 with KeyError: 'moe_enable_deepep'; no rollout metrics.
+
+  3120873 baseline retry r3
+    job_name=qwen3-8b-qwen3-8b-baseline-r3-N1xG4
+    log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3120873.out
+    driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_baseline_py312_r3
+    status=RUNNING at 2026-06-02 16:13 PDT. Includes explicit MoE dispatcher compatibility overrides.
 
   3118324 SpecDec K=3, request-gated long-tail
     job_name=qwen3-8b-qwen3-8b-publichf-eagle3-k3-req8-N1xG4
@@ -105,4 +121,15 @@ NeMo-RL GRPO:
     drafter=RedHatAI/Qwen3-8B-speculator.eagle3
     log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3119389.out
     driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_publichf_specdec_py312_r2
-    status=RUNNING at 2026-06-02 14:57 PDT. Actors online 4/4; driver dependency/native-extension setup; no rollout metrics yet.
+    status=FAILED before Step 1 with KeyError: 'moe_enable_deepep'; no rollout metrics.
+
+  3120874 SpecDec K=3, request-gated long-tail retry r3
+    job_name=qwen3-8b-qwen3-8b-publichf-eagle3-k3-req8-r3-N1xG4
+    method=eagle3
+    num_speculative_tokens=3
+    request_gate_threshold=8
+    token_gate_threshold=4096
+    drafter=RedHatAI/Qwen3-8B-speculator.eagle3
+    log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3120874.out
+    driver_venv=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen3_8b_publichf_specdec_py312_r3
+    status=RUNNING at 2026-06-02 16:13 PDT. Includes explicit MoE dispatcher compatibility overrides.
