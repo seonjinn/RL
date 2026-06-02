@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-02 00:22 PDT",
+  "updated_at": "2026-06-02 00:31 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -2222,7 +2222,7 @@
     },
     "current_gap_vs_specdec_rl_papers": [
       "The measured path uses a fixed offline drafter, not online drafter refresh inside GRPO.",
-      "Strict lower-batch-only gating is implemented in the patched path but the 235B strict PublicHF throughput retry 3103227 has not emitted throughput/acceptance metrics yet.",
+      "Strict lower-batch-only gating is implemented in the patched path, but the 235B strict PublicHF throughput retry 3103227 failed before rollout metrics with KeyError: 'moe_enable_deepep'. No strict lower-batch-only 235B throughput/acceptance result exists yet.",
       "Dynamic K needs reliable late-position acceptance; current K=2/K=3 math results show that later draft positions are too weak.",
       "Current full-shape NeMo-RL E2E speedup is bounded by generation fraction because rewards, logprobs, and policy training dominate many steps."
     ]

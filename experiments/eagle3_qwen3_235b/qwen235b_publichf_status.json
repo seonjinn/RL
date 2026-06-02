@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-02 00:22 PDT",
+  "updated_at": "2026-06-02 00:31 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -339,7 +339,7 @@
       "job_id": "3103227",
       "submitted_at": "2026-06-01 22:41 PDT",
       "state_at_submit_check": "RUNNING at 2026-06-01 22:46 PDT on coreai_dlalgo_llm; 32 nodes allocated; 128/128 Ray workers connected",
-      "latest_state": "RUNNING at 2026-06-02 00:22 PDT after 01:39:50 elapsed; 128/128 Ray workers connected; Megatron policy workers/checkpoint save visible; no completed Epoch/Step, gate, acceptance, or throughput metrics yet",
+      "latest_state": "FAILED in driver step at 2026-06-02 00:26 PDT while main Slurm job was still completing at the 00:30 poll; no completed Epoch/Step, gate, acceptance, or throughput metrics",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -363,7 +363,9 @@
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3103227-logs/ray-driver.log",
       "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3103227.out",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_v9b_20260601",
-      "latest_observation": "At the 00:22 PDT poll, job 3103227 was still RUNNING after 01:39:50 elapsed. It reached 128/128 Ray workers, started the driver, and passed Megatron-Bridge/Megatron-LM/nemo-rl build in the driver venv. ray-driver.log shows the corrected override policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus speculative_config.method=eagle3, model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3, num_speculative_tokens=1, draft_tensor_parallel_size=1, CUDA Graph mode, target/drafter loading, lm_policy worker initialization, and Megatron checkpoint save at iteration 0. vLLM warns that tensor_parallel_size=16 exceeds the 4-GPU/node reservation and that custom allreduce is disabled because the process group spans nodes; this can reduce throughput. A fresh log search/tail found no completed Epoch/Step, gate, acceptance, throughput, traceback, or runtime-failure lines yet.",
+      "latest_observation": "At the 00:30 PDT poll, job 3103227 had failed in the driver enroot step before rollout metrics. It reached 128/128 Ray workers, started the driver, passed venv build, loaded the target/drafter, initialized lm_policy workers far enough to save Megatron checkpoint iteration 0, then MegatronPolicyWorker creation failed with KeyError: 'moe_enable_deepep' in nemo_rl/models/megatron/setup.py::_apply_moe_config. The log has no completed Epoch/Step, gate, acceptance, or throughput metrics. This is a NeMo-RL/Megatron config compatibility failure, not a drafter-quality or SpecDec-throughput result.",
+      "no_completed_rollout_metric": true,
+      "failure_class": "MegatronPolicyWorker config failure / missing megatron_cfg.moe_enable_deepep",
       "purpose": "Measure strict lower-batch-only PublicHF 235B SpecDec throughput after V9 all-disabled path fix and third-party workspace restoration."
     }
   ],
