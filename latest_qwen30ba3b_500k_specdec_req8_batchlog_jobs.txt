@@ -1,6 +1,6 @@
 timestamp=2026-06-02 12:11:42 PDT
 job_id=3116714
-status=RUNNING at 2026-06-02 12:12 PDT on nvl72131-T[09,12,14,16]
+status=RUNNING at 2026-06-02 12:21 PDT on nvl72131-T[09,12,14,16]. Ray driver is alive and forced venv rebuild/dependency setup is still in progress. 308 packages installed; native extension builds for flash-attn, grouped-gemm, causal-conv1d, mamba-ssm, and transformer-engine-torch are still running. No generation step or new enabled_req_avg/active request gate line has emitted yet.
 purpose=Qwen3-30B-A3B NeMo-RL long-tail SpecDec K=1 with request<=8 gate and driver-visible enabled/disabled batch-size metrics.
 account=coreai_dlalgo_nemorl
 partition=batch
