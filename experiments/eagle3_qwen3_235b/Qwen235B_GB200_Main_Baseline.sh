@@ -54,6 +54,8 @@ VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
 VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-}"
 VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-}"
 MOE_ENABLE_DEEPEP="${MOE_ENABLE_DEEPEP:-false}"
+MOE_TOKEN_DISPATCHER_TYPE="${MOE_TOKEN_DISPATCHER_TYPE:-alltoall}"
+MOE_SHARED_EXPERT_OVERLAP="${MOE_SHARED_EXPERT_OVERLAP:-false}"
 
 mkdir -p "${NRL_MEGATRON_CHECKPOINT_DIR}"
 
@@ -113,6 +115,8 @@ policy.megatron_cfg.pipeline_model_parallel_size=8 \
 policy.megatron_cfg.context_parallel_size=2 \
 policy.megatron_cfg.sequence_parallel=true \
 policy.megatron_cfg.moe_enable_deepep=${MOE_ENABLE_DEEPEP} \
+policy.megatron_cfg.moe_token_dispatcher_type=${MOE_TOKEN_DISPATCHER_TYPE} \
+policy.megatron_cfg.moe_shared_expert_overlap=${MOE_SHARED_EXPERT_OVERLAP} \
 grpo.async_grpo.enabled=false \
 grpo.val_period=1000 \
 checkpointing.enabled=false \
