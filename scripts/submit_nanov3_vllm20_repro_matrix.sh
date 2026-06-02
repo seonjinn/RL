@@ -92,6 +92,7 @@ submit_job() {
   local steps="${11:-${MAX_STEPS}}"
   local max_new_tokens_override="${12:-}"
   local cap_max_tokens_to_context="${13:-${CAP_MAX_TOKENS_TO_CONTEXT}}"
+  local policy_ep="${14:-}"
 
   local nodes
   nodes="$(nodes_for "${tp}" "${cp}" "${min_nodes}")"
@@ -124,6 +125,9 @@ submit_job() {
   extra+=" grpo.seed=${GRPO_SEED}"
   extra+=" grpo.max_num_steps=${steps}"
   extra+=" policy.megatron_cfg.tensor_model_parallel_size=${tp}"
+  if [[ -n "${policy_ep}" ]]; then
+    extra+=" policy.megatron_cfg.expert_model_parallel_size=${policy_ep}"
+  fi
   extra+=" policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP}"
   extra+=" grpo.num_prompts_per_step=${prompts}"
   extra+=" policy.train_global_batch_size=${train_gbs}"
@@ -154,6 +158,7 @@ submit_job() {
   JOB_NAME_BASE="${job_name_base}" \
   NEMO_RL_ISOLATED_CACHE_ROOT="${REPRO_CACHE_ROOT}" \
   CP_SIZE="${cp}" \
+  POLICY_EP="${policy_ep}" \
   POLICY_MAX_TOTAL_SEQUENCE_LENGTH="${seq_len}" \
   HYBRID_CP_ENABLED="${hybrid_enabled}" \
   HYBRID_CP_FORCE_FULL_CP="${force_full_cp}" \
@@ -263,11 +268,18 @@ add_49k_dyncp_rows() {
 
 add_49k_dyncp_threshold_sweep_rows() {
   # Threshold is max sequence length per local CP rank. For CP=4 and 49K
-  # sequences, a full-sequence threshold (49152) collapses local CP to 1 and
-  # can OOM. Sweep safer per-rank budgets first.
+  # sequences, the strict EP16/TP8 topology still floors local CP at 2. These
+  # rows are useful for EP16 threshold sensitivity, not for local-CP1 testing.
   submit_job "49k-cp4-th12288" 49152 8 4 4 dyncp 12288 1.0 512 2048 "${MAX_STEPS}"
   submit_job "49k-cp4-th16384" 49152 8 4 4 dyncp 16384 1.0 512 2048 "${MAX_STEPS}"
   submit_job "49k-cp4-th24576" 49152 8 4 4 dyncp 24576 1.0 512 2048 "${MAX_STEPS}"
+  submit_job "49k-cp4-th32768" 49152 8 4 4 dyncp 32768 1.0 512 2048 "${MAX_STEPS}"
+  submit_job "49k-cp4-th49152" 49152 8 4 4 dyncp 49152 1.0 512 2048 "${MAX_STEPS}"
+}
+
+add_49k_cp1_diagnostic_rows() {
+  submit_job "49k-tp8-ep8-cp4-nohcp" 49152 8 4 4 nohcp "" "" 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
+  submit_job "49k-tp8-ep8-cp4" 49152 8 4 4 dyncp 49152 1.0 512 2048 "${MAX_STEPS}" "" "${CAP_MAX_TOKENS_TO_CONTEXT}" 8
 }
 
 add_long_rows() {
@@ -432,6 +444,9 @@ case "${SUBMIT_SET}" in
     ;;
   49k_dyncp_threshold_sweep)
     add_49k_dyncp_threshold_sweep_rows
+    ;;
+  49k_cp1_diagnostic)
+    add_49k_cp1_diagnostic_rows
     ;;
   long)
     add_long_rows

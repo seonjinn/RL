@@ -112,6 +112,9 @@ EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
 fi
+if [[ -n "${POLICY_EP:-}" ]]; then
+  EXTRA_OVERRIDES+=" policy.megatron_cfg.expert_model_parallel_size=${POLICY_EP}"
+fi
 if [[ -n "${HYBRID_CP_ENABLED:-${DYNAMIC_CP_ENABLED:-}}" ]]; then
   EXTRA_OVERRIDES+=" policy.hybrid_cp.enabled=${HYBRID_CP_ENABLED:-${DYNAMIC_CP_ENABLED}}"
 fi
