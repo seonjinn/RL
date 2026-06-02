@@ -432,9 +432,14 @@ SBATCH_ARGS=(
     --job-name="${JOB_NAME}"
     --partition="${SBATCH_PARTITION}"
     --time="${SBATCH_TIME}"
-    --gres="gpu:${GPUS_PER_NODE}"
     --output="${LOGS_DIR}/%x_%j.log"
 )
+
+if [[ "${SBATCH_GPU_DIRECTIVE:-gres}" == "gpus_per_node" ]]; then
+    SBATCH_ARGS+=(--gpus-per-node="${GPUS_PER_NODE}")
+else
+    SBATCH_ARGS+=(--gres="gpu:${GPUS_PER_NODE}")
+fi
 
 if [[ -n "${SBATCH_SWITCHES:-}" ]]; then
     SBATCH_ARGS+=(--switches="${SBATCH_SWITCHES}")

@@ -234,6 +234,14 @@ add_nrt_reaper_recovery_exact_rows() {
   add_256k_safe_baseline_rows
 }
 
+add_nrt_reaper_missing_short_rows() {
+  # Rows cancelled by the NRT idle reaper in the 20260601 strict rerun.
+  # Keep this minimal to avoid duplicating rows that are still running.
+  submit_job "16k-cp8-nohcp" 16384 8 8 8 nohcp "" "" 512 2048 "${MAX_STEPS}"
+  submit_job "16k-cp8" 16384 8 8 8 dyncp 4096 1.0 512 2048 "${MAX_STEPS}"
+  submit_job "32k-cp8-nohcp" 32768 8 8 8 nohcp "" "" 512 2048 "${MAX_STEPS}"
+}
+
 add_nrt_missing_dyncp_recovery_rows() {
   # DynamicCP-only rows missing valid post-warmup NRT comparisons.
   submit_job "8k-cp8" 8192 8 8 8 dyncp 2048 1.0 512 2048 "${MAX_STEPS}"
@@ -438,6 +446,9 @@ case "${SUBMIT_SET}" in
     ;;
   nrt_reaper_recovery_exact)
     add_nrt_reaper_recovery_exact_rows
+    ;;
+  nrt_reaper_missing_short)
+    add_nrt_reaper_missing_short_rows
     ;;
   nrt_missing_dyncp_recovery)
     add_nrt_missing_dyncp_recovery_rows
