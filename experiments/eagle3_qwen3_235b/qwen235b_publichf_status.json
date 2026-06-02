@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 21:36 PDT",
+  "updated_at": "2026-06-01 21:40 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -260,7 +260,7 @@
       "job_id": "3092445",
       "submitted_at": "2026-06-01 18:54 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 21:36 PDT on coreai_dlalgo_llm",
+      "latest_state": "RUNNING at 21:40 PDT on coreai_dlalgo_llm",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -284,7 +284,7 @@
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3092445-logs/ray-driver.log",
       "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3092445.out",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_rebuild_20260601",
-      "latest_observation": "Resubmitted without dependency after cancelling startup_token-stalled job 3090318. slurm-3092445.out confirms NRL_FORCE_REBUILD_VENVS=true, UV_PYTHON=3.12.13, a fresh driver venv, policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, request gate 4, token gate 0, the NVIDIA PublicHF Eagle3 drafter, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. It was RUNNING on nvl72059-T[01-16],nvl72154-T[01-16] at the 21:36 PDT squeue poll with elapsed 2:42:31 / 4:00:00. ray-driver.log shows setup completed in 4669.5s, synchronous GRPO entered Epoch 1/1 Step 1/4, and generation started for batch size 512. The latest tail still shows first rollout request enqueue with Adding requests 64/64 and Processed prompts 0/64 visible. The log mtime is still 21:02 and size is 807283 bytes, so no new driver log lines appeared between the 21:05 and 21:36 polls. There is still no completed rollout, acceptance metric, throughput metric, repeated startup_token error, Traceback, or NCCL failure. A W&B git code logging artifact-type warning is present but has not stopped the job."
+      "latest_observation": "Resubmitted without dependency after cancelling startup_token-stalled job 3090318. slurm-3092445.out confirms NRL_FORCE_REBUILD_VENVS=true, UV_PYTHON=3.12.13, a fresh driver venv, policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, request gate 4, token gate 0, the NVIDIA PublicHF Eagle3 drafter, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. It was RUNNING on nvl72059-T[01-16],nvl72154-T[01-16] at the 21:40 PDT squeue poll with elapsed 2:46:06 / 4:00:00. ray-driver.log shows setup completed in 4669.5s, synchronous GRPO entered Epoch 1/1 Step 1/4, and generation started for batch size 512. The latest tail still shows first rollout request enqueue with Adding requests 64/64 and Processed prompts 0/64 visible. The log mtime is still 21:02 and size is 807283 bytes, so no new driver log lines appeared between the 21:05 and 21:40 polls. There is still no completed rollout, acceptance metric, throughput metric, repeated startup_token error, Traceback, or NCCL failure. A W&B git code logging artifact-type warning is present but has not stopped the job."
     }
   ],
   "matched_baseline_run": {
@@ -342,9 +342,9 @@
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 441071,
+    "latest_observed_hidden_state_files": 442917,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 84-93 running, and tasks 94-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 21:36 PDT",
+    "latest_observed_array_window": "tasks 84-93 running, and tasks 94-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 21:40 PDT",
     "rough_eta": "About 3-5h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
