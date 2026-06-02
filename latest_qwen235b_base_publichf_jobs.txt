@@ -60,4 +60,4 @@ specdec_k1_req32_NRL_FORCE_REBUILD_VENVS=true
 specdec_k1_req32_driver_srun_cpus_per_task=8
 specdec_k1_req32_driver_srun_mem=128G
 specdec_k1_req32_build_parallelism=MAX_JOBS=4,CMAKE_BUILD_PARALLEL_LEVEL=4,NVTE_BUILD_MAX_JOBS=4,NINJAFLAGS=-j4,MAKEFLAGS=-j4
-specdec_k1_req32_status=RUNNING at 2026-06-02 12:36 PDT; all 128 worker units are online and the driver is in forced venv rebuild/dependency setup. No rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput metric yet.
+specdec_k1_req32_status=RUNNING at 2026-06-02 12:47 PDT; all 128 worker units are online, forced venv rebuild installed 308 Python packages, and native package builds are still in progress. No rollout acceptance, step-time, generation-time, E2E throughput, or generation throughput metric yet.
