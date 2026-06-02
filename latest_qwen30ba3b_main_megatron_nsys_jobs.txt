@@ -79,6 +79,6 @@ retry run r2:
   num_prompts_per_step=64
   num_generations_per_prompt=32
   train_global_batch_size=2048
-  status=RUNNING as of 2026-06-02 14:53 PDT on 4 nodes nvl72073-T[02,05-06,11]. No GRPO or nsys artifact yet.
+  status=RUNNING as of 2026-06-02 14:57 PDT on 4 nodes nvl72073-T[02,05-06,11]. The CPython 3.13.13 driver venv created successfully and installed 274 packages. No GRPO step or nsys artifact yet.
   log_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-main-20260527-online-draft/logs/qwen30ba3b_grpo_nsys_main_megatron_step2to5_max10_r2/3119501-logs
   expected_artifacts=nsys reports from Megatron policy workers during steps 2:5 once GRPO reaches the profiling window.
