@@ -38,4 +38,4 @@ thirdparty_restore_status=Restored 3rdparty/Megatron-Bridge, Megatron-LM, and Gy
 strict_req4_specdec_v9b_retry_job=3103227
 v9b_retry_purpose=Retry 3103018 after third-party workspace restoration, same strict request gate 4/token gate 0 and PublicHF NVIDIA Eagle3 Thinking-2507 target/drafter
 v9_patch_validation=PASS for source and target /lustre/.../SpecDec-RL; markers include NRL_SPECDEC_BATCH_GATE_PATCH_V9 and NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1
-v9b_retry_state=RUNNING at 2026-06-01 22:54 PDT; 128/128 Ray workers connected; driver venv build passed Megatron-Bridge/Megatron-LM/nemo-rl; dependency install/download still in progress; no rollout metrics yet
+v9b_retry_state=RUNNING at 2026-06-01 23:03 PDT after 00:20:56 elapsed; 128/128 Ray workers connected; driver venv build passed Megatron-Bridge/Megatron-LM/nemo-rl; dependency install/download still in progress; no rollout metrics yet

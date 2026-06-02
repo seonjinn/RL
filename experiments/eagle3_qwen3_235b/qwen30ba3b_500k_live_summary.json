@@ -2124,11 +2124,11 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 14:28 PDT",
-    "hidden_state_array_job": "3072149_[0-99]%5",
-    "active_tasks": "36-40 running; 41-99 pending on JobArrayTaskLimit",
-    "train_job": "3072524 dependency-pending on hidden-state array completion",
-    "hidden_state_files_observed": 201722,
+    "updated_at": "2026-06-01 23:03 PDT",
+    "hidden_state_array_job": "3072149_[0-99]%10",
+    "active_tasks": "tasks 97-99 running; repair jobs 3101471/3101472 running for shards 94/96",
+    "train_job": "3101473 dependency-pending on afterany:3072149 and afterok:3101471:3101472",
+    "hidden_state_files_observed": 495419,
     "hidden_state_files_expected": 500000,
     "status": "hidden-state generation is still running; 235B Speculators training has not started yet.",
     "hidden_state_file_extension": ".safetensors"
@@ -2154,21 +2154,21 @@
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-01 14:46 PDT",
+    "updated_at": "2026-06-01 23:03 PDT",
     "stage": "hidden_state_extraction",
-    "hidden_state_count": 204999,
+    "hidden_state_count": 495419,
     "target_hidden_state_count": 500000,
-    "hidden_state_count_fraction": 0.409998,
-    "array_job": "3072149_[0-99]%5",
+    "hidden_state_count_fraction": 0.990838,
+    "array_job": "3072149_[0-99]%10",
     "active_tasks": [
-      "41",
-      "42",
-      "43",
-      "44",
-      "45"
+      "97",
+      "98",
+      "99",
+      "repair_94_3101471",
+      "repair_96_3101472"
     ],
-    "pending_tasks": "46-99 pending on JobArrayTaskLimit",
-    "train_job": "3072524",
+    "pending_tasks": "none observed; replacement train waits on main array and repair jobs",
+    "train_job": "3101473",
     "train_job_state": "PENDING Dependency",
     "repair_jobs": [
       "3072518",
@@ -2176,7 +2176,9 @@
       "3072520",
       "3072521",
       "3072522",
-      "3072523"
+      "3072523",
+      "3101471",
+      "3101472"
     ]
   }
 }
