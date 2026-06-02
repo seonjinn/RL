@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 17:31 PDT",
+  "updated_at": "2026-06-01 17:43 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -71,7 +71,7 @@
       "job_id": "3084952",
       "submitted_at": "2026-06-01 16:26 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 17:31 PDT on coreai_dlalgo_llm",
+      "latest_state": "RUNNING at 17:43 PDT on coreai_dlalgo_llm",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -92,7 +92,7 @@
       "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/3084952-logs/ray-driver.log",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_corrected_20260601",
-      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. At 17:31 PDT the job was still RUNNING after about 65 minutes. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM V1 engine initialization with enforce_eager=false and CUDA Graph mode, target safetensors loading to 118/118, and the observed 1/1 drafter safetensors load. The policy-worker venv rebuild finished and lm_policy workers initialized 128/128 in 53.40s. Setup completed, synchronous GRPO started, Step 1/4 emitted both early SpecDec metrics and standard Generation Worker Group metrics, and the run advanced to Step 2/4. No traceback or fatal error was observed. Step 1 generated throughput is 63.70 generated tok/s/GPU with 62.82% acceptance; this is 0.954x versus the historical 66.78 tok/s/GPU 235B baseline, but a matched Thinking-2507 baseline and E2E step-time comparison are still needed before treating this as a publishable speed comparison.",
+      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. At 17:43 PDT the job was still RUNNING after about 77 minutes. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM V1 engine initialization with enforce_eager=false and CUDA Graph mode, target safetensors loading to 118/118, and the observed 1/1 drafter safetensors load. Step 1/4 and Step 2/4 emitted early SpecDec metrics plus standard Generation Worker Group metrics; Step 3/4 emitted early metrics and was in logprobs at the latest check. No traceback or fatal error was observed. Generated throughput is 63.70, 43.39, then 73.58 generated tok/s/GPU with acceptance 62.82%, 69.01%, then 65.82%. Step 1 and Step 2 completed total-step logging; Step 3 final step metrics are still pending. Scheduler gate metrics show enabled_ratio=1.0 and disabled=0 for Steps 1-3, so this run has the runtime gate configured but has not yet demonstrated lower-batch-only activation. Matched Thinking-2507 baseline job 3088636 is RUNNING and still building/downloading the Python environment, so strict speedup should wait for its baseline throughput and E2E step-time comparison.",
       "early_generation_metric": {
         "step": 1,
         "phase": "specdec_early_generation",
@@ -111,19 +111,83 @@
         "historical_baseline_generated_tokens_per_sec_per_gpu": 66.78,
         "speedup_vs_historical_baseline": 0.954
       },
+      "generation_metrics": [
+        {
+          "step": 1,
+          "elapsed_s": 371.9825,
+          "total_tokens": 3083909,
+          "generated_tokens": 3033149,
+          "tokens_per_sec_per_gpu": 64.77,
+          "generated_tokens_per_sec_per_gpu": 63.70,
+          "acceptance_rate": 0.6282,
+          "draft_tokens": 1862514,
+          "accepted_tokens": 1169985,
+          "reporting_workers": "8/8"
+        },
+        {
+          "step": 2,
+          "elapsed_s": 287.8038,
+          "total_tokens": 1647545,
+          "generated_tokens": 1598333,
+          "tokens_per_sec_per_gpu": 44.72,
+          "generated_tokens_per_sec_per_gpu": 43.39,
+          "acceptance_rate": 0.6901,
+          "draft_tokens": 945471,
+          "accepted_tokens": 652467,
+          "reporting_workers": "8/8"
+        },
+        {
+          "step": 3,
+          "elapsed_s": 330.2889,
+          "total_tokens": 3166757,
+          "generated_tokens": 3110847,
+          "tokens_per_sec_per_gpu": 74.90,
+          "generated_tokens_per_sec_per_gpu": 73.58,
+          "acceptance_rate": 0.6582,
+          "draft_tokens": 1875608,
+          "accepted_tokens": 1234590,
+          "reporting_workers": "8/8",
+          "metric_scope": "early_generation_only; final step metrics pending"
+        }
+      ],
+      "gate_metrics_observation": {
+        "steps_observed": [
+          1,
+          2,
+          3
+        ],
+        "scheduler_enabled_ratio": 1.0,
+        "scheduler_disabled": 0,
+        "interpretation": "Runtime gate is configured, but observed scheduler metrics have not disabled SpecDec so far; do not treat this run as proof of lower-batch-only activation."
+      },
       "latest_metric_counts": {
-        "acceptance_or_draft_lines": 1,
-        "throughput_lines": 2,
+        "acceptance_or_draft_lines": 3,
+        "throughput_lines": 6,
         "error_lines": 0
       }
     }
   ],
+  "matched_baseline_run": {
+    "job_id": "3088636",
+    "submitted_at": "2026-06-01 17:36 PDT",
+    "latest_state": "RUNNING at 17:43 PDT on coreai_dlalgo_llm",
+    "startup_status": "Driver log exists and is still downloading/building Python dependencies; no rollout or throughput metric yet.",
+    "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+    "num_prompts_per_step": 16,
+    "num_generations_per_prompt": 32,
+    "train_global_batch_size": 512,
+    "max_steps": 4,
+    "sequence_packing": true,
+    "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
+    "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
+    "note": "Matched baseline for corrected PublicHF K=1 SpecDec job 3084952: same target, p16/g32/GBS512/4step shape, sequence packing, CUDA Graph, async_engine=false, and omit generation logprobs."
+  },
   "in_house_500k_status": {
     "hidden_state_array_job": "3072149_[0-99]%10",
     "train_job": "3072524",
-    "latest_observed_hidden_state_files": 294168,
+    "latest_observed_hidden_state_files": 301803,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 56-65 running, tasks 66-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 17:31 PDT",
+    "latest_observed_array_window": "tasks 56-65 running, tasks 66-99 pending on JobArrayTaskLimit after raising ArrayTaskThrottle from 5 to 10 at 15:18 PDT; observed at 17:43 PDT",
     "rough_eta": "About 5-9h for remaining hidden-state extraction if the current 10-shard throughput holds, plus several hours for training if scheduling remains stable.",
     "note": "This estimate is queue and restart dependent. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough."
   }
