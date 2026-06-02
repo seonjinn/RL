@@ -1,0 +1,14 @@
+# vLLM standalone SpecDec timing breakdown
+submitted_at=2026-06-02 10:43:38 PDT
+job_id=3115084
+job_name=vllm-specdec-breakdown-q30-k1
+model=Qwen/Qwen3-30B-A3B
+draft_model=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+num_speculative_tokens=1
+scope=vLLM standalone LLM.generate torch-profiler breakdown, not NeMo-RL E2E
+figure4_buckets=Drafting,Verification,Rejection Sampling,Other vLLM overheads
+logs_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333
+output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333/breakdown.json
+profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333/profile
+speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_standalone_specdec_breakdown_k1_20260602_104333/speculative_config.json
+status=3115084 submitted

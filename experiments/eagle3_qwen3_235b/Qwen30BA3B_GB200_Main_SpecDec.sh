@@ -101,6 +101,9 @@ NRL_NSYS_PROFILE_STEP_RANGE="${NRL_NSYS_PROFILE_STEP_RANGE:-}"
 NRL_NSYS_WORKER_PATTERNS="${NRL_NSYS_WORKER_PATTERNS:-}"
 RAY_LOG_SYNC_FREQUENCY="${RAY_LOG_SYNC_FREQUENCY:-}"
 REQUIRE_SPECDEC_RL_PATCHES="${REQUIRE_SPECDEC_RL_PATCHES:-true}"
+MOE_ENABLE_DEEPEP="${MOE_ENABLE_DEEPEP:-false}"
+MOE_TOKEN_DISPATCHER_TYPE="${MOE_TOKEN_DISPATCHER_TYPE:-alltoall}"
+MOE_SHARED_EXPERT_OVERLAP="${MOE_SHARED_EXPERT_OVERLAP:-false}"
 WANDB_NAME="${WANDB_NAME:-Qwen30B_A3B_Main_N${NUM_NODES}xG${GPUS_PER_NODE}_specdec_k${NUM_SPECULATIVE_TOKENS}_p${NUM_PROMPTS}_g${NUM_GENERATIONS}_${MAX_STEPS}step}"
 
 if [[ -z "${SPECDEC_ADAPTIVE_GATE_MODE}" ]] && {
@@ -355,6 +358,10 @@ cluster.gpus_per_node=${GPUS_PER_NODE} \
 policy.model_name=${TARGET_MODEL_ID} \
 policy.generation.vllm_cfg.enforce_eager=false \
 policy.generation.vllm_cfg.async_engine=false \
+policy.sequence_packing.enabled=true \
+++policy.megatron_cfg.moe_enable_deepep=${MOE_ENABLE_DEEPEP} \
+++policy.megatron_cfg.moe_token_dispatcher_type=${MOE_TOKEN_DISPATCHER_TYPE} \
+++policy.megatron_cfg.moe_shared_expert_overlap=${MOE_SHARED_EXPERT_OVERLAP} \
 grpo.async_grpo.enabled=false \
 grpo.val_period=1000 \
 checkpointing.enabled=false \

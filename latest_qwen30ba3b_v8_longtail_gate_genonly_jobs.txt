@@ -70,3 +70,50 @@ VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=2048
 VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=1
 expected_evidence=worker log should show gate disabled while active requests or scheduled tokens exceed thresholds, then enabled once the decode tail falls under request<=64 and token<=2048; NeMo-RL early metrics should show nonzero draft_tokens and acceptance if enabled.
 status=3107122 RUNNING on nvl72047-T[07,14-15,17] at 2026-06-02 02:00 PDT; driver is still preparing the Python environment/building dependencies, so rollout/gate metrics are not available yet.
+terminal_status=3107122 TIMEOUT at 2026-06-02 05:50 PDT after repeated Ray worker registration failures: TypeError: connect() got an unexpected keyword argument 'startup_token'. No generation, gate, acceptance, or throughput metrics were produced.
+root_cause=Submitted with NRL_FORCE_REBUILD_VENVS=false, so stale worker environments could mix with the current Ray/driver stack. Future NeMo-RL SpecDec jobs must keep NRL_FORCE_REBUILD_VENVS=true.
+
+# submitted V10 one-step gate-transition probe Tue Jun  2 09:59:43 PDT 2026
+job_name=qwen30ba3b-longtail-gate-probe-req64-tok2048-log1-genonly-r2-N4xG4
+job_id=3114676
+purpose=Replacement for 3107122 using forced worker environment rebuild, still designed to pinpoint the decode-iteration point where long-tail gate starts enabling SpecDec.
+model=Qwen/Qwen3-30B-A3B
+drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+num_prompts_per_step=64
+num_generations_per_prompt=32
+train_global_batch_size=2048
+max_steps=1
+num_speculative_tokens=1
+max_total_sequence_length=2048
+NRL_STOP_AFTER_GENERATION=true
+NRL_FORCE_REBUILD_VENVS=true
+VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=64
+VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=2048
+VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=1
+status=3114676 FAILED after 00:28:44 with exit 1; no rollout/gate metrics. The next replacement path is the full 20-step long-tail request-gate run below, after adding the missing Qwen3-30B-A3B MoE config overrides to the launcher.
+
+# submitted full NeMo-RL 20-step long-tail gate req4 runs Tue Jun  2 10:40 PDT 2026
+full_rl_k1_job_id=3115045
+full_rl_k1_job_name=qwen30ba3b-500k-k1-longtail-req4-N4xG4
+full_rl_k1_wandb_name=Qwen30BA3B_500K_Eagle3_K1_20step_longtail_req4_20260602
+full_rl_k3_job_id=3115044
+full_rl_k3_job_name=qwen30ba3b-500k-k3-longtail-req4-N4xG4
+full_rl_k3_wandb_name=Qwen30BA3B_500K_Eagle3_K3_20step_longtail_req4_20260602
+full_rl_model=Qwen/Qwen3-30B-A3B
+full_rl_drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers48_mlen8193/0
+full_rl_drafter_provenance=qwen30ba3b_mixed_math_nonopenmath_500k_speculators
+full_rl_account=coreai_dlalgo_nemorl
+full_rl_num_nodes=4
+full_rl_gpus_per_node=4
+full_rl_num_prompts_per_step=64
+full_rl_num_generations_per_prompt=32
+full_rl_train_global_batch_size=2048
+full_rl_max_steps=20
+full_rl_gate_mode=request_long_tail_only
+full_rl_VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4
+full_rl_VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
+full_rl_VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=16
+full_rl_NRL_FORCE_REBUILD_VENVS=true
+full_rl_container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
+full_rl_launcher_fix=Qwen30BA3B_GB200_Main_SpecDec.sh now forces policy.sequence_packing.enabled=true plus moe_enable_deepep=false, moe_token_dispatcher_type=alltoall, moe_shared_expert_overlap=false to avoid the latest NeMo-RL missing-MoE-key failure.
+full_rl_status=3115044 and 3115045 RUNNING at 2026-06-02 10:40 PDT; waiting for long-tail gate logs, per-step acceptance, step-time, generation-time, E2E throughput, and generation throughput.

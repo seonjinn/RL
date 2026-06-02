@@ -1,0 +1,55 @@
+# Qwen3-235B in-house 500K Speculators Eagle3 NeMo-RL eval jobs
+
+# training completion Tue Jun  2 2026
+train_job_id=3105111
+train_state=COMPLETED
+train_elapsed=03:23:05
+train_checkpoint=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193/0
+train_checkpoint_model_bytes=2128003048
+val_loss_epoch=5.429361045615419
+val_loss_pos0=0.9411817903326729
+val_loss_pos1=1.8758693229220982
+val_loss_pos2=2.612276273594744
+
+# submitted first in-house 500K NeMo-RL eval Tue Jun  2 09:59 PDT 2026
+job_name=qwen235b-main-specdec-inhouse500k-k1-req4-r1-N32xG4
+job_id=3114678
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/checkpoints_train_500k_layers94_mlen8193/0
+drafter_provenance=qwen235b_mixed_math_nonopenmath_500k_speculators
+num_nodes=32
+gpus_per_node=4
+num_prompts_per_step=16
+num_generations_per_prompt=32
+train_global_batch_size=512
+max_steps=4
+num_speculative_tokens=1
+VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=4
+VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
+VLLM_SPECDEC_BATCH_GATE_LOG_INTERVAL=1
+NRL_FORCE_REBUILD_VENVS=true
+status=3114678 FAILED after 00:15:22 with exit 1; no rollout metrics. Root cause observed in driver log: worker venv build failed while building editable nemo-gym metadata with SIGSEGV, before generation/acceptance/throughput.
+
+# submitted PublicHF Eagle3 20-step K sweep Tue Jun  2 10:40 PDT 2026
+publichf_k1_job_id=3115042
+publichf_k1_job_name=qwen235b-publichf-k1-20step-N32xG4
+publichf_k1_wandb_name=Qwen235B_PublicHF_Eagle3_K1_20step_always_on_20260602
+publichf_k2_job_id=3115043
+publichf_k2_job_name=qwen235b-publichf-k2-20step-N32xG4
+publichf_k2_wandb_name=Qwen235B_PublicHF_Eagle3_K2_20step_always_on_20260602
+publichf_model=Qwen/Qwen3-235B-A22B-Thinking-2507
+publichf_drafter=/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3
+publichf_drafter_provenance=manual_diagnostic
+publichf_account=coreai_dlalgo_llm
+publichf_num_nodes=32
+publichf_gpus_per_node=4
+publichf_num_prompts_per_step=16
+publichf_num_generations_per_prompt=32
+publichf_train_global_batch_size=512
+publichf_max_steps=20
+publichf_gate_mode=always_on
+publichf_VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD=0
+publichf_VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD=0
+publichf_NRL_FORCE_REBUILD_VENVS=true
+publichf_container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
+publichf_status=3115042 and 3115043 RUNNING at 2026-06-02 10:40 PDT; waiting for W&B URLs, acceptance, step-time, generation-time, E2E throughput, and generation throughput.
