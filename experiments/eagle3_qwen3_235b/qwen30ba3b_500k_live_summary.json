@@ -2124,11 +2124,11 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 23:06 PDT",
+    "updated_at": "2026-06-01 23:13 PDT",
     "hidden_state_array_job": "3072149_[0-99]%10",
-    "active_tasks": "tasks 97-99 running; repair jobs 3101471/3101472 running for shards 94/96",
+    "active_tasks": "tasks 98-99 running; repair jobs 3101471/3101472 completed for shards 94/96",
     "train_job": "3101473 dependency-pending on afterany:3072149 and afterok:3101471:3101472",
-    "hidden_state_files_observed": 496558,
+    "hidden_state_files_observed": 497848,
     "hidden_state_files_expected": 500000,
     "status": "hidden-state generation is still running; 235B Speculators training has not started yet.",
     "hidden_state_file_extension": ".safetensors"
@@ -2154,18 +2154,18 @@
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-01 23:06 PDT",
+    "updated_at": "2026-06-01 23:13 PDT",
     "stage": "hidden_state_extraction",
-    "hidden_state_count": 496558,
+    "hidden_state_count": 497848,
     "target_hidden_state_count": 500000,
-    "hidden_state_count_fraction": 0.993116,
+    "hidden_state_count_fraction": 0.995696,
     "array_job": "3072149_[0-99]%10",
     "active_tasks": [
       "97",
       "98",
       "99",
-      "repair_94_3101471",
-      "repair_96_3101472"
+      "completed_repair_94_3101471",
+      "completed_repair_96_3101472"
     ],
     "pending_tasks": "none observed; replacement train waits on main array and repair jobs",
     "train_job": "3101473",
