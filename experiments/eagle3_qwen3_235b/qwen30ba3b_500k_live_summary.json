@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 14:46 PDT",
+  "updated_at": "2026-06-02 00:18 PDT",
   "scope": "Qwen3-30B-A3B 500K Speculators Eagle3 drafter, NeMo-RL live interim metrics",
   "baseline": {
     "job_id": "3056050",
@@ -2124,10 +2124,10 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-02 00:00 PDT",
+    "updated_at": "2026-06-02 00:18 PDT",
     "hidden_state_array_job": "3072149_[0-99]%10",
-    "active_tasks": "missing-id repair retry jobs 3105107, 3105108, 3105109, and 3105110 are RUNNING with VLLM_MAX_MODEL_LEN=8193; earlier shard repair jobs 3101471/3101472 completed for shards 94/96",
-    "train_job": "3105111 dependency-pending on afterok:3105107:3105108:3105109:3105110",
+    "active_tasks": "missing-id repair retry jobs 3105107, 3105108, 3105109, and 3105110 reached COMPLETING with VLLM_MAX_MODEL_LEN=8193 and exact hs_*.safetensors coverage is now 500000/500000; earlier shard repair jobs 3101471/3101472 completed for shards 94/96",
+    "train_job": "3105111 RUNNING; coverage validation passed with 500000/500000 hidden-state files and first train losses were logged by 00:18 PDT",
     "superseded_train_jobs": [
       "3101473 cancelled before start after exact coverage check found missing hidden-state ids",
       "3104702 cancelled after first missing-id repair wave hit vLLM max-model-len validation"
@@ -2139,15 +2139,16 @@
       "329404": "3104701"
     },
     "failed_missing_hidden_state_repair_root_cause": "The first repair wave used VLLM_MAX_MODEL_LEN=8192. These samples have 8192 input tokens and request one output/hidden-state token, so vLLM rejected them because max input length was 8191.",
-    "hidden_state_files_observed": 499996,
+    "hidden_state_files_observed": 500000,
     "hidden_state_files_expected": 500000,
-    "missing_hidden_state_ids": [
+    "missing_hidden_state_ids": [],
+    "previously_missing_hidden_state_ids": [
       178153,
       272847,
       324589,
       329404
     ],
-    "status": "100-shard hidden-state array completed, but exact hs_*.safetensors coverage is 499996/500000. Four one-sample repairs are running in the retry wave with VLLM_MAX_MODEL_LEN=8193; 235B Speculators training has not started yet.",
+    "status": "100-shard hidden-state array completed and the four one-sample repairs with VLLM_MAX_MODEL_LEN=8193 raised exact hs_*.safetensors coverage to 500000/500000. 235B Speculators training job 3105111 is RUNNING and has emitted first losses.",
     "hidden_state_file_extension": ".safetensors"
   },
   "hybridep_specdec_interpretation": {
@@ -2170,27 +2171,96 @@
     },
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
+  "specdec_speedup_gap_analysis": {
+    "updated_at": "2026-06-02 00:18 PDT",
+    "summary": "The current NeMo-RL results do not show SpecRL/ReSpec/TLT-like multi-x generation gains because K=1 acceptance around 57% only gives an ideal no-overhead bound near 1.57x, K>1 acceptance collapses, and the full GRPO step often spends most time outside rollout generation.",
+    "k1_upper_bound_intuition": {
+      "acceptance_rate": 0.574,
+      "idealized_generated_tokens_per_target_verify": 1.574,
+      "note": "This ignores drafter forward cost, target verification overhead, scheduler bookkeeping, CUDA Graph capture/copy costs, cache effects, and cross-node placement."
+    },
+    "observed_best_30b_completed_nemo_rl_generation": {
+      "job_id": "3060379",
+      "acceptance_rate": 0.574,
+      "generation_throughput_speedup": 1.3664,
+      "e2e_throughput_speedup": 1.0957,
+      "interpretation": "This is below the idealized K=1 bound but plausible once drafter and verification overhead are included."
+    },
+    "strict_p64g32_alltoall_completed_steps1_4": {
+      "baseline_job": "3078629",
+      "specdec_job": "3078630",
+      "baseline_total_step_time_s": 240.21,
+      "baseline_generation_time_s": 37.33,
+      "baseline_generation_fraction": 0.1554,
+      "theoretical_e2e_ceiling_if_generation_zero_time": 1.184,
+      "specdec_generation_time_s": 33.71,
+      "generation_time_speedup": 1.1075,
+      "generation_throughput_speedup": 1.1166,
+      "e2e_step_time_speedup": 0.9962,
+      "interpretation": "Generation got faster, but the saved 3.62s was not enough to move total GRPO step time once non-generation phases and SpecDec overhead were included."
+    },
+    "deeper_k_quality_drop": {
+      "k2_acceptance_rate": 0.4211,
+      "k2_generation_throughput_speedup": 1.2,
+      "k3_acceptance_rate": 0.3185,
+      "k3_generation_throughput_speedup": 1.177,
+      "k3_per_position_acceptance_latest": [
+        0.5511,
+        0.2762,
+        0.1324
+      ],
+      "interpretation": "Later draft positions are much weaker than the first position, so increasing K does not compound the K=1 gain."
+    },
+    "large_batch_publichf_235b_counterexample": {
+      "job_id": "3084952",
+      "acceptance_rate": 0.6571,
+      "matched_baseline_job": "3088636",
+      "generation_throughput_speedup": 0.986,
+      "e2e_throughput_speedup": 0.975,
+      "gate_evidence": "enabled_ratio=1.0 and disabled=0 for all 4 steps",
+      "interpretation": "High acceptance still lost when SpecDec stayed always enabled at large active batches. Lower-batch-only activation is required to avoid paying draft overhead when target decoding is already well utilized."
+    },
+    "current_gap_vs_specdec_rl_papers": [
+      "The measured path uses a fixed offline drafter, not online drafter refresh inside GRPO.",
+      "Strict lower-batch-only gating is implemented in the patched path but the 235B strict PublicHF throughput retry 3103227 has not emitted throughput/acceptance metrics yet.",
+      "Dynamic K needs reliable late-position acceptance; current K=2/K=3 math results show that later draft positions are too weak.",
+      "Current full-shape NeMo-RL E2E speedup is bounded by generation fraction because rewards, logprobs, and policy training dominate many steps."
+    ]
+  },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-02 00:00 PDT",
-    "stage": "missing_hidden_state_repair_mlen8193_running",
-    "hidden_state_count": 499996,
+    "updated_at": "2026-06-02 00:18 PDT",
+    "stage": "speculators_training_running_after_hidden_state_repair",
+    "hidden_state_count": 500000,
     "target_hidden_state_count": 500000,
-    "hidden_state_count_fraction": 0.999992,
+    "hidden_state_count_fraction": 1.0,
     "array_job": "3072149_[0-99]%10",
     "active_tasks": [
-      "repair 3105107 for id 178153 with VLLM_MAX_MODEL_LEN=8193",
-      "repair 3105108 for id 272847 with VLLM_MAX_MODEL_LEN=8193",
-      "repair 3105109 for id 324589 with VLLM_MAX_MODEL_LEN=8193",
-      "repair 3105110 for id 329404 with VLLM_MAX_MODEL_LEN=8193"
+      "repair 3105107 for id 178153 with VLLM_MAX_MODEL_LEN=8193 reached COMPLETING",
+      "repair 3105108 for id 272847 with VLLM_MAX_MODEL_LEN=8193 reached COMPLETING",
+      "repair 3105109 for id 324589 with VLLM_MAX_MODEL_LEN=8193 reached COMPLETING",
+      "repair 3105110 for id 329404 with VLLM_MAX_MODEL_LEN=8193 reached COMPLETING"
     ],
-    "pending_tasks": "replacement train waits on all four missing-id repair jobs",
+    "pending_tasks": "none for hidden-state coverage; monitor running training job 3105111 for first loss/checkpoint output",
     "train_job": "3105111",
-    "train_job_state": "PENDING Dependency",
+    "train_job_state": "RUNNING at 2026-06-02 00:18 PDT",
+    "first_loss_observation": {
+      "observed_at": "2026-06-02 00:18 PDT",
+      "global_step_0_train_loss": 32.031,
+      "global_step_1_train_loss": 31.797,
+      "loss_0_step0": 10.562,
+      "loss_1_step0": 10.625,
+      "loss_2_step0": 10.812,
+      "loss_0_step1": 10.562,
+      "loss_1_step1": 10.562,
+      "loss_2_step1": 10.688,
+      "note": "This only proves the 235B 500K Speculators training loop is running; it is too early to judge convergence."
+    },
     "superseded_train_jobs": [
       "3101473",
       "3104702"
     ],
-    "missing_hidden_state_ids": [
+    "missing_hidden_state_ids": [],
+    "previously_missing_hidden_state_ids": [
       178153,
       272847,
       324589,
@@ -2225,7 +2295,7 @@
       "329404": "3104701"
     },
     "failed_missing_hidden_state_repair_root_cause": "VLLM_MAX_MODEL_LEN=8192 was too short for 8192-token inputs plus one requested output/hidden-state token.",
-    "running_repair_jobs": {
+    "completing_repair_jobs": {
       "178153": "3105107",
       "272847": "3105108",
       "324589": "3105109",
