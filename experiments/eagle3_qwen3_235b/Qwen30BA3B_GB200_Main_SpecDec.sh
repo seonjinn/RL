@@ -204,7 +204,8 @@ if [[ "${REQUIRE_SPECDEC_RL_PATCHES}" == "true" || "${REQUIRE_SPECDEC_RL_PATCHES
       exit 2
     fi
   }
-  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_SPECDEC_BATCH_GATE_PATCH_V8"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_SPECDEC_BATCH_GATE_PATCH_V9"
+  require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1"
   require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_generation.py" "acceptance_rate_reliable"
   require_patch_marker "${SCRIPT_DIR}/nemo_rl/algorithms/grpo.py" "_repair_specdec_generation_logprobs_if_safe"
   require_patch_marker "${SCRIPT_DIR}/nemo_rl/models/generation/vllm/vllm_worker.py" "NRL_VLLM_OMIT_GENERATION_LOGPROBS"

@@ -52,7 +52,8 @@ REQUIRED_FILES: dict[str, list[str]] = {
         "def _patch_vllm_speculative_decoding_post_step(required: bool)",
         "def _patch_vllm_batch_gated_speculative_decoding()",
         "def _patch_vllm_adaptive_specdec_gate()",
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V8",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V9",
+        "NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1",
         "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1",
         "NRL_SPECDEC_SCHEDULER_LOOKAHEAD_GATE_PATCH_V5",
         "NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1",
@@ -629,11 +630,16 @@ def check_runner_gate_first_draft_guard(
 
     text = read_text(worker)
     required = [
-        "NRL_SPECDEC_BATCH_GATE_PATCH_V8",
+        "NRL_SPECDEC_BATCH_GATE_PATCH_V9",
+        "NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1",
         "nrl_specdec_batch_gate_all_disabled",
         "nrl_specdec_batch_gate_eligible_count",
         "specdec_scheduler_all_attr",
         "_nrl_specdec_batch_gate_last_scheduler_eligible_count",
+        "if input_fits_in_drafter and not specdec_batch_gate_disabled:",
+        "elif self.valid_sampled_token_count_event is not None:",
+        "self._copy_draft_token_ids_to_cpu(",
+        "zeros_only=True",
     ]
     missing = [snippet for snippet in required if snippet not in text]
     deadlock_snippet = (
@@ -642,15 +648,20 @@ def check_runner_gate_first_draft_guard(
         "                            \"                    and specdec_scheduled_token_count == 0\\n\"\n"
         "                            \"                )\\n\""
     )
-    if missing or deadlock_snippet in text:
+    nested_async_deadlock_snippet = (
+        "if input_fits_in_drafter:\\n\"\n"
+        "                            \"                if not specdec_batch_gate_disabled:\\n\""
+    )
+    if missing or deadlock_snippet in text or nested_async_deadlock_snippet in text:
         add(
             checks,
             "source",
             "runner first-draft gate guard",
             "fail",
-            "runner gate may still disable EAGLE before the first draft instead of using explicit scheduler all-disabled state",
+            "runner gate may still disable EAGLE before the first draft instead of using explicit scheduler all-disabled state, or may skip the async event path on all-disabled EAGLE batches",
             missing=missing,
             has_deadlock_snippet=deadlock_snippet in text,
+            has_nested_async_deadlock_snippet=nested_async_deadlock_snippet in text,
         )
         return
 
@@ -659,7 +670,7 @@ def check_runner_gate_first_draft_guard(
         "source",
         "runner first-draft gate guard",
         "pass",
-        "runner gate uses explicit scheduler all-disabled state and no longer treats an empty scheduled_spec_decode_tokens map as a standalone disable signal",
+        "runner gate uses explicit scheduler all-disabled state, keeps the async event branch reachable when disabled, and zeroes draft ids before scheduler copy on all-disabled batches",
     )
 
 

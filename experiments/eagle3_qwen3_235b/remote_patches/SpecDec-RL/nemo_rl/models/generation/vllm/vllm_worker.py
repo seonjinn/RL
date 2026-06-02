@@ -973,7 +973,8 @@ class BaseVllmGenerationWorker:
                     content = f.read()
 
                 required_markers = [
-                    "NRL_SPECDEC_BATCH_GATE_PATCH_V8",
+                    "NRL_SPECDEC_BATCH_GATE_PATCH_V9",
+                    "NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1",
                     "VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD",
                     "VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD",
                     "_nrl_specdec_batch_gate_threshold",
@@ -1106,7 +1107,42 @@ class BaseVllmGenerationWorker:
                         with open(path, "w") as f:
                             f.write(upgraded_content)
                         content = upgraded_content
-                    if "NRL_SPECDEC_BATCH_GATE_PATCH_V8" not in content:
+                    zero_drafts_on_disable_marker = (
+                        "NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1"
+                    )
+                    legacy_disabled_none_block = (
+                        "        if specdec_batch_gate_disabled:\n"
+                        "            self._draft_token_ids = None\n"
+                    )
+                    zero_drafts_on_disable_block = (
+                        "        if specdec_batch_gate_disabled:\n"
+                        "            # NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1\n"
+                        "            try:\n"
+                        "                self._draft_token_ids = torch.zeros(\n"
+                        "                    (1, self.num_spec_tokens),\n"
+                        "                    dtype=torch.int32,\n"
+                        "                    device=self.device,\n"
+                        "                ).expand(len(self.input_batch.req_ids), -1)\n"
+                        "                self._copy_draft_token_ids_to_cpu(\n"
+                        "                    scheduler_output,\n"
+                        "                    zeros_only=True,\n"
+                        "                )\n"
+                        "            except Exception:\n"
+                        "                self._draft_token_ids = None\n"
+                    )
+                    if (
+                        zero_drafts_on_disable_marker not in content
+                        and legacy_disabled_none_block in content
+                    ):
+                        upgraded_content = content.replace(
+                            legacy_disabled_none_block,
+                            zero_drafts_on_disable_block,
+                            1,
+                        )
+                        with open(path, "w") as f:
+                            f.write(upgraded_content)
+                        content = upgraded_content
+                    if "NRL_SPECDEC_BATCH_GATE_PATCH_V9" not in content:
                         raise RuntimeError(
                             "Found an outdated vLLM SpecDec batch-gate patch in "
                             f"{path}. Rebuild the Ray vLLM environment before "
@@ -1375,7 +1411,7 @@ class BaseVllmGenerationWorker:
                             "                    spec_decode_metadata,\n"
                             "                    spec_decode_common_attn_metadata,\n"
                             "                )\n",
-                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V8\n"
+                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V9\n"
                             "        specdec_batch_gate_disabled = False\n"
                             "        if self.speculative_config:\n"
                             "            specdec_batch_gate_threshold = getattr(\n"
@@ -1519,7 +1555,19 @@ class BaseVllmGenerationWorker:
                             "                except Exception:\n"
                             "                    pass\n"
                             "        if specdec_batch_gate_disabled:\n"
-                            "            self._draft_token_ids = None\n"
+                            "            # NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1\n"
+                            "            try:\n"
+                            "                self._draft_token_ids = torch.zeros(\n"
+                            "                    (1, self.num_spec_tokens),\n"
+                            "                    dtype=torch.int32,\n"
+                            "                    device=self.device,\n"
+                            "                ).expand(len(self.input_batch.req_ids), -1)\n"
+                            "                self._copy_draft_token_ids_to_cpu(\n"
+                            "                    scheduler_output,\n"
+                            "                    zeros_only=True,\n"
+                            "                )\n"
+                            "            except Exception:\n"
+                            "                self._draft_token_ids = None\n"
                             "        if self.speculative_config and not specdec_batch_gate_disabled:\n"
                             "            assert spec_decode_common_attn_metadata is not None\n"
                             "            with record_function_or_nullcontext(\"Draft\"):\n"
@@ -1545,7 +1593,7 @@ class BaseVllmGenerationWorker:
                             "            spec_decode_common_attn_metadata.max_seq_len + self.num_spec_tokens\n"
                             "            <= effective_drafter_max_model_len\n"
                             "        )\n"
-                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V8\n"
+                            "        # NRL_SPECDEC_BATCH_GATE_PATCH_V9\n"
                             "        specdec_batch_gate_disabled = False\n"
                             "        if self.speculative_config:\n"
                             "            specdec_batch_gate_threshold = getattr(\n"
@@ -1689,7 +1737,19 @@ class BaseVllmGenerationWorker:
                             "                except Exception:\n"
                             "                    pass\n"
                             "        if specdec_batch_gate_disabled:\n"
-                            "            self._draft_token_ids = None\n",
+                            "            # NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1\n"
+                            "            try:\n"
+                            "                self._draft_token_ids = torch.zeros(\n"
+                            "                    (1, self.num_spec_tokens),\n"
+                            "                    dtype=torch.int32,\n"
+                            "                    device=self.device,\n"
+                            "                ).expand(len(self.input_batch.req_ids), -1)\n"
+                            "                self._copy_draft_token_ids_to_cpu(\n"
+                            "                    scheduler_output,\n"
+                            "                    zeros_only=True,\n"
+                            "                )\n"
+                            "            except Exception:\n"
+                            "                self._draft_token_ids = None\n",
                         ),
                         (
                             "            if input_fits_in_drafter:\n"
@@ -1697,11 +1757,10 @@ class BaseVllmGenerationWorker:
                             "                # as inputs, and does not need to wait for bookkeeping to finish.\n"
                             "                propose_draft_token_ids(sampled_token_ids)\n"
                             "            elif self.valid_sampled_token_count_event is not None:\n",
-                            "            if input_fits_in_drafter:\n"
-                            "                if not specdec_batch_gate_disabled:\n"
-                            "                    # EAGLE speculative decoding can use the GPU sampled tokens\n"
-                            "                    # as inputs, and does not need to wait for bookkeeping to finish.\n"
-                            "                    propose_draft_token_ids(sampled_token_ids)\n"
+                            "            if input_fits_in_drafter and not specdec_batch_gate_disabled:\n"
+                            "                # EAGLE speculative decoding can use the GPU sampled tokens\n"
+                            "                # as inputs, and does not need to wait for bookkeeping to finish.\n"
+                            "                propose_draft_token_ids(sampled_token_ids)\n"
                             "            elif self.valid_sampled_token_count_event is not None:\n",
                         ),
                         (
@@ -1973,9 +2032,9 @@ class BaseVllmGenerationWorker:
                 "NRL SpecDec adaptive gate:",
             ]
             if "NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1" not in content:
-                if "NRL_SPECDEC_BATCH_GATE_PATCH_V8" not in content:
+                if "NRL_SPECDEC_BATCH_GATE_PATCH_V9" not in content:
                     raise RuntimeError(
-                        "Adaptive SpecDec gate requires the V8 batch gate to be "
+                        "Adaptive SpecDec gate requires the V9 batch gate to be "
                         f"installed first in {gpu_model_runner}."
                     )
 
@@ -3506,6 +3565,12 @@ class BaseVllmGenerationWorker:
                     scheduler_content,
                     scheduler,
                 )
+            scheduler_content, output_gate_attr_changed = (
+                _ensure_scheduler_output_gate_attr(scheduler_content, scheduler)
+            )
+            if output_gate_attr_changed:
+                with open(scheduler, "w") as f:
+                    f.write(scheduler_content)
             try:
                 __import__("py_compile").compile(scheduler, doraise=True)
             except Exception:

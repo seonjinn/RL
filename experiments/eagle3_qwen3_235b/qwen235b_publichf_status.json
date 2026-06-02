@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-01 22:01 PDT",
+  "updated_at": "2026-06-01 22:33 PDT",
   "scope": "Qwen3-235B Public HF Eagle3 NeMo-RL diagnostic runs",
   "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
   "public_hf_candidates": [
@@ -92,7 +92,7 @@
       "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/3084952-logs/ray-driver.log",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_corrected_20260601",
-      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. The job completed 4/4 steps at 17:50 PDT with ExitCode 0:0. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM V1 engine initialization with enforce_eager=false and CUDA Graph mode, target safetensors loading to 118/118, and the observed 1/1 drafter safetensors load. Steps 1-4 emitted completed Generation Worker Group and E2E metrics. Generated throughput is 63.70, 43.39, 73.58, and 61.78 generated tok/s/GPU with acceptance 62.82%, 69.01%, 65.82%, and 65.20%. Mean generated throughput is 60.61 tok/s/GPU, mean acceptance is 65.71%, mean E2E throughput is 43.60 tok/s/GPU, and mean total step time is 475.04s. Scheduler gate metrics show enabled_ratio=1.0 and disabled=0 for all 4 steps, and runner logs show active requests ranging from 1 to 64 with per-worker scheduled tokens up to 128 under token_threshold=4096. This confirms the drafter is active, but also proves this token threshold was too loose to demonstrate lower-batch-only activation. Matched Thinking-2507 baseline job 3088636 now has 4/4 baseline metrics: mean generated throughput 61.48 tok/s/GPU, mean E2E 44.72 tok/s/GPU, and mean total step time 452.20s. Versus that matched baseline, this always-enabled PublicHF run is slower: generation throughput 0.986x, E2E throughput 0.975x, and step-time speedup 0.952x. Strict lower-batch-only speedup still waits on rebuild strict-gate job 3092445.",
+      "latest_observation": "Submitted after patching the 235B launchers to pass policy.model_name explicitly and patching Megatron checkpoint-complete detection to require iter_0000000/run_config.yaml. The job completed 4/4 steps at 17:50 PDT with ExitCode 0:0. Ray workers were online at 128/128, the driver log confirmed policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507 plus the NVIDIA PublicHF Eagle3 speculative_config, vLLM V1 engine initialization with enforce_eager=false and CUDA Graph mode, target safetensors loading to 118/118, and the observed 1/1 drafter safetensors load. Steps 1-4 emitted completed Generation Worker Group and E2E metrics. Generated throughput is 63.70, 43.39, 73.58, and 61.78 generated tok/s/GPU with acceptance 62.82%, 69.01%, 65.82%, and 65.20%. Mean generated throughput is 60.61 tok/s/GPU, mean acceptance is 65.71%, mean E2E throughput is 43.60 tok/s/GPU, and mean total step time is 475.04s. Scheduler gate metrics show enabled_ratio=1.0 and disabled=0 for all 4 steps, and runner logs show active requests ranging from 1 to 64 with per-worker scheduled tokens up to 128 under token_threshold=4096. This confirms the drafter is active, but also proves this token threshold was too loose to demonstrate lower-batch-only activation. Matched Thinking-2507 baseline job 3088636 now has 4/4 baseline metrics: mean generated throughput 61.48 tok/s/GPU, mean E2E 44.72 tok/s/GPU, and mean total step time 452.20s. Versus that matched baseline, this always-enabled PublicHF run is slower: generation throughput 0.986x, E2E throughput 0.975x, and step-time speedup 0.952x. Strict lower-batch-only speedup is still unmeasured: rebuild strict-gate job 3092445 proved large-batch disable but failed before completed rollout metrics, and the next retry should use the validated V9 all-disabled path fix.",
       "early_generation_metric": {
         "step": 1,
         "phase": "specdec_early_generation",
@@ -182,7 +182,7 @@
         "generation_throughput_speedup_vs_matched_baseline": 0.986,
         "e2e_throughput_speedup_vs_matched_baseline": 0.975,
         "e2e_step_time_speedup_vs_matched_baseline": 0.952,
-        "comparison_note": "3084952 is not a strict lower-batch-only result because scheduler gate metrics stayed enabled_ratio=1.0 and disabled=0. Use 3092445 for strict request-gate evidence."
+        "comparison_note": "3084952 is not a strict lower-batch-only result because scheduler gate metrics stayed enabled_ratio=1.0 and disabled=0. Use 3092445 only as strict request-gate evidence; it is not a throughput result because it failed before completed rollout metrics."
       },
       "gate_metrics_observation": {
         "steps_observed": [
@@ -260,7 +260,7 @@
       "job_id": "3092445",
       "submitted_at": "2026-06-01 18:54 PDT",
       "state_at_submit_check": "RUNNING",
-      "latest_state": "RUNNING at 22:01 PDT on coreai_dlalgo_llm",
+      "latest_state": "FAILED at 2026-06-01 22:02 PDT after 03:08:55 elapsed on coreai_dlalgo_llm; ExitCode 1:0",
       "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
       "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -284,7 +284,47 @@
       "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3092445-logs/ray-driver.log",
       "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3092445.out",
       "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_rebuild_20260601",
-      "latest_observation": "Resubmitted without dependency after cancelling startup_token-stalled job 3090318. slurm-3092445.out confirms NRL_FORCE_REBUILD_VENVS=true, UV_PYTHON=3.12.13, a fresh driver venv, policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, request gate 4, token gate 0, the NVIDIA PublicHF Eagle3 drafter, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. It was still RUNNING on nvl72059-T[01-16],nvl72154-T[01-16] at the 22:01 PDT squeue poll with elapsed 3:07:14 / 4:00:00. ray-driver.log shows setup completed in 4669.5s, synchronous GRPO entered Epoch 1/1 Step 1/4, and generation started for batch size 512. The latest tail still shows first rollout request enqueue with Adding requests 64/64 and Processed prompts 0/64 visible. The driver log mtime is still 21:02 and size is 807283 bytes, so no new driver log lines appeared by the 22:01 poll. There is still no completed rollout, acceptance metric, throughput metric, repeated startup_token error, Traceback, or NCCL failure. This is now best treated as a likely Step 1 generation stall unless it emits metrics before the 4h time limit."
+      "latest_observation": "Resubmitted without dependency after cancelling startup_token-stalled job 3090318. slurm-3092445.out confirms NRL_FORCE_REBUILD_VENVS=true, UV_PYTHON=3.12.13, a fresh driver venv, policy.model_name=Qwen/Qwen3-235B-A22B-Thinking-2507, request gate 4, token gate 0, the NVIDIA PublicHF Eagle3 drafter, CUDA Graph mode via enforce_eager=false, p16/g32/GBS512, sequence packing, and max_steps=4. It reached Epoch 1/1 Step 1/4 generation, then failed after 03:08:55 elapsed with ExitCode 1:0. The important gate evidence is positive: vLLM logged NRL SpecDec batch gate checked=1 disabled=1 enabled=0 last_disabled=True requests=64 tokens=1856 request_threshold=4 token_threshold=0, and the dumped SchedulerOutput had scheduled_spec_decode_tokens={}. That proves strict lower-batch gating did disable draft work for the initial large batch. No completed rollout throughput or acceptance metric was emitted. The failure is Ray/vLLM execution hang on the all-disabled speculative_config path: RayChannelTimeoutError timed out waiting for object availability, RAY_CGRAPH_get_timeout was 3600 seconds, and the driver ended with RuntimeError: Failed to unpickle serialized exception. Treat this as a code-path/stability blocker for all-disabled batches, not as a drafter quality or speedup result.",
+      "failure_summary": {
+        "terminal_state": "FAILED",
+        "elapsed": "03:08:55",
+        "exit_code": "1:0",
+        "no_completed_rollout_metric": true,
+        "gate_evidence": "NRL SpecDec batch gate checked=1 disabled=1 enabled=0 last_disabled=True requests=64 tokens=1856 request_threshold=4 token_threshold=0; SchedulerOutput scheduled_spec_decode_tokens={}",
+        "failure_class": "RayChannelTimeoutError / RAY_CGRAPH_get_timeout=3600 in all-disabled speculative_config path",
+        "interpretation": "Lower-batch gate semantics worked, but the all-disabled vLLM speculative_config execution path still needs a baseline fallback or metadata-path fix before strict request-gated 235B throughput can be measured."
+      }
+    },
+    {
+      "job_id": "3103018",
+      "submitted_at": "2026-06-01 22:32 PDT",
+      "state_at_submit_check": "RUNNING at 2026-06-01 22:33 PDT on coreai_dlalgo_llm; no dependency; 32 nodes allocated",
+      "latest_state": "RUNNING in Prolog/startup at submit check; no rollout metrics yet",
+      "drafter": "nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3",
+      "drafter_local_path": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/public_hf/nvidia_Qwen3-235B-A22B-Thinking-2507-Eagle3",
+      "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+      "provenance": "manual_diagnostic_strict_long_tail_v9_retry",
+      "num_speculative_tokens": 1,
+      "max_steps": 4,
+      "num_prompts_per_step": 16,
+      "num_generations_per_prompt": 32,
+      "train_global_batch_size": 512,
+      "sequence_packing": true,
+      "specdec_gate": {
+        "request_threshold": 4,
+        "token_threshold": 0,
+        "note": "Strict lower-batch-only diagnostic retry after 3092445. Draft work should be enabled only when active requests are <=4."
+      },
+      "container": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly.sqsh",
+      "nemo_rl_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL",
+      "megatron_checkpoint_dir": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/nrl_megatron_ckpts_20260601_qwen235b_thinking2507_publichf_nvidia",
+      "driver_uv_project_environment": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/.driver_venvs/qwen235b_publichf_strict_req4_v9_20260601_py312",
+      "force_rebuild_venvs": true,
+      "ray_driver_log": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/3103018-logs/ray-driver.log",
+      "slurm_stdout": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3103018.out",
+      "wandb_name": "Qwen235B_Thinking2507_PublicHF_NVIDIA_Eagle3_k1_req4_v9_20260601",
+      "latest_observation": "Submitted after syncing the guarded launcher and V9 SpecDec-RL patch to the remote checkout. V9 validation passes and includes NRL_SPECDEC_BATCH_GATE_PATCH_V9 plus NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1. This retry keeps the 3092445 strict request gate shape but uses a new venv and launcher preflight requiring V9. At the first submit check the job was RUNNING with 32 nodes allocated, no dependency, and no rollout metrics yet.",
+      "purpose": "Measure strict lower-batch-only PublicHF 235B SpecDec throughput after fixing the all-disabled speculative path suspected from 3092445."
     }
   ],
   "matched_baseline_run": {
@@ -347,11 +387,11 @@
       "94": "3101471",
       "96": "3101472"
     },
-    "latest_observed_hidden_state_files": 453787,
+    "latest_observed_hidden_state_files": 459275,
     "hidden_state_dir": "/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_235b_mixed_math_nonopenmath_500k_parallel/hidden_states_layers94_mlen8193_500k_global",
-    "latest_observed_array_window": "tasks 86-93 plus 95 and 97 running, tasks 98-99 pending on JobArrayTaskLimit, and repair jobs 3101471/3101472 running for shards 94/96; observed at 2026-06-01 22:01 PDT",
-    "rough_eta": "Roughly the final 9% of hidden-state extraction remained at the 22:01 poll; ETA is queue/restart dependent, then train 3101473 starts only after the main array and repair jobs 3101471/3101472 finish successfully.",
-    "note": "Shards 94 and 96 failed earlier at Ray srun startup with memory-allocation errors and were resubmitted as repair jobs 3101471 and 3101472; both were RUNNING at 22:01 PDT. Superseded train job 3072524 was cancelled before it could start on an incomplete hidden-state cache; replacement train job 3101473 depends on afterany:3072149 and afterok:3101471:3101472. Latest hidden-state count is 453787; size is 50T observed at 450087 files on 2026-06-01 21:56 PDT; latest count 453787 at 2026-06-01 22:01 PDT. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough.",
-    "latest_observed_hidden_state_size": "50T observed at 450087 files on 2026-06-01 21:56 PDT; latest count 453787 at 2026-06-01 22:01 PDT"
+    "latest_observed_array_window": "tasks 86-93 plus 95 and 97 running, tasks 98-99 pending on JobArrayTaskLimit, and repair jobs 3101471/3101472 running for shards 94/96; observed at 2026-06-01 22:07 PDT",
+    "rough_eta": "Roughly the final 8% of hidden-state extraction remained at the 22:07 poll; ETA is queue/restart dependent, then train 3101473 starts only after the main array and repair jobs 3101471/3101472 finish successfully.",
+    "note": "Shards 94 and 96 failed earlier at Ray srun startup with memory-allocation errors and were resubmitted as repair jobs 3101471 and 3101472; both were RUNNING at 22:07 PDT. Superseded train job 3072524 was cancelled before it could start on an incomplete hidden-state cache; replacement train job 3101473 depends on afterany:3072149 and afterok:3101471:3101472. Latest hidden-state count is 459275; size is 51T observed at 459275 files on 2026-06-01 22:07 PDT. Public HF diagnostics are being run in parallel because waiting for the in-house 500K checkpoint is not fast enough.",
+    "latest_observed_hidden_state_size": "51T observed at 459275 files on 2026-06-01 22:07 PDT"
   }
 }
