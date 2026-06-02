@@ -1,0 +1,27 @@
+{
+  "created_at": "2026-06-01 23:34 PDT",
+  "mode": "qwen3_235b_missing_hidden_state_repair",
+  "reason": "100-shard hidden-state array completed, but exact coverage validation found four missing hs_<id>.safetensors files before training.",
+  "hidden_state_array_job": "3072149_[0-99]%10",
+  "exact_hidden_state_files_observed_before_repair": 499996,
+  "expected_hidden_state_files": 500000,
+  "missing_ids": [
+    178153,
+    272847,
+    324589,
+    329404
+  ],
+  "superseded_train_job": "3101473",
+  "superseded_train_action": "cancelled before start after coverage check found missing hidden-state ids",
+  "repair_jobs": {
+    "178153": "3104698",
+    "272847": "3104699",
+    "324589": "3104700",
+    "329404": "3104701"
+  },
+  "replacement_train_job": "3104702",
+  "replacement_train_dependency": "afterok:3104698:3104699:3104700:3104701",
+  "replacement_train_validation": "VALIDATE_HIDDEN_STATE_COVERAGE=true; train should fail closed unless hs_0..hs_499999 are all present.",
+  "latest_queue_observation": "At 2026-06-01 23:43 PDT, all four repair jobs 3104698, 3104699, 3104700, and 3104701 were RUNNING; replacement train 3104702 was still PENDING Dependency.",
+  "latest_hidden_state_coverage_observation": "At 2026-06-01 23:43 PDT, exact hs_*.safetensors count was still 499996 and the missing ids were still 178153, 272847, 324589, and 329404; the repair jobs were in startup and had not written the missing files yet."
+}

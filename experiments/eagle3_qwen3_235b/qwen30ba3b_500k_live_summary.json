@@ -1674,7 +1674,7 @@
     "post_review_hardening_state": "Launch-time patch-marker checks, legacy drafter refusal, no-dependency submission support, and reliable-acceptance analyzer gating are synced to fs1/fsw roadmap mirrors.",
     "latest_dynamic_k_result": "Job 3072963 emitted Step 1 early metrics, then failed in Megatron get_logprobs due to NCCL _ALLGATHER_BASE timeout after 1800s. No final performance throughput."
   },
-  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, then failed in policy.get_logprobs with the same EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP _ALLGATHER_BASE NCCL timeout class at 2026-06-01 12:07 PDT. Strict SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then hit a Megatron policy.get_logprobs NCCL timeout in the same group at 2026-06-01 11:06 PDT. This gives a strict early generation-only speedup of 1.2058x, but not final completed-step throughput; the full-GRPO blocker is reproduced by baseline and is not SpecDec-only. Reduced alltoall-dispatcher smoke jobs now prove the 30B NeMo-RL full 1-step loop can complete with this dispatcher: baseline 3076036 completed Step 1/1, and SpecDec 3076041 completed Step 1/1 with acceptance 58.88% while passing rewards, logprobs, and policy training. This is a reduced p8/g8, GBS64 validation, not the final p64/g32 throughput comparison. Corrected V8 long-tail verifier 3076833 completed the stop-after-generation diagnostic with acceptance 57.65%, early generated throughput 6669.63 tok/s/GPU, draft_tokens 2287959, accepted_tokens 1319121, and runner gate disabled_count 16/21977; this is generation-side/long-tail evidence, not full GRPO throughput. First p64/g32 alltoall follow-up 3077214/3077216 produced no comparable metric: baseline 3077214 failed before rollout in MegatronPolicyWorker import with a TransformerEngine/Triton JIT AttributeError, and SpecDec 3077216 was cancelled after a repeated Ray startup_token worker-registration stall. Repaired p64/g32 r2 jobs 3078476 and 3078477 were cancelled after repeating the startup_token/worker-registration stall with NRL_FORCE_REBUILD_VENVS=false. Fresh r3 p64/g32 jobs 3078629 and 3078630 were submitted with NRL_FORCE_REBUILD_VENVS=true and were RUNNING as of 2026-06-01 13:43 PDT in Ray/vLLM environment setup, with no rollout throughput or acceptance metrics emitted yet. No publishable pure vLLM standalone benchmark table exists yet for the 30B 500K drafter; the current reported throughput values are NeMo-RL generation metrics or NeMo-RL generation-side diagnostics.",
+  "caveat": "Best observed completed 30B NeMo-RL result remains token-pressure K=1 job 3060379 at 5696.58 tok/s/GPU, 1.3664x versus the historical baseline, with 57.40% acceptance. Strict baseline 3075647 emitted early generation-only throughput 4762.42 tok/s/GPU with async_engine=false and NRL_VLLM_OMIT_GENERATION_LOGPROBS=true, then failed in policy.get_logprobs with the same EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP _ALLGATHER_BASE NCCL timeout class at 2026-06-01 12:07 PDT. Strict SpecDec 3074778 emitted early generation-only throughput 5742.32 tok/s/GPU with 57.91% acceptance and 16/16 reporting workers, then hit a Megatron policy.get_logprobs NCCL timeout in the same group at 2026-06-01 11:06 PDT. This gives a strict early generation-only speedup of 1.2058x, but not final completed-step throughput; the full-GRPO blocker is reproduced by baseline and is not SpecDec-only. Reduced alltoall-dispatcher smoke jobs prove the 30B NeMo-RL full 1-step loop can complete with this dispatcher: baseline 3076036 completed Step 1/1, and SpecDec 3076041 completed Step 1/1 with acceptance 58.88% while passing rewards, logprobs, and policy training. This is a reduced p8/g8, GBS64 validation. Fresh r3 p64/g32 alltoall jobs 3078629 and 3078630 completed 4/4 steps with NRL_FORCE_REBUILD_VENVS=true: baseline mean generation 6068.62 generated tok/s/GPU, E2E 1004.69 tok/s/GPU, total step 240.21s; SpecDec K=1 mean generation 6776.01 generated tok/s/GPU, E2E 1001.70 tok/s/GPU, total step 241.13s, and acceptance 57.28%. This is the strict full-shape comparison: generation improves 1.1166x, but E2E is flat/slightly lower because logprobs/training dominate. Corrected V8 long-tail verifier 3076833 completed the stop-after-generation diagnostic with acceptance 57.65%, early generated throughput 6669.63 tok/s/GPU, draft_tokens 2287959, accepted_tokens 1319121, and runner gate disabled_count 16/21977; this is generation-side/long-tail evidence, not full GRPO throughput. No publishable pure vLLM standalone benchmark table exists yet for the 30B 500K drafter; the current reported throughput values are NeMo-RL generation metrics or NeMo-RL generation-side diagnostics.",
   "current_primary_dynamic_k_job": "3076833_v8_resubmitted_r3_with_stop_and_maxlen",
   "batch_gate_v7_review_fix": {
     "state": "patched_validated_synced_step1_early_metrics_seen_dynamic_k_failed_k1_validation_running_step1_generation_seen",
@@ -2030,7 +2030,7 @@
         "NUM_SPECULATIVE_TOKENS": "1 for SpecDec"
       },
       "manifest": "latest_qwen30ba3b_alltoall_p64g32_strict_jobs.txt",
-      "status": "r3 resubmitted; 3078629 and 3078630 are RUNNING as of 2026-06-01 13:43 PDT in Ray/vLLM environment setup, with no rollout metrics emitted yet",
+      "status": "completed 4/4 steps. Baseline 3078629 mean total step 240.21s, generation 37.33s, E2E 1004.69 tok/s/GPU, generated 6068.62 tok/s/GPU. SpecDec 3078630 mean total step 241.13s, generation 33.71s, E2E 1001.70 tok/s/GPU, generated 6776.01 tok/s/GPU, acceptance 57.28%. Generation throughput speedup is 1.1166x; E2E throughput speedup is 0.997x.",
       "superseded_r2_attempt": {
         "submitted_at": "2026-06-01 13:25 PDT",
         "baseline_job_id": "3078476",
@@ -2046,7 +2046,7 @@
         "specdec_failure": "CANCELLED after 1:02 elapsed. vLLM policy workers never registered and Ray repeated TypeError: connect() got an unexpected keyword argument 'startup_token'."
       }
     },
-    "next_decision": "Poll p64/g32 r3 jobs 3078629 and 3078630. If both complete, use their completed NeMo-RL generated tok/s/GPU and E2E tok/s/GPU as the strict alltoall baseline-vs-SpecDec comparison. If p64/g32 still fails, keep p8/g8 as functional proof and inspect scale-specific Megatron/NCCL behavior."
+    "next_decision": "Use completed p64/g32 r3 jobs 3078629 and 3078630 as the strict alltoall baseline-vs-SpecDec comparison. The next optimization decision is whether to reduce non-generation overhead, for example with HybridEP/policy-side acceleration, because generation speedup is real but E2E is flat."
   },
   "longtail_gate_v8_verification": {
     "updated_at": "2026-06-01 13:43 PDT",
@@ -2124,13 +2124,20 @@
     "fix": "Added module-level logging.getLogger(__name__) to the maintained SpecDec-RL vllm_worker overlay, synced it to /lustre/.../SpecDec-RL, and py_compile passed."
   },
   "qwen235b_500k_speculators_pipeline_current": {
-    "updated_at": "2026-06-01 23:23 PDT",
+    "updated_at": "2026-06-01 23:43 PDT",
     "hidden_state_array_job": "3072149_[0-99]%10",
-    "active_tasks": "tasks 98-99 running; repair jobs 3101471/3101472 completed for shards 94/96",
-    "train_job": "3101473 dependency-pending on afterany:3072149 and afterok:3101471:3101472",
-    "hidden_state_files_observed": 499326,
+    "active_tasks": "missing-id repair jobs 3104698, 3104699, 3104700, and 3104701 are RUNNING; earlier shard repair jobs 3101471/3101472 completed for shards 94/96",
+    "train_job": "3104702 dependency-pending on afterok:3104698:3104699:3104700:3104701",
+    "superseded_train_job": "3101473 cancelled before start after exact coverage check found missing hidden-state ids",
+    "hidden_state_files_observed": 499996,
     "hidden_state_files_expected": 500000,
-    "status": "hidden-state generation is still running; 235B Speculators training has not started yet.",
+    "missing_hidden_state_ids": [
+      178153,
+      272847,
+      324589,
+      329404
+    ],
+    "status": "100-shard hidden-state array completed, but exact hs_*.safetensors coverage is 499996/500000. Four one-sample repairs are running; 235B Speculators training has not started yet.",
     "hidden_state_file_extension": ".safetensors"
   },
   "hybridep_specdec_interpretation": {
@@ -2154,19 +2161,28 @@
     "note_on_58_88_acceptance": "58.88% acceptance is from 30B reduced alltoall p8/g8 job 3076041, not a completed 235B 500K in-house result."
   },
   "qwen3_235b_500k_training_current": {
-    "updated_at": "2026-06-01 23:23 PDT",
-    "stage": "hidden_state_extraction",
-    "hidden_state_count": 499326,
+    "updated_at": "2026-06-01 23:43 PDT",
+    "stage": "missing_hidden_state_repair",
+    "hidden_state_count": 499996,
     "target_hidden_state_count": 500000,
-    "hidden_state_count_fraction": 0.998652,
+    "hidden_state_count_fraction": 0.999992,
     "array_job": "3072149_[0-99]%10",
     "active_tasks": [
-      "98",
-      "99"
+      "repair 3104698 for id 178153",
+      "repair 3104699 for id 272847",
+      "repair 3104700 for id 324589",
+      "repair 3104701 for id 329404"
     ],
-    "pending_tasks": "none observed; replacement train waits on main array tasks 98-99",
-    "train_job": "3101473",
+    "pending_tasks": "replacement train waits on all four missing-id repair jobs",
+    "train_job": "3104702",
     "train_job_state": "PENDING Dependency",
+    "superseded_train_job": "3101473",
+    "missing_hidden_state_ids": [
+      178153,
+      272847,
+      324589,
+      329404
+    ],
     "repair_jobs": [
       "3072518",
       "3072519",
@@ -2175,11 +2191,21 @@
       "3072522",
       "3072523",
       "3101471",
-      "3101472"
+      "3101472",
+      "3104698",
+      "3104699",
+      "3104700",
+      "3104701"
     ],
     "completed_repair_jobs": {
       "94": "3101471",
       "96": "3101472"
+    },
+    "running_repair_jobs": {
+      "178153": "3104698",
+      "272847": "3104699",
+      "324589": "3104700",
+      "329404": "3104701"
     }
   }
 }
