@@ -1,0 +1,51 @@
+# Qwen3-8B public HF Eagle3 SpecDec jobs
+# Submitted: 2026-06-02 13:31 PDT
+# Target/verifier: Qwen/Qwen3-8B
+# Drafter: RedHatAI/Qwen3-8B-speculator.eagle3
+# NeMo-RL recipe: examples/configs/recipes/llm/grpo-qwen3-8b-base-1n8g-fp8-kvcache-megatron.yaml
+# NeMo-RL container: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh
+# All NeMo-RL jobs use NRL_FORCE_REBUILD_VENVS=true, max_steps=20, sequence_packing.enabled=true.
+
+vLLM standalone static-batch sweep:
+  isl=1000
+  osl=512
+  batch_sizes=1,2,4,8,16,32
+  tp=1
+  cuda_graph=enforced by vLLM default; enforce_eager=false
+  profiler=disabled for first throughput boundary sweep
+  results_root=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs
+
+  3118288 baseline
+    dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen3_8b_vllm_baseline_bs1-32_cuda_graph_20260602_133138
+
+  3118289 SpecDec K=1
+    method=eagle3
+    drafter=RedHatAI/Qwen3-8B-speculator.eagle3
+    dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen3_8b_vllm_spec_k1_bs1-32_cuda_graph_20260602_133138
+
+  3118290 SpecDec K=3
+    method=eagle3
+    drafter=RedHatAI/Qwen3-8B-speculator.eagle3
+    dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen3_8b_vllm_spec_k3_bs1-32_cuda_graph_20260602_133138
+
+NeMo-RL GRPO:
+  num_nodes=1
+  gpus_per_node=4
+  num_prompts_per_step=64
+  num_generations_per_prompt=32
+  train_global_batch_size=2048
+  max_steps=20
+
+  3118323 baseline
+    job_name=qwen3-8b-qwen3-8b-baseline-publichf-target-N1xG4
+    log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3118323.out
+
+  3118324 SpecDec K=3, request-gated long-tail
+    job_name=qwen3-8b-qwen3-8b-publichf-eagle3-k3-req8-N1xG4
+    method=eagle3
+    num_speculative_tokens=3
+    request_gate_threshold=8
+    token_gate_threshold=4096
+    drafter=RedHatAI/Qwen3-8B-speculator.eagle3
+    log=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL/slurm-3118324.out
+
