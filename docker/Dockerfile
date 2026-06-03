@@ -277,6 +277,8 @@ ENV VLLM_PRECOMPILED_WHEEL_LOCATION=${BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATI
 LABEL com.nvidia.build.id="${NVIDIA_BUILD_ID}"
 LABEL com.nvidia.build.ref="${NVIDIA_BUILD_REF}"
 
+RUN bash tools/postbuild_container_smoke.sh
+
 # Generate container fingerprint for frozen environment support
 # Store outside /opt/nemo-rl to avoid being overwritten by user mounts
 RUN python tools/generate_fingerprint.py > /opt/nemo_rl_container_fingerprint

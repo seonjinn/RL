@@ -15,6 +15,7 @@
 import os
 import time
 import warnings
+from datetime import timedelta
 from inspect import signature
 from typing import Any, Optional, TypeVar
 
@@ -293,7 +294,20 @@ def destroy_parallel_state():
         pass
 
 
-def setup_distributed() -> None:
+def _current_cuda_device() -> Optional[torch.device]:
+    if not torch.cuda.is_available():
+        return None
+    return torch.device("cuda", torch.cuda.current_device())
+
+
+def _barrier_kwargs() -> dict[str, Any]:
+    device = _current_cuda_device()
+    if device is None:
+        return {}
+    return {"device_ids": [device.index]}
+
+
+def setup_distributed(config: Optional[PolicyConfig] = None) -> None:
     """Handle NCCL settings, dtype mapping, and basic config setup."""
     # Disable dynamo autotune_local_cache to avoid crash when there's already a cache
     # with different order of node_bundles
@@ -301,7 +315,22 @@ def setup_distributed() -> None:
     # Ensure clean slate before import
     destroy_parallel_state()
     # Need to initialize the process group before calling into Megatron-Bridge, otherwise Megatron-Bridge will try to set an incorrect device
-    torch.distributed.init_process_group("nccl")
+    init_kwargs: dict[str, Any] = {}
+    if config is not None:
+        timeout_minutes = config.get("megatron_cfg", {}).get(
+            "distributed_timeout_minutes"
+        )
+        if timeout_minutes is not None:
+            init_kwargs["timeout"] = timedelta(minutes=float(timeout_minutes))
+
+    device = _current_cuda_device()
+    if (
+        device is not None
+        and "device_id" in signature(torch.distributed.init_process_group).parameters
+    ):
+        init_kwargs["device_id"] = device
+
+    torch.distributed.init_process_group("nccl", **init_kwargs)
 
 
 def validate_and_set_config(
@@ -373,11 +402,13 @@ def validate_model_paths(config: PolicyConfig) -> tuple[str, str, bool]:
         hf_model_subdir = f"model_{hf_model_subdir.replace('/', '_')}"
 
     pretrained_path = f"{get_megatron_checkpoint_dir()}/{hf_model_subdir}"
-    pt_checkpoint_exists = os.path.exists(pretrained_path) and os.path.exists(
-        os.path.join(pretrained_path, "iter_0000000")
-    )
+    pt_checkpoint_exists = os.path.exists(_pretrained_run_config_path(pretrained_path))
 
     return hf_model_name, pretrained_path, pt_checkpoint_exists
+
+
+def _pretrained_run_config_path(pretrained_path: str) -> str:
+    return os.path.join(pretrained_path, "iter_0000000/run_config.yaml")
 
 
 def setup_model_config(
@@ -390,9 +421,7 @@ def setup_model_config(
 ) -> tuple[ConfigContainer, Any]:
     """Handle all the model configuration logic."""
     # Load pretrained run config
-    pretrained_run_config = os.path.join(
-        pretrained_path, "iter_0000000/run_config.yaml"
-    )
+    pretrained_run_config = _pretrained_run_config_path(pretrained_path)
 
     if not os.path.exists(pretrained_run_config):
         raise FileNotFoundError(
@@ -879,6 +908,14 @@ def _create_megatron_config(
 ) -> ConfigContainer:
     """Create the final Megatron configuration container."""
     dist_cfg = DistributedInitConfig()
+    if "distributed_timeout_minutes" in config["megatron_cfg"]:
+        dist_cfg.distributed_timeout_minutes = config["megatron_cfg"][
+            "distributed_timeout_minutes"
+        ]
+    if "distributed_timeout_seconds_after_init" in config["megatron_cfg"]:
+        dist_cfg.distributed_timeout_seconds_after_init = config["megatron_cfg"][
+            "distributed_timeout_seconds_after_init"
+        ]
     if "use_gloo_process_groups" in config["megatron_cfg"]:
         dist_cfg.use_gloo_process_groups = config["megatron_cfg"][
             "use_gloo_process_groups"
@@ -1151,9 +1188,14 @@ def handle_model_import(
     pt_checkpoint_exists: bool,
 ) -> None:
     """Handle HF model import if checkpoint doesn't exist."""
+    rank = (
+        torch.distributed.get_rank()
+        if torch.distributed.is_available() and torch.distributed.is_initialized()
+        else 0
+    )
     if pt_checkpoint_exists:
         print(f"Checkpoint already exists at {pretrained_path}. Skipping import.")
-    else:
+    elif rank == 0:
         hf_config_overrides = config.get("hf_config_overrides", {}) or {}
         import_model_from_hf_name(
             hf_model_name,
@@ -1165,6 +1207,17 @@ def handle_model_import(
         if parallel_state.model_parallel_is_initialized():
             print("Reinitializing model parallel after loading model state.")
             parallel_state.destroy_model_parallel()
+    else:
+        print(f"Waiting for rank 0 to import checkpoint at {pretrained_path}.")
+
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.barrier(**_barrier_kwargs())
+
+    pretrained_run_config = _pretrained_run_config_path(pretrained_path)
+    if not os.path.exists(pretrained_run_config):
+        raise FileNotFoundError(
+            f"Pretrained run config not found after import barrier at {pretrained_run_config} on rank={rank}."
+        )
 
 
 def setup_reference_model_state(

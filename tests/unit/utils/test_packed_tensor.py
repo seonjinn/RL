@@ -56,6 +56,7 @@ def create_mock_model_params():
     params = [
         ("layer1.weight", torch.randn(10, 20, dtype=torch.float32)),
         ("layer1.bias", torch.randn(10, dtype=torch.float32)),
+        ("scalar_step", torch.tensor(0, dtype=torch.long)),
         ("layer2.weight", torch.randn(20, 30, dtype=torch.float32)),
         ("layer2.bias", torch.randn(20, dtype=torch.float32)),
         ("layer3.weight", torch.randn(30, 40, dtype=torch.float16)),

@@ -460,6 +460,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
 
         from fastapi import Request
         from fastapi.responses import JSONResponse, StreamingResponse
+        from vllm.entrypoints.chat_utils import load_chat_template
         from vllm.entrypoints.openai.chat_completion.protocol import (
             ChatCompletionRequest,
             ChatCompletionResponse,
@@ -665,6 +666,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         serving_chat_kwargs = serving_chat_default_kwargs | self.cfg["vllm_cfg"].get(
             "http_server_serving_chat_kwargs", dict()
         )
+        serving_chat_kwargs["chat_template"] = load_chat_template(serving_chat_kwargs["chat_template"])
         serving_chat_kwargs.update(
             dict(
                 engine_client=engine_client,
@@ -672,6 +674,18 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 return_tokens_as_token_ids=True,
             )
         )
+
+        # vLLM's resolve_chat_template passes the string directly to
+        # tokenizer.get_chat_template which does NOT handle file paths.
+        # We must load the file ourselves so the serving layer receives
+        # actual Jinja content instead of a filesystem path.
+        _ct = serving_chat_kwargs.get("chat_template")
+        if isinstance(_ct, str) and not any(c in _ct for c in "{}\n"):
+            from vllm.entrypoints.chat_utils import load_chat_template
+
+            loaded = load_chat_template(_ct)
+            if loaded is not None:
+                serving_chat_kwargs["chat_template"] = loaded
 
         # Load custom reasoning parser plugin if specified
         reasoning_parser_plugin = serving_chat_kwargs.pop("reasoning_parser_plugin", None)
@@ -1310,6 +1324,11 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
         """Async version of prepare_refit_info."""
         await self.llm.collective_rpc("prepare_refit_info", args=(state_dict_info,))
 
+    async def _invalidate_mm_cache_after_refit(self) -> None:
+        """Reset per-worker multimodal cache after weight/sleep-wake boundaries."""
+        if self.llm is not None:
+            await self.llm.reset_mm_cache()
+
     async def update_weights_via_ipc_zmq_async(
         self,
     ) -> bool:
@@ -1342,6 +1361,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                     f"Error: Worker failed to update weights. Result: {exceptions_or_none}"
                 )
                 return False
+            await self._invalidate_mm_cache_after_refit()
             return True
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
@@ -1379,6 +1399,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                     f"Error: Worker failed to update weights. Result: {exceptions_or_none}"
                 )
                 return False
+            await self._invalidate_mm_cache_after_refit()
             return True
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
@@ -1438,6 +1459,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
             wake_up_args["tags"] = tags
 
         await self.llm.wake_up(**wake_up_args)
+        await self._invalidate_mm_cache_after_refit()
 
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""

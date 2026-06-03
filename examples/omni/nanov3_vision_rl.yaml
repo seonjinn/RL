@@ -183,6 +183,11 @@ policy:
       async_engine: false
       kv_cache_dtype: auto
       precision: ${policy.precision}
+      # CRITICAL: load_format=auto makes vLLM load real weights from disk
+      # at init time. With the default "dummy", vLLM's HTTP serving layer
+      # initializes multimodal/processor components that hold parameters/buffers
+      # not covered by Megatron's refit, corrupting image-conditioned generation.
+      load_format: auto
       tensor_parallel_size: 2
       pipeline_parallel_size: 1
       expert_parallel_size: 1

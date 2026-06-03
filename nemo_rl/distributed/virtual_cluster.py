@@ -235,12 +235,19 @@ def init_ray(log_dir: Optional[str] = None) -> None:
             logger.info(f"Connected to existing Ray cluster: {cluster_res}")
             return
 
+    except RuntimeError as e:
+        if "Version mismatch:" not in str(e):
+            raise
+        logger.warning(
+            "Existing Ray cluster has an incompatible Ray/Python version. "
+            "Starting a new local cluster..."
+        )
+        ray.shutdown()
     except ConnectionError:
         logger.debug("No existing Ray cluster found, will start a new one.")
         # If ConnectionError, proceed to start a new local cluster without further action here.
         # Clear driver-side package cache so working_dir is re-uploaded
         ray.shutdown()
-        pass
 
     # Start a brand-new local cluster
     # Reuse `runtime_env` but drop `working_dir` to avoid packaging the whole repo (prevents ray OSError: Failed to download runtime_env file package issue)

@@ -149,18 +149,29 @@ def model_forward(
 def apply_temperature_scaling(
     logits: torch.Tensor,
     cfg: PolicyConfig,
+    force: bool = False,
 ) -> torch.Tensor:
     """Apply temperature scaling to logits.
 
     Args:
         logits: Logits tensor to scale
         cfg: Policy configuration containing generation settings
+        force: Apply temperature scaling even when vLLM is configured to return
+            raw, pre-temperature logprobs. This is correct for the loss forward,
+            which should optimize the temperature-scaled sampling distribution.
+            Rollout-side logprob recomputation leaves this False so
+            ``prev_logprobs`` matches vLLM ``generation_logprobs`` in
+            raw-logprobs mode.
 
     Returns:
         torch.Tensor: Temperature-scaled logits
     """
     if "generation" in cfg and cfg["generation"] is not None:
         temperature = cfg["generation"]["temperature"]
+        vllm_cfg = cfg["generation"].get("vllm_cfg") or {}
+        logprobs_mode = vllm_cfg.get("logprobs_mode", "processed_logprobs")
+        if not force and logprobs_mode in ("raw_logprobs", "raw_logits"):
+            return logits
         if temperature is not None and temperature > 0:
             logits.div_(temperature)
     return logits
@@ -276,11 +287,17 @@ def forward_with_post_processing_fn(
         if processed_mb.original_input_lengths is not None:
             data_dict["input_lengths"] = processed_mb.original_input_lengths
 
-    # Apply temperature scaling only for sampling-oriented post-processors.
-    # Loss computation should use unscaled logits.
-    if isinstance(
+    # Temperature scaling of the forward logits.
+    #
+    # LossPostProcessor is the training/loss forward, so it always scales by
+    # the sampling temperature. Logprobs/Topk are rollout-side recomputation
+    # paths; they respect raw_logprobs/raw_logits mode so prev_logprobs match
+    # vLLM's generation_logprobs.
+    if isinstance(post_processing_fn, LossPostProcessor):
+        apply_temperature_scaling(output_tensor, cfg, force=True)
+    elif isinstance(
         post_processing_fn,
-        (LossPostProcessor, LogprobsPostProcessor, TopkLogitsPostProcessor),
+        (LogprobsPostProcessor, TopkLogitsPostProcessor),
     ):
         apply_temperature_scaling(output_tensor, cfg)
 

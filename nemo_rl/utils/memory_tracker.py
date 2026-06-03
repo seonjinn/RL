@@ -19,6 +19,13 @@ from pydantic import BaseModel, Field
 from ray.scripts.scripts import memory_summary
 
 
+def _safe_ray_memory_summary() -> str:
+    try:
+        return memory_summary(stats_only=True, num_entries=5)
+    except Exception as exc:
+        return f"Unavailable ({type(exc).__name__}: {exc})"
+
+
 class MemoryTrackerDataPoint(BaseModel):
     stage: str
     memory_used_before_stage_gb: float
@@ -40,7 +47,9 @@ class MemoryTrackerDataPoint(BaseModel):
         ]
 
     def get_snapshot_str(self) -> str:
-        ray_memory_summary = memory_summary(stats_only=True, num_entries=5)
+        # Ray memory inspection is diagnostic; do not let transient RPC failures
+        # terminate training.
+        ray_memory_summary = _safe_ray_memory_summary()
         return f"""💭 Driver CPU memory tracker for {self.stage}:
 - Mem usage before                  {self.memory_used_before_stage_gb:>7.2f} GB
 - Mem usage after                   {self.memory_used_after_stage_gb:>7.2f} GB

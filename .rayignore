@@ -1,0 +1,8 @@
+3rdparty/
+.git/
+.venv/
+debug_results/
+__pycache__/
+*.egg-info/
+*_logs/
+logs/

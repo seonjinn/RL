@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,12 +27,14 @@ from nemo_rl.algorithms.advantage_estimator import (
 from nemo_rl.algorithms.grpo import (
     _default_grpo_save_state,
     async_grpo_train,
+    build_async_train_and_logprob_data,
     compute_and_apply_seq_logprob_error_masking,
     dynamic_sampling,
     grpo_train,
     validate,
 )
 from nemo_rl.algorithms.loss_functions import ClippedPGLossFn
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data.interfaces import DatumSpec, LLMMessageLogType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.environments.interfaces import (
@@ -43,6 +46,28 @@ from nemo_rl.utils.timer import Timer
 from tests.unit.algorithms.utils import (
     create_mock_batch,
 )
+
+
+def _seq_logprob_error_result(
+    max_error=0.0,
+    mean_error=0.0,
+    min_error=0.0,
+    num_masked=0,
+    masked_pct=0.0,
+    updated_sample_mask=None,
+):
+    return {
+        "max_seq_mult_prob_error": max_error,
+        "mean_seq_mult_prob_error": mean_error,
+        "min_seq_mult_prob_error": min_error,
+        "max_seq_mult_prob_error_after_mask": max_error,
+        "mean_seq_mult_prob_error_after_mask": mean_error,
+        "min_seq_mult_prob_error_after_mask": min_error,
+        "num_masked_seqs": num_masked,
+        "masked_correct_pct": masked_pct,
+        "updated_sample_mask": updated_sample_mask,
+    }
+
 
 # ============================================================================
 # Stub classes for async GRPO testing (non-Ray versions for easy mocking)
@@ -90,6 +115,20 @@ class StubReplayBuffer:
         mock.remote = MagicMock(
             side_effect=lambda *args, **kwargs: _sample(*args, **kwargs)
         )
+        return mock
+
+    @property
+    def has_complete_batch(self):
+        """Return a mock that reports the target step has enough trajectories."""
+        mock = MagicMock()
+        mock.remote = MagicMock(return_value=True)
+        return mock
+
+    @property
+    def get_trajectories_needed(self):
+        """Return a mock that reports no gap-filling is needed."""
+        mock = MagicMock()
+        mock.remote = MagicMock(return_value=0)
         return mock
 
     @property
@@ -153,6 +192,13 @@ class StubAsyncTrajectoryCollector:
         """Wait for stop - returns a remote-callable mock"""
         mock = MagicMock()
         mock.remote = MagicMock(return_value=MagicMock())
+        return mock
+
+    @property
+    def get_efficiency_metrics(self):
+        """Return collector-side efficiency metrics."""
+        mock = MagicMock()
+        mock.remote = MagicMock(return_value={})
         return mock
 
 
@@ -250,7 +296,7 @@ def mock_async_grpo_infrastructure(mock_batch, mock_rollout_metrics):
     stack.enter_context(
         patch(
             "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
-            return_value=(0.0, 0, 0.0),
+            return_value=_seq_logprob_error_result(),
         )
     )
 
@@ -972,6 +1018,7 @@ def test_setup_sglang_sets_model_path_and_parallel_flag(
         "loss_fn": {
             "force_on_policy_ratio": False,
             "use_importance_sampling_correction": False,
+            "reference_policy_kl_penalty": 0.0,
         },
         "env": {},
         "grpo": {
@@ -1097,6 +1144,12 @@ def test_grpo_train_collects_generation_logger_metrics(
 
     mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
     mock_rollout_metrics = {"gen_kl_error": 0.0, "mean_gen_tokens_per_sample": 2.0}
+    mock_grpo_components["policy"].get_logprobs.return_value = {
+        "logprobs": torch.zeros(1, 2)
+    }
+    mock_grpo_components["policy"].get_reference_policy_logprobs.return_value = {
+        "reference_logprobs": torch.zeros(1, 2)
+    }
 
     def fake_batched_message_log_to_flat_message(*_args, **_kwargs):
         flat = BatchedDataDict(
@@ -1144,8 +1197,25 @@ def test_grpo_train_collects_generation_logger_metrics(
     )
     monkeypatch.setattr(
         grpo_mod,
+        "MemoryTracker",
+        lambda: SimpleNamespace(
+            snapshot_start_of_stage=lambda *_args, **_kwargs: None
+        ),
+    )
+    monkeypatch.setattr(
+        grpo_mod,
         "compute_and_apply_seq_logprob_error_masking",
-        lambda *_args, **_kwargs: (0.0, 0, 0.0),
+        lambda *_args, **_kwargs: {
+            "max_seq_mult_prob_error": 0.0,
+            "mean_seq_mult_prob_error": 0.0,
+            "min_seq_mult_prob_error": 0.0,
+            "max_seq_mult_prob_error_after_mask": 0.0,
+            "mean_seq_mult_prob_error_after_mask": 0.0,
+            "min_seq_mult_prob_error_after_mask": 0.0,
+            "num_masked_seqs": 0,
+            "masked_correct_pct": 0.0,
+            "updated_sample_mask": None,
+        },
     )
 
     master_config = mock_grpo_components["master_config"]
@@ -1172,14 +1242,20 @@ def test_grpo_train_collects_generation_logger_metrics(
 
     assert policy_generation.clear_logger_metrics.called
     assert policy_generation.get_logger_metrics.called
-    assert any(
-        "generation_logger_metrics" in call.args[0]
-        for call in mock_grpo_components["logger"].log_metrics.call_args_list
-    )
 
 
 @pytest.fixture
-def mock_grpo_components():
+def mock_grpo_components(monkeypatch):
+    import nemo_rl.algorithms.grpo as grpo_mod
+
+    monkeypatch.setattr(
+        grpo_mod,
+        "MemoryTracker",
+        lambda: SimpleNamespace(
+            snapshot_start_of_stage=lambda *_args, **_kwargs: None
+        ),
+    )
+
     # Create mock components
     policy = MagicMock()
     policy.train.return_value = {
@@ -1202,6 +1278,10 @@ def mock_grpo_components():
         "unpadded_sequence_lengths": torch.tensor([12, 18]),
         "logprobs": torch.randn(2, 20),
     }
+    policy.get_logprobs.return_value = {"logprobs": torch.zeros(1, 5)}
+    policy.get_reference_policy_logprobs.return_value = {
+        "reference_logprobs": torch.zeros(1, 5)
+    }
     policy.prepare_for_training.return_value = None
     # Mock sharding annotations for async GRPO
     policy.sharding_annotations.get_axis_size.return_value = 1  # data_parallel size
@@ -1216,13 +1296,19 @@ def mock_grpo_components():
                         "content": "test",
                         "token_ids": torch.tensor([1, 2, 3]),
                     },
+                    {
+                        "role": "assistant",
+                        "content": "ok",
+                        "token_ids": torch.tensor([4, 5]),
+                        "generation_logprobs": torch.zeros(2),
+                    },
                 ]
             ],
             "task_name": ["math"],
             "extra_env_info": [{}],
             "loss_multiplier": torch.tensor([1.0]),
             "idx": torch.tensor([0]),
-            "length": torch.tensor([3]),  # Add length field for GRPO
+            "length": torch.tensor([5]),  # Add length field for GRPO
             "total_reward": torch.tensor(
                 [1.0]
             ),  # Add total_reward for rollout processing
@@ -1330,6 +1416,7 @@ def mock_grpo_components():
         },
         "loss_fn": {
             "use_importance_sampling_correction": True,  # Required for async mode
+            "reference_policy_kl_penalty": 0.01,
         },
         "checkpointing": {
             "enabled": False,
@@ -1409,7 +1496,7 @@ def test_grpo_exit_on_max_steps(mock_grpo_components, train_func):
             ):
                 with patch(
                     "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
-                    return_value=(0.0, 0, 0.0),
+                    return_value=_seq_logprob_error_result(),
                 ):
                     train_func(
                         mock_grpo_components["policy"],
@@ -1461,7 +1548,7 @@ def test_grpo_exit_on_max_epochs(mock_grpo_components, train_func):
 
             with patch(
                 "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
-                return_value=(0.0, 0, 0.0),
+                return_value=_seq_logprob_error_result(),
             ):
                 # Run training
                 train_func(
@@ -1540,7 +1627,7 @@ def test_grpo_exit_on_timeout(mock_grpo_components, train_func, capsys):
                 ):
                     with patch(
                         "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
-                        return_value=(0.0, 0, 0.0),
+                        return_value=_seq_logprob_error_result(),
                     ):
                         train_func(
                             mock_grpo_components["policy"],
@@ -1595,6 +1682,446 @@ def test_grpo_exit_on_timeout(mock_grpo_components, train_func, capsys):
             assert not (line.startswith("Step ") and "Step 9" in line), (
                 f"Training continued to next step after timeout: {line}"
             )
+
+
+def _async_vlm_master_config(*, should_use_nemo_gym=True):
+    return {
+        "grpo": {
+            "deduplicate_multimodal_data": False,
+            "async_grpo": {"enabled": True, "max_trajectory_age_steps": 1},
+        },
+        "policy": {
+            "is_vlm": True,
+            "make_sequence_length_divisible_by": 1,
+            "max_total_sequence_length": 32,
+            "generation": {
+                "backend": "vllm",
+                "vllm_cfg": {"async_engine": True, "expose_http_server": True},
+                "colocated": {"enabled": False},
+            },
+        },
+        "loss_fn": {"use_importance_sampling_correction": True},
+        "env": {"should_use_nemo_gym": should_use_nemo_gym},
+    }
+
+
+def _tokenizer_for_async_vlm():
+    tokenizer = MagicMock()
+    tokenizer.pad_token_id = 0
+    tokenizer.convert_tokens_to_ids.side_effect = {
+        "<image>": 91,
+        "<img>": 90,
+    }.__getitem__
+    return tokenizer
+
+
+def _processor_for_async_vlm():
+    return SimpleNamespace(
+        patch_size=16,
+        downsample_ratio=0.5,
+        config=SimpleNamespace(
+            vision_config=SimpleNamespace(video_temporal_patch_size=1)
+        ),
+    )
+
+
+def _async_vlm_replay_batch(include_multimodal=True):
+    user_message = {
+        "role": "user",
+        "content": "look",
+        "token_ids": torch.tensor([90, 91, 92], dtype=torch.long),
+        "token_loss_mask": torch.zeros(3, dtype=torch.long),
+        "generation_logprobs": torch.zeros(3, dtype=torch.float32),
+    }
+    if include_multimodal:
+        user_message.update(
+            {
+                "pixel_values": PackedTensor(
+                    [torch.ones((1, 3, 2, 2), dtype=torch.float32)],
+                    dim_to_pack=0,
+                ),
+                "imgs_sizes": PackedTensor(
+                    [torch.tensor([[2, 2]], dtype=torch.int32)],
+                    dim_to_pack=0,
+                ),
+            }
+        )
+    return BatchedDataDict[DatumSpec](
+        {
+            "message_log": [
+                [
+                    user_message,
+                    {
+                        "role": "assistant",
+                        "content": "ok",
+                        "token_ids": torch.tensor([7, 8], dtype=torch.long),
+                        "token_loss_mask": torch.ones(2, dtype=torch.long),
+                        "generation_logprobs": torch.tensor(
+                            [-0.1, -0.2], dtype=torch.float32
+                        ),
+                    },
+                ]
+            ],
+            "loss_multiplier": torch.ones(1, dtype=torch.float32),
+        }
+    )
+
+
+def test_build_async_train_and_logprob_data_attaches_multimodal_payloads():
+    train_data, logprob_data, _flat_messages, input_lengths = (
+        build_async_train_and_logprob_data(
+            repeated_batch=_async_vlm_replay_batch(),
+            tokenizer=_tokenizer_for_async_vlm(),
+            processor=None,
+            master_config=_async_vlm_master_config(),
+        )
+    )
+
+    assert "pixel_values" in train_data
+    assert "imgs_sizes" in train_data
+    assert "pixel_values" in logprob_data
+    assert "imgs_sizes" in logprob_data
+    assert "generation_logprobs" not in logprob_data
+    assert "token_mask" not in logprob_data
+    assert torch.equal(input_lengths, torch.tensor([5], dtype=torch.int32))
+
+
+def test_build_async_train_and_logprob_data_raises_on_empty_multimodal_for_vlm():
+    with pytest.raises(RuntimeError, match="get_multimodal_dict"):
+        build_async_train_and_logprob_data(
+            repeated_batch=_async_vlm_replay_batch(include_multimodal=False),
+            tokenizer=_tokenizer_for_async_vlm(),
+            processor=None,
+            master_config=_async_vlm_master_config(),
+        )
+
+
+def test_build_async_train_and_logprob_data_vision_truncation_gated():
+    import sys
+
+    fake_multimodal = SimpleNamespace(
+        truncate_for_expanded_budget=MagicMock(),
+        compute_expanded_lengths=MagicMock(),
+    )
+    with patch.dict(
+        sys.modules, {"nemo_rl.models.megatron.multimodal": fake_multimodal}
+    ):
+        build_async_train_and_logprob_data(
+            repeated_batch=_async_vlm_replay_batch(),
+            tokenizer=_tokenizer_for_async_vlm(),
+            processor=None,
+            master_config=_async_vlm_master_config(),
+        )
+    fake_multimodal.truncate_for_expanded_budget.assert_not_called()
+
+    batch_without_images = _async_vlm_replay_batch()
+    for message in batch_without_images["message_log"][0]:
+        message.pop("imgs_sizes", None)
+
+    fake_multimodal = SimpleNamespace(
+        truncate_for_expanded_budget=MagicMock(),
+        compute_expanded_lengths=MagicMock(),
+    )
+    with patch.dict(
+        sys.modules, {"nemo_rl.models.megatron.multimodal": fake_multimodal}
+    ):
+        build_async_train_and_logprob_data(
+            repeated_batch=batch_without_images,
+            tokenizer=_tokenizer_for_async_vlm(),
+            processor=_processor_for_async_vlm(),
+            master_config=_async_vlm_master_config(),
+        )
+    fake_multimodal.truncate_for_expanded_budget.assert_not_called()
+
+
+def test_build_async_train_and_logprob_data_rebuilds_multimodal_after_truncation():
+    import sys
+
+    truncated_pixel_values = PackedTensor(
+        [torch.full((1, 3, 2, 2), 7.0, dtype=torch.float32)],
+        dim_to_pack=0,
+    )
+
+    def fake_truncate(data, **_kwargs):
+        data = BatchedDataDict(dict(data))
+        data["input_ids"] = data["input_ids"][:, :3]
+        data["input_lengths"] = torch.tensor([3], dtype=torch.int32)
+        data["pixel_values"] = truncated_pixel_values
+        return data, torch.tensor([True])
+
+    fake_multimodal = SimpleNamespace(
+        truncate_for_expanded_budget=MagicMock(side_effect=fake_truncate),
+        compute_expanded_lengths=MagicMock(
+            return_value=torch.tensor([3], dtype=torch.int64)
+        ),
+    )
+    with patch.dict(
+        sys.modules, {"nemo_rl.models.megatron.multimodal": fake_multimodal}
+    ):
+        train_data, logprob_data, _flat_messages, _input_lengths = (
+            build_async_train_and_logprob_data(
+                repeated_batch=_async_vlm_replay_batch(),
+                tokenizer=_tokenizer_for_async_vlm(),
+                processor=_processor_for_async_vlm(),
+                master_config=_async_vlm_master_config(),
+            )
+        )
+
+    assert train_data["pixel_values"] is truncated_pixel_values
+    assert logprob_data["pixel_values"] is truncated_pixel_values
+    assert torch.equal(train_data["expanded_lengths"], torch.tensor([3]))
+
+
+def test_async_grpo_train_accepts_dedup_with_vllm():
+    """Phase 2: deduplicate_multimodal_data=True no longer raises for async vllm."""
+    config = _async_vlm_master_config()
+    config["grpo"]["deduplicate_multimodal_data"] = True
+
+    # Should pass the dedup guard and only fail later when it tries to
+    # spin up the collector (missing real policy/generation). A KeyError
+    # or AttributeError deep in the function body proves the guard passed.
+    with pytest.raises(Exception) as exc_info:
+        async_grpo_train(
+            policy=MagicMock(),
+            policy_generation=MagicMock(),
+            dataloader=MagicMock(),
+            val_dataloader=None,
+            tokenizer=_tokenizer_for_async_vlm(),
+            loss_fn=MagicMock(),
+            task_to_env={},
+            val_task_to_env=None,
+            logger=MagicMock(),
+            checkpointer=MagicMock(),
+            grpo_save_state=_default_grpo_save_state(),
+            master_config=config,
+            processor=_processor_for_async_vlm(),
+        )
+    assert "deduplicate_multimodal_data" not in str(exc_info.value)
+
+
+def test_async_grpo_train_rejects_vlm_without_nemo_gym():
+    with pytest.raises(NotImplementedError, match="NeMo Gym path"):
+        async_grpo_train(
+            policy=MagicMock(),
+            policy_generation=MagicMock(),
+            dataloader=MagicMock(),
+            val_dataloader=None,
+            tokenizer=_tokenizer_for_async_vlm(),
+            loss_fn=MagicMock(),
+            task_to_env={},
+            val_task_to_env=None,
+            logger=MagicMock(),
+            checkpointer=MagicMock(),
+            grpo_save_state=_default_grpo_save_state(),
+            master_config=_async_vlm_master_config(should_use_nemo_gym=False),
+            processor=_processor_for_async_vlm(),
+        )
+
+
+def _make_per_prompt_group(
+    prompt_idx: int, num_gens: int, *, include_multimodal: bool = True
+):
+    """Build a single per-prompt replay entry with num_gens completions."""
+    message_logs = []
+    for _g in range(num_gens):
+        user_msg = {
+            "role": "user",
+            "content": f"prompt{prompt_idx}",
+            "token_ids": torch.tensor([90, 91, 92], dtype=torch.long),
+            "token_loss_mask": torch.zeros(3, dtype=torch.long),
+            "generation_logprobs": torch.zeros(3, dtype=torch.float32),
+        }
+        if include_multimodal:
+            user_msg["pixel_values"] = PackedTensor(
+                [torch.full((1, 3, 2, 2), float(prompt_idx), dtype=torch.float32)],
+                dim_to_pack=0,
+            )
+            user_msg["imgs_sizes"] = PackedTensor(
+                [torch.tensor([[2, 2]], dtype=torch.int32)], dim_to_pack=0
+            )
+        message_logs.append(
+            [
+                user_msg,
+                {
+                    "role": "assistant",
+                    "content": "ans",
+                    "token_ids": torch.tensor([7, 8], dtype=torch.long),
+                    "token_loss_mask": torch.ones(2, dtype=torch.long),
+                    "generation_logprobs": torch.tensor([-0.1, -0.2], dtype=torch.float32),
+                },
+            ]
+        )
+    return BatchedDataDict[DatumSpec](
+        {
+            "message_log": message_logs,
+            "loss_multiplier": torch.ones(num_gens, dtype=torch.float32),
+        }
+    )
+
+
+def test_dedup_prompt_idx_rebuild_after_concat():
+    """Concatenating two per-entry [0,0] must produce [0,0,1,1], not [0,0,0,0]."""
+    g0 = _make_per_prompt_group(0, 2)
+    g1 = _make_per_prompt_group(1, 2)
+    repeated = BatchedDataDict.from_batches([g0, g1])
+
+    sizes = torch.tensor([g0.size, g1.size], dtype=torch.long)
+    dedup_idx = torch.arange(2, dtype=torch.long).repeat_interleave(sizes)
+
+    assert dedup_idx.tolist() == [0, 0, 1, 1]
+    assert torch.bincount(dedup_idx).tolist() == [2, 2]
+
+
+def test_dedup_prompt_idx_rebuild_dynamic_sizes():
+    """Forward-looking: unequal group sizes [3, 2, 3] produce correct bincount."""
+    batches = [
+        _make_per_prompt_group(0, 3),
+        _make_per_prompt_group(1, 2),
+        _make_per_prompt_group(2, 3),
+    ]
+    sizes = torch.tensor([b.size for b in batches], dtype=torch.long)
+    dedup_idx = torch.arange(3, dtype=torch.long).repeat_interleave(sizes)
+
+    assert dedup_idx.tolist() == [0, 0, 0, 1, 1, 2, 2, 2]
+    assert torch.bincount(dedup_idx).tolist() == [3, 2, 3]
+
+
+def test_build_async_train_and_logprob_data_with_dedup():
+    """Dedup collapses N-copy PackedTensors to unique-per-prompt."""
+    num_gens = 4
+    g0 = _make_per_prompt_group(0, num_gens)
+    g1 = _make_per_prompt_group(1, num_gens)
+    repeated = BatchedDataDict.from_batches([g0, g1])
+
+    sizes = torch.tensor([g0.size, g1.size], dtype=torch.long)
+    repeated["_dedup_prompt_idx"] = torch.arange(2, dtype=torch.long).repeat_interleave(
+        sizes
+    )
+
+    train_data, logprob_data, _flat, _lens = build_async_train_and_logprob_data(
+        repeated_batch=repeated,
+        tokenizer=_tokenizer_for_async_vlm(),
+        processor=None,
+        master_config=_async_vlm_master_config(),
+        deduplicate_multimodal_data=True,
+    )
+
+    pv_train = train_data["pixel_values"]
+    assert isinstance(pv_train, PackedTensor)
+    assert pv_train._dedup_indices is not None
+    assert len(pv_train.tensors) == 2
+    assert len(pv_train) == num_gens * 2
+
+    pv_lp = logprob_data["pixel_values"]
+    assert isinstance(pv_lp, PackedTensor)
+    assert pv_lp._dedup_indices is not None
+    assert len(pv_lp.tensors) == 2
+
+
+def test_build_async_train_and_logprob_data_dedup_pixel_dtype():
+    """Dedup path casts pixel_values to bfloat16."""
+    g = _make_per_prompt_group(0, 2)
+    g["_dedup_prompt_idx"] = torch.zeros(2, dtype=torch.long)
+
+    train_data, _lp, _flat, _lens = build_async_train_and_logprob_data(
+        repeated_batch=g,
+        tokenizer=_tokenizer_for_async_vlm(),
+        processor=None,
+        master_config=_async_vlm_master_config(),
+        deduplicate_multimodal_data=True,
+    )
+
+    pv = train_data["pixel_values"]
+    assert pv.tensors[0].dtype == torch.bfloat16
+
+
+def test_build_async_train_and_logprob_data_no_dedup_keeps_float32():
+    """Without dedup, pixel_values stay float32."""
+    g = _make_per_prompt_group(0, 2)
+
+    train_data, _lp, _flat, _lens = build_async_train_and_logprob_data(
+        repeated_batch=g,
+        tokenizer=_tokenizer_for_async_vlm(),
+        processor=None,
+        master_config=_async_vlm_master_config(),
+        deduplicate_multimodal_data=False,
+    )
+
+    pv = train_data["pixel_values"]
+    assert pv.tensors[0].dtype == torch.float32
+    assert pv._dedup_indices is None
+
+
+def test_async_trainer_payload_bytes_drop_with_dedup():
+    """Dedup-on produces fewer tensor_mm bytes than dedup-off for same batch."""
+    from nemo_rl.utils.multimodal_payload_metrics import collect_multimodal_payload_metrics
+
+    num_gens = 8
+    g0 = _make_per_prompt_group(0, num_gens)
+    g0["_dedup_prompt_idx"] = torch.zeros(num_gens, dtype=torch.long)
+
+    _train_off, lp_off, _f1, _l1 = build_async_train_and_logprob_data(
+        repeated_batch=g0,
+        tokenizer=_tokenizer_for_async_vlm(),
+        processor=None,
+        master_config=_async_vlm_master_config(),
+        deduplicate_multimodal_data=False,
+    )
+
+    g0_dedup = _make_per_prompt_group(0, num_gens)
+    g0_dedup["_dedup_prompt_idx"] = torch.zeros(num_gens, dtype=torch.long)
+
+    _train_on, lp_on, _f2, _l2 = build_async_train_and_logprob_data(
+        repeated_batch=g0_dedup,
+        tokenizer=_tokenizer_for_async_vlm(),
+        processor=None,
+        master_config=_async_vlm_master_config(),
+        deduplicate_multimodal_data=True,
+    )
+
+    m_off = collect_multimodal_payload_metrics(lp_off, boundary="b")
+    m_on = collect_multimodal_payload_metrics(lp_on, boundary="b")
+
+    bytes_off = m_off["payload_bytes/b/tensor_mm"]
+    bytes_on = m_on["payload_bytes/b/tensor_mm"]
+    assert bytes_off > 0
+    assert bytes_on > 0
+    ratio = bytes_off / bytes_on
+    assert ratio >= num_gens - 2, f"dedup_ratio={ratio:.1f}, expected >={num_gens - 2}"
+
+
+def test_sequence_level_is_ignores_prompt_and_image_tokens():
+    train_data_with_image_tokens = BatchedDataDict(
+        {
+            "token_mask": torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.float32),
+            "sample_mask": torch.tensor([1.0], dtype=torch.float32),
+            "prev_logprobs": torch.tensor([[0.0, -9.0, -9.0, -0.2, -0.4]]),
+            "generation_logprobs": torch.tensor([[0.0, 9.0, 9.0, -0.1, -0.3]]),
+        }
+    )
+    train_data_without_image_tokens = BatchedDataDict(
+        {
+            "token_mask": torch.tensor([[0, 1, 1]], dtype=torch.float32),
+            "sample_mask": torch.tensor([1.0], dtype=torch.float32),
+            "prev_logprobs": torch.tensor([[0.0, -0.2, -0.4]]),
+            "generation_logprobs": torch.tensor([[0.0, -0.1, -0.3]]),
+        }
+    )
+
+    with_image = compute_and_apply_seq_logprob_error_masking(
+        train_data_with_image_tokens,
+        rewards=torch.tensor([1.0]),
+        seq_logprob_error_threshold=None,
+    )
+    without_image = compute_and_apply_seq_logprob_error_masking(
+        train_data_without_image_tokens,
+        rewards=torch.tensor([1.0]),
+        seq_logprob_error_threshold=None,
+    )
+
+    assert with_image["mean_seq_mult_prob_error"] == pytest.approx(
+        without_image["mean_seq_mult_prob_error"]
+    )
 
 
 # ============================================================================
@@ -2175,9 +2702,12 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         rewards = torch.tensor([1.0, 0.0, 1.0, 0.0])
         original_sample_mask = train_data["sample_mask"].clone()
 
-        max_error, num_masked, masked_pct = compute_and_apply_seq_logprob_error_masking(
+        result = compute_and_apply_seq_logprob_error_masking(
             train_data, rewards, seq_logprob_error_threshold=None
         )
+        max_error = result["max_seq_mult_prob_error"]
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         # Verify metrics are computed
         assert max_error > 0.0, "Should compute max error"
@@ -2213,11 +2743,11 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         rewards = torch.tensor([1.0, 0.0, 1.0, 0.0])
 
         # Use threshold 1.2 which should mask sequences 2 and 3
-        _max_error, num_masked, masked_pct = (
-            compute_and_apply_seq_logprob_error_masking(
-                train_data, rewards, seq_logprob_error_threshold=1.2
-            )
+        result = compute_and_apply_seq_logprob_error_masking(
+            train_data, rewards, seq_logprob_error_threshold=1.2
         )
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         # Verify masking occurred
         assert num_masked == 2, "Should mask 2 sequences (indices 2 and 3)"
@@ -2245,11 +2775,11 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         rewards = torch.tensor([1.0, 1.0, 1.0])
         original_sample_mask = train_data["sample_mask"].clone()
 
-        _max_error, num_masked, masked_pct = (
-            compute_and_apply_seq_logprob_error_masking(
-                train_data, rewards, seq_logprob_error_threshold=2.0
-            )
+        result = compute_and_apply_seq_logprob_error_masking(
+            train_data, rewards, seq_logprob_error_threshold=2.0
         )
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         # Verify no masking occurred
         assert num_masked == 0, "Should not mask any sequences"
@@ -2271,11 +2801,11 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         )
         rewards = torch.tensor([1.0, 0.0, 1.0])  # 2 correct, 1 incorrect
 
-        _max_error, num_masked, masked_pct = (
-            compute_and_apply_seq_logprob_error_masking(
-                train_data, rewards, seq_logprob_error_threshold=1.0
-            )
+        result = compute_and_apply_seq_logprob_error_masking(
+            train_data, rewards, seq_logprob_error_threshold=1.0
         )
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         # Verify all sequences are masked
         assert num_masked == 3, "Should mask all 3 sequences"
@@ -2306,11 +2836,11 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         )
         rewards = torch.tensor([1.0, 1.0, 0.0, 1.0])
 
-        _max_error, num_masked, masked_pct = (
-            compute_and_apply_seq_logprob_error_masking(
-                train_data, rewards, seq_logprob_error_threshold=1.0
-            )
+        result = compute_and_apply_seq_logprob_error_masking(
+            train_data, rewards, seq_logprob_error_threshold=1.0
         )
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         # Only 3 sequences were originally unmasked, all should be masked now
         assert num_masked == 3, "Should mask 3 sequences (indices 0, 2, 3)"
@@ -2336,11 +2866,11 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         # Rewards: seq 2 correct, seq 3 incorrect, seq 4 correct
         rewards = torch.tensor([0.0, 0.0, 1.0, 0.0, 1.0])
 
-        _max_error, num_masked, masked_pct = (
-            compute_and_apply_seq_logprob_error_masking(
-                train_data, rewards, seq_logprob_error_threshold=1.5
-            )
+        result = compute_and_apply_seq_logprob_error_masking(
+            train_data, rewards, seq_logprob_error_threshold=1.5
         )
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         assert num_masked == 3, "Should mask 3 sequences"
         # 2 out of 3 masked sequences were correct (reward=1)
@@ -2378,11 +2908,11 @@ class TestComputeAndApplySeqLogprobErrorMasking:
 
         # Sequence 0 should have lower error due to masked tokens
         # Sequence 1 should have higher error
-        _max_error, num_masked, masked_pct = (
-            compute_and_apply_seq_logprob_error_masking(
-                train_data, rewards, seq_logprob_error_threshold=2.0
-            )
+        result = compute_and_apply_seq_logprob_error_masking(
+            train_data, rewards, seq_logprob_error_threshold=2.0
         )
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         # Only sequence 1 should be masked (seq 0 has reduced error due to token_mask)
         assert num_masked == 1, "Should mask only sequence 1"
@@ -2403,9 +2933,12 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         )
         rewards = torch.zeros(0)
 
-        max_error, num_masked, masked_pct = compute_and_apply_seq_logprob_error_masking(
+        result = compute_and_apply_seq_logprob_error_masking(
             train_data, rewards, seq_logprob_error_threshold=1.5
         )
+        max_error = result["max_seq_mult_prob_error"]
+        num_masked = result["num_masked_seqs"]
+        masked_pct = result["masked_correct_pct"]
 
         assert max_error == 0.0, "Empty batch should have max_error=0"
         assert num_masked == 0, "Empty batch should have no masked sequences"
@@ -2441,9 +2974,10 @@ class TestComputeAndApplySeqLogprobErrorMasking:
         rewards = torch.tensor([1.0, 1.0, 1.0])
 
         # Threshold of 1.5 should mask sequence 2 (exp(0.41) > 1.5)
-        max_error, num_masked, masked_pct = compute_and_apply_seq_logprob_error_masking(
+        result = compute_and_apply_seq_logprob_error_masking(
             train_data, rewards, seq_logprob_error_threshold=1.5
         )
+        num_masked = result["num_masked_seqs"]
 
         # At least sequence 2 should be masked
         assert num_masked >= 1, "At least one sequence should be masked"

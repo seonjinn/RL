@@ -36,6 +36,19 @@ def get_num_buffers():
     return int(os.getenv("NRL_REFIT_NUM_BUFFERS", "2"))
 
 
+def _tensor_as_flat_bytes(tensor: torch.Tensor) -> torch.Tensor:
+    """Return a byte view that also works for scalar tensors."""
+    if tensor.dim() == 0:
+        tensor = tensor.reshape(1)
+    return tensor.view(torch.uint8).view(-1)
+
+
+def _bytes_as_tensor(tensor: torch.Tensor, dtype: torch.dtype, shape: torch.Size):
+    """Restore a tensor from bytes, preserving scalar tensor shape."""
+    restored = tensor.view(dtype)
+    return restored.reshape(shape)
+
+
 def packed_broadcast_producer(iterator, group, src, post_iter_func):
     """Broadcast a list of tensors in a packed manner.
 
@@ -75,9 +88,9 @@ def packed_broadcast_producer(iterator, group, src, post_iter_func):
                 # Pack the tensors
                 while True:
                     # Apply backend specific post processing and then convert to linearized uint8 tensor
-                    tensor = post_iter_func(next(iterator)).view(torch.uint8).view(-1)
+                    tensor = _tensor_as_flat_bytes(post_iter_func(next(iterator)))
                     packing_tensor_list[buffer_idx].append(tensor)
-                    packing_tensor_sizes[buffer_idx] += tensor.view(torch.uint8).numel()
+                    packing_tensor_sizes[buffer_idx] += tensor.numel()
                     if packing_tensor_sizes[buffer_idx] > target_packed_tensor_size:
                         break
                 # Pack the tensors and call broadcast collective
@@ -130,7 +143,7 @@ def packed_broadcast_consumer(iterator, group, src, post_unpack_func):
         unpacked_list = [
             (
                 meta_data_list[i][0],
-                tensor.view(meta_data_list[i][2]).view(*meta_data_list[i][1]),
+                _bytes_as_tensor(tensor, meta_data_list[i][2], meta_data_list[i][1]),
             )
             for i, tensor in enumerate(unpacked_tensor)
         ]

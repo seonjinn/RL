@@ -30,7 +30,6 @@ from nemo_rl.algorithms.loss_functions import (
     MPOLossFn,
 )
 from nemo_rl.algorithms.utils import maybe_pad_last_batch, set_seed
-from nemo_rl.models.megatron.multimodal import truncate_for_expanded_budget
 from nemo_rl.data import DataConfig
 from nemo_rl.data.collate_fn import preference_collate_fn
 from nemo_rl.data.datasets import AllTaskProcessedDataset
@@ -334,6 +333,7 @@ def add_ref_logprobs_to_data(dataloader, policy, master_config, is_val=False, to
                 and _image_token_id is not None
                 and "imgs_sizes" in batch
             ):
+                from nemo_rl.models.megatron.multimodal import truncate_for_expanded_budget
                 batch, vision_truncated = truncate_for_expanded_budget(
                     batch,
                     max_seq_length=max_seq,

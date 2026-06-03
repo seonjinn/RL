@@ -31,6 +31,7 @@ os.environ["TMPDIR"] = _temp_dir  # System temp dir
 from nemo_rl.algorithms.async_utils import AsyncTrajectoryCollector, ReplayBuffer
 from nemo_rl.algorithms.grpo import MasterConfig, extract_initial_prompt_messages
 from nemo_rl.data.interfaces import DatumSpec, LLMMessageLogType
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.environments.interfaces import (
     EnvironmentInterface,
@@ -235,6 +236,58 @@ class TestReplayBuffer:
         )
 
         assert sample_result is None  # Should return None when insufficient
+
+        ray.kill(buffer)
+
+    def test_replay_buffer_roundtrip_multimodal_gym_payload(self):
+        """Multimodal message_log payloads survive replay push/sample."""
+        buffer = ReplayBuffer.remote(max_size=10)
+        pixel_values = PackedTensor(
+            [torch.ones((1, 3, 2, 2), dtype=torch.float32)],
+            dim_to_pack=0,
+        )
+        imgs_sizes = PackedTensor(
+            [torch.tensor([[2, 2]], dtype=torch.int32)],
+            dim_to_pack=0,
+        )
+        batch = BatchedDataDict[DatumSpec](
+            {
+                "message_log": [
+                    [
+                        {
+                            "role": "user",
+                            "content": "look",
+                            "token_ids": torch.tensor([1, 2, 3]),
+                            "pixel_values": pixel_values,
+                            "imgs_sizes": imgs_sizes,
+                        }
+                    ]
+                ],
+                "loss_multiplier": torch.ones(1),
+            }
+        )
+        trajectory = {"batch": batch, "rollout_metrics": {}}
+
+        status = ray.get(
+            buffer.push_with_wait_signal.remote(
+                trajectory, weight_version=0, target_weight_version=1
+            )
+        )
+        assert status == "success"
+
+        sample = ray.get(
+            buffer.sample.remote(
+                num_prompt_groups=1,
+                current_weight_version=1,
+                max_age_steps=1,
+            )
+        )
+        recovered = sample["trajectories"][0]["batch"]["message_log"][0][0]
+        assert torch.equal(
+            recovered["pixel_values"].tensors[0],
+            pixel_values.tensors[0],
+        )
+        assert torch.equal(recovered["imgs_sizes"].tensors[0], imgs_sizes.tensors[0])
 
         ray.kill(buffer)
 
@@ -772,7 +825,7 @@ class TestAsyncUtilsIntegration:
         assert len(state["trajectories"]) == 2
         assert state["trajectory_versions"] == [5, 6]
         assert state["target_weight_versions"] == [6, 7]
-        assert state["last_target_weight_already_generated"] == 7
+        assert state["last_target_weight_already_generated"] == -1
         assert state["max_size"] == 10
 
         # Verify trajectories are correctly serialized
@@ -820,9 +873,9 @@ class TestAsyncUtilsIntegration:
         assert debug_info["trajectory_versions"] == [5, 6]
         assert debug_info["target_weight_versions"] == [6, 7]
 
-        # Verify last_target_weight_already_generated was restored
+        # Pushing trajectories does not mark any target as consumed.
         last_target = ray.get(buffer2.get_last_target_weight_already_generated.remote())
-        assert last_target == 7
+        assert last_target == -1
 
         ray.kill(buffer2)
 
@@ -985,6 +1038,57 @@ class TestAsyncUtilsIntegration:
         # Clean up
         os.unlink(checkpoint_path)
         ray.kill(buffer2)
+
+    def test_replay_buffer_pt_roundtrip_with_packed_tensor_dedup_indices(self):
+        """PackedTensor with _dedup_indices survives torch.save/load roundtrip."""
+        buffer = ReplayBuffer.remote(max_size=10)
+
+        pixel_values = PackedTensor(
+            [torch.ones((1, 3, 2, 2), dtype=torch.float32)],
+            dim_to_pack=0,
+            dedup_indices=[0, 0, 0, 0],
+        )
+        batch = BatchedDataDict[DatumSpec](
+            {
+                "message_log": [
+                    [
+                        {
+                            "role": "user",
+                            "content": "look",
+                            "token_ids": torch.tensor([1, 2, 3]),
+                            "pixel_values": pixel_values,
+                        }
+                    ]
+                ],
+                "loss_multiplier": torch.ones(1),
+            }
+        )
+        trajectory = {"batch": batch, "rollout_metrics": {}}
+
+        ray.get(
+            buffer.push_with_wait_signal.remote(
+                trajectory, weight_version=0, target_weight_version=1
+            )
+        )
+
+        state = ray.get(buffer.state_dict.remote())
+        ray.kill(buffer)
+
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+            torch.save(state, f.name)
+            path = f.name
+
+        loaded = torch.load(path, weights_only=False)
+        os.unlink(path)
+
+        recovered_pv = loaded["trajectories"][0]["batch"]["message_log"][0][0][
+            "pixel_values"
+        ]
+        assert isinstance(recovered_pv, PackedTensor)
+        assert recovered_pv._dedup_indices == [0, 0, 0, 0]
+        assert torch.equal(recovered_pv.tensors[0], pixel_values.tensors[0])
+        assert len(recovered_pv.tensors) == 1
+        assert len(recovered_pv) == 4
 
 
 class TestPromptExtraction:

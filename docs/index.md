@@ -220,6 +220,7 @@ guides/eval.md
 guides/deepseek.md
 model-quirks.md
 guides/async-grpo.md
+guides/async-grpo-deep-dive.md
 guides/dtensor-tp-accuracy.md
 guides/ft-launcher-guide.md
 ```
@@ -261,6 +262,7 @@ design-docs/training-backends.md
 design-docs/sequence-packing-and-dynamic-batching.md
 design-docs/env-vars.md
 design-docs/nemo-gym-integration.md
+design-docs/async-grpo-multimodal.md
 ```
 
 ```{toctree}

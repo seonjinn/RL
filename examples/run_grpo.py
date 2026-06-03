@@ -173,6 +173,7 @@ def main() -> None:
             grpo_save_state=grpo_state,
             master_config=master_config,
             max_trajectory_age_steps=async_config["max_trajectory_age_steps"],
+            processor=None,
         )
     else:
         print("🚀 Running synchronous GRPO training")

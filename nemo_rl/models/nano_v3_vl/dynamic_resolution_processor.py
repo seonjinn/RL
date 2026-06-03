@@ -294,33 +294,50 @@ class DynamicResolutionProcessor(ProcessorMixin):
 
         Chat templates (Jinja2) that do ``message.content | string`` will
         produce Python repr for list content.  This method converts the list
-        into a single string with ``<image>`` / ``<so_embedding>`` placeholders
-        so the template renders them correctly.
+        into the same string that the Nemotron multimodal template branch would
+        build before its common sanitization/trim step.
         """
         content = message.get("content")
         if not isinstance(content, list):
             return message
-        parts: list[str] = []
+
+        text = ""
+        num_images = 0
+        num_videos = 0
+        num_audios = 0
         for item in content:
             if not isinstance(item, dict):
-                parts.append(str(item))
                 continue
             ctype = item.get("type", "")
-            if ctype == "image":
-                parts.append(IMG_INPUT_TAG)
-            elif ctype == "video":
-                # Video entries should be expanded into image entries by
-                # _expand_video_entries before reaching here.  Emit a single
-                # <image> tag as a fallback so the template doesn't produce
-                # garbage (the dict repr) for unexpanded video entries.
-                parts.append(IMG_INPUT_TAG)
-            elif ctype == "audio":
-                parts.append("<so_embedding>")
+            if ctype in ("image", "image_url"):
+                num_images += 1
+            elif ctype in ("video", "video_url"):
+                num_videos += 1
+            elif ctype in ("audio", "audio_url"):
+                num_audios += 1
             elif ctype == "text":
-                parts.append(item.get("text", ""))
-            else:
-                parts.append(str(item))
-        return {**message, "content": "".join(parts)}
+                text += item.get("text", "")
+
+        if IMG_INPUT_TAG in text:
+            num_images = 0
+        if "<video>" in text:
+            num_videos = 0
+        if "<so_embedding>" in text:
+            num_audios = 0
+
+        mm_content = ""
+        if num_images > 1:
+            image_tags = [
+                f"<image {image_idx + 1}>{IMG_INPUT_TAG}"
+                for image_idx in range(num_images)
+            ]
+            mm_content = " ".join(image_tags) + "\n"
+        elif num_images == 1:
+            mm_content = f"{IMG_INPUT_TAG}\n"
+
+        mm_content += "<video>\n" * num_videos
+        mm_content += "<so_embedding>\n" * num_audios
+        return {**message, "content": mm_content + text.lstrip("\n")}
 
     def compute_num_embeddings(self, height: int, width: int) -> int:
         """Compute number of image embeddings for given dimensions.

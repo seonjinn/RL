@@ -32,7 +32,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NEMORL="${NEMORL:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+if [[ -f "${SCRIPT_DIR}/ray.sub" ]]; then
+  DEFAULT_NEMORL="${SCRIPT_DIR}"
+else
+  DEFAULT_NEMORL="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+NEMORL="${NEMORL:-${DEFAULT_NEMORL}}"
+NEMORL="$(readlink -f "${NEMORL}")"
 
 ENV_FILE="${ENV_FILE:-${NEMORL}/.env}"
 if [[ ! -f "${ENV_FILE}" && -f "/scratch/fsw/portfolios/llmservice/users/smohsenitahe/.env" ]]; then
@@ -60,8 +66,6 @@ JOB_NAME="${JOB_NAME:-${JOB_NAME_BASE}-${RUN_ID}}"
 WANDB_NAME="${WANDB_NAME:-superv3-mpo-sft-49k}"
 WANDB_PROJECT="${WANDB_PROJECT:-vlm-mpo-dev-mmpr}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
-MODEL_NAME="${MPO_MODEL_NAME:-${MODEL_NAME:-}}"
-DATA_PATH="${MPO_DATA_PATH:-${DATA_PATH:-}}"
 MODEL_NAME="${MODEL_NAME:-/scratch/fsw/portfolios/llmservice/projects/llmservice_fm_vision/users/tpoon/workspace/output/sft_super_omni_49k_svg_newcontainer_0422/checkpoints/tp_1_hf/iter_0007110/mcore_to_hf}"
 DATA_PATH="${DATA_PATH:-/scratch/fsw/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1.2_commercial/MMPR-v1.2/meta_commercial_fixthink_0313_paired_0331.json}"
 MPO_MAX_NUM_STEPS="${MPO_MAX_NUM_STEPS:-1000}"
@@ -75,7 +79,7 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 RESULTS_ROOT="${RESULTS_ROOT:-${NEMORL}/results}"
 RESULTS_DIR="${RESULTS_ROOT}/${JOB_NAME}"
-SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-nemotron_omni_vision}"
+SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-llmservice_fm_vision}"
 SBATCH_PARTITION="${SBATCH_PARTITION:-${PARTITION:-batch_long}}"
 SBATCH_TIME="${SBATCH_TIME:-4:00:00}"
 export GPUS_PER_NODE="${GPUS_PER_NODE:-8}"

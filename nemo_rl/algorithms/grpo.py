@@ -3825,6 +3825,128 @@ def validate(
     return val_metrics, timing_metrics
 
 
+def _is_vlm_async_run(
+    master_config: MasterConfig,
+    processor: Optional[AutoProcessor],
+) -> bool:
+    return bool(master_config["policy"].get("is_vlm") or processor is not None)
+
+
+def build_async_train_and_logprob_data(
+    repeated_batch: BatchedDataDict[DatumSpec],
+    tokenizer: TokenizerType,
+    processor: Optional[AutoProcessor],
+    master_config: MasterConfig,
+    deduplicate_multimodal_data: bool = False,
+) -> tuple[
+    BatchedDataDict[ClippedPGLossDataDict],
+    BatchedDataDict[ClippedPGLossDataDict],
+    BatchedDataDict[Any],
+    torch.Tensor,
+]:
+    """Build async GRPO train/logprob data from a sampled replay batch."""
+    flat_messages, input_lengths = batched_message_log_to_flat_message(
+        repeated_batch["message_log"],
+        pad_value_dict={"token_ids": tokenizer.pad_token_id},
+        make_sequence_length_divisible_by=master_config["policy"][
+            "make_sequence_length_divisible_by"
+        ],
+    )
+
+    train_data = BatchedDataDict[ClippedPGLossDataDict](
+        {
+            "input_ids": flat_messages["token_ids"],
+            "input_lengths": input_lengths,
+            "generation_logprobs": flat_messages["generation_logprobs"],
+            "token_mask": flat_messages["token_loss_mask"],
+            "sample_mask": repeated_batch["loss_multiplier"],
+        }
+    )
+
+    extra_multimodal_data = flat_messages.get_multimodal_dict(
+        as_tensors=False,
+        pixel_dtype=torch.bfloat16 if deduplicate_multimodal_data else None,
+    )
+    if _is_vlm_async_run(master_config, processor) and not extra_multimodal_data:
+        raise RuntimeError(
+            "is_vlm=True or processor was provided, but "
+            "flat_messages.get_multimodal_dict() returned empty for this "
+            "replay batch. Check that the replay batch carries pixel_values "
+            "on message_log[0]. Refusing to train a VLM policy without "
+            "multimodal data."
+        )
+
+    if deduplicate_multimodal_data and extra_multimodal_data:
+        prompt_indices = repeated_batch["_dedup_prompt_idx"]
+        for key, val in extra_multimodal_data.items():
+            if isinstance(val, PackedTensor):
+                extra_multimodal_data[key] = val.deduplicate(prompt_indices)
+
+    train_data.update(extra_multimodal_data)
+    train_data.to("cpu")
+
+    if "imgs_sizes" in train_data and processor is not None:
+        patch_dim = getattr(processor, "patch_size", 16)
+        downsample_ratio = getattr(processor, "downsample_ratio", 0.5)
+        image_token_id = tokenizer.convert_tokens_to_ids("<image>")
+        img_start_token_id = tokenizer.convert_tokens_to_ids("<img>")
+        max_seq_length = master_config["policy"]["max_total_sequence_length"]
+        vision_config = getattr(getattr(processor, "config", None), "vision_config", None)
+        temporal_patch_size = getattr(vision_config, "video_temporal_patch_size", 1)
+
+        from nemo_rl.models.megatron.multimodal import truncate_for_expanded_budget
+
+        truncated_train_data, vision_truncated = truncate_for_expanded_budget(
+            train_data,
+            max_seq_length=max_seq_length,
+            patch_dim=patch_dim,
+            downsample_ratio=downsample_ratio,
+            pad_token_id=tokenizer.pad_token_id,
+            image_token_id=image_token_id,
+            img_start_token_id=img_start_token_id,
+            temporal_patch_size=temporal_patch_size,
+        )
+        train_data = cast(BatchedDataDict[ClippedPGLossDataDict], truncated_train_data)
+        if vision_truncated.any():
+            n_truncated = int(vision_truncated.sum().item())
+            print(
+                f"✂ Vision-budget truncation: {n_truncated}/{len(vision_truncated)} "
+                f"samples truncated to fit expanded budget of {max_seq_length}",
+                flush=True,
+            )
+
+        from nemo_rl.models.megatron.multimodal import compute_expanded_lengths
+
+        train_data["expanded_lengths"] = compute_expanded_lengths(
+            train_data["input_ids"],
+            train_data["input_lengths"],
+            train_data.get("imgs_sizes"),
+            image_token_id=image_token_id,
+            patch_dim=patch_dim,
+            downsample_ratio=downsample_ratio,
+            num_frames=train_data.get("num_frames"),
+            max_length=max_seq_length,
+            img_start_token_id=img_start_token_id,
+            temporal_patch_size=temporal_patch_size,
+        )
+
+        extra_multimodal_data = {
+            key: train_data[key]
+            for key in extra_multimodal_data
+            if key in train_data
+        }
+
+    logprob_data = BatchedDataDict[ClippedPGLossDataDict](
+        {
+            "input_ids": train_data["input_ids"],
+            "input_lengths": train_data["input_lengths"],
+            **extra_multimodal_data,
+        }
+    )
+
+    return train_data, logprob_data, flat_messages, input_lengths
+
+
 def async_grpo_train(
     policy: ColocatablePolicyInterface,
     policy_generation: Optional[GenerationInterface],
@@ -3857,7 +3979,7 @@ def async_grpo_train(
         grpo_save_state: Training state
         master_config: Master configuration
         max_trajectory_age_steps: Maximum age (in training steps) for trajectories to be used in training
-        processor: Optional HF processor for VLM expanded-length truncation
+        processor: Optional multimodal processor for VLM policy training
     """
     # Ensure we are running with a compatible async generation backend
     assert _should_use_async_rollouts(master_config), (
@@ -3867,12 +3989,21 @@ def async_grpo_train(
     assert master_config["loss_fn"]["use_importance_sampling_correction"] is True, (
         "Importance sampling correction must be enabled for async GRPO for good convergence due to off-policy samples!"
     )
-
-    if master_config["grpo"].get("deduplicate_multimodal_data", False):
-        raise ValueError(
-            "grpo.deduplicate_multimodal_data does not support async GRPO "
-            "collector/replay. Use sync GRPO or set "
-            "grpo.deduplicate_multimodal_data=false."
+    deduplicate_multimodal_data = master_config["grpo"].get(
+        "deduplicate_multimodal_data", False
+    )
+    if deduplicate_multimodal_data:
+        generation_cfg = master_config["policy"]["generation"]
+        if generation_cfg is None or generation_cfg.get("backend") != "vllm":
+            raise ValueError(
+                "grpo.deduplicate_multimodal_data requires policy.generation.backend='vllm'."
+            )
+    if _is_vlm_async_run(master_config, processor) and not _should_use_nemo_gym(master_config):
+        raise NotImplementedError(
+            "Async VLM is supported only on the NeMo Gym path in this design. "
+            "Set env.should_use_nemo_gym=true, or run sync GRPO. Non-gym "
+            "async VLM is tracked separately in "
+            "docs/design-docs/async-grpo-multimodal.md (Out of Scope)."
         )
 
     if master_config["grpo"]["async_grpo"]["max_trajectory_age_steps"] > 1:
@@ -4253,6 +4384,19 @@ def async_grpo_train(
                     # Concatenate per-prompt groups into a single training batch
                     per_prompt_batches = [t["batch"] for t in trajectories]
                     repeated_batch = BatchedDataDict.from_batches(per_prompt_batches)
+
+                    if deduplicate_multimodal_data:
+                        # from_batches concatenates per-entry _dedup_prompt_idx
+                        # (all-zeros) into a globally all-zero tensor — always
+                        # overwrite with the correct cross-group mapping.
+                        num_prompt_groups = len(per_prompt_batches)
+                        sizes = torch.tensor(
+                            [b.size for b in per_prompt_batches], dtype=torch.long
+                        )
+                        repeated_batch["_dedup_prompt_idx"] = torch.arange(
+                            num_prompt_groups, dtype=torch.long
+                        ).repeat_interleave(sizes)
+
                     # Aggregate rollout metrics across groups with proper aggregation per metric type
                     rollout_metrics = {}
                     for t in trajectories:
@@ -4366,34 +4510,17 @@ def async_grpo_train(
                                 if "generation_logprobs" not in message:
                                     message["generation_logprobs"] = torch.zeros_like(token_ids, dtype=torch.float32)
 
-                    # Convert to flat format for training
-                    flat_messages, input_lengths = batched_message_log_to_flat_message(
-                        repeated_batch["message_log"],
-                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                        make_sequence_length_divisible_by=master_config["policy"][
-                            "make_sequence_length_divisible_by"
-                        ],
-                    )
-
-                    # Create training data
-                    # Note: advantages will be computed and added after logprobs are available
-                    train_data = BatchedDataDict[ClippedPGLossDataDict](
-                        {
-                            "input_ids": flat_messages["token_ids"],
-                            "input_lengths": input_lengths,
-                            "generation_logprobs": flat_messages["generation_logprobs"],
-                            "token_mask": flat_messages["token_loss_mask"],
-                            "sample_mask": repeated_batch["loss_multiplier"],
-                        }
-                    )
-                    train_data.update(flat_messages.get_multimodal_dict(as_tensors=False))
-                    train_data.to("cpu")
-                    train_data = _apply_vision_budget_guard(
+                    (
                         train_data,
-                        tokenizer,
-                        processor,
-                        master_config,
-                        label="async",
+                        logprob_data,
+                        flat_messages,
+                        input_lengths,
+                    ) = build_async_train_and_logprob_data(
+                        repeated_batch=repeated_batch,
+                        tokenizer=tokenizer,
+                        processor=processor,
+                        master_config=master_config,
+                        deduplicate_multimodal_data=deduplicate_multimodal_data,
                     )
                     _print_sequence_length_debug(train_data, label="async/pre_zero_loss_guard")
                     _collapse_zero_loss_rows_for_compute(
@@ -4404,6 +4531,13 @@ def async_grpo_train(
                     _print_sequence_length_debug(train_data, label="async/post_zero_loss_guard")
 
                 # Training phase (same as sync version)
+                debug_payload_metrics = master_config["grpo"].get(
+                    "debug_payload_metrics", False
+                )
+                unique_prompts_for_policy = infer_unique_prompt_count(
+                    repeated_batch, default_rows=train_data.size
+                )
+
                 # Skip prev_logprobs computation when force_on_policy_ratio=True
                 # unless sequence-error masking or snapshots need real prev_logprobs.
                 seq_logprob_error_threshold = master_config["grpo"].get(
@@ -4432,20 +4566,38 @@ def async_grpo_train(
                         policy.prepare_for_lp_inference()
 
                 print("▶ Computing logprobs...", flush=True)
+                fprop_logprobs = torch.zeros_like(train_data["generation_logprobs"])
                 with timer.time("policy_and_reference_logprobs"):
                     if not skip_prev_logprobs:
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                logprob_data,
+                                boundary="driver_to_policy_get_logprobs",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
+                        )
                         fprop_logprobs = policy.get_logprobs(
-                            train_data,
+                            logprob_data,
                             timer=timer,
                         )["logprobs"]
 
                     if to_compute_kl:
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                logprob_data,
+                                boundary="driver_to_policy_get_reference_policy_logprobs",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
+                        )
                         reference_logprobs = policy.get_reference_policy_logprobs(
-                            train_data,
+                            logprob_data,
                             timer=timer,
                         )["reference_logprobs"]
                     else:
                         reference_logprobs = torch.zeros_like(train_data["generation_logprobs"])
+                    del logprob_data
                 train_data["prev_logprobs"] = fprop_logprobs
                 train_data["reference_policy_logprobs"] = reference_logprobs
 
@@ -4585,6 +4737,14 @@ def async_grpo_train(
 
                     print("▶ Training policy...")
                     with timer.time("policy_training"):
+                        print_multimodal_payload_metrics(
+                            collect_multimodal_payload_metrics(
+                                train_data,
+                                boundary="driver_to_policy_train",
+                                unique_prompts=unique_prompts_for_policy,
+                            ),
+                            enabled=debug_payload_metrics,
+                        )
                         train_results = policy.train(
                             train_data,
                             loss_fn,

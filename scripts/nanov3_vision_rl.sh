@@ -21,6 +21,9 @@ CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-${CP_SIZE:-}}"
 GRPO_MAX_NUM_STEPS="${GRPO_MAX_NUM_STEPS:-${MAX_STEPS:-}}"
 MODEL_NAME="${IMAGE_GRPO_MODEL_NAME:-${MODEL_NAME:-}}"
 CACHE_DIR="${IMAGE_GRPO_CACHE_DIR:-${CACHE_DIR:-}}"
+USER_SET_GENERATION_MAX_NEW_TOKENS="${GENERATION_MAX_NEW_TOKENS+x}"
+GENERATION_MAX_NEW_TOKENS="${GENERATION_MAX_NEW_TOKENS:-8192}"
+FORCE_ACTUAL_LONG_GENERATION="${FORCE_ACTUAL_LONG_GENERATION:-false}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-omni}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
 : "${MODEL_NAME:?Set IMAGE_GRPO_MODEL_NAME or MODEL_NAME, or define it in ${NEMORL}/.env}"
@@ -108,6 +111,25 @@ if [[ ! -f "${CONFIG_ABS_PATH}" ]]; then
   exit 1
 fi
 
+if [[ ! "${GENERATION_MAX_NEW_TOKENS}" =~ ^[0-9]+$ ]] || (( GENERATION_MAX_NEW_TOKENS < 1 )); then
+  echo "GENERATION_MAX_NEW_TOKENS must be a positive integer, got ${GENERATION_MAX_NEW_TOKENS}" >&2
+  exit 1
+fi
+
+EFFECTIVE_GENERATION_MAX_NEW_TOKENS="${GENERATION_MAX_NEW_TOKENS}"
+if [[ "${FORCE_ACTUAL_LONG_GENERATION}" != "true" ]]; then
+  for generation_limit in "${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-}" "${VLLM_MAX_MODEL_LEN:-}"; do
+    if [[ "${generation_limit}" =~ ^[0-9]+$ ]] && (( generation_limit < EFFECTIVE_GENERATION_MAX_NEW_TOKENS )); then
+      EFFECTIVE_GENERATION_MAX_NEW_TOKENS="${generation_limit}"
+    fi
+  done
+
+  if [[ "${GENERATION_MIN_NEW_TOKENS:-}" =~ ^[0-9]+$ ]] && (( GENERATION_MIN_NEW_TOKENS > EFFECTIVE_GENERATION_MAX_NEW_TOKENS )); then
+    echo "GENERATION_MIN_NEW_TOKENS=${GENERATION_MIN_NEW_TOKENS} exceeds capped max_new_tokens=${EFFECTIVE_GENERATION_MAX_NEW_TOKENS}. Set FORCE_ACTUAL_LONG_GENERATION=true for forced-length diagnostics." >&2
+    exit 1
+  fi
+fi
+
 EXTRA_OVERRIDES=""
 if [[ -n "${CONTEXT_PARALLEL_SIZE}" ]]; then
   EXTRA_OVERRIDES+=" policy.megatron_cfg.context_parallel_size=${CONTEXT_PARALLEL_SIZE}"
@@ -136,8 +158,8 @@ fi
 if [[ -n "${VLLM_MAX_MODEL_LEN:-}" ]]; then
   EXTRA_OVERRIDES+=" policy.generation.vllm_cfg.max_model_len=${VLLM_MAX_MODEL_LEN}"
 fi
-if [[ -n "${GENERATION_MAX_NEW_TOKENS:-}" ]]; then
-  EXTRA_OVERRIDES+=" policy.generation.max_new_tokens=${GENERATION_MAX_NEW_TOKENS}"
+if [[ "${FORCE_ACTUAL_LONG_GENERATION}" != "true" || -n "${USER_SET_GENERATION_MAX_NEW_TOKENS}" ]]; then
+  EXTRA_OVERRIDES+=" policy.generation.max_new_tokens=${EFFECTIVE_GENERATION_MAX_NEW_TOKENS}"
 fi
 if [[ -n "${GENERATION_MIN_NEW_TOKENS:-}" ]]; then
   EXTRA_OVERRIDES+=" ++policy.generation.min_new_tokens=${GENERATION_MIN_NEW_TOKENS}"

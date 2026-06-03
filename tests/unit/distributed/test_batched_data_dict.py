@@ -546,6 +546,64 @@ def test_get_multimodal_dict_mixed_content_and_device_move():
     ].device.type == ("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def test_packed_tensor_inside_message_log_survives_repeat_interleave():
+    pixel_values = PackedTensor(
+        [torch.ones((1, 3, 2, 2), dtype=torch.float32)],
+        dim_to_pack=0,
+    )
+    batch = BatchedDataDict(
+        {
+            "message_log": [
+                [
+                    {
+                        "role": "user",
+                        "token_ids": torch.tensor([1, 2]),
+                        "pixel_values": pixel_values,
+                    }
+                ]
+            ],
+            "idx": torch.tensor([0]),
+        }
+    )
+
+    repeated = batch.slice(0, 1).repeat_interleave(3)
+
+    assert repeated.size == 3
+    assert all("pixel_values" in row[0] for row in repeated["message_log"])
+    assert all(
+        torch.equal(row[0]["pixel_values"].tensors[0], pixel_values.tensors[0])
+        for row in repeated["message_log"]
+    )
+    assert len({id(row) for row in repeated["message_log"]}) == 3
+
+
+def test_from_batches_preserves_packed_tensor_dedup_through_concat():
+    """from_batches must preserve PackedTensor dedup metadata via PackedTensor.concat."""
+    pt_a = PackedTensor(
+        [torch.ones(2, 3)], dim_to_pack=0, dedup_indices=[0, 0]
+    )
+    pt_b = PackedTensor(
+        [torch.full((2, 3), 2.0)], dim_to_pack=0, dedup_indices=[0, 0]
+    )
+    b1 = BatchedDataDict({"pv": pt_a, "ids": torch.tensor([1, 1])})
+    b2 = BatchedDataDict({"pv": pt_b, "ids": torch.tensor([2, 2])})
+
+    merged = BatchedDataDict.from_batches([b1, b2])
+    pv = merged["pv"]
+    assert isinstance(pv, PackedTensor)
+    assert pv._dedup_indices is not None
+    assert len(pv._dedup_indices) == 4
+    assert len(pv.tensors) == 2
+    assert pv._dedup_indices == [0, 0, 1, 1]
+
+    expanded = pv.as_tensor()
+    expected = torch.cat(
+        [torch.ones(2, 3), torch.ones(2, 3), torch.full((2, 3), 2.0), torch.full((2, 3), 2.0)],
+        dim=0,
+    )
+    assert torch.equal(expanded, expected)
+
+
 def test_from_batches_pads_3d_tensors_along_sequence_dim():
     """from_batches should pad 3D tensors along the sequence dimension before stacking."""
 

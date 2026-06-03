@@ -216,6 +216,25 @@ class TestApplyTemperatureScaling:
 
         assert torch.allclose(result, original)
 
+    def test_temperature_scaling_skips_raw_logprobs_unless_forced(self):
+        """Test raw-logprobs mode skips rollout scaling but not forced loss scaling."""
+        from nemo_rl.models.megatron.train import apply_temperature_scaling
+
+        cfg = {
+            "generation": {
+                "temperature": 0.5,
+                "vllm_cfg": {"logprobs_mode": "raw_logprobs"},
+            }
+        }
+
+        logits = torch.ones(2, 10, 100) * 4.0
+        result = apply_temperature_scaling(logits, cfg)
+        assert torch.allclose(result, torch.ones_like(result) * 4.0)
+
+        forced_logits = torch.ones(2, 10, 100) * 4.0
+        forced_result = apply_temperature_scaling(forced_logits, cfg, force=True)
+        assert torch.allclose(forced_result, torch.ones_like(forced_result) * 8.0)
+
 
 class TestForwardWithPostProcessingFn:
     """Tests for forward_with_post_processing_fn function."""
@@ -696,8 +715,8 @@ class TestForwardWithPostProcessingFn:
             post_processing_fn=post_processor,
         )
 
-        # Verify apply_temperature_scaling was called with the output tensor and cfg
-        mock_temp_scaling.assert_called_once_with(output_tensor, cfg)
+        # Verify loss forward forces temperature scaling even in raw-logprobs mode.
+        mock_temp_scaling.assert_called_once_with(output_tensor, cfg, force=True)
 
     @patch("nemo_rl.models.megatron.train.model_forward")
     @patch("nemo_rl.models.megatron.train.apply_temperature_scaling")

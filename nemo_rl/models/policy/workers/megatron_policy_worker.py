@@ -158,7 +158,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         self.timer = Timer(context={"worker": "megatron_policy", "rank": self.rank})
 
         # Step 1: Setup distributed
-        setup_distributed()
+        setup_distributed(config)
         log_gpu_memory_diagnostics(label="after_nccl_init", worker_type="MegatronPolicyWorker")
 
         # Step 2: Validate and setup model paths
@@ -1528,13 +1528,15 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         )
         self.model.train()
 
-        # Move optimizer state to CUDA if it exists
-        # colocated generation will always offload optimizer to cuda before refit
+        # Move optimizer state to CUDA if it exists.
+        # Must be symmetric with offload_before_refit() which unconditionally
+        # moves the optimizer to CPU. Without this, non-colocated async GRPO
+        # strands optimizer momentum on CPU after the first weight-updating
+        # refit, causing CUDA illegal memory access on the next training step.
         if (
             hasattr(self, "optimizer")
             and self.optimizer is not None
             and not self.optimizer_cpu_offload
-            and (self.offload_optimizer_for_logprob or self.is_generation_colocated)
         ):
             self.move_optimizer("cuda")
 
