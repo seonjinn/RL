@@ -118,6 +118,53 @@ from nemo_rl.utils.timer import Timer
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
+_HCP_UNSCALED_METRIC_KEYS = frozenset(
+    {
+        "lr",
+        "wd",
+        "global_valid_seqs",
+        "global_valid_toks",
+    }
+)
+
+
+def _metric_scale_for_hcp_group(group_batch: Optional[BatchedDataDict[Any]]) -> float:
+    if group_batch is None or group_batch.get("_hcp_is_dummy", False):
+        return 1.0
+
+    local_cp_size = group_batch.get("local_cp_size", 1)
+    if torch.is_tensor(local_cp_size):
+        local_cp_size = int(local_cp_size.item())
+    else:
+        local_cp_size = int(local_cp_size)
+
+    return 1.0 / max(1, local_cp_size)
+
+
+def _scale_hcp_loss_metrics(
+    loss_metrics: dict[str, Any],
+    metric_scale: float,
+) -> dict[str, Any]:
+    if metric_scale == 1.0:
+        return loss_metrics
+
+    scaled_metrics: dict[str, Any] = {}
+    for key, value in loss_metrics.items():
+        if (
+            key in _HCP_UNSCALED_METRIC_KEYS
+            or "_min" in key
+            or "_max" in key
+        ):
+            scaled_metrics[key] = value
+        elif torch.is_tensor(value):
+            scaled_metrics[key] = value * metric_scale
+        elif isinstance(value, (int, float)):
+            scaled_metrics[key] = value * metric_scale
+        else:
+            scaled_metrics[key] = value
+    return scaled_metrics
+
+
 @ray.remote(
     runtime_env=get_runtime_env_for_policy_worker("megatron_policy_worker")
 )  # pragma: no cover
@@ -671,13 +718,19 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                                 loss_metrics[k] = x[k]
                             else:
                                 loss_metrics[k] = x[k] / num_global_batches
-                        gb_loss_metrics.append(loss_metrics)
                         curr_lr = self.scheduler.get_lr(self.optimizer.param_groups[0])
                         curr_wd = self.scheduler.get_wd()
                         loss_metrics["lr"] = curr_lr
                         loss_metrics["wd"] = curr_wd
                         loss_metrics["global_valid_seqs"] = global_valid_seqs.item()
                         loss_metrics["global_valid_toks"] = global_valid_toks.item()
+                        if hcp_enabled and group_batches is not None:
+                            metric_scale = _metric_scale_for_hcp_group(group_batches[idx])
+                            loss_metrics = _scale_hcp_loss_metrics(
+                                loss_metrics,
+                                metric_scale,
+                            )
+                        gb_loss_metrics.append(loss_metrics)
                         mb_losses.append(loss_metrics["loss"])
 
                 else:

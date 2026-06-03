@@ -36,6 +36,49 @@ from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from tests.unit.test_utils import SimpleLoss
 
+
+def test_hcp_loss_metrics_are_scaled_by_local_cp_size():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        _metric_scale_for_hcp_group,
+        _scale_hcp_loss_metrics,
+    )
+
+    group_batch = BatchedDataDict(
+        {
+            "local_cp_size": torch.tensor(4, dtype=torch.int32),
+            "_hcp_is_dummy": False,
+        }
+    )
+    metrics = {
+        "loss": 8.0,
+        "token_mult_prob_error": 12.0,
+        "gen_kl_error": 4.0,
+        "num_valid_samples": 16.0,
+        "probs_ratio_min": 0.25,
+        "probs_ratio_max": 2.0,
+        "lr": 1e-6,
+        "wd": 0.1,
+        "global_valid_seqs": 512.0,
+        "global_valid_toks": 4096.0,
+    }
+
+    scaled = _scale_hcp_loss_metrics(
+        metrics,
+        _metric_scale_for_hcp_group(group_batch),
+    )
+
+    assert scaled["loss"] == 2.0
+    assert scaled["token_mult_prob_error"] == 3.0
+    assert scaled["gen_kl_error"] == 1.0
+    assert scaled["num_valid_samples"] == 4.0
+    assert scaled["probs_ratio_min"] == 0.25
+    assert scaled["probs_ratio_max"] == 2.0
+    assert scaled["lr"] == 1e-6
+    assert scaled["wd"] == 0.1
+    assert scaled["global_valid_seqs"] == 512.0
+    assert scaled["global_valid_toks"] == 4096.0
+
+
 basic_pg_loss_test_config: ClippedPGLossConfig = {
     "ratio_clip_min": 0.2,
     "ratio_clip_max": 0.2,
