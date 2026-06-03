@@ -79,6 +79,41 @@ def test_hcp_loss_metrics_are_scaled_by_local_cp_size():
     assert scaled["global_valid_toks"] == 4096.0
 
 
+def test_hcp_train_batch_result_is_scaled_by_num_global_batches():
+    from nemo_rl.models.policy.lm_policy import _scale_hcp_train_batch_result
+
+    batch_result = {
+        "global_loss": torch.tensor([8.0]),
+        "all_mb_metrics": {
+            "loss": [8.0],
+            "token_mult_prob_error": [2.0],
+            "gen_kl_error": [0.6],
+            "num_valid_samples": [16.0],
+            "probs_ratio_min": [0.25],
+            "probs_ratio_max": [2.0],
+            "lr": [1e-6],
+            "wd": [0.1],
+            "global_valid_seqs": [512.0],
+            "global_valid_toks": [4096.0],
+        },
+    }
+
+    scaled = _scale_hcp_train_batch_result(batch_result, 0.5)
+    scaled_metrics = scaled["all_mb_metrics"]
+
+    assert torch.equal(scaled["global_loss"], torch.tensor([4.0]))
+    assert scaled_metrics["loss"] == [4.0]
+    assert scaled_metrics["token_mult_prob_error"] == [1.0]
+    assert scaled_metrics["gen_kl_error"] == [0.3]
+    assert scaled_metrics["num_valid_samples"] == [8.0]
+    assert scaled_metrics["probs_ratio_min"] == [0.25]
+    assert scaled_metrics["probs_ratio_max"] == [2.0]
+    assert scaled_metrics["lr"] == [1e-6]
+    assert scaled_metrics["wd"] == [0.1]
+    assert scaled_metrics["global_valid_seqs"] == [512.0]
+    assert scaled_metrics["global_valid_toks"] == [4096.0]
+
+
 basic_pg_loss_test_config: ClippedPGLossConfig = {
     "ratio_clip_min": 0.2,
     "ratio_clip_max": 0.2,

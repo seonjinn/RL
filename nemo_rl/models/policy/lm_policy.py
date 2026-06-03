@@ -57,6 +57,69 @@ from nemo_rl.utils.timer import Timer
 PathLike = Union[str, "os.PathLike[Any]"]
 
 
+_HCP_BATCH_UNSCALED_METRIC_KEYS = frozenset(
+    {
+        "lr",
+        "wd",
+        "global_valid_seqs",
+        "global_valid_toks",
+    }
+)
+
+
+def _scale_hcp_train_metric_value(value: Any, metric_scale: float) -> Any:
+    if torch.is_tensor(value):
+        return value * metric_scale
+    if isinstance(value, np.ndarray):
+        return value * metric_scale
+    if isinstance(value, (int, float, np.number)) and not isinstance(value, bool):
+        return value * metric_scale
+    return value
+
+
+def _scale_hcp_train_batch_metrics(
+    all_mb_metrics: dict[str, list[Any]],
+    metric_scale: float,
+) -> dict[str, list[Any]]:
+    if metric_scale == 1.0:
+        return dict(all_mb_metrics)
+
+    scaled_metrics: dict[str, list[Any]] = {}
+    for key, values in all_mb_metrics.items():
+        if (
+            key in _HCP_BATCH_UNSCALED_METRIC_KEYS
+            or "_min" in key
+            or "_max" in key
+        ):
+            scaled_metrics[key] = values
+        else:
+            scaled_metrics[key] = [
+                _scale_hcp_train_metric_value(value, metric_scale)
+                for value in values
+            ]
+    return scaled_metrics
+
+
+def _scale_hcp_train_batch_result(
+    batch_result: dict[str, Any],
+    metric_scale: float,
+) -> dict[str, Any]:
+    if metric_scale == 1.0:
+        return batch_result
+
+    scaled_result = dict(batch_result)
+    if "global_loss" in scaled_result:
+        scaled_result["global_loss"] = (
+            scaled_result["global_loss"] * metric_scale
+        )
+    if "all_mb_metrics" in scaled_result:
+        scaled_result["all_mb_metrics"] = _scale_hcp_train_batch_metrics(
+            scaled_result["all_mb_metrics"],
+            metric_scale,
+        )
+    return scaled_result
+
+
 class Policy(ColocatablePolicyInterface, GenerationInterface):
     def __init__(
         self,
@@ -691,6 +754,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             )
             all_batch_results = []
             last_worker_results = []
+            batch_metric_scale = 1.0 / num_global_batches
 
             if self.flops_tracker is not None:
                 self.flops_tracker.reset()
@@ -746,6 +810,10 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                     for key, values in worker_result.get("all_mb_metrics", {}).items():
                         merged_mb_metrics[key].extend(values)
                 primary_result["all_mb_metrics"] = dict(merged_mb_metrics)
+                primary_result = _scale_hcp_train_batch_result(
+                    primary_result,
+                    batch_metric_scale,
+                )
                 all_batch_results.append(primary_result)
 
             aggregated_results = {
