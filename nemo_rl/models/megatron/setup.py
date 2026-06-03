@@ -1195,7 +1195,11 @@ def handle_model_import(
     )
     if pt_checkpoint_exists:
         print(f"Checkpoint already exists at {pretrained_path}. Skipping import.")
-    elif rank == 0:
+    else:
+        if rank == 0:
+            print(f"Importing checkpoint from {hf_model_name} to {pretrained_path}.")
+        else:
+            print(f"Participating in distributed checkpoint import at {pretrained_path}.")
         hf_config_overrides = config.get("hf_config_overrides", {}) or {}
         import_model_from_hf_name(
             hf_model_name,
@@ -1207,8 +1211,6 @@ def handle_model_import(
         if parallel_state.model_parallel_is_initialized():
             print("Reinitializing model parallel after loading model state.")
             parallel_state.destroy_model_parallel()
-    else:
-        print(f"Waiting for rank 0 to import checkpoint at {pretrained_path}.")
 
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.barrier(**_barrier_kwargs())

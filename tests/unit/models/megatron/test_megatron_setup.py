@@ -850,15 +850,22 @@ class TestModelAndOptimizerStateNamedTuple:
 class TestHandleModelImport:
     """Tests for handle_model_import function."""
 
+    @staticmethod
+    def _create_run_config(pretrained_path):
+        iter_dir = pretrained_path / "iter_0000000"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        (iter_dir / "run_config.yaml").write_text("test: true\n")
+
     def test_skip_import_when_checkpoint_exists(self, tmp_path, capsys):
         """Test that import is skipped when checkpoint exists."""
         from nemo_rl.models.megatron.setup import handle_model_import
 
-        pretrained_path = str(tmp_path / "model")
+        pretrained_path = tmp_path / "model"
+        self._create_run_config(pretrained_path)
         config = {"model_name": "test-model", "megatron_cfg": {}}
 
         handle_model_import(
-            config, "test-model", pretrained_path, pt_checkpoint_exists=True
+            config, "test-model", str(pretrained_path), pt_checkpoint_exists=True
         )
 
         captured = capsys.readouterr()
@@ -872,7 +879,10 @@ class TestHandleModelImport:
 
         mock_ps.model_parallel_is_initialized.return_value = False
 
-        pretrained_path = str(tmp_path / "model")
+        pretrained_path = tmp_path / "model"
+        mock_import.side_effect = lambda *_args, **_kwargs: self._create_run_config(
+            pretrained_path
+        )
         config = {
             "model_name": "test-model",
             "megatron_cfg": {"some_config": "value"},
@@ -880,14 +890,49 @@ class TestHandleModelImport:
         }
 
         handle_model_import(
-            config, "test-model", pretrained_path, pt_checkpoint_exists=False
+            config, "test-model", str(pretrained_path), pt_checkpoint_exists=False
         )
 
         mock_import.assert_called_once_with(
             "test-model",
-            pretrained_path,
+            str(pretrained_path),
             {"some_config": "value"},
         )
+
+    @patch("nemo_rl.models.megatron.setup.import_model_from_hf_name")
+    @patch("nemo_rl.models.megatron.setup.parallel_state")
+    @patch("nemo_rl.models.megatron.setup.torch.distributed")
+    def test_distributed_nonzero_rank_participates_in_import(
+        self, mock_dist, mock_ps, mock_import, tmp_path
+    ):
+        """Test that nonzero ranks participate in distributed checkpoint import."""
+        from nemo_rl.models.megatron.setup import handle_model_import
+
+        mock_dist.is_available.return_value = True
+        mock_dist.is_initialized.return_value = True
+        mock_dist.get_rank.return_value = 3
+        mock_ps.model_parallel_is_initialized.return_value = False
+
+        pretrained_path = tmp_path / "model"
+        mock_import.side_effect = lambda *_args, **_kwargs: self._create_run_config(
+            pretrained_path
+        )
+        config = {
+            "model_name": "test-model",
+            "megatron_cfg": {"some_config": "value"},
+            "hf_config_overrides": {},
+        }
+
+        handle_model_import(
+            config, "test-model", str(pretrained_path), pt_checkpoint_exists=False
+        )
+
+        mock_import.assert_called_once_with(
+            "test-model",
+            str(pretrained_path),
+            {"some_config": "value"},
+        )
+        mock_dist.barrier.assert_called_once()
 
     @patch("nemo_rl.models.megatron.setup.import_model_from_hf_name")
     @patch("nemo_rl.models.megatron.setup.parallel_state")
@@ -899,7 +944,10 @@ class TestHandleModelImport:
 
         mock_ps.model_parallel_is_initialized.return_value = True
 
-        pretrained_path = str(tmp_path / "model")
+        pretrained_path = tmp_path / "model"
+        mock_import.side_effect = lambda *_args, **_kwargs: self._create_run_config(
+            pretrained_path
+        )
         config = {
             "model_name": "test-model",
             "megatron_cfg": {},
@@ -907,7 +955,7 @@ class TestHandleModelImport:
         }
 
         handle_model_import(
-            config, "test-model", pretrained_path, pt_checkpoint_exists=False
+            config, "test-model", str(pretrained_path), pt_checkpoint_exists=False
         )
 
         mock_ps.destroy_model_parallel.assert_called_once()
