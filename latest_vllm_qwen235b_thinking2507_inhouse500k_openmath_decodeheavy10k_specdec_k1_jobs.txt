@@ -20,6 +20,7 @@ output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sn
 profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_openmath_decodeheavy_1024x10000_bs1-4_mbt16384_cuda_graph_no_custom_ar_20260602/profile
 speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_openmath_decodeheavy_1024x10000_bs1-4_mbt16384_cuda_graph_no_custom_ar_20260602/speculative_config.json
 status=3120704 submitted
-current_status=RUNNING as of 2026-06-02 16:08 PDT on nvl72078-T02. No output JSON yet; target and in-house Eagle3 drafter loading/initialization are still in progress.
+current_status=RUNNING as of 2026-06-02 16:20 PDT on nvl72078-T02. Target and in-house Eagle3 drafter initialization/CUDA graph capture completed; first generation batch is in progress and no output JSON has been written yet.
 shape=ISL=1024,OSL=10000,batch_sizes=1,2,4
 prompt_source=OpenMath prompt JSONL, not synthetic dummy tokens.
+note=This is the real OpenMath prompt SpecDec K=1 run for in-house 500K Eagle3; final speedup waits for baseline/spec JSON completion.

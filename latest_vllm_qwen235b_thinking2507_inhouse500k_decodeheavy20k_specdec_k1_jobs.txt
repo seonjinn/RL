@@ -18,6 +18,7 @@ output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sn
 profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_decodeheavy_1024x20000_bs1-4_mbt32768_cuda_graph_no_custom_ar_20260602/profile
 speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_inhouse500k_eagle3_k1_decodeheavy_1024x20000_bs1-4_mbt32768_cuda_graph_no_custom_ar_20260602/speculative_config.json
 status=3120648 submitted
-current_status=RUNNING as of 2026-06-02 16:08 PDT on nvl72155-T08. No output JSON yet.
+current_status=RUNNING as of 2026-06-02 16:20 PDT on nvl72155-T08. Engine initialization/CUDA graph capture completed; first generation batch is in progress and no output JSON has been written yet.
 shape=ISL=1024,OSL=20000,batch_sizes=1,2,4
 prompt_source=synthetic dummy prompt_token_ids, not OpenMath.
+note=This is synthetic prompt_token_ids; compare against 3120128 only for decode-heavy overhead, not math-domain drafter quality.

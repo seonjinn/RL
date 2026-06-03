@@ -18,8 +18,9 @@ output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sn
 profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x20000_bs1-4_mbt32768_cuda_graph_no_custom_ar_20260602/profile
 speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_decodeheavy_1024x20000_bs1-4_mbt32768_cuda_graph_no_custom_ar_20260602/speculative_config.json
 status=3120128 submitted
-current_status=RUNNING as of 2026-06-02 16:08 PDT on nvl72004-T01.
+current_status=COMPLETED as of 2026-06-02 16:18 PDT, exit_code=0:0, node=nvl72004-T01.
 shape=ISL=1024,OSL=20000,batch_sizes=1,2,4
 prompt_source=synthetic dummy prompt_token_ids, not OpenMath.
-partial_results_tok_s_per_gpu=bs1:18.77,bs2:37.03
-partial_results_latency_s=bs1:266.38,bs2:270.08
+results_tok_s_per_gpu=bs1:18.77,bs2:37.03,bs4:73.37
+results_latency_s=bs1:266.38,bs2:270.08,bs4:272.58
+note=Completed baseline-only synthetic decode-heavy run. Use as overhead/control evidence only; OpenMath-prompt baseline/spec pair is the math-domain comparison.

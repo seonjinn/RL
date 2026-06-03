@@ -20,6 +20,9 @@ output_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sn
 profile_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_openmath_decodeheavy_1024x10000_bs1-4_mbt16384_cuda_graph_no_custom_ar_20260602/profile
 speculative_config_json=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen235b_thinking2507_vllm_baseline_openmath_decodeheavy_1024x10000_bs1-4_mbt16384_cuda_graph_no_custom_ar_20260602/speculative_config.json
 status=3120705 submitted
-current_status=RUNNING as of 2026-06-02 16:08 PDT on nvl72127-T15. No output JSON yet; target model loading/initialization is still in progress.
+current_status=RUNNING as of 2026-06-02 16:20 PDT on nvl72127-T15; bs1/bs2 are written, bs4 is still running.
 shape=ISL=1024,OSL=10000,batch_sizes=1,2,4
 prompt_source=OpenMath prompt JSONL, not synthetic dummy tokens.
+partial_results_tok_s_per_gpu=bs1:23.05,bs2:42.41
+partial_results_latency_s=bs1:108.45,bs2:117.89
+note=This is the real OpenMath prompt baseline for the in-house 500K Eagle3 K=1 vLLM standalone decode-heavy comparison.

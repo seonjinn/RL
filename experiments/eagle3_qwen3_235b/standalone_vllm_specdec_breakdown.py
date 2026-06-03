@@ -214,9 +214,7 @@ def diff_spec_decode_metrics(
 
     diff["active"] = diff["num_draft_tokens"] > 0
     if diff["num_draft_tokens"] > 0:
-        diff["acceptance_rate"] = (
-            diff["num_accepted_tokens"] / diff["num_draft_tokens"]
-        )
+        diff["acceptance_rate"] = diff["num_accepted_tokens"] / diff["num_draft_tokens"]
     else:
         diff["acceptance_rate"] = 0.0
     if diff["num_drafts"] > 0:
@@ -359,6 +357,7 @@ def build_llm(args: argparse.Namespace, capture_sizes: list[int]):
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "seed": 0,
         "compilation_config": compilation_config,
+        "disable_log_stats": False,
     }
     if args.enforce_eager:
         kwargs["enforce_eager"] = True
@@ -425,7 +424,9 @@ def main() -> None:
     batch_sizes = sorted(set(args.batch_sizes))
     num_spec_tokens = 0
     if args.speculative_config:
-        num_spec_tokens = int(load_json_arg(args.speculative_config).get("num_speculative_tokens", 0))
+        num_spec_tokens = int(
+            load_json_arg(args.speculative_config).get("num_speculative_tokens", 0)
+        )
     capture_sizes = sorted(
         set(batch_sizes + [bs * max(1, num_spec_tokens + 1) for bs in batch_sizes])
     )
