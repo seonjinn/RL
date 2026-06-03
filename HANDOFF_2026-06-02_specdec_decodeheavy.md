@@ -172,7 +172,17 @@ All COMPLETED unless noted. Result dir = `.../vllm-benchmark/vllm-runs/<TAG>/bre
 | 3122235 | 235B public K=3 decode-heavy (acc rerun) | yes | DONE (results in §2a) |
 
 Pre-existing (earlier session, baseline reuse): 235B in-house K=1 = 3120704, baseline = 3120705.
-3120648 (235B in-house K=1 OSL=20000) was still running earlier — check if relevant.
+
+3120648 (235B in-house K=1 **SYNTHETIC** decode-heavy OSL=**20000**, baseline 3120128) COMPLETED:
+K=1 = 0.488x / 0.497x / 0.502x at bs 1/2/4 (baseline 18.77/37.03/73.37 tok/s/gpu). Pushing decode
+from OSL=10000 → 20000 leaves the slowdown unchanged (~0.49-0.50x) — longer decode does NOT help;
+the slowdown is regime-stable. (Synthetic dummy prompts; even lower than the synthetic-10k 0.656x.)
+
+8B NeMo-RL E2E SpecDec is still BLOCKED at infra level: K=3 job 3120874 FAILED with
+`enroot-nsenter: .../bin/ray: No such file or directory` (Ray driver-venv binary missing; ray 2.49.2).
+Prior attempts 3119388/3119389 failed with `KeyError: moe_enable_deepep`. No 8B NeMo-RL throughput/
+acceptance exists yet — only standalone 8B results are valid. (See memory feedback_gym_ray_pin_conflict
+/ feedback_gym_subprocess_venv_py_version_mismatch for the ray-venv failure family.)
 
 TAG naming for the acc reruns:
 - `qwen235b_thinking2507_vllm_inhouse500k_eagle3_k3_acc_openmath_decodeheavy_1024x10000_bs1-4_mbt16384_cuda_graph_no_custom_ar_20260602`
