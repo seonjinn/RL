@@ -36,6 +36,26 @@ This session tested that hypothesis with **vLLM standalone `LLM.generate` decode
 | public HF K=1 | 0.652x | 0.550x | 0.554x |
 | public HF K=3 | 1.013x | 0.575x | 0.591x |
 
+235B K=3 acceptance reruns (jobs 3122231 in-house / 3122235 public, with acceptance logging; slight
+throughput variance vs the pre-fix rows above is bs1 single-prompt noise):
+
+| config | bs | speedup | acceptance | mean_accept_len | per-position acc | overhead_ratio |
+|--------|----|---------|-----------|-----------------|------------------|----------------|
+| in-house K=3 | 1 | 0.678x | 0.340 | 2.02 | [0.593, 0.313, 0.114] | 2.98x |
+| in-house K=3 | 2 | 0.590x | 0.313 | 1.94 | [0.556, 0.268, 0.113] | 3.28x |
+| in-house K=3 | 4 | 0.557x | 0.353 | 2.06 | [0.578, 0.325, 0.158] | 3.70x |
+| public K=3 | 1 | 0.981x | 0.606 | 2.82 | [0.867, 0.626, 0.326] | 2.87x |
+| public K=3 | 2 | 0.575x | 0.426 | 2.28 | [0.670, 0.396, 0.213] | 3.96x |
+| public K=3 | 4 | 0.572x | 0.363 | 2.09 | [0.615, 0.309, 0.164] | 3.65x |
+
+**235B is BOTH overhead-bound AND acceptance-limited (unlike 8B which was pure overhead).** 235B
+acceptance is low (~31-35% in-house, ~36-61% public) and per-position collapses steeply (pos2 only
+11-33%), so mean_accept_len is only ~2.0-2.8 — below the ~2.9 break-even set by the overhead ratio.
+**public > in-house on acceptance** (bs1 pos0 0.87 vs 0.59), so the in-house mlen8193 drafter quality
+IS a real secondary factor (the earlier K=1-throughput-only read that said "public ≈ in-house, not a
+drafter problem" was masked by overhead). Model check: public K=1 bs1 = pos0 acc 0.87 → mean_len 1.87
+/ overhead 2.87 = 0.65x = measured public K=1 bs1 0.652x ✓.
+
 8B target = `Qwen/Qwen3-8B`, drafter `RedHatAI/Qwen3-8B-speculator.eagle3`, TP=1:
 
 | config | bs1 | bs2 | bs4 | acceptance | mean_accept_len |
@@ -57,10 +77,13 @@ efficiency + scheduling) costs ~2.9x a baseline decode step, **roughly constant 
 ~mean_len 2.9 (≈K=2). So K=1 (2 tokens) always loses; K=3 (≈4 tokens) wins by amortizing the fixed
 overhead. The win is NOT from better acceptance.
 
-**235B does not recover at K=3** (still 0.55-0.68x; public K=3 bs1 only 1.013x) because draft_tp=1
-runs the drafter on a SINGLE GPU while the target is TP=4 → the un-sharded 235B-class drafter forward
-makes the overhead ratio even larger (~4x). public ≈ in-house ⇒ NOT a drafter-quality / mlen8193
-problem; it is the single-GPU drafter overhead.
+**235B does not recover at K=3** (still 0.55-0.68x; public K=3 bs1 only 0.98x). Two compounding causes
+(see acceptance table in §2a): (1) per-step overhead ~2.9-4x (draft_tp=1 single-GPU drafter vs TP=4
+target), AND (2) low acceptance with steep per-position collapse → mean_accept_len only ~2.0-2.8,
+below the ~2.9 break-even. The public drafter has higher acceptance than in-house, so in-house drafter
+quality (mlen8193, possibly overshot by OSL=10000) is a real secondary factor. 235B needs BOTH levers:
+cut overhead (draft_tp) and raise effective accepted length (better drafter, or stop drafting the dead
+3rd position). 8B, by contrast, was pure overhead (99.9% acceptance) and K=3 alone fixed it.
 
 Caveat: the 99.9% is inflated by `ignore_eos=True` + `min_tokens=OSL` forcing generation past natural
 EOS into degenerate repetition (trivially draftable). Real RL (temperature=1.0) acceptance is ~57%
@@ -145,8 +168,8 @@ All COMPLETED unless noted. Result dir = `.../vllm-benchmark/vllm-runs/<TAG>/bre
 | 3121566 | 235B public K=3 decode-heavy | no (pre-fix) | DONE |
 | 3121598 | 8B K=1 decode-heavy (acc rerun) | **yes** | DONE |
 | 3121599 | 8B K=3 decode-heavy (acc rerun) | **yes** | DONE |
-| **3122231** | 235B in-house K=3 decode-heavy (acc rerun) | yes | **RUNNING (~30min in as of 18:34 PT)** |
-| **3122235** | 235B public K=3 decode-heavy (acc rerun) | yes | **RUNNING** |
+| 3122231 | 235B in-house K=3 decode-heavy (acc rerun) | yes | DONE (results in §2a) |
+| 3122235 | 235B public K=3 decode-heavy (acc rerun) | yes | DONE (results in §2a) |
 
 Pre-existing (earlier session, baseline reuse): 235B in-house K=1 = 3120704, baseline = 3120705.
 3120648 (235B in-house K=1 OSL=20000) was still running earlier — check if relevant.
@@ -157,9 +180,10 @@ TAG naming for the acc reruns:
 
 ---
 
-## 5. IMMEDIATE next step — harvest the two RUNNING jobs (3122231, 3122235)
+## 5. Harvest command (3122231/3122235 already harvested — results in §2a)
 
-A background monitor was watching them; in a fresh agent just run the harvest directly once they finish:
+These two finished and their acceptance results are recorded in §2a. Re-run this to re-harvest any
+breakdown.json (also the template for harvesting future runs):
 
 ```bash
 ssh oci-hsg-cs-001-vscode-02 "python3 - <<'PY'
@@ -223,6 +247,13 @@ done
 
 Success criterion: if `draft_tp=4` moves 235B K=3 above ~1.0x, the single-GPU-drafter overhead is
 confirmed as the binding constraint and draft_tp becomes the actionable fix for 235B SpecDec.
+
+Caveat from §2a acceptance data: 235B mean_accept_len is only ~2.0-2.8 (acceptance ~35%, per-position
+collapses), so cutting overhead via draft_tp may only reach break-even, not a large win — 235B also
+needs higher effective accepted length. Pair the draft_tp sweep with: (a) public drafter (better
+acceptance than in-house), (b) try K=2 (the 3rd draft position is accepted only 11-33% of the time, so
+it mostly wastes work), and (c) an OSL≤8192 within-drafter-range run (§7 item 1) since OSL=10000
+overshoots the mlen8193 in-house drafter.
 
 ---
 
