@@ -5,9 +5,9 @@
 # Memory budget (BF16 KV @ 32K, GQA 4 KV heads, TP=8):
 #   model 32 GB + workspace 7 GB = 39 GB static per H100 (80 GB)
 #   gmu=0.85 → 68 GB total, KV pool ~29 GB
-#   max_num_seqs=24 caps worst-case at 24 * 1.54 GB = 36.9 GB; in practice avg
-#   seq is well below 32K because PR #2514 clamps swebench_tests_timeout=60.
-# First submission: observe steady-state KV pool usage; tune cap if OOM appears.
+#   max_num_seqs left at NeMo-RL/vLLM default to mirror 128 GPU runs.
+#   timeout60 clamps avg seq below 32K, so steady-state is much smaller than worst-case.
+# First submission: observe whether OOM occurs at 32K with default seq cap.
 # Run order: BF16 first (this script); FP8 KV second after BF16 confirms healthy.
 #
 # Tokens must be exported in the calling shell (WANDB_API_KEY, HF_TOKEN). No fallback values.
@@ -188,7 +188,6 @@ export COMMAND="CUDA_HOME=/usr/local/cuda \
   policy.generation.temperature=1.0 \
   policy.generation.vllm_cfg.tensor_parallel_size=8 \
   policy.generation.vllm_cfg.gpu_memory_utilization=0.85 \
-  ++policy.generation.vllm_cfg.max_num_seqs=24 \
   policy.generation.vllm_cfg.skip_tokenizer_init=False \
   loss_fn.reference_policy_kl_penalty=0 \
   loss_fn.ratio_clip_min=0.2 \
@@ -239,7 +238,7 @@ echo " VARIANT     : ${VARIANT} (tag: ${VARIANT_TAG})"
 echo " EXP_NAME    : ${EXP_NAME}"
 echo " HW          : 32 nodes x 8 H100 = 256 GPU (24 vLLM + 8 train)"
 echo " Train       : TP=4 EP=8 PP=8 CP=1 DP=2"
-echo " vLLM        : TP=8 x 24 DP groups, gmu=0.85, kv_cache_dtype=auto (BF16), max_num_seqs=24"
+echo " vLLM        : TP=8 x 24 DP groups, gmu=0.85, kv_cache_dtype=auto (BF16), max_num_seqs=default"
 echo " GBS         : 512 (64 prompts x 8 gens), seq=32768, async_age=16"
 echo " Partition   : batch  Time: 04:00:00  max_steps=40 (time-capped)"
 echo " Branch      : $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)"
