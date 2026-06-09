@@ -96,7 +96,7 @@ fi
 nvcc --version 2>&1 | head -5 || true
 
 echo "[GYM CLEANUP] Pruning stale swebench_results_* dirs (>1d old) to prevent project inode quota exhaustion..."
-GYM_PATH="/lustre/fsw/portfolios/coreai/users/sna/repos/nemo-rl-qwen-swe/3rdparty/Gym-workspace/Gym/responses_api_agents/swe_agents"
+GYM_PATH="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/repos/nemo-rl-qwen-swe-pr2280-pr2514/3rdparty/Gym-workspace/Gym/responses_api_agents/swe_agents"
 GYM_LOCK="${GYM_PATH}/.cleanup.lock"
 if [ -d "$GYM_PATH" ]; then
   (

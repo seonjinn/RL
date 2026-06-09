@@ -1,0 +1,65 @@
+--- a/nemo_rl/algorithms/async_utils.py
++++ b/nemo_rl/algorithms/async_utils.py
+@@ -822,7 +822,7 @@
+                 print(
+                     f"⏳ Waiting for {len(self._inflight_threads)} pending gap-fill workers to complete..."
+                 )
+-                self.wait_for_pending_generations()
++                self.wait_for_pending_generations(max_wait_seconds=self._pending_wait_ceiling)
+             self.running = False
+             print("🛑 Trajectory collection stopped")
+
+@@ -986,12 +986,21 @@
+             print(
+                 "⏸️ Non-async engine: waiting for all pending generations to complete..."
+             )
+-            self.wait_for_pending_generations()
++            self.wait_for_pending_generations(max_wait_seconds=self._pending_wait_ceiling)
+
+         elapsed = time.time() - start_time
+         print(f"✅ Ready for refit (took {elapsed:.2f}s)")
+
+@@ -1019,8 +1028,17 @@
+-    def wait_for_pending_generations(self) -> None:
+-        """Wait for all in-flight generation threads to complete."""
++    def wait_for_pending_generations(
++        self, max_wait_seconds: Optional[float] = None
++    ) -> None:
++        """Wait for all in-flight generation threads to complete.
++
++        Args:
++            max_wait_seconds: Optional upper bound on the wait. After this many
++                seconds elapses with threads still pending, the function logs a
++                warning and returns. The threads remain daemon=True and will
++                terminate with the process; this is a defense against a single
++                stuck swe_agent rollout blocking the whole step.
++        """
+         start_time = time.time()
+
+         while True:
+@@ -1034,6 +1052,15 @@
+                 break
+
+             elapsed = time.time() - start_time
++            if max_wait_seconds is not None and elapsed > max_wait_seconds:
++                print(
++                    f"⚠️ wait_for_pending_generations: bounded-wait timeout after "
++                    f"{elapsed:.1f}s with {pending_count} threads still pending; "
++                    f"abandoning wait. Threads are daemon=True and will be "
++                    f"reaped when the interpreter exits. This usually means a "
++                    f"swe_agent rollout exceeded swebench_agent_timeout+60s."
++                )
++                break
+             print(
+                 f"⏳ Waiting for {pending_count} pending generation threads... ({elapsed:.1f}s elapsed)"
+             )
+
+# Also need to add `self._pending_wait_ceiling` in __init__:
+#
+#   self._pending_wait_ceiling = float(
+#       self.master_config.get("grpo", {})
+#                          .get("async_grpo", {})
+#                          .get("pending_wait_ceiling_seconds", 1860.0)
+#   )
+#
+# Default 1860s = swebench_agent_timeout (1800) + 60s shell-timeout grace.
