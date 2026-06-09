@@ -49,6 +49,37 @@ grep -c 'if k != "q_scale"' nemo_rl/models/policy/workers/megatron_policy_worker
 grep -E '^SEQ_LOGPROB_ERROR_THRESHOLD=' examples/swe_bench/run_grpo_swe2_qwen235b_fp8kv.sh  # =null
 ```
 
+## ⚠ CRITICAL: the fixes are UNCOMMITTED working-tree edits
+As of handoff, none of the 4 code fixes are committed:
+- `setup.py`, `megatron_policy_worker.py` -> ` M` (modified, tracked, uncommitted)
+- `serialization.py` -> ` M` **inside the Megatron-LM submodule** (a `git submodule update --init --recursive` WIPES it)
+- `run_grpo_swe2_qwen235b_fp8kv.sh` -> `??` (untracked; survives checkout/pull but not `git clean -fd`)
+
+**Do NOT run `git pull` / `git checkout` / `git reset` / `git stash` / `git submodule update` in the ruit repo** — any of these can lose the fixes. To restore them after any git op, run the idempotent re-apply script:
+```
+bash experiments/scaleout_256h100_32k_async16/scripts/apply_vllm017_fixes.sh          # apply+verify
+bash experiments/scaleout_256h100_32k_async16/scripts/apply_vllm017_fixes.sh --verify # verify only (all counts must be 1)
+```
+`.bak_strict` / `.bak_vai` / `.bak_seqlp` backups sit next to the edited files. The q_scale fix (fix #3) is a multi-line code edit, not sed-able — re-apply it with `experiments/eagle3_qwen3_235b/remote_patches/apply_ruit_fp8kv_qscale_fix.py` if the verify shows it missing.
+
+## Exact submit wrapper (token-safe, via vscode-02)
+Tokens are read from `~/.bashrc` with grep (do NOT `source ~/.bashrc` — it hangs on lustre). Always filter output through `grep -avE "hf_ccp|cd4db"` so a token never prints.
+```
+WK=$(grep -hoE 'WANDB_API_KEY=[A-Za-z0-9]+' ~/.bashrc | head -1 | cut -d= -f2)
+HK=$(grep -hoE 'HF_TOKEN=[A-Za-z0-9_]+' ~/.bashrc | head -1 | cut -d= -f2)
+export WANDB_API_KEY="$WK" HF_TOKEN="$HK"
+export HF_HOME=/lustre/fsw/portfolios/coreai/users/sna/hf_home_vllm017
+export NUM_NODES=32 SBATCH_PARTITION=batch SBATCH_TIME=4:0:0 MAX_NUM_STEPS=40
+export NUM_GEN_NODES=24 MAX_TRAJECTORY_AGE_STEPS=4 EXP_SUFFIX=vLLM0.17-fp8kv-192g64t-async4
+export PERSISTENT_CACHE=/lustre/fsw/portfolios/coreai/users/sna/.cache/q235b_vllm017_192g64t_a4
+cd <ruit-repo>; bash examples/swe_bench/run_grpo_swe2_qwen235b_fp8kv.sh
+```
+From a laptop, pipe via stdin: `ssh cw-dfw-cs-001-vscode-02 'bash -s' < wrapper.sh 2>&1 | grep -avE "hf_ccp|cd4db"`.
+
+## Dependencies / fragilities the next agent must know
+- **HF_HOME points into pmannan's files via symlinks**: `hub/` and all 260 `.distcp` + `.metadata` shards symlink to `/lustre/fsw/.../pmannan/rl_projects/hf_home/...`. If pmannan deletes/moves those, both the HF model load and the Megatron checkpoint load break. Only `run_config.yaml` is a real (patched) sna file.
+- **Contingency — if `ConnectionRefusedError` recurs after the seq_logprob fix**: then it is a *separate*, genuine NemoGym stability issue (not the assertion). Suspect the in-flight weight update disrupting vLLM servers under `concurrency=768`; first mitigation to try is lowering `env.nemo_gym.swe_agents_{train,val}...concurrency` (768 -> 256). The 68/80 ConnectionRefused in jobs 12670854/12673673 were downstream of the assertion crash and should disappear now.
+
 ## Gold config (in the launch script; matches pmannan's 0.13 gold except 0.17/no-HybridEP)
 GBS=512 (num_prompts_per_step=64 x num_generations_per_prompt=8), max_total_sequence_length=32768,
 `kv_cache_dtype=fp8_e4m3`, gpu_memory_utilization=0.8, temperature=1.0,
