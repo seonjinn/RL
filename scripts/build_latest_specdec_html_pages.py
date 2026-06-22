@@ -520,7 +520,7 @@ def nemorl_charts_section(rows: pd.DataFrame) -> str:
         model_sections.append(
             f'<h3>{esc(model)}</h3>'
             '<p class="note">Within this model, x-axis groups are matched setup slices: mode, max OSL, and cluster/source. Method colors compare against the matched baseline inside each slice.</p>'
-            f'<div class="charts">{rendered}</div>'
+            f'<div class="model-charts">{rendered}</div>'
         )
     return (
         '<section><h2>Baseline-Relative Charts</h2>'
@@ -602,11 +602,11 @@ def nemorl_multigroup_metric_svg(
     if math.isnan(max_value) or max_value <= 0:
         return ""
     y_max = max(1.15 if reference_line else 0.1, max_value * 1.2)
-    legend_cols = min(5, len(methods))
+    legend_cols = min(4, len(methods))
     legend_rows = math.ceil(len(methods) / legend_cols)
-    width = max(1040, 120 + 138 * len(group_labels))
-    height = 430 + max(0, legend_rows - 1) * 24
-    left, right, top, bottom = 72, 26, 78 + max(0, legend_rows - 1) * 24, 104
+    width = max(980, 120 + 132 * len(group_labels))
+    height = 444 + max(0, legend_rows - 1) * 28
+    left, right, top, bottom = 72, 26, 84 + max(0, legend_rows - 1) * 28, 108
     plot_w, plot_h = width - left - right, height - top - bottom
     group_w = plot_w / max(1, len(group_labels))
     inner = min(116, group_w * 0.82)
@@ -627,7 +627,7 @@ def nemorl_multigroup_metric_svg(
         label = f"{value:.1f}x" if reference_line else f"{value:.1f}"
         grid.append(
             f'<line x1="{left}" x2="{width - right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#d1d5db" stroke-dasharray="6 6"/>'
-            f'<text x="{left - 9}" y="{y + 4:.1f}" text-anchor="end" font-size="13" fill="#4b5563">{label}</text>'
+            f'<text x="{left - 9}" y="{y + 5:.1f}" text-anchor="end" font-size="14" fill="#4b5563">{label}</text>'
         )
 
     baseline = ""
@@ -635,25 +635,25 @@ def nemorl_multigroup_metric_svg(
         y = y_for(1.0)
         baseline = (
             f'<line x1="{left}" x2="{width - right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#111827" stroke-dasharray="5 5" stroke-width="1.3"/>'
-            f'<text x="{width - right - 82}" y="{y - 8:.1f}" font-size="13" fill="#111827">1.0x baseline</text>'
+            f'<text x="{width - right - 92}" y="{y - 9:.1f}" font-size="14" fill="#111827">1.0x baseline</text>'
         )
 
-    legend_gap = 168
+    legend_gap = 218
     legend_start = width / 2 - ((legend_cols - 1) * legend_gap) / 2
     legend_parts = []
     for idx, method in enumerate(methods):
         x = legend_start + (idx % legend_cols) * legend_gap
-        y = 39 + (idx // legend_cols) * 22
+        y = 38 + (idx // legend_cols) * 24
         color = PALETTE.get(method, "#4b5563")
         legend_parts.append(
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="14" height="14" rx="2" fill="{color}" stroke="#192133" stroke-width="1.4"/>'
-            f'<text x="{x + 20:.1f}" y="{y + 12:.1f}" font-size="13" fill="#111827">{esc(nemorl_method_label(method))}</text>'
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="15" height="15" rx="2" fill="{color}" stroke="#192133" stroke-width="1.4"/>'
+            f'<text x="{x + 21:.1f}" y="{y + 13:.1f}" font-size="14" fill="#111827">{esc(nemorl_method_label(method))}</text>'
         )
 
     bars = []
     for group_idx, label in enumerate(group_labels):
         gx = left + group_idx * group_w + group_w / 2
-        bars.append(svg_multiline_text(gx, height - 82, label.split("\n"), size=11))
+        bars.append(svg_multiline_text(gx, height - 88, label.split("\n"), size=13))
         for method_idx, method in enumerate(methods):
             value = lookup.get((label, method), math.nan)
             if math.isnan(value):
@@ -663,14 +663,14 @@ def nemorl_multigroup_metric_svg(
             color = PALETTE.get(method, "#4b5563")
             bars.append(
                 f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{top + plot_h - y:.1f}" rx="2.5" fill="{color}" stroke="#192133" stroke-width="1.2"/>'
-                f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" font-size="10" fill="#111827">{value:.2f}x</text>'
+                f'<text x="{x + bar_w / 2:.1f}" y="{y - 5:.1f}" text-anchor="middle" font-size="12" fill="#111827">{value:.2f}x</text>'
             )
 
     return (
         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">'
-        f'<text x="{width / 2}" y="24" text-anchor="middle" font-size="19" font-weight="700" fill="#111827">{esc(title)}</text>'
+        f'<text x="{width / 2}" y="24" text-anchor="middle" font-size="21" font-weight="700" fill="#111827">{esc(title)}</text>'
         f'{"".join(legend_parts)}'
-        f'<text x="18" y="{top + plot_h / 2:.1f}" transform="rotate(-90 18 {top + plot_h / 2:.1f})" text-anchor="middle" font-size="15" fill="#111827">{esc(y_label)}</text>'
+        f'<text x="18" y="{top + plot_h / 2:.1f}" transform="rotate(-90 18 {top + plot_h / 2:.1f})" text-anchor="middle" font-size="16" fill="#111827">{esc(y_label)}</text>'
         f'{"".join(grid)}{baseline}'
         f'<line x1="{left}" x2="{left}" y1="{top}" y2="{top + plot_h}" stroke="#111827" stroke-width="2"/>'
         f'<line x1="{left}" x2="{width - right}" y1="{top + plot_h}" y2="{top + plot_h}" stroke="#111827" stroke-width="2"/>'
@@ -1453,7 +1453,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         key = "Step20 rows are running or pending; matched speedup will update as baseline and spec rows complete more steps."
     css = """
 :root{--ink:#172033;--muted:#637083;--line:#d8dee8;--bg:#f6f8fb;--panel:#fff;--green:#157f47;--amber:#946200}
-*{box-sizing:border-box}body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{padding:28px 32px 18px;background:#fff;border-bottom:1px solid var(--line)}main{max-width:1480px;margin:0 auto;padding:22px 28px 42px}h1{margin:0 0 8px;font-size:28px;letter-spacing:0}h2{margin:0 0 12px;font-size:20px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts{grid-template-columns:1fr}}@media(max-width:900px){header,main{padding-left:16px;padding-right:16px}.kpis{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
+*{box-sizing:border-box}body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{padding:28px 32px 18px;background:#fff;border-bottom:1px solid var(--line)}main{max-width:1480px;margin:0 auto;padding:22px 28px 42px}h1{margin:0 0 8px;font-size:28px;letter-spacing:0}h2{margin:0 0 12px;font-size:20px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:1fr;gap:14px;max-width:1160px;margin:12px auto 20px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts,.model-charts{grid-template-columns:1fr}}@media(max-width:900px){header,main{padding-left:16px;padding-right:16px}.kpis{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
     cols = [
         ("source_group", "Source group", "text"),
         ("cluster", "Cluster", "text"),
