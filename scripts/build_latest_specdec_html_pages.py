@@ -480,47 +480,58 @@ def nemorl_chart_rows(rows: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def nemorl_chart_model_order(models: list[str]) -> list[str]:
+    preferred = ["Qwen3-235B-A22B", "Qwen3-30B-A3B", "Qwen3-32B", "Qwen3-8B"]
+    present = list(dict.fromkeys(str(model) for model in models if str(model) and str(model) != "nan"))
+    ordered = [model for model in preferred if model in present]
+    ordered.extend(model for model in present if model not in ordered)
+    return ordered
+
+
 def nemorl_charts_section(rows: pd.DataFrame) -> str:
     chart_rows = nemorl_chart_rows(rows)
     if chart_rows.empty:
         return '<section><h2>Baseline-Relative Charts</h2><p class="note">No parsed step20 timing rows are available yet for charting.</p></section>'
-    cards = [
-        nemorl_multigroup_metric_svg(
-            chart_rows,
-            "Generation Throughput Speedup",
-            "gen_tps_speedup",
-            "Speedup vs baseline",
-        ),
-        nemorl_multigroup_metric_svg(
-            chart_rows,
-            "E2E Throughput Speedup",
-            "e2e_tps_speedup",
-            "Speedup vs baseline",
-        ),
-        nemorl_multigroup_metric_svg(
-            chart_rows,
-            "Generation Step-Time Speedup",
-            "generation_time_speedup",
-            "Baseline time / run time",
-        ),
-        nemorl_multigroup_metric_svg(
-            chart_rows,
-            "E2E Step-Time Speedup",
-            "e2e_step_time_speedup",
-            "Baseline time / run time",
-        ),
+    metric_specs = [
+        ("Generation Throughput Speedup", "gen_tps_speedup", "Speedup vs baseline"),
+        ("E2E Throughput Speedup", "e2e_tps_speedup", "Speedup vs baseline"),
+        ("Generation Step-Time Speedup", "generation_time_speedup", "Baseline time / run time"),
+        ("E2E Step-Time Speedup", "e2e_step_time_speedup", "Baseline time / run time"),
     ]
+    model_sections = []
+    for model in nemorl_chart_model_order(chart_rows["model_name"].astype(str).tolist()):
+        sub = chart_rows[chart_rows["model_name"].astype(str) == model].copy()
+        if sub.empty:
+            continue
+        cards = [
+            nemorl_multigroup_metric_svg(
+                sub,
+                title,
+                metric,
+                y_label,
+                include_model_in_group=False,
+                max_groups=6,
+            )
+            for title, metric, y_label in metric_specs
+        ]
+        rendered = "".join(f'<div class="chart-card">{card}</div>' for card in cards if card)
+        if not rendered:
+            continue
+        model_sections.append(
+            f'<h3>{esc(model)}</h3>'
+            '<p class="note">Within this model, x-axis groups are matched setup slices: mode, max OSL, and cluster/source. Method colors compare against the matched baseline inside each slice.</p>'
+            f'<div class="charts">{rendered}</div>'
+        )
     return (
         '<section><h2>Baseline-Relative Charts</h2>'
-        '<p class="note">Charts use parsed step20 rows. Baselines are matched by model, mode, max OSL, temperature/top_p, and source setup; Qwen30/Qwen32 historical rows are separated from Qwen235B live rows by OSL and cluster label.</p>'
-        '<div class="charts">'
-        + "".join(f'<div class="chart-card">{card}</div>' for card in cards if card)
-        + '</div></section>'
+        '<p class="note">Charts use parsed step20 rows and are grouped by model. Baselines are matched by model, mode, max OSL, temperature/top_p, and source setup; each model section keeps those setup slices separate on the x-axis.</p>'
+        + "".join(model_sections)
+        + '</section>'
     )
 
 
-def nemorl_group_label(row: pd.Series) -> str:
-    model = short_model(row.get("model_name", row.get("model", "")))
+def nemorl_group_label(row: pd.Series, *, include_model: bool = True) -> str:
+    model = short_model(row.get("model_name", row.get("model", ""))) if include_model else ""
     mode = str(row.get("mode", "") or "sync")
     osl = clean_float(row.get("max_new_tokens"))
     cluster = str(row.get("cluster", "") or "").upper()
@@ -565,6 +576,7 @@ def nemorl_multigroup_metric_svg(
     *,
     reference_line: bool = True,
     max_groups: int = 10,
+    include_model_in_group: bool = True,
 ) -> str:
     if rows.empty:
         return ""
@@ -575,7 +587,7 @@ def nemorl_multigroup_metric_svg(
     rows = rows[pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0) > 0]
     if rows.empty:
         return ""
-    rows["group_label"] = rows.apply(nemorl_group_label, axis=1)
+    rows["group_label"] = rows.apply(lambda row: nemorl_group_label(row, include_model=include_model_in_group), axis=1)
     rows["source_rank"] = rows["source_group"].astype(str).map(
         lambda value: 0 if "Qwen235B" in value else 1 if "Lyris" in value else 2
     )
@@ -1296,7 +1308,7 @@ def load_lyris_historical_nemorl() -> pd.DataFrame:
                     "vllm_token_acceptance_pct": clean_float(row.get("acceptance_pct")),
                     "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accept_len")),
                     "manifest": str(path.relative_to(ROOT)),
-                    "notes": str(row.get("notes", "")),
+                    "notes": str(row.get("notes", "")).strip(),
                     "log_path": str(row.get("source_log", "")),
                 }
             )
@@ -1354,7 +1366,7 @@ def load_oci_historical_nemorl() -> pd.DataFrame:
                 "vllm_token_acceptance_pct": clean_float(row.get("acceptance_rate_pct")),
                 "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accepted_length")),
                 "manifest": str(NEMORL_OCI_HISTORICAL.relative_to(ROOT)),
-                "notes": str(row.get("notes", "")),
+                "notes": str(row.get("notes", "")).strip(),
                 "log_path": str(row.get("sources", "")),
             }
         )
@@ -1441,7 +1453,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         key = "Step20 rows are running or pending; matched speedup will update as baseline and spec rows complete more steps."
     css = """
 :root{--ink:#172033;--muted:#637083;--line:#d8dee8;--bg:#f6f8fb;--panel:#fff;--green:#157f47;--amber:#946200}
-*{box-sizing:border-box}body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{padding:28px 32px 18px;background:#fff;border-bottom:1px solid var(--line)}main{max-width:1480px;margin:0 auto;padding:22px 28px 42px}h1{margin:0 0 8px;font-size:28px;letter-spacing:0}h2{margin:0 0 12px;font-size:20px}.subtitle,.note{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts{grid-template-columns:1fr}}@media(max-width:900px){header,main{padding-left:16px;padding-right:16px}.kpis{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
+*{box-sizing:border-box}body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{padding:28px 32px 18px;background:#fff;border-bottom:1px solid var(--line)}main{max-width:1480px;margin:0 auto;padding:22px 28px 42px}h1{margin:0 0 8px;font-size:28px;letter-spacing:0}h2{margin:0 0 12px;font-size:20px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts{grid-template-columns:1fr}}@media(max-width:900px){header,main{padding-left:16px;padding-right:16px}.kpis{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
     cols = [
         ("source_group", "Source group", "text"),
         ("cluster", "Cluster", "text"),
