@@ -44,14 +44,19 @@
     th, td { border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; font-size: 13px; }
     th { background: #eef1f6; }
     tr:last-child td { border-bottom: 0; }
+    .chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+    .chart-figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+    .chart-figure img { display: block; width: 100%; height: auto; }
+    .chart-figure figcaption { color: var(--muted); font-size: 13px; margin-top: 7px; }
     .note { border-left: 4px solid var(--blue); background: var(--panel); border-radius: 8px; padding: 13px 14px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 14px; }
+    @media (max-width: 980px) { .chart-grid { grid-template-columns: 1fr; } }
     @media (max-width: 840px) { .grid { grid-template-columns: 1fr; } main { padding: 18px 12px 32px; } }
   </style>
 </head>
 <body>
-<main>
+<main id="overview">
   <h1>SpecDec RL Benchmark Dashboard</h1>
-  <p>Updated 2026-06-22 02:02:07 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
+  <p>Updated 2026-06-22 02:05:15 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
 
   <div class="grid">
     <div class="card"><div class="label">vLLM scope</div><div class="metric">Math + SWE</div><p>Batch sweeps and temp 0/1 comparisons with ISL/OSL shown in the result tables.</p></div>
@@ -70,9 +75,21 @@
   </section>
 
   <section>
+    <h2>vLLM Standalone Charts</h2>
+    <p>Each bar uses the best valid matched-baseline row available for that model/domain/temperature cell. The table below keeps the method, batch size, ISL, and OSL visible.</p>
+    <div class="chart-grid"><figure class="chart-figure"><img src="figures/vllm_best_speedup.png" alt="Best matched-baseline throughput speedup. Method, batch size, ISL, and OSL are listed in the table below."><figcaption>Best matched-baseline throughput speedup. Method, batch size, ISL, and OSL are listed in the table below.</figcaption></figure><figure class="chart-figure"><img src="figures/vllm_best_acceptance.png" alt="Acceptance rate for the same best rows; temperature 1 generally lowers acceptance and accepted length."><figcaption>Acceptance rate for the same best rows; temperature 1 generally lowers acceptance and accepted length.</figcaption></figure></div>
+  </section>
+
+  <section>
     <h2>Best vLLM Standalone Rows</h2>
     <p>Best rows are selected by matched baseline speedup for each model, domain, and temperature.</p>
     <div class="table-scroll"><table><thead><tr><th>Domain</th><th>Model</th><th>Temp</th><th>Method</th><th>BS</th><th>ISL/OSL</th><th>tok/s/GPU</th><th>Speedup</th><th>Acceptance</th><th>Mean accept len</th><th>Source</th></tr></thead><tbody><tr><td>Math</td><td>Qwen3-235B-A22B</td><td>0.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>15.31</td><td>8.00x</td><td>83.8%</td><td>7.82</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>Math</td><td>Qwen3-235B-A22B</td><td>1.0</td><td>suffix_k32</td><td>2</td><td>4096/32768</td><td>23.18</td><td>5.90x</td><td>73.4%</td><td>6.52</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-235B-A22B</td><td>0.0</td><td>suffix_k32</td><td>4</td><td>4096/32768</td><td>46.72</td><td>6.08x</td><td>86.2%</td><td>7.62</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-235B-A22B</td><td>1.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>6.10</td><td>2.86x</td><td>55.1%</td><td>3.12</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-30B-A3B</td><td>0.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>176.72</td><td>8.89x</td><td>93.9%</td><td>10.01</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-30B-A3B</td><td>1.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>168.53</td><td>8.61x</td><td>91.2%</td><td>9.46</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>Math</td><td>Qwen3-32B</td><td>0.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>71.80</td><td>10.97x</td><td>95.8%</td><td>10.40</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>Math</td><td>Qwen3-32B</td><td>1.0</td><td>suffix_k32</td><td>8</td><td>4096/32768</td><td>194.02</td><td>3.11x</td><td>78.5%</td><td>6.24</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-32B</td><td>0.0</td><td>suffix_k32</td><td>4</td><td>4096/32768</td><td>222.13</td><td>6.55x</td><td>92.5%</td><td>9.69</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-32B</td><td>1.0</td><td>suffix_k32</td><td>2</td><td>4096/32768</td><td>39.60</td><td>2.42x</td><td>62.3%</td><td>4.06</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>NeMo-RL Baseline-Relative Charts</h2>
+    <p>Sync-mode rows with parsed matched-baseline metrics are plotted. Qwen30/32 are performance recipe OSL4096; Qwen235B is latest nightly/PR2879 with vLLM 0.20 path and recipe OSL8192.</p>
+    <div class="chart-grid"><figure class="chart-figure"><img src="figures/nemorl_generation_throughput_speedup.png" alt="Generation worker tokens/sec/GPU speedup vs matched baseline."><figcaption>Generation worker tokens/sec/GPU speedup vs matched baseline.</figcaption></figure><figure class="chart-figure"><img src="figures/nemorl_e2e_throughput_speedup.png" alt="End-to-end tokens/sec/GPU speedup vs matched baseline."><figcaption>End-to-end tokens/sec/GPU speedup vs matched baseline.</figcaption></figure><figure class="chart-figure"><img src="figures/nemorl_generation_time_speedup.png" alt="Baseline generation time divided by SpecDec generation time; higher is faster."><figcaption>Baseline generation time divided by SpecDec generation time; higher is faster.</figcaption></figure><figure class="chart-figure"><img src="figures/nemorl_e2e_step_time_speedup.png" alt="Baseline total step time divided by SpecDec total step time; higher is faster."><figcaption>Baseline total step time divided by SpecDec total step time; higher is faster.</figcaption></figure></div>
   </section>
 
   <section>

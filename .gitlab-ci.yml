@@ -17,6 +17,8 @@ pages:
   timeout: 2h
   script:
     - test -f public/index.html
+    - test -f public/figures/vllm_best_speedup.png
+    - test -f public/figures/nemorl_generation_throughput_speedup.png
     - test -f public/reports/vllm_standalone_results_latest.html
     - test -f public/reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html
     - ls -lah public
