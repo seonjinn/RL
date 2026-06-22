@@ -1,0 +1,16 @@
+# Lyris SpecDec checkpoint/dependency prewarm
+submitted_at=2026-06-22 01:58:19 PDT
+job_id=2175770
+remote_host=login-lyris
+remote_repo=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark
+logs_dir=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/vllm-runs/angelslim_checkpoint_prewarm_lyris_20260622
+summary_json=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/vllm-runs/angelslim_checkpoint_prewarm_lyris_20260622/prewarm_summary.json
+account=coreai_dlalgo_llm
+partition=gb200
+container_image=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-hsg-ultra-rl-v0.20.2-pd42430.sqsh
+hf_home=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
+arctic_site=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/.container_cache/arctic-inference-0.1.1-py313
+arctic_pip_spec=arctic-inference==0.1.1
+model_ids=AngelSlim/Qwen3-a3B_eagle3 AngelSlim/Qwen3-32B_eagle3 AngelSlim/Qwen3-8B_eagle3 AngelSlim/Qwen3-14B_eagle3 AngelSlim/Qwen3-4B_eagle3 AngelSlim/Qwen3-4b-dflare AngelSlim/Qwen3-8b-dflare AngelSlim/Gpt-oss-20b-dflare
+optional_model_ids=
+status=2175770 submitted

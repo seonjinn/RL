@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpecDec RL Benchmark Dashboard</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #151922;
+      --muted: #5d6675;
+      --line: #d7dce5;
+      --blue: #1d5fbf;
+      --green: #0c7a4b;
+      --amber: #986100;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 26px 18px 44px; }
+    h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
+    h2 { margin: 28px 0 10px; font-size: 20px; letter-spacing: 0; }
+    p { color: var(--muted); margin: 7px 0 0; }
+    code { background: #eef1f6; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; font-size: 12px; }
+    a { color: var(--blue); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; font-weight: 700; letter-spacing: .04em; }
+    .metric { font-size: 24px; font-weight: 780; margin-top: 6px; }
+    .muted { color: var(--muted); }
+    .pill { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 9px; border-radius: 999px; background: #eef1f6; border: 1px solid var(--line); font-weight: 700; font-size: 12px; }
+    .pill.ok { color: var(--green); }
+    .pill.warn { color: var(--amber); }
+    .links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .links a { display: inline-flex; align-items: center; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 7px 10px; text-decoration: none; font-weight: 700; }
+    .table-scroll { width: 100%; overflow-x: auto; margin-top: 10px; }
+    table { min-width: 1060px; width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    th, td { border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { background: #eef1f6; }
+    tr:last-child td { border-bottom: 0; }
+    .note { border-left: 4px solid var(--blue); background: var(--panel); border-radius: 8px; padding: 13px 14px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 14px; }
+    @media (max-width: 840px) { .grid { grid-template-columns: 1fr; } main { padding: 18px 12px 32px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SpecDec RL Benchmark Dashboard</h1>
+  <p>Updated 2026-06-22 02:01:09 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
+
+  <div class="grid">
+    <div class="card"><div class="label">vLLM scope</div><div class="metric">Math + SWE</div><p>Batch sweeps and temp 0/1 comparisons with ISL/OSL shown in the result tables.</p></div>
+    <div class="card"><div class="label">NeMo-RL scope</div><div class="metric">Perf recipe</div><p>Qwen30/32 use recipe OSL4096; Qwen235B PR2879 rows use recipe OSL8192.</p></div>
+    <div class="card"><div class="label">AngelSlim staging</div><div class="metric"><code>2175770</code></div><p>HF download job is submitted on Lyris, not pulled from the login node.</p></div>
+  </div>
+
+  <section>
+    <h2>Report Links</h2>
+    <div class="links">
+      <a href="reports/vllm_standalone_results_latest.html">vLLM standalone latest</a>
+      <a href="reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html">NeMo-RL latest</a>
+      <a href="reports/specdec_clean_benchmark_results_20260617.html">Combined clean report</a>
+      <a href="archive/specdec_math_progress_report.html">Archive: old Eagle3 report</a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Best vLLM Standalone Rows</h2>
+    <p>Best rows are selected by matched baseline speedup for each model, domain, and temperature.</p>
+    <div class="table-scroll"><table><thead><tr><th>Domain</th><th>Model</th><th>Temp</th><th>Method</th><th>BS</th><th>ISL/OSL</th><th>tok/s/GPU</th><th>Speedup</th><th>Acceptance</th><th>Mean accept len</th><th>Source</th></tr></thead><tbody><tr><td>Math</td><td>Qwen3-235B-A22B</td><td>0.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>15.31</td><td>8.00x</td><td>83.8%</td><td>7.82</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>Math</td><td>Qwen3-235B-A22B</td><td>1.0</td><td>suffix_k32</td><td>2</td><td>4096/32768</td><td>23.18</td><td>5.90x</td><td>73.4%</td><td>6.52</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-235B-A22B</td><td>0.0</td><td>suffix_k32</td><td>4</td><td>4096/32768</td><td>46.72</td><td>6.08x</td><td>86.2%</td><td>7.62</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-235B-A22B</td><td>1.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>6.10</td><td>2.86x</td><td>55.1%</td><td>3.12</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-30B-A3B</td><td>0.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>176.72</td><td>8.89x</td><td>93.9%</td><td>10.01</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-30B-A3B</td><td>1.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>168.53</td><td>8.61x</td><td>91.2%</td><td>9.46</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>Math</td><td>Qwen3-32B</td><td>0.0</td><td>suffix_k32</td><td>1</td><td>4096/32768</td><td>71.80</td><td>10.97x</td><td>95.8%</td><td>10.40</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>Math</td><td>Qwen3-32B</td><td>1.0</td><td>suffix_k32</td><td>8</td><td>4096/32768</td><td>194.02</td><td>3.11x</td><td>78.5%</td><td>6.24</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-32B</td><td>0.0</td><td>suffix_k32</td><td>4</td><td>4096/32768</td><td>222.13</td><td>6.55x</td><td>92.5%</td><td>9.69</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr><tr><td>SWE</td><td>Qwen3-32B</td><td>1.0</td><td>suffix_k32</td><td>2</td><td>4096/32768</td><td>39.60</td><td>2.42x</td><td>62.3%</td><td>4.06</td><td><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code></td></tr></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>Best NeMo-RL Rows</h2>
+    <p>Best rows are selected by generation throughput speedup against the matched baseline. E2E throughput and step-time speedup are shown separately.</p>
+    <div class="table-scroll"><table><thead><tr><th>Job</th><th>Model</th><th>Mode</th><th>Method</th><th>Completed</th><th>Max OSL</th><th>Gen tok/s/GPU</th><th>Gen TPS speedup</th><th>Gen time speedup</th><th>E2E TPS speedup</th><th>E2E step speedup</th><th>Acceptance</th><th>Mean accept len</th><th>Source</th></tr></thead><tbody><tr><td><code>2172802</code></td><td>Qwen3-235B-A22B</td><td>sync</td><td>eagle3_k5</td><td>19/20</td><td>8192</td><td>31.58</td><td>1.81x</td><td>1.89x</td><td>1.78x</td><td>1.85x</td><td>n/a</td><td>n/a</td><td><code>docs/lyris_qwen235b_pr2879_live_enriched_20260621.csv</code></td></tr><tr><td><code>2152193</code></td><td>Qwen3-30B-A3B</td><td>sync</td><td>Eagle-3</td><td>19/20 last 20</td><td>4096</td><td>3226.28</td><td>2.15x</td><td>2.18x</td><td>1.39x</td><td>1.41x</td><td>63.9%</td><td>2.87</td><td><code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code></td></tr><tr><td><code>2152195</code></td><td>Qwen3-32B</td><td>sync</td><td>Eagle-3</td><td>19/20 last 20</td><td>4096</td><td>2150.33</td><td>1.69x</td><td>1.72x</td><td>1.33x</td><td>1.36x</td><td>45.2%</td><td>2.33</td><td><code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code></td></tr></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>DFlare and AngelSlim Status</h2>
+    <div class="note">
+      <span class="pill warn">staging</span>
+      <p>DFlare public checkpoints found so far are <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>. Current vLLM/NeMo-RL result pages do not yet include a direct DFlare row because the local generation path is vLLM SpecDec, while DFlare is exposed through AngelSlim's standalone tooling. The submitted HF staging job also downloads AngelSlim Eagle3 drafters for Qwen3-A3B, Qwen3-32B, Qwen3-8B, Qwen3-14B, and Qwen3-4B.</p>
+      <p>Models requested in staging job: <code>AngelSlim/Qwen3-a3B_eagle3 AngelSlim/Qwen3-32B_eagle3 AngelSlim/Qwen3-8B_eagle3 AngelSlim/Qwen3-14B_eagle3 AngelSlim/Qwen3-4B_eagle3 AngelSlim/Qwen3-4b-dflare AngelSlim/Qwen3-8b-dflare AngelSlim/Gpt-oss-20b-dflare</code></p>
+      <p>Logs: <code>/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/vllm-runs/angelslim_checkpoint_prewarm_lyris_20260622</code></p>
+      <p>Summary JSON: <code>/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/vllm-runs/angelslim_checkpoint_prewarm_lyris_20260622/prewarm_summary.json</code></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Data Artifacts</h2>
+    <div class="links">
+      <a href="data/vllm_standalone_added_results_latest.csv">vLLM added CSV</a>
+      <a href="data/vllm_standalone_all_batches_combined_20260619.csv">vLLM all-batch CSV</a>
+      <a href="data/lyris_qwen235b_pr2879_live_enriched_20260621.csv">Qwen235B NeMo-RL CSV</a>
+      <a href="data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv">Qwen30/32 NeMo-RL CSV</a>
+      <a href="data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt">AngelSlim job record</a>
+    </div>
+  </section>
+</main>
+</body>
+</html>

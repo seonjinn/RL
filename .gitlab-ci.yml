@@ -16,9 +16,9 @@ pages:
     - pages
   timeout: 2h
   script:
-    - test -f experiments/eagle3_qwen3_235b/specdec_math_progress_report.html
-    - mkdir -p public
-    - cp experiments/eagle3_qwen3_235b/specdec_math_progress_report.html public/index.html
+    - test -f public/index.html
+    - test -f public/reports/vllm_standalone_results_latest.html
+    - test -f public/reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html
     - ls -lah public
   artifacts:
     paths:

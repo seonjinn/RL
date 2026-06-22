@@ -1,0 +1,1905 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3 Eagle3 SpecDec Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-2: #eef2f7;
+      --ink: #17202c;
+      --muted: #607086;
+      --line: #d9e0ea;
+      --blue: #1f62b4;
+      --green: #0f7b55;
+      --amber: #a15c00;
+      --red: #b42318;
+      --purple: #6f42c1;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #111418;
+      --panel: #1a2028;
+      --panel-2: #232b36;
+      --ink: #e9edf3;
+      --muted: #aab5c3;
+      --line: #303b49;
+      --blue: #7db2ff;
+      --green: #67d29f;
+      --amber: #ffbf66;
+      --red: #ff8b7f;
+      --purple: #c6a7ff;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 18px 42px;
+    }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 30px; letter-spacing: 0; line-height: 1.12; }
+    h2 { font-size: 20px; margin: 28px 0 12px; letter-spacing: 0; }
+    h3 { font-size: 15px; margin-bottom: 8px; letter-spacing: 0; }
+    p { color: var(--muted); }
+    code {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--ink);
+    }
+    a { color: var(--blue); }
+    .sub { max-width: 860px; margin-top: 7px; }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--ink);
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .theme-toggle input { margin: 0; }
+    .tabs {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      display: flex;
+      gap: 6px;
+      padding: 10px 0;
+      background: color-mix(in srgb, var(--bg) 92%, transparent);
+      backdrop-filter: blur(8px);
+      overflow-x: auto;
+      border-bottom: 1px solid var(--line);
+    }
+    .tab {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 8px 11px;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+    .tab[aria-selected="true"] {
+      border-color: var(--blue);
+      background: color-mix(in srgb, var(--blue) 14%, var(--panel));
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .page { display: none; }
+    .page.active { display: block; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+      min-height: 112px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .metric {
+      margin-top: 7px;
+      font-size: 27px;
+      font-weight: 760;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+    .small { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .ok { color: var(--green); }
+    .warn { color: var(--amber); }
+    .bad { color: var(--red); }
+    .info { color: var(--blue); }
+    .purple { color: var(--purple); }
+    .banner {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--blue);
+      border-radius: 8px;
+      padding: 14px 16px;
+      box-shadow: var(--shadow);
+      margin-top: 14px;
+    }
+    .banner p { margin-top: 6px; }
+    .summary-hero {
+      border-left-color: var(--green);
+      margin-bottom: 14px;
+    }
+    .takeaways {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .takeaway {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 116px;
+    }
+    .takeaway strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+      font-size: 14px;
+    }
+    .takeaway p { font-size: 13px; }
+    .conclusion-table table { min-width: 900px; }
+    details.detail-log > summary {
+      cursor: pointer;
+      font-weight: 740;
+      color: var(--ink);
+      list-style-position: inside;
+    }
+    details.detail-log[open] > summary { margin-bottom: 8px; }
+    .status-row {
+      display: grid;
+      grid-template-columns: 160px 1fr 170px;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      margin-top: 9px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 86px;
+      height: 26px;
+      padding: 0 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--ink);
+    }
+    .pill.ok { background: color-mix(in srgb, var(--green) 16%, var(--panel)); border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+    .pill.warn { background: color-mix(in srgb, var(--amber) 16%, var(--panel)); border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); }
+    .pill.bad { background: color-mix(in srgb, var(--red) 16%, var(--panel)); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+    .pill.info { background: color-mix(in srgb, var(--blue) 14%, var(--panel)); border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .table-scroll {
+      width: 100%;
+      overflow-x: auto;
+      margin-top: 8px;
+    }
+    .table-scroll table { min-width: 1320px; }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 11px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 13px;
+    }
+    th { background: var(--panel-2); color: var(--ink); }
+    tr:last-child td { border-bottom: 0; }
+    .bars {
+      display: grid;
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 150px 1fr 74px;
+      gap: 10px;
+      align-items: center;
+      font-size: 13px;
+    }
+    .bar-track {
+      height: 16px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+    }
+    .bar-fill {
+      height: 100%;
+      width: var(--w);
+      background: var(--c);
+      border-radius: 999px;
+    }
+    .contract-flow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr) 42px minmax(0, 1fr);
+      gap: 10px;
+      align-items: stretch;
+      margin: 12px 0 14px;
+    }
+    .contract-node {
+      min-height: 126px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      box-shadow: var(--shadow);
+    }
+    .contract-node h3 { margin-bottom: 7px; }
+    .contract-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 18px;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .step {
+      min-height: 92px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+      position: relative;
+    }
+    .step:not(:last-child)::after {
+      content: ">";
+      position: absolute;
+      right: -9px;
+      top: 35px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .step-title { font-weight: 730; font-size: 13px; }
+    .step p { margin-top: 5px; font-size: 12px; }
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+      box-shadow: var(--shadow);
+      margin-top: 12px;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .mono-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 9px;
+      font-size: 13px;
+    }
+    .mono-list div {
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .chart-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-top: 14px;
+    }
+    .chart-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .chart-svg {
+      width: 100%;
+      min-width: 720px;
+      height: auto;
+      display: block;
+    }
+    .chart-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 10px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .legend-line {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend-line::before {
+      content: "";
+      width: 20px;
+      height: 3px;
+      background: var(--legend-color);
+      border-radius: 999px;
+      display: inline-block;
+    }
+    @media (max-width: 900px) {
+      header { display: block; }
+      .toolbar { justify-content: flex-start; margin-top: 12px; }
+      .grid, .grid.two, .split, .contract-flow, .takeaways { grid-template-columns: 1fr; }
+      .contract-arrow { min-height: 18px; }
+      .status-row { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .step:not(:last-child)::after { display: none; }
+      .bar-row { grid-template-columns: 105px 1fr 58px; }
+    }
+    @media (max-width: 560px) {
+      main { padding: 18px 12px 32px; }
+      h1 { font-size: 24px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Qwen3 Eagle3 SpecDec Dashboard</h1>
+      <p class="sub">Updated 2026-06-02 14:46 PT. Scope: Eagle3 drafter training with Speculators, NeMo-RL rollout throughput, acceptance, dataset split/overlap, and long-tail gating.</p>
+    </div>
+    <div class="toolbar">
+      <label class="theme-toggle" title="Switch light or dark mode">
+        <input id="themeSwitch" type="checkbox">
+        Dark mode
+      </label>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Report pages">
+    <button class="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button class="tab" data-tab="q30">Qwen3-30B-A3B</button>
+    <button class="tab" data-tab="q235">Qwen3-235B</button>
+    <button class="tab" data-tab="data">Dataset &amp; Training</button>
+    <button class="tab" data-tab="parallel">500K Parallel Plan</button>
+    <button class="tab" data-tab="links">Artifacts</button>
+  </nav>
+
+  <section id="overview" class="page active">
+    <div class="banner summary-hero">
+      <h2>Executive Summary</h2>
+      <p>The current conclusion is clear. Qwen3-30B-A3B shows real NeMo-RL generation-phase speedup, but not 2x. Qwen3-235B PublicHF has high acceptance in older always-on checks, but the 4-step NeMo-RL run was slower than the matched baseline; the current exact-base 20-step validation is retrying as job <code>3119292</code> after a Megatron-Bridge config-sanitize hotfix and has reached actors <code>128/128</code>. The lower-batch gate is verified on Qwen3-30B-A3B in live full-GRPO jobs. Strict request-gate K=<code>1</code> job <code>3115812</code> has Steps <code>1-20</code> generation metrics with mean <code>4381.42</code> generated tok/s/GPU (<code>1.051x</code> over historical baseline), and it disables larger active batches such as <code>last_active_requests=32</code> with <code>effective_k=0</code>. Hybrid request/token gate + dynamic-K job <code>3115813</code> has Steps <code>1-20</code> generation/E2E metrics with mean <code>4374.96</code> generated tok/s/GPU (<code>1.049x</code>) and enables tail requests such as <code>last_active_requests=1</code> with <code>effective_k=3</code>. Request <= <code>8</code> retry <code>3116841</code> completed <code>20/20</code> metrics: mean <code>4380.97</code> generated tok/s/GPU, weighted acceptance <code>54.67%</code>, and scheduler enabled ratio only <code>0.0137%</code>, so the gate works but is too conservative for large speedup. Clean Qwen3-235B standalone vLLM boundary baseline <code>3116058</code> and PublicHF Eagle3 K=<code>1</code> SpecDec retry <code>3116562</code> both completed; standalone SpecDec improves batch-size sweep throughput by <code>1.125x-1.275x</code> through bs=<code>32</code>, but this is not NeMo-RL E2E. Qwen3-8B standalone vLLM with <code>RedHatAI/Qwen3-8B-speculator.eagle3</code> shows K=<code>3</code> speedups up to <code>2.145x</code>; NeMo-RL retries <code>3119388</code>/<code>3119389</code> are still in driver dependency/native-extension setup with no GRPO step or acceptance metrics yet.</p>
+      <div class="takeaways">
+        <div class="takeaway">
+          <strong>Qwen3-30B-A3B</strong>
+          <p>500K Speculators Eagle3 training is complete. Best NeMo-RL generation speedup is <code>1.366x</code>, acceptance is <code>57.40%</code>, and E2E speedup is only about <code>1.096x</code>.</p>
+        </div>
+        <div class="takeaway">
+          <strong>Qwen3-235B PublicHF</strong>
+          <p>4-step K=<code>1</code> acceptance is <code>65.71%</code>, but generation throughput is <code>0.986x</code> and E2E throughput is <code>0.975x</code>. Later 20-step K=<code>1</code>/<code>2</code> reruns <code>3115042</code>/<code>3115043</code> failed before usable metrics.</p>
+        </div>
+        <div class="takeaway">
+          <strong>Qwen3-235B In-house 500K</strong>
+          <p>Hidden-state coverage is <code>500000/500000</code>. Training job <code>3105111</code> completed and wrote checkpoint <code>0</code>; validation <code>loss_epoch=5.429</code>. Eval <code>3114678</code> failed before rollout metrics, so it is not an acceptance/throughput result.</p>
+        </div>
+      </div>
+    </div>
+
+    <h2>Active Runs Submitted 2026-06-02</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Job</th><th>Model / Drafter</th><th>K</th><th>Gate</th><th>Steps</th><th>Account</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>235B PublicHF always-on</td><td><code>3115042</code><br><a href="https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/glrugovm">W&amp;B</a></td><td><code>Qwen/Qwen3-235B-A22B-Thinking-2507</code> + NVIDIA PublicHF Eagle3</td><td><code>1</code></td><td>request <code>0</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>235B PublicHF always-on</td><td><code>3115043</code><br><a href="https://wandb.ai/nvidia/sync-grpo-gb200_oci-benchmark/runs/jv4ol91v">W&amp;B</a></td><td><code>Qwen/Qwen3-235B-A22B-Thinking-2507</code> + NVIDIA PublicHF Eagle3</td><td><code>2</code></td><td>request <code>0</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>235B base exact baseline</td><td><code>3115167</code></td><td><code>Qwen/Qwen3-235B-A22B</code>, no drafter</td><td>-</td><td>-</td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>235B base exact PublicHF</td><td><code>3115169</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>request <code>0</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>235B base exact PublicHF</td><td><code>3115168</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>3</code></td><td>request <code>0</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>30B 500K long-tail</td><td><code>3115812</code></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>1</code></td><td>request <code>4</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill ok">COMPLETED</span></td></tr>
+          <tr><td>30B 500K hybrid dynamic-K</td><td><code>3115813</code></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>3/2/1</code></td><td>request <code>64</code>, token <code>2048</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill ok">COMPLETED</span></td></tr>
+          <tr><td>30B 500K request-batch log</td><td><code>3116714</code></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>1</code></td><td>request <code>8</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>30B 500K request-batch log retry</td><td><code>3116841</code></td><td><code>Qwen/Qwen3-30B-A3B</code> + in-house 500K Speculators Eagle3</td><td><code>1</code></td><td>request <code>8</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill ok">COMPLETED</span></td></tr>
+          <tr><td>30B main Megatron nsys</td><td><code>3119417</code></td><td><code>Qwen/Qwen3-30B-A3B</code>, main branch <code>333864d</code></td><td>-</td><td>seqpack + alltoall</td><td><code>10</code>, profile <code>2:5</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill bad">FAILED</span> Hydra stray backslash</td></tr>
+          <tr><td>30B main Megatron nsys retry</td><td><code>3119501</code></td><td><code>Qwen/Qwen3-30B-A3B</code>, main branch <code>333864d</code></td><td>-</td><td>seqpack + alltoall</td><td><code>10</code>, profile <code>2:5</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>8B vLLM standalone sweep</td><td><code>3118288</code>/<code>3118289</code>/<code>3118290</code></td><td><code>Qwen/Qwen3-8B</code> + <code>RedHatAI/Qwen3-8B-speculator.eagle3</code></td><td><code>0/1/3</code></td><td>batch sweep <code>1/2/4/8/16/32</code></td><td>standalone</td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill ok">COMPLETED</span></td></tr>
+          <tr><td>8B NeMo-RL baseline</td><td><code>3118323</code></td><td><code>Qwen/Qwen3-8B</code>, no drafter</td><td>-</td><td>-</td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill bad">CANCELLED</span></td></tr>
+          <tr><td>8B NeMo-RL SpecDec</td><td><code>3118324</code></td><td><code>Qwen/Qwen3-8B</code> + <code>RedHatAI/Qwen3-8B-speculator.eagle3</code></td><td><code>3</code></td><td>request <code>8</code>, token <code>4096</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill bad">CANCELLED</span></td></tr>
+          <tr><td>8B NeMo-RL baseline retry</td><td><code>3119388</code></td><td><code>Qwen/Qwen3-8B</code>, no drafter</td><td>-</td><td>-</td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>8B NeMo-RL SpecDec retry</td><td><code>3119389</code></td><td><code>Qwen/Qwen3-8B</code> + <code>RedHatAI/Qwen3-8B-speculator.eagle3</code></td><td><code>3</code></td><td>request <code>8</code>, token <code>4096</code></td><td><code>20</code></td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill info">RUNNING</span></td></tr>
+          <tr><td>235B vLLM boundary baseline</td><td><code>3116058</code></td><td><code>Qwen/Qwen3-235B-A22B</code></td><td><code>0</code></td><td>batch sweep <code>1/2/4/8/16/32</code></td><td>standalone</td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill ok">COMPLETED</span></td></tr>
+          <tr><td>235B vLLM boundary SpecDec</td><td><code>3116057</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>batch sweep <code>1/2/4/8/16/32</code></td><td>standalone</td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>235B vLLM boundary SpecDec retry</td><td><code>3116562</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>same sweep, custom all-reduce disabled</td><td>standalone</td><td><code>coreai_dlalgo_nemorl</code></td><td><span class="pill ok">COMPLETED</span></td></tr>
+          <tr><td>235B NeMo-RL boundary validation</td><td><code>3116849</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>request <code>32</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill bad">FAILED</span></td></tr>
+          <tr><td>235B NeMo-RL boundary validation retry</td><td><code>3119292</code></td><td><code>Qwen/Qwen3-235B-A22B</code> + <code>nvidia/Qwen3-235B-A22B-Eagle3</code></td><td><code>1</code></td><td>request <code>32</code>, token <code>0</code></td><td><code>20</code></td><td><code>coreai_dlalgo_llm</code></td><td><span class="pill info">RUNNING</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small">All active NeMo-RL replacements use <code>NRL_FORCE_REBUILD_VENVS=true</code>, <code>--time=04:00:00</code>, sequence packing enabled, and container <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh</code>. As of 14:42 PT, patched 30B jobs <code>3115812</code>/<code>3115813</code> completed successfully. Both emitted generation and E2E timing through Step <code>20</code>. Job <code>3116714</code> failed before generation because native extension rebuild exceeded driver <code>srun</code> memory; retry <code>3116841</code> completed successfully with Steps <code>1-20</code> full timing metrics. Its mean generated throughput is <code>4380.97 tok/s/GPU</code>, speedup is <code>1.051x</code> versus historical baseline <code>3056050</code>, weighted acceptance is <code>54.67%</code>, weighted scheduler enabled ratio is <code>0.0137%</code>, and weighted runner enabled ratio is <code>0.3709%</code>. Step <code>20</code> generation is <code>4392.31 generated tok/s/GPU</code> with <code>effective_k=0</code> at <code>last_active_requests=32</code>. This confirms request-bucket long-tail gating, but also shows that request-only gating is too narrow to drive a large throughput gain. Earlier jobs <code>3115812</code>/<code>3115813</code> started with driver CPU=<code>1</code>, so use them primarily for functional long-tail validation. The compatibility patch dispatches by function signature and does not touch generation, verifier, acceptance, or loss logic.</p>
+    <p class="small"><strong>235B boundary status:</strong> the clean CUDA-graph / profiler-off / instrumentation-off baseline <code>3116058</code> completed successfully, and matching PublicHF Eagle3 K=<code>1</code> SpecDec retry <code>3116562</code> also completed after disabling vLLM custom all-reduce. These are standalone vLLM <code>LLM.generate</code> wall-clock sweeps, not NeMo-RL E2E. The result shows standalone speedup across bs=<code>1/2/4/8/16/32</code>, but trace attribution coverage is <code>0%</code> because profiler/instrumentation was intentionally disabled to preserve clean wall-clock timing. Exact-base NeMo-RL jobs <code>3115167</code>/<code>3115168</code>/<code>3115169</code> all failed before rollout, so they produced no acceptance or throughput metric. The follow-up exact-base NeMo-RL validation <code>3116849</code> also failed before rollout metrics during <code>policy.prepare_refit_info()</code>: Megatron-Bridge <code>qkv_config</code> broadcast attempted to pickle a <code>torch._C._distributed_c10d.ProcessGroup</code>. Retry <code>3119292</code> is running after applying a config-sanitize hotfix and has reached actors <code>128/128</code>; as of 2026-06-02 14:57 PDT it is still in 32-node worker environment setup and has no GRPO rollout, acceptance, or throughput metric yet.</p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>235B Standalone vLLM Batch Size</th><th>Baseline Tok/s/GPU</th><th>SpecDec K=1 Tok/s/GPU</th><th>Throughput Speedup</th><th>Latency Speedup</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>1</code></td><td><code>27.40</code></td><td><code>32.71</code></td><td><code>1.194x</code></td><td><code>1.194x</code></td></tr>
+          <tr><td><code>2</code></td><td><code>51.84</code></td><td><code>62.70</code></td><td><code>1.210x</code></td><td><code>1.210x</code></td></tr>
+          <tr><td><code>4</code></td><td><code>104.00</code></td><td><code>116.99</code></td><td><code>1.125x</code></td><td><code>1.125x</code></td></tr>
+          <tr><td><code>8</code></td><td><code>200.00</code></td><td><code>236.19</code></td><td><code>1.181x</code></td><td><code>1.181x</code></td></tr>
+          <tr><td><code>16</code></td><td><code>373.53</code></td><td><code>455.80</code></td><td><code>1.220x</code></td><td><code>1.220x</code></td></tr>
+          <tr><td><code>32</code></td><td><code>661.61</code></td><td><code>843.53</code></td><td><code>1.275x</code></td><td><code>1.275x</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>8B Public Speculator Fast Check</h2>
+    <p class="small">This is a low-cost diagnostic with <code>Qwen/Qwen3-8B</code> and <code>RedHatAI/Qwen3-8B-speculator.eagle3</code>. The standalone vLLM result is useful for batch-boundary intuition, but it is not yet a NeMo-RL speedup result. First NeMo-RL jobs <code>3118323</code>/<code>3118324</code> were cancelled after their driver logs stopped updating during forced native-extension rebuild and emitted no GRPO step, throughput, or acceptance metrics. The 8B launchers now pass the same rebuild safeguards as the larger-model launchers: <code>DRIVER_SRUN_MEM=128G</code>, <code>DRIVER_SRUN_CPUS_PER_TASK=8</code>, <code>MAX_JOBS=4</code>, <code>CMAKE_BUILD_PARALLEL_LEVEL=4</code>, <code>NVTE_BUILD_MAX_JOBS=4</code>, <code>NINJAFLAGS=-j4</code>, and <code>MAKEFLAGS=-j4</code>. Retries <code>3119388</code>/<code>3119389</code> are running; as of 2026-06-02 14:57 PDT their driver builds have progressed through <code>flash-attn</code>, <code>transformer-engine-torch</code>, and <code>nv-grouped-gemm</code>, but they still have no GRPO step, acceptance, or throughput metrics. The Qwen3-8B NeMo-RL K=<code>3</code> result is therefore not available yet.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Batch size</th><th>Baseline tok/s/GPU</th><th>K=1 tok/s/GPU</th><th>K=1 speedup</th><th>K=3 tok/s/GPU</th><th>K=3 speedup</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>1</code></td><td><code>245.68</code></td><td><code>241.20</code></td><td><code>0.982x</code></td><td><code>434.45</code></td><td><code>1.768x</code></td></tr>
+          <tr><td><code>2</code></td><td><code>482.62</code></td><td><code>326.17</code></td><td><code>0.676x</code></td><td><code>437.35</code></td><td><code>0.906x</code></td></tr>
+          <tr><td><code>4</code></td><td><code>855.50</code></td><td><code>959.64</code></td><td><code>1.122x</code></td><td><code>1716.56</code></td><td><code>2.006x</code></td></tr>
+          <tr><td><code>8</code></td><td><code>1792.27</code></td><td><code>1903.83</code></td><td><code>1.062x</code></td><td><code>3372.17</code></td><td><code>1.882x</code></td></tr>
+          <tr><td><code>16</code></td><td><code>3219.52</code></td><td><code>3764.53</code></td><td><code>1.169x</code></td><td><code>6388.47</code></td><td><code>1.984x</code></td></tr>
+          <tr><td><code>32</code></td><td><code>5349.54</code></td><td><code>7121.34</code></td><td><code>1.331x</code></td><td><code>11475.60</code></td><td><code>2.145x</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small">Interpretation: K=<code>3</code> is clearly useful in the standalone batch sweep for bs=<code>4</code> and above, but bs=<code>2</code> is slower and K=<code>1</code> is weak until larger batches. Acceptance was not emitted by the standalone script, so use NeMo-RL SpecDec retry <code>3119389</code> for request-gated acceptance and rollout timing once it reaches GRPO steps.</p>
+
+    <h2>Live 30B Long-Tail Validation</h2>
+    <div class="table-scroll conclusion-table">
+      <table>
+        <thead>
+          <tr><th>Job</th><th>Gate</th><th>Step evidence</th><th>Generation tok/s/GPU</th><th>Acceptance</th><th>Gate evidence</th><th>Interpretation</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>3115812</code></td><td>K=<code>1</code>, request <= <code>4</code></td><td>Generation Steps <code>1-20/20</code>; E2E timing Steps <code>1-20</code></td><td>Steps 1-20 mean <code>4381.42</code> (<code>1.051x</code>)</td><td>Weighted Steps 1-20 <code>53.98%</code>, but only <code>5760</code> draft tokens total</td><td>Large batch disabled: Step 20 <code>last_active_requests=32</code>, <code>effective_k=0</code>. Tail enabled: Step 16 <code>last_active_requests=1</code>, <code>effective_k=1</code>; raw logs also show requests=<code>3/4</code> with <code>last_disabled=False</code>.</td><td>Strict request <= <code>4</code> gating proves lower-batch-only behavior, but it is too conservative and barely drafts.</td></tr>
+          <tr><td><code>3115813</code></td><td>K=<code>3/2/1</code>, request <= <code>64</code>, token <= <code>2048</code></td><td>Generation Steps <code>1-20/20</code>; E2E timing Steps <code>1-20</code></td><td>Steps 1-20 mean <code>4374.96</code> (<code>1.049x</code>)</td><td>Weighted Steps 1-20 <code>40.71%</code></td><td>Tail enabled: Step 20 <code>last_active_requests=1</code>, <code>effective_k=3</code>. Third-position acceptance remains near zero: Step 20 <code>0.5637,0.2946,0.0001</code>.</td><td>Hybrid gate drafts enough to measure, but K=<code>3</code> wastes work. Prefer K=<code>1</code>/K=<code>2</code> until later-position acceptance improves.</td></tr>
+          <tr><td><code>3116841</code></td><td>K=<code>1</code>, request <= <code>8</code></td><td>Full timing Steps <code>1-20/20</code>; Slurm <code>COMPLETED</code></td><td>Steps 1-20 mean <code>4380.97</code> (<code>1.051x</code>); Step 20 <code>4392.31</code></td><td>Weighted Steps 1-20 <code>54.67%</code>, with <code>17271</code> draft tokens total</td><td>Large batches are disabled: Step 20 <code>last_active_requests=32</code>, <code>effective_k=0</code>. Tail examples are enabled: Step 10 <code>last_active_requests=1</code>, <code>effective_k=1</code>. Weighted scheduler enabled ratio is only <code>0.0137%</code>.</td><td>Request <= <code>8</code> explicitly confirms lower-batch-only behavior, but it is still too conservative. Acceptance is healthy on drafted tokens, yet the drafter is enabled too rarely for large speedup.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Why Acceptance Did Not Become 2x Speedup</h2>
+    <p class="small">The DREAM-R result is the right warning sign, but it is not the same measurement as our NeMo-RL Eagle3 runs. <a href="https://arxiv.org/pdf/2605.28678v1">DREAM-R</a> reports large gains such as MathVerse <code>52.61%</code> acceptance with <code>2.38x</code> speedup because acceptance is measured at a reasoning-step granularity and their FPSR system overlaps draft, target, verification, rollback, and fast-forward work. Our current NeMo-RL numbers are token-level Eagle3 acceptance inside vLLM, mostly K=<code>1</code>, with GRPO logprobs/training/reward still in the step.</p>
+    <div class="table-scroll conclusion-table">
+      <table>
+        <thead>
+          <tr><th>Factor</th><th>DREAM-R / related systems</th><th>Our current NeMo-RL evidence</th><th>Why it matters</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Acceptance unit</td><td>Reasoning-step acceptance; one accepted draft can skip many target tokens.</td><td>Token-level Eagle3 acceptance. Qwen3-235B PublicHF K=<code>1</code> accepts one token per proposal position.</td><td>K=<code>1</code> with <code>65.71%</code> acceptance has a simple no-overhead intuition near <code>1.66x</code>, not <code>2x+</code>. Real overhead reduces it further.</td></tr>
+          <tr><td>Parallel overlap</td><td>FPSR overlaps draft and target/verifier work across separate execution resources.</td><td>vLLM SpecDec pays drafter forward, target verification, sampling, scheduler, KV/cache, and cross-node coordination inside the rollout loop.</td><td>If overhead is comparable to the saved target work, high acceptance can still be throughput-neutral or slower.</td></tr>
+          <tr><td>Batch regime</td><td>SpecDec is most valuable when target decoding is underfilled or latency-bound.</td><td>Completed 235B PublicHF job <code>3084952</code> was effectively always-on: scheduler <code>enabled_ratio=1.0</code>, <code>disabled=0</code>.</td><td>At large/high-utilization batches, the target model is already busy and drafter/verifier overhead can erase the gain. Long-tail gating is therefore required.</td></tr>
+          <tr><td>Draft depth</td><td>Can amortize cost across longer speculative reasoning chunks.</td><td>30B K=<code>3</code> late-position acceptance collapsed: latest live Step 12 is <code>0.5584</code>, <code>0.2840</code>, <code>0.0001</code>. K=<code>1</code> is the only consistently strong position so far.</td><td>Deeper K only helps if later positions are accepted. Otherwise it adds draft work with little saved target work.</td></tr>
+          <tr><td>Measured scope</td><td>Inference-system speedup.</td><td>NeMo-RL E2E includes rollout generation plus logprobs, reward, policy update, synchronization, and logging.</td><td>A generation-phase gain is diluted in E2E GRPO step time unless generation dominates the step or policy-side work is also optimized.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Decision Points</h2>
+    <div class="table-scroll conclusion-table">
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Current Answer</th><th>Evidence</th><th>Next Action</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Do we have 2x generation speedup?</td>
+            <td><span class="pill warn">Not yet</span></td>
+            <td>30B best is <code>1.366x</code>. 235B PublicHF always-on is <code>0.986x</code>.</td>
+            <td>Use completed 30B jobs <code>3115812</code>/<code>3115813</code>/<code>3116841</code>. The 235B NeMo-RL request<=32 validation <code>3116849</code> failed before rollout due to a Megatron-Bridge config pickle issue; retry <code>3119292</code> is running after the sanitize hotfix. Standalone vLLM boundary <code>3116058</code>/<code>3116562</code> is complete.</td>
+          </tr>
+          <tr>
+            <td>Why is 235B slower despite high acceptance?</td>
+            <td><span class="pill info">Overhead, not drafter quality alone</span></td>
+            <td><code>3084952</code> had acceptance <code>65.71%</code>, but gate metrics were <code>enabled_ratio=1.0</code> and <code>disabled=0</code>.</td>
+            <td>Disable SpecDec for large batches and enable it only in the long tail.</td>
+          </tr>
+          <tr>
+            <td>Where is the 235B in-house drafter?</td>
+            <td><span class="pill ok">training complete</span></td>
+            <td><code>3105111</code> completed, hidden states <code>500000/500000</code>, checkpoint <code>0</code>, validation <code>loss_epoch=5.429</code>.</td>
+            <td>Fix worker environment/build path for in-house 235B eval, then rerun K=1/K=2. PublicHF K=1/K=2 20-step runs are already active.</td>
+          </tr>
+          <tr>
+            <td>Is long-tail gating verified?</td>
+            <td><span class="pill ok">Yes for 30B</span></td>
+            <td><code>3115812</code> disables larger batches with <code>last_active_requests=32</code>, <code>effective_k=0</code>, and enables tail cases with requests <code>1-4</code>, <code>effective_k=1</code>. <code>3115813</code> enables tail cases with <code>last_active_requests=1</code>, <code>effective_k=3</code>. <code>3116841</code> confirms the request <= <code>8</code> bucket split.</td>
+            <td><code>3116841</code> now provides explicit request-bucket averages for request <= <code>8</code>: latest enabled average active requests <code>1.91</code>, disabled average active requests <code>101.45</code>. Use it to choose the smallest gate that produces meaningful draft volume.</td>
+          </tr>
+          <tr>
+            <td>Can we split drafter vs verifier execution time?</td>
+            <td><span class="pill info">partially today</span></td>
+            <td>Current NeMo-RL/vLLM metrics expose draft/accepted token counters, acceptance, and gate state, but not clean drafter-forward versus verifier-forward wall time.</td>
+            <td>vLLM standalone breakdown retry <code>3115354</code> is running with explicit <code>profiler_config</code>; use internal timers/NVTX only if the trace still lacks draft/verify ranges.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>235B PublicHF Step Acceptance</h2>
+    <p class="small">These are the completed NeMo-RL step metrics from corrected PublicHF job <code>3084952</code>. The drafter did attach and acceptance is high, but the gate stayed effectively always-on: scheduler <code>enabled_ratio=1.0</code> and <code>disabled=0</code> for all observed steps.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Generation elapsed</th><th>Generated tok/s/GPU</th><th>E2E tok/s/GPU</th><th>Acceptance</th><th>Draft tokens</th><th>Accepted tokens</th><th>Gate state</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>1</code></td><td><code>371.98s</code></td><td><code>63.70</code></td><td><code>37.53</code></td><td><code>62.82%</code></td><td><code>1,862,514</code></td><td><code>1,169,985</code></td><td><code>always enabled</code></td></tr>
+          <tr><td><code>2</code></td><td><code>287.80s</code></td><td><code>43.39</code></td><td><code>34.35</code></td><td><code>69.01%</code></td><td><code>945,471</code></td><td><code>652,467</code></td><td><code>always enabled</code></td></tr>
+          <tr><td><code>3</code></td><td><code>330.29s</code></td><td><code>73.58</code></td><td><code>53.74</code></td><td><code>65.82%</code></td><td><code>1,875,608</code></td><td><code>1,234,590</code></td><td><code>always enabled</code></td></tr>
+          <tr><td><code>4</code></td><td><code>327.48s</code></td><td><code>61.78</code></td><td><code>48.76</code></td><td><code>65.20%</code></td><td><code>1,567,346</code></td><td><code>1,021,833</code></td><td><code>always enabled</code></td></tr>
+          <tr><td><strong>Mean</strong></td><td><code>329.57s</code></td><td><code>60.61</code></td><td><code>43.60</code></td><td><code>65.71%</code></td><td colspan="2"><code>6,251,425 draft / 4,078,875 accepted</code></td><td><code>not lower-batch-only</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>30B Lower-Batch Gate Tests</h2>
+    <p class="small">Yes, Qwen3-30B-A3B was tested with small-batch-only/runtime gates. Request-count-only gating worked functionally, but it did not produce the best speedup. The strongest observed policy was token-pressure gating, which is closer to "enable SpecDec only when the decode work is underfilled enough to benefit."</p>
+    <p class="small"><strong>Gate-transition evidence, 2026-06-02:</strong> live full-GRPO jobs now show exactly when SpecDec turns on. In request <= <code>4</code> job <code>3115812</code>, larger active batches such as Step 20 <code>last_active_requests=32</code> set <code>effective_k=0</code>, while tail cases with requests <code>1-4</code> set <code>effective_k=1</code>. In hybrid request <= <code>64</code> / token <= <code>2048</code> job <code>3115813</code>, tail cases such as Step 20 with <code>last_active_requests=1</code> set <code>effective_k=3</code>, while raw runner logs show larger requests such as <code>96/128</code> disabled. Replacement request <= <code>8</code> job <code>3116841</code> completed Step <code>20</code>: weighted scheduler enabled ratio across Steps <code>1-20</code> is only <code>0.0137%</code>, Step 20 disables <code>last_active_requests=32</code> with <code>effective_k=0</code>, and Step 10 enables <code>last_active_requests=1</code> with <code>effective_k=1</code>.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Gate</th><th>Steps</th><th>Generated tok/s/GPU</th><th>Speedup vs baseline</th><th>Acceptance</th><th>Conclusion</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>3059445</code></td><td>request <= <code>4</code></td><td><code>20/20</code></td><td><code>4414.40</code></td><td><code>1.059x</code></td><td><code>44.87%</code></td><td>Too strict; enables very little draft work.</td></tr>
+          <tr><td><code>3059556</code></td><td>request <= <code>32</code></td><td><code>20/20</code></td><td><code>4401.79</code></td><td><code>1.056x</code></td><td><code>52.12%</code></td><td>Functional, but still weak.</td></tr>
+          <tr><td><code>3059932</code></td><td>request <= <code>64</code></td><td><code>20/20</code></td><td><code>4427.50</code></td><td><code>1.062x</code></td><td><code>56.47%</code></td><td>Request-only gate remains near 1.06x.</td></tr>
+          <tr><td><code>3058759</code></td><td>token <= <code>2048</code></td><td><code>20/20</code></td><td><code>5596.71</code></td><td><code>1.342x</code></td><td><code>57.43%</code></td><td>Strong completed 20-step token-pressure result.</td></tr>
+          <tr><td><code>3060379</code></td><td>instrumented token <= <code>2048</code></td><td><code>8/8</code></td><td><code>5696.58</code></td><td><code>1.366x</code></td><td><code>57.40%</code></td><td>Best observed NeMo-RL generation result.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>SpecDec Timing Breakdown</h2>
+    <p class="small">The current pipeline can explain acceptance and gate behavior, but not yet a precise wall-clock split between drafter generation and target verification. That split matters for 235B because high acceptance alone did not produce speedup.</p>
+    <p class="small"><strong>Update, 2026-06-02 01:29 PT:</strong> submitted corrected 30B profiling job <code>3106841</code> to capture <code>vllm_generation_worker</code> nsys traces for K=1, token gate <code>2048</code>, profile window <code>2:4</code>, with Ray log sync enabled every 30 seconds. The earlier job <code>3106783</code> was cancelled because the nsys artifact sync env was not propagated. Earlier completed nsys runs profiled <code>megatron_policy_worker</code>, so they cannot cleanly separate drafter generation from target verification.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Available now</th><th>Missing for exact breakdown</th><th>Next instrumentation</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Did the drafter run?</td><td><code>num_draft_tokens</code>, <code>num_drafts</code>, <code>active</code></td><td>None for activity/volume.</td><td>Already collected from vLLM metric snapshots.</td></tr>
+          <tr><td>Were draft tokens accepted?</td><td><code>num_accepted_tokens</code>, <code>acceptance_rate</code>, per-position acceptance</td><td>None for acceptance quality when all DP workers report.</td><td>Continue using complete-DP reliability guard.</td></tr>
+          <tr><td>Was SpecDec enabled only in the long tail?</td><td>Yes for 30B: <code>3115812</code> and <code>3115813</code> show <code>effective_k=0</code> on larger active batches and <code>effective_k&gt;0</code> on tail requests. Job <code>3116841</code> adds explicit request-bucket averages for request <= <code>8</code>.</td><td>Per-request wall-clock timing while gate toggles.</td><td>Use <code>3116841</code> once it reaches generation; add request-bucket timing only if the current gate counters are still insufficient.</td></tr>
+          <tr><td>How much time did drafter generation take?</td><td>Not separated by current NeMo-RL logs.</td><td>Drafter forward GPU time and host scheduling time.</td><td>Job <code>3106841</code> targets <code>vllm_generation_worker</code> nsys traces; add internal timers only if the trace lacks draft ranges.</td></tr>
+          <tr><td>How much time did verifier/target verification take?</td><td>Only total generation elapsed and aggregate vLLM forward/execute style metrics when enabled.</td><td>Verifier forward GPU time, accept/reject sampling time, and post-step copy/scheduler time.</td><td>Use job <code>3106841</code> to inspect target execution/verification ranges, then add explicit vLLM timers if needed.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">235B baseline</div>
+        <div class="metric ok">66.78</div>
+        <p class="small">tok/s/GPU, 20-step NeMo-RL baseline complete.</p>
+      </div>
+      <div class="card">
+        <div class="label">235B PublicHF K=1</div>
+        <div class="metric warn">62.8-69.0%</div>
+        <p class="small">Job 3084952 completed 4/4: mean acceptance 65.71%, mean generation 60.61 tok/s/GPU. Matched baseline 3088636 completed 4/4: mean 61.48 generated tok/s/GPU.</p>
+      </div>
+      <div class="card">
+        <div class="label">30B mixed baseline</div>
+        <div class="metric info">4169.19</div>
+        <p class="small">tok/s/GPU mean from 20 completed NeMo-RL generation metrics.</p>
+      </div>
+      <div class="card">
+        <div class="label">30B 500K training</div>
+        <div class="metric ok">done</div>
+        <p class="small">Job 3056818 completed 1 epoch, wrote checkpoint 0, and selected it as best with val loss 7.491660.</p>
+      </div>
+    </div>
+
+    <details class="banner detail-log">
+      <summary>Detailed debug timeline</summary>
+      <h2>Live Update: 2026-06-02 01:45 PT</h2>
+      <p>Current status split: Qwen3-30B-A3B 500K Speculators Eagle3 is the healthy measured path, and strict p64/g32 alltoall baseline/SpecDec jobs completed <code>4/4</code> steps. SpecDec K=1 improved generation time and generated tok/s/GPU, but E2E was still flat because logprobs/training dominate the GRPO step. Qwen3-235B in-house 500K training is actively running: target-response finalization and Speculators prepare are complete, the 100-shard hidden-state array completed, exact coverage is <code>500000/500000</code>, and replacement train <code>3105111</code> reached latest observed global step <code>32223</code>. Its loss dropped from the first logged <code>32.031</code>/<code>31.797</code> to recent values around <code>3.957-6.211</code>. Public HF 235B Eagle3 is verified to attach and draft in NeMo-RL: corrected NVIDIA PublicHF job <code>3084952</code> completed <code>4/4</code> with mean generated throughput <code>60.61 tok/s/GPU</code>, mean E2E <code>43.60 tok/s/GPU</code>, and mean acceptance <code>65.71%</code>. Matched Thinking-2507 baseline job <code>3088636</code> has <code>4/4</code> baseline metrics, mean generated throughput <code>61.48</code>, mean E2E <code>44.72</code>, and mean total step <code>452.20s</code>. The always-enabled PublicHF diagnostic is therefore slower than this matched baseline: generation throughput <code>0.986x</code>, E2E throughput <code>0.975x</code>, and E2E step-time speedup <code>0.952x</code>. Strict lower-batch-only job <code>3092445</code> produced gate evidence but no throughput result because it failed in the all-disabled speculative path. V9b retry <code>3103227</code> reached target/drafter loading and Megatron checkpoint save, then failed before rollout metrics with <code>KeyError: 'moe_enable_deepep'</code> in <code>MegatronPolicyWorker</code> config setup. V9c retry <code>3105964</code> failed before rollout metrics because the added Megatron cfg overrides needed Hydra append syntax. Corrected V9d retry <code>3106959</code> is running on 32 nodes; no Epoch/Step, acceptance, gate, or throughput metrics have been emitted yet.</p>
+      <p>Review of <code>3075161</code> exposed a long-tail gate bug: even when the runner observed <code>requests=128</code>, <code>tokens=3360</code>, and token gate <code>2048</code>, the old V7 runner let scheduler <code>all_disabled=false</code> override the runner threshold, so the gate stayed <code>enabled_ratio=1.0</code>. The live <code>/SpecDec-RL</code> checkout now has V9 gate logic and launcher marker checks. V9 keeps the async event branch reachable when a large batch is disabled and zeroes draft ids before scheduler copy on all-disabled batches. Corrected r3 verifier <code>3076833</code> completed successfully with <code>NRL_STOP_AFTER_GENERATION=true</code>, <code>policy.max_total_sequence_length=2048</code>, K=<code>3/2/1</code> dynamic tiers, and token gate <code>2048</code>. It produced early generation metrics: acceptance <code>57.65%</code>, generated throughput <code>6669.63 tok/s/GPU</code>, draft tokens <code>2,287,959</code>, accepted tokens <code>1,319,121</code>, and <code>16/16</code> reporting workers. Runner gate evidence now includes <code>disabled=16</code> out of <code>21,977</code> checks, so threshold disables are visible; scheduler enabled ratio is still <code>1.0</code>, and the per-position denominator is marked unreliable. This verifies the generation-side long-tail path, not full GRPO throughput.</p>
+      <p>Current NeMo-RL SpecDec launchers are runtime-gated, not unconditional always-on SpecDec. The default main-run policy is token-pressure gating: request gate <code>0</code>, token gate <code>4096</code>, and <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code>. The completed 235B PublicHF K=1 run was configured this way, but observed scheduler gate metrics stayed <code>enabled_ratio=1.0</code> and <code>disabled=0</code> for all <code>4</code> steps. Runner logs showed active requests from <code>1</code> to <code>64</code> and scheduled tokens up to only <code>128</code> per worker, so token gate <code>4096</code> was too loose for this workload. Strict lower-batch-only job <code>3089565</code> was cancelled because its remote launcher was stale and missed <code>policy.model_name=${TARGET_MODEL_ID}</code>. Fixed retry <code>3090318</code> confirmed the right target/gate settings but then stalled before rollout with repeated Ray worker <code>startup_token</code> registration failures, so it was cancelled at 18:54. Rebuild retry <code>3092445</code> ran with <code>NRL_FORCE_REBUILD_VENVS=true</code>, request gate <code>4</code>, token gate <code>0</code>, matching target <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>, and the NVIDIA PublicHF Eagle3 drafter. It reached Step <code>1/4</code> generation and proved large-batch disable semantics: vLLM logged <code>checked=1 disabled=1 enabled=0</code>, <code>requests=64</code>, <code>tokens=1856</code>, <code>request_threshold=4</code>, and dumped <code>scheduled_spec_decode_tokens={}</code>. It then failed after <code>03:08:55</code> with <code>RayChannelTimeoutError</code> and <code>RAY_CGRAPH_get_timeout=3600</code>, ending in <code>RuntimeError: Failed to unpickle serialized exception</code>. This is a stability bug in the all-disabled speculative_config path, not a drafter acceptance or throughput result.</p>
+      <p>30B dynamic-K validation job <code>3070995</code> reached real NeMo-RL Step 1 generation, emitted complete-DP SpecDec metrics, then failed before final throughput in the Megatron logprob/training phase. Its publishable partial metrics remain: acceptance <code>33.36%</code>, draft tokens <code>362,572</code>, accepted tokens <code>120,960</code>, per-position acceptance <code>46.48%</code>/<code>20.29%</code>/<code>0.04%</code>, runner gate enabled ratio <code>8.69%</code>, and scheduler gate enabled ratio <code>2.99%</code>. Follow-up reviews fixed scheduler-output propagation first, then found one more first-draft risk: V6 could treat an empty initial <code>scheduled_spec_decode_tokens</code> map as a runner-wide disable. V7 now propagates explicit <code>nrl_specdec_batch_gate_all_disabled</code> and <code>nrl_specdec_batch_gate_eligible_count</code>, and keeps early NeMo-RL generation throughput logging separate from final throughput parsing.</p>
+      <p>Current 30B dynamic-K rerun <code>3072963</code> failed after real Step 1 generation. It emitted complete-DP early metrics: acceptance <code>33.91%</code>, early generated throughput <code>4511.04 tok/s/GPU</code> (<code>1.082x</code> vs baseline <code>4169.19</code>), draft tokens <code>423,736</code>, accepted tokens <code>143,708</code>, per-position acceptance <code>47.16%</code>/<code>20.89%</code>/<code>0.18%</code>, runner gate enabled ratio <code>9.72%</code>, and scheduler gate enabled ratio <code>3.47%</code>. It produced no final NeMo-RL performance throughput because Megatron <code>policy.get_logprobs</code> hit an NCCL watchdog timeout in <code>EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP</code>: <code>_ALLGATHER_BASE</code> ran for <code>1,800,087 ms</code>, then Ray reported <code>ActorDiedError</code>.</p>
+      <p>Post-review hardening is committed and synced. A follow-up launcher patch now enforces drafter provenance, and separate review agents found two remaining correctness risks: baseline launchers did not prove <code>async_engine=false</code>, and dynamic-K could be misused without a long-tail threshold. The launchers, analyzer, and patch validator now fail closed on these cases. Baseline <code>3074777</code> emitted Step 1 early generation-only throughput <code>4760.56 tok/s/GPU</code>, but is now diagnostic-only because its run evidence lacked explicit <code>policy.generation.vllm_cfg.async_engine=false</code>. Strict replacement baseline <code>3075647</code> emitted Step 1 early generation-only throughput <code>4762.42 tok/s/GPU</code> with <code>NRL_VLLM_OMIT_GENERATION_LOGPROBS=true</code> and <code>async_engine=false</code>, then failed in <code>policy.get_logprobs</code> with the same Megatron <code>EXPERT_TENSOR_AND_MODEL_PARALLEL_GROUP</code> <code>_ALLGATHER_BASE</code> NCCL watchdog timeout at 12:07. SpecDec <code>3074778</code> emitted Step 1 early generation-only throughput <code>5742.32 tok/s/GPU</code>, acceptance <code>57.91%</code>, draft tokens <code>4,165,064</code>, accepted tokens <code>2,411,996</code>, and <code>16/16</code> reporting workers, then hit the same logprob failure class at 11:06. The strict generation-only comparison is therefore <code>1.206x</code> for SpecDec K=1, while final completed-step throughput remains blocked by a baseline-reproduced logprob path failure rather than a SpecDec-only failure.</p>
+      <p>The failure signature has now been tested directly on a reduced alltoall-dispatcher smoke. Baseline <code>3076036</code> and SpecDec K=1 <code>3076041</code> both completed <code>Step 1/1</code> with <code>num_prompts_per_step=8</code>, <code>num_generations_per_prompt=8</code>, <code>train_global_batch_size=64</code>, <code>max_steps=1</code>, <code>policy.max_total_sequence_length=2048</code>, and <code>policy.megatron_cfg.moe_token_dispatcher_type=alltoall</code>. Baseline <code>3076036</code> reached final step metrics: generation <code>609.78 generated tok/s/GPU</code>, E2E <code>95.15 tok/s/GPU</code>, total step <code>79.15s</code>. SpecDec <code>3076041</code> also passed rewards, logprobs, and policy training, with acceptance <code>58.88%</code>, draft tokens <code>71,188</code>, accepted tokens <code>41,914</code>, generation <code>507.92 generated tok/s/GPU</code>, E2E <code>92.57 tok/s/GPU</code>, and total step <code>81.26s</code>. The first p64/g32 alltoall follow-up <code>3077214</code>/<code>3077216</code> did not produce comparable metrics: baseline failed before rollout in <code>MegatronPolicyWorker</code> import with a TransformerEngine/Triton JIT error, and SpecDec was cancelled after repeated Ray <code>startup_token</code> worker-registration failures. Repaired r2 jobs <code>3078476</code>/<code>3078477</code> repeated the worker-registration stall with <code>NRL_FORCE_REBUILD_VENVS=false</code> and were cancelled after r3 replacements were submitted. Fresh r3 p64/g32 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code> steps with <code>NRL_FORCE_REBUILD_VENVS=true</code>: baseline mean <code>240.21s</code> total, <code>37.33s</code> generation, <code>1004.69</code> E2E tok/s/GPU, <code>6068.62</code> generated tok/s/GPU; SpecDec K=1 mean <code>241.13s</code> total, <code>33.71s</code> generation, <code>1001.70</code> E2E tok/s/GPU, <code>6776.01</code> generated tok/s/GPU, and <code>57.28%</code> acceptance.</p>
+      <p>235B in-house Speculators training is now running and learning. Array <code>3072149_[0-99]%10</code> completed, and the second one-sample repair wave with <code>VLLM_MAX_MODEL_LEN=8193</code> raised exact coverage from <code>499996</code> to <code>500000</code> <code>hs_*.safetensors</code> files. Replacement train <code>3105111</code> cleared <code>afterok:3105107:3105108:3105109:3105110</code>, passed coverage validation, and reached latest observed global step <code>32223</code>. Recent <code>train/loss</code> values around steps <code>32219-32223</code> are roughly <code>3.957-6.211</code>, down from initial <code>31-32</code>. Cache size remains about <code>51T</code>.</p>
+      <p>Public HF 235B fast path: <code>nvidia/Qwen3-235B-A22B-Thinking-2507-Eagle3</code> downloaded successfully. The earlier NVIDIA job <code>3080343</code> did attach Eagle3, but it inherited the YAML default target <code>Qwen/Qwen3-235B-A22B</code> because the launcher did not pass <code>policy.model_name=${TARGET_MODEL_ID}</code>; it was cancelled at 16:26 because the attached drafter was for <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>. RedHat fallback job <code>3081230</code> failed before metrics when Megatron workers treated an incomplete checkpoint directory as complete and then could not find <code>iter_0000000/run_config.yaml</code>. Corrected job <code>3084952</code> completed at 17:50 on <code>coreai_dlalgo_llm</code>, K=<code>1</code>, GBS <code>512</code>, token gate <code>4096</code>, and the matching Thinking-2507 target/drafter pair. Matched baseline job <code>3088636</code> now has <code>4/4</code> baseline throughput, and the always-enabled PublicHF result is slightly slower. Because <code>3084952</code> never disabled its gate, strict request-gate job <code>3090318</code> was tried with request gate <code>4</code>, token gate <code>0</code>, then cancelled for the Ray <code>startup_token</code> venv mismatch. Rebuild retry <code>3092445</code> proved strict large-batch disable but failed before any completed rollout metric due to a Ray/vLLM timeout in the all-disabled speculative path.</p>
+    </details>
+
+    <details class="banner detail-log">
+      <summary>How to read the numbers</summary>
+      <h2>Result Provenance Rules</h2>
+      <table>
+        <thead>
+          <tr><th>Result Type</th><th>Can be compared to baseline?</th><th>Rule</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Completed NeMo-RL generation metric</td><td><span class="pill ok">yes</span></td><td>Use only when the run emits the normal NeMo-RL generated tok/s/GPU metric for a completed step. The 30B best result <code>3060379</code> is in this category. Speedups in this bucket are Generation throughput speedups, not E2E throughput speedups.</td></tr>
+          <tr><td>Early generation-only metric</td><td><span class="pill warn">partial</span></td><td>Log separately. These values are emitted right after rollout generation and before Megatron logprobs/training. If <code>get_logprobs</code> later fails, they are not final NeMo-RL throughput.</td></tr>
+          <tr><td>Full E2E RL step</td><td><span class="pill info">tracked separately</span></td><td>Total step time includes generation, logprobs, rewards, and training. It should not be mixed with generated tok/s/GPU.</td></tr>
+          <tr><td>Public HF Eagle3 smoke</td><td><span class="pill warn">no</span></td><td>Use only for attach/smoke evidence unless the base model, dataset, batch shape, gates, and baseline are re-run under the same conditions.</td></tr>
+          <tr><td>Standalone vLLM-only benchmark</td><td><span class="pill info">running</span></td><td>Existing standalone vLLM serve benchmarks report throughput/acceptance only. Breakdown job <code>3115084</code> failed in torch.compile with <code>VllmBackend can only be called once</code>. Retry <code>3115305</code> disabled compile but failed because vLLM profiling was not enabled. Current retry <code>3115354</code> passes explicit <code>profiler_config</code>; its log confirms vLLM 0.17.0 accepted it, but <code>breakdown.json</code> is not produced yet. This remains separate from NeMo-RL E2E timing.</td></tr>
+          <tr><td>In-house 500K Speculators drafter</td><td><span class="pill ok">yes</span></td><td>Allowed for the main tables only when the launcher provenance guard points at the expected mixed non-OpenMath 500K checkpoint root.</td></tr>
+          <tr><td>Baseline/config parity</td><td><span class="pill warn">required</span></td><td>Future speedup gates must prove matching generation-logprob mode, prompt/generation batch shape, and vLLM batch caps. Historical <code>1.3664x</code> remains the best observed NeMo-RL generation result, but the final comparison should be repeated against a logprob-matched baseline.</td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <details class="banner detail-log">
+      <summary>Context before latest update</summary>
+      <h2>Context Before Latest Live Update</h2>
+      <p>30B is the healthy path right now: the clean 500K Speculators Eagle3 drafter trained successfully, and completed NeMo-RL sweeps show real rollout Generation speedup. Best observed completed result is K=1 token-pressure job <code>3060379</code>: <code>5696.58 generated tok/s/GPU</code>, <code>1.3664x</code> Generation-throughput speedup, <code>1.3466x</code> Generation-time speedup, <code>1.0957x</code> E2E-throughput speedup, and <code>1.0782x</code> E2E step-time speedup versus historical baseline <code>3056050</code>, with <code>57.40%</code> acceptance. Strict p64/g32 alltoall jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code> steps: SpecDec improves mean generation time <code>37.33s -> 33.71s</code> and generation throughput <code>6068.62 -> 6776.01 generated tok/s/GPU</code>, but E2E is still slightly slower (<code>240.21s -> 241.13s</code>, <code>1004.69 -> 1001.70 tok/s/GPU</code>) because logprobs/training dominate the total GRPO step. Reduced alltoall smoke jobs <code>3076036</code>/<code>3076041</code> prove the full 1-step NeMo-RL loop works at p8/g8, but are not the final p64/g32 shape. For 235B, target-response finalization and prepare are complete; hidden-state array <code>3072149_[0-99]%10</code> completed, exact coverage is now <code>500000/500000</code> after the <code>VLLM_MAX_MODEL_LEN=8193</code> repair wave, and replacement train <code>3105111</code> is running.</p>
+    </details>
+
+    <h2>500K Eval Snapshot</h2>
+    <p class="small">Final 20-step NeMo-RL metrics for token gate <code>4096</code>, compared with historical mixed baseline <code>3056050</code>. Baseline means from <code>3056050-logs/ray-driver.log</code>: E2E step <code>236.43s</code>, generation <code>96.33s</code>, E2E <code>1758.32 tok/s/GPU</code>, generation <code>4169.19 generated tok/s/GPU</code>.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Job</th><th>Completed Metrics</th><th>E2E step time</th><th>Generation time</th><th>E2E token throughput<br>(tok/s/GPU)</th><th>Generation token throughput<br>(generated tok/s/GPU)</th><th>Generation speedup<br>vs baseline</th><th>Mean Acceptance</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>K=1</td>
+            <td><code>3058167</code></td>
+            <td><code>20/20</code></td>
+            <td><code>215.31s</code></td>
+            <td><code>71.74s</code></td>
+            <td><code>1933.17</code></td>
+            <td><code>5604.28</code></td>
+            <td><code>1.344x</code></td>
+            <td><code>57.51%</code></td>
+          </tr>
+          <tr>
+            <td>K=2</td>
+            <td><code>3058168</code></td>
+            <td><code>20/20</code></td>
+            <td><code>222.93s</code></td>
+            <td><code>80.36s</code></td>
+            <td><code>1866.84</code></td>
+            <td><code>5004.48</code></td>
+            <td><code>1.200x</code></td>
+            <td><code>42.11%</code></td>
+          </tr>
+          <tr>
+            <td>K=3</td>
+            <td><code>3058169</code></td>
+            <td><code>20/20</code></td>
+            <td><code>221.46s</code></td>
+            <td><code>81.91s</code></td>
+            <td><code>1877.91</code></td>
+            <td><code>4908.22</code></td>
+            <td><code>1.177x</code></td>
+            <td><code>31.85%</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Throughput Metric Matrix</h2>
+    <p class="small">This table keeps Generation and E2E numbers separate. Time speedup is <code>baseline time / candidate time</code>; token-throughput speedup is <code>candidate throughput / baseline throughput</code>. <code>not logged</code> means the source run did not emit that metric, so it is not inferred.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Scope</th><th>E2E step time</th><th>E2E step-time speedup</th><th>Generation time</th><th>Generation-time speedup</th><th>E2E token throughput<br>(tok/s/GPU)</th><th>E2E token-throughput speedup</th><th>Generation token throughput<br>(generated tok/s/GPU)</th><th>Generation token-throughput speedup</th><th>Acceptance</th><th>Note</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Historical baseline <code>3056050</code></td><td>Completed NeMo-RL metric</td><td><code>236.43s</code></td><td><code>1.000x</code></td><td><code>96.33s</code></td><td><code>1.000x</code></td><td><code>1758.32</code></td><td><code>1.000x</code></td><td><code>4169.19</code></td><td><code>1.000x</code></td><td><code>n/a</code></td><td>20 completed-step means from <code>3056050-logs/ray-driver.log</code>.</td></tr>
+          <tr><td>500K K=1 <code>3058167</code></td><td>Completed NeMo-RL metric</td><td><code>215.31s</code></td><td><code>1.098x</code></td><td><code>71.74s</code></td><td><code>1.343x</code></td><td><code>1933.17</code></td><td><code>1.099x</code></td><td><code>5604.28</code></td><td><code>1.344x</code></td><td><code>57.51%</code></td><td>Best K from the 20-step K sweep.</td></tr>
+          <tr><td>500K K=2 <code>3058168</code></td><td>Completed NeMo-RL metric</td><td><code>222.93s</code></td><td><code>1.061x</code></td><td><code>80.36s</code></td><td><code>1.199x</code></td><td><code>1866.84</code></td><td><code>1.062x</code></td><td><code>5004.48</code></td><td><code>1.200x</code></td><td><code>42.11%</code></td><td>Acceptance drop makes K=2 worse than K=1.</td></tr>
+          <tr><td>500K K=3 <code>3058169</code></td><td>Completed NeMo-RL metric</td><td><code>221.46s</code></td><td><code>1.068x</code></td><td><code>81.91s</code></td><td><code>1.176x</code></td><td><code>1877.91</code></td><td><code>1.068x</code></td><td><code>4908.22</code></td><td><code>1.177x</code></td><td><code>31.85%</code></td><td>Draft depth is too high for the observed acceptance.</td></tr>
+          <tr><td>K=1 token-pressure <code>3060379</code></td><td>Completed NeMo-RL metric</td><td><code>219.28s</code></td><td><code>1.078x</code></td><td><code>71.54s</code></td><td><code>1.347x</code></td><td><code>1926.58</code></td><td><code>1.096x</code></td><td><code>5696.58</code></td><td><code>1.366x</code></td><td><code>57.40%</code></td><td>Best observed historical Generation throughput result.</td></tr>
+          <tr><td>Live strict request gate <code>3115812</code></td><td>Generation Steps 1-20, E2E Steps 1-20</td><td><code>244.62s</code></td><td><code>0.966x</code></td><td><code>91.73s</code></td><td><code>1.050x</code></td><td><code>1700.67</code></td><td><code>0.967x</code></td><td><code>4381.42</code></td><td><code>1.051x</code></td><td><code>53.98%</code></td><td>Lower-batch gate is verified: larger <code>last_active_requests=32</code> gets <code>effective_k=0</code>, tail requests <code>1-4</code> get <code>effective_k=1</code>. Draft volume is too small: <code>5760</code> draft tokens.</td></tr>
+          <tr><td>Live hybrid dynamic-K <code>3115813</code></td><td>Generation Steps 1-20, E2E Steps 1-20</td><td><code>236.59s</code></td><td><code>0.999x</code></td><td><code>91.82s</code></td><td><code>1.051x</code></td><td><code>1757.39</code></td><td><code>0.999x</code></td><td><code>4374.96</code></td><td><code>1.049x</code></td><td><code>40.71%</code></td><td>Tail gating works and draft volume is real, but K=<code>3</code> wastes work: latest Step 20 uses <code>last_active_requests=1</code>, <code>effective_k=3</code>, and per-position acceptance is <code>0.5637,0.2946,0.0001</code>.</td></tr>
+          <tr><td>Live request-bucket gate <code>3116841</code></td><td>Steps <code>1-20</code></td><td><code>239.55s</code></td><td><code>n/a</code></td><td><code>91.72s</code></td><td><code>n/a</code></td><td><code>1736.27</code></td><td><code>n/a</code></td><td><code>4380.97</code></td><td><code>1.051x</code></td><td><code>54.67%</code></td><td>Completed. Request-bucket logs verify long-tail gating, but scheduler enabled ratio is only <code>0.0137%</code>, so request-only gate is too conservative for large speedup.</td></tr>
+          <tr><td>Strict early baseline <code>3075647</code></td><td>Early generation only</td><td><code>failed</code></td><td><code>failed</code></td><td><code>86.30s</code></td><td><code>1.000x</code></td><td><code>failed</code></td><td><code>failed</code></td><td><code>4762.42</code></td><td><code>1.000x</code></td><td><code>n/a</code></td><td>Failed later in Megatron logprobs, so not a completed E2E result.</td></tr>
+          <tr><td>Strict early SpecDec <code>3074778</code></td><td>Early generation only</td><td><code>failed</code></td><td><code>failed</code></td><td><code>71.62s</code></td><td><code>1.205x</code></td><td><code>failed</code></td><td><code>failed</code></td><td><code>5742.32</code></td><td><code>1.206x</code></td><td><code>57.91%</code></td><td>Generation improved, but both baseline and SpecDec failed later in Megatron logprobs, so this is not E2E.</td></tr>
+          <tr><td>Reduced alltoall baseline <code>3076036</code></td><td>Full 1-step NeMo-RL E2E</td><td><code>79.15s</code></td><td><code>1.000x</code></td><td><code>not logged separately</code></td><td><code>not logged</code></td><td><code>95.15</code></td><td><code>1.000x</code></td><td><code>609.78</code></td><td><code>1.000x</code></td><td><code>n/a</code></td><td>Reduced p8/g8, GBS64 smoke; not the final p64/g32 shape.</td></tr>
+          <tr><td>Reduced alltoall SpecDec <code>3076041</code></td><td>Full 1-step NeMo-RL E2E</td><td><code>81.26s</code></td><td><code>0.974x</code></td><td><code>not logged separately</code></td><td><code>not logged</code></td><td><code>92.57</code></td><td><code>0.973x</code></td><td><code>507.92</code></td><td><code>0.833x</code></td><td><code>58.88%</code></td><td>Functional proof only; reduced shape was slower with SpecDec.</td></tr>
+          <tr><td>p64/g32 alltoall baseline <code>3078629</code></td><td>Completed full-shape Steps 1-4 mean</td><td><code>240.21s</code></td><td><code>1.000x</code></td><td><code>37.33s</code></td><td><code>1.000x</code></td><td><code>1004.69</code></td><td><code>1.000x</code></td><td><code>6068.62</code></td><td><code>1.000x</code></td><td><code>n/a</code></td><td>Strict p64/g32 alltoall baseline, mean of completed Steps 1-4.</td></tr>
+          <tr><td>p64/g32 alltoall SpecDec K=1 <code>3078630</code></td><td>Completed full-shape Steps 1-4 mean</td><td><code>241.13s</code></td><td><code>0.996x</code></td><td><code>33.71s</code></td><td><code>1.108x</code></td><td><code>1001.70</code></td><td><code>0.997x</code></td><td><code>6776.01</code></td><td><code>1.117x</code></td><td><code>57.28%</code></td><td>Generation is faster, but total step is slightly slower because logprobs/training dominate the step.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Why 57% Acceptance Is Not 2x</h2>
+    <p class="small">Acceptance is necessary, but it is not a speedup estimate. In this report, K=<code>1</code> means one drafted token. With acceptance <code>a</code>, the simple best-case intuition is about <code>1+a</code> generated tokens per target verification before drafter, scheduling, verification, CUDA Graph, cache, and cross-node communication overhead. At <code>a=57.4%</code>, that upper-bound intuition is only about <code>1.574x</code>, not <code>2x</code>. The observed historical NeMo-RL generation result of <code>1.344-1.366x</code> is therefore below the no-overhead bound, but not inconsistent with it.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Factor</th><th>Observed Evidence</th><th>Impact on Speedup</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>K=<code>1</code> upper bound</td><td>Best 30B token-pressure acceptance is <code>57.40%</code> on job <code>3060379</code>.</td><td>Idealized K=<code>1</code> bound is roughly <code>1.574x</code> before overhead, so a measured <code>1.366x</code> generation speedup is already fairly close to the practical ceiling for this depth.</td></tr>
+          <tr><td>Drafter and verification overhead</td><td>SpecDec adds drafter forward work, proposal bookkeeping, verification sampling, scheduler changes, and metric logging.</td><td>These costs subtract from the accepted-token gain, especially when only one draft token is attempted.</td></tr>
+          <tr><td>K=<code>2</code>/<code>3</code> quality drop</td><td>30B K=<code>2</code> acceptance is <code>42.11%</code>; K=<code>3</code> is <code>31.85%</code>, with per-position acceptance dropping roughly <code>55%</code>/<code>28%</code>/<code>13%</code>.</td><td>Deeper drafts do not turn 57% K=<code>1</code> acceptance into multi-token wins. Later draft positions are too weak, so K=<code>2</code>/<code>3</code> are slower than K=<code>1</code>.</td></tr>
+          <tr><td>Full NeMo-RL step composition</td><td>Strict p64/g32 alltoall baseline <code>3078629</code> spends <code>37.33s</code> in generation out of a <code>240.21s</code> step, about <code>15.5%</code>.</td><td>Even an infinitely fast generation phase would cap E2E speedup near <code>1.18x</code>. The measured SpecDec K=<code>1</code> run saved generation time but E2E stayed flat: <code>240.21s -> 241.13s</code>.</td></tr>
+          <tr><td>Large-batch underfill mismatch</td><td>235B PublicHF job <code>3084952</code> accepted <code>65.71%</code>, but gate metrics stayed always-enabled and the run was slower than matched baseline: generation <code>0.986x</code>, E2E <code>0.975x</code>.</td><td>High acceptance can still lose when target decoding is already well utilized or TP/placement overhead dominates. This is why the lower-batch-only gate matters.</td></tr>
+          <tr><td>Current training mode</td><td>The measured NeMo-RL path uses a fixed offline drafter. Online drafter refresh inside GRPO is still not implemented in the measured runs.</td><td>TLT/ReSpec/SpecRL-style methods can report larger gains when they combine selective activation, dynamic drafting, and online or distribution-aware drafter alignment. That is not yet the current measured NeMo-RL path.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small">The actionable direction is therefore not simply "raise acceptance". We need strict lower-batch activation to avoid large-batch overhead, better late-position acceptance before using K&gt;1, and eventually online or step-adaptive drafter training so the drafter tracks the changing RL policy distribution. Relevant comparison papers: <a href="https://arxiv.org/html/2511.16665v3">TLT</a> and <a href="https://arxiv.org/html/2510.26475v1">ReSpec</a>.</p>
+
+    <h2>Standalone vLLM Benchmark</h2>
+    <p class="small">This is a separate vLLM-only benchmark. It does not include rewards, logprobs, policy training, weight sync, or any NeMo-RL E2E step work.</p>
+    <p class="small">Completed shared-server result at 15:09 PT. This is a synthetic random ISL/OSL <code>1000/1000</code> standalone benchmark, not the NeMo-RL math rollout metric. SpecDec K=1 is slower at every tested batch size because acceptance is only <code>24-31%</code> and draft overhead dominates.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Batch size</th><th>Baseline output tok/s</th><th>SpecDec output tok/s</th><th>Speedup</th><th>Acceptance</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>1</code></td><td><code>230.49</code></td><td><code>147.65</code></td><td><code>0.641x</code></td><td><code>26.47%</code></td></tr>
+          <tr><td><code>2</code></td><td><code>418.38</code></td><td><code>246.15</code></td><td><code>0.588x</code></td><td><code>26.65%</code></td></tr>
+          <tr><td><code>4</code></td><td><code>696.05</code></td><td><code>452.48</code></td><td><code>0.650x</code></td><td><code>30.61%</code></td></tr>
+          <tr><td><code>8</code></td><td><code>1197.22</code></td><td><code>782.68</code></td><td><code>0.654x</code></td><td><code>27.80%</code></td></tr>
+          <tr><td><code>16</code></td><td><code>1971.87</code></td><td><code>368.29</code></td><td><code>0.187x</code></td><td><code>24.39%</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Job</th><th>Scope</th><th>Shape</th><th>SpecDec config</th><th>Status</th><th>Result fields expected</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Baseline per-BS</td>
+            <td><code>3079765</code></td>
+            <td>vLLM standalone <code>bench serve</code></td>
+            <td>Qwen3-30B-A3B, ISL/OSL <code>1000/1000</code>, BS <code>1 2 4 8 16</code>, 1 node x 4 GPU allocation, engine TP=<code>1</code></td>
+            <td><code>none</code></td>
+            <td><span class="pill warn">running</span></td>
+            <td>With <code>HF_HUB_FIX_VERSION=0.36.0</code>, produced BS=<code>1/2/4</code> so far: <code>220.2</code>, <code>403.8</code>, <code>666.6</code> output tok/s/GPU. Previous job <code>3078992</code> was cancelled after the container showed <code>huggingface-hub==1.16.1</code> import mismatch.</td>
+          </tr>
+          <tr>
+            <td>SpecDec K=1 per-BS</td>
+            <td><code>3079840</code></td>
+            <td>vLLM standalone <code>bench serve</code></td>
+            <td>Same as baseline</td>
+            <td><code>method=eagle3</code>, 500K Qwen3-30B-A3B drafter, K=<code>1</code>, draft TP=<code>1</code></td>
+            <td><span class="pill bad">cancelled</span></td>
+            <td>SpecDec config was exported and attached, but vLLM failed before serving because CUDA graph capture size was <code>[1]</code>; K=<code>1</code> requires a valid capture size multiple of <code>K+1=2</code>. This job was cancelled and superseded by shared/cgfix job <code>3080041</code>.</td>
+          </tr>
+          <tr>
+            <td>Baseline shared</td>
+            <td><code>3080042</code></td>
+            <td>vLLM standalone <code>bench serve</code></td>
+            <td>Same shape, but one shared server across BS <code>1 2 4 8 16</code></td>
+            <td><code>none</code>, CUDA graph capture sizes <code>[1,2,4,8,16]</code></td>
+            <td><span class="pill ok">completed</span></td>
+            <td>Completed as the paired control for the shared-server SpecDec rerun.</td>
+          </tr>
+          <tr>
+            <td>SpecDec K=1 shared/cgfix</td>
+            <td><code>3080041</code></td>
+            <td>vLLM standalone <code>bench serve</code></td>
+            <td>Same shared-server shape as <code>3080042</code></td>
+            <td><code>method=eagle3</code>, 500K Qwen3-30B-A3B drafter, K=<code>1</code>, shared-server CUDA graph capture sizes include <code>[2,4,8,16]</code></td>
+            <td><span class="pill ok">completed</span></td>
+            <td>Preserved CUDA graphs while satisfying vLLM SpecDec's <code>K+1</code> capture-size constraint. It completed successfully, but the synthetic random benchmark was slower than baseline at all batch sizes.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>HybridEP Impact</h2>
+    <p class="small">HybridEP does not directly raise SpecDec acceptance or raw rollout Generation throughput. Its value is that it can shrink policy training and logprob time, so a fixed Generation speedup contributes more to E2E step speedup.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Current Evidence</th><th>Implication</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Will HybridEP make SpecDec generation faster?</td>
+            <td>No direct evidence. Generation is run by vLLM workers; HybridEP mainly targets MoE policy/logprob/training efficiency.</td>
+            <td>Do not expect acceptance rate or generated tok/s/GPU to improve just because HybridEP is enabled.</td>
+          </tr>
+          <tr>
+            <td>Will HybridEP make SpecDec E2E speedup larger?</td>
+            <td>Likely, if it reduces the non-generation part of the GRPO step without adding rollout/sync overhead.</td>
+            <td>SpecDec gains are currently diluted because logprobs and training dominate total step time.</td>
+          </tr>
+          <tr>
+            <td>Observed dilution on 30B p64/g32</td>
+            <td>Steps 1-4 mean baseline <code>3078629</code>: generation <code>37.33s</code> of total <code>240.21s</code> (<code>15.5%</code>). SpecDec <code>3078630</code>: generation <code>33.71s</code>, but total <code>241.13s</code>.</td>
+            <td>Generation-time speedup is <code>1.108x</code>, but E2E step-time speedup is only <code>0.996x</code>.</td>
+          </tr>
+          <tr>
+            <td>Why <code>58.88%</code> acceptance can still be slower</td>
+            <td>The <code>58.88%</code> row is 30B reduced alltoall p8/g8 job <code>3076041</code>, not a 235B 500K result. At that small/reduced shape, drafter/scheduler/cache overhead outweighed the saved target decode work.</td>
+            <td>Acceptance alone is insufficient; the drafter must save more target-model work than the overhead it introduces.</td>
+          </tr>
+          <tr>
+            <td>235B expectation</td>
+            <td>235B in-house 500K drafter is training now and has not produced a clean 500K-trained NeMo-RL E2E result yet.</td>
+            <td>HybridEP should be tested with 235B once the drafter is trained, but it should be reported as E2E acceleration, not Generation-throughput improvement.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Dataset / Test Split Summary</h2>
+    <div class="grid">
+      <div class="card">
+        <div class="label">Clean drafter training</div>
+        <div class="metric ok">500K</div>
+        <p class="small">Exact-unique non-OpenMath math conversations for the clean Qwen3-30B-A3B Speculators Eagle3 run.</p>
+      </div>
+      <div class="card">
+        <div class="label">NeMo-RL test set</div>
+        <div class="metric info">OpenMath 50K</div>
+        <p class="small"><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, with 44304 unique normalized prompts.</p>
+      </div>
+      <div class="card">
+        <div class="label">Direct prompt overlap</div>
+        <div class="metric ok">0</div>
+        <p class="small">OpenMath eval prompts are denylisted before the 500K training file is written.</p>
+      </div>
+      <div class="card">
+        <div class="label">Clean claim boundary</div>
+        <div class="metric warn">split</div>
+        <p class="small">Mixed non-OpenMath training, evaluated on OpenMath NeMo-RL rollouts.</p>
+      </div>
+    </div>
+    <div class="banner">
+      <h2>Dataset Contract: What Was Trained vs Tested</h2>
+      <p><strong>Training data:</strong> the clean Qwen3-30B-A3B Speculators Eagle3 path uses <code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>. <strong>Generation setup:</strong> this is <code>1</code> target response per prompt from <code>Qwen/Qwen3-30B-A3B</code> with temperature <code>1.0</code> and top_p <code>1.0</code>; it is not <code>32</code> responses per prompt. <strong>NeMo-RL test data:</strong> baseline, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>. <strong>Overlap:</strong> OpenMath eval prompts are used as a denylist during 500K construction; final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>. This means the clean result is mixed-math training evaluated on OpenMath, not OpenMath-on-OpenMath.</p>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Run</th><th>Drafter Training Data</th><th>NeMo-RL Test Dataset</th><th>Overlap Status</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Qwen3-30B-A3B clean 500K</td>
+          <td>Speculators Eagle3 trained on <code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, DAPO-Math-17k <code>15K</code>.</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, <code>50000</code> rows and <code>44304</code> unique normalized prompts. This is the actual NeMo-RL baseline/SpecDec rollout file.</td>
+          <td><span class="pill ok">0 direct overlap</span> OpenMath prompts are loaded as a denylist before writing the clean 500K training JSONL; validation reports <code>denylisted_prompts=0</code>.</td>
+        </tr>
+        <tr>
+          <td>Qwen3-30B-A3B older 50K proof</td>
+          <td>OpenMath-derived 50K drafter training, used only to verify NeMo-RL can attach/run Eagle3 SpecDec.</td>
+          <td>OpenMath NeMo-RL rollout source.</td>
+          <td><span class="pill warn">not clean</span> Do not use this as the final leakage-clean claim because train/test domain source overlaps.</td>
+        </tr>
+        <tr>
+          <td>Qwen3-235B public HF Eagle3 checks</td>
+          <td>External public checkpoint; training mix and overlap are not controlled by this repo.</td>
+          <td>Same OpenMath NeMo-RL rollout source when evaluated here.</td>
+          <td><span class="pill warn">separate</span> Report separately from our Speculators-trained drafter.</td>
+        </tr>
+      </tbody>
+    </table>
+    <h2>500K Qwen3-30B-A3B Dataset Build Details</h2>
+    <table>
+      <thead>
+        <tr><th>Question</th><th>Answer</th><th>Evidence</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>How many training samples?</td>
+          <td><code>500000</code> final exact-unique training conversations. Each row is one math prompt plus one target-model answer.</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+        </tr>
+        <tr>
+          <td>Was it 32 samples per prompt?</td>
+          <td>No. Target generation used one answer per prompt: <code>NUM_RESPONSES=1</code>, request payload <code>n=1</code>, temperature <code>1.0</code>, top_p <code>1.0</code>. The NeMo-RL GRPO test still uses <code>64</code> prompts x <code>32</code> generations per step, but that is evaluation workload, not drafter-training data generation.</td>
+          <td><code>prepare_training_conversations.sh</code>, <code>generate_training_conversations_openai.py</code>, NeMo-RL run overrides</td>
+        </tr>
+        <tr>
+          <td>How was 500K assembled?</td>
+          <td>Ten <code>50K</code> target-response slices were merged. The primary slices had <code>499941</code> unique normalized prompts; <code>59</code> duplicate prompts were skipped and replaced with fresh DAPO rows to reach exactly <code>500000</code>.</td>
+          <td><code>primary_unique_written_before_replacements=499941</code>, <code>replacement_rows_written=59</code>, <code>status=pass</code></td>
+        </tr>
+        <tr>
+          <td>What is the actual NeMo-RL test set?</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>: <code>50000</code> rollout rows and <code>44304</code> unique normalized prompts. This is the file used for baseline throughput, SpecDec throughput, and acceptance measurements.</td>
+          <td>Same file is passed as the OpenMath denylist during clean 500K construction.</td>
+        </tr>
+        <tr>
+          <td>Does train overlap test?</td>
+          <td><span class="pill ok">No direct prompt overlap</span> The builder lowercases and whitespace-normalizes user prompts, loads the <code>44304</code> OpenMath eval prompt keys as a denylist, and writes only rows that do not match it.</td>
+          <td><code>denylist_prompt_count=44304</code>, <code>skipped_denylist=0</code>, final validation <code>denylisted_prompts=0</code></td>
+        </tr>
+        <tr>
+          <td>What is the training exposure?</td>
+          <td>The final job starts from the mixed 50K checkpoint, then runs one full epoch over the clean 500K cache. So the clean corpus has <code>500K</code> unique rows, while optimizer history includes the earlier 50K warm-start.</td>
+          <td>Train job <code>3056818</code>, checkpoint <code>0</code>, full loop <code>87,997/87,997</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="contract-flow" aria-label="Train and test dataset contract">
+      <div class="contract-node">
+        <h3>1. Drafter Training</h3>
+        <p class="small">500K exact-unique non-OpenMath math conversations generated with <code>Qwen/Qwen3-30B-A3B</code> targets.</p>
+        <p class="small">Mix: NuminaMath-1.5 300K, NuminaMath-CoT 100K, OpenThoughts-114k 60K, math-deepscaler 25K, DAPO-Math-17k 15K.</p>
+      </div>
+      <div class="contract-arrow">-&gt;</div>
+      <div class="contract-node">
+        <h3>2. Leakage Guard</h3>
+        <p class="small"><code>openmath_reasoning_cot_conversations_50k.jsonl</code> is loaded as a denylist before writing the final 500K training file.</p>
+        <p class="small">Validation: <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, <code>denylisted_prompts=0</code>.</p>
+      </div>
+      <div class="contract-arrow">-&gt;</div>
+      <div class="contract-node">
+        <h3>3. NeMo-RL Test</h3>
+        <p class="small">All clean baseline, SpecDec throughput, and acceptance measurements use OpenMath rollouts.</p>
+        <p class="small">Test file: <code>50000</code> rows, <code>44304</code> unique normalized prompts. Overlap claim is prompt-level, not semantic-near-duplicate proof.</p>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Part</th><th>What Is Used</th><th>Leakage / Overlap Control</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Training sample mix</td>
+          <td>NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, DAPO-Math-17k <code>15K</code>.</td>
+          <td>OpenMath is intentionally excluded from the clean 500K training source mix.</td>
+        </tr>
+        <tr>
+          <td>Target-response setup</td>
+          <td>Prompts are answered by <code>Qwen/Qwen3-30B-A3B</code>, merged from 10 50K slices, then converted to Speculators Eagle3 format.</td>
+          <td>The final training file is <code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code>.</td>
+        </tr>
+        <tr>
+          <td>Actual NeMo-RL evaluation</td>
+          <td>Baseline throughput, SpecDec acceptance, and generation tok/s/GPU are measured on <code>openmath_reasoning_cot_conversations_50k.jsonl</code>.</td>
+          <td>The same OpenMath eval prompt file is used as a denylist before writing the clean 500K training JSONL.</td>
+        </tr>
+        <tr>
+          <td>Overlap result</td>
+          <td>Final validation reports <code>records_written=500000</code>, <code>duplicate_prompts=0</code>, and <code>denylisted_prompts=0</code>.</td>
+          <td><span class="pill ok">0 direct overlap</span> This is normalized prompt-level overlap, not a semantic near-duplicate guarantee.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Measurement Scope</h2>
+    <table>
+      <thead>
+        <tr><th>Number</th><th>Source</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>30B 1.18x-1.34x Generation speedup</td>
+          <td><span class="pill ok">NeMo-RL</span></td>
+          <td>Measured from NeMo-RL <code>Generation Worker Group (Generated tokens/sec/gpu)</code> over completed rollout jobs. This is not E2E throughput and not a standalone vLLM-only benchmark.</td>
+        </tr>
+        <tr>
+          <td>30B K=1 mixed 50K interim</td>
+          <td><span class="pill warn">NeMo-RL</span></td>
+          <td>Job <code>3056051</code> completed 20 generation metrics with mean <code>5500.27 tok/s/GPU</code>, or <code>1.32x</code> versus the <code>4169.19</code> baseline. vLLM acceptance mean is <code>52.5%</code> across <code>160</code> parsed metrics.</td>
+        </tr>
+        <tr>
+          <td>235B PublicHF K=1 early result</td>
+          <td><span class="pill warn">NeMo-RL early</span></td>
+            <td>Corrected target/drafter job <code>3084952</code> completed <code>4/4</code>. Generated throughput is <code>63.70</code>, <code>43.39</code>, <code>73.58</code>, and <code>61.78</code> generated tok/s/GPU; E2E throughput is <code>37.53</code>, <code>34.35</code>, <code>53.74</code>, and <code>48.76</code> tok/s/GPU; acceptance is <code>62.82%</code>, <code>69.01%</code>, <code>65.82%</code>, and <code>65.20%</code>; reporting is <code>8/8</code>. Mean generated throughput is <code>60.61</code> tok/s/GPU and mean acceptance is <code>65.71%</code>. This confirms the PublicHF Eagle3 drafter is attached and active, but it is not a strict lower-batch speedup result. Matched baseline <code>3088636</code> completed <code>4/4</code> with mean <code>61.48 generated tok/s/GPU</code>, mean E2E <code>44.72 tok/s/GPU</code>, and mean total step <code>452.20s</code>. The always-enabled PublicHF diagnostic is <code>0.986x</code> generation throughput and <code>0.975x</code> E2E throughput versus that baseline. Gate metrics for <code>3084952</code> were not selective: scheduler <code>enabled_ratio=1.0</code>, <code>disabled=0</code>. Superseded <code>3089565</code> was cancelled because its remote launcher missed the explicit target override; <code>3090318</code> was cancelled after repeated Ray <code>startup_token</code> startup failures; rebuild retry <code>3092445</code> proved request-gate disable for the large initial batch but failed before completed rollout metrics with a Ray/vLLM all-disabled speculative path timeout. V9 retry <code>3103018</code> failed before rollout due to missing third-party workspace files; V9b retry <code>3103227</code> restored those files but then failed before rollout metrics with <code>KeyError: 'moe_enable_deepep'</code>; V9c retry <code>3105964</code> failed before rollout due to Hydra structured-config append syntax; corrected V9d retry <code>3106959</code> is running and has not emitted rollout metrics yet.</td>
+        </tr>
+        <tr>
+          <td>235B K=1 54% acceptance</td>
+          <td><span class="pill warn">vLLM internal</span></td>
+          <td>Observed inside completed job <code>3055926</code>. NeMo-RL mean is <code>66.16 tok/s/GPU</code>, or <code>0.99x</code> versus the <code>66.78</code> baseline. Driver step-summary acceptance mean is <code>54.6%</code> across <code>20</code> parsed rollout summaries.</td>
+        </tr>
+        <tr>
+          <td>235B baseline 66.78 tok/s/GPU</td>
+          <td><span class="pill ok">NeMo-RL</span></td>
+          <td>Completed 20-step NeMo-RL baseline job <code>3053877</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Long-Tail Gate Status</h2>
+    <table>
+      <thead>
+        <tr><th>Question</th><th>Current Answer</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Are we using vLLM native <code>disable_by_batch_size</code>?</td>
+          <td>No. The NeMo-RL scripts intentionally reject <code>SPECDEC_DISABLE_BY_BATCH_SIZE</code> because that knob is request-admission scoped in some vLLM releases and can miss the active long-tail phase.</td>
+        </tr>
+        <tr>
+          <td>What gate is implemented?</td>
+          <td>A runtime patch in <code>nemo_rl/models/generation/vllm/vllm_worker.py</code> patches both vLLM scheduler lookahead and GPU model-runner draft proposal. SpecDec draft work is skipped when active requests exceed <code>VLLM_SPECDEC_BATCH_SIZE_GATE_THRESHOLD</code> or scheduled tokens exceed <code>VLLM_SPECDEC_BATCH_TOKEN_GATE_THRESHOLD</code>. Adaptive mode adds <code>NRL_SPECDEC_SCHEDULER_ADAPTIVE_GATE_PATCH_V1</code> and <code>NRL_SPECDEC_ADAPTIVE_GATE_PATCH_V1</code>, so scheduler and runner thresholds adjust toward a target enabled ratio. Dynamic-depth mode adds <code>NRL_SPECDEC_SCHEDULER_DYNAMIC_DRAFT_CAP_PATCH_V1</code> plus <code>NRL_SPECDEC_SCHEDULER_DYNAMIC_UPDATE_DRAFT_CAP_PATCH_V1</code>, so the selected K caps both scheduler lookahead and the draft tokens stored back into scheduler request state.</td>
+        </tr>
+        <tr>
+          <td>Why this direction?</td>
+          <td>The <a href="https://arxiv.org/html/2511.16665v3">TLT adaptive drafter paper</a> frames speculative decoding as most useful during long-tail rollout when the effective batch is small, and notes that fluctuating batch sizes can make always-on SD suboptimal. <a href="https://arxiv.org/html/2510.26475v1">ReSpec</a> makes the same system point for RL: static SD settings lose value at large batch sizes, so the server should choose SD settings from runtime workload signals. Our current gate is a practical approximation: keep SD off or shallow during large active batches and use deeper drafting only as request/token pressure falls.</td>
+        </tr>
+        <tr>
+          <td>How is this different from TLT?</td>
+          <td>TLT does not rely on an unready learned drafter from the first token. It uses warm-up data and can fall back to model-free drafting early, while a spot trainer updates the learned drafter from target-model hidden states/tokens during rollout bubbles. ReSpec also adds online drafter evolution with reward-weighted KD. Current NeMo-RL runs use a fixed offline Speculators Eagle3 drafter plus adaptive request/token thresholds, dynamic K caps, and a new optional step-level acceptance controller that can lower K after weak acceptance. This tests adaptive serving first, but it does not yet implement online drafter refresh, reward-weighted KD, idle-GPU spot training, or model-free early rollout fallback.</td>
+        </tr>
+        <tr>
+          <td>Are we training the drafter online?</td>
+          <td>No. The active 30B and 235B NeMo-RL SpecDec scripts pass a fixed <code>DRAFT_MODEL</code> into vLLM <code>speculative_config.model</code>. The drafter is not updated after each GRPO step, and it is not trained on idle rollout GPUs. There is an experimental <code>nemo_rl_eagle3_online_draft_overlay.yaml</code>, but it is not used in the current measured jobs; it also disables sequence packing and DTensor, so it is a separate validation path rather than the current performance path.</td>
+        </tr>
+        <tr>
+          <td>What did the gate code review find?</td>
+          <td>Review found that an adaptive scheduler controller and an adaptive runner controller could drift independently. Later reviews fixed dynamic K request-state capping, Ray env propagation, K-decrease logic, runner/scheduler summaries, selected-count denominator reliability, controller no-op/error reporting, complete-DP acceptance trust, and scheduler-output propagation. V7 fixed the empty first-draft hazard by propagating explicit scheduler all-disabled state. The latest <code>3075161</code> run exposed the opposite bug: scheduler <code>all_disabled=false</code> could override runner token/request thresholds. V8 ORed runner threshold state with scheduler all-disabled state so large active batches are actually disabled while tail batches can still draft; V9 additionally fixes the all-disabled runner path by keeping the async event branch reachable and zeroing draft ids before scheduler copy.</td>
+        </tr>
+        <tr>
+          <td>What instrumentation was added?</td>
+          <td>The validated <code>/SpecDec-RL</code> checkout now has the long-tail scheduler/runner gate patches, adaptive gate patches, dynamic-K selected/stored cap patches, per-request dynamic selected state, step-diffed and DP-summed denominator counters, complete-DP acceptance reliability, no-op/runtime-exception controller failure metrics, scheduler-output gate propagation via <code>NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V2</code>, early step-level acceptance logging, and early generation throughput logging before logprob/training. The latest review fixes add <code>NRL_SPECDEC_DYNAMIC_REQUIRES_GATE_THRESHOLD_V1</code>, <code>NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_GATE_METRICS_V1</code>, and <code>NRL_SPECDEC_BATCH_GATE_PATCH_V9</code>, so dynamic-K cannot silently become global SpecDec, scheduler partial-enable cannot override large-batch threshold disables, and all-disabled batches no longer skip the async event path. Corrected verifier <code>3076833</code> completed stop-after-generation with acceptance <code>57.65%</code>, <code>6669.63 generated tok/s/GPU</code>, and runner disabled-count evidence.</td>
+        </tr>
+        <tr>
+          <td>How is it enabled?</td>
+          <td>Submission scripts pass <code>ENABLE_RUNTIME_SPECDEC_GATE_PATCH=true</code>, then map <code>SPECDEC_SCHEDULER_PATCH_GATE_THRESHOLD</code> and <code>SPECDEC_SCHEDULER_PATCH_GATE_TOKEN_THRESHOLD</code> into the vLLM worker env vars. Adaptive runs additionally pass <code>SPECDEC_ADAPTIVE_GATE_*</code>, dynamic-depth runs pass <code>SPECDEC_DYNAMIC_DRAFT_*</code>, and step-controller runs pass <code>NRL_SPECDEC_STEP_ADAPTIVE_CONTROLLER=true</code> plus acceptance/K floor knobs. The 30B 500K wrapper now preserves dynamic-depth env vars through wrapper submission, and <code>VllmGeneration</code> forwards the corresponding <code>VLLM_SPECDEC_DYNAMIC_DRAFT_*</code> values into Ray actor environments.</td>
+        </tr>
+        <tr>
+          <td>What was fixed in the submission scripts?</td>
+          <td>Remote main baseline and SpecDec launchers are on guarded versions. They reject <code>SPECDEC_DISABLE_BY_BATCH_SIZE</code>, require patch markers, keep CUDA graphs via <code>enforce_eager=false</code>, set <code>async_engine=false</code>, expose <code>NRL_VLLM_OMIT_GENERATION_LOGPROBS</code>, pass <code>policy.model_name=${TARGET_MODEL_ID}</code> explicitly, and fail fast if the real checkout lacks the current SpecDec patch markers. The remote Megatron setup also now requires <code>iter_0000000/run_config.yaml</code> before treating a converted checkpoint as complete. The 30B launcher defaults to the 500K drafter root, while 30B legacy 50K and 235B legacy default drafters require explicit opt-in.</td>
+        </tr>
+        <tr>
+          <td>Is there an active 235B SpecDec job now?</td>
+          <td>Corrected Public HF 235B NeMo-RL SpecDec diagnostic <code>3084952</code> completed <code>4/4</code> with target <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code> and NVIDIA PublicHF Eagle3 K=<code>1</code>. Mean generated throughput is <code>60.61 tok/s/GPU</code>, mean E2E is <code>43.60 tok/s/GPU</code>, and mean acceptance is <code>65.71%</code>. Scheduler gate metrics are <code>enabled_ratio=1.0</code> and <code>disabled=0</code> for all steps, so this job is not evidence that only the lower-batch tail was accelerated. Matched baseline job <code>3088636</code> emitted <code>4/4</code> metrics with mean <code>61.48 generated tok/s/GPU</code>, mean E2E <code>44.72 tok/s/GPU</code>, and mean total step <code>452.20s</code>, so the always-enabled PublicHF diagnostic is slower than the matched baseline. Rebuild retry <code>3092445</code> proved strict large-batch disable, then failed before any completed rollout metric with <code>RayChannelTimeoutError</code> in the all-disabled speculative path. V9b strict-gate retry <code>3103227</code> passed target/drafter loading plus policy worker/checkpoint-save setup, but then failed before rollout with <code>KeyError: 'moe_enable_deepep'</code>. V9c retry <code>3105964</code> failed before rollout because the new Megatron cfg overrides needed Hydra append syntax. Corrected V9d retry <code>3106959</code> is running on 32 nodes and has not emitted rollout metrics yet. The active in-house 235B work is clean 500K Speculators training: hidden-state array <code>3072149_[0-99]%10</code> completed, exact coverage is <code>500000/500000</code>, and replacement train <code>3105111</code> is running at latest observed global step <code>32223</code>.</td>
+        </tr>
+        <tr>
+          <td>What is the next long-tail experiment?</td>
+          <td>The 500K K=1/2/3 jobs with token gate <code>4096</code> completed <code>20/20</code> generation metrics. K=1 token-gate <code>2048</code> job <code>3058759</code> and K=1 token-gate <code>1024</code> job <code>3058762</code> also completed and stay around <code>1.34x</code>. Corrected V8 verifier <code>3076833</code> completed the generation-side long-tail diagnostic. Strict p64/g32 alltoall r3 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code>; SpecDec improved generation throughput but was flat E2E. For 235B PublicHF, matched baseline <code>3088636</code> is complete; strict request-gate job <code>3092445</code> failed before throughput after proving large-batch disable, V9 retry <code>3103018</code> failed before rollout due to missing third-party workspace files, V9b retry <code>3103227</code> failed before rollout due to missing <code>moe_enable_deepep</code> config, V9c retry <code>3105964</code> failed on Hydra append syntax, and active V9d retry <code>3106959</code> is the current strict-gate measurement attempt.</td>
+        </tr>
+        <tr>
+          <td>Is the patch bundle current?</td>
+          <td>Yes. The source overlay and target-applied validation now pass against the current markers, including <code>NRL_SPECDEC_BATCH_GATE_PATCH_V9</code>, <code>NRL_SPECDEC_BATCH_GATE_ZERO_DRAFTS_ON_DISABLE_V1</code>, <code>NRL_SPECDEC_DYNAMIC_REQUIRES_GATE_THRESHOLD_V1</code>, <code>NRL_SPECDEC_CONTROLLER_REQUIRES_COMPLETE_GATE_METRICS_V1</code>, <code>NRL_SPECDEC_SCHEDULER_OUTPUT_GATE_ATTR_V2</code>, and <code>NRL_SPECDEC_ACCEPTANCE_REQUIRES_COMPLETE_DP_METRICS_V1</code>. The validated remote checkout is <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL</code>. V8 long-tail gate verification completed as <code>3076833</code>; V9 target-applied validation now passes, matched baseline <code>3088636</code> is complete, and the maintained 235B launchers now use <code>++policy.megatron_cfg.*</code> syntax for extra Megatron config keys after <code>3105964</code> exposed the Hydra structured-config failure.</td>
+        </tr>
+        <tr>
+          <td>Current concern</td>
+          <td>K=2/K=3 deeper draft positions have much lower acceptance than K=1, so static deeper drafting often loses the overhead tradeoff. Request-only gates also stayed near <code>1.06x</code> Generation speedup, while token-pressure K=1 is the best confirmed Generation result at <code>1.3664x</code>. The current concern is whether dynamic-depth can keep the K=1 throughput profile for normal batches while letting K=2/K=3 help only in the small active-batch tail.</td>
+        </tr>
+        <tr>
+          <td>Strict-gate follow-up jobs</td>
+          <td>30B K=2 strict gate job <code>3057073</code> completed 20/20 NeMo-RL generation metrics. 235B K=2 strict gate job <code>3057084</code> failed during Ray/enroot startup before rollout; retry <code>3057118</code> attached the drafter but stalled in Step 1 with <code>0/64</code> prompts processed and was cancelled after <code>01:16:34</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Workstreams</h2>
+    <div class="status-row">
+      <strong>30B NeMo-RL</strong>
+      <span>Mixed 50K baseline produced all 20 generation metrics at <code>4169.19 tok/s/GPU</code>. K=1 token-gate4096 job <code>3056051</code> completed 20 generation metrics with mean <code>5500.27 tok/s/GPU</code> (<code>1.32x</code>), and vLLM acceptance is <code>52.5%</code> across <code>160</code> parsed metrics. K=2 strict long-tail gate job <code>3057073</code> completed 20 generation metrics with mean <code>4328.88 tok/s/GPU</code> (<code>1.04x</code>) and acceptance <code>28.0%</code>. K=2 token-gate4096 job <code>3056052</code> completed 20/20 generation metrics with mean <code>4849.05 tok/s/GPU</code> (<code>1.16x</code>) with step-level acceptance <code>38.1%</code> and aggregate acceptance median <code>50%</code>.</span>
+      <span class="pill ok">K2 complete</span>
+    </div>
+    <div class="status-row">
+      <strong>30B training</strong>
+      <span>50K mixed checkpoint complete. The clean 500K hidden-state cache is complete at <code>500000/500000</code>, and train job <code>3056818</code> completed the <code>87,997/87,997</code> 1-epoch train loop from the 50K checkpoint. Final observed train step is <code>global_step=87996</code>; latest 20 observed train losses average <code>7.149</code> with range <code>6.229-8.346</code>; validation loss is <code>7.491660</code>. Checkpoint <code>0</code> is ready. Smaller 100K/150K continuation jobs completed; the 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code>, and continuation job <code>3059621</code> has completed the <code>50,000/50,000</code> hidden-state cache and entered Speculators training. The clean 500K result remains the primary reported path.</span>
+      <span class="pill ok">done</span>
+    </div>
+    <div class="status-row">
+      <strong>235B NeMo-RL</strong>
+      <span>Baseline complete. K=1 token-gate4096 job <code>3055926</code> completed 20/20 steps at <code>66.16 tok/s/GPU</code>, slightly below the <code>66.78</code> baseline despite <code>54.6%</code> driver step-summary acceptance. K=2 strict long-tail gate job <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code> and initialized <code>128</code> vLLM workers plus <code>128</code> lm_policy workers, but stayed in Step 1 with no processed prompts and no throughput metric. It was cancelled after <code>01:16:34</code> to free 32 nodes.</span>
+      <span class="pill bad">cancelled</span>
+    </div>
+    <div class="status-row">
+      <strong>500K scaling</strong>
+      <span>Exact unique 500K JSONL is verified at <code>500000</code> rows. Prepare job <code>3056797</code>, hidden-state shards <code>3056798-3056817</code>, and train job <code>3056818</code> are complete. K=1/2/3 NeMo-RL evaluations with token gate <code>4096</code> completed <code>20/20</code> metrics: K=1 is <code>5604.28 generated tok/s/GPU</code> and <code>57.51%</code> acceptance; K=2 is <code>5004.48</code> and <code>42.11%</code>; K=3 is <code>4908.22</code> and <code>31.85%</code>. K=1 token-pressure follow-up <code>3060379</code> is best confirmed at <code>5696.58 generated tok/s/GPU</code>, <code>1.3664x</code> Generation speedup, and <code>57.40%</code> acceptance. Request-only gates stayed near <code>1.06x</code> Generation speedup. Dynamic-K job <code>3070995</code> reached Step 1 acceptance but failed before final throughput. Runtime timeout, dynamic-tier counter aggregation, denominator sanity gating, controller no-op/dynamic-env safety, per-request K tracking, DP denominator merge, generated scheduler repairs, complete-DP metric trust, scheduler-output propagation, and V9 runner threshold/all-disabled gating is now fixed; corrected verifier <code>3076833</code> completed stop-after-generation and p64/g32 alltoall r3 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code> steps.</span>
+      <span class="pill warn">live eval</span>
+    </div>
+  </section>
+
+  <section id="q30" class="page">
+    <h2>Qwen3-30B-A3B</h2>
+    <div class="split">
+      <div class="bars">
+        <h3>Best NeMo-RL Generation Speedups So Far</h3>
+        <div class="bar-row">
+          <span>Baseline</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:82%;--c:var(--muted)"></div></div>
+          <strong>1.00x</strong>
+        </div>
+        <div class="bar-row">
+          <span>K=2 old 50K</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:87%;--c:var(--blue)"></div></div>
+          <strong>1.17x</strong>
+        </div>
+        <div class="bar-row">
+          <span>K=3 old 50K</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:90%;--c:var(--green)"></div></div>
+          <strong>1.22x</strong>
+        </div>
+        <div class="bar-row">
+          <span>K=1 mixed n=20</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:99%;--c:var(--amber)"></div></div>
+          <strong>1.32x</strong>
+        </div>
+        <div class="bar-row">
+          <span>K=1 500K n=20</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--green)"></div></div>
+          <strong>1.34x</strong>
+        </div>
+        <div class="bar-row">
+          <span>K=4</span>
+          <div class="bar-track"><div class="bar-fill" style="--w:34%;--c:var(--red)"></div></div>
+          <strong>0.42x</strong>
+        </div>
+      </div>
+      <div class="callout">
+        <h3>What Matters</h3>
+        <p>30B already proves SpecDec can help NeMo-RL generation, but it is not at the <code>2x</code> target. The older completed best was about <code>1.32x</code>; the new 500K K=1 drafter completes at <code>1.34x</code> across 20 NeMo-RL generation metrics. K=2 and K=3 are slower because acceptance drops.</p>
+        <div class="mono-list">
+          <div>Baseline complete: <code>3056050</code>, mean <code>4169.19 tok/s/GPU</code> from 20 metrics</div>
+          <div>K=1 token-gate4096 complete: <code>3056051</code>, mean <code>5500.27 tok/s/GPU</code> from 20 metrics, speedup <code>1.32x</code>, acceptance <code>52.5%</code></div>
+          <div>K=2 strict gate complete: <code>3057073</code>, request gate <code>4</code>, token gate <code>1024</code>, mean <code>4328.88 tok/s/GPU</code> from 20 metrics, speedup <code>1.04x</code>, acceptance <code>28.0%</code></div>
+          <div>K=2 token-gate4096 complete: <code>3056052</code>, 20/20 metrics, mean <code>4849.05 tok/s/GPU</code>, speedup <code>1.16x</code>, step-level acceptance <code>38.1%</code>, aggregate acceptance median <code>50%</code></div>
+          <div>500K K=1/K=2/K=3 final jobs: <code>3058167</code>/<code>3058168</code>/<code>3058169</code>, n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means <code>5604.28</code>/<code>5004.48</code>/<code>4908.22</code>, acceptance means <code>57.51%</code>/<code>42.11%</code>/<code>31.85%</code></div>
+          <div>500K stricter long-tail K=1 jobs: token gate <code>2048</code> <code>3058759</code>, n=<code>20</code>, mean <code>5596.71</code>, speedup <code>1.3424x</code>, acceptance <code>57.43%</code>; token gate <code>1024</code> <code>3058762</code>, n=<code>20</code>, mean <code>5578.08</code>, speedup <code>1.3379x</code>, acceptance <code>57.44%</code></div>
+          <div>500K batch-size-only long-tail K=1 jobs: request gate <code>4</code>, token gate <code>0</code>, job <code>3059445</code>, n=<code>20</code>, mean <code>4414.40</code>, speedup <code>1.0588x</code>, acceptance <code>44.87%</code>; request gate <code>32</code>, token gate <code>0</code>, job <code>3059556</code>, n=<code>20</code>, mean <code>4401.79</code>, speedup <code>1.0558x</code>, acceptance <code>52.12%</code>; request gate <code>64</code>, token gate <code>0</code>, job <code>3059932</code>, n=<code>20</code>, mean <code>4427.50</code>, speedup <code>1.0620x</code>, acceptance <code>56.47%</code>; hybrid request gate <code>96</code>, token gate <code>2048</code>, retry job <code>3060012</code>, n=<code>20</code>, mean <code>4419.72</code>, speedup <code>1.0601x</code>, acceptance <code>57.51%</code>; V4 hybrid gate-hit logging job <code>3060282</code> has confirmed gate counters and n=<code>8</code>, mean <code>4499.57</code>; V4 strict small-batch-only job <code>3060293</code>, request gate <code>4</code>, n=<code>8</code>, mean <code>4448.28</code>, speedup <code>1.0669x</code>, acceptance <code>41.37%</code>; V4 token-pressure-only job <code>3060379</code>, request gate <code>0</code>, token gate <code>2048</code>, max steps <code>8</code>, n=<code>8</code>, mean <code>5696.58</code>, speedup <code>1.3664x</code>, acceptance <code>57.40%</code>; TLT-style V4 request gate <code>32</code> job <code>3060401</code>, max steps <code>8</code>, n=<code>8</code>, mean <code>4450.60</code>, speedup <code>1.0675x</code>, acceptance <code>52.07%</code></div>
+        </div>
+        <table>
+          <thead>
+            <tr><th>K=3 position</th><th>Latest acceptance</th><th>Interpretation</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1st draft token</td><td>55.11%</td><td>Close to K=1 quality; the drafter can often predict the immediate next token.</td></tr>
+            <tr><td>2nd draft token</td><td>27.62%</td><td>Acceptance roughly halves once the draft prefix is one token away from the target trajectory.</td></tr>
+            <tr><td>3rd draft token</td><td>13.24%</td><td>Deep speculative tokens are mostly rejected on math CoT exact-token verification.</td></tr>
+          </tbody>
+        </table>
+        <p class="small">K=3 mean acceptance is only <code>31.85%</code> because the deeper speculative positions collapse, not because every position is equally weak. This is consistent with multi-step exposure bias and target-distribution drift: math reasoning has many valid next-token continuations, but the verifier accepts exact target-model tokens. Operationally, K=1 remains the safe setting until adaptive-depth or online drafter refresh improves second/third-token acceptance.</p>
+      </div>
+    </div>
+
+    <div class="chart-panel">
+      <h3>Step-Level Acceptance Rate</h3>
+      <p class="small">This is the key stability view for a fixed drafter. The 500K K=1 drafter stays roughly flat around <code>57%</code> over 20 GRPO steps; K=2/K=3 lose acceptance because the draft depth is larger. The token-pressure long-tail gate follows the same K=1 acceptance band, while request-only gating is noisier because most proposal checks are disabled.</p>
+      <div class="chart-wrap">
+        <svg class="chart-svg" viewBox="0 0 720 260" role="img" aria-label="Step-level acceptance-rate chart for 30B 500K Eagle3 SpecDec jobs">
+          <line x1="60" y1="30" x2="60" y2="210" stroke="var(--line)" />
+          <line x1="60" y1="210" x2="660" y2="210" stroke="var(--line)" />
+          <line x1="60" y1="50" x2="660" y2="50" stroke="var(--line)" stroke-dasharray="4 4" />
+          <line x1="60" y1="103" x2="660" y2="103" stroke="var(--line)" stroke-dasharray="4 4" />
+          <line x1="60" y1="156" x2="660" y2="156" stroke="var(--line)" stroke-dasharray="4 4" />
+          <text x="20" y="54" fill="var(--muted)" font-size="12">58%</text>
+          <text x="20" y="107" fill="var(--muted)" font-size="12">48%</text>
+          <text x="20" y="160" fill="var(--muted)" font-size="12">38%</text>
+          <text x="55" y="232" fill="var(--muted)" font-size="12">1</text>
+          <text x="205" y="232" fill="var(--muted)" font-size="12">6</text>
+          <text x="360" y="232" fill="var(--muted)" font-size="12">11</text>
+          <text x="520" y="232" fill="var(--muted)" font-size="12">16</text>
+          <text x="650" y="232" fill="var(--muted)" font-size="12">20</text>
+          <polyline points="60.0,51.7 91.6,55.9 123.2,45.1 154.7,63.7 186.3,48.5 217.9,56.0 249.5,52.4 281.1,58.4 312.6,58.9 344.2,50.0 375.8,52.9 407.4,47.8 438.9,52.3 470.5,50.4 502.1,52.6 533.7,53.5 565.3,50.5 596.8,67.5 628.4,54.8 660.0,52.3" fill="none" stroke="var(--green)" stroke-width="3" />
+          <polyline points="60.0,133.3 91.6,138.4 123.2,126.9 154.7,145.7 186.3,130.6 217.9,136.7 249.5,133.8 281.1,140.4 312.6,139.3 344.2,131.8 375.8,134.9 407.4,128.4 438.9,133.8 470.5,131.5 502.1,134.5 533.7,135.0 565.3,131.1 596.8,149.0 628.4,137.0 660.0,134.1" fill="none" stroke="var(--amber)" stroke-width="2.5" />
+          <polyline points="60.0,188.2 91.6,192.1 123.2,182.4 154.7,199.0 186.3,185.5 217.9,190.6 249.5,188.0 281.1,193.7 312.6,192.8 344.2,186.1 375.8,188.9 407.4,183.7 438.9,188.4 470.5,186.6 502.1,188.9 533.7,189.8 565.3,186.2 596.8,201.4 628.4,191.5 660.0,188.8" fill="none" stroke="var(--red)" stroke-width="2.5" />
+          <polyline points="60.0,51.9 91.6,56.2 123.2,45.5 154.7,63.7 186.3,49.1 217.9,56.6 249.5,53.2 281.1,58.9" fill="none" stroke="var(--blue)" stroke-width="3.5" stroke-dasharray="7 4" />
+          <polyline points="60.0,93.0 91.6,72.4 123.2,87.0 154.7,123.7 186.3,79.3 217.9,37.3 249.5,103.4 281.1,64.6" fill="none" stroke="#8b5cf6" stroke-width="3.5" stroke-dasharray="3 5" />
+        </svg>
+      </div>
+      <div class="chart-legend">
+        <span class="legend-line" style="--legend-color:var(--green)">K=1 500K, 20 steps, mean 57.51%</span>
+        <span class="legend-line" style="--legend-color:var(--amber)">K=2 500K, 20 steps, mean 42.11%</span>
+        <span class="legend-line" style="--legend-color:var(--red)">K=3 500K, 20 steps, mean 31.85%</span>
+        <span class="legend-line" style="--legend-color:var(--blue)">K=1 token gate 2048, job 3060379, 8 steps, mean 57.40%</span>
+        <span class="legend-line" style="--legend-color:#8b5cf6">K=1 request gate 32, job 3060401, 8 steps, mean 52.07%</span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Step</th><th>K=1 500K</th><th>K=2 500K</th><th>K=3 500K</th><th>K=1 token2048</th><th>K=1 req32</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>57.91%</td><td>42.49%</td><td>32.11%</td><td>57.87%</td><td>50.10%</td></tr>
+          <tr><td>2</td><td>57.10%</td><td>41.52%</td><td>31.39%</td><td>57.06%</td><td>53.99%</td></tr>
+          <tr><td>3</td><td>59.14%</td><td>43.69%</td><td>33.22%</td><td>59.08%</td><td>51.23%</td></tr>
+          <tr><td>4</td><td>55.63%</td><td>40.15%</td><td>30.07%</td><td>55.63%</td><td>44.31%</td></tr>
+          <tr><td>5</td><td>58.51%</td><td>42.99%</td><td>32.62%</td><td>58.39%</td><td>52.69%</td></tr>
+          <tr><td>6</td><td>57.08%</td><td>41.84%</td><td>31.66%</td><td>56.98%</td><td>60.62%</td></tr>
+          <tr><td>7</td><td>57.76%</td><td>42.40%</td><td>32.16%</td><td>57.62%</td><td>48.14%</td></tr>
+          <tr><td>8</td><td>56.64%</td><td>41.15%</td><td>31.07%</td><td>56.55%</td><td>55.46%</td></tr>
+          <tr><td>9</td><td>56.54%</td><td>41.35%</td><td>31.24%</td><td>-</td><td>-</td></tr>
+          <tr><td>10</td><td>58.23%</td><td>42.77%</td><td>32.52%</td><td>-</td><td>-</td></tr>
+          <tr><td>11</td><td>57.68%</td><td>42.19%</td><td>31.99%</td><td>-</td><td>-</td></tr>
+          <tr><td>12</td><td>58.64%</td><td>43.41%</td><td>32.96%</td><td>-</td><td>-</td></tr>
+          <tr><td>13</td><td>57.79%</td><td>42.40%</td><td>32.08%</td><td>-</td><td>-</td></tr>
+          <tr><td>14</td><td>58.14%</td><td>42.83%</td><td>32.42%</td><td>-</td><td>-</td></tr>
+          <tr><td>15</td><td>57.73%</td><td>42.27%</td><td>31.98%</td><td>-</td><td>-</td></tr>
+          <tr><td>16</td><td>57.56%</td><td>42.17%</td><td>31.82%</td><td>-</td><td>-</td></tr>
+          <tr><td>17</td><td>58.12%</td><td>42.91%</td><td>32.49%</td><td>-</td><td>-</td></tr>
+          <tr><td>18</td><td>54.92%</td><td>39.52%</td><td>29.62%</td><td>-</td><td>-</td></tr>
+          <tr><td>19</td><td>57.32%</td><td>41.79%</td><td>31.49%</td><td>-</td><td>-</td></tr>
+          <tr><td>20</td><td>57.78%</td><td>42.33%</td><td>32.00%</td><td>-</td><td>-</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="chart-panel">
+      <h3>Acceptance Over Wall Time</h3>
+      <p class="small">Same acceptance data, but the x-axis is cumulative rollout wall time at the end of each step. This helps separate drafter quality drift from slow or noisy steps. The current 30B K=1 drafter does not show a time drift: it starts at <code>57.91%</code>, ends at <code>57.78%</code>, and averages <code>57.51%</code> over about <code>71.8</code> minutes.</p>
+      <div class="chart-wrap">
+        <svg class="chart-svg" viewBox="0 0 720 260" role="img" aria-label="Acceptance-rate chart over cumulative wall-clock minutes">
+          <line x1="60" y1="30" x2="60" y2="210" stroke="var(--line)" />
+          <line x1="60" y1="210" x2="660" y2="210" stroke="var(--line)" />
+          <line x1="60" y1="30" x2="660" y2="30" stroke="var(--line)" stroke-dasharray="4 4" />
+          <line x1="60" y1="90" x2="660" y2="90" stroke="var(--line)" stroke-dasharray="4 4" />
+          <line x1="60" y1="150" x2="660" y2="150" stroke="var(--line)" stroke-dasharray="4 4" />
+          <text x="20" y="34" fill="var(--muted)" font-size="12">60%</text>
+          <text x="20" y="94" fill="var(--muted)" font-size="12">50%</text>
+          <text x="20" y="154" fill="var(--muted)" font-size="12">40%</text>
+          <text x="20" y="214" fill="var(--muted)" font-size="12">30%</text>
+          <text x="54" y="232" fill="var(--muted)" font-size="12">0m</text>
+          <text x="174" y="232" fill="var(--muted)" font-size="12">15m</text>
+          <text x="294" y="232" fill="var(--muted)" font-size="12">30m</text>
+          <text x="414" y="232" fill="var(--muted)" font-size="12">45m</text>
+          <text x="534" y="232" fill="var(--muted)" font-size="12">60m</text>
+          <text x="646" y="232" fill="var(--muted)" font-size="12">75m</text>
+          <polyline points="93.9,42.5 122.8,47.4 151.9,35.2 179.4,56.2 207.6,38.9 234.9,47.5 264.3,43.4 293.8,50.2 321.3,50.8 349.5,40.6 377.4,43.9 406.5,38.2 435.6,43.3 465.2,41.2 492.9,43.6 521.0,44.6 549.7,41.3 577.1,60.5 606.4,46.1 634.2,43.3" fill="none" stroke="var(--green)" stroke-width="3" />
+          <polyline points="95.0,135.1 124.2,140.9 154.3,127.9 182.4,149.1 211.0,132.1 238.7,139.0 269.5,135.6 301.3,143.1 329.9,141.9 358.5,133.4 388.0,136.9 417.6,129.5 448.3,135.6 478.9,133.0 507.6,136.4 536.6,137.0 566.4,132.5 595.5,152.9 625.8,139.3 654.5,136.0" fill="none" stroke="var(--amber)" stroke-width="2.5" />
+          <polyline points="94.1,197.3 123.2,201.7 153.1,190.7 181.1,209.6 209.9,194.3 237.6,200.0 268.4,197.0 299.3,203.6 327.9,202.6 356.3,194.9 385.4,198.1 415.0,192.2 445.8,197.5 476.4,195.5 505.0,198.1 533.4,199.1 563.3,195.1 592.1,212.3 622.1,201.1 650.6,198.0" fill="none" stroke="var(--red)" stroke-width="2.5" />
+          <polyline points="93.7,42.8 122.8,47.6 151.7,35.5 178.8,56.2 207.8,39.7 234.9,48.1 264.5,44.3 294.2,50.7" fill="none" stroke="var(--blue)" stroke-width="3.5" stroke-dasharray="7 4" />
+          <polyline points="96.2,89.4 127.2,66.1 158.9,82.6 189.3,124.1 220.0,73.9 250.0,26.3 281.8,101.2 314.4,57.2" fill="none" stroke="#8b5cf6" stroke-width="3.5" stroke-dasharray="3 5" />
+        </svg>
+      </div>
+      <div class="chart-legend">
+        <span class="legend-line" style="--legend-color:var(--green)">K=1 500K, 71.8 minutes, 57.91% -> 57.78%</span>
+        <span class="legend-line" style="--legend-color:var(--amber)">K=2 500K, 74.3 minutes, 42.49% -> 42.33%</span>
+        <span class="legend-line" style="--legend-color:var(--red)">K=3 500K, 73.8 minutes, 32.11% -> 32.00%</span>
+        <span class="legend-line" style="--legend-color:var(--blue)">K=1 token gate 2048, 29.3 minutes, 57.87% -> 56.55%</span>
+        <span class="legend-line" style="--legend-color:#8b5cf6">K=1 request gate 32, 31.8 minutes, 50.10% -> 55.46%</span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Elapsed</th><th>First</th><th>Latest</th><th>Mean</th><th>Readout</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>K=1 500K</td><td>71.8 min</td><td>57.91%</td><td>57.78%</td><td>57.51%</td><td>Stable; no visible acceptance decay across the 20-step run.</td></tr>
+          <tr><td>K=2 500K</td><td>74.3 min</td><td>42.49%</td><td>42.33%</td><td>42.11%</td><td>Stable but lower; larger draft depth reduces accepted-token fraction.</td></tr>
+          <tr><td>K=3 500K</td><td>73.8 min</td><td>32.11%</td><td>32.00%</td><td>31.85%</td><td>Stable but too low for this workload.</td></tr>
+          <tr><td>K=1 token gate 2048</td><td>29.3 min</td><td>57.87%</td><td>56.55%</td><td>57.40%</td><td>Tracks the full K=1 run while giving the best observed NeMo-RL speedup.</td></tr>
+          <tr><td>K=1 request gate 32</td><td>31.8 min</td><td>50.10%</td><td>55.46%</td><td>52.07%</td><td>Noisier; request-count-only gating disables most proposal checks.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>30B Status Table</h2>
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Status</th><th>Evidence</th><th>Next</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Mixed 50K drafter</td>
+          <td><span class="pill ok">done</span></td>
+          <td>Job <code>3052366</code>, val loss <code>7.341310</code>, checkpoint <code>0</code>.</td>
+          <td>Use in active NeMo-RL K=1/K=2 evaluation.</td>
+        </tr>
+        <tr>
+          <td>Mixed 100K continuation</td>
+          <td><span class="pill warn">running</span></td>
+          <td>Job <code>3055365</code> completed; follow-up 150K job <code>3055370</code> also completed. The 200K auto first job <code>3059620</code> timed out after <code>04:00:28</code>; continuation job <code>3059621</code> is running, with <code>50,000/50,000</code> hidden-state files observed at the 14:47 PT check and training launched from the 150K checkpoint. Latest observed training log reached <code>global_step=4683</code>.</td>
+          <td>Use only as secondary learning-curve evidence. Main 500K path supersedes this smaller continuation for final evaluation.</td>
+        </tr>
+        <tr>
+          <td>500K target responses</td>
+          <td><span class="pill ok">eval complete</span></td>
+          <td>10 50K slices exist for 30B mixed non-OpenMath. Exact unique merged file is verified at <code>500000</code> rows; Speculators conversion wrote <code>500000</code> rows with <code>0</code> failures. Prepare completed tokenization and token frequency counting at <code>500000/500000</code>.</td>
+          <td>Current chain: prepare <code>3056797</code> complete, r2 shards <code>3056798-3056817</code> complete with <code>500000</code> files, train <code>3056818</code> complete with best checkpoint <code>0</code>, validation loss <code>7.491660</code>. K=1/K=2/K=3 500K-drafter NeMo-RL eval jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code> completed <code>20/20</code> generation metrics with token gate <code>4096</code>. K=1 follow-ups <code>3058759</code> with token gate <code>2048</code> and <code>3058762</code> with token gate <code>1024</code> also reached <code>20/20</code>. Request-only gates <code>4</code> and <code>32</code> completed but were only about <code>1.06x</code>; request gate <code>64</code> completed at <code>1.0620x</code>, and hybrid request gate <code>96</code> plus token gate <code>2048</code> completed at <code>1.0601x</code>. V4 gate-hit logging is confirmed in <code>3060282</code> and <code>3060293</code>; token-pressure-only <code>3060379</code> completed eight metrics at <code>1.3664x</code>, and TLT-style request gate <code>32</code> job <code>3060401</code> completed eight metrics at <code>1.0675x</code>. Duplicate older shards <code>3056722-3056741</code> were canceled.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="q235" class="page">
+    <h2>Qwen3-235B</h2>
+    <div class="grid">
+      <div class="card">
+        <div class="label">Historical baseline</div>
+        <div class="metric ok">66.78</div>
+        <p class="small">tok/s/GPU across 20 NeMo-RL steps; not yet remeasured for Thinking-2507 PublicHF.</p>
+      </div>
+      <div class="card">
+        <div class="label">PublicHF K=1 acceptance</div>
+        <div class="metric warn">62.8-69.0%</div>
+        <p class="small">Job 3084952 completed 4/4; matched baseline 3088636 has 4/4 metrics.</p>
+      </div>
+      <div class="card">
+        <div class="label">K=2 outcome</div>
+        <div class="metric bad">cancelled</div>
+        <p class="small">Retry <code>3057118</code> was cancelled after stalling before first rollout metric.</p>
+      </div>
+      <div class="card">
+          <div class="label">K=1 retry</div>
+        <div class="metric warn">66.16</div>
+        <p class="small">Completed 20-step NeMo-RL mean; speedup is <code>0.99x</code>.</p>
+      </div>
+    </div>
+
+    <div class="banner">
+      <h2>K=2 Summary</h2>
+      <p>K=2 job <code>3055189</code> attached the Eagle3 drafter and produced vLLM SpecDec metrics, but failed before NeMo-RL could finish Step 1. The dumped scheduler state shows <code>64</code> running requests, <code>total_num_scheduled_tokens=2080</code>, and <code>scheduled_spec_decode_tokens={}</code>. Retry job <code>3057118</code> also attached the drafter and entered Step 1, then stayed at <code>Processed prompts: 0/64</code> with no driver-log progress after <code>04:38:57 PT</code>; it was cancelled after <code>01:16:34</code>. Neither run is a completed low-throughput result.</p>
+    </div>
+
+    <h2>235B Decision</h2>
+    <table>
+      <thead>
+        <tr><th>Question</th><th>Answer</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Do we have a clean 235B baseline?</td><td>Yes. Historical 235B recipe <code>3053877</code> completed 20 steps at <code>66.78 tok/s/GPU</code>. The matched Thinking-2507 PublicHF baseline job <code>3088636</code> now has <code>4/4</code> metrics: mean generated tok/s/GPU <code>61.48</code>, mean E2E tok/s/GPU <code>44.72</code>, and mean total step <code>452.20s</code>.</td></tr>
+        <tr><td>Do we have a clean 235B SpecDec speedup?</td><td>No. Legacy K=1 completed 20/20 steps at <code>66.16 tok/s/GPU</code>, slightly below the <code>66.78</code> baseline. Corrected PublicHF K=1 job <code>3084952</code> completed <code>4/4</code> with mean <code>60.61</code> generated tok/s/GPU and mean <code>43.60</code> E2E tok/s/GPU, but its gate was effectively always-on and it is slower than matched baseline: generation <code>0.986x</code>, E2E <code>0.975x</code>. Rebuild strict request-gate job <code>3092445</code> proved lower-batch gating disables large batches, but failed before throughput metrics with a Ray/vLLM timeout in the all-disabled speculative path.</td></tr>
+        <tr><td>What is K=1 acceptance?</td><td>Legacy completed K=1 driver step-summary acceptance mean is <code>54.6%</code> across <code>20</code> parsed rollout summaries. Corrected PublicHF K=1 job <code>3084952</code> has mean acceptance <code>65.71%</code> across <code>4</code> completed steps.</td></tr>
+        <tr><td>Is the K=2 drafter attached?</td><td>Yes. Retry job <code>3057118</code> logs <code>SpeculativeConfig(method='eagle3', num_spec_tokens=2)</code>, initialized <code>128</code> vLLM workers and <code>128</code> lm_policy workers, and entered Step 1 rollout. It produced no NeMo-RL rollout throughput or acceptance metric and was cancelled after stalling.</td></tr>
+        <tr><td>Next debug</td><td>Do not count K=2 strict gate or <code>3092445</code> as throughput results. For PublicHF K=1, the matched Thinking-2507 baseline <code>3088636</code> is complete, and <code>3092445</code> now identifies the next code fix: all-disabled speculative_config batches need a stable baseline fallback or metadata-path repair. For the in-house 235B drafter, wait for train job <code>3105111</code> to finish, then evaluate the resulting checkpoint in NeMo-RL with K=1 and K=2.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>235B In-House Drafter Corpus</h2>
+    <div class="banner">
+      <h2>Current Data Status</h2>
+      <p>The public/HF 235B Eagle3 checks and the earlier K=1/K=2 NeMo-RL runs are separate from the in-house clean 500K Speculators training path. For the in-house 235B path, target-response repair and finalization are complete. Finalizer <code>3068014</code> produced exact <code>500000</code>-row conversation and Speculators JSONL files, and prepare job <code>3068015</code> completed with <code>16</code> arrow shards plus <code>token_freq.pt</code>. The 100-shard hidden-state array <code>3072149_[0-99]%10</code> completed after the vLLM <code>extract_hidden_states</code> draft-token shape patch, and exact coverage is now <code>500000/500000</code>. Retry repairs <code>3105107</code>, <code>3105108</code>, <code>3105109</code>, and <code>3105110</code> used <code>VLLM_MAX_MODEL_LEN=8193</code> and raised coverage to full. Replacement train <code>3105111</code> completed in <code>03:23:05</code> and wrote checkpoint <code>0</code> under <code>checkpoints_train_500k_layers94_mlen8193</code>; validation reports <code>loss_epoch=5.429</code> with position losses <code>0.941/1.876/2.612</code>. NeMo-RL eval job <code>3114678</code> is running against this checkpoint with K=<code>1</code>, request gate <code>4</code>, token gate <code>0</code>, and forced venv rebuild.</p>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Status</th><th>Evidence</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Existing 235B target responses</td>
+          <td><span class="pill ok">500,000 rows</span></td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_target_chunks/qwen3_235b_*.jsonl</code>, generated from mixed non-OpenMath prompts with <code>Qwen/Qwen3-235B-A22B-Thinking-2507</code>. This count excludes the completed <code>qwen3_30ba3b_*.jsonl</code> files in the same directory. Revalidation at <code>2026-06-01 08:06 PT</code> found <code>100</code> chunk files, total <code>500000</code> rows, min/max <code>5000/5000</code>, and <code>0</code> short chunks.</td>
+        </tr>
+        <tr>
+          <td>Short-chunk repair</td>
+          <td><span class="pill ok">complete</span></td>
+          <td>Initial count-based repairs completed or left squeue but chunks <code>005-008</code> stayed at <code>4997/4999/4997/4999</code> rows. A probe found exact missing prompt IDs, so fourth-wave count-based repair jobs <code>3061953</code>-<code>3061956</code> were canceled/superseded. Missing-ID attempt <code>3061970</code> failed before generation on Slurm/Ray memory allocation; retry job <code>3061996</code> completed in <code>17</code> minutes and chunks <code>005-008</code> are now exactly <code>5000</code> rows.</td>
+        </tr>
+        <tr>
+          <td>Exact missing-ID repair</td>
+          <td><span class="pill ok">complete</span></td>
+          <td>Wave3 jobs <code>3062965-3062970</code> timed out after generating <code>15,017</code> temporary repair rows; group 6 completed and was applied. Direct adaptive missing-ID job <code>3068010</code> completed <code>1435/1435</code> repair rows as of <code>2026-06-01 02:28 PT</code>.</td>
+        </tr>
+        <tr>
+          <td>Count-based continuation</td>
+          <td><span class="pill warn">disabled</span></td>
+          <td>The old count-based continuation path is no longer active. A fresh exact-id sweep at 17:52 PT found <code>477,285</code> rows and <code>22,715</code> missing ids across <code>88</code> short chunks. Because those chunks had interior holes, not clean suffix gaps, active count-based jobs were cancelled. Group 6 was applied, wave3 exact-ID jobs generated <code>15,017</code> temporary rows before timeout, and direct adaptive repair job <code>3068010</code> generated the final <code>1435</code> missing responses. The current chunk set is now exactly <code>500000</code> rows.</td>
+        </tr>
+        <tr>
+          <td>Finalize 235B corpus</td>
+          <td><span class="pill ok">complete</span></td>
+          <td>Finalizer job <code>3068014</code> completed successfully and validated all 100 chunks. It built the exact-unique <code>500000</code>-row conversation JSONL with the OpenMath denylist plus replacement rows, then converted it to a <code>500000</code>-row Speculators JSONL before training.</td>
+        </tr>
+        <tr>
+          <td>235B Speculators training chain</td>
+          <td><span class="pill ok">training running</span></td>
+          <td>The active chain is prepare <code>3068015</code> complete, hidden-state array <code>3072149_[0-99]%10</code> complete, completed repair jobs <code>3072518-3072523</code> for shards <code>005-010</code>, completed repair jobs <code>3101471</code>/<code>3101472</code> for shards <code>94</code>/<code>96</code>, and completed one-sample repairs <code>3105107-3105110</code> with <code>VLLM_MAX_MODEL_LEN=8193</code>. Exact coverage is <code>500000/500000</code>. Replacement train <code>3105111</code> is running and has reached latest observed global step <code>32223</code>; recent losses are roughly <code>3.957-6.211</code>, down from the initial <code>31-32</code>. Previous array <code>3071825</code> and trains <code>3072150</code>, <code>3072524</code>, <code>3101473</code>, and <code>3104702</code> were superseded.</td>
+        </tr>
+        <tr>
+          <td>Clean 235B training claim</td>
+          <td><span class="pill ok">validated</span></td>
+          <td>The final 235B merge used <code>openmath_reasoning_cot_conversations_50k.jsonl</code> as the denylist and passed normalized prompt validation: <code>500000</code> rows, <code>500000</code> unique prompts, <code>0</code> duplicate prompts, and <code>0</code> denylisted OpenMath prompts. The drafter checkpoint is not final yet because train job <code>3105111</code> is still running.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="data" class="page">
+    <h2>Data &amp; Training Pipeline</h2>
+    <div class="grid">
+      <div class="card">
+        <div class="label">Training corpus</div>
+        <div class="metric ok">500K</div>
+        <p class="small">Exact-unique mixed math conversations for Speculators Eagle3 training.</p>
+      </div>
+      <div class="card">
+        <div class="label">NeMo-RL eval set</div>
+        <div class="metric info">50K</div>
+        <p class="small">OpenMath reasoning conversations used for rollout acceptance and throughput.</p>
+      </div>
+      <div class="card">
+        <div class="label">Prompt overlap</div>
+        <div class="metric ok">0</div>
+        <p class="small">No normalized prompt overlap between the 500K training file and NeMo-RL eval prompts.</p>
+      </div>
+      <div class="card">
+        <div class="label">Leakage caveat</div>
+        <div class="metric warn">lexical</div>
+        <p class="small">Verified exact normalized prompts, not semantic near-duplicates.</p>
+      </div>
+    </div>
+
+    <div class="banner">
+      <h2>Dataset Contract</h2>
+      <p>The clean Speculators run trains on non-OpenMath mixed math data and evaluates in NeMo-RL on OpenMath. The actual NeMo-RL test file, <code>openmath_reasoning_cot_conversations_50k.jsonl</code>, is used as a denylist before the 500K training file is written, so direct prompt leakage is excluded in the current exact-unique build.</p>
+    </div>
+
+    <h2>One-Screen Data Contract</h2>
+    <table>
+      <thead>
+        <tr><th>Question</th><th>Answer</th><th>Evidence / File</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>What did we train the Speculators Eagle3 drafter on?</td>
+          <td><code>500000</code> exact-unique non-OpenMath math conversations: NuminaMath-1.5 <code>300K</code>, NuminaMath-CoT <code>100K</code>, OpenThoughts-114k <code>60K</code>, math-deepscaler <code>25K</code>, and DAPO-Math-17k <code>15K</code>.</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+        </tr>
+        <tr>
+          <td>How were training targets produced?</td>
+          <td>The prompts are answered by <code>Qwen/Qwen3-30B-A3B</code> with one response per prompt, temperature <code>1.0</code>, and top_p <code>1.0</code>. They are converted into Speculators Eagle3 rows, then prepared into the 500K Arrow dataset and hidden-state cache.</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl</code></td>
+        </tr>
+        <tr>
+          <td>What is the actual NeMo-RL test dataset?</td>
+          <td>NeMo-RL baseline throughput, SpecDec throughput, and acceptance are measured on OpenMath rollout prompts: <code>50000</code> rows, <code>44304</code> unique normalized prompts.</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code></td>
+        </tr>
+        <tr>
+          <td>Does training directly overlap the NeMo-RL test set?</td>
+          <td><span class="pill ok">No direct prompt overlap</span> The OpenMath eval prompts are loaded as a denylist before writing the clean 500K training file.</td>
+          <td>Final validation: <code>records_written=500000</code>, <code>unique_user_prompts=500000</code>, <code>duplicate_prompts=0</code>, <code>denylisted_prompts=0</code>.</td>
+        </tr>
+        <tr>
+          <td>What claim should be made from this split?</td>
+          <td>Clean 30B result means <strong>mixed non-OpenMath math training</strong> evaluated on <strong>OpenMath NeMo-RL rollout</strong>. The older OpenMath-trained 50K drafter is only an integration proof.</td>
+          <td>The overlap check is normalized prompt-level lexical matching, not a semantic near-duplicate proof.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Exact Files Used</h2>
+    <table>
+      <thead>
+        <tr><th>Role</th><th>File</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Raw mixed prompt pool</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></td>
+          <td>Initial non-OpenMath math prompt pool before target-response generation.</td>
+        </tr>
+        <tr>
+          <td>Final clean training conversations</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+          <td>Exact-unique 500K training conversation file after duplicate removal, OpenMath denylist filtering, and DAPO replacements.</td>
+        </tr>
+        <tr>
+          <td>Speculators training JSONL</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl</code></td>
+          <td>Converted 500K file consumed by the Speculators Eagle3 prepare/train pipeline.</td>
+        </tr>
+        <tr>
+          <td>Actual NeMo-RL test / denylist file</td>
+          <td><code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/openmath_reasoning_cot_conversations_50k.jsonl</code></td>
+          <td>OpenMath rollout source for NeMo-RL baseline and SpecDec tests; also loaded as the denylist during clean 500K construction.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Model Dataset Accountability</h2>
+    <table>
+      <thead>
+        <tr><th>Model / Run</th><th>Drafter Training Data</th><th>NeMo-RL Test Data</th><th>Overlap Status</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Qwen3-30B-A3B clean Speculators 500K</td>
+          <td>Mixed non-OpenMath math, <code>500000</code> exact-unique conversations. Source mix: NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k.</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code>, <code>50000</code> rollout rows, <code>44304</code> unique normalized prompts.</td>
+          <td><span class="pill ok">0 direct overlap</span> OpenMath eval prompts are denylisted before writing the final 500K training JSONL.</td>
+        </tr>
+        <tr>
+          <td>Qwen3-30B-A3B older OpenMath 50K proof</td>
+          <td>OpenMath-derived 50K drafter training used earlier to verify that NeMo-RL can attach and run Eagle3 SpecDec.</td>
+          <td>OpenMath NeMo-RL rollout source.</td>
+          <td><span class="pill warn">not clean</span> Kept as integration proof only; not used for the final leakage-clean claim.</td>
+        </tr>
+        <tr>
+          <td>Qwen3-235B public HF Eagle3 checks</td>
+          <td>External public checkpoint; exact training sample mix is not controlled by this repo.</td>
+          <td>Same OpenMath NeMo-RL rollout source when evaluated here.</td>
+          <td><span class="pill warn">separate</span> Report separately from our Speculators-trained drafter because overlap/provenance is not auditable here.</td>
+        </tr>
+        <tr>
+          <td>Qwen3-235B in-house path</td>
+          <td>Target-response generation repair is complete on the same mixed non-OpenMath prompt pool. Direct adaptive missing-ID job <code>3068010</code> completed all <code>1435</code> prompts; finalizer <code>3068014</code> produced exact <code>500000</code> final rows; Speculators prepare job <code>3068015</code> completed. Hidden-state extraction is complete at <code>500000/500000</code> files after shard repairs and the <code>VLLM_MAX_MODEL_LEN=8193</code> missing-id repair wave. Current active stage is Speculators training job <code>3105111</code>, which is running.</td>
+          <td>OpenMath NeMo-RL rollout source for baseline and SpecDec throughput comparisons.</td>
+          <td><span class="pill ok">0 direct overlap</span> Finalizer validation reports <code>500000</code> rows, <code>500000</code> unique prompts, <code>0</code> duplicate prompts, and <code>0</code> denylisted OpenMath prompts.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="flow">
+      <div class="step">
+        <div class="step-title">1. Prompt pool</div>
+        <p>500K non-OpenMath math prompts from NuminaMath-1.5, NuminaMath-CoT, OpenThoughts-114k, math-deepscaler, and DAPO-Math-17k.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">2. Target responses</div>
+        <p>30B target responses are complete for the 500K path. 235B responses are separate and now finalized: direct adaptive missing-ID repair job <code>3068010</code> completed all <code>1435</code> prompts, finalizer <code>3068014</code> completed exact <code>500000</code>-row corpus validation, and prepare job <code>3068015</code> completed. Hidden-state array <code>3072149_[0-99]%10</code> completed, shard repair jobs <code>3072518-3072523</code> are complete, shard repair jobs <code>3101471</code>/<code>3101472</code> are complete for shards <code>94</code>/<code>96</code>, exact coverage is now <code>500000/500000</code>, and train job <code>3105111</code> is running.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">3. Speculators format</div>
+        <p>Convert exact-unique conversations into Speculators JSONL, then tokenized Arrow data.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">4. Hidden states</div>
+        <p>Extract selected target-model hidden states for Eagle3. This is the current storage and runtime bottleneck.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">5. Train + evaluate</div>
+        <p>Train the Eagle3 drafter, then measure NeMo-RL acceptance and generation tok/s/GPU on the OpenMath eval file.</p>
+      </div>
+    </div>
+
+    <h2>Dataset Split And Overlap</h2>
+    <table>
+      <thead>
+        <tr><th>Use</th><th>Dataset / File</th><th>Rows</th><th>Overlap Note</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Planned drafter training prompt pool</td>
+          <td><code>mixed_math_nonopenmath_500k_prompts.jsonl</code></td>
+          <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
+          <td>Non-OpenMath pool. Internal duplicate count is <code>59</code>.</td>
+        </tr>
+        <tr>
+          <td>Primary target-response slices</td>
+          <td>10 files: <code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_50k*.jsonl</code></td>
+          <td><code>500000</code> raw, <code>499941</code> unique normalized prompts</td>
+          <td>Responses are synthesized by <code>Qwen/Qwen3-30B-A3B</code>. Duplicate primary prompts are skipped before training.</td>
+        </tr>
+        <tr>
+          <td>Replacement prompts</td>
+          <td><code>mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></td>
+          <td><code>100</code> fresh prompts; <code>59</code> used</td>
+          <td>Selected from DAPO files after excluding the 500K prompt pool and OpenMath eval prompts. Validation passed: 100 valid rows, 0 duplicate prompts.</td>
+        </tr>
+        <tr>
+          <td>Final exact unique training file</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique.jsonl</code></td>
+          <td><code>500000</code> rows</td>
+          <td>Verified by line count and merge summary: <code>primary_unique_written_before_replacements=499941</code>, <code>replacement_rows_written=59</code>, <code>status=pass</code>. This is the source training conversation file.</td>
+        </tr>
+        <tr>
+          <td>Speculators 500K conversion</td>
+          <td><code>mixed_math_nonopenmath_qwen3_30ba3b_conversations_500k_unique_speculators.jsonl</code></td>
+          <td><code>500000</code> rows</td>
+          <td>Prepare job <code>3056797</code> reports <code>overall=pass</code>, <code>rows_written=500000</code>, <code>rows_failed=0</code>.</td>
+        </tr>
+        <tr>
+          <td>NeMo-RL math evaluation</td>
+          <td><code>openmath_reasoning_cot_conversations_50k.jsonl</code></td>
+          <td><code>50000</code> rows, <code>44304</code> unique normalized prompts</td>
+          <td>Used as the test/evaluation prompt set for NeMo-RL baseline and SpecDec runs. It is not used for the clean 500K Speculators training corpus and is denylisted from the mixed 500K training file.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Overlap Verification Details</h2>
+    <table>
+      <thead>
+        <tr><th>Check</th><th>Evidence</th><th>Interpretation</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Prompt key</td>
+          <td>The unique builder hashes lowercased, whitespace-collapsed user prompts.</td>
+          <td>This catches exact prompt reuse after trivial spacing/case differences.</td>
+        </tr>
+        <tr>
+          <td>OpenMath denylist</td>
+          <td><code>denylist_prompt_count=44304</code> from <code>openmath_reasoning_cot_conversations_50k.jsonl</code>.</td>
+          <td>NeMo-RL evaluation prompts are reserved before any training row is written.</td>
+        </tr>
+        <tr>
+          <td>Training/eval overlap</td>
+          <td>Final validation: <code>rows=500000</code>, <code>valid=500000</code>, <code>unique_user_prompts=500000</code>, <code>duplicate_prompts=0</code>, <code>denylisted_prompts=0</code>.</td>
+          <td>No normalized OpenMath evaluation prompt appeared in the final mixed training inputs.</td>
+        </tr>
+        <tr>
+          <td>Internal duplicates</td>
+          <td><code>skipped_duplicate_or_seen=59</code>, then <code>59</code> fresh DAPO replacements were appended.</td>
+          <td>The final file is exactly 500K prompt-unique training conversations.</td>
+        </tr>
+        <tr>
+          <td>Remaining caveat</td>
+          <td>The check is prompt-level lexical normalization, not a semantic near-duplicate search.</td>
+          <td>It prevents direct leakage; it does not claim that mathematically similar problems never occur across datasets.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>500K Source Mix</h2>
+    <div class="bars">
+      <div class="bar-row">
+        <span>Numina 1.5</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:60%;--c:var(--blue)"></div></div>
+        <strong>300K</strong>
+      </div>
+      <div class="bar-row">
+        <span>Numina CoT</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:20%;--c:var(--green)"></div></div>
+        <strong>100K</strong>
+      </div>
+      <div class="bar-row">
+        <span>OpenThoughts</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:12%;--c:var(--amber)"></div></div>
+        <strong>60K</strong>
+      </div>
+      <div class="bar-row">
+        <span>DeepScaleR</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:5%;--c:var(--purple)"></div></div>
+        <strong>25K</strong>
+      </div>
+      <div class="bar-row">
+        <span>DAPO math</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:3%;--c:var(--red)"></div></div>
+        <strong>15K</strong>
+      </div>
+    </div>
+
+    <h2>500K Source Mix Table</h2>
+    <p class="small">Rows below are the requested source mix before duplicate replacement. The final exact-unique file keeps this mix as closely as possible, skips 59 duplicate primary prompts, and appends 59 fresh DAPO replacement conversations.</p>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Dataset</th><th>Rows</th><th>Share</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>NuminaMath 1.5</td><td><code>AI-MO/NuminaMath-1.5</code></td><td><code>300000</code></td><td>60%</td></tr>
+        <tr><td>NuminaMath CoT</td><td><code>AI-MO/NuminaMath-CoT</code></td><td><code>100000</code></td><td>20%</td></tr>
+        <tr><td>OpenThoughts math</td><td><code>open-thoughts/OpenThoughts-114k</code></td><td><code>60000</code></td><td>12%</td></tr>
+        <tr><td>DeepScaleR math</td><td><code>PALM-Lab/math-deepscaler</code></td><td><code>25000</code></td><td>5%</td></tr>
+        <tr><td>DAPO math</td><td><code>BytedTsinghua-SIA/DAPO-Math-17k</code></td><td><code>15000</code></td><td>3%</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Training Setup</h2>
+    <table>
+      <thead>
+        <tr><th>Setting</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Target model</td><td><code>Qwen/Qwen3-30B-A3B</code></td></tr>
+        <tr><td>Drafter backend</td><td>Speculators Eagle3 / speculator model</td></tr>
+        <tr><td>Target-response sampling</td><td><code>NUM_RESPONSES=1</code>, OpenAI-compatible request <code>n=1</code>, temperature <code>1.0</code>, top_p <code>1.0</code>, max tokens following the <code>8192</code> sequence budget.</td></tr>
+        <tr><td>Training/eval distinction</td><td>Drafter training uses one target answer per training prompt. NeMo-RL evaluation uses the GRPO workload, currently <code>64</code> prompts x <code>32</code> generations per step for the 30B runs.</td></tr>
+        <tr><td>Target layers</td><td><code>1 23 44</code></td></tr>
+        <tr><td>Sequence length</td><td><code>8192</code></td></tr>
+        <tr><td>Loss/data form</td><td>Supervised Speculators Eagle3 drafter training from target responses and selected target-model hidden states; this is not GRPO/DAPO reward training.</td></tr>
+        <tr><td>Training continuation</td><td>Full 500K path starts from the completed mixed 50K checkpoint unless explicitly reset.</td></tr>
+        <tr><td>500K execution plan</td><td>Merge 10x50K, prepare once, generate hidden states in 20 global-index shards, train once on the full cache. Current validation estimates hidden-state storage at <code>45168.494 GiB</code> for 500K rows.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Progress</h2>
+    <div class="bars">
+      <div class="bar-row">
+        <span>30B prompts</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--green)"></div></div>
+        <strong>500K</strong>
+      </div>
+      <div class="bar-row">
+        <span>30B responses</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--green)"></div></div>
+        <strong>500K</strong>
+      </div>
+      <div class="bar-row">
+        <span>500K prepare</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--green)"></div></div>
+        <strong>done</strong>
+      </div>
+      <div class="bar-row">
+        <span>500K HS shards</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--green)"></div></div>
+        <strong>20/20</strong>
+      </div>
+      <div class="bar-row">
+        <span>500K HS files</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:100%;--c:var(--green)"></div></div>
+        <strong>500K</strong>
+      </div>
+      <div class="bar-row">
+        <span>30B 100K HS</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:89%;--c:var(--amber)"></div></div>
+        <strong>89%</strong>
+      </div>
+      <div class="bar-row">
+        <span>235B responses</span>
+        <div class="bar-track"><div class="bar-fill" style="--w:82%;--c:var(--amber)"></div></div>
+        <strong>K1 done</strong>
+      </div>
+    </div>
+  </section>
+
+  <section id="parallel" class="page">
+    <h2>500K Parallel Plan</h2>
+    <div class="banner">
+      <h2>Short Answer</h2>
+      <p>Yes, generate hidden states in parallel first, then train once on the full cache. For 30B, the exact-unique 500K file is verified, prepare job <code>3056797</code> completed preprocessing, all hidden-state shards completed, and train job <code>3056818</code> completed. The resulting checkpoint <code>0</code> completed K=1/2/3 NeMo-RL evaluation as jobs <code>3058167</code>, <code>3058168</code>, and <code>3058169</code>. The current strict 30B frontier includes completed p64/g32 alltoall jobs <code>3078629</code>/<code>3078630</code>, reduced alltoall full-step validation <code>3076036</code>/<code>3076041</code>, and completed V8 long-tail validation <code>3076833</code> plus V9 all-disabled path validation. For 235B, the same parallel shape completed the 100-shard array, exact coverage is now <code>500000/500000</code> after the <code>VLLM_MAX_MODEL_LEN=8193</code> repair wave, and train <code>3105111</code> is running.</p>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <div class="label">Proposed split</div>
+        <div class="metric info">20 shards</div>
+        <p class="small">25K samples per shard, each using 1 node / 4 GPUs for vLLM hidden-state extraction.</p>
+      </div>
+      <div class="card">
+        <div class="label">Fast path resource</div>
+        <div class="metric warn">80 GPUs</div>
+        <p class="small">If scheduled together, hidden-state extraction could finish in a few hours instead of serial multi-day chunks.</p>
+      </div>
+    </div>
+
+    <h2>Parallel Flow</h2>
+    <div class="flow">
+      <div class="step">
+        <div class="step-title">Merge 10x50K + replacements</div>
+        <p>Done. Skip duplicate prompts, denylist OpenMath eval prompts, then append 59 fresh DAPO replacements to reach exactly 500K.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">Prepare once</div>
+        <p>Build one 500K Arrow dataset.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">Shard hidden states</div>
+        <p>Run global ranges: 0-25K, 25K-50K, ...</p>
+      </div>
+      <div class="step">
+        <div class="step-title">Train once</div>
+        <p>Train Eagle3 on the complete unique hidden-state cache.</p>
+      </div>
+      <div class="step">
+        <div class="step-title">Evaluate</div>
+        <p>Run NeMo-RL baseline vs K=1/K=2/K=3.</p>
+      </div>
+    </div>
+
+    <h2>Tradeoff</h2>
+    <table>
+      <thead>
+        <tr><th>Option</th><th>Pros</th><th>Cons</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Serial 50K continuation</td>
+          <td>Lower storage pressure; already running.</td>
+          <td>Slow to reach 500K.</td>
+        </tr>
+        <tr>
+          <td>Parallel 500K full cache</td>
+          <td>Fastest way to test a true 500K drafter.</td>
+          <td>Needs many GPUs and roughly <code>44.1</code> TiB if all hidden states are retained, based on current validation estimate.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="links" class="page">
+    <h2>Artifacts</h2>
+    <div class="mono-list">
+      <div>GitLab repo: <code>ssh://git@gitlab-master.nvidia.com:12051/sna/specdec_rl.git</code></div>
+      <div>Pages URL: <a href="https://sna.gitlab-master-pages.nvidia.com/specdec_rl/">https://sna.gitlab-master-pages.nvidia.com/specdec_rl/</a></div>
+      <div>Report mirror fs1: <code>/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/specdec_math_progress_report.html</code></div>
+      <div>Report mirror fsw: <code>/lustre/fsw/portfolios/coreai/users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/specdec_math_progress_report.html</code></div>
+      <div>30B mixed 50K checkpoint: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_50k/checkpoints_train_50k_layers48_mlen8193/0</code></div>
+      <div>30B 500K prompt pool: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_prompts.jsonl</code></div>
+      <div>30B replacement prompts: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/data/mixed_math_nonopenmath_500k_replacement_prompts_dapo100.jsonl</code></div>
+      <div>30B exact unique 500K submit summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/mixed_math_nonopenmath_qwen3_30ba3b_500k_parallel_submit_summary.json</code></div>
+      <div>30B exact unique 500K jobs: merge <code>verified_existing_500k_unique</code>, prepare <code>3056797</code>, shards <code>3056798-3056817</code>, train <code>3056818</code></div>
+      <div>30B 500K live summary: <code>experiments/eagle3_qwen3_235b/qwen30ba3b_500k_live_summary.json</code></div>
+      <div>235B target-response generation status: <code>experiments/eagle3_qwen3_235b/qwen235b_targetgen_status.json</code>. Current state: finalizer <code>3068014</code> produced exact <code>500000</code>-row final conversation and Speculators JSONL files, prepare job <code>3068015</code> completed, hidden-state array <code>3072149</code> completed, exact coverage is <code>500000/500000</code>, and replacement train job <code>3105111</code> is running at latest observed global step <code>32223</code>.</div>
+      <div>235B missing hidden-state repair summary: <code>experiments/eagle3_qwen3_235b/qwen235b_hidden_state_missing4_repair_summary.json</code>.</div>
+      <div>235B hidden-state repair summary: <code>experiments/eagle3_qwen3_235b/qwen235b_hidden_state_repair_94_96_summary.json</code>.</div>
+      <div>235B Public HF diagnostic status: <code>experiments/eagle3_qwen3_235b/qwen235b_publichf_status.json</code>. Corrected NVIDIA Thinking-2507 PublicHF job <code>3084952</code> completed <code>4/4</code> with K=<code>1</code>, GBS <code>512</code>, and token gate <code>4096</code>. Superseded NVIDIA job <code>3080343</code> was cancelled because it used target <code>Qwen/Qwen3-235B-A22B</code> with a Thinking-2507 drafter; RedHat fallback <code>3081230</code> failed before metrics on the incomplete Megatron checkpoint <code>run_config.yaml</code> race; strict-gate job <code>3089565</code> was cancelled because the remote launcher missed the explicit target override. Completed metrics: mean generated tok/s/GPU <code>60.61</code>, mean E2E tok/s/GPU <code>43.60</code>, and mean acceptance <code>65.71%</code>. Gate metrics stayed <code>enabled_ratio=1.0</code>, <code>disabled=0</code>. Matched baseline job <code>3088636</code> now has <code>4/4</code> mean <code>61.48 generated tok/s/GPU</code> and <code>44.72 E2E tok/s/GPU</code>, so the always-enabled PublicHF diagnostic is slower; strict lower-batch job <code>3090318</code> was cancelled after Ray <code>startup_token</code> worker-registration failures; rebuild job <code>3092445</code> ran with request gate <code>4</code>, token gate <code>0</code>, forced venv rebuild, correct target override, and matching drafter. It proved large-batch disable with <code>scheduled_spec_decode_tokens={}</code> but failed before rollout throughput with <code>RayChannelTimeoutError</code> and <code>RAY_CGRAPH_get_timeout=3600</code>. V9 retry <code>3103018</code> failed before rollout during driver venv build because a third-party workspace was incomplete; V9b retry <code>3103227</code> restored that workspace but failed before rollout metrics with <code>KeyError: 'moe_enable_deepep'</code>; V9c retry <code>3105964</code> failed before rollout metrics with a Hydra structured-config append error; active V9d retry <code>3106959</code> is running from <code>/lustre/.../SpecDec-RL</code> with request gate <code>4</code>, token gate <code>0</code>, and corrected <code>++policy.megatron_cfg.*</code> launcher overrides.</div>
+      <div>235B finalize scripts: <code>experiments/eagle3_qwen3_235b/finalize_qwen235b_mixed_500k_corpus.sh</code> and <code>experiments/eagle3_qwen3_235b/submit_qwen235b_finalize_after_targetgen.sh</code>.</div>
+      <div>30B 500K NeMo-RL eval jobs: K=1 <code>3058167</code>, K=2 <code>3058168</code>, K=3 <code>3058169</code>, token gate <code>4096</code>. Final n=<code>20</code>/<code>20</code>/<code>20</code> generated tok/s/GPU means: <code>5604.28</code>, <code>5004.48</code>, <code>4908.22</code>.</div>
+      <div>30B 500K stricter long-tail eval jobs: K=1 token gate <code>2048</code> job <code>3058759</code>, K=1 token gate <code>1024</code> job <code>3058762</code>. Final n=<code>20</code>/<code>20</code> generated tok/s/GPU means: <code>5596.71</code>, <code>5578.08</code>. Batch-size-only request gate jobs stayed near <code>1.06x</code> Generation speedup. V4 token-pressure job <code>3060379</code> is historical best Generation result at <code>1.3664x</code>. Strict early-generation comparison is baseline <code>3075647</code> and SpecDec <code>3074778</code>; both failed later in Megatron logprobs. Corrected V8 dynamic-K long-tail follow-up <code>3076833</code> completed with K=<code>3/2/1</code> tiers, token gate <code>2048</code>, acceptance <code>57.65%</code>, and <code>6669.63 generated tok/s/GPU</code>. Repaired p64/g32 alltoall r3 jobs <code>3078629</code>/<code>3078630</code> completed <code>4/4</code> steps.</div>
+      <div>30B K=2 live summary: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/reports/qwen30ba3b_mixed50k_k2_gate4096_3056052_live_summary.json</code></div>
+      <div>30B strict long-tail gate run: <code>3057073</code>, K=2, request gate <code>4</code>, token gate <code>1024</code></div>
+      <div>235B strict long-tail gate run: <code>3057084</code> failed at Ray/enroot startup; retry <code>3057118</code>, K=2, request gate <code>4</code>, token gate <code>1024</code>, account <code>coreai_dlalgo_llm</code>, cancelled after Step 1 stall before first metric</div>
+      <div>30B 100K hidden-state dir: <code>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/speculators/eagle3_qwen3_30ba3b_mixed_math_nonopenmath_100k_seen/hidden_states_layers48_mlen8193_offset50k</code></div>
+    </div>
+  </section>
+</main>
+
+<script>
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  const pages = Array.from(document.querySelectorAll(".page"));
+  function showTab(id) {
+    tabs.forEach(tab => tab.setAttribute("aria-selected", tab.dataset.tab === id ? "true" : "false"));
+    pages.forEach(page => page.classList.toggle("active", page.id === id));
+    history.replaceState(null, "", "#" + id);
+  }
+  tabs.forEach(tab => tab.addEventListener("click", () => showTab(tab.dataset.tab)));
+  const initial = location.hash ? location.hash.slice(1) : "overview";
+  if (document.getElementById(initial)) showTab(initial);
+
+  const themeSwitch = document.getElementById("themeSwitch");
+  const storedTheme = localStorage.getItem("specdec-theme");
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const startDark = storedTheme ? storedTheme === "dark" : prefersDark;
+  document.documentElement.dataset.theme = startDark ? "dark" : "light";
+  themeSwitch.checked = startDark;
+  themeSwitch.addEventListener("change", () => {
+    const theme = themeSwitch.checked ? "dark" : "light";
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("specdec-theme", theme);
+  });
+</script>
+</body>
+</html>
