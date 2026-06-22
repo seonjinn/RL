@@ -48,11 +48,24 @@ NEMORL_MANIFESTS = sorted(ROOT.glob("latest_lyris_nemorl_qwen235b_*20260621_jobs
 NEMORL_SUMMARY = DOCS / "lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv"
 NEMORL_SACCT = DOCS / "lyris_qwen235b_pr2879_sacct_20260621.psv"
 NEMORL_OUT = DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv"
-NEMORL_LYRIS_HISTORICAL = DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv"
+NEMORL_LYRIS_HISTORICAL_SOURCES = [
+    (
+        DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
+        "Lyris Qwen30/Qwen32 PerfCfg OSL4096 latest-main+PR2879 2026-06-22",
+        "performance recipe default plus latest-main+PR2879 topology-aware fix, temp=1.0/top_p=1.0, step>=2 summary",
+        1,
+    ),
+    (
+        DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
+        "Lyris Qwen30/Qwen32 PerfCfg OSL4096 2026-06-18",
+        "performance recipe default, temp=1.0/top_p=1.0, step>=2 live summary",
+        2,
+    ),
+]
 NEMORL_OCI_HISTORICAL = DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv"
 NEMORL_COMBINED_OUT = DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv"
 NEMORL_HTML = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_latest.html"
-NEMORL_HTML_DATED = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_20260621.html"
+NEMORL_HTML_DATED = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_20260622.html"
 
 
 MODEL_MAP = {
@@ -1241,51 +1254,52 @@ def enrich_nemorl() -> pd.DataFrame:
 
 
 def load_lyris_historical_nemorl() -> pd.DataFrame:
-    if not NEMORL_LYRIS_HISTORICAL.exists():
-        return pd.DataFrame()
-    raw = pd.read_csv(NEMORL_LYRIS_HISTORICAL)
-    raw = raw[raw["model"].astype(str).isin(["Qwen3-30B-A3B", "Qwen3-32B"])].copy()
     rows = []
-    for _, row in raw.iterrows():
-        completed, last = parse_completed_last(row.get("completed_last_step"))
-        rows.append(
-            {
-                "job_id": str(row.get("job_id", "")),
-                "model": str(row.get("model", "")),
-                "model_name": str(row.get("model", "")),
-                "mode": str(row.get("mode", "")),
-                "method": str(row.get("method", "")),
-                "method_k": normalize_nemorl_method(row.get("method"), row.get("label")),
-                "max_steps": 20,
-                "max_new_tokens": clean_float(row.get("max_osl")),
-                "temperature": clean_float(row.get("temperature")),
-                "top_p": clean_float(row.get("top_p")),
-                "isl": row.get("isl", ""),
-                "cluster": "lyris",
-                "source_group": "Lyris Qwen30/Qwen32 PerfCfg OSL4096 2026-06-18",
-                "config_basis": "performance recipe default, temp=1.0/top_p=1.0, step>=2 live summary",
-                "source_priority": 1,
-                "slurm_state": str(row.get("slurm_state", "")),
-                "exit_code": "",
-                "completed_steps": completed,
-                "last_step": last,
-                "completed_last_step": str(row.get("completed_last_step", "")),
-                "metric_state": str(row.get("metric_state", "")),
-                "total_step_time_s_mean": clean_float(row.get("e2e_step_time_s")),
-                "generation_time_s_mean": clean_float(row.get("generation_time_s")),
-                "e2e_tokens_per_sec_per_gpu_mean": clean_float(row.get("e2e_throughput_tok_s_gpu")),
-                "generation_worker_tokens_per_sec_per_gpu_mean": clean_float(row.get("generation_throughput_tok_s_gpu")),
-                "e2e_step_time_speedup": clean_float(row.get("e2e_step_time_speedup")),
-                "e2e_tps_speedup": clean_float(row.get("e2e_throughput_speedup")),
-                "generation_time_speedup": clean_float(row.get("generation_time_speedup")),
-                "gen_tps_speedup": clean_float(row.get("generation_throughput_speedup")),
-                "vllm_token_acceptance_pct": clean_float(row.get("acceptance_pct")),
-                "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accept_len")),
-                "manifest": str(NEMORL_LYRIS_HISTORICAL.relative_to(ROOT)),
-                "notes": str(row.get("notes", "")),
-                "log_path": str(row.get("source_log", "")),
-            }
-        )
+    for path, source_group, config_basis, source_priority in NEMORL_LYRIS_HISTORICAL_SOURCES:
+        if not path.exists():
+            continue
+        raw = pd.read_csv(path)
+        raw = raw[raw["model"].astype(str).isin(["Qwen3-30B-A3B", "Qwen3-32B"])].copy()
+        for _, row in raw.iterrows():
+            completed, last = parse_completed_last(row.get("completed_last_step"))
+            rows.append(
+                {
+                    "job_id": str(row.get("job_id", "")),
+                    "model": str(row.get("model", "")),
+                    "model_name": str(row.get("model", "")),
+                    "mode": str(row.get("mode", "")),
+                    "method": str(row.get("method", "")),
+                    "method_k": normalize_nemorl_method(row.get("method"), row.get("label")),
+                    "max_steps": 20,
+                    "max_new_tokens": clean_float(row.get("max_osl")),
+                    "temperature": clean_float(row.get("temperature")),
+                    "top_p": clean_float(row.get("top_p")),
+                    "isl": row.get("isl", ""),
+                    "cluster": "lyris",
+                    "source_group": source_group,
+                    "config_basis": config_basis,
+                    "source_priority": source_priority,
+                    "slurm_state": str(row.get("slurm_state", "")),
+                    "exit_code": "",
+                    "completed_steps": completed,
+                    "last_step": last,
+                    "completed_last_step": str(row.get("completed_last_step", "")),
+                    "metric_state": str(row.get("metric_state", "")),
+                    "total_step_time_s_mean": clean_float(row.get("e2e_step_time_s")),
+                    "generation_time_s_mean": clean_float(row.get("generation_time_s")),
+                    "e2e_tokens_per_sec_per_gpu_mean": clean_float(row.get("e2e_throughput_tok_s_gpu")),
+                    "generation_worker_tokens_per_sec_per_gpu_mean": clean_float(row.get("generation_throughput_tok_s_gpu")),
+                    "e2e_step_time_speedup": clean_float(row.get("e2e_step_time_speedup")),
+                    "e2e_tps_speedup": clean_float(row.get("e2e_throughput_speedup")),
+                    "generation_time_speedup": clean_float(row.get("generation_time_speedup")),
+                    "gen_tps_speedup": clean_float(row.get("generation_throughput_speedup")),
+                    "vllm_token_acceptance_pct": clean_float(row.get("acceptance_pct")),
+                    "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accept_len")),
+                    "manifest": str(path.relative_to(ROOT)),
+                    "notes": str(row.get("notes", "")),
+                    "log_path": str(row.get("source_log", "")),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -1457,13 +1471,19 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             f"<title>Lyris NeMo-RL SpecDec Status 2026-06-21</title><style>{css}</style></head><body>",
             "<header><h1>Lyris NeMo-RL SpecDec Status</h1>",
             f"<div class=\"subtitle\">Updated {esc(updated)}. Includes Qwen3-235B PR2879/latest-main live rows plus historical Qwen3-30B-A3B/Qwen3-32B NeMo-RL rows found in Lyris and OCI-HSG artifacts.</div></header><main>",
-            "<div><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span></div>",
+            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span></div>",
             "<div class=\"kpis\">",
             f"<div class=\"kpi\"><b>{running}</b><span>running jobs</span></div>",
             f"<div class=\"kpi\"><b>{pending}</b><span>pending jobs</span></div>",
             f"<div class=\"kpi\"><b>{completed_metric}</b><span>rows with completed steps</span></div>",
             f"<div class=\"kpi\"><b>{len(rows)}</b><span>tracked rows</span></div>",
             "</div>",
+            "<section><h2>Evaluation Methodology</h2><ul>",
+            "<li>Recipes: NeMo-RL <code>examples/configs/recipes/llm/performance</code>.</li>",
+            "<li>Matched comparisons keep model, mode, max OSL, temperature=1.0, top_p=1.0, and cluster/source setup fixed.</li>",
+            "<li>SpecDec rows add only the generation speculative decoding method, drafter/checkpoint, and <code>num_speculative_tokens</code>; baseline rows use the same recipe with SpecDec disabled.</li>",
+            "<li>Fresh 2026-06-22 Qwen3-30B-A3B/Qwen3-32B Lyris rows use latest-main+PR2879, recipe OSL4096, and step2-20 averages where available.</li>",
+            "</ul></section>",
             f"<section><h2>Key Finding</h2><p>{esc(key)}</p><p class=\"note\">Acceptance metrics are shown only when the NeMo-RL driver log includes vLLM SpecDec metrics; Qwen3-235B current driver snapshots mostly expose timing/throughput, while historical Qwen30/Qwen32 rows include acceptance when available.</p></section>",
             nemorl_charts_section(rows),
             "<section><h2>Step20 Current And Historical Snapshot</h2><div class=\"table-wrap\">",
@@ -1472,7 +1492,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<section><h2>Step3 Smoke / K Sweep</h2><div class=\"table-wrap\">",
             table(smoke, cols),
             "</div></section>",
-            "<section><h2>Sources</h2><p class=\"note\"><code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_qwen235b_*20260621_jobs.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
+            "<section><h2>Sources</h2><p class=\"note\"><code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_qwen235b_*20260621_jobs.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
             "</main></body></html>",
         ]
     )

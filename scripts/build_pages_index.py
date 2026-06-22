@@ -149,8 +149,14 @@ def vllm_best_rows() -> pd.DataFrame:
 def load_nemorl_rows() -> pd.DataFrame:
     rows: list[dict[str, object]] = []
 
-    perf = load_csv(DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv")
-    if not perf.empty:
+    perf_sources = [
+        DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
+        DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
+    ]
+    for perf_path in perf_sources:
+        perf = load_csv(perf_path)
+        if perf.empty:
+            continue
         perf = perf[perf["model"].isin(["Qwen3-30B-A3B", "Qwen3-32B"])]
         perf = perf[~perf["method"].astype(str).str.contains("baseline", case=False, na=False)]
         for column in [
@@ -168,7 +174,7 @@ def load_nemorl_rows() -> pd.DataFrame:
         for _, row in perf.dropna(subset=["generation_throughput_speedup"]).iterrows():
             rows.append(
                 {
-                    "source_file": "docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
+                    "source_file": f"docs/{perf_path.name}",
                     "job_id": row["job_id"],
                     "model": row["model"],
                     "mode": row["mode"],
@@ -600,6 +606,8 @@ def build() -> None:
         DOCS / "vllm_standalone_added_results_latest.csv",
         DOCS / "vllm_standalone_all_batches_combined_20260619.csv",
         DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv",
+        DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
+        DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv",
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
         DOCS / "lyris_angelslim_checkpoint_prewarm_summary_20260622.json",
@@ -748,6 +756,8 @@ def build() -> None:
       <a href=\"data/vllm_standalone_added_results_latest.csv\">vLLM added CSV</a>
       <a href=\"data/vllm_standalone_all_batches_combined_20260619.csv\">vLLM all-batch CSV</a>
       <a href=\"data/lyris_qwen235b_pr2879_live_enriched_20260621.csv\">Qwen235B NeMo-RL CSV</a>
+      <a href=\"data/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv\">Qwen30/32 NeMo-RL 2026-06-22 CSV</a>
+      <a href=\"data/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv\">Qwen30/32 NeMo-RL 2026-06-22 status</a>
       <a href=\"data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv\">Qwen30/32 NeMo-RL CSV</a>
       <a href=\"data/lyris_angelslim_checkpoint_prewarm_summary_20260622.json\">AngelSlim prewarm summary</a>
       <a href=\"data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt\">AngelSlim job record</a>
