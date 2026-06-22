@@ -59,7 +59,7 @@ def copy_if_exists(src: Path, dst_dir: Path) -> Path | None:
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / src.name
     shutil.copy2(src, dst)
-    if dst.suffix in {".csv", ".html", ".txt"}:
+    if dst.suffix in {".csv", ".html", ".json", ".txt"}:
         raw = dst.read_bytes()
         dst.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
     return dst
@@ -324,6 +324,7 @@ def build() -> None:
         DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv",
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
+        DOCS / "lyris_angelslim_checkpoint_prewarm_summary_20260622.json",
         ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt",
     ]
     archive_files = [
@@ -342,9 +343,13 @@ def build() -> None:
     generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
     job_id = job.get("job_id", "pending")
+    job_status = job.get("status", "submitted")
+    sacct_state = job.get("sacct_state", "")
     logs_dir = job.get("logs_dir", "")
     summary_json = job.get("summary_json", "")
     model_ids = job.get("model_ids", "")
+    status_class = "ok" if sacct_state == "COMPLETED" else "warn"
+    status_label = sacct_state or job_status
 
     html_text = f"""<!doctype html>
 <html lang=\"en\">
@@ -404,7 +409,7 @@ def build() -> None:
   <div class=\"grid\">
     <div class=\"card\"><div class=\"label\">vLLM scope</div><div class=\"metric\">Math + SWE</div><p>Batch sweeps and temp 0/1 comparisons with ISL/OSL shown in the result tables.</p></div>
     <div class=\"card\"><div class=\"label\">NeMo-RL scope</div><div class=\"metric\">Perf recipe</div><p>Qwen30/32 use recipe OSL4096; Qwen235B PR2879 rows use recipe OSL8192.</p></div>
-    <div class=\"card\"><div class=\"label\">AngelSlim staging</div><div class=\"metric\"><code>{esc(job_id)}</code></div><p>HF download job is submitted on Lyris, not pulled from the login node.</p></div>
+    <div class=\"card\"><div class=\"label\">AngelSlim staging</div><div class=\"metric\"><code>{esc(job_id)}</code></div><p>HF download job state: <span class=\"pill {status_class}\">{esc(status_label)}</span></p></div>
   </div>
 
   <section>
@@ -432,7 +437,7 @@ def build() -> None:
   <section>
     <h2>DFlare and AngelSlim Status</h2>
     <div class=\"note\">
-      <span class=\"pill warn\">staging</span>
+      <span class=\"pill {status_class}\">{esc(status_label)}</span>
       <p>DFlare public checkpoints found so far are <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>. Current vLLM/NeMo-RL result pages do not yet include a direct DFlare row because the local generation path is vLLM SpecDec, while DFlare is exposed through AngelSlim's standalone tooling. The submitted HF staging job also downloads AngelSlim Eagle3 drafters for Qwen3-A3B, Qwen3-32B, Qwen3-8B, Qwen3-14B, and Qwen3-4B.</p>
       <p>Models requested in staging job: <code>{esc(model_ids)}</code></p>
       <p>Logs: <code>{esc(logs_dir)}</code></p>
@@ -447,6 +452,7 @@ def build() -> None:
       <a href=\"data/vllm_standalone_all_batches_combined_20260619.csv\">vLLM all-batch CSV</a>
       <a href=\"data/lyris_qwen235b_pr2879_live_enriched_20260621.csv\">Qwen235B NeMo-RL CSV</a>
       <a href=\"data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv\">Qwen30/32 NeMo-RL CSV</a>
+      <a href=\"data/lyris_angelslim_checkpoint_prewarm_summary_20260622.json\">AngelSlim prewarm summary</a>
       <a href=\"data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt\">AngelSlim job record</a>
     </div>
   </section>

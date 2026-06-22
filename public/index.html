@@ -51,12 +51,12 @@
 <body>
 <main>
   <h1>SpecDec RL Benchmark Dashboard</h1>
-  <p>Updated 2026-06-22 02:01:09 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
+  <p>Updated 2026-06-22 02:02:07 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
 
   <div class="grid">
     <div class="card"><div class="label">vLLM scope</div><div class="metric">Math + SWE</div><p>Batch sweeps and temp 0/1 comparisons with ISL/OSL shown in the result tables.</p></div>
     <div class="card"><div class="label">NeMo-RL scope</div><div class="metric">Perf recipe</div><p>Qwen30/32 use recipe OSL4096; Qwen235B PR2879 rows use recipe OSL8192.</p></div>
-    <div class="card"><div class="label">AngelSlim staging</div><div class="metric"><code>2175770</code></div><p>HF download job is submitted on Lyris, not pulled from the login node.</p></div>
+    <div class="card"><div class="label">AngelSlim staging</div><div class="metric"><code>2175770</code></div><p>HF download job state: <span class="pill ok">COMPLETED</span></p></div>
   </div>
 
   <section>
@@ -84,7 +84,7 @@
   <section>
     <h2>DFlare and AngelSlim Status</h2>
     <div class="note">
-      <span class="pill warn">staging</span>
+      <span class="pill ok">COMPLETED</span>
       <p>DFlare public checkpoints found so far are <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>. Current vLLM/NeMo-RL result pages do not yet include a direct DFlare row because the local generation path is vLLM SpecDec, while DFlare is exposed through AngelSlim's standalone tooling. The submitted HF staging job also downloads AngelSlim Eagle3 drafters for Qwen3-A3B, Qwen3-32B, Qwen3-8B, Qwen3-14B, and Qwen3-4B.</p>
       <p>Models requested in staging job: <code>AngelSlim/Qwen3-a3B_eagle3 AngelSlim/Qwen3-32B_eagle3 AngelSlim/Qwen3-8B_eagle3 AngelSlim/Qwen3-14B_eagle3 AngelSlim/Qwen3-4B_eagle3 AngelSlim/Qwen3-4b-dflare AngelSlim/Qwen3-8b-dflare AngelSlim/Gpt-oss-20b-dflare</code></p>
       <p>Logs: <code>/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/vllm-runs/angelslim_checkpoint_prewarm_lyris_20260622</code></p>
@@ -99,6 +99,7 @@
       <a href="data/vllm_standalone_all_batches_combined_20260619.csv">vLLM all-batch CSV</a>
       <a href="data/lyris_qwen235b_pr2879_live_enriched_20260621.csv">Qwen235B NeMo-RL CSV</a>
       <a href="data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv">Qwen30/32 NeMo-RL CSV</a>
+      <a href="data/lyris_angelslim_checkpoint_prewarm_summary_20260622.json">AngelSlim prewarm summary</a>
       <a href="data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt">AngelSlim job record</a>
     </div>
   </section>

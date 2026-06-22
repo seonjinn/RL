@@ -1,0 +1,113 @@
+{
+  "arctic_inference": {
+    "available": true,
+    "module": "arctic_inference"
+  },
+  "hf_home": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
+  "results": [
+    {
+      "architectures": [
+        "LlamaForCausalLMEagle3"
+      ],
+      "elapsed_s": 3.639,
+      "model_type": "llama",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-a3B_eagle3",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-a3B_eagle3/snapshots/266a50ea8c9dbedb729d7c18a98dd79f5b39b5c2",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-a3B_eagle3/snapshots/266a50ea8c9dbedb729d7c18a98dd79f5b39b5c2",
+      "tokenizer_warning": "ValueError: Couldn't instantiate the backend tokenizer from one of: \n(1) a `tokenizers` library serialization file, \n(2) a slow tokenizer instance to convert or \n(3) an equivalent slow tokenizer class to instantiate and convert. \nYou need to have sentencepiece or tiktoken installed to convert a slow tokenizer to a fast one."
+    },
+    {
+      "architectures": [
+        "LlamaForCausalLMEagle3"
+      ],
+      "elapsed_s": 10.969,
+      "model_type": "llama",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-32B_eagle3",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-32B_eagle3/snapshots/74789e1a6a4b705a71d040315d911b58fb2a80ef",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-32B_eagle3/snapshots/74789e1a6a4b705a71d040315d911b58fb2a80ef",
+      "tokenizer_warning": "ValueError: Couldn't instantiate the backend tokenizer from one of: \n(1) a `tokenizers` library serialization file, \n(2) a slow tokenizer instance to convert or \n(3) an equivalent slow tokenizer class to instantiate and convert. \nYou need to have sentencepiece or tiktoken installed to convert a slow tokenizer to a fast one."
+    },
+    {
+      "architectures": [
+        "LlamaForCausalLMEagle3"
+      ],
+      "elapsed_s": 5.879,
+      "model_type": "llama",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-8B_eagle3",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-8B_eagle3/snapshots/9629dfce7a4a10564dd48d3e5485c3976095653c",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-8B_eagle3/snapshots/9629dfce7a4a10564dd48d3e5485c3976095653c",
+      "tokenizer_warning": "ValueError: Couldn't instantiate the backend tokenizer from one of: \n(1) a `tokenizers` library serialization file, \n(2) a slow tokenizer instance to convert or \n(3) an equivalent slow tokenizer class to instantiate and convert. \nYou need to have sentencepiece or tiktoken installed to convert a slow tokenizer to a fast one."
+    },
+    {
+      "architectures": [
+        "LlamaForCausalLMEagle3"
+      ],
+      "elapsed_s": 5.008,
+      "model_type": "llama",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-14B_eagle3",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-14B_eagle3/snapshots/3d13517724e81cb409ddf1d4650772ec52f1e18e",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-14B_eagle3/snapshots/3d13517724e81cb409ddf1d4650772ec52f1e18e",
+      "tokenizer_warning": "ValueError: Couldn't instantiate the backend tokenizer from one of: \n(1) a `tokenizers` library serialization file, \n(2) a slow tokenizer instance to convert or \n(3) an equivalent slow tokenizer class to instantiate and convert. \nYou need to have sentencepiece or tiktoken installed to convert a slow tokenizer to a fast one."
+    },
+    {
+      "architectures": [
+        "Eagle3LlamaForCausalLM"
+      ],
+      "elapsed_s": 1.278,
+      "model_type": "llama",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-4B_eagle3",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-4B_eagle3/snapshots/fd331e59626c8e95c392381a16ee59d518727fbb",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-4B_eagle3/snapshots/fd331e59626c8e95c392381a16ee59d518727fbb",
+      "tokenizer_warning": "ValueError: Couldn't instantiate the backend tokenizer from one of: \n(1) a `tokenizers` library serialization file, \n(2) a slow tokenizer instance to convert or \n(3) an equivalent slow tokenizer class to instantiate and convert. \nYou need to have sentencepiece or tiktoken installed to convert a slow tokenizer to a fast one."
+    },
+    {
+      "architectures": [
+        "QwenDFlareDraftModel"
+      ],
+      "elapsed_s": 12.699,
+      "model_type": "qwen3",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-4b-dflare",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-4b-dflare/snapshots/71dcbb0645c9357c938ab4e30a677c5a63bff900",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-4b-dflare/snapshots/71dcbb0645c9357c938ab4e30a677c5a63bff900",
+      "tokenizer_ok": true
+    },
+    {
+      "architectures": [
+        "QwenDFlareDraftModel"
+      ],
+      "elapsed_s": 16.322,
+      "model_type": "qwen3",
+      "ok": true,
+      "repo_id": "AngelSlim/Qwen3-8b-dflare",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-8b-dflare/snapshots/55e2c8d86d76ce1e79fa3b8642c7f80091285a82",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-8b-dflare/snapshots/55e2c8d86d76ce1e79fa3b8642c7f80091285a82",
+      "tokenizer_ok": true
+    },
+    {
+      "architectures": [
+        "QwenDFlareDraftModel"
+      ],
+      "elapsed_s": 12.306,
+      "model_type": "qwen3",
+      "ok": true,
+      "repo_id": "AngelSlim/Gpt-oss-20b-dflare",
+      "required": true,
+      "snapshot_du": "8.0K\t/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Gpt-oss-20b-dflare/snapshots/7c4c0a31ad7b387a4c2c67350c3d86776844c034",
+      "snapshot_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Gpt-oss-20b-dflare/snapshots/7c4c0a31ad7b387a4c2c67350c3d86776844c034",
+      "tokenizer_ok": true
+    }
+  ]
+}

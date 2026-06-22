@@ -13,4 +13,8 @@ arctic_site=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/.container_ca
 arctic_pip_spec=arctic-inference==0.1.1
 model_ids=AngelSlim/Qwen3-a3B_eagle3 AngelSlim/Qwen3-32B_eagle3 AngelSlim/Qwen3-8B_eagle3 AngelSlim/Qwen3-14B_eagle3 AngelSlim/Qwen3-4B_eagle3 AngelSlim/Qwen3-4b-dflare AngelSlim/Qwen3-8b-dflare AngelSlim/Gpt-oss-20b-dflare
 optional_model_ids=
-status=2175770 submitted
+status=2175770 completed
+sacct_state=COMPLETED
+sacct_exit_code=0:0
+elapsed=00:01:58
+summary_local=docs/lyris_angelslim_checkpoint_prewarm_summary_20260622.json
