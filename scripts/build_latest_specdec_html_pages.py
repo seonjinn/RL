@@ -44,7 +44,9 @@ VLLM_ADDED_OUT = DOCS / "vllm_standalone_added_results_latest.csv"
 VLLM_HTML_LATEST = DOCS / "vllm_standalone_results_latest.html"
 VLLM_HTML_DATED = DOCS / "vllm_standalone_results_20260621.html"
 
-NEMORL_MANIFESTS = sorted(ROOT.glob("latest_lyris_nemorl_qwen235b_*20260621_jobs.csv"))
+NEMORL_MANIFESTS = sorted(ROOT.glob("latest_lyris_nemorl_qwen235b_*20260621_jobs.csv")) + sorted(
+    DOCS.glob("latest_lyris_nemorl_perfcfg_*wandb_20260622_jobs.csv")
+)
 NEMORL_SUMMARY = DOCS / "lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv"
 NEMORL_SACCT = DOCS / "lyris_qwen235b_pr2879_sacct_20260621.psv"
 NEMORL_OUT = DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv"
@@ -63,9 +65,196 @@ NEMORL_LYRIS_HISTORICAL_SOURCES = [
     ),
 ]
 NEMORL_OCI_HISTORICAL = DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv"
+NEMORL_LIVE_K_SWEEP_SUMMARY = DOCS / "lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv"
+NEMORL_LIVE_K_SWEEP_SOURCE_GROUP = "Lyris Qwen30/Qwen32 PerfCfg OSL4096 latest-main+PR2879 2026-06-22"
+NEMORL_LIVE_K_SWEEP_CHECKED_AT = "2026-06-22 15:52 PDT"
 NEMORL_COMBINED_OUT = DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv"
 NEMORL_HTML = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_latest.html"
 NEMORL_HTML_DATED = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_20260622.html"
+
+NEMORL_LIVE_K_SWEEP_META = [
+    {
+        "job_id": "2177867",
+        "model": "qwen30ba3b",
+        "mode": "sync",
+        "k": 5,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "FAILED",
+        "elapsed": "00:08:00",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "failed_before_completed_step",
+        "notes": "Old pre-fix K5 sync attempt; CUBLAS GEMM failure at step 1.",
+        "error": "RuntimeError: CUDA error: CUBLAS_STATUS_EXECUTION_FAILED when calling cublasGemmEx",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_sync_eagle3/2177867-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177868",
+        "model": "qwen30ba3b",
+        "mode": "async-1off",
+        "k": 5,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "RUNNING",
+        "elapsed": "02:15:07",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "engine_error_observed",
+        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "error": "RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling cublasSetStream",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_async1off_eagle3/2177868-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177869",
+        "model": "qwen32",
+        "mode": "sync",
+        "k": 5,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:55:19",
+        "metric_state": "partial_live",
+        "notes": "Step 17 observed; no boundary error found in bounded grep.",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen32_sync_eagle3/2177869-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177870",
+        "model": "qwen32",
+        "mode": "async-1off",
+        "k": 5,
+        "nodes_x_gpus": "8x4",
+        "segment": 8,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:55:19",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "engine_error_observed",
+        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "error": "RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling cublasGemmEx",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen32_async1off_eagle3/2177870-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177871",
+        "model": "qwen30ba3b",
+        "mode": "sync",
+        "k": 7,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "FAILED",
+        "elapsed": "00:07:46",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "failed_before_completed_step",
+        "notes": "Old pre-fix K7 sync attempt; Triton device-side assert at step 1.",
+        "error": "RuntimeError: Triton Error [CUDA]: device-side assert triggered",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_sync_eagle3/2177871-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177872",
+        "model": "qwen30ba3b",
+        "mode": "async-1off",
+        "k": 7,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:49:29",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "engine_error_observed",
+        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "error": "RuntimeError: Triton Error [CUDA]: device-side assert triggered",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_async1off_eagle3/2177872-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177873",
+        "model": "qwen32",
+        "mode": "sync",
+        "k": 7,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:48:44",
+        "metric_state": "partial_live",
+        "notes": "Step 15 observed; no boundary error found in bounded grep.",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen32_sync_eagle3/2177873-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177874",
+        "model": "qwen32",
+        "mode": "async-1off",
+        "k": 7,
+        "nodes_x_gpus": "8x4",
+        "segment": 8,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:55:19",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "engine_error_observed",
+        "notes": "Async job still allocated, but vLLM EngineCore traceback is present in the driver log.",
+        "error": "EngineCore traceback at step 1",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen32_async1off_eagle3/2177874-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177875",
+        "model": "qwen30ba3b",
+        "mode": "sync",
+        "k": 9,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:41:12",
+        "metric_state": "partial_live",
+        "notes": "Driver reached step 20/20; SLURM allocation still running when checked.",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_sync_eagle3/2177875-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177876",
+        "model": "qwen30ba3b",
+        "mode": "async-1off",
+        "k": 9,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:41:08",
+        "completed_steps": 0,
+        "last_step": 17,
+        "metric_state": "running_unparsed",
+        "notes": "Step 17 observed; not yet added to timing table because async log needs separate deduping.",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_async1off_eagle3/2177876-logs/ray-driver.log",
+    },
+    {
+        "job_id": "2177877",
+        "model": "qwen32",
+        "mode": "sync",
+        "k": 9,
+        "nodes_x_gpus": "4x4",
+        "segment": 4,
+        "slurm_state": "PENDING",
+        "elapsed": "0:00",
+        "completed_steps": 0,
+        "last_step": 0,
+        "metric_state": "pending",
+        "notes": "Pending for priority at latest check.",
+        "log_path": "",
+    },
+    {
+        "job_id": "2177878",
+        "model": "qwen32",
+        "mode": "async-1off",
+        "k": 9,
+        "nodes_x_gpus": "8x4",
+        "segment": 8,
+        "slurm_state": "RUNNING",
+        "elapsed": "01:49:29",
+        "completed_steps": 0,
+        "last_step": 1,
+        "metric_state": "engine_error_observed",
+        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "error": "RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling cublasSetStream",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen32_async1off_eagle3/2177878-logs/ray-driver.log",
+    },
+]
 
 
 MODEL_MAP = {
@@ -81,6 +270,8 @@ PALETTE = {
     "baseline_fuselossfalse": "#9ca3af",
     "eagle3_k3": "#1f78b4",
     "eagle3_k5": "#a6cee3",
+    "eagle3_k7": "#3b82f6",
+    "eagle3_k9": "#1d4ed8",
     "eagle3_k8": "#2563eb",
     "pard_k5": "#e31a1c",
     "pard_k16": "#dc2626",
@@ -104,6 +295,9 @@ METRIC_PALETTE = {
     "Generation time": "#fb9a99",
     "E2E step time": "#e31a1c",
 }
+
+
+WANDB_URL_RE = re.compile(r"https?://wandb\.ai/[^\s\x1b\"'<>]+")
 
 
 def short_model(value: object) -> str:
@@ -553,6 +747,8 @@ def nemorl_method_order(methods: list[str]) -> list[str]:
         "baseline_fuselossfalse",
         "eagle3_k3",
         "eagle3_k5",
+        "eagle3_k7",
+        "eagle3_k9",
         "suffix_k32",
         "pard_k5",
         "pard_k16",
@@ -735,6 +931,43 @@ def esc(value: object) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""
     return html.escape(str(value), quote=True)
+
+
+def text_value(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except TypeError:
+        pass
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none"} else text
+
+
+def first_text(row: pd.Series, *keys: str) -> str:
+    for key in keys:
+        value = text_value(row.get(key, ""))
+        if value:
+            return value
+    return ""
+
+
+def normalize_wandb_url(value: object) -> str:
+    text = text_value(value)
+    if not text:
+        return ""
+    match = WANDB_URL_RE.search(text)
+    if match:
+        return match.group(0).rstrip(".,)")
+    return text if text.startswith(("http://", "https://")) else ""
+
+
+def link_html(value: object, label: str = "W&B") -> str:
+    url = normalize_wandb_url(value)
+    if not url:
+        return ""
+    return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
 
 
 def clean_float(value: object) -> float:
@@ -999,6 +1232,8 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
         for key, _, kind in columns:
             value = row.get(key, "")
             cls = "num" if kind in {"num", "x", "pct"} else ""
+            if key == "slurm_state":
+                cls = str(value).strip()
             if kind == "num":
                 text = fmt(value, 2)
             elif kind == "int":
@@ -1009,6 +1244,8 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
                 text = fmt_pct(value)
             elif kind == "temp":
                 text = "n/a" if pd.isna(value) else f"{float(value):.1f}"
+            elif kind == "link":
+                text = link_html(value)
             else:
                 text = esc(value)
             cells.append(f'<td class="{cls}">{text}</td>' if cls else f"<td>{text}</td>")
@@ -1198,6 +1435,23 @@ def load_nemorl_manifest() -> pd.DataFrame:
     return rows
 
 
+def nemorl_source_group_from_run_id(run_id: object) -> str:
+    text = str(run_id)
+    if "eagerfalse_triton" in text and "wandb" in text:
+        return "Lyris PerfCfg enforce_eager=false triton W&B matrix 2026-06-22"
+    return "Lyris Qwen235B PR2879 OSL8192 2026-06-21"
+
+
+def nemorl_config_basis_from_run_id(run_id: object) -> str:
+    text = str(run_id)
+    if "eagerfalse_triton" in text and "wandb" in text:
+        return (
+            "performance recipe default plus latest-main+PR2879 topology-aware fix; "
+            "enforce_eager=false, MoE backend=triton, max_num_seqs=64, max_num_batched_tokens=32768, W&B enabled"
+        )
+    return "performance recipe default, latest main plus PR2879 topology-aware fix"
+
+
 def enrich_nemorl() -> pd.DataFrame:
     manifest = load_nemorl_manifest()
     summary = pd.read_csv(NEMORL_SUMMARY) if NEMORL_SUMMARY.exists() else pd.DataFrame()
@@ -1209,12 +1463,22 @@ def enrich_nemorl() -> pd.DataFrame:
     rows = manifest.merge(summary, on="job_id", how="left", suffixes=("", "_metric"))
     if not sacct.empty:
         rows = rows.merge(sacct, on="job_id", how="left")
+    for col in ["wandb_enabled", "wandb_project", "wandb_name", "wandb_url"]:
+        metric_col = f"{col}_metric"
+        if col not in rows:
+            rows[col] = ""
+        if metric_col in rows:
+            rows[col] = rows[col].where(rows[col].map(text_value).ne(""), rows[metric_col])
+    rows["wandb_url"] = rows["wandb_url"].map(normalize_wandb_url)
     rows["method_k"] = rows.apply(lambda r: method_with_k(r.get("method"), r.get("num_speculative_tokens")), axis=1)
     rows["model_name"] = rows["model"].map(model_name)
     rows["cluster"] = "lyris"
-    rows["source_group"] = "Lyris Qwen235B PR2879 OSL8192 2026-06-21"
-    rows["config_basis"] = "performance recipe default, latest main plus PR2879 topology-aware fix"
+    rows["source_group"] = rows["run_id"].map(nemorl_source_group_from_run_id)
+    rows["config_basis"] = rows["run_id"].map(nemorl_config_basis_from_run_id)
     rows["source_priority"] = 0
+    if "slurm_state" not in rows:
+        rows["slurm_state"] = ""
+    rows["slurm_state"] = rows["slurm_state"].where(rows["slurm_state"].map(text_value).ne(""), "SUBMITTED")
     rows["completed_last_step"] = rows.apply(
         lambda r: (
             f"{int(clean_float(r.get('completed_steps')))}/{int(clean_float(r.get('last_step')))}"
@@ -1308,6 +1572,10 @@ def load_lyris_historical_nemorl() -> pd.DataFrame:
                     "vllm_token_acceptance_pct": clean_float(row.get("acceptance_pct")),
                     "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accept_len")),
                     "manifest": str(path.relative_to(ROOT)),
+                    "wandb_enabled": str(row.get("wandb_enabled", "")),
+                    "wandb_project": str(row.get("wandb_project", "")),
+                    "wandb_name": str(row.get("wandb_name", "")),
+                    "wandb_url": normalize_wandb_url(row.get("wandb_url", "")),
                     "notes": str(row.get("notes", "")).strip(),
                     "log_path": str(row.get("source_log", "")),
                 }
@@ -1366,8 +1634,92 @@ def load_oci_historical_nemorl() -> pd.DataFrame:
                 "vllm_token_acceptance_pct": clean_float(row.get("acceptance_rate_pct")),
                 "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accepted_length")),
                 "manifest": str(NEMORL_OCI_HISTORICAL.relative_to(ROOT)),
+                "wandb_enabled": str(row.get("wandb_enabled", "")),
+                "wandb_project": str(row.get("wandb_project", "")),
+                "wandb_name": str(row.get("wandb_name", "")),
+                "wandb_url": normalize_wandb_url(row.get("wandb_url", "")),
                 "notes": str(row.get("notes", "")).strip(),
                 "log_path": str(row.get("sources", "")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def load_lyris_live_k_sweep_nemorl() -> pd.DataFrame:
+    summary = pd.read_csv(NEMORL_LIVE_K_SWEEP_SUMMARY) if NEMORL_LIVE_K_SWEEP_SUMMARY.exists() else pd.DataFrame()
+    if not summary.empty:
+        summary["job_id"] = summary["job_id"].astype(str)
+        summary = summary.set_index("job_id")
+    rows = []
+    for meta in NEMORL_LIVE_K_SWEEP_META:
+        job_id = meta["job_id"]
+        metric = summary.loc[job_id].to_dict() if not summary.empty and job_id in summary.index else {}
+        completed = clean_float(metric.get("completed_steps", meta.get("completed_steps", math.nan)))
+        last = clean_float(metric.get("last_step", meta.get("last_step", math.nan)))
+        if math.isnan(completed):
+            completed = clean_float(meta.get("completed_steps", math.nan))
+        if math.isnan(last):
+            last = clean_float(meta.get("last_step", math.nan))
+        completed_last = (
+            f"{int(completed)}/20 last {int(last)}"
+            if not math.isnan(completed) and not math.isnan(last) and last > 0
+            else "0/20"
+        )
+        metric_state = str(meta.get("metric_state", ""))
+        if metric and completed > 0 and metric_state in {"partial_live", ""}:
+            metric_state = str(metric.get("partial_result_state", "partial_live"))
+        latest_error = str(meta.get("error", "")).strip()
+        if not latest_error:
+            raw_error = metric.get("latest_error", "")
+            if raw_error is not None and not pd.isna(raw_error):
+                latest_error = str(raw_error).strip()
+        rows.append(
+            {
+                "job_id": job_id,
+                "model": meta["model"],
+                "model_name": model_name(meta["model"]),
+                "mode": meta["mode"],
+                "method": f"Eagle-3 K={meta['k']}",
+                "method_k": f"eagle3_k{meta['k']}",
+                "max_steps": 20,
+                "max_new_tokens": 4096,
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "isl": "performance recipe default",
+                "cluster": "lyris",
+                "source_group": NEMORL_LIVE_K_SWEEP_SOURCE_GROUP,
+                "config_basis": (
+                    "performance recipe default plus latest-main+PR2879 topology-aware fix; "
+                    f"context-clamp K sweep checked {NEMORL_LIVE_K_SWEEP_CHECKED_AT}"
+                ),
+                "source_priority": 0.5,
+                "slurm_state": meta["slurm_state"],
+                "exit_code": "",
+                "elapsed": meta.get("elapsed", ""),
+                "completed_steps": completed,
+                "last_step": last,
+                "completed_last_step": completed_last,
+                "metric_state": metric_state,
+                "total_step_time_s_mean": clean_float(metric.get("total_step_time_s_mean")),
+                "generation_time_s_mean": clean_float(metric.get("generation_time_s_mean")),
+                "e2e_tokens_per_sec_per_gpu_mean": clean_float(metric.get("e2e_tokens_per_sec_per_gpu_mean")),
+                "generation_worker_tokens_per_sec_per_gpu_mean": clean_float(metric.get("generation_worker_tokens_per_sec_per_gpu_mean")),
+                "e2e_step_time_speedup": math.nan,
+                "e2e_tps_speedup": math.nan,
+                "generation_time_speedup": math.nan,
+                "gen_tps_speedup": math.nan,
+                "vllm_token_acceptance_pct": clean_float(metric.get("vllm_token_acceptance_pct")),
+                "vllm_acceptance_length_mean_weighted_mean": clean_float(metric.get("vllm_acceptance_length_mean_weighted_mean")),
+                "manifest": str(NEMORL_LIVE_K_SWEEP_SUMMARY.relative_to(ROOT)) if NEMORL_LIVE_K_SWEEP_SUMMARY.exists() else "",
+                "wandb_enabled": str(meta.get("wandb_enabled", metric.get("wandb_enabled", ""))),
+                "wandb_project": str(meta.get("wandb_project", metric.get("wandb_project", ""))),
+                "wandb_name": str(meta.get("wandb_name", metric.get("wandb_name", ""))),
+                "wandb_url": normalize_wandb_url(meta.get("wandb_url", metric.get("wandb_url", ""))),
+                "notes": str(meta.get("notes", "")).strip(),
+                "latest_error": latest_error,
+                "log_path": str(meta.get("log_path", metric.get("log_path", ""))),
+                "nodes_x_gpus": meta.get("nodes_x_gpus", ""),
+                "segment": meta.get("segment", ""),
             }
         )
     return pd.DataFrame(rows)
@@ -1416,7 +1768,16 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
-    parts = [part for part in [live_rows, load_lyris_historical_nemorl(), load_oci_historical_nemorl()] if not part.empty]
+    parts = [
+        part
+        for part in [
+            live_rows,
+            load_lyris_live_k_sweep_nemorl(),
+            load_lyris_historical_nemorl(),
+            load_oci_historical_nemorl(),
+        ]
+        if not part.empty
+    ]
     if not parts:
         return pd.DataFrame()
     rows = pd.concat(parts, ignore_index=True, sort=False)
@@ -1426,6 +1787,58 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
         na_position="last",
     )
     return rows
+
+
+def nemorl_live_k_sweep_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty or "job_id" not in rows:
+        return pd.DataFrame()
+    ids = {item["job_id"] for item in NEMORL_LIVE_K_SWEEP_META}
+    live = rows[rows["job_id"].astype(str).isin(ids)].copy()
+    if live.empty:
+        return live
+    live["k_sort"] = live["method_k"].astype(str).str.extract(r"k(\d+)").astype(float)
+    mode_rank = {"sync": 0, "async-1off": 1}
+    live["mode_rank"] = live["mode"].astype(str).map(mode_rank).fillna(9)
+    live["model_rank"] = live["model_name"].astype(str).map({"Qwen3-30B-A3B": 0, "Qwen3-32B": 1}).fillna(9)
+    return live.sort_values(["model_rank", "mode_rank", "k_sort", "job_id"], na_position="last")
+
+
+def nemorl_fresh_finding(live_rows: pd.DataFrame) -> str:
+    if live_rows.empty:
+        return "No fresh K-sweep rows were available in the local artifacts."
+    clean = live_rows[
+        (live_rows["mode"].astype(str) == "sync")
+        & pd.to_numeric(live_rows.get("completed_steps"), errors="coerce").fillna(0).gt(0)
+    ].copy()
+    if clean.empty:
+        return "Fresh K-sweep jobs are submitted, but no sync row has completed enough steps for timing metrics yet."
+    clean["gen_tps_speedup"] = pd.to_numeric(clean.get("gen_tps_speedup"), errors="coerce")
+    clean["e2e_tps_speedup"] = pd.to_numeric(clean.get("e2e_tps_speedup"), errors="coerce")
+    clean = clean.sort_values("gen_tps_speedup", ascending=False)
+    best = clean.iloc[0]
+    q32 = clean[clean["model_name"].astype(str) == "Qwen3-32B"]
+    q32_text = ""
+    if not q32.empty:
+        q32_bits = [
+            f"{nemorl_method_label(row.method_k)} {fmt_x(row.gen_tps_speedup)} gen"
+            for row in q32.itertuples()
+            if not math.isnan(clean_float(row.gen_tps_speedup))
+        ]
+        if q32_bits:
+            q32_text = " Qwen3-32B partial sync rows: " + ", ".join(q32_bits) + "."
+    return (
+        f"Fresh K-sweep signal: {best['model_name']} {best['mode']} {nemorl_method_label(best['method_k'])} "
+        f"reached {best['completed_last_step']} with {fmt_x(best['gen_tps_speedup'])} generation throughput "
+        f"and {fmt_x(best['e2e_tps_speedup'])} E2E throughput vs the matched OSL4096 baseline."
+        + q32_text
+    )
+
+
+def chapter_card(title: str, body: str, href: str) -> str:
+    return (
+        f'<a class="chapter-card" href="{esc(href)}">'
+        f"<strong>{esc(title)}</strong><span>{esc(body)}</span></a>"
+    )
 
 
 def build_nemorl_html(rows: pd.DataFrame) -> str:
@@ -1438,6 +1851,13 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
     completed_metric = int(pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0).gt(0).sum()) if not rows.empty else 0
     current = rows[pd.to_numeric(rows.get("max_steps"), errors="coerce") == 20].copy() if not rows.empty else pd.DataFrame()
     smoke = rows[pd.to_numeric(rows.get("max_steps"), errors="coerce") == 3].copy() if not rows.empty else pd.DataFrame()
+    live_k = nemorl_live_k_sweep_rows(rows)
+    fresh_key = nemorl_fresh_finding(live_k)
+    async_engine_errors = int(
+        (
+            live_k.get("metric_state", pd.Series(dtype=str)).astype(str).str.contains("engine_error", na=False)
+        ).sum()
+    ) if not live_k.empty else 0
     best = current[~current["method_k"].astype(str).str.startswith("baseline")].copy()
     best = best[pd.to_numeric(best["completed_steps"], errors="coerce").fillna(0) > 0]
     best = best[pd.to_numeric(best["gen_tps_speedup"], errors="coerce").notna()]
@@ -1452,12 +1872,14 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
     else:
         key = "Step20 rows are running or pending; matched speedup will update as baseline and spec rows complete more steps."
     css = """
-:root{--ink:#172033;--muted:#637083;--line:#d8dee8;--bg:#f6f8fb;--panel:#fff;--green:#157f47;--amber:#946200}
-*{box-sizing:border-box}body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{padding:28px 32px 18px;background:#fff;border-bottom:1px solid var(--line)}main{max-width:1480px;margin:0 auto;padding:22px 28px 42px}h1{margin:0 0 8px;font-size:28px;letter-spacing:0}h2{margin:0 0 12px;font-size:20px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:1fr;gap:14px;max-width:1160px;margin:12px auto 20px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts,.model-charts{grid-template-columns:1fr}}@media(max-width:900px){header,main{padding-left:16px;padding-right:16px}.kpis{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
+:root{--ink:#111827;--muted:#5f6b7a;--line:#d6dee9;--bg:#f4f6f9;--panel:#fff;--soft:#eef3f8;--blue:#2457a6;--green:#157f47;--amber:#946200;--red:#b42318}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:1fr;gap:14px;max-width:1160px;margin:12px auto 20px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}.FAILED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.kpis,.chapter-grid{grid-template-columns:1fr 1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.kpis,.chapter-grid{grid-template-columns:1fr}}"""
     cols = [
         ("source_group", "Source group", "text"),
         ("cluster", "Cluster", "text"),
         ("job_id", "Job", "text"),
+        ("wandb_url", "W&B", "link"),
+        ("wandb_name", "W&B name", "text"),
         ("model_name", "Model", "text"),
         ("mode", "Mode", "text"),
         ("method_display", "Method", "text"),
@@ -1477,34 +1899,75 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         ("vllm_acceptance_length_mean_weighted_mean", "Mean len", "num"),
         ("manifest", "Manifest", "text"),
     ]
+    live_cols = [
+        ("job_id", "Job", "text"),
+        ("wandb_url", "W&B", "link"),
+        ("wandb_name", "W&B name", "text"),
+        ("model_name", "Model", "text"),
+        ("mode", "Mode", "text"),
+        ("method_display", "Method", "text"),
+        ("nodes_x_gpus", "Nodes x GPUs", "text"),
+        ("segment", "segment", "int"),
+        ("slurm_state", "SLURM", "text"),
+        ("completed_last_step", "completed/last", "text"),
+        ("generation_worker_tokens_per_sec_per_gpu_mean", "Gen tok/s/GPU", "num"),
+        ("gen_tps_speedup", "Gen tput speedup", "x"),
+        ("generation_time_s_mean", "Gen time", "num"),
+        ("generation_time_speedup", "Gen-time speedup", "x"),
+        ("e2e_tokens_per_sec_per_gpu_mean", "E2E tok/s/GPU", "num"),
+        ("e2e_tps_speedup", "E2E tput speedup", "x"),
+        ("total_step_time_s_mean", "E2E step", "num"),
+        ("e2e_step_time_speedup", "E2E step speedup", "x"),
+        ("vllm_token_acceptance_pct", "Acceptance", "pct"),
+        ("vllm_acceptance_length_mean_weighted_mean", "Mean len", "num"),
+        ("metric_state", "Metric state", "text"),
+        ("notes", "Notes", "text"),
+        ("latest_error", "First severe error", "text"),
+    ]
     return "\n".join(
         [
             "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
             f"<title>Lyris NeMo-RL SpecDec Status 2026-06-21</title><style>{css}</style></head><body>",
-            "<header><h1>Lyris NeMo-RL SpecDec Status</h1>",
-            f"<div class=\"subtitle\">Updated {esc(updated)}. Includes Qwen3-235B PR2879/latest-main live rows plus historical Qwen3-30B-A3B/Qwen3-32B NeMo-RL rows found in Lyris and OCI-HSG artifacts.</div></header><main>",
-            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span></div>",
+            "<header><div class=\"hero\"><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
+            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main live rows plus Qwen3-30B-A3B/Qwen3-32B Lyris and OCI-HSG artifacts.</div>",
+            "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#fresh\">Fresh Live K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
+            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
             "<div class=\"kpis\">",
             f"<div class=\"kpi\"><b>{running}</b><span>running jobs</span></div>",
             f"<div class=\"kpi\"><b>{pending}</b><span>pending jobs</span></div>",
+            f"<div class=\"kpi\"><b>{async_engine_errors}</b><span>async rows with engine errors</span></div>",
             f"<div class=\"kpi\"><b>{completed_metric}</b><span>rows with completed steps</span></div>",
             f"<div class=\"kpi\"><b>{len(rows)}</b><span>tracked rows</span></div>",
             "</div>",
-            "<section><h2>Evaluation Methodology</h2><ul>",
+            "<section id=\"overview\"><h2>Overview</h2>",
+            f"<div class=\"callout\"><strong>Key finding.</strong> {esc(key)}<br><strong>Fresh update.</strong> {esc(fresh_key)}</div>",
+            "<div class=\"chapter-grid\">",
+            chapter_card("Fresh Live K Sweep", "Newest Lyris Eagle-3 K5/K7/K9 state and partial speedups.", "#fresh"),
+            chapter_card("Matched Charts", "Generation/E2E throughput and step-time speedups by model.", "#charts"),
+            chapter_card("Step20 Snapshot", "All current and historical step20 rows with acceptance metrics.", "#step20"),
+            chapter_card("Raw Evidence", "CSV, log path, and source provenance links for reproducibility.", "#sources"),
+            "</div></section>",
+            "<section id=\"fresh\"><h2>Fresh Live K Sweep</h2>",
+            "<p class=\"note\">Newest Lyris run set for Eagle-3 K5/K7/K9 on performance recipes. Sync rows with completed steps are baseline-relative against the matched 2026-06-22 OSL4096 baseline rows. Async rows are listed for status but should not be treated as clean performance data while EngineCore errors are present.</p><div class=\"table-wrap\">",
+            table(live_k, live_cols),
+            "</div></section>",
+            "<section id=\"methodology\"><h2>Evaluation Methodology</h2><ul>",
             "<li>Recipes: NeMo-RL <code>examples/configs/recipes/llm/performance</code>.</li>",
             "<li>Matched comparisons keep model, mode, max OSL, temperature=1.0, top_p=1.0, and cluster/source setup fixed.</li>",
             "<li>SpecDec rows add only the generation speculative decoding method, drafter/checkpoint, and <code>num_speculative_tokens</code>; baseline rows use the same recipe with SpecDec disabled.</li>",
             "<li>Fresh 2026-06-22 Qwen3-30B-A3B/Qwen3-32B Lyris rows use latest-main+PR2879, recipe OSL4096, and step2-20 averages where available.</li>",
             "</ul></section>",
-            f"<section><h2>Key Finding</h2><p>{esc(key)}</p><p class=\"note\">Acceptance metrics are shown only when the NeMo-RL driver log includes vLLM SpecDec metrics; Qwen3-235B current driver snapshots mostly expose timing/throughput, while historical Qwen30/Qwen32 rows include acceptance when available.</p></section>",
+            f"<section><h2>Metric Notes</h2><p>{esc(fresh_key)}</p><p class=\"note\">Acceptance metrics are shown only when the NeMo-RL driver log includes vLLM SpecDec metrics; Qwen3-235B current driver snapshots mostly expose timing/throughput, while historical Qwen30/Qwen32 rows include acceptance when available.</p></section>",
+            '<div id="charts">',
             nemorl_charts_section(rows),
-            "<section><h2>Step20 Current And Historical Snapshot</h2><div class=\"table-wrap\">",
+            "</div>",
+            "<section id=\"step20\"><h2>Step20 Current And Historical Snapshot</h2><div class=\"table-wrap\">",
             table(current, cols),
             "</div></section>",
-            "<section><h2>Step3 Smoke / K Sweep</h2><div class=\"table-wrap\">",
+            "<section id=\"smoke\"><h2>Step3 Smoke / K Sweep</h2><div class=\"table-wrap\">",
             table(smoke, cols),
             "</div></section>",
-            "<section><h2>Sources</h2><p class=\"note\"><code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_qwen235b_*20260621_jobs.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
+            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv</code>, <code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_qwen235b_*20260621_jobs.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
             "</main></body></html>",
         ]
     )

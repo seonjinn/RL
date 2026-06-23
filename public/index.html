@@ -56,7 +56,7 @@
 <body>
 <main id="overview">
   <h1>SpecDec RL Benchmark Dashboard</h1>
-  <p>Updated 2026-06-22 08:59:22 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
+  <p>Updated 2026-06-22 17:33:01 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
 
   <div class="grid">
     <div class="card"><div class="label">vLLM scope</div><div class="metric">Math + SWE</div><p>Batch sweeps and temp 0/1 comparisons with ISL/OSL shown in the result tables.</p></div>
@@ -95,7 +95,7 @@
   <section>
     <h2>Best NeMo-RL Rows</h2>
     <p>Best rows are selected by generation throughput speedup against the matched baseline. E2E throughput and step-time speedup are shown separately.</p>
-    <div class="table-scroll"><table><thead><tr><th>Job</th><th>Model</th><th>Mode</th><th>Method</th><th>Completed</th><th>Max OSL</th><th>Gen tok/s/GPU</th><th>Gen TPS speedup</th><th>Gen time speedup</th><th>E2E TPS speedup</th><th>E2E step speedup</th><th>Acceptance</th><th>Mean accept len</th><th>Source</th></tr></thead><tbody><tr><td><code>2172802</code></td><td>Qwen3-235B-A22B</td><td>sync</td><td>eagle3_k5</td><td>19/20</td><td>8192</td><td>31.58</td><td>1.81x</td><td>1.89x</td><td>1.78x</td><td>1.85x</td><td>n/a</td><td>n/a</td><td><code>docs/lyris_qwen235b_pr2879_live_enriched_20260621.csv</code></td></tr><tr><td><code>2152193</code></td><td>Qwen3-30B-A3B</td><td>sync</td><td>Eagle-3</td><td>19/20 last 20</td><td>4096</td><td>3226.28</td><td>2.15x</td><td>2.18x</td><td>1.39x</td><td>1.41x</td><td>63.9%</td><td>2.87</td><td><code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code></td></tr><tr><td><code>2152195</code></td><td>Qwen3-32B</td><td>sync</td><td>Eagle-3</td><td>19/20 last 20</td><td>4096</td><td>2150.33</td><td>1.69x</td><td>1.72x</td><td>1.33x</td><td>1.36x</td><td>45.2%</td><td>2.33</td><td><code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code></td></tr></tbody></table></div>
+    <div class="table-scroll"><table><thead><tr><th>Job</th><th>Model</th><th>Mode</th><th>Method</th><th>Completed</th><th>Max OSL</th><th>Gen tok/s/GPU</th><th>Gen TPS speedup</th><th>Gen time speedup</th><th>E2E TPS speedup</th><th>E2E step speedup</th><th>Acceptance</th><th>Mean accept len</th><th>Source</th></tr></thead><tbody><tr><td><code>2172802</code></td><td>Qwen3-235B-A22B</td><td>sync</td><td>eagle3_k5</td><td>19/20</td><td>8192</td><td>31.58</td><td>1.81x</td><td>1.89x</td><td>1.78x</td><td>1.85x</td><td>n/a</td><td>n/a</td><td><code>docs/lyris_qwen235b_pr2879_live_enriched_20260621.csv</code></td></tr><tr><td><code>2152193</code></td><td>Qwen3-30B-A3B</td><td>sync</td><td>Eagle-3</td><td>19/20 last 20</td><td>4096</td><td>3226.28</td><td>2.15x</td><td>2.18x</td><td>1.39x</td><td>1.41x</td><td>63.9%</td><td>2.87</td><td><code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code></td></tr><tr><td><code>2177869</code></td><td>Qwen3-32B</td><td>sync</td><td>eagle3_k5</td><td>15/20 last 17</td><td>4096</td><td>2169.52</td><td>1.73x</td><td>1.74x</td><td>1.34x</td><td>1.35x</td><td>30.2%</td><td>2.39</td><td><code>docs/lyris_nemorl_perfcfg_specdec_combined_latest.csv</code></td></tr></tbody></table></div>
   </section>
 
   <section>
@@ -115,6 +115,8 @@
       <a href="data/vllm_standalone_added_results_latest.csv">vLLM added CSV</a>
       <a href="data/vllm_standalone_all_batches_combined_20260619.csv">vLLM all-batch CSV</a>
       <a href="data/lyris_qwen235b_pr2879_live_enriched_20260621.csv">Qwen235B NeMo-RL CSV</a>
+      <a href="data/lyris_nemorl_perfcfg_specdec_combined_latest.csv">Combined NeMo-RL latest CSV</a>
+      <a href="data/lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv">Fresh Eagle-3 K sweep CSV</a>
       <a href="data/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv">Qwen30/32 NeMo-RL 2026-06-22 CSV</a>
       <a href="data/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv">Qwen30/32 NeMo-RL 2026-06-22 status</a>
       <a href="data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv">Qwen30/32 NeMo-RL CSV</a>
