@@ -66,8 +66,8 @@ NEMORL_LYRIS_HISTORICAL_SOURCES = [
 ]
 NEMORL_OCI_HISTORICAL = DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv"
 NEMORL_LIVE_K_SWEEP_SUMMARY = DOCS / "lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv"
-NEMORL_LIVE_K_SWEEP_SOURCE_GROUP = "Lyris Qwen30/Qwen32 PerfCfg OSL4096 latest-main+PR2879 2026-06-22"
-NEMORL_LIVE_K_SWEEP_CHECKED_AT = "2026-06-22 15:52 PDT"
+NEMORL_LIVE_K_SWEEP_SOURCE_GROUP = "Lyris Qwen30/Qwen32 PerfCfg OSL4096 enforce_eager=true K sweep 2026-06-22"
+NEMORL_LIVE_K_SWEEP_CHECKED_AT = "2026-06-22 21:31 PDT"
 NEMORL_COMBINED_OUT = DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv"
 NEMORL_HTML = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_latest.html"
 NEMORL_HTML_DATED = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_20260622.html"
@@ -97,12 +97,12 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 5,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "RUNNING",
-        "elapsed": "02:15:07",
+        "slurm_state": "TIMEOUT",
+        "elapsed": "05:00:19",
         "completed_steps": 0,
         "last_step": 1,
-        "metric_state": "engine_error_observed",
-        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "metric_state": "engine_error_timeout",
+        "notes": "Timed out after vLLM EngineCore error; not clean performance data.",
         "error": "RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling cublasSetStream",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_async1off_eagle3/2177868-logs/ray-driver.log",
     },
@@ -113,10 +113,10 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 5,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:55:19",
-        "metric_state": "partial_live",
-        "notes": "Step 17 observed; no boundary error found in bounded grep.",
+        "slurm_state": "COMPLETED",
+        "elapsed": "02:21:17",
+        "metric_state": "parsed_completed",
+        "notes": "Completed 20/20; log confirms enforce_eager=true.",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen32_sync_eagle3/2177869-logs/ray-driver.log",
     },
     {
@@ -126,12 +126,12 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 5,
         "nodes_x_gpus": "8x4",
         "segment": 8,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:55:19",
+        "slurm_state": "TIMEOUT",
+        "elapsed": "05:00:01",
         "completed_steps": 0,
         "last_step": 1,
-        "metric_state": "engine_error_observed",
-        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "metric_state": "engine_error_timeout",
+        "notes": "Timed out after vLLM EngineCore error; not clean performance data.",
         "error": "RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling cublasGemmEx",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k5_contextclamp_step20_recipe_osl_temp1/logs/qwen32_async1off_eagle3/2177870-logs/ray-driver.log",
     },
@@ -158,12 +158,12 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 7,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:49:29",
+        "slurm_state": "TIMEOUT",
+        "elapsed": "05:00:12",
         "completed_steps": 0,
         "last_step": 1,
-        "metric_state": "engine_error_observed",
-        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "metric_state": "engine_error_timeout",
+        "notes": "Timed out after vLLM EngineCore error; not clean performance data.",
         "error": "RuntimeError: Triton Error [CUDA]: device-side assert triggered",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_async1off_eagle3/2177872-logs/ray-driver.log",
     },
@@ -174,10 +174,10 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 7,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:48:44",
-        "metric_state": "partial_live",
-        "notes": "Step 15 observed; no boundary error found in bounded grep.",
+        "slurm_state": "COMPLETED",
+        "elapsed": "02:26:16",
+        "metric_state": "parsed_completed",
+        "notes": "Completed 20/20; log confirms enforce_eager=true.",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen32_sync_eagle3/2177873-logs/ray-driver.log",
     },
     {
@@ -187,12 +187,12 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 7,
         "nodes_x_gpus": "8x4",
         "segment": 8,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:55:19",
+        "slurm_state": "TIMEOUT",
+        "elapsed": "05:00:01",
         "completed_steps": 0,
         "last_step": 1,
-        "metric_state": "engine_error_observed",
-        "notes": "Async job still allocated, but vLLM EngineCore traceback is present in the driver log.",
+        "metric_state": "engine_error_timeout",
+        "notes": "Timed out after vLLM EngineCore traceback; not clean performance data.",
         "error": "EngineCore traceback at step 1",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k7_contextclamp_step20_recipe_osl_temp1/logs/qwen32_async1off_eagle3/2177874-logs/ray-driver.log",
     },
@@ -203,10 +203,10 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 9,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:41:12",
-        "metric_state": "partial_live",
-        "notes": "Driver reached step 20/20; SLURM allocation still running when checked.",
+        "slurm_state": "COMPLETED",
+        "elapsed": "01:45:29",
+        "metric_state": "parsed_completed",
+        "notes": "Completed 20/20; log confirms enforce_eager=true.",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_sync_eagle3/2177875-logs/ray-driver.log",
     },
     {
@@ -216,12 +216,10 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 9,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:41:08",
-        "completed_steps": 0,
-        "last_step": 17,
-        "metric_state": "running_unparsed",
-        "notes": "Step 17 observed; not yet added to timing table because async log needs separate deduping.",
+        "slurm_state": "COMPLETED",
+        "elapsed": "01:59:05",
+        "metric_state": "parsed_completed_with_shutdown_warning",
+        "notes": "Completed 20/20 with enforce_eager=true; async log lacks generation-time breakdown, so throughput rows are cleaner than time-speedup rows.",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen30ba3b_async1off_eagle3/2177876-logs/ray-driver.log",
     },
     {
@@ -231,13 +229,11 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 9,
         "nodes_x_gpus": "4x4",
         "segment": 4,
-        "slurm_state": "PENDING",
-        "elapsed": "0:00",
-        "completed_steps": 0,
-        "last_step": 0,
-        "metric_state": "pending",
-        "notes": "Pending for priority at latest check.",
-        "log_path": "",
+        "slurm_state": "COMPLETED",
+        "elapsed": "02:39:13",
+        "metric_state": "parsed_completed",
+        "notes": "Completed 20/20; log confirms enforce_eager=true.",
+        "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen32_sync_eagle3/2177877-logs/ray-driver.log",
     },
     {
         "job_id": "2177878",
@@ -246,12 +242,12 @@ NEMORL_LIVE_K_SWEEP_META = [
         "k": 9,
         "nodes_x_gpus": "8x4",
         "segment": 8,
-        "slurm_state": "RUNNING",
-        "elapsed": "01:49:29",
+        "slurm_state": "TIMEOUT",
+        "elapsed": "05:00:12",
         "completed_steps": 0,
         "last_step": 1,
-        "metric_state": "engine_error_observed",
-        "notes": "Async job still allocated, but vLLM EngineCore error is present in the driver log.",
+        "metric_state": "engine_error_timeout",
+        "notes": "Timed out after vLLM EngineCore error; not clean performance data.",
         "error": "RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling cublasSetStream",
         "log_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/20260622_lyris_nemorl_qwen30_qwen32_eagle3k9_contextclamp_step20_recipe_osl_temp1/logs/qwen32_async1off_eagle3/2177878-logs/ray-driver.log",
     },
@@ -1486,6 +1482,7 @@ def enrich_nemorl() -> pd.DataFrame:
     rows["cluster"] = "lyris"
     rows["source_group"] = rows["run_id"].map(nemorl_source_group_from_run_id)
     rows["config_basis"] = rows["run_id"].map(nemorl_config_basis_from_run_id)
+    rows["enforce_eager"] = rows["run_id"].map(lambda value: False if "eagerfalse" in str(value) else "")
     rows["source_priority"] = 0
     if "slurm_state" not in rows:
         rows["slurm_state"] = ""
@@ -1696,11 +1693,14 @@ def load_lyris_live_k_sweep_nemorl() -> pd.DataFrame:
                 "max_new_tokens": 4096,
                 "temperature": 1.0,
                 "top_p": 1.0,
+                "enforce_eager": True,
                 "isl": "performance recipe default",
                 "cluster": "lyris",
                 "source_group": NEMORL_LIVE_K_SWEEP_SOURCE_GROUP,
+                "comparison_group": "Lyris Qwen30/Qwen32 PerfCfg OSL4096 latest-main+PR2879 2026-06-22",
                 "config_basis": (
                     "performance recipe default plus latest-main+PR2879 topology-aware fix; "
+                    "enforce_eager=true, prefix caching disabled, MoE backend=triton; "
                     f"context-clamp K sweep checked {NEMORL_LIVE_K_SWEEP_CHECKED_AT}"
                 ),
                 "source_priority": 0.5,
@@ -1740,6 +1740,10 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
     if rows.empty:
         return rows
     rows = rows.copy()
+    if "comparison_group" not in rows:
+        rows["comparison_group"] = ""
+    comparison_group = rows["comparison_group"].map(text_value)
+    rows["_comparison_group"] = comparison_group.where(comparison_group.ne(""), rows["source_group"])
     for col in [
         "generation_worker_tokens_per_sec_per_gpu_mean",
         "e2e_tokens_per_sec_per_gpu_mean",
@@ -1751,7 +1755,7 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
         "e2e_step_time_speedup",
     ]:
         rows[col] = pd.to_numeric(rows.get(col), errors="coerce")
-    group_cols = ["source_group", "model_name", "mode", "max_steps", "max_new_tokens", "temperature", "top_p"]
+    group_cols = ["_comparison_group", "model_name", "mode", "max_steps", "max_new_tokens", "temperature", "top_p"]
     for _, idx in rows.groupby(group_cols, dropna=False).groups.items():
         sub = rows.loc[list(idx)]
         base = sub[sub["method_k"].astype(str) == "baseline"]
@@ -1775,7 +1779,7 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
                 rows.at[row_idx, "generation_time_speedup"] = base_gen_time / gen_time
             if not math.isnan(base_step_time) and not math.isnan(step_time) and step_time and math.isnan(clean_float(rows.at[row_idx, "e2e_step_time_speedup"])):
                 rows.at[row_idx, "e2e_step_time_speedup"] = base_step_time / step_time
-    return rows
+    return rows.drop(columns=["_comparison_group"], errors="ignore")
 
 
 def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
@@ -1884,7 +1888,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         key = "Step20 rows are running or pending; matched speedup will update as baseline and spec rows complete more steps."
     css = """
 :root{--ink:#111827;--muted:#5f6b7a;--line:#d6dee9;--bg:#f4f6f9;--panel:#fff;--soft:#eef3f8;--blue:#2457a6;--green:#157f47;--amber:#946200;--red:#b42318}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:1fr;gap:14px;max-width:1160px;margin:12px auto 20px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING{color:var(--green);font-weight:700}.PENDING{color:var(--amber);font-weight:700}.FAILED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.kpis,.chapter-grid{grid-template-columns:1fr 1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.kpis,.chapter-grid{grid-template-columns:1fr}}"""
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:1fr;gap:14px;max-width:1160px;margin:12px auto 20px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING,.COMPLETED{color:var(--green);font-weight:700}.PENDING,.SUBMITTED{color:var(--amber);font-weight:700}.FAILED,.TIMEOUT,.CANCELLED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.kpis,.chapter-grid{grid-template-columns:1fr 1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.kpis,.chapter-grid{grid-template-columns:1fr}}"""
     cols = [
         ("source_group", "Source group", "text"),
         ("cluster", "Cluster", "text"),
@@ -1894,6 +1898,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         ("model_name", "Model", "text"),
         ("mode", "Mode", "text"),
         ("method_display", "Method", "text"),
+        ("enforce_eager", "enforce_eager", "text"),
         ("max_steps", "Max steps", "int"),
         ("max_new_tokens", "Max OSL", "int"),
         ("slurm_state", "SLURM", "text"),
@@ -1917,6 +1922,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         ("model_name", "Model", "text"),
         ("mode", "Mode", "text"),
         ("method_display", "Method", "text"),
+        ("enforce_eager", "enforce_eager", "text"),
         ("nodes_x_gpus", "Nodes x GPUs", "text"),
         ("segment", "segment", "int"),
         ("slurm_state", "SLURM", "text"),
@@ -1941,8 +1947,8 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             f"<title>Lyris NeMo-RL SpecDec Status 2026-06-21</title><style>{css}</style></head><body>",
             "<header><div class=\"hero\"><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
             f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main live rows plus Qwen3-30B-A3B/Qwen3-32B Lyris and OCI-HSG artifacts.</div>",
-            "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#fresh\">Fresh Live K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
-            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
+            "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#fresh\">Fresh enforce_eager=true K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
+            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">enforce_eager shown per row</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
             "<div class=\"kpis\">",
             f"<div class=\"kpi\"><b>{running}</b><span>running jobs</span></div>",
             f"<div class=\"kpi\"><b>{pending}</b><span>pending jobs</span></div>",
@@ -1953,13 +1959,13 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<section id=\"overview\"><h2>Overview</h2>",
             f"<div class=\"callout\"><strong>Key finding.</strong> {esc(key)}<br><strong>Fresh update.</strong> {esc(fresh_key)}</div>",
             "<div class=\"chapter-grid\">",
-            chapter_card("Fresh Live K Sweep", "Newest Lyris Eagle-3 K5/K7/K9 state and partial speedups.", "#fresh"),
+            chapter_card("Fresh enforce_eager=true K Sweep", "Newest Lyris Eagle-3 K5/K7/K9 state and parsed speedups.", "#fresh"),
             chapter_card("Matched Charts", "Generation/E2E throughput and step-time speedups by model.", "#charts"),
             chapter_card("Step20 Snapshot", "All current and historical step20 rows with acceptance metrics.", "#step20"),
             chapter_card("Raw Evidence", "CSV, log path, and source provenance links for reproducibility.", "#sources"),
             "</div></section>",
-            "<section id=\"fresh\"><h2>Fresh Live K Sweep</h2>",
-            "<p class=\"note\">Newest Lyris run set for Eagle-3 K5/K7/K9 on performance recipes. Sync rows with completed steps are baseline-relative against the matched 2026-06-22 OSL4096 baseline rows. Async rows are listed for status but should not be treated as clean performance data while EngineCore errors are present.</p><div class=\"table-wrap\">",
+            "<section id=\"fresh\"><h2>Fresh enforce_eager=true K Sweep</h2>",
+            "<p class=\"note\">Newest Lyris run set for Eagle-3 K5/K7/K9 on performance recipes with <code>policy.generation.vllm_cfg.enforce_eager=true</code>, prefix caching disabled, and MoE backend=triton. Sync rows with completed steps are baseline-relative against the matched 2026-06-22 OSL4096 baseline rows. Async timeout rows are listed for status but should not be treated as clean performance data while EngineCore errors are present.</p><div class=\"table-wrap\">",
             table(live_k, live_cols),
             "</div></section>",
             "<section id=\"methodology\"><h2>Evaluation Methodology</h2><ul>",
@@ -1967,6 +1973,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<li>Matched comparisons keep model, mode, max OSL, temperature=1.0, top_p=1.0, and cluster/source setup fixed.</li>",
             "<li>SpecDec rows add only the generation speculative decoding method, drafter/checkpoint, and <code>num_speculative_tokens</code>; baseline rows use the same recipe with SpecDec disabled.</li>",
             "<li>Fresh 2026-06-22 Qwen3-30B-A3B/Qwen3-32B Lyris rows use latest-main+PR2879, recipe OSL4096, and step2-20 averages where available.</li>",
+            "<li>The fresh K-sweep section is explicitly <code>enforce_eager=true</code>; the pending W&B matrix rows are separately labeled <code>enforce_eager=false</code> when present.</li>",
             "</ul></section>",
             f"<section><h2>Metric Notes</h2><p>{esc(fresh_key)}</p><p class=\"note\">Acceptance metrics are shown only when the NeMo-RL driver log includes vLLM SpecDec metrics; Qwen3-235B current driver snapshots mostly expose timing/throughput, while historical Qwen30/Qwen32 rows include acceptance when available.</p></section>",
             '<div id="charts">',
