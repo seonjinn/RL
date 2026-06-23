@@ -225,6 +225,41 @@ def load_nemorl_rows() -> pd.DataFrame:
                 }
             )
 
+    combined = load_csv(DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv")
+    if not combined.empty:
+        fresh_ids = {str(job_id) for job_id in range(2177867, 2177879)}
+        fresh = combined[combined["job_id"].astype(str).isin(fresh_ids)].copy()
+        fresh = fresh[fresh["mode"].astype(str).eq("sync")]
+        for column in [
+            "gen_tps_speedup",
+            "generation_time_speedup",
+            "e2e_tps_speedup",
+            "e2e_step_time_speedup",
+            "generation_worker_tokens_per_sec_per_gpu_mean",
+            "vllm_token_acceptance_pct",
+            "vllm_acceptance_length_mean_weighted_mean",
+        ]:
+            fresh[column] = pd.to_numeric(fresh[column], errors="coerce")
+        for _, row in fresh.dropna(subset=["gen_tps_speedup"]).iterrows():
+            rows.append(
+                {
+                    "source_file": "docs/lyris_nemorl_perfcfg_specdec_combined_latest.csv",
+                    "job_id": row["job_id"],
+                    "model": row["model_name"],
+                    "mode": row["mode"],
+                    "method": row["method_k"],
+                    "completed": row["completed_last_step"],
+                    "max_osl": row["max_new_tokens"],
+                    "gen_tps": row["generation_worker_tokens_per_sec_per_gpu_mean"],
+                    "gen_tps_speedup": row["gen_tps_speedup"],
+                    "gen_time_speedup": row["generation_time_speedup"],
+                    "e2e_tps_speedup": row["e2e_tps_speedup"],
+                    "e2e_step_speedup": row["e2e_step_time_speedup"],
+                    "acceptance_pct": row.get("vllm_token_acceptance_pct", math.nan),
+                    "mean_accept_len": row.get("vllm_acceptance_length_mean_weighted_mean", math.nan),
+                }
+            )
+
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows)
@@ -252,6 +287,8 @@ def display_method(value: object) -> str:
         "pard-2": "PARD-2",
         "eagle3 k3": "Eagle-3 K3",
         "eagle3 k5": "Eagle-3 K5",
+        "eagle3 k7": "Eagle-3 K7",
+        "eagle3 k9": "Eagle-3 K9",
         "pard k5": "PARD K5",
         "pard k16": "PARD K16",
         "pard2 k16": "PARD-2 K16",
@@ -606,6 +643,8 @@ def build() -> None:
         DOCS / "vllm_standalone_added_results_latest.csv",
         DOCS / "vllm_standalone_all_batches_combined_20260619.csv",
         DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv",
+        DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv",
+        DOCS / "lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv",
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv",
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
@@ -756,6 +795,8 @@ def build() -> None:
       <a href=\"data/vllm_standalone_added_results_latest.csv\">vLLM added CSV</a>
       <a href=\"data/vllm_standalone_all_batches_combined_20260619.csv\">vLLM all-batch CSV</a>
       <a href=\"data/lyris_qwen235b_pr2879_live_enriched_20260621.csv\">Qwen235B NeMo-RL CSV</a>
+      <a href=\"data/lyris_nemorl_perfcfg_specdec_combined_latest.csv\">Combined NeMo-RL latest CSV</a>
+      <a href=\"data/lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv\">Fresh Eagle-3 K sweep CSV</a>
       <a href=\"data/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv\">Qwen30/32 NeMo-RL 2026-06-22 CSV</a>
       <a href=\"data/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv\">Qwen30/32 NeMo-RL 2026-06-22 status</a>
       <a href=\"data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv\">Qwen30/32 NeMo-RL CSV</a>
