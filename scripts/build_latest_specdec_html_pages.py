@@ -71,6 +71,7 @@ NEMORL_LIVE_K_SWEEP_CHECKED_AT = "2026-06-22 15:52 PDT"
 NEMORL_COMBINED_OUT = DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv"
 NEMORL_HTML = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_latest.html"
 NEMORL_HTML_DATED = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_20260622.html"
+WANDB_ENTITY = "nvidia"
 
 NEMORL_LIVE_K_SWEEP_META = [
     {
@@ -970,6 +971,16 @@ def link_html(value: object, label: str = "W&B") -> str:
     return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
 
 
+def wandb_link_html(row: pd.Series) -> str:
+    direct_url = normalize_wandb_url(row.get("wandb_url", ""))
+    if direct_url:
+        return link_html(direct_url, "run")
+    project = first_text(row, "wandb_project")
+    if not project:
+        return ""
+    return link_html(f"https://wandb.ai/{WANDB_ENTITY}/{project}", "project")
+
+
 def clean_float(value: object) -> float:
     try:
         if value is None or pd.isna(value):
@@ -1245,7 +1256,7 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
             elif kind == "temp":
                 text = "n/a" if pd.isna(value) else f"{float(value):.1f}"
             elif kind == "link":
-                text = link_html(value)
+                text = wandb_link_html(row) if key == "wandb_url" else link_html(value)
             else:
                 text = esc(value)
             cells.append(f'<td class="{cls}">{text}</td>' if cls else f"<td>{text}</td>")
