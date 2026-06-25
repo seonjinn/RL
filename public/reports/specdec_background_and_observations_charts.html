@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Speculative Decoding Background and Current Observations</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --text: #1d2430;
+      --muted: #5c6675;
+      --line: #d9dee7;
+      --blue: #2f6fdd;
+      --teal: #138b7e;
+      --green: #2b8a3e;
+      --red: #c0392b;
+      --orange: #c77700;
+      --purple: #7357d8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121418;
+        --panel: #1c2027;
+        --text: #e9edf3;
+        --muted: #a7b0bf;
+        --line: #333946;
+        --blue: #7aa7ff;
+        --teal: #4fd2bf;
+        --green: #69c779;
+        --red: #ff8178;
+        --orange: #ffbd5f;
+        --purple: #aa99ff;
+      }
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.2;
+    }
+    h1 {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 22px;
+      margin-bottom: 14px;
+    }
+    h3 {
+      font-size: 16px;
+      margin: 18px 0 8px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    code {
+      background: color-mix(in srgb, var(--line), transparent 50%);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 22px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .full {
+      grid-column: 1 / -1;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .takeaways {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 22px 0;
+    }
+    .takeaway {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .takeaway strong {
+      display: block;
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 10px 0 14px;
+    }
+    .meta {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      background: color-mix(in srgb, var(--panel), var(--line) 18%);
+    }
+    .meta strong {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .chart {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr) 74px;
+      gap: 10px;
+      align-items: center;
+      font-size: 13px;
+    }
+    .bar-track {
+      height: 18px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--line), transparent 55%);
+    }
+    .bar {
+      height: 100%;
+      min-width: 2px;
+      background: var(--blue);
+    }
+    .bar.teal { background: var(--teal); }
+    .bar.green { background: var(--green); }
+    .bar.red { background: var(--red); }
+    .bar.orange { background: var(--orange); }
+    .bar.purple { background: var(--purple); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .key {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      background: var(--blue);
+    }
+    .swatch.teal { background: var(--teal); }
+    .swatch.green { background: var(--green); }
+    .swatch.red { background: var(--red); }
+    .swatch.orange { background: var(--orange); }
+    .swatch.purple { background: var(--purple); }
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      overflow: visible;
+    }
+    .axis, .gridline {
+      stroke: var(--line);
+      stroke-width: 1;
+    }
+    .axis-label, .point-label {
+      fill: var(--muted);
+      font-size: 11px;
+    }
+    .line-blue { stroke: var(--blue); fill: none; stroke-width: 2.5; }
+    .line-teal { stroke: var(--teal); fill: none; stroke-width: 2.5; }
+    .line-purple { stroke: var(--purple); fill: none; stroke-width: 2.5; }
+    .dot-blue { fill: var(--blue); }
+    .dot-teal { fill: var(--teal); }
+    .dot-purple { fill: var(--purple); }
+    .diagram-title {
+      fill: var(--text);
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .diagram-text {
+      fill: var(--text);
+      font-size: 12px;
+    }
+    .diagram-muted {
+      fill: var(--muted);
+      font-size: 11px;
+    }
+    .diagram-box {
+      fill: var(--panel);
+      stroke: var(--line);
+      stroke-width: 1.2;
+      rx: 8;
+    }
+    .diagram-classic {
+      stroke: var(--orange);
+    }
+    .diagram-eagle {
+      stroke: var(--teal);
+    }
+    .diagram-arrow {
+      stroke: var(--muted);
+      stroke-width: 1.6;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+    @media (max-width: 860px) {
+      .grid, .takeaways {
+        grid-template-columns: 1fr;
+      }
+      .bar-row {
+        grid-template-columns: 96px minmax(0, 1fr) 62px;
+      }
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Speculative Decoding: Background, Speedup Drivers, and Current Results</h1>
+  <p class="subtitle">Draft for Google Docs/team sharing. Updated June 2, 2026. Primary reference: arXiv 2601.11580v2 execution-time breakdown framing.</p>
+
+  <section class="takeaways">
+    <div class="takeaway">
+      <strong>1.366x</strong>
+      <span class="muted">Best confirmed Qwen3-30B-A3B NeMo-RL generation speedup, K=1 token-pressure, 57.40% acceptance.</span>
+    </div>
+    <div class="takeaway">
+      <strong>0.986x</strong>
+      <span class="muted">Qwen3-235B PublicHF always-on generation speedup despite 65.71% acceptance.</span>
+    </div>
+    <div class="takeaway">
+      <strong>2.145x</strong>
+      <span class="muted">Qwen3-8B vLLM standalone K=3 speedup at batch size 32.</span>
+    </div>
+    <div class="takeaway">
+      <strong>0.0137%</strong>
+      <span class="muted">Scheduler enabled ratio for 30B request<=8 long-tail gate; too conservative for large average speedup.</span>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card full">
+      <h2>Core Message</h2>
+      <p>Acceptance rate is necessary, but it is not sufficient. SpecDec helps only when accepted draft tokens save more target-model work than the added drafter, verification, rejection sampling, scheduler, cache, and CUDA Graph overhead. This is why the Figure 4-style breakdown in arXiv 2601.11580v2 is the right lens: separate drafting, verification, rejection sampling, and other vLLM overheads before claiming a speedup.</p>
+    </div>
+
+    <div class="card full">
+      <h2>How EAGLE-3 Differs From Classic SpecDec</h2>
+      <p class="muted">Classic speculative decoding uses an independent small language model. EAGLE-3 is a hidden-state-conditioned drafter that is trained from target-model representations, so it is more tightly coupled to the verifier.</p>
+      <svg viewBox="0 0 940 420" role="img" aria-label="Classic speculative decoding versus EAGLE-3 overview">
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+            <path d="M0,0 L8,3.5 L0,7 Z" fill="currentColor"></path>
+          </marker>
+        </defs>
+        <text class="diagram-title" x="30" y="34">Classic Draft LM</text>
+        <text class="diagram-title" x="30" y="222">EAGLE-3 Drafter</text>
+
+        <rect class="diagram-box diagram-classic" x="30" y="58" width="145" height="76"></rect>
+        <text class="diagram-text" x="48" y="88">Token prefix</text>
+        <text class="diagram-muted" x="48" y="110">same context as target</text>
+
+        <path class="diagram-arrow" d="M175 96 H222"></path>
+        <rect class="diagram-box diagram-classic" x="225" y="58" width="175" height="76"></rect>
+        <text class="diagram-text" x="244" y="83">Independent small LM</text>
+        <text class="diagram-muted" x="244" y="105">predicts next token IDs</text>
+        <text class="diagram-muted" x="244" y="121">from tokens only</text>
+
+        <path class="diagram-arrow" d="M400 96 H447"></path>
+        <rect class="diagram-box diagram-classic" x="450" y="58" width="160" height="76"></rect>
+        <text class="diagram-text" x="470" y="88">Draft tokens</text>
+        <text class="diagram-muted" x="470" y="110">K proposals</text>
+
+        <path class="diagram-arrow" d="M610 96 H657"></path>
+        <rect class="diagram-box diagram-classic" x="660" y="58" width="170" height="76"></rect>
+        <text class="diagram-text" x="680" y="83">Target verifier</text>
+        <text class="diagram-muted" x="680" y="105">parallel verification</text>
+        <text class="diagram-muted" x="680" y="121">accept or reject</text>
+
+        <rect class="diagram-box diagram-eagle" x="30" y="246" width="145" height="76"></rect>
+        <text class="diagram-text" x="48" y="276">Token prefix</text>
+        <text class="diagram-muted" x="48" y="298">same context as target</text>
+
+        <path class="diagram-arrow" d="M175 284 H222"></path>
+        <rect class="diagram-box diagram-eagle" x="225" y="246" width="175" height="76"></rect>
+        <text class="diagram-text" x="244" y="271">Target hidden states</text>
+        <text class="diagram-muted" x="244" y="293">selected target layers</text>
+        <text class="diagram-muted" x="244" y="309">example: 1, 46, 90</text>
+
+        <path class="diagram-arrow" d="M400 284 H447"></path>
+        <rect class="diagram-box diagram-eagle" x="450" y="246" width="160" height="76"></rect>
+        <text class="diagram-text" x="470" y="271">EAGLE-3 drafter</text>
+        <text class="diagram-muted" x="470" y="293">uses target features</text>
+        <text class="diagram-muted" x="470" y="309">then proposes tokens</text>
+
+        <path class="diagram-arrow" d="M610 284 H657"></path>
+        <rect class="diagram-box diagram-eagle" x="660" y="246" width="170" height="76"></rect>
+        <text class="diagram-text" x="680" y="271">Target verifier</text>
+        <text class="diagram-muted" x="680" y="293">same correctness path</text>
+        <text class="diagram-muted" x="680" y="309">accept or reject</text>
+
+        <text class="diagram-muted" x="52" y="162">Simple plug-in drafter, but the proposal distribution is learned from token prefixes only.</text>
+        <text class="diagram-muted" x="52" y="350">More target-aware and parameter-efficient, but it needs target hidden-state extraction and distribution-matched training.</text>
+      </svg>
+      <table>
+        <thead>
+          <tr><th>Approach</th><th>Drafter input</th><th>Strength</th><th>Main risk in RL</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Classic draft LM</td><td>Token prefix only</td><td>Easy to attach and reason about.</td><td>Needs a strong small LM; can drift from the target policy.</td></tr>
+          <tr><td>EAGLE / EAGLE-3</td><td>Target hidden-state features plus tokens</td><td>More aligned with the target for a small drafter.</td><td>Needs hidden-state data and can still become stale during online RL.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Qwen3-8B vLLM Standalone Speedup</h2>
+      <p class="muted">Static-batch generation only. Not NeMo-RL E2E.</p>
+      <div class="meta-grid">
+        <div class="meta"><strong>Target / drafter</strong>Qwen/Qwen3-8B + RedHatAI/Qwen3-8B-speculator.eagle3</div>
+        <div class="meta"><strong>vLLM / container</strong>vLLM v0.20.2, standalone LLM.generate</div>
+        <div class="meta"><strong>Shape</strong>ISL=1000, OSL=512, batch sizes 1/2/4/8/16/32</div>
+        <div class="meta"><strong>Parallelism</strong>TP=1, PP=1, 1 GPU used, 1 node allocated with 4 GPUs</div>
+        <div class="meta"><strong>Servers</strong>baseline nvl72129-T05, K=1 nvl72160-T17, K=3 nvl72103-T17</div>
+        <div class="meta"><strong>Runtime knobs</strong>CUDA Graph on, enforce_eager=false, profiler off, custom all-reduce disabled</div>
+      </div>
+      <div class="legend">
+        <span class="key"><span class="swatch"></span>K=1</span>
+        <span class="key"><span class="swatch teal"></span>K=3</span>
+      </div>
+      <div class="chart">
+        <div class="bar-row"><span>bs=1 K=1</span><div class="bar-track"><div class="bar" style="width:45.8%"></div></div><span>0.982x</span></div>
+        <div class="bar-row"><span>bs=1 K=3</span><div class="bar-track"><div class="bar teal" style="width:82.4%"></div></div><span>1.768x</span></div>
+        <div class="bar-row"><span>bs=2 K=1</span><div class="bar-track"><div class="bar" style="width:31.5%"></div></div><span>0.676x</span></div>
+        <div class="bar-row"><span>bs=2 K=3</span><div class="bar-track"><div class="bar teal" style="width:42.2%"></div></div><span>0.906x</span></div>
+        <div class="bar-row"><span>bs=4 K=1</span><div class="bar-track"><div class="bar" style="width:52.3%"></div></div><span>1.122x</span></div>
+        <div class="bar-row"><span>bs=4 K=3</span><div class="bar-track"><div class="bar teal" style="width:93.5%"></div></div><span>2.006x</span></div>
+        <div class="bar-row"><span>bs=8 K=1</span><div class="bar-track"><div class="bar" style="width:49.5%"></div></div><span>1.062x</span></div>
+        <div class="bar-row"><span>bs=8 K=3</span><div class="bar-track"><div class="bar teal" style="width:87.7%"></div></div><span>1.882x</span></div>
+        <div class="bar-row"><span>bs=16 K=1</span><div class="bar-track"><div class="bar" style="width:54.5%"></div></div><span>1.169x</span></div>
+        <div class="bar-row"><span>bs=16 K=3</span><div class="bar-track"><div class="bar teal" style="width:92.5%"></div></div><span>1.984x</span></div>
+        <div class="bar-row"><span>bs=32 K=1</span><div class="bar-track"><div class="bar" style="width:62.1%"></div></div><span>1.331x</span></div>
+        <div class="bar-row"><span>bs=32 K=3</span><div class="bar-track"><div class="bar teal" style="width:100%"></div></div><span>2.145x</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Qwen3-8B NeMo-RL Status</h2>
+      <p class="muted">The standalone K=3 result is strong, but NeMo-RL has not produced rollout throughput yet.</p>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Job</th><th>Status</th><th>Reason / next action</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Baseline r2</td><td>3119388</td><td>Failed before Step 1</td><td>Megatron setup hit <code>KeyError: moe_enable_deepep</code>.</td></tr>
+          <tr><td>SpecDec K=3 r2</td><td>3119389</td><td>Failed before Step 1</td><td>Same config mismatch; no acceptance or throughput metric.</td></tr>
+          <tr><td>Baseline r3</td><td>3120873</td><td>Running</td><td>Launcher now passes explicit MoE dispatcher compatibility overrides.</td></tr>
+          <tr><td>SpecDec K=3 r3</td><td>3120874</td><td>Running</td><td>Request-gated long-tail SpecDec with the same compatibility fix.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Qwen3-235B vLLM Standalone K=1</h2>
+      <p class="muted">Generation only. CUDA Graph on, custom all-reduce disabled.</p>
+      <div class="meta-grid">
+        <div class="meta"><strong>Target / drafter</strong>Qwen/Qwen3-235B-A22B + nvidia/Qwen3-235B-A22B-Eagle3</div>
+        <div class="meta"><strong>vLLM / container</strong>vLLM v0.17.0, standalone LLM.generate</div>
+        <div class="meta"><strong>Shape</strong>ISL=1000, OSL=512, batch sizes 1/2/4/8/16/32</div>
+        <div class="meta"><strong>Parallelism</strong>TP=4, PP=1, 4 GPUs, 1 node</div>
+        <div class="meta"><strong>Servers</strong>baseline nvl72142-T07, SpecDec nvl72087-T18</div>
+        <div class="meta"><strong>Runtime knobs</strong>CUDA Graph on, enforce_eager=false, profiler off, custom all-reduce disabled</div>
+      </div>
+      <div class="chart">
+        <div class="bar-row"><span>bs=1</span><div class="bar-track"><div class="bar green" style="width:93.7%"></div></div><span>1.194x</span></div>
+        <div class="bar-row"><span>bs=2</span><div class="bar-track"><div class="bar green" style="width:94.9%"></div></div><span>1.210x</span></div>
+        <div class="bar-row"><span>bs=4</span><div class="bar-track"><div class="bar green" style="width:88.2%"></div></div><span>1.125x</span></div>
+        <div class="bar-row"><span>bs=8</span><div class="bar-track"><div class="bar green" style="width:92.6%"></div></div><span>1.181x</span></div>
+        <div class="bar-row"><span>bs=16</span><div class="bar-track"><div class="bar green" style="width:95.7%"></div></div><span>1.220x</span></div>
+        <div class="bar-row"><span>bs=32</span><div class="bar-track"><div class="bar green" style="width:100%"></div></div><span>1.275x</span></div>
+      </div>
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-235B PublicHF Decode-Heavy OSL=10000</h2>
+      <p class="muted">vLLM standalone generation-only sweep. Same public HF target/drafter as the short-decode boundary run, but ISL=1000 and OSL=10000.</p>
+      <div class="meta-grid">
+        <div class="meta"><strong>Target / drafter</strong>Qwen/Qwen3-235B-A22B + nvidia/Qwen3-235B-A22B-Eagle3</div>
+        <div class="meta"><strong>vLLM / container</strong>vLLM v0.17.0, standalone LLM.generate</div>
+        <div class="meta"><strong>Shape</strong>ISL=1000, OSL=10000, batch sizes 1/2/4/8/16/32</div>
+        <div class="meta"><strong>Parallelism</strong>TP=4, PP=1, 4 GPUs, 1 node</div>
+        <div class="meta"><strong>Jobs</strong>baseline 3140545/3140571, K=1 3140546/3140574</div>
+        <div class="meta"><strong>Runtime knobs</strong>CUDA Graph on, enforce_eager=false, profiler off, custom all-reduce disabled</div>
+      </div>
+      <p class="muted">Result: K=1 is slower at every tested batch size despite high acceptance. This is direct evidence that acceptance alone is not enough when EAGLE overhead dominates the saved verifier work.</p>
+      <img src="qwen3_235b_vllm_decodeheavy10k_speedup_acceptance.png" alt="Qwen3-235B decode-heavy K=1 speedup and acceptance" style="width:100%; max-width:960px; display:block; margin:16px auto 0;" />
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-235B Thinking-2507 In-House 500K K=1</h2>
+      <p class="muted">vLLM standalone short-decode sweep. This is the in-house 500K Eagle3 drafter, not PublicHF. It is generation-only, not NeMo-RL E2E.</p>
+      <div class="meta-grid">
+        <div class="meta"><strong>Target / drafter</strong>Qwen/Qwen3-235B-A22B-Thinking-2507 + in-house mixed-math 500K Eagle3 checkpoint</div>
+        <div class="meta"><strong>vLLM / container</strong>vLLM v0.17.0, standalone LLM.generate</div>
+        <div class="meta"><strong>Shape</strong>ISL=1000, OSL=512, batch sizes 1/2/4/8/16/32</div>
+        <div class="meta"><strong>Parallelism</strong>TP=4, PP=1, 4 GPUs, 1 node</div>
+        <div class="meta"><strong>Servers</strong>baseline nvl72114-T16, SpecDec nvl72171-T07</div>
+        <div class="meta"><strong>Runtime knobs</strong>CUDA Graph on, enforce_eager=false, profiler off, custom all-reduce disabled</div>
+      </div>
+      <div class="chart">
+        <div class="bar-row"><span>bs=1</span><div class="bar-track"><div class="bar green" style="width:83.3%"></div></div><span>1.176x</span></div>
+        <div class="bar-row"><span>bs=2</span><div class="bar-track"><div class="bar green" style="width:78.6%"></div></div><span>1.109x</span></div>
+        <div class="bar-row"><span>bs=4</span><div class="bar-track"><div class="bar green" style="width:82.7%"></div></div><span>1.167x</span></div>
+        <div class="bar-row"><span>bs=8</span><div class="bar-track"><div class="bar green" style="width:84.9%"></div></div><span>1.199x</span></div>
+        <div class="bar-row"><span>bs=16</span><div class="bar-track"><div class="bar green" style="width:85.3%"></div></div><span>1.204x</span></div>
+        <div class="bar-row"><span>bs=32</span><div class="bar-track"><div class="bar green" style="width:100%"></div></div><span>1.412x</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Batch size</th><th>Baseline tok/s/GPU</th><th>SpecDec tok/s/GPU</th><th>Speedup</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>27.68</td><td>32.56</td><td>1.176x</td></tr>
+          <tr><td>2</td><td>55.50</td><td>61.56</td><td>1.109x</td></tr>
+          <tr><td>4</td><td>106.30</td><td>124.06</td><td>1.167x</td></tr>
+          <tr><td>8</td><td>204.39</td><td>245.13</td><td>1.199x</td></tr>
+          <tr><td>16</td><td>378.33</td><td>455.70</td><td>1.204x</td></tr>
+          <tr><td>32</td><td>609.62</td><td>860.76</td><td>1.412x</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>External Papers Versus Our Measurements</h2>
+      <p class="muted">Same x-axis, different scopes. Paper numbers often report inference, rollout-only, or smaller-model E2E results; our key target is NeMo-RL full GRPO behavior.</p>
+      <div class="chart">
+        <div class="bar-row"><span>FastGRPO E2E</span><div class="bar-track"><div class="bar purple" style="width:60.0%"></div></div><span>2.72x</span></div>
+        <div class="bar-row"><span>SPEC-RL rollout</span><div class="bar-track"><div class="bar purple" style="width:51.0%"></div></div><span>2.31x</span></div>
+        <div class="bar-row"><span>ReSpec avg E2E</span><div class="bar-track"><div class="bar purple" style="width:40.6%"></div></div><span>1.84x</span></div>
+        <div class="bar-row"><span>NeMo SD 8B gen</span><div class="bar-track"><div class="bar purple" style="width:39.7%"></div></div><span>1.80x</span></div>
+        <div class="bar-row"><span>DREAM-R 235B</span><div class="bar-track"><div class="bar purple" style="width:51.0%"></div></div><span>2.31x</span></div>
+        <div class="bar-row"><span>TLT E2E</span><div class="bar-track"><div class="bar purple" style="width:46.4%"></div></div><span>2.10x</span></div>
+        <div class="bar-row"><span>Learn-to-Draft</span><div class="bar-track"><div class="bar purple" style="width:95.4%"></div></div><span>4.32x</span></div>
+        <div class="bar-row"><span>Our 30B gen</span><div class="bar-track"><div class="bar green" style="width:30.2%"></div></div><span>1.366x</span></div>
+        <div class="bar-row"><span>Our 235B gen</span><div class="bar-track"><div class="bar red" style="width:21.8%"></div></div><span>0.986x</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Result</th><th>Scope</th><th>Scale</th><th>Reason it is not directly equivalent</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>FastGRPO 2.35x-2.72x</td><td>E2E GRPO</td><td>7B-8B</td><td>Online draft learning and smaller dense targets; accepted length is much stronger than our K=1 token acceptance.</td></tr>
+          <tr><td>DREAM-R up to 2.31x on Q235B</td><td>Inference latency</td><td>Qwen3-VL-235B verifier</td><td>Not RL training. Uses K=4 speculative reasoning, so the acceptance metric differs from NeMo-RL token acceptance.</td></tr>
+          <tr><td>TLT around 1.7x-2.1x E2E</td><td>GRPO with long-tail activation</td><td>Up to Llama-70B</td><td>SpecDec is enabled selectively in underfilled phases. Our 235B PublicHF result was always-on and lost throughput.</td></tr>
+          <tr><td>Our 30B 1.366x</td><td>NeMo-RL generation</td><td>Qwen3-30B-A3B</td><td>K=1 offline drafter; E2E is smaller because logprobs/training/reward remain in the step.</td></tr>
+          <tr><td>Our 235B 0.986x</td><td>NeMo-RL generation</td><td>Qwen3-235B Thinking-2507</td><td>High acceptance but always-on. This is the clearest evidence that load-aware gating is required.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>NeMo-RL Generation Speedup Summary</h2>
+      <p class="muted">Full GRPO or rollout measurements. These are not equivalent to standalone vLLM throughput.</p>
+      <div class="chart">
+        <div class="bar-row"><span>30B baseline</span><div class="bar-track"><div class="bar" style="width:73.2%"></div></div><span>1.000x</span></div>
+        <div class="bar-row"><span>30B best K=1</span><div class="bar-track"><div class="bar green" style="width:100%"></div></div><span>1.366x</span></div>
+        <div class="bar-row"><span>30B req<=8</span><div class="bar-track"><div class="bar orange" style="width:76.9%"></div></div><span>1.051x</span></div>
+        <div class="bar-row"><span>30B alltoall</span><div class="bar-track"><div class="bar teal" style="width:81.8%"></div></div><span>1.117x</span></div>
+        <div class="bar-row"><span>235B always-on</span><div class="bar-track"><div class="bar red" style="width:72.2%"></div></div><span>0.986x</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Generation speedup</th><th>Acceptance</th><th>Interpretation</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>30B best K=1 token-pressure, job 3060379</td><td>1.366x</td><td>57.40%</td><td>Best confirmed NeMo-RL generation result.</td></tr>
+          <tr><td>30B request<=8 gate, job 3116841</td><td>1.051x</td><td>54.67%</td><td>Gate works, but enabled ratio is too small.</td></tr>
+          <tr><td>30B alltoall full-shape</td><td>1.117x</td><td>57.28%</td><td>Generation improves, E2E is flat because non-generation work dominates.</td></tr>
+          <tr><td>235B PublicHF always-on, job 3084952</td><td>0.986x</td><td>65.71%</td><td>High acceptance but wrong load regime; always-on SpecDec loses.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>235B In-House 500K Decode-Heavy Sweeps</h2>
+      <p class="muted">Short-decode standalone generation is positive for the in-house 500K drafter. Decode-heavy standalone generation is negative, including the real OpenMath-prompt pair.</p>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Job</th><th>Target / drafter</th><th>Shape</th><th>vLLM / parallelism</th><th>Server</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Synthetic decode-heavy baseline</td><td>3119864</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>nvl72150-T13</td><td>Completed. Dummy prompts only.</td></tr>
+          <tr><td>Synthetic decode-heavy in-house 500K K=1</td><td>3119827</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72082-T17</td><td>Completed. Negative, 0.656x-0.690x; dummy prompts only.</td></tr>
+          <tr><td>Synthetic decode-heavy 20k baseline</td><td>3120128</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=32768</td><td>nvl72004-T01</td><td>Completed. 18.77/37.03/73.37 tok/s/GPU.</td></tr>
+          <tr><td>Synthetic decode-heavy 20k in-house 500K K=1</td><td>3120648</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72155-T08</td><td>Completed. Negative, 0.488x/0.497x/0.502x; dummy prompts only.</td></tr>
+          <tr><td>OpenMath decode-heavy baseline</td><td>3120705</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>nvl72127-T15</td><td>Completed. 23.05/42.41/75.35 tok/s/GPU.</td></tr>
+          <tr><td>OpenMath decode-heavy in-house 500K K=1</td><td>3120704</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72078-T02</td><td>Completed. Negative, 0.486x/0.578x/0.606x.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>Acceptance Rate Projection</h2>
+      <p>K=1 ideal upper bound is approximately <code>1 + acceptance</code>. Our best 30B K=1 run gives an overhead efficiency of about 0.64, so a practical same-regime estimate is <code>1 + 0.64 * acceptance</code>.</p>
+      <div class="legend">
+        <span class="key"><span class="swatch"></span>Ideal K=1</span>
+        <span class="key"><span class="swatch teal"></span>30B-calibrated K=1</span>
+        <span class="key"><span class="swatch purple"></span>Ideal K=3</span>
+      </div>
+      <svg viewBox="0 0 900 330" role="img" aria-label="Acceptance rate to projected speedup chart">
+        <line class="axis" x1="60" y1="280" x2="850" y2="280"></line>
+        <line class="axis" x1="60" y1="40" x2="60" y2="280"></line>
+        <line class="gridline" x1="60" y1="240" x2="850" y2="240"></line>
+        <line class="gridline" x1="60" y1="200" x2="850" y2="200"></line>
+        <line class="gridline" x1="60" y1="160" x2="850" y2="160"></line>
+        <line class="gridline" x1="60" y1="120" x2="850" y2="120"></line>
+        <line class="gridline" x1="60" y1="80" x2="850" y2="80"></line>
+        <text class="axis-label" x="22" y="284">1.0x</text>
+        <text class="axis-label" x="22" y="244">1.5x</text>
+        <text class="axis-label" x="22" y="204">2.0x</text>
+        <text class="axis-label" x="22" y="164">2.5x</text>
+        <text class="axis-label" x="22" y="124">3.0x</text>
+        <text class="axis-label" x="22" y="84">3.5x</text>
+        <text class="axis-label" x="70" y="305">30%</text>
+        <text class="axis-label" x="195" y="305">40%</text>
+        <text class="axis-label" x="320" y="305">50%</text>
+        <text class="axis-label" x="445" y="305">60%</text>
+        <text class="axis-label" x="570" y="305">70%</text>
+        <text class="axis-label" x="695" y="305">80%</text>
+        <text class="axis-label" x="820" y="305">90%</text>
+        <polyline class="line-blue" points="80,256 205,248 330,240 455,232 580,224 705,216 830,208"></polyline>
+        <polyline class="line-teal" points="80,264.7 205,259.6 330,254.5 455,249.4 580,244.3 705,239.2 830,234.1"></polyline>
+        <polyline class="line-purple" points="80,246.6 205,230.1 330,210.0 455,193.9 580,157.4 705,121.0 830,84.9"></polyline>
+        <circle class="dot-blue" cx="330" cy="240" r="4"></circle>
+        <circle class="dot-teal" cx="401" cy="251.6" r="5"></circle>
+        <text class="point-label" x="410" y="248">30B observed: 57.40%, 1.366x</text>
+        <circle class="dot-purple" cx="393" cy="198.5" r="4"></circle>
+        <text class="point-label" x="402" y="195">Ideal K=3 crosses 2x near 55%</text>
+      </svg>
+      <table>
+        <thead>
+          <tr><th>Acceptance</th><th>Ideal K=1</th><th>30B-calibrated K=1</th><th>Ideal K=2</th><th>Ideal K=3</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>40%</td><td>1.400x</td><td>1.255x</td><td>1.560x</td><td>1.624x</td></tr>
+          <tr><td>50%</td><td>1.500x</td><td>1.319x</td><td>1.750x</td><td>1.875x</td></tr>
+          <tr><td>57.40%</td><td>1.574x</td><td>1.366x</td><td>1.904x</td><td>2.093x</td></tr>
+          <tr><td>60%</td><td>1.600x</td><td>1.383x</td><td>1.960x</td><td>2.176x</td></tr>
+          <tr><td>70%</td><td>1.700x</td><td>1.447x</td><td>2.190x</td><td>2.533x</td></tr>
+          <tr><td>80%</td><td>1.800x</td><td>1.511x</td><td>2.440x</td><td>2.952x</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">The K=2/K=3 columns are ideal upper bounds with uniform per-position acceptance. Real K=3 requires high acceptance on later positions; aggregate acceptance alone can be misleading.</p>
+    </div>
+
+    <div class="card full">
+      <h2>Recommended Next Actions</h2>
+      <ol>
+        <li>Produce a Figure 4-style vLLM timing breakdown and record standalone acceptance counters: drafted tokens, accepted tokens, per-position accepted tokens, acceptance rate, and mean acceptance length.</li>
+        <li>Keep CUDA Graph enabled for performance runs.</li>
+        <li>Use load-aware gating instead of always-on SpecDec: active requests, scheduled tokens, and per-position acceptance should all matter.</li>
+        <li>Prefer K=1/K=2 until later-position acceptance supports K=3.</li>
+        <li>Report generation speedup and E2E speedup separately for every NeMo-RL run.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+</body>
+</html>

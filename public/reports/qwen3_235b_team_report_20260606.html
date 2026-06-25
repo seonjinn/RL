@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3-235B Speculative Decoding Report</title>
+  <style>
+    :root {
+      --text: #182230;
+      --muted: #5d6675;
+      --line: #d9dee8;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --blue: #2f6fdd;
+      --green: #2b8a3e;
+      --amber: #d97904;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.48;
+    }
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      padding: 28px 32px 22px;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 28px 44px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 28px 0 12px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+    p, li { color: var(--text); }
+    .subtle { color: var(--muted); }
+    .status {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid #9bd4aa;
+      background: #effaf1;
+      color: var(--green);
+      font-weight: 700;
+      font-size: 13px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px 20px;
+      margin: 18px 0;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .metric {
+      border-left: 3px solid var(--blue);
+      background: #f9fbff;
+      padding: 10px 12px;
+      min-height: 84px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 2px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: var(--panel);
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 8px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #f4f6f9;
+      font-weight: 700;
+    }
+    .figures {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+    figure { margin: 0; padding: 0; }
+    figure img {
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      background: white;
+    }
+    figcaption {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    code {
+      background: #eef2f7;
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      background: #101828;
+      color: #eef4ff;
+      border-radius: 8px;
+      padding: 12px;
+      overflow-x: auto;
+    }
+    a { color: var(--blue); }
+    @media (max-width: 860px) {
+      header { padding: 22px 18px 18px; }
+      main { padding: 16px; }
+      h1 { font-size: 24px; }
+      .summary { grid-template-columns: 1fr; }
+      table { font-size: 12px; }
+      th, td { padding: 7px 6px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Qwen3-235B Speculative Decoding Report</h1>
+    <div class="subtle">Last local refresh: 2026-06-07 PDT</div>
+    <div class="status">Full-GRPO E2E claim gate: positive_qwen235b_e2e_noncolocated_tp4</div>
+  </header>
+  <main>
+    <section>
+      <h2>Executive Summary</h2>
+      <ul>
+        <li>PARD now shows real Qwen3-235B NeMo-RL Full-GRPO E2E benefit in the clean non-colocated TP4 branch.</li>
+        <li>Public PARD K3 job <code>3209048</code> vs baseline <code>3209047</code>, Step 2-5, gives total-step speedup <code>1.421x</code>, E2E throughput speedup <code>1.420x</code>, generation-time speedup <code>1.887x</code>, and generation throughput speedup <code>1.888x</code>.</li>
+        <li>This is fixed <code>max_new_tokens=256</code>, not 8K/16K generation length. The E2E gain is visible because baseline generation is <code>62.3%</code> of the steady-state step.</li>
+        <li>Qwen3-30B-A3B GBS2048 completed 20 timing steps: generation-time speedup <code>1.719x</code>, E2E throughput speedup <code>1.083x</code>.</li>
+        <li>DFlash is not promoted because current Qwen3-235B OpenMath acceptance is near zero.</li>
+      </ul>
+      <div class="summary">
+        <div class="metric"><strong>1.420x</strong><span>Qwen3-235B Full-GRPO E2E throughput</span></div>
+        <div class="metric"><strong>1.887x</strong><span>Qwen3-235B generation-time speedup</span></div>
+        <div class="metric"><strong>57.58%</strong><span>Qwen3-235B PARD K3 acceptance</span></div>
+        <div class="metric"><strong>1.083x</strong><span>Qwen3-30B-A3B GBS2048 E2E throughput</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Current Evidence</h2>
+      <table><thead><tr><th>Area</th><th>Best / Status</th><th>Evidence</th><th>Decision</th></tr></thead><tbody><tr><td>Qwen3-235B no-stop Full-GRPO</td><td>non-colocated TP4 public PARD K3 3209048 vs baseline 3209047</td><td>Step 2-5: total-step 1.421x, E2E throughput 1.420x, generation-time 1.887x, generation throughput 1.888x, acceptance 57.58%</td><td>Clean Qwen3-235B Full-GRPO E2E win. Non-colocated generation avoids colocated TP4 host-memory OOM while keeping generation TP4.</td></tr><tr><td>Qwen3-30B-A3B Full-GRPO GBS2048</td><td>public PARD K3 3207978 vs baseline 3207492</td><td>Step 2-20: total-step 1.083x, E2E throughput 1.083x, generation-time 1.719x, generation throughput 1.720x, acceptance 69.10%</td><td>Generation improves strongly, but E2E is limited because baseline generation is only 21.7% of the step.</td></tr><tr><td>vLLM standalone short synthetic</td><td>PARD K=12 bs32</td><td>3.290x, 92.95% acceptance</td><td>Useful sanity proof only; not representative of OpenMath or RL.</td></tr><tr><td>vLLM standalone OpenMath current local</td><td>local_pard_k5_dpace_draft_ce_2048_gate</td><td>job 3190567; 1.296x, 47.01% acceptance</td><td>Promote 2K dynamic D-PACE K5 as the current local checkpoint gate.</td></tr><tr><td>NeMo-RL latest-main vLLM0.20 generation-only</td><td>public_pard_k5 job 3197509</td><td>1.591x generation throughput only, 42.17% acceptance, mean accepted length 3.108</td><td>Version-skew control was positive and led to the Full-GRPO non-colocated TP4 validation branch.</td></tr><tr><td>DFlash</td><td>DFlash K3 bs1</td><td>max observed acceptance 1.22%</td><td>Do not promote current checkpoint; training/alignment issue, not runtime priority.</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>Figures</h2>
+      <div class="figures">
+        <figure>
+          <img src="qwen3_pard_nemorl_fullgrpo_final_speedups_20260607.png" alt="NeMo-RL Full-GRPO PARD K3 speedups">
+          <figcaption>Current Full-GRPO comparison for Qwen3-235B non-colocated TP4 and Qwen3-30B-A3B GBS2048.</figcaption>
+        </figure>
+        <figure>
+          <img src="qwen3_235b_pard_operator_decision_20260606.png" alt="Qwen3-235B PARD speedup evidence">
+          <figcaption>Historical speedup evidence separated by standalone and NeMo-RL generation gates.</figcaption>
+        </figure>
+        <figure>
+          <img src="qwen3_235b_specdec_cost_model_20260606.png" alt="Acceptance length vs measured speedup">
+          <figcaption>Acceptance-only ideal length versus measured speedup. The gap is draft, verification, context, and orchestration cost.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section>
+      <h2>Full-GRPO Result Summary</h2>
+      <table><thead><tr><th>Model</th><th>Shape</th><th>Jobs</th><th>Window</th><th>Step speedup</th><th>E2E tput speedup</th><th>Gen-time speedup</th><th>Gen tput speedup</th><th>Acceptance</th><th>Baseline gen share</th></tr></thead><tbody><tr><td>Qwen3-235B-A22B</td><td>noncolocated_tp4_32train_4gen</td><td>3209047 -&gt; 3209048</td><td>step2-5</td><td>1.421x</td><td>1.420x</td><td>1.887x</td><td>1.888x</td><td>57.58%</td><td>62.29%</td></tr><tr><td>Qwen3-235B-A22B</td><td>noncolocated_tp4_32train_4gen</td><td>3209170 -&gt; 3209171</td><td>step2-3</td><td>1.580x</td><td>1.591x</td><td>1.797x</td><td>1.804x</td><td>50.66%</td><td>85.05%</td></tr><tr><td>Qwen3-30B-A3B</td><td>colocated_4n4g_gbs2048</td><td>3207492 -&gt; 3207978</td><td>step2-20</td><td>1.083x</td><td>1.083x</td><td>1.719x</td><td>1.720x</td><td>69.10%</td><td>21.74%</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>Operability Status</h2>
+      <table><thead><tr><th>Area</th><th>Status</th><th>Evidence</th></tr></thead><tbody><tr><td>Qwen3-235B no-stop Full-GRPO E2E</td><td>proven_positive_noncolocated_tp4</td><td>3209048 vs 3209047, Step 2-5, E2E throughput 1.420x, total step-time 1.421x, generation-time 1.887x, acceptance 57.58%.</td></tr><tr><td>Qwen3-30B-A3B GBS2048 Full-GRPO</td><td>completed_positive_generation</td><td>3207978 vs 3207492, Step 2-20, generation-time 1.719x and E2E throughput 1.083x.</td></tr><tr><td>Historical Qwen3-235B colocated TP4 Full-GRPO attempts</td><td>superseded_by_noncolocated_tp4_result</td><td>Earlier attempts failed through reference-logprob, packed-loss, vLLM wake-up, or Ray host-memory paths. The positive branch separates generation workers onto 4 generation-only nodes.</td></tr><tr><td>TP8 colocated probe</td><td>partial_positive_cross_node_tp</td><td>3208891 showed Step 2-4 E2E throughput 1.133x and generation-time 1.587x vs TP8 baseline, but Step 5 ended with ActorDied/NCCL timeout signatures.</td></tr><tr><td>Long OSL 8K/16K</td><td>not_yet_stable_for_qwen235b_fullgrpo</td><td>Qwen3-30B-A3B long-OSL Step 1 was positive, but Step 2 hit vLLM sleep/wake CuMem OOM; Qwen3-235B long-OSL is still open.</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>vLLM Runtime Versions</h2>
+      <table><thead><tr><th>Path</th><th>vLLM version</th><th>Runtime</th><th>Implication</th></tr></thead><tbody><tr><td>Qwen3-235B vLLM standalone PARD / OpenMath / high-batch gates</td><td>v0.20.2</td><td>vllm-hsg-ultra-rl-v0.20.2-nemo-speed-pr24.sqsh</td><td>Standalone numbers are from a newer vLLM engine than most NeMo-RL runs; do not treat them as version-identical.</td></tr><tr><td>Qwen3-235B NeMo-RL latest-main/nightly public PARD Full-GRPO</td><td>0.20.0 worker venv</td><td>/opt/ray_venvs inside nemo_rl_nightly_20260606.sqsh; driver /opt/nemo_rl_venv</td><td>Positive no-stop Full-GRPO result is 3209048 vs 3209047 under non-colocated TP4.</td></tr><tr><td>Qwen3-235B NeMo-RL sync generation / older PARD-style validation</td><td>0.17.0 extracted site</td><td>/lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/python_site/vllm_0_17_0_extract_py312</td><td>Historical generation-path validation; current clean Full-GRPO result uses latest-main/nightly vLLM 0.20.0.</td></tr><tr><td>DFlash support track</td><td>0.19.1rc1.dev315+g0b790a250.d20260606</td><td>vllm_dflash_pr38300_0b790a2_cu129_torch28nv_source_py312</td><td>Separate DFlash runtime proof only; not the current PARD/PARD-2-style baseline.</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>Why Acceptance Alone Was Misleading</h2>
+      <ul>
+        <li>Decode-heavy 10k K1 has <code>93.59%</code> acceptance but only <code>0.823x</code> throughput.</li>
+        <li>OpenMath reduces accepted length: public PARD K5 bs32 drops from <code>5.775</code> mean length on short synthetic to <code>3.276</code>.</li>
+        <li>Long context is the clearest standalone failure mode: PARD K5 at <code>ISL=10000/OSL=1000</code> reaches only <code>0.392x</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Method Decisions</h2>
+      <table><thead><tr><th>Method</th><th>Current decision</th></tr></thead><tbody><tr><td>PARD</td><td>Primary runtime substrate and public baseline; now positive for Qwen3-235B Full-GRPO fixed-256 under non-colocated TP4.</td></tr><tr><td>PARD-2 / CAT</td><td>Continue local CAT/D-PACE approximations; official code/checkpoints are not public yet.</td></tr><tr><td>Dynamic D-PACE</td><td>Current local candidate: K5 for OpenMath standalone, K3 for NeMo-RL sync generation.</td></tr><tr><td>DFlash</td><td>Do not run NeMo-RL until held-out OpenMath acceptance improves beyond the current near-zero acceptance.</td></tr><tr><td>P-EAGLE</td><td>Track only; no ready Qwen3-235B pretrained path in this stack.</td></tr><tr><td>SpecKV/adaptive-K</td><td>Follow-up after fixed-256 success; focus on long/decode-heavy stability and adaptive K.</td></tr><tr><td>MoE-specific verification</td><td>Systems follow-up for long-context Qwen3-235B and non-colocated resource efficiency.</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>Completion Audit</h2>
+      <table><thead><tr><th>Requirement</th><th>Status</th><th>Gap</th></tr></thead><tbody><tr><td>Find Qwen3-235B SpecDec methods that can show performance benefit</td><td>met_for_fixed256_fullgrpo</td><td>Public PARD K3 shows Qwen3-235B Full-GRPO E2E speedup under non-colocated TP4. Long-context/decode-heavy Qwen3-235B remains open.</td></tr><tr><td>Start from PARD/PARD-2 and recent 2025-2026 methods</td><td>met_for_triage</td><td>Official PARD-2 code/checkpoints are still not public in AMD-AGI/PARD.</td></tr><tr><td>Make a Qwen3-235B method work in vLLM standalone</td><td>partially_met</td><td>K1 and long-context/decode-heavy settings can still be slower despite high acceptance.</td></tr><tr><td>Incorporate methods into NeMo-RL and test actual performance</td><td>met_for_public_pard_k3_fixed256</td><td>Qwen3-235B non-colocated TP4 and Qwen3-30B-A3B GBS2048 both have parsed Full-GRPO timing metrics.</td></tr><tr><td>Avoid repetitive failures by documenting negative evidence</td><td>met_for_current_evidence</td><td>Colocated TP4 host-memory OOM, TP8 cross-node caveat, and long-OSL CuMem sleep/wake failures are documented.</td></tr><tr><td>Full objective completion</td><td>not_complete</td><td>Fixed-256 PARD result is positive, but the broader objective still includes recent-method exploration and long/decode-heavy Qwen3-235B behavior.</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>Operational Runbook</h2>
+      <ul>
+        <li><a href="qwen3_235b_latest_main_current_fullgrpo_status_20260607.md">Latest Qwen3-235B Full-GRPO status</a></li>
+        <li><a href="qwen3_pard_nemorl_fullgrpo_final_summary_20260607.csv">Machine-readable final summary</a></li>
+        <li><a href="qwen3_235b_team_report_20260606.md">Markdown team report</a></li>
+      </ul>
+      <p>Current remote poll command:</p>
+      <pre>ssh oci-hsg-cs-001-vscode-02 'sacct -j 3209047,3209048,3207978,3208891 -o JobID,JobName%80,State,Elapsed,ExitCode -P'</pre>
+    </section>
+
+    <section>
+      <h2>Resume Commands</h2>
+      <p>Local refresh:</p>
+      <pre>scripts/refresh_qwen235b_report_bundle.sh</pre>
+    </section>
+
+    <section>
+      <h2>Primary Sources</h2>
+      <ul>
+        <li><a href="https://github.com/AMD-AGI/PARD">PARD repository</a></li>
+        <li><a href="https://docs.vllm.ai/en/v0.20.0/features/speculative_decoding/parallel_draft_model/">vLLM PARD parallel draft model path</a></li>
+        <li><a href="https://arxiv.org/abs/2605.08632">PARD-2</a></li>
+        <li><a href="https://arxiv.org/abs/2602.06036">DFlash</a></li>
+        <li><a href="https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/dflash/">vLLM DFlash docs</a></li>
+        <li><a href="https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/peagle/">vLLM P-EAGLE docs</a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

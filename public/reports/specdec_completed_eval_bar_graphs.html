@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3 SpecDec Evaluation Dashboard</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #182230;
+      --muted: #5d6675;
+      --line: #d9dee8;
+      --green: #2b8a3e;
+      --red: #c23b31;
+      --blue: #2f6fdd;
+      --orange: #be6b00;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    main {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 28px 20px 56px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 6px; letter-spacing: 0; }
+    h2 { font-size: 21px; margin-bottom: 10px; letter-spacing: 0; }
+    h3 { font-size: 15px; margin-bottom: 6px; letter-spacing: 0; }
+    code {
+      background: #eef1f6;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .subtitle, .note { color: var(--muted); }
+    .note { font-size: 13px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .full { grid-column: 1 / -1; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 16px;
+    }
+    .summary-item {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+    }
+    .summary-item strong { display: block; font-size: 22px; margin-bottom: 3px; }
+    .summary-item span { color: var(--muted); font-size: 13px; }
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 1px 7px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: #f0f3f7;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .done { color: var(--green); background: #eef8f0; border-color: #cbe8d1; }
+    .run { color: var(--blue); background: #edf4ff; border-color: #cfe0ff; }
+    .pend { color: var(--orange); background: #fff5e8; border-color: #f4d4a8; }
+    .bad { color: var(--red); background: #fff0ef; border-color: #f2c6c2; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 650; }
+    img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+    }
+    .small { font-size: 12px; color: var(--muted); }
+    @media (max-width: 900px) {
+      .grid, .summary { grid-template-columns: 1fr; }
+      main { padding: 20px 12px 42px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Qwen3 SpecDec Evaluation Dashboard</h1>
+  <p class="subtitle">Updated through the June 4, 2026 02:21 PDT poll. This page combines completed vLLM standalone ceilings, real-prompt standalone isolation results, current NeMo-RL rollout metrics, gate diagnostics, acceptance projections, step-level acceptance rates, and the fixed/online drafter follow-up matrix.</p>
+
+  <section class="summary">
+    <div class="summary-item">
+      <strong>0.665-0.853x</strong>
+      <span>Qwen3-8B vLLM standalone on DAPOMath real prompts; all K values regress.</span>
+    </div>
+    <div class="summary-item">
+      <strong>2.288x</strong>
+      <span>Qwen3-32B vLLM standalone K=3 speedup at batch 32.</span>
+    </div>
+    <div class="summary-item">
+      <strong>1.37-1.58x</strong>
+      <span>Qwen3-8B always-on generation speedup through Step 4.</span>
+    </div>
+    <div class="summary-item">
+      <strong>1.04-1.06x</strong>
+      <span>Qwen3-8B NeMo-RL gated K=3 long-rollout generation speedup.</span>
+    </div>
+    <div class="summary-item">
+      <strong>1.33-1.43x</strong>
+      <span>Qwen3-32B always-on generation speedup across observed K=1/K=3 steps.</span>
+    </div>
+    <div class="summary-item">
+      <strong>1.299x</strong>
+      <span>Qwen3-8B r22 exact-engine/no-gate native K=1 generation speedup; dynamic K3-&gt;K1 regressed to 0.787x.</span>
+    </div>
+    <div class="summary-item">
+      <strong>1.152/1.175x</strong>
+      <span>Qwen3-8B logprob-skip diagnostic Step 1-4 mean E2E speedup for K=1/K=3 always-on; generation speedup is 1.290/1.343x.</span>
+    </div>
+    <div class="summary-item">
+      <strong>1.093x</strong>
+      <span>Qwen3-8B online finite-loss + gradfix 20-step K=1 generation speedup; E2E is 1.029x.</span>
+    </div>
+  </section>
+
+  <section class="card full">
+    <h2>13:35 PDT Logprob Bottleneck Diagnostic</h2>
+    <p class="note">The fixed/offline GRPO loop now skips reference-policy logprob fprop when <code>reference_policy_kl_penalty=0</code>. A second explicit diagnostic switch, <code>NRL_GRPO_SKIP_POLICY_LOGPROBS_IF_SAFE=true</code>, skips policy prev-logprob fprop only when <code>force_on_policy_ratio=true</code>, KL penalty is zero, and importance-sampling paths are disabled. Default GRPO remains unchanged.</p>
+    <table>
+      <tr><th>Job</th><th>Mode</th><th>Status</th><th>Purpose</th></tr>
+      <tr><td>3131108</td><td>Baseline r2</td><td><span class="status bad">FAILED</span></td><td>Changed-objective baseline with BF16/KV-auto and logprob skip; failed before rollout in Megatron optimizer scheduler assertion <code>lr_warmup_steps &lt; lr_decay_steps</code></td></tr>
+      <tr><td>3131109</td><td>K=1 always-on r2</td><td><span class="status bad">FAILED</span></td><td>Same diagnostic settings plus Eagle-3 K=1 and runtime gate disabled; same scheduler assertion, no metric</td></tr>
+      <tr><td>3131110</td><td>K=3 always-on r2</td><td><span class="status bad">FAILED</span></td><td>Same diagnostic settings plus Eagle-3 K=3 and runtime gate disabled; same scheduler assertion, no metric</td></tr>
+      <tr><td>3131615-3131617</td><td>r3 reuse-venv</td><td><span class="status bad">CANCELED</span></td><td>Invalid batch: it called stale root launchers. Do not use as evidence.</td></tr>
+      <tr><td>3131648</td><td>Baseline r4</td><td><span class="status bad">FAILED</span></td><td>Same scheduler assertion, no metric</td></tr>
+      <tr><td>3131649</td><td>K=1 always-on r4</td><td><span class="status bad">FAILED</span></td><td>Corrected reuse-venv launcher with Eagle-3 K=1 and runtime gate disabled; same scheduler assertion, no metric</td></tr>
+      <tr><td>3131650</td><td>K=3 always-on r4</td><td><span class="status bad">FAILED</span></td><td>Corrected reuse-venv launcher with Eagle-3 K=3 and runtime gate disabled; same scheduler assertion, no metric</td></tr>
+      <tr><td>3132444</td><td>Baseline r5</td><td><span class="status done">COMPLETED</span></td><td>Step 1-4 metrics emitted: mean generation 4260.76 generated tok/s/GPU and mean E2E 2608.80 tok/s/GPU.</td></tr>
+      <tr><td>3132445-3132446</td><td>K=1/K=3 r5</td><td><span class="status bad">FAILED</span></td><td>Slurm Ray-head step failed with memory requirement error; not a model/code result</td></tr>
+      <tr><td>3132635</td><td>K=1 r6</td><td><span class="status done">COMPLETED</span></td><td>Step 1-4 metrics emitted: mean generation 5498.34 tok/s/GPU, generation speedup 1.290x, mean E2E 3004.60 tok/s/GPU, E2E speedup 1.152x, mean acceptance 60.57%.</td></tr>
+      <tr><td>3132636</td><td>K=3 r6</td><td><span class="status done">COMPLETED</span></td><td>Step 1-4 metrics emitted: mean generation 5721.98 tok/s/GPU, generation speedup 1.343x, mean E2E 3065.85 tok/s/GPU, E2E speedup 1.175x, mean acceptance 35.75%, Step 4 per-position acceptance 55.59% / 33.05% / 18.37%.</td></tr>
+    </table>
+    <p class="note">These jobs are not default GRPO results. They isolate how much E2E speedup is capped by post-rollout policy/reference logprob work. The chart now includes matched generation speedup, E2E speedup, and acceptance. The mean inferred generation time share is about 58%, so non-generation work caps E2E. Online Qwen3-8B r73 short512 reached generation but failed in policy-side TransformerEngine RMSNorm; r75 passed logprobs after local spec/no-fused-softmax but failed in online EAGLE draft <code>enorm</code> TE RMSNorm; r77 proved local-spec HF reconvert needed dense Qwen3Bridge local layernorm mappings; r78 recovered acceptance to 57.5-63.0% and passed logprobs but failed in ModelOpt EAGLE decoder <code>input_layernorm</code> TE RMSNorm; r79 cleared recursive EAGLE TE RMSNorm and passed logprobs, then failed later in Megatron DDP grad finalization with a <code>0/3</code> no-grad bucket assertion. r80 disabled DDP overlap and moved the blocker to a helper signature mismatch; r81/r82 were launcher/Ray environment failures; r83 fixed Ray/vLLM initialization but was cancelled before rollout metrics.</p>
+    <img src="specdec_qwen3_8b_logprob_skip_diag_step1_step4.png" alt="Qwen3-8B logprob-skip diagnostic Step 1-4 generation E2E and acceptance">
+  </section>
+
+  <section class="card full">
+    <h2>02:21 PDT Online Drafter Update</h2>
+    <p class="note">Qwen3-8B online drafter training now has completed one-step metrics. r84/r85 completed the default-style worker≈32/fixed512 matched pair: K=1 always was generation 0.605x, E2E 0.914x, acceptance 40.80%. r86/r87 completed the greedy/fixed512 matched pair: K=1 always was generation 0.757x, E2E 1.066x, acceptance 41.82%. r88/r89 then reran the same greedy/fixed512 comparison after worker-side fixed-length <code>SamplingParams</code> support with actor venv rebuild; r89 was still generation 0.732x, E2E 1.029x, acceptance 42.01%. This rules out missing <code>min_tokens</code>/<code>ignore_eos</code>/stop-disable propagation as the primary cause of the Qwen3-8B online slowdown.</p>
+    <p class="note">r90/r91 validated the greedy training-loss fix: <code>temperature=0.0</code> no longer makes <code>Draft Loss</code> NaN. Both failed before Step 2 in <code>offload_before_refit</code> because CPU gradients were assigned to CUDA parameters. The grad-offload fallback was patched, and clean finite-loss + gradfix r92/r93 jobs completed. r93 K=1 acceptance rose from 42.24% on Step 1 to 70.42% on Step 2 and 71.70% on Step 5, but aggregate speedup remains generation 0.964x and E2E 0.980x.</p>
+    <p class="note">The 20-step follow-up r94/r95/r96 completed. r95 K=1 always recovers generation speedup: generation throughput 1.093x, generation step-time 1.093x, E2E throughput 1.029x, E2E step-time 1.029x, mean acceptance 61.20%. r96 K=3 always remains a net generation slowdown: generation throughput 0.968x, E2E throughput 0.995x, mean acceptance 37.46%. The baseline generation slice is only 6.83% of total step time, so even the K=1 generation improvement only moves E2E by about 2.9%.</p>
+    <img src="qwen3_8b_online_gradfix_r92_r93.png" alt="Qwen3-8B online drafter gradfix r92 r93 speedup and acceptance">
+    <img src="qwen3_8b_online_gradfix_r94_r96_20step.png" alt="Qwen3-8B online drafter gradfix r94 r96 20-step speedup and acceptance">
+    <table>
+      <tr><th>Model</th><th>Old failed job</th><th>Failure class</th><th>New prep/smoke</th><th>Dependent matrix</th><th>Status</th></tr>
+      <tr><td>Qwen3-8B</td><td>3130576, 3130760, 3130928, 3131454</td><td><code>rope_scaling=null</code>; then single-node driver memory step failure; then short-smoke scheduler assertion; then vLLM V1 SpecDec bookkeeping assertion during rollout generation</td><td>none active</td><td>K=1/2/3 always/gated: 3131455, 3131456, 3131457, 3131458, 3131459, 3131460 wait on failed <code>afterok:3131454</code></td><td><span class="status bad">FAILED</span>; r61 smoke had draft enabled, BF16, KV auto, and scheduler override, but failed at <code>assert sampled_token_ids.shape[-1] == 1</code>; no metric</td></tr>
+      <tr><td>Qwen3-8B V6 retry</td><td>3133314</td><td>V6 runtime patch aligns scheduler lookahead gate with runner batch gate by using <code>max(len(self.running), len(num_scheduled_tokens)+1)</code></td><td>3133314</td><td>K=1/2/3 always/gated retry: 3133315, 3133316, 3133317, 3133318, 3133319, 3133320</td><td><span class="status bad">FAILED</span>; reached rollout generation, then failed before <code>SpecDec early</code> metric with the same vLLM V1 <code>sampled_token_ids.shape[-1] == 1</code> assertion. Dependent matrix was cancelled.</td></tr>
+      <tr><td>Qwen3-8B V9/r68 retry</td><td>3133619, 3133620, 3133622, 3133624, 3133925</td><td>V9 adds runner active-batch pressure and zero-draft disabled path; r68 adds scheduler-output scrub because r67 still left speculative scheduler metadata when the runner gate was disabled</td><td>3133925 gated scrub smoke failed before rollout</td><td>3133621/3133623/3133625 were cancelled after the V9 smoke failed</td><td><span class="status bad">FAILED</span> r68 actor venv build hit disk quota before rollout; r67 gated failed in vLLM V1 bookkeeping; r67 always K=1/K=2/K=3 failed in policy-side TransformerEngine RMSNorm CUDA invalid-argument; no online rollout metric yet</td></tr>
+      <tr><td>Qwen3-8B r73-r83 short512</td><td>3136275, 3136718, 3137127, 3137466, 3137513, 3137739, 3139283, 3139703, 3140266, 3140576</td><td>r73 validates short512 K=1 always online path with draft enabled, BF16 generation, KV auto; r74/r75 force local transformer spec and disable masked softmax fusion; r77 validates local-spec HF reconvert but exposed dense Qwen3Bridge mapping gaps; r78 validates that mapping fix and reaches training; r79 clears recursive EAGLE TE RMSNorm but exposes DDP no-grad bucket overlap assertion; r80 disables DDP overlap but hits helper signature mismatch; r81/r82 expose launcher/Ray setup issues</td><td>3140704 Ray-match retry</td><td>none</td><td><span class="status bad">CANCELLED</span> r83 fixed Ray versioning and initialized vLLM workers through CUDA Graph capture, but no rollout metric emitted before cancellation</td></tr>
+      <tr><td>Qwen3-8B r84-r89 completed online pairs</td><td>3141902, 3142137, 3142745, 3142746, 3143675, 3143676</td><td>Matched online drafter worker≈32/fixed512 pairs, including greedy and post-SamplingParams-patch reruns with actor venv rebuild</td><td>completed</td><td>none</td><td><span class="status done">COMPLETED</span> default-style K=1 was generation 0.605x / E2E 0.914x / acceptance 40.80%; greedy K=1 was generation 0.757x / E2E 1.066x / acceptance 41.82%; post-patch greedy K=1 was generation 0.732x / E2E 1.029x / acceptance 42.01%</td></tr>
+      <tr><td>Qwen3-8B r90-r93 finite-loss online rerun</td><td>3144473, 3144474, 3144992, 3144993</td><td>r90/r91 confirmed finite draft loss after the <code>temperature=0.0</code> training patch but failed before Step 2 in grad offload; r92/r93 reran after gradfix and completed 5/5 steps</td><td>3144992 baseline and 3144993 K=1 always</td><td>none</td><td><span class="status done">COMPLETED</span> r93 acceptance 42.24%, 70.42%, 56.98%, 48.91%, 71.70%; step gen speedups 0.760x, 1.110x, 0.959x, 0.949x, 1.217x; aggregate gen/E2E 0.964x/0.980x</td></tr>
+      <tr><td>Qwen3-8B r94-r96 finite-loss 20-step online rerun</td><td>3145919, 3145920, 3145921</td><td>Longer fixed512 greedy 20-step baseline/K=1/K=3 comparison after finite-loss and grad-offload patches</td><td>3145919 baseline, 3145920 K=1 always, 3145921 K=3 always</td><td>none</td><td><span class="status done">COMPLETED</span> K=1 generation/E2E 1.093x/1.029x with 61.20% mean acceptance; K=3 generation/E2E 0.968x/0.995x with 37.46% mean acceptance</td></tr>
+      <tr><td>Qwen3-32B</td><td>3130535, 3130930, 3131904, 3132468, 3132637</td><td>missing provider <code>rope_scaling_factor</code>; then Megatron buffer API mismatch; then stale actor venv missing <code>tensordict</code>; then Slurm Ray-head memory step; latest r64 reached rollout generation setup but failed during policy-to-vLLM draft-weight streaming with <code>KeyError: 'draft.fc.weight'</code></td><td>none active</td><td>K=1/2/3 always/gated retry 3132638, 3132639, 3132641, 3132642, 3132643, 3132644</td><td><span class="status bad">FAILED</span>; r64 actor venv rebuild/suffix path worked, but vLLM worker <code>state_dict_info</code> did not contain streamed draft key <code>draft.fc.weight</code>; dependent matrix jobs were cancelled</td></tr>
+      <tr><td>Qwen3-30B-A3B</td><td>3130615, 3130929</td><td>missing MoE provider <code>rope_scaling_factor</code>; then vLLM Qwen3-MoE fused-MoE loader rejected <code>shard_dim=0</code> for a 3D expert tensor during policy-to-vLLM weight streaming</td><td>none active</td><td>K=1/2/3 always/gated: 3130932, 3130936, 3130939, 3130941, 3130944, 3130947 are waiting on failed <code>afterok:3130929</code></td><td><span class="status bad">FAILED</span>; MasterConfig showed draft enabled, BF16, KV auto, but no rollout metric</td></tr>
+    </table>
+  </section>
+
+  <section class="card full">
+    <h2>10:10 PDT Fixed/Offline Update</h2>
+    <p class="note">The fixed/offline matrix has log-backed metrics through 8-20 rollout steps depending on job. Qwen3-8B timed out at the 4h walltime after 8-10 observed steps; those final observed metrics are retained. Qwen3-32B K=1/K=3 and Qwen3-30B-A3B are complete at 20 steps. The latest PNGs were regenerated from <code>specdec_followup_latest_metrics.json</code> at 512 dpi.</p>
+    <table>
+      <tr><th>Model</th><th>K</th><th>Gate</th><th>Job</th><th>Status</th><th>Observed steps</th><th>Mean gen tok/s/GPU</th><th>Mean acceptance</th><th>Latest gate enabled</th></tr>
+      <tr><td>Qwen3-8B</td><td>1</td><td>Always</td><td>3127152</td><td><span class="status bad">TIMEOUT</span></td><td>9</td><td>5547.06</td><td>60.84%</td><td>n/a</td></tr>
+      <tr><td>Qwen3-8B</td><td>1</td><td>Gated</td><td>3127155</td><td><span class="status bad">TIMEOUT</span></td><td>8</td><td>4027.48</td><td>51.73%</td><td>scheduler 0.02%, runner 0.63%</td></tr>
+      <tr><td>Qwen3-8B</td><td>3</td><td>Always</td><td>3127158</td><td><span class="status bad">TIMEOUT</span></td><td>10</td><td>5915.66</td><td>36.04%</td><td>n/a</td></tr>
+      <tr><td>Qwen3-8B</td><td>3</td><td>Gated</td><td>3127161</td><td><span class="status bad">TIMEOUT</span></td><td>8</td><td>4038.35</td><td>28.17%</td><td>scheduler 0.02%, runner 0.63%</td></tr>
+      <tr><td>Qwen3-32B</td><td>1</td><td>Always</td><td>3128147</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>2388.46</td><td>69.45%</td><td>n/a</td></tr>
+      <tr><td>Qwen3-32B</td><td>1</td><td>Gated</td><td>3128148</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>1643.20</td><td>45.58%</td><td>scheduler 0.26%, runner 4.10%</td></tr>
+      <tr><td>Qwen3-32B</td><td>3</td><td>Always</td><td>3128428</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>2405.82</td><td>45.28%</td><td>n/a</td></tr>
+      <tr><td>Qwen3-32B</td><td>3</td><td>Gated</td><td>3128429</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>1651.10</td><td>23.65%</td><td>scheduler 0.22%, runner 3.21%</td></tr>
+      <tr><td>Qwen3-30B-A3B</td><td>1</td><td>Always</td><td>3128151</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>5601.48</td><td>57.51%</td><td>n/a</td></tr>
+      <tr><td>Qwen3-30B-A3B</td><td>1</td><td>Gated</td><td>3128152</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>4372.35</td><td>48.00%</td><td>scheduler 0.00%, runner 0.02%</td></tr>
+      <tr><td>Qwen3-30B-A3B</td><td>3</td><td>Always</td><td>3128153</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>4896.03</td><td>31.80%</td><td>n/a</td></tr>
+      <tr><td>Qwen3-30B-A3B</td><td>3</td><td>Gated</td><td>3128154</td><td><span class="status done">COMPLETED</span></td><td>20</td><td>4357.91</td><td>23.64%</td><td>scheduler 0.00%, runner 0.01%</td></tr>
+    </table>
+    <p class="note">Qwen3-8B online drafter training now has completed paired metrics through the 20-step finite-loss + gradfix follow-up and the engine-shaped rerun. r84/r85 completed the default-style worker≈32/fixed512 matched pair: K=1 always was generation 0.605x, E2E 0.914x, acceptance 40.80%. r86/r87 completed the greedy/fixed512 matched pair: K=1 always was generation 0.757x, E2E 1.066x, acceptance 41.82%. r88/r89 completed the post-SamplingParams-patch greedy rerun with actor venv rebuild: K=1 always was generation 0.732x, E2E 1.029x, acceptance 42.01%. r92/r93 completed after the gradfix with improved acceptance but aggregate gen/E2E 0.964x/0.980x. r94/r95/r96 20-step comparison shows K=1 generation/E2E 1.093x/1.029x with 61.20% mean acceptance, while K=3 is generation/E2E 0.968x/0.995x with 37.46% mean acceptance. The final r97/r98/r99 engine-shaped rerun shows K=1 generation/E2E 1.120x/1.060x with 61.75% acceptance, and K=3 generation/E2E 1.009x/1.041x with 37.40% acceptance.</p>
+    <img src="qwen3_8b_engine_shape_r97_r99_20step.png" alt="Qwen3-8B engine-shaped online finite-loss plus gradfix 20-step chart">
+    <img src="specdec_followup_latest_generation_bars.png" alt="Latest fixed drafter follow-up generation throughput bars">
+    <img src="specdec_followup_latest_acceptance_by_model.png" alt="Latest fixed drafter follow-up acceptance rates by model">
+  </section>
+
+  <section class="card full">
+    <h2>Historical Submitted Follow-Up Matrix</h2>
+    <p class="note">This section is retained for traceability and is superseded by the 10:48 and 10:10 PDT tables above. Some rows below show the status from the earlier 04:12 PDT poll and should not be read as current job state.</p>
+    <h3>Historical 04:12 PDT Snapshot</h3>
+    <table>
+      <tr><th>Group</th><th>Model</th><th>K</th><th>Gate</th><th>Job</th><th>Status</th><th>Current metric / reason</th></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>1</td><td>Always</td><td>3127152</td><td><span class="status run">RUNNING</span></td><td>Step 1 generated tok/s/GPU 5648.64, acceptance 63.93%; Step 2 generated 5551.14, acceptance 59.33%; Step 3 generated 5432.50, acceptance 58.06%</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>1</td><td>Gated</td><td>3127155</td><td><span class="status run">RUNNING</span></td><td>Step 1 generated tok/s/GPU 4091.79, acceptance 54.20%, scheduler enabled 0.04%; Step 2 generated 4021.44, acceptance 49.68%, scheduler enabled 0.03%</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>3</td><td>Always</td><td>3127158</td><td><span class="status run">RUNNING</span></td><td>Step 1 generated tok/s/GPU 5812.01, acceptance 38.65%; Step 2 generated 5983.01, acceptance 34.64%; Step 3 generated 5698.97, acceptance 33.98%</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>3</td><td>Gated</td><td>3127161</td><td><span class="status run">RUNNING</span></td><td>Step 1 generated tok/s/GPU 4095.04, acceptance 30.06%, scheduler enabled 0.03%; Step 2 generated 4039.39, acceptance 26.64%, scheduler enabled 0.02%</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-32B</td><td>1</td><td>Always</td><td>3128147</td><td><span class="status run">RUNNING</span></td><td>Step 1 generated tok/s/GPU 2327.40, acceptance 70.13%; Step 2 generated 2519.32, acceptance 69.13%</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-32B</td><td>1</td><td>Gated</td><td>3128148</td><td><span class="status run">RUNNING</span></td><td>Step 1 generated tok/s/GPU 1584.49, acceptance 47.13%, scheduler enabled 0.26%; Step 2 generated 1803.00, acceptance 40.56%, scheduler enabled 0.28%</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-32B</td><td>3</td><td>Always/Gated</td><td>3128149/3128150</td><td><span class="status bad">FAILED</span></td><td>4 GPUs/node layout hit node-memory OOM; K=3 gated emitted Step 1 generated tok/s/GPU 1588.65 and acceptance 24.73% before failing</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-32B</td><td>3</td><td>Always/Gated</td><td>3128428/3128429</td><td><span class="status run">RUNNING</span></td><td>8 nodes x 2 GPUs retry to reduce per-node CPU memory pressure while preserving 16 total GPUs</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-30B-A3B</td><td>1</td><td>Always</td><td>3128151</td><td><span class="status run">RUNNING</span></td><td>Step 1/2/3 generated tok/s/GPU 5745.88/5311.72/5987.16; acceptance 57.91%/57.01%/59.15%</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-30B-A3B</td><td>1</td><td>Gated</td><td>3128152</td><td><span class="status run">RUNNING</span></td><td>Step 1/2/3 generated tok/s/GPU 4425.95/4209.63/4621.79; acceptance 64.88%/46.08%/52.53%; scheduler enabled near 0%</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-30B-A3B</td><td>3</td><td>Always</td><td>3128153</td><td><span class="status run">RUNNING</span></td><td>Step 1/2/3 generated tok/s/GPU 4918.23/4860.85/5195.76; acceptance 32.11%/31.35%/33.13%</td></tr>
+      <tr><td>Fixed retry</td><td>Qwen3-30B-A3B</td><td>3</td><td>Gated</td><td>3128154</td><td><span class="status run">RUNNING</span></td><td>Step 1/2/3 generated tok/s/GPU 4434.02/4185.37/4608.09; acceptance 38.81%/20.11%/24.80%; scheduler enabled near 0%</td></tr>
+      <tr><td>Online smoke</td><td>Qwen3-8B</td><td>1</td><td>Always</td><td>3128421</td><td><span class="status run">RUNNING</span></td><td>Python 3.13 online draft path with wheel-only TE; no TransformerEngine.git/transformer-engine-torch/Building transformer-engine log line, no failure yet</td></tr>
+    </table>
+    <p class="note">Historical online attempts below are retained for traceability. Earlier online attempts failed before rollout due to Python version, missing workspace members, stale lock resolution, missing system deps, quota, or CUDA mismatch while building Qwen-unneeded dependencies; the current valid smoke is <code>3128421</code>.</p>
+    <img src="specdec_followup_qwen3_8b_step1.png" alt="Qwen3-8B fixed drafter follow-up Step 1 and Step 2 metrics">
+    <img src="specdec_followup_latest_generation_bars.png" alt="Latest fixed drafter follow-up generation throughput bars">
+    <img src="specdec_followup_latest_acceptance_by_model.png" alt="Latest fixed drafter follow-up acceptance rates by model">
+    <table>
+      <tr><th>Mode</th><th>Model</th><th>K</th><th>Gate</th><th>Job</th><th>Status</th><th>Notes</th></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>1</td><td>Always</td><td>3127152</td><td><span class="status run">RUNNING</span></td><td>BF16, KV auto, runtime gate off</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-32B</td><td>1</td><td>Always</td><td>3127153</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota during actor venv build; retry job 3128147 is running</td></tr>
+      <tr><td>Fixed 500K drafter</td><td>Qwen3-30B-A3B</td><td>1</td><td>Always</td><td>3127154</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota during actor venv build; retry job 3128151 is running</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>1</td><td>Gated</td><td>3127155</td><td><span class="status run">RUNNING</span></td><td>Runtime request gate threshold 8</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-32B</td><td>1</td><td>Gated</td><td>3127156</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota during actor venv build; retry job 3128148 is running</td></tr>
+      <tr><td>Fixed 500K drafter</td><td>Qwen3-30B-A3B</td><td>1</td><td>Gated</td><td>3127157</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota during actor venv build; retry job 3128152 is running</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>3</td><td>Always</td><td>3127158</td><td><span class="status run">RUNNING</span></td><td>Runtime gate off</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-32B</td><td>3</td><td>Always</td><td>3127159</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota; 4x4 retry 3128149 failed from node-memory OOM; 8x2 retry 3128428 is running</td></tr>
+      <tr><td>Fixed 500K drafter</td><td>Qwen3-30B-A3B</td><td>3</td><td>Always</td><td>3127160</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota during actor venv build; retry job 3128153 is running</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-8B</td><td>3</td><td>Gated</td><td>3127161</td><td><span class="status run">RUNNING</span></td><td>Runtime request gate threshold 8</td></tr>
+      <tr><td>Fixed drafter</td><td>Qwen3-32B</td><td>3</td><td>Gated</td><td>3127162</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota; 4x4 retry 3128150 failed from node-memory OOM after Step 1; 8x2 retry 3128429 is running</td></tr>
+      <tr><td>Fixed 500K drafter</td><td>Qwen3-30B-A3B</td><td>3</td><td>Gated</td><td>3127163</td><td><span class="status bad">FAILED</span></td><td>Initial batch hit fs1 quota during actor venv build; retry job 3128154 is running</td></tr>
+      <tr><td>Online draft training</td><td>Qwen3-8B/32B/30B</td><td>1/3</td><td>Always/Gated</td><td>3127386, 3127399-3127409</td><td><span class="status bad">FAILED</span></td><td>Superseded batch; failed before rollout while resolving/building Python 3.13 CUDA13 dependencies</td></tr>
+    </table>
+  </section>
+
+  <section class="grid">
+    <div class="card full">
+      <h2>Current Interpretation</h2>
+      <p>The newest Qwen3-8B long-rollout data strongly implicates the runtime scheduler gate. With the TLT-style gate, K=1/K=2/K=3 Step 1 generation is only about 1.035-1.041x, and the latest gated points remain modest through Step 5/8. When the gate is disabled, K=1 generation is 1.373-1.458x and K=3 generation is 1.433-1.578x through Step 4. E2E improves to 1.163-1.196x for K=1 and 1.204-1.253x for K=3 through Step 4.</p>
+      <p>This is not the whole story. The short512 and r22 exact-engine/no-gate diagnostics show K=1 can help in NeMo-RL (1.278-1.299x generation, 64.61% acceptance), while K=3 can regress badly under the same fixed 512-token greedy shape (0.423-0.452x, 40.66% acceptance). That points to both gate behavior and K/workload fit, not BF16 vs FP8, as the main variables.</p>
+      <p>Qwen3-32B now shows the same gate pattern. Gated K=1/K=2/K=3 all completed 20 steps and remain below baseline on average. Always-on K=1/K=3 improves generation to 1.331-1.430x and E2E to 1.149-1.196x through Step 4. K=2 always-on failed before aggregate rollout metrics under high KV-cache pressure, so it is not counted.</p>
+      <p>Gate metrics confirm the code-level mechanism: with request threshold 8 and token threshold 4096, scheduler lookahead is enabled only about 0.03-0.04% of observed 8B gated decisions and about 0.23-0.27% of observed 32B gated decisions. Runner-side draft generation is also only about 1-4% active. The gated runs are therefore mostly baseline decoding with a small long-tail SpecDec tail.</p>
+      <p>Latest exact-engine status: r22 emitted the key generation-only metrics. Baseline 3126355 reached 5652.52 generated tok/s/GPU. Native K=1 3126356 reached 7345.13 generated tok/s/GPU, giving 1.299x generation speedup with 64.61% acceptance. Native K=3 3126357 reached 2555.29 generated tok/s/GPU, giving 0.452x with 40.66% acceptance and per-position acceptance 61.05%, 38.46%, 22.27%. Dynamic-cap r24 3126685 used a K=3 engine with scheduler effective_k=1 and reached 4446.23 tok/s/GPU, or 0.787x vs the exact-engine baseline, despite 64.60% acceptance. This shows native K=1 is materially better than simulating K=1 through a K=3 dynamic-cap engine in the current code path.</p>
+      <p>New isolation axis: Qwen3-8B vLLM standalone DAPOMath real-prompt bs32 retry2 completed after tokenizer fallbacks were patched. The result is a regression for every K: K=1 0.665x with 61.11% acceptance, K=2 0.817x with 46.91% acceptance, and K=3 0.853x with 36.62% acceptance. This means the synthetic fixed-prompt standalone 2x speedup is not representative of the real DAPOMath prompt distribution.</p>
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-8B DAPOMath Standalone Isolation</h2>
+      <p class="note">vLLM standalone bs32 on real DAPOMath prompts. This isolates prompt/domain mismatch from NeMo-RL overhead: every SpecDec K regresses against the standalone baseline.</p>
+      <img src="specdec_qwen3_8b_dapo_vllm_standalone.png" alt="Qwen3-8B DAPOMath real-prompt vLLM standalone SpecDec chart">
+    </div>
+
+    <div class="card full">
+      <h2>Gate Enabled Ratio</h2>
+      <p class="note">Mean of observed SpecDec early gate rows. This explains why the TLT-style gated setting does not reproduce always-on or standalone throughput.</p>
+      <img src="specdec_gate_enabled_ratio.png" alt="SpecDec gate enabled ratio chart">
+    </div>
+
+    <div class="card full">
+      <h2>Current NeMo-RL Early Speedup</h2>
+      <p class="note">Generation and E2E speedups where matched baselines exist. Short512/r22 exact diagnostics are generation-only; earlier short512 diagnostics failed after generation/training NaN.</p>
+      <img src="specdec_current_nemorl_early_speedup.png" alt="Current NeMo-RL early SpecDec speedup chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-8B Gate Diagnostic</h2>
+      <p class="note">Long-rollout rows compare against BF16 long baseline 3124761 Step 1. r22 exact-engine rows compare against baseline 3126355 and are generation-only stop-after-generation diagnostics.</p>
+      <img src="specdec_qwen3_8b_gate_diagnostics.png" alt="Qwen3-8B gate and fixed decode diagnostic chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-32B Gate Diagnostic</h2>
+      <p class="note">Matched-step comparison against baseline 3124830. K=2 always-on failed before aggregate rollout metrics and is omitted from the chart; K=1/K=3 always-on now have E2E through Step 4.</p>
+      <img src="specdec_qwen3_32b_gate_diagnostics.png" alt="Qwen3-32B gated versus always-on SpecDec chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-8B Acceptance Projection</h2>
+      <p class="note">What-if K=3 projection from the current always-on Step 1-4 acceptance. Generation lift is linearly scaled and capped at the measured vLLM standalone K=3 ceiling; E2E uses an Amdahl-style generation fraction.</p>
+      <img src="specdec_qwen3_8b_acceptance_projection_speedup.png" alt="Qwen3-8B acceptance-rate speedup projection chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-32B Acceptance Projection</h2>
+      <p class="note">What-if K=3 projection from the current always-on Step 1-4 acceptance. This is not a measured config result; it shows the implied speedup target if aggregate acceptance improves.</p>
+      <img src="specdec_qwen3_32b_acceptance_projection_speedup.png" alt="Qwen3-32B acceptance-rate speedup projection chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-8B Step Acceptance Rate</h2>
+      <p class="note">Top: aggregate acceptance by rollout step. Bottom: K=3 per-position acceptance for gated, always-on, and short512 diagnostics.</p>
+      <img src="specdec_qwen3_8b_step_acceptance_rates.png" alt="Qwen3-8B NeMo-RL SpecDec step acceptance chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-32B Step Acceptance Rate</h2>
+      <p class="note">Top: aggregate acceptance by rollout step. Bottom: K=3 per-position acceptance for gated and always-on diagnostics.</p>
+      <img src="specdec_qwen3_32b_step_acceptance_rates.png" alt="Qwen3-32B NeMo-RL SpecDec step acceptance chart">
+    </div>
+
+    <div class="card">
+      <h2>vLLM Standalone Ceiling</h2>
+      <p class="note">Generation-only fixed decode, ISL/OSL 1000/512, dtype auto, KV auto. Qwen3-8B K=2 and Qwen3-32B K=3 are the strongest completed standalone points.</p>
+      <img src="specdec_completed_vllm_standalone_speedup.png" alt="vLLM standalone speedup chart">
+    </div>
+
+    <div class="card">
+      <h2>Qwen3-32B Standalone</h2>
+      <p class="note">Qwen3-32B standalone has healthy K=1/K=2/K=3 acceptance and speedup, but this has not transferred to gated NeMo-RL yet.</p>
+      <img src="specdec_completed_qwen3_32b_vllm_standalone.png" alt="Qwen3-32B standalone speedup and acceptance chart">
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-8B NeMo-RL Current Results</h2>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Step</th><th>Gen speedup</th><th>E2E speedup</th><th>Acceptance</th><th>Per-position acceptance</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>r5 K=3 gated, FP8 weight/KV auto</td><td>1</td><td>1.057x</td><td>1.028x</td><td>21.96%</td><td>36.10%, 18.00%, 11.05%</td><td>running</td></tr>
+          <tr><td>r5 K=3 gated, FP8 weight/KV auto</td><td>2</td><td>1.047x</td><td>1.022x</td><td>29.32%</td><td>51.02%, 25.88%, 11.01%</td><td>running</td></tr>
+          <tr><td>r5 K=3 gated, FP8 weight/KV auto</td><td>3</td><td>1.049x</td><td>1.018x</td><td>23.43%</td><td>42.05%, 19.86%, 8.32%</td><td>running</td></tr>
+          <tr><td>r5 K=3 gated, FP8 weight/KV auto</td><td>4</td><td>1.038x</td><td>1.019x</td><td>24.90%</td><td>44.35%, 20.87%, 9.16%</td><td>running</td></tr>
+          <tr><td>r5 K=3 gated, FP8 weight/KV auto</td><td>5</td><td>1.059x</td><td>1.027x</td><td>26.51%</td><td>45.13%, 23.52%, 10.80%</td><td>running</td></tr>
+          <tr><td>r5 K=3 gated, FP8 weight/KV auto</td><td>6</td><td>1.055x</td><td>1.030x</td><td>23.11%</td><td>41.26%, 19.52%, 8.31%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>1</td><td>1.041x</td><td>1.022x</td><td>30.06%</td><td>49.88%, 26.10%, 13.93%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>2</td><td>1.059x</td><td>1.023x</td><td>27.38%</td><td>50.21%, 23.34%, 8.48%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>3</td><td>1.048x</td><td>1.019x</td><td>26.12%</td><td>47.25%, 22.42%, 8.51%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>4</td><td>1.019x</td><td>1.009x</td><td>23.68%</td><td>40.37%, 20.46%, 10.13%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>5</td><td>1.014x</td><td>1.004x</td><td>22.06%</td><td>38.68%, 19.27%, 8.13%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>6</td><td>1.056x</td><td>1.025x</td><td>25.79%</td><td>43.28%, 22.81%, 11.00%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>7</td><td>1.013x</td><td>1.005x</td><td>36.48%</td><td>57.41%, 32.61%, 19.30%</td><td>running</td></tr>
+          <tr><td>r6 K=3 gated, BF16/KV auto</td><td>8</td><td>1.000x</td><td>pending</td><td>29.22%</td><td>48.80%, 25.70%, 12.73%</td><td>timed out after Step 8 metric</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>1</td><td>1.040x</td><td>1.019x</td><td>54.20%</td><td>54.20%</td><td>running</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>2</td><td>1.055x</td><td>1.018x</td><td>54.49%</td><td>54.49%</td><td>running</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>3</td><td>1.049x</td><td>1.016x</td><td>50.03%</td><td>50.03%</td><td>running</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>4</td><td>1.032x</td><td>1.010x</td><td>50.80%</td><td>50.80%</td><td>running</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>5</td><td>1.013x</td><td>0.997x</td><td>46.27%</td><td>46.27%</td><td>running</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>6</td><td>1.056x</td><td>1.015x</td><td>47.03%</td><td>47.03%</td><td>running</td></tr>
+          <tr><td>K=1 gated long rollout</td><td>7</td><td>1.002x</td><td>pending</td><td>60.84%</td><td>60.84%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>1</td><td>1.035x</td><td>1.019x</td><td>42.05%</td><td>54.11%, 29.93%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>2</td><td>1.051x</td><td>1.026x</td><td>36.68%</td><td>48.67%, 24.65%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>3</td><td>1.052x</td><td>1.026x</td><td>39.45%</td><td>52.77%, 26.04%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>4</td><td>1.010x</td><td>1.006x</td><td>41.42%</td><td>52.99%, 29.76%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>5</td><td>1.022x</td><td>1.011x</td><td>34.12%</td><td>45.14%, 23.03%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>6</td><td>1.043x</td><td>1.017x</td><td>28.57%</td><td>37.82%, 19.18%</td><td>running</td></tr>
+          <tr><td>K=2 gated long rollout</td><td>7</td><td>0.992x</td><td>pending</td><td>44.32%</td><td>56.39%, 32.18%</td><td>running</td></tr>
+          <tr><td>K=1 always-on long rollout</td><td>1</td><td>1.440x</td><td>1.189x</td><td>63.93%</td><td>63.93%</td><td>completed</td></tr>
+          <tr><td>K=1 always-on long rollout</td><td>2</td><td>1.458x</td><td>1.196x</td><td>59.38%</td><td>59.38%</td><td>completed</td></tr>
+          <tr><td>K=1 always-on long rollout</td><td>3</td><td>1.383x</td><td>1.163x</td><td>58.30%</td><td>58.30%</td><td>completed</td></tr>
+          <tr><td>K=1 always-on long rollout</td><td>4</td><td>1.373x</td><td>1.169x</td><td>60.70%</td><td>60.70%</td><td>completed</td></tr>
+          <tr><td>K=3 always-on long rollout</td><td>1</td><td>1.485x</td><td>1.233x</td><td>38.65%</td><td>58.99%, 36.23%, 20.73%</td><td>completed</td></tr>
+          <tr><td>K=3 always-on long rollout</td><td>2</td><td>1.578x</td><td>1.253x</td><td>34.58%</td><td>54.27%, 31.90%, 17.56%</td><td>completed</td></tr>
+          <tr><td>K=3 always-on long rollout</td><td>3</td><td>1.435x</td><td>1.204x</td><td>34.02%</td><td>53.05%, 31.33%, 17.68%</td><td>completed</td></tr>
+          <tr><td>K=3 always-on long rollout</td><td>4</td><td>1.433x</td><td>1.211x</td><td>35.63%</td><td>55.53%, 33.00%, 18.37%</td><td>completed</td></tr>
+          <tr><td>r11 K=3 short512/greedy/no-logprob/no-stop</td><td>1</td><td>0.865x</td><td>invalid</td><td>40.79%</td><td>61.16%, 38.78%, 22.18%</td><td>failed after generation</td></tr>
+          <tr><td>r12 K=3 short512/greedy/enginebs32</td><td>1</td><td>0.423x</td><td>invalid</td><td>40.66%</td><td>61.05%, 38.46%, 22.27%</td><td>failed after generation</td></tr>
+          <tr><td>K=1 short512/greedy/engine diagnostic</td><td>1</td><td>1.278x</td><td>invalid</td><td>64.61%</td><td>64.61%</td><td>failed after generation</td></tr>
+          <tr><td>r22 K=1 exact-engine/no-gate</td><td>1</td><td>1.299x</td><td>generation-only</td><td>64.61%</td><td>64.61%</td><td>stop-after-generation</td></tr>
+          <tr><td>r22 K=3 exact-engine/no-gate</td><td>1</td><td>0.452x</td><td>generation-only</td><td>40.66%</td><td>61.05%, 38.46%, 22.27%</td><td>stop-after-generation</td></tr>
+          <tr><td>r24 dynamic-cap K=3 engine, effective K=1</td><td>1</td><td>0.787x</td><td>generation-only</td><td>64.60%</td><td>effective K=1; K=3 per-position denominator unreliable</td><td>completed stop-after-generation</td></tr>
+          <tr><td>r84 online K=1 always vs r85 online baseline</td><td>1</td><td>0.605x</td><td>0.914x</td><td>40.80%</td><td>40.80%</td><td>completed matched online pair</td></tr>
+          <tr><td>r87 greedy online K=1 always vs r86 greedy online baseline</td><td>1</td><td>0.757x</td><td>1.066x</td><td>41.82%</td><td>41.82%</td><td>completed greedy matched online pair; generation itself is slower</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-32B NeMo-RL Current Results</h2>
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Step</th><th>Gen speedup</th><th>E2E speedup</th><th>Acceptance</th><th>Per-position acceptance</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>r1 K=1 gated</td><td>1</td><td>0.920x</td><td>0.937x</td><td>47.13%</td><td>47.13%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>2</td><td>0.936x</td><td>0.947x</td><td>42.50%</td><td>42.50%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>3</td><td>0.957x</td><td>0.942x</td><td>48.71%</td><td>48.71%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>4</td><td>0.956x</td><td>0.950x</td><td>39.57%</td><td>39.57%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>5</td><td>0.901x</td><td>0.917x</td><td>48.22%</td><td>48.22%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>6</td><td>0.961x</td><td>0.951x</td><td>41.79%</td><td>41.79%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>7</td><td>0.955x</td><td>0.947x</td><td>42.44%</td><td>42.44%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>8</td><td>0.920x</td><td>0.926x</td><td>40.90%</td><td>40.90%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>9</td><td>0.924x</td><td>0.931x</td><td>39.66%</td><td>39.66%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>10</td><td>0.948x</td><td>0.941x</td><td>47.18%</td><td>47.18%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>11</td><td>0.911x</td><td>0.927x</td><td>50.09%</td><td>50.09%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>12</td><td>0.951x</td><td>0.944x</td><td>43.14%</td><td>43.14%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>13</td><td>0.946x</td><td>0.942x</td><td>45.69%</td><td>45.69%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>14</td><td>0.941x</td><td>0.938x</td><td>41.96%</td><td>41.96%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>15</td><td>0.895x</td><td>0.913x</td><td>48.68%</td><td>48.68%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>16</td><td>0.907x</td><td>0.922x</td><td>50.61%</td><td>50.61%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>17</td><td>0.874x</td><td>0.906x</td><td>48.32%</td><td>48.32%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>18</td><td>0.938x</td><td>0.935x</td><td>42.37%</td><td>42.37%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>19</td><td>0.842x</td><td>0.889x</td><td>43.02%</td><td>43.02%</td></tr>
+          <tr><td>r1 K=1 gated</td><td>20</td><td>0.915x</td><td>0.928x</td><td>45.73%</td><td>45.73%</td></tr>
+          <tr><td>K=2 gated</td><td>1</td><td>0.909x</td><td>0.936x</td><td>32.75%</td><td>43.65%, 21.81%</td></tr>
+          <tr><td>K=2 gated</td><td>2</td><td>0.951x</td><td>0.967x</td><td>29.60%</td><td>40.60%, 18.54%</td></tr>
+          <tr><td>K=2 gated</td><td>3</td><td>0.949x</td><td>0.966x</td><td>32.93%</td><td>43.50%, 22.30%</td></tr>
+          <tr><td>K=2 gated</td><td>4</td><td>0.945x</td><td>0.960x</td><td>31.19%</td><td>42.08%, 20.23%</td></tr>
+          <tr><td>K=2 gated</td><td>5</td><td>0.873x</td><td>0.918x</td><td>32.97%</td><td>43.78%, 22.11%</td></tr>
+          <tr><td>K=2 gated</td><td>6</td><td>0.952x</td><td>0.964x</td><td>30.50%</td><td>41.29%, 19.63%</td></tr>
+          <tr><td>K=2 gated</td><td>7</td><td>0.946x</td><td>0.959x</td><td>30.54%</td><td>41.03%, 19.98%</td></tr>
+          <tr><td>K=2 gated</td><td>8</td><td>0.906x</td><td>0.937x</td><td>29.54%</td><td>40.35%, 18.68%</td></tr>
+          <tr><td>K=2 gated</td><td>9</td><td>0.916x</td><td>0.939x</td><td>27.37%</td><td>37.64%, 17.02%</td></tr>
+          <tr><td>K=2 gated</td><td>10</td><td>0.948x</td><td>0.960x</td><td>34.21%</td><td>45.14%, 23.24%</td></tr>
+          <tr><td>K=2 gated</td><td>11</td><td>0.916x</td><td>0.944x</td><td>36.98%</td><td>48.22%, 25.68%</td></tr>
+          <tr><td>K=2 gated</td><td>12</td><td>0.942x</td><td>0.957x</td><td>28.12%</td><td>38.99%, 17.19%</td></tr>
+          <tr><td>K=2 gated</td><td>13</td><td>0.946x</td><td>0.960x</td><td>32.06%</td><td>42.66%, 21.40%</td></tr>
+          <tr><td>K=2 gated</td><td>14</td><td>0.935x</td><td>0.952x</td><td>29.85%</td><td>41.09%, 18.53%</td></tr>
+          <tr><td>K=2 gated</td><td>15</td><td>0.890x</td><td>0.929x</td><td>36.97%</td><td>47.88%, 26.02%</td></tr>
+          <tr><td>K=2 gated</td><td>16</td><td>0.918x</td><td>0.945x</td><td>35.80%</td><td>46.65%, 24.90%</td></tr>
+          <tr><td>K=2 gated</td><td>17</td><td>0.869x</td><td>0.919x</td><td>34.41%</td><td>45.40%, 23.40%</td></tr>
+          <tr><td>K=2 gated</td><td>18</td><td>0.925x</td><td>0.939x</td><td>29.19%</td><td>39.58%, 18.75%</td></tr>
+          <tr><td>K=2 gated</td><td>19</td><td>0.842x</td><td>0.907x</td><td>30.18%</td><td>40.50%, 19.80%</td></tr>
+          <tr><td>K=2 gated</td><td>20</td><td>0.913x</td><td>0.934x</td><td>32.05%</td><td>43.27%, 20.80%</td></tr>
+          <tr><td>K=1 always-on</td><td>1</td><td>1.337x</td><td>1.149x</td><td>70.13%</td><td>70.13%</td></tr>
+          <tr><td>K=1 always-on</td><td>2</td><td>1.383x</td><td>1.175x</td><td>69.17%</td><td>69.17%</td></tr>
+          <tr><td>K=1 always-on</td><td>3</td><td>1.398x</td><td>1.176x</td><td>70.03%</td><td>70.03%</td></tr>
+          <tr><td>K=1 always-on</td><td>4</td><td>1.369x</td><td>1.173x</td><td>68.76%</td><td>68.76%</td></tr>
+          <tr><td>K=3 always-on</td><td>1</td><td>1.350x</td><td>1.163x</td><td>45.82%</td><td>66.72%, 43.25%, 27.48%</td></tr>
+          <tr><td>K=3 always-on</td><td>2</td><td>1.331x</td><td>1.151x</td><td>44.79%</td><td>65.93%, 42.05%, 26.36%</td></tr>
+          <tr><td>K=3 always-on</td><td>3</td><td>1.430x</td><td>1.196x</td><td>45.88%</td><td>66.70%, 43.33%, 27.57%</td></tr>
+          <tr><td>K=3 always-on</td><td>4</td><td>1.378x</td><td>1.180x</td><td>44.55%</td><td>65.66%, 41.76%, 26.20%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>1</td><td>0.918x</td><td>0.943x</td><td>24.73%</td><td>42.87%, 21.05%, 10.08%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>2</td><td>0.949x</td><td>0.961x</td><td>22.18%</td><td>39.91%, 18.20%, 8.24%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>3</td><td>0.962x</td><td>0.969x</td><td>24.65%</td><td>43.27%, 20.54%, 9.94%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>4</td><td>0.944x</td><td>0.956x</td><td>22.27%</td><td>39.34%, 18.62%, 8.67%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>5</td><td>0.930x</td><td>0.953x</td><td>25.69%</td><td>43.56%, 22.26%, 11.15%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>6</td><td>0.963x</td><td>0.967x</td><td>22.62%</td><td>40.10%, 18.89%, 8.66%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>7</td><td>0.950x</td><td>0.961x</td><td>19.40%</td><td>36.14%, 15.38%, 6.44%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>8</td><td>0.949x</td><td>0.958x</td><td>20.51%</td><td>37.73%, 16.74%, 6.91%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>9</td><td>0.917x</td><td>0.943x</td><td>20.87%</td><td>38.16%, 16.99%, 7.26%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>10</td><td>0.960x</td><td>0.964x</td><td>27.78%</td><td>46.64%, 24.07%, 12.46%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>11</td><td>0.916x</td><td>0.942x</td><td>27.91%</td><td>46.83%, 24.53%, 12.18%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>12</td><td>0.961x</td><td>0.965x</td><td>21.14%</td><td>38.71%, 16.78%, 7.71%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>13</td><td>0.943x</td><td>0.959x</td><td>25.63%</td><td>43.39%, 22.42%, 10.89%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>14</td><td>0.946x</td><td>0.959x</td><td>21.93%</td><td>39.92%, 17.86%, 7.77%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>15</td><td>0.915x</td><td>0.947x</td><td>28.03%</td><td>46.52%, 24.77%, 12.66%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>16</td><td>0.924x</td><td>0.944x</td><td>27.81%</td><td>46.50%, 24.17%, 12.56%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>17</td><td>0.857x</td><td>0.911x</td><td>24.15%</td><td>41.97%, 20.91%, 9.41%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>18</td><td>0.937x</td><td>0.955x</td><td>22.74%</td><td>40.56%, 18.92%, 8.52%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>19</td><td>0.858x</td><td>0.913x</td><td>20.77%</td><td>38.00%, 16.85%, 7.28%</td></tr>
+          <tr><td>r1 K=3 gated</td><td>20</td><td>0.931x</td><td>0.954x</td><td>24.11%</td><td>42.69%, 20.20%, 9.27%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h2>Active Experiment Matrix</h2>
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Mode</th><th>K</th><th>Job</th><th>Status at latest poll</th><th>Comparison baseline</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Qwen3-8B</td><td>vLLM standalone</td><td>1,2,3</td><td>3118289, 3125464, 3118290</td><td><span class="status done">completed</span></td><td>3118288</td></tr>
+          <tr><td>Qwen3-8B</td><td>vLLM standalone DAPOMath real prompts</td><td>1,2,3</td><td>3126865, 3126866, 3126867</td><td><span class="status done">completed</span>; bs32 real-prompt speedups K1 0.665x, K2 0.817x, K3 0.853x</td><td>3126864 retry2 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL gated long rollout</td><td>1</td><td>3125392</td><td><span class="status run">running</span>; through Step 7, gen avg 1.035x, E2E avg through Step 6 1.013x</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL gated long rollout</td><td>2</td><td>3125443</td><td><span class="status run">running</span>; through Step 7, gen avg 1.029x, E2E avg through Step 6 1.018x</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL gated long rollout</td><td>3</td><td>3124762</td><td><span class="status pend">timed out</span>; through Step 8, gen avg 1.031x, E2E avg through Step 7 1.015x</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL always-on long rollout</td><td>1</td><td>3125397</td><td><span class="status done">completed</span>; through Step 4, gen 1.373-1.458x, E2E 1.163-1.196x</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL always-on long rollout validation</td><td>1</td><td>3127002</td><td><span class="status run">running</span>; Ray actors connected 4/4, driver started, no rollout metric yet. Native K=1 always-on BF16/KV-auto 20-step validation submitted after r24 showed dynamic K3-&gt;K1 is slower than native K=1</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL always-on long rollout</td><td>2</td><td>3125444</td><td><span class="status bad">failed before metric</span>; vLLM scheduler dump at generation start</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL always-on long rollout</td><td>3</td><td>3125396</td><td><span class="status done">completed</span>; through Step 4, gen 1.433-1.578x, E2E 1.204-1.253x</td><td>3124761 BF16 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL short512/greedy/engine diagnostics</td><td>1,3</td><td>3125393, 3125311</td><td><span class="status bad">failed after generation</span>; generation metric valid, E2E invalid</td><td>3125310 short512 baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL exact-engine/no-gate short512 diagnostic</td><td>1,3</td><td>3126356, 3126357</td><td><span class="status done">generation metric emitted</span>; baseline 5652.52 tok/s/GPU, K=1 7345.13 tok/s/GPU (1.299x, acc 64.61%), K=3 2555.29 tok/s/GPU (0.452x, acc 40.66%)</td><td>3126355 exact-engine baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>NeMo-RL exact-engine dynamic draft cap</td><td>3 engine, dynamic 3/2/1</td><td>3126685</td><td><span class="status done">completed</span>; Step 1 gen 4446.23 tok/s/GPU, 0.787x vs exact baseline, acceptance 64.60%, scheduler effective_k=1</td><td>3126355 exact-engine baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 smoke</td><td>1</td><td>3135990</td><td><span class="status bad">failed before Ray startup</span>; Slurm could not create ray-head step because memory required by task was unavailable. Not a model/code metric.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 low-CPU retry</td><td>1</td><td>3136275</td><td><span class="status bad">failed after generation</span>; MasterConfig confirms policy.draft.enabled=true, BF16/KV auto, max_total_sequence_length 2560, max_new_tokens 512. vLLM internal SpecDec acceptance logs appeared first, then policy-side TransformerEngine RMSNorm failed during logprob forward.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 local transformer smoke</td><td>1</td><td>3136718</td><td><span class="status bad">failed after generation</span>; local-spec marker confirmed and original TE RMSNorm did not recur; failed next on missing <code>scaled_masked_softmax_cuda</code>.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 local transformer no-fused-softmax smoke</td><td>1</td><td>3137127</td><td><span class="status bad">failed</span>; <code>get_logprobs()</code> passed, then training failed in online EAGLE draft <code>enorm</code> TE RMSNorm. vLLM acceptance was 0% because the run reused a TE-converted checkpoint while forcing local spec at runtime.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 local reconvert + draft torch RMSNorm smoke</td><td>1</td><td>3137466</td><td><span class="status bad">failed before driver</span>; Slurm ray-head startup failed with <code>Memory required by task is not available</code>.</td><td>infra startup only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 local reconvert + draft torch RMSNorm retry</td><td>1</td><td>3137513</td><td><span class="status bad">failed</span>; local-spec HF reconvert marker fired, then dense Qwen3Bridge missing local layernorm mapping caused conversion failure.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 Qwen3 mapping fix retry</td><td>1</td><td>3137739</td><td><span class="status bad">failed</span>; conversion/generation/logprobs passed and vLLM acceptance recovered to 57.5-63.0%, then training failed in ModelOpt EAGLE decoder <code>input_layernorm</code> TE RMSNorm.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 recursive EAGLE TE norm replacement retry</td><td>1</td><td>3139283</td><td><span class="status bad">failed</span>; recursive TE norm replacement marker fired, generation acceptance 66.6% / 57.6% repeated, logprobs completed, then DDP grad sync failed on a <code>0/3</code> no-grad bucket.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 DDP no-overlap retry</td><td>1</td><td>3139703</td><td><span class="status bad">failed</span>; DDP no-overlap avoided the r79 grad-sync assertion, then failed at a model-parallel helper signature mismatch.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 helper-compat retry</td><td>1</td><td>3140266</td><td><span class="status bad">failed before model path</span>; Slurm GRES parser issue.</td><td>launcher setup only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 GRES parser retry</td><td>1</td><td>3140576</td><td><span class="status bad">failed</span>; Ray head/driver Python/Ray version mismatch.</td><td>Ray setup only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter short512 Ray-match retry</td><td>1</td><td>3140704</td><td><span class="status bad">cancelled</span>; Ray init, MasterConfig, vLLM worker init, and CUDA Graph capture succeeded, but no rollout metric emitted before cancellation.</td><td>online smoke only</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter worker≈32 fixed512 matched pair</td><td>1</td><td>3141902 / 3142137</td><td><span class="status done">completed</span>; r84 K=1 always vs r85 baseline: generation 0.605x, E2E 0.914x, acceptance 40.80%</td><td>3142137 online baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter greedy worker≈32 fixed512 matched pair</td><td>1</td><td>3142746 / 3142745</td><td><span class="status done">completed</span>; r87 greedy K=1 always vs r86 greedy baseline: generation 0.757x, E2E 1.066x, acceptance 41.82%</td><td>3142745 greedy online baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter post-SamplingParams-patch greedy matched pair</td><td>1</td><td>3143676 / 3143675</td><td><span class="status done">completed</span>; r89 K=1 vs r88 baseline: generation 0.732x, E2E 1.029x, acceptance 42.01%. Patched worker-side min_tokens/ignore_eos/stop-disable controls were active via actor venv rebuild.</td><td>3143675 post-patch greedy baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter finite-loss + gradfix 5-step rerun</td><td>1</td><td>3144993 / 3144992</td><td><span class="status done">completed</span>; r93 K=1 acceptance 42.24%, 70.42%, 56.98%, 48.91%, 71.70%; step gen speedups 0.760x, 1.110x, 0.959x, 0.949x, 1.217x; aggregate gen/E2E 0.964x/0.980x.</td><td>3144992 finite-loss gradfix baseline</td></tr>
+          <tr><td>Qwen3-8B</td><td>Online drafter finite-loss + gradfix 20-step follow-up</td><td>baseline, 1, 3</td><td>3145919, 3145920, 3145921</td><td><span class="status done">completed</span>; K=1 generation/E2E 1.093x/1.029x with 61.20% mean acceptance; K=3 generation/E2E 0.968x/0.995x with 37.46% mean acceptance.</td><td>3145919 finite-loss gradfix baseline</td></tr>
+          <tr><td>Qwen3-32B</td><td>vLLM standalone</td><td>1,2,3</td><td>3124817, 3125465, 3124818</td><td><span class="status done">completed</span></td><td>3124816</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL gated long rollout</td><td>1,3</td><td>3124832, 3124831</td><td><span class="status done">completed</span>; through Step 20, K1 avg gen/E2E 0.925x/0.932x, K3 avg 0.932x/0.951x</td><td>3124830 BF16 baseline</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL gated long rollout</td><td>2</td><td>3125460</td><td><span class="status done">completed</span>; through Step 20, avg gen/E2E 0.920x/0.945x, acc 31.86%</td><td>3124830 BF16 baseline</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL always-on long rollout</td><td>1,3</td><td>3125461, 3125463</td><td><span class="status done">completed</span>; through Step 4, gen K1 1.337-1.398x and K3 1.331-1.430x</td><td>3124830 BF16 baseline</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL always-on long rollout</td><td>2</td><td>3125462</td><td><span class="status bad">failed before aggregate metric</span>; KV cache near full in vLLM dump</td><td>3124830 BF16 baseline</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL worker32 GBS512</td><td>baseline</td><td>3136000</td><td><span class="status run">running</span>; Step 1-2 baseline metrics emitted, Step 3 early generation emitted. Logs confirm 512 responses across 16 workers, about 32 per worker.</td><td>new worker32 baseline</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL worker32 GBS512 always-on</td><td>1</td><td>3136001</td><td><span class="status run">running</span>; Step 1-2 mean gen/E2E speedup 1.42x/1.21x, acceptance 70.0%. Step 3 early generation emitted.</td><td>3136000</td></tr>
+          <tr><td>Qwen3-32B</td><td>NeMo-RL worker32 GBS512 always-on</td><td>3</td><td>3136002</td><td><span class="status run">running</span>; Step 1-2 mean gen/E2E speedup 1.66x/1.32x, acceptance 46.4%.</td><td>3136000</td></tr>
+        </tbody>
+      </table>
+      <p class="small">Always-on jobs disable the runtime scheduler gate by setting request/token thresholds to 0 and the runtime gate patch flag to false. Gated jobs use request threshold 8 and token threshold 4096.</p>
+    </div>
+
+    <div class="card full">
+      <h2>Qwen3-32B Worker32 Early Signal</h2>
+      <img src="qwen3_32b_nemorl_worker32_early.png" alt="Qwen3-32B NeMo-RL worker32 early speedup and acceptance">
+      <table>
+        <thead>
+          <tr><th>Mode</th><th>Job</th><th>Scope</th><th>Gen speedup</th><th>E2E speedup</th><th>Acceptance</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>K=1 always</td><td>3136001</td><td>Step 1-2 mean</td><td>1.42x</td><td>1.21x</td><td>70.0%</td></tr>
+          <tr><td>K=3 always</td><td>3136002</td><td>Step 1-2 mean</td><td>1.66x</td><td>1.32x</td><td>46.4%</td></tr>
+        </tbody>
+      </table>
+      <p class="small">This is an early matched signal, not a completed 20-step aggregate. The run uses GBS=512 with 16 generation workers, so each worker sees about 32 responses, closer to the standalone bs32 comparison than the original GBS=2048 runs.</p>
+      <p class="small">Latest K=3 extended poll: matched Step 1-8 generation average is 1.64x, matched Step 1-7 E2E average is 1.31x, and Step 1-8 acceptance average is 45.9%. Step 9 has K=3 metrics, but its matched baseline is still pending.</p>
+    </div>
+
+    <div class="card">
+      <h2>Completed NeMo-RL Context</h2>
+      <img src="specdec_completed_nemorl_speedup.png" alt="Completed NeMo-RL speedup chart">
+    </div>
+
+    <div class="card">
+      <h2>30B Completed K Sweep</h2>
+      <img src="specdec_completed_30b_k_sweep.png" alt="Qwen3-30B completed K sweep chart">
+    </div>
+
+    <div class="card full">
+      <h2>All Completed Evaluation Summary</h2>
+      <img src="specdec_completed_eval_summary.png" alt="Completed SpecDec evaluation summary chart">
+    </div>
+  </section>
+</main>
+</body>
+</html>

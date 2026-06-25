@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeMo-RL PARD / PARD-2 Status - 2026-06-15</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5e6b78;
+      --line: #dbe1e8;
+      --green: #147d4f;
+      --red: #b42318;
+      --amber: #9a6700;
+      --blue: #2454a6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+    header {
+      margin-bottom: 22px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 30px 0 12px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    a { color: var(--blue); text-decoration-thickness: 1px; }
+    code {
+      background: #eef2f6;
+      border: 1px solid #dde4eb;
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    .subtle { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 8px;
+    }
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 96px;
+    }
+    .metric .label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .metric .value {
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.15;
+    }
+    .metric .note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 5px;
+    }
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      margin: 14px 0;
+    }
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .ok { background: #e9f7ef; color: var(--green); border: 1px solid #bfe5ce; }
+    .fail { background: #fdeceb; color: var(--red); border: 1px solid #f5c1bd; }
+    .run { background: #eef4ff; color: var(--blue); border: 1px solid #c9d9ff; }
+    .warn { background: #fff7df; color: var(--amber); border: 1px solid #f3d27a; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0 4px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #eef2f6;
+      color: #243447;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .callout {
+      border-left: 4px solid var(--amber);
+      background: #fffaf0;
+      padding: 12px 14px;
+      margin: 14px 0;
+    }
+    ul { margin: 8px 0 0 20px; padding: 0; }
+    li { margin: 4px 0; }
+    footer {
+      margin-top: 28px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      main { padding: 20px 12px 36px; }
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+    }
+    @media (max-width: 520px) {
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>NeMo-RL PARD / PARD-2 Status</h1>
+    <p class="subtle">Snapshot: 2026-06-15 21:03 PDT. Scope: 235B MathRL, MathRL PARD-2 online/static, Eagle-3 MathRL, SWE-RL PARD-2 proof gates on OCI-HSG and Lyris, and Lyris standalone refresh.</p>
+  </header>
+
+  <section class="grid" aria-label="headline metrics">
+    <div class="metric">
+      <div class="label">MathRL 10-step proof</div>
+      <div class="value">3 / 3</div>
+      <div class="note">baseline, PARD K3, PARD K5 completed</div>
+    </div>
+    <div class="metric">
+      <div class="label">Best E2E speedup</div>
+      <div class="value">1.21x</div>
+      <div class="note">PARD K5, Step 2-10 mean</div>
+    </div>
+    <div class="metric">
+      <div class="label">PARD-2 MathRL</div>
+      <div class="value">r3 queued</div>
+      <div class="note">baseline/online fixed for local snapshot</div>
+    </div>
+    <div class="metric">
+      <div class="label">SWE-RL PARD-2</div>
+      <div class="value">r41 pending</div>
+      <div class="note">template fix, no node-local cache override</div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Executive Read</h2>
+    <div class="callout">
+      21:03 PDT update: Lyris r39 <code>2133251</code> is confirmed <code>FAILED 2:0</code>: Ray reached <code>64/64</code> actors, but the driver failed because workspace member <code>research/template_project/pyproject.toml</code> still required Python <code>&gt;=3.13.13</code> while Lyris has working Python <code>3.13.9</code>. The SWE-RL submit path now lowers both top-level and template-project Python requirements to <code>&gt;=3.13.9</code> before submit. r40 <code>2133287</code> then failed after <code>00:01:20</code> because pyxis could not mount worker-node host path <code>/tmp/uv_cache_swerl_r40</code>. r41 <code>2133292</code> removes those node-local override mounts and is <code>PENDING</code> at <code>21:03:28 PDT</code>.
+    </div>
+    <div class="callout">
+      OCI MathRL r2 is split: Eagle-3 K3 <code>3331856</code> is still <code>RUNNING</code> and has reached <code>Step 4/5</code> generation; static PARD-2 K3 <code>3331857</code> is still <code>RUNNING</code> with HF <code>429</code> warnings but no fatal exit. Baseline <code>3331855</code> failed in <code>prepare_refit_info()</code> with <code>No .safetensors files or index found in Qwen/Qwen3-235B-A22B</code>, and online PARD-2 <code>3331858</code> failed on HF Hub <code>429 Too Many Requests</code> during vLLM actor creation.
+    </div>
+    <div class="callout">
+      I patched the MathRL launcher so both <code>TARGET_MODEL</code> and <code>TOKENIZER_NAME</code> default to the local Qwen3-235B snapshot, and made <code>NRL_MEGATRON_CHECKPOINT_DIR</code> method-specific. Replacement local-model r3 jobs are queued under <code>nemotron_n3_post</code>: baseline <code>3332282</code> and online PARD-2 <code>3332283</code>, both <code>PENDING|Priority</code> at <code>21:00:04 PDT</code>.
+    </div>
+    <div class="callout">
+      20:49 PDT update: Lyris authentication is working again (<code>klist_rc=0</code>, <code>squeue</code>/<code>sacct</code> accessible). I patched the Lyris SWE-RL launcher so persistent uv/pip/torch cache envs are propagated into the Ray driver command, fixed the default Lyris repo/container paths, and validated the contract. Baseline 1-step smoke r37 <code>2133224</code> failed quickly because managed Python <code>3.13.13</code> is unavailable; r38 <code>2133226</code> then failed on uv extraction disk quota even with explicit Lustre cache exports. r39 <code>2133251</code> passed Ray head bootstrap (<code>Prepared/Installed 57 packages</code>, <code>ray start --head</code>) before the template-project Python requirement failure documented above.
+    </div>
+    <div class="callout">
+      OCI MathRL generation-bound r2 was fully allocated after 20:49 PDT. The latest state is superseded by the 21:00 PDT update above: Eagle-3 <code>3331856</code> and static PARD-2 <code>3331857</code> are still running, while baseline <code>3331855</code> and online PARD-2 <code>3331858</code> failed and were replaced by r3 queued jobs <code>3332282</code>/<code>3332283</code>.
+    </div>
+    <div class="callout">
+      Lyris standalone temp=1/top_p=1 status is unchanged: SWE standalone completed, while Math500 baseline <code>2124147</code> and PARD-2 <code>2124150</code> timed out at 5 hours. Earlier Lyris SWE-RL retries <code>2129614</code>, <code>2129624</code>, <code>2129715</code>, and <code>2129746</code> are failed; r36 specifically hit uv disk quota under <code>/root/.cache/uv</code> before <code>bin/ray</code> existed.
+    </div>
+    <div class="callout">
+      20:30 PDT update: generation-bound MathRL r1 baseline <code>3330755</code> reached <code>SETUP COMPLETE</code>, entered <code>Step 1/5</code>, generated the 32-response batch, computed logprobs/advantages, then failed during policy training in packed loss input construction: tensor length <code>1312</code> vs <code>1168</code> at <code>nemo_rl/algorithms/loss/utils.py</code>. I cancelled stale r1 Eagle-3/static PARD-2/online PARD-2 jobs <code>3330756</code>-<code>3330758</code>.
+    </div>
+    <div class="callout">
+      New MathRL generation-bound r2 is submitted under <code>nemotron_n3_post</code>: baseline <code>3331855</code>, Eagle-3 K3 <code>3331856</code>, static PARD-2 K3 <code>3331857</code>, and online PARD-2 K3 <code>3331858</code>. All use <code>max_new_tokens=min_tokens=1024</code>, <code>temperature=1.0</code>, <code>top_p=1.0</code>, <code>top_k=-1</code>, 5 steps, 4 prompts, 8 generations, and train global batch size 32. r2 forces <code>context_parallel_size=1</code> and <code>sequence_packing=false</code> for all methods. At <code>20:31:17 PDT</code>, baseline, Eagle-3, and static PARD-2 are <code>RUNNING</code>; online PARD-2 is <code>PENDING|Priority</code> with estimated start <code>2026-06-15T20:43:08</code>.
+    </div>
+    <div class="callout">
+      PARD-2 actor venv setup was also fixed for r2: static/online PARD-2 now use a shared Lustre actor venv root plus <code>READY_ENV_BUILDER</code> markers. This addresses the r1 static PARD-2 failure mode where serialized venv creation under node-local <code>/opt/ray_venvs</code> made other nodes fail with missing <code>bin/python</code>.
+    </div>
+    <div class="callout">
+      SWE-RL PARD-2 r28 <code>3331533</code> was cancelled after <code>00:05:26</code>. It never reached actor setup; the log looped at <code>0/64</code> actors because the head container could not execute <code>/tmp/nemo_rl_ray_3331533_3.12.13_2.54.0/bin/ray</code>. This is a Ray runtime venv materialization issue before the previous NCCL timeout patch is exercised.
+    </div>
+    <div class="callout">
+      20:01 PDT live update: SWE-RL PARD-2 r27 <code>3327299</code> is now <code>FAILED</code> after reaching <code>SETUP COMPLETE</code>, total setup <code>1744.9s</code>, and rollout collection up to <code>29/32</code>. The fatal error was a Megatron tensor-model-parallel NCCL <code>ALLGATHER</code> watchdog timeout during policy-to-generation refit/broadcast: timeout <code>600000ms</code>, observed runtime <code>600087ms</code>. This is a different failure from the earlier Math <code>draft.fc.weight</code> refit metadata issue.
+    </div>
+    <div class="callout">
+      I patched the remote Math and SWE repos with <code>NRL_MEGATRON_PG_TIMEOUT_V1</code> and updated the SWE submit wrapper so <code>NRL_MEGATRON_NCCL_TIMEOUT_SECONDS</code> and <code>NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS</code> are passed into the Ray driver/actor command path. New SWE-RL PARD-2 retry <code>3331533</code> is queued under <code>nemotron_n3_post</code> with <code>max_steps=1</code>, fresh actor venv suffix, W&amp;B disabled, and Megatron PG timeout <code>3600s</code>.
+    </div>
+    <div class="callout">
+      MathRL generation-bound baseline <code>3330755</code> and Eagle-3 K3 <code>3330756</code> are still <code>RUNNING</code>. Both reached <code>All workers connected!</code> and are currently materializing vLLM actor environments; no <code>SETUP COMPLETE</code>, Step marker, or fatal error is visible yet. Static PARD-2 K3 <code>3330757</code> and online PARD-2 K3 <code>3330758</code> remain <code>PENDING|Priority</code>, now both estimated at <code>20:21:17 PDT</code>.
+    </div>
+    <div class="callout">
+      19:49 PDT live update: MathRL generation-bound baseline <code>3330755</code> and Eagle-3 K3 <code>3330756</code> are <code>RUNNING</code> and both reached <code>All workers connected!</code>. Static PARD-2 K3 <code>3330757</code> and online PARD-2 K3 <code>3330758</code> remain <code>PENDING|Priority</code>, with latest estimates <code>20:21:17</code> and <code>20:52:39 PDT</code>.
+    </div>
+    <div class="callout">
+      Math online PARD-2 fixed-256 <code>3324571</code> reached <code>SETUP COMPLETE</code>, entered <code>Step 1/10</code>, and began <code>Generating responses for batch of size 64</code>. It then failed during the first policy-to-generation refit with <code>KeyError: 'draft.fc.weight'</code> in <code>VllmInternalWorkerExtension.update_weights_via_ipc_zmq</code>. Setup timing: vLLM <code>1212.9s</code>, policy <code>99.6s</code>, other setup <code>316.6s</code>, total <code>1629.2s</code>.
+    </div>
+    <div class="callout">
+      Root-cause patch applied to both Math and SWE remote repos: policy <code>prepare_refit_info()</code> now merges metadata from all policy workers and logs <code>NRL_REFIT_INFO_MERGE_V1</code>, preventing <code>draft.*</code> keys such as <code>draft.fc.weight</code> from being dropped when they come from a non-first worker. The local Math launcher applies the same hotfix before future submissions.
+    </div>
+    <div class="callout">
+      SWE-RL PARD-2 r27 <code>3327299</code> remains <code>RUNNING</code>. The earlier <code>ray status</code> traceback was transient and non-fatal; the job then reached <code>64/64</code> actors and <code>All workers connected!</code>. <code>ray-driver.log</code> shows active rollout collection, latest observed at <code>29/32</code>, but no NeMo-RL Step marker yet.
+    </div>
+    <div class="callout">
+      19:30 PDT live update: OCI-HSG access is working again. Math online PARD-2 fixed-256 <code>3324571</code> and SWE-RL PARD-2 r27 <code>3327299</code> are <code>RUNNING</code> since <code>2026-06-15T19:05:01</code>, but neither has emitted <code>SETUP COMPLETE</code> or <code>Step</code> markers yet. Math static PARD-2 fixed-256 <code>3324570</code> failed before setup/Step from actor venv creation via <code>uv run --locked --extra mcore</code>, ending with missing <code>megatron/core/datasets/helpers_cpp.cpython-313-aarch64-linux-gnu.so</code>.
+    </div>
+    <div class="callout">
+      New MathRL generation-bound batch submitted under <code>nemotron_n3_post</code>: baseline <code>3330755</code>, Eagle-3 K3 <code>3330756</code>, static PARD-2 K3 <code>3330757</code>, and online PARD-2 K3 <code>3330758</code>. All use <code>max_new_tokens=min_tokens=1024</code>, <code>temperature=1.0</code>, <code>top_p=1.0</code>, <code>top_k=-1</code>, 5 steps, and train global batch size 32. All four are currently <code>PENDING|Priority</code>; latest start estimates are <code>19:43:43</code>, <code>20:05:01</code>, <code>20:21:17</code>, and <code>21:39:44 PDT</code>, respectively. The PARD-2 entries use <code>NRL_ACTOR_UV_LOCK_MODE=unlocked</code> and <code>NRL_SERIALIZE_ACTOR_VENV_CREATION=true</code>.
+    </div>
+    <div class="callout">
+      19:07 PDT access note: a fresh local live poll could not be completed because this shell resolves through public DNS (<code>8.8.8.8</code>) and cannot resolve the internal SSH aliases <code>oci-hsg-cs-001-vscode-02</code> or <code>login-lyris</code>. The latest successful remote state remains the 18:47 PDT poll below; this is an access/DNS limitation, not a new job failure signal.
+    </div>
+    <div class="callout">
+      18:47 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest estimates are <code>18:52:03 PDT</code> for <code>3324570</code>, <code>19:17:49 PDT</code> for <code>3324571</code>, and <code>20:21:17 PDT</code> for <code>3327299</code>. Priorities are <code>129934</code>, <code>129934</code>, and <code>129917</code>; actual <code>NodeList</code> is empty and no runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:43 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest estimates are <code>18:52:03 PDT</code> for <code>3324570</code> and <code>19:13:02 PDT</code> for both <code>3324571</code> and <code>3327299</code>. Candidate placements exist, but actual <code>NodeList</code> is empty and no runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:41 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest estimates are <code>18:52:03 PDT</code> for <code>3324570</code>, <code>19:13:02 PDT</code> for <code>3324571</code>, and <code>20:00:00 PDT</code> for <code>3327299</code>. Candidate placements exist, but actual <code>NodeList</code> is empty and no runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:39 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest estimates are <code>18:52:03 PDT</code> for <code>3324570</code>, <code>19:13:02 PDT</code> for <code>3327299</code>, and <code>19:17:49 PDT</code> for <code>3324571</code>. Candidate placements exist, but actual <code>NodeList</code> is empty and no runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:37 PDT refresh: I polled OCI-HSG five times from <code>18:32:43 PDT</code> through <code>18:37:17 PDT</code>. Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Priorities ticked up to <code>129933</code> for Math and <code>129916</code> for SWE r27. Latest estimates are <code>18:52:03 PDT</code>, <code>19:17:49 PDT</code>, and <code>19:13:02 PDT</code>. No runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:31 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest estimates are <code>18:52:00 PDT</code> for <code>3324570</code>, <code>18:52:03 PDT</code> for <code>3324571</code>, and <code>19:13:02 PDT</code> for <code>3327299</code>. Candidate placements exist, but actual <code>NodeList</code> is empty and no runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:29 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest estimates shifted to <code>20:25:06 PDT</code> for SWE-RL r27 <code>3327299</code> and <code>20:52:39 PDT</code> for both Math PARD-2 gates. Candidate <code>SchedNodeList</code> placements exist, but actual <code>NodeList</code> is empty and no runtime logs or Step markers exist yet.
+    </div>
+    <div class="callout">
+      18:26 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Math priorities ticked up to <code>129932</code>, SWE r27 is <code>129915</code>, and candidate <code>SchedNodeList</code> placements still exist but actual <code>NodeList</code> is empty. Latest estimates are <code>18:52:00 PDT</code>, <code>18:52:03 PDT</code>, and <code>20:52:39 PDT</code>. No runtime logs or Step markers exist yet, so no resubmit was triggered.
+    </div>
+    <div class="callout">
+      18:24 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. The near-current <code>3324570</code> estimate did not materialize; latest estimates are <code>18:52:00 PDT</code> for <code>3324570</code>, <code>18:52:03 PDT</code> for <code>3324571</code>, and <code>20:52:39 PDT</code> for <code>3327299</code>. There are still no runtime logs, Step markers, or new failures.
+    </div>
+    <div class="callout">
+      18:21 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. <code>scontrol</code> now shows scheduler candidate nodes for all three jobs, but no actual allocation or logs yet. Latest estimates are <code>19:17:48 PDT</code> for <code>3324570</code>, <code>20:21:17 PDT</code> for <code>3324571</code>, and <code>20:52:39 PDT</code> for <code>3327299</code>.
+    </div>
+    <div class="callout">
+      18:19 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. The temporary <code>18:18:35 PDT</code> start estimate did not materialize; latest estimates drifted to <code>19:17:49 PDT</code> for <code>3324570</code>, <code>20:21:17 PDT</code> for <code>3327299</code>, and <code>20:52:39 PDT</code> for <code>3324571</code>. There are still no runtime logs, Step markers, or new failures.
+    </div>
+    <div class="callout">
+      18:16 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest start estimates remain <code>18:42:26 PDT</code> for <code>3324570</code>, <code>19:17:48 PDT</code> for <code>3324571</code>, and <code>20:21:17 PDT</code> for <code>3327299</code>. There are still no runtime logs, Step markers, or new failures.
+    </div>
+    <div class="callout">
+      18:15 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest start estimates are <code>18:42:26 PDT</code> for <code>3324570</code>, <code>19:17:48 PDT</code> for <code>3324571</code>, and <code>20:21:17 PDT</code> for <code>3327299</code>. The log roots still have no runtime logs, Step markers, or new failures.
+    </div>
+    <div class="callout">
+      18:13 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code>. Latest start estimates moved to <code>18:52:00 PDT</code> for <code>3324570</code>, <code>19:17:49 PDT</code> for <code>3324571</code>, and <code>19:37:27 PDT</code> for <code>3327299</code>. There are still no runtime logs or Step markers from these active gates.
+    </div>
+    <div class="callout">
+      18:11 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code> with no runtime logs or Step markers. Latest estimates are <code>19:17:48 PDT</code> for <code>3324570</code>, <code>19:37:27 PDT</code> for SWE-RL r27 <code>3327299</code>, and <code>20:16:46 PDT</code> for <code>3324571</code>. Lyris remains SSH-reachable, but the Kerberos tickets expired at <code>2026-06-15 16:08:40 PDT</code>, <code>kinit -R</code> fails with <code>Ticket expired while renewing credentials</code>, and Slurm fails on <code>/etc/slurm/slurm.conf: Permission denied</code>.
+    </div>
+    <div class="callout">
+      18:06 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are still <code>PENDING|Priority</code> with no runtime logs yet. Latest estimates are <code>19:17:48 PDT</code>, <code>19:37:27 PDT</code>, and <code>20:16:46 PDT</code>, respectively. Lyris remains SSH-reachable but Slurm fails on <code>/etc/slurm/slurm.conf: Permission denied</code>.
+    </div>
+    <div class="callout">
+      18:05 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL r27 <code>3327299</code> are all still <code>PENDING|Priority</code>. I reduced only the two Math PARD-2 jobs to <code>01:00:00</code> walltime because the successful Math 10-step runs completed in about 30-34 minutes and the previous static PARD-2 attempt reached its failure after 25 minutes; SWE r27 remains <code>02:00:00</code>. Latest estimates are <code>19:37:27 PDT</code> for <code>3324570</code>, <code>20:21:17 PDT</code> for <code>3324571</code>, and <code>20:21:17 PDT</code> for <code>3327299</code>.
+    </div>
+    <div class="callout">
+      18:03 PDT refresh: Math static PARD-2 <code>3324570</code>, Math online PARD-2 <code>3324571</code>, and SWE-RL patched r27 <code>3327299</code> are all still <code>PENDING|Priority</code>. Latest estimates are <code>19:17:49 PDT</code>, <code>19:56:03 PDT</code>, and <code>21:11:03 PDT</code>, respectively. I also hardened the SWE-RL submit wrapper so future submissions fail preflight if the remote Gym app lacks either the OpenHands <code>PYTHONPATH</code> patch or the <code>poetry_shebang</code> / miniforge-bind patch that fixed r25's rollout-layer failure. The local contract validator, direct remote marker check, and OCI-HSG dry-run all pass.
+    </div>
+    <div class="callout">
+      17:59 PDT queue refresh: patched SWE-RL r27 <code>3327299</code>, Math static PARD-2 <code>3324570</code>, and Math online PARD-2 <code>3324571</code> are still <code>PENDING|Priority</code> with no new driver logs. The latest scheduler estimates are <code>19:17:49 PDT</code> for <code>3324570</code>, <code>19:56:03 PDT</code> for <code>3324571</code>, and <code>21:11:03 PDT</code> for SWE r27 <code>3327299</code>. No new runtime failure appeared after the miniforge-bind patch.
+    </div>
+    <div class="callout">
+      Latest SWE-RL update at 17:53 PDT: r25 <code>3324801</code> reached <code>SETUP COMPLETE</code> and NemoGym rollout collection, but did not reach training <code>Step 1</code>. Final marker counts before cancellation were <code>Step=0</code>, <code>bad interpreter/return code 126=124</code>, and <code>NeMo Gym returned a result with no generation data=462</code>. The root cause was inner OpenHands/SWE-rebench <code>poetry</code>: its shebang pointed to an unmounted <code>/opt/nemo-rl/.../swe_openhands_setup/miniforge3/bin/python3.12</code>. I patched OCI-HSG remote Gym <code>app.py</code> to bind that shebang miniforge path, verified <code>py_compile</code>, submitted patched retry r27 <code>3327299</code> under <code>nemotron_n3_post</code>, and cancelled stale r25 plus pre-patch fallback r26 <code>3325343</code>. r27 is <code>PENDING|Priority</code>, with scheduler estimate <code>2026-06-15 19:17:48 PDT</code>.
+    </div>
+    <div class="callout">
+      Step-1-plus answer: yes. Clean 235B NeMo-RL examples exist for MathRL: baseline <code>3321180</code>, PARD K3 <code>3321423</code>, and PARD K5 <code>3321424</code> all completed <code>Step 1/10</code> through <code>Step 10/10</code>. Partial 235B PARD-2 evidence also exists: Math static PARD-2 <code>3324200</code> reached <code>Step 1/10</code>, generated responses, computed logprobs, and then failed during policy training. The clean online PARD-2 mechanics proof remains the smaller Qwen3-8B comparison <code>3288181</code>/<code>3288182</code>/<code>3288183</code>, which completed the 10-step run.
+    </div>
+    <div class="callout">
+      Latest SWE-RL r25 update at 17:42 PDT: <code>3324801</code> is still <code>RUNNING</code>, all <code>100/100</code> Ray actors are alive, and the driver reached <code>SETUP COMPLETE</code> with total setup time <code>1640.0s</code>. It has passed Ray/Python, NemoGym path, PARD-2 vLLM initialization, CUDA graph capture, and actor creation gates. It has not emitted a <code>Step 1</code> marker yet; the current tail is NemoGym actor virtualenv materialization.
+    </div>
+    <div class="callout">
+      17:36 PDT clarification, superseded by the 17:42 update above: SWE-RL r25 <code>3324801</code> did not terminate immediately. The whole Slurm job was still <code>RUNNING</code> on <code>nvl72092-T[01-16]</code>. The immediate failures were short startup/probe steps that tried to run <code>/tmp/nemo_rl_ray_3324801_3.13.13_2.54.0/bin/ray</code> before the Ray venv existed inside the container; one later <code>ray status</code> probe hit Ray's <code>AttributeError: 'NoneType' object has no attribute 'decode'</code>. The same Slurm log subsequently reached <code>64/64</code> actors and <code>All workers connected!</code>.
+    </div>
+    <p>MathRL is now a working 235B 10-step NeMo-RL example for baseline and PARD. Both PARD K3 and PARD K5 improve generation and E2E throughput on the reduced-shape temp1 run.</p>
+    <p>PARD-2 has not produced a completed 235B proof yet, but the failure has moved forward. MathRL r21 static reached <code>SETUP COMPLETE</code>, <code>Step 1/10</code>, and generation start after the warp snapshot fix.</p>
+    <div class="callout">
+      Current move: Math online PARD-2 r23 <code>3324365</code> ran <code>00:18:30</code> and reached vLLM/PARD-2 drafter load plus 128/128 policy workers, then failed before Step 1 because sequence packing was disabled while context parallelism was still <code>2</code>. MCore raised <code>AssertionError: Sequence Packing must be enabled to use Context Parallelism with MCore.</code> Static r24 <code>3324460</code> was cancelled before allocation because it had the same bad combination. CP=1 replacements are queued as static r25 <code>3324570</code> and online r25 <code>3324571</code>.
+    </div>
+    <p>SWE-RL r20 <code>3322947</code> hit the same PARD-2 warp snapshot class of failure as the earlier Math r20 attempts: the job passed setup far enough to start async vLLM engines, then vLLM tried to load <code>warp_model.bin</code> from a local snapshot that did not contain it and raised <code>HFValidationError</code>. It was cancelled and replaced by r21 <code>3324256</code> using the corrected snapshot.</p>
+    <p>SWE-RL r21 then failed earlier because the launcher passed an empty <code>UV_PYTHON_DOWNLOADS</code> value to <code>uv sync</code>. The submit script now defaults that variable to <code>auto</code>. SWE-RL r22 <code>3324276</code> reached the driver and loaded datasets, then exited in <code>wandb.init</code> with <code>No API key configured</code>; the submit wrapper now has a W&amp;B-key guard.</p>
+    <p>SWE-RL r23 <code>3324381</code> made it through the prior gates: W&amp;B, dataset load, 32/32 policy workers, PARD-2 drafter load, async vLLM Uvicorn serving, CUDA graph capture, and <code>SETUP COMPLETE</code>. It then failed before Step 1 when <code>NemoGym.__init__()</code> tried to import the mounted Gym package and raised <code>ModuleNotFoundError: No module named 'nemo_gym'</code>.</p>
+    <p>I patched the SWE submit wrapper to propagate <code>NRL_ACTOR_VENV_CACHE_SUFFIX</code> into the Ray driver command and submitted r24 <code>3324728</code>. r24 failed earlier, before PARD-2 setup, because the Ray head used Ray <code>2.49.2</code> / Python <code>3.12.13</code> while the driver used Ray <code>2.54.0</code> / Python <code>3.13.13</code>.</p>
+    <p>I then submitted r25 <code>3324801</code> with <code>RAY_VERSION=2.54.0</code>, <code>RAY_PYTHON_VERSION=3.13.13</code>, <code>RAY_PYTHON_SPEC=3.13.13</code>, and <code>RAY_USE_EXISTING_ENV=false</code>. The NemoGym path fix is now also stronger: the remote <code>create_env()</code> path injects the Gym source root into the NemoGym actor env, the local submit wrapper injects <code>${REPO_ROOT}/3rdparty/Gym-workspace/Gym</code> into launcher <code>PYTHONPATH</code>, and the same <code>create_env()</code> fix is now persisted in the local patch bundle. r25 is currently <code>RUNNING</code> and has passed the prior Ray/Python mismatch and NemoGym import gates. It loaded the SWE datasets, initialized <code>32/32</code> vLLM policy workers plus <code>32/32</code> LM policy workers, started PARD-2 vLLM engines, and loaded Qwen3 checkpoint shards. It has not yet emitted <code>SETUP COMPLETE</code> or Step 1.</p>
+    <p>To reduce retry latency if r25 fails, I submitted SWE-RL fallback r26 <code>3325343</code> with <code>--dependency=afternotok:3324801</code>. It is <code>PENDING|Dependency</code> and will not run unless r25 exits non-zero. Its sbatch submit line explicitly exports Ray/Python bootstrap values: Ray <code>2.54.0</code>, Python <code>3.13.13</code>, <code>RAY_USE_EXISTING_ENV=false</code>, and <code>UV_PYTHON_DOWNLOADS=auto</code>. W&amp;B is disabled on this fallback with final override <code>logger.wandb_enabled=False</code>.</p>
+    <p>The shared SWE-RL submit wrapper is now hardened for future retries: if Ray/UV bootstrap variables are set and no explicit <code>--export</code> is already present, it automatically appends <code>--export=ALL,...</code> to the generated <code>sbatch</code> line. A dry-run confirmed the OCI-HSG line includes Ray <code>2.54.0</code>, Python <code>3.13.13</code>, <code>RAY_USE_EXISTING_ENV=false</code>, and <code>UV_PYTHON_DOWNLOADS=auto</code>.</p>
+    <p>To improve backfill eligibility, I reduced the active r25/r26 proof-gate walltimes from <code>04:00:00</code> to <code>02:00:00</code>. At the latest poll, Math static r25 <code>3324570</code> and Math online r25 <code>3324571</code> are still <code>PENDING|Priority</code>. SWE-RL r25 <code>3324801</code> is <code>RUNNING</code> on <code>nvl72092-T[01-16]</code>, and fallback r26 <code>3325343</code> remains dependency-blocked on r25.</p>
+    <p>I added a focused MathRL PARD-2 contract validator for the r25 failure class. <code>scripts/validate_qwen235b_mathrl_pard2_cp1_contract.py</code> passes and confirms both <code>static_pard2_k3</code> and <code>online_pard2_k3</code> use <code>sequence_packing_enabled=false</code> with <code>context_parallel_size=1</code>, while only <code>online_pard2_k3</code> enables the online draft/refit controls.</p>
+    <p>I also extended the SWE-RL launcher contract validator so it now guards the r24 Ray/Python export fix and r23 NemoGym path fix. <code>docs/swerl_fullgrpo_launcher_contract_validation_20260615.md</code> is now <code>Overall: PASS</code> and checks <code>SBATCH_EXPORT_RAY_ENV</code>, <code>append_sbatch_ray_export</code>, Ray/Python/UV export variables, <code>NRL_NEMO_GYM_SOURCE_ROOT</code>, actor venv suffix pass-through, and Ray driver command env propagation.</p>
+    <p>Small online-drafter proof is positive mechanically: OCI-HSG Qwen3-8B online PARD-2 job <code>3288183</code> completed 10/10, and its driver log shows <code>Draft Refit This Step: True</code> plus <code>[draft-refit] exported PARD draft weights</code> through Step 10/10. The refreshed impact report shows online refit on <code>9</code> parsed post-step rows and acceptance rising from static <code>1.836%</code> to online <code>2.553%</code>, but generation-worker TPS is only <code>0.9696x</code> of static and <code>0.5887x</code> of baseline. This proves the online drafter train/refit path itself is functional on the smaller setup, not a throughput win.</p>
+    <p>Lyris SSH reaches <code>login-lyris02.lyris.clusters.nvidia.com</code>, but Slurm commands currently fail because the active Kerberos tickets expired at <code>16:08:40 PDT</code>. Because <code>/home</code> and <code>/etc/slurm</code> are NFSv4 <code>sec=krb5</code> mounts, <code>/home/sna/.bashrc</code> and <code>/etc/slurm/slurm.conf</code> return <code>Permission denied</code>; <code>kinit -R</code> also failed because the ticket is already expired. Direct login-node access now reaches the host-key/MFA path but requires the <code>sna-mfa@login-lyris.nvidia.com</code> authentication flow before Slurm can be refreshed. The optimized mxfp8 standalone bf16-KV and fp8-KV runs completed successfully through bs=32 before this refresh issue. The bf16 denominator remains invalid: the primary job was cancelled after invalid bs=1/2/4/8/16 rows, and the latest repair job <code>2131558</code> hit an NCCL <code>_ALLGATHER_BASE</code> watchdog timeout during the first bs=1 request.</p>
+    <p class="subtle">Patch application was rechecked at 16:26 PDT. Local MathRL launcher now sets <code>context_parallel_size=1</code> for static/online PARD-2 sequence-packing-off runs. Local SWE submit wrapper now passes <code>NRL_ACTOR_VENV_CACHE_SUFFIX</code>, Ray version settings, NemoGym source <code>PYTHONPATH</code>, and future explicit Ray/UV <code>sbatch --export</code> values. The remote SWE repo and local patch bundle both contain <code>nemo_rl/environments/utils.py</code> with the NemoGym actor env fix. The r25 poll helper checks the correct <code>mathrl_latest_main_logs</code> roots and also tracks fallback r26.</p>
+  </section>
+
+  <h2>Lyris Standalone Refresh</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Mode</th>
+        <th>Status</th>
+        <th>Latest Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>2131233</code></td>
+        <td>bf16 TP8/DP1 denominator</td>
+        <td><span class="status fail">CANCELLED / INVALID</span></td>
+        <td>Cancelled at 15:33 PDT and invalid through bs=16. Runs produce zero output tokens after the engine/server failure path. Do not use these rows for performance comparison.</td>
+      </tr>
+      <tr>
+        <td><code>2131352</code></td>
+        <td>bf16 TP8/DP1 bs=1 repair</td>
+        <td><span class="status fail">INVALID</span></td>
+        <td>SLURM completed <code>0:0</code>, but the benchmark wrapper reported zero output tokens. Log root cause: NCCL <code>_ALLGATHER_BASE</code> watchdog timeout, SIGABRT, then connection refused retries.</td>
+      </tr>
+      <tr>
+        <td><code>2131558</code></td>
+        <td>bf16 TP8/DP1 bs=1 repair, Ray v2 retry</td>
+        <td><span class="status fail">CANCELLED / INVALID</span></td>
+        <td>Server became healthy and bs=1 started, then generation stalled. Rank 7 hit NCCL <code>_ALLGATHER_BASE</code> watchdog timeout after 600 seconds in logits all-gather; no raw bs=1 JSON was written.</td>
+      </tr>
+      <tr>
+        <td><code>2131234</code></td>
+        <td>mxfp8 optimized, bf16 KV, TP4/DP1</td>
+        <td><span class="status ok">COMPLETED 0:0</span></td>
+        <td>Completed through bs=32. bs16 output throughput is <code>1661.07 tok/s</code>; bs32 output throughput is <code>2417.10 tok/s</code>, total throughput <code>2658.81 tok/s</code>, mean TTFT <code>2263.99 ms</code>.</td>
+      </tr>
+      <tr>
+        <td><code>2131235</code></td>
+        <td>mxfp8 optimized, fp8 KV, TP4/DP1</td>
+        <td><span class="status ok">COMPLETED 0:0</span></td>
+        <td>Completed through bs=32. bs16 output throughput is <code>1663.80 tok/s</code>; bs32 output throughput is <code>2427.55 tok/s</code>, total throughput <code>2670.31 tok/s</code>, mean TTFT <code>2283.87 ms</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>MathRL Completed Runs</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Method</th>
+        <th>Status</th>
+        <th>Elapsed</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>3321180</code></td>
+        <td>baseline</td>
+        <td><span class="status ok">COMPLETED 0:0</span></td>
+        <td>00:30:20</td>
+        <td>Reached <code>Step 10/10</code>, trained policy on Step 10, and logged max-step guard.</td>
+      </tr>
+      <tr>
+        <td><code>3321423</code></td>
+        <td>PARD K3</td>
+        <td><span class="status ok">COMPLETED 0:0</span></td>
+        <td>00:33:37</td>
+        <td>Reached <code>Step 10/10</code>, trained policy on Step 10, and logged max-step guard.</td>
+      </tr>
+      <tr>
+        <td><code>3321424</code></td>
+        <td>PARD K5</td>
+        <td><span class="status ok">COMPLETED 0:0</span></td>
+        <td>00:33:16</td>
+        <td>Reached <code>Step 10/10</code>, trained policy on Step 10, and logged max-step guard.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>MathRL PARD Speedups</h2>
+  <p class="subtle">Step 2-10 means exclude Step 1 cold-start/setup effects.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Method</th>
+        <th class="num">Completed Steps</th>
+        <th class="num">Total Step Mean</th>
+        <th class="num">Generation Mean</th>
+        <th class="num">E2E tok/s/GPU</th>
+        <th class="num">Gen-worker tok/s/GPU</th>
+        <th class="num">Acceptance</th>
+        <th class="num">E2E Speedup</th>
+        <th class="num">Gen Speedup</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>3321180</code></td>
+        <td>baseline</td>
+        <td class="num">9</td>
+        <td class="num">80.17s</td>
+        <td class="num">35.81s</td>
+        <td class="num">2.25</td>
+        <td class="num">4.99</td>
+        <td class="num">n/a</td>
+        <td class="num">1.00x</td>
+        <td class="num">1.00x</td>
+      </tr>
+      <tr>
+        <td><code>3321423</code></td>
+        <td>PARD K3</td>
+        <td class="num">9</td>
+        <td class="num">69.15s</td>
+        <td class="num">23.30s</td>
+        <td class="num">2.60</td>
+        <td class="num">7.65</td>
+        <td class="num">61.8%</td>
+        <td class="num">1.16x</td>
+        <td class="num">1.54x</td>
+      </tr>
+      <tr>
+        <td><code>3321424</code></td>
+        <td>PARD K5</td>
+        <td class="num">9</td>
+        <td class="num">66.38s</td>
+        <td class="num">21.90s</td>
+        <td class="num">2.71</td>
+        <td class="num">8.17</td>
+        <td class="num">45.3%</td>
+        <td class="num">1.21x</td>
+        <td class="num">1.64x</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>PARD-2 MathRL Gates</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Mode</th>
+        <th>Status</th>
+        <th>Elapsed</th>
+        <th>Read</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>3321785</code></td>
+        <td>static PARD-2 K3</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:11:46</td>
+        <td>Ray actor startup failed because <code>/opt/ray_venvs_swerl_ray254_r12/.../VllmAsyncGenerationWorker/bin/python</code> did not exist.</td>
+      </tr>
+      <tr>
+        <td><code>3321786</code></td>
+        <td>online PARD-2 K3</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:11:57</td>
+        <td>Same stale async vLLM actor venv path failure before <code>SETUP COMPLETE</code> or Step 1.</td>
+      </tr>
+      <tr>
+        <td><code>3322390</code></td>
+        <td>static PARD-2 K3, r18 fresh actor venv</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>00:08:59 before cancellation</td>
+        <td>Still hit stale async worker path <code>/opt/ray_venvs_swerl_ray254_r12/.../VllmAsyncGenerationWorker/bin/python</code>; cancelled before wasting more allocation.</td>
+      </tr>
+      <tr>
+        <td><code>3322392</code></td>
+        <td>online PARD-2 K3, r18 fresh actor venv</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>00:09:01 before cancellation</td>
+        <td>Same stale async worker path; no <code>SETUP COMPLETE</code> or Step 1 marker.</td>
+      </tr>
+      <tr>
+        <td><code>3322611</code></td>
+        <td>static PARD-2 K3, r19 actor-runtime hotfix</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>0:00 before cancellation</td>
+        <td>Cancelled before start after SWE-RL r18 showed the next stale-runtime-env layer in the shared PARD-2 vLLM overlay. Superseded by r20 job <code>3322940</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3322621</code></td>
+        <td>online PARD-2 K3, r19 actor-runtime hotfix</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>0:00 before cancellation</td>
+        <td>Cancelled before start for the same nested vLLM runtime-env issue. Superseded by r20 job <code>3322941</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3322940</code></td>
+        <td>static PARD-2 K3, r20 dynamic nested runtime env</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:08:50</td>
+        <td>Outer and nested runtime-env fixes worked, but vLLM PARD-2 drafter load failed because the configured draft snapshot lacked <code>warp_model.bin</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3322941</code></td>
+        <td>online PARD-2 K3, r20 dynamic nested runtime env</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:08:44</td>
+        <td>Same missing <code>warp_model.bin</code> issue. Superseded by r21/r22 jobs using the corrected PARD-2 snapshot and preflight.</td>
+      </tr>
+      <tr>
+        <td><code>3323891</code></td>
+        <td>static PARD-2 K3, r21 warp snapshot fix</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:20:50</td>
+        <td>Reached <code>SETUP COMPLETE</code>, <code>Step 1/10</code>, and generation start. Failed on <code>ActorHandle</code> missing <code>_get_raw_spec_counters</code>. This is patched in r22.</td>
+      </tr>
+      <tr>
+        <td><code>3323893</code></td>
+        <td>online PARD-2 K3, r21 warp snapshot fix</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:14:01</td>
+        <td>Reached <code>128/128</code> vLLM workers and loaded the PARD-2 drafter, then failed before Step 1 because online drafter training does not support sequence packing: <code>policy.draft.enabled=true does not support sequence packing yet</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3324200</code></td>
+        <td>static PARD-2 K3, r22 raw-counter patch</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:25:11</td>
+        <td>Reached <code>SETUP COMPLETE</code>, <code>Step 1/10</code>, generation, advantages, and logprob computation. Failed in policy training at <code>prepare_packed_loss_input</code>: sequence-packing metadata length <code>600</code> did not fit the local <code>input_ids</code> width <code>408</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3324365</code></td>
+        <td>online PARD-2 K3, r23 sequence packing off</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:18:30</td>
+        <td>Reached 128/128 vLLM workers, PARD-2 drafter load, and 128/128 policy workers. Failed before Step 1 because sequence packing was disabled while context parallelism remained <code>2</code>: <code>Sequence Packing must be enabled to use Context Parallelism with MCore.</code></td>
+      </tr>
+      <tr>
+        <td><code>3324460</code></td>
+        <td>static PARD-2 K3, r24 sequence packing off</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>00:00:00</td>
+        <td>Cancelled before allocation because it still had the same bad <code>sequence_packing=false</code> plus <code>context_parallel_size=2</code> combination.</td>
+      </tr>
+      <tr>
+        <td><code>3324570</code></td>
+        <td>static PARD-2 K3, r25 sequence packing off CP=1</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:12:42</td>
+        <td>Failed before <code>SETUP COMPLETE</code> or Step 1 during actor venv materialization: <code>uv run --locked --extra mcore</code> did not produce <code>megatron/core/datasets/helpers_cpp.cpython-313-aarch64-linux-gnu.so</code>. This was treated as a shared editable-build race, not a PARD-2 algorithmic failure.</td>
+      </tr>
+      <tr>
+        <td><code>3324571</code></td>
+        <td>online PARD-2 K3, r25 sequence packing off CP=1</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:30:17</td>
+        <td>Reached <code>SETUP COMPLETE</code>, <code>Step 1/10</code>, and <code>Generating responses for batch of size 64</code>. Failed during the first policy-to-generation refit because vLLM requested <code>draft.fc.weight</code> and the policy refit metadata had dropped non-first-worker <code>draft.*</code> keys. Patched by <code>NRL_REFIT_INFO_MERGE_V1</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3330757</code></td>
+        <td>static PARD-2 K3, generation-bound 1024</td>
+        <td><span class="status warn">PENDING</span></td>
+        <td>0:00 at 20:01 poll</td>
+        <td>Queued under <code>nemotron_n3_post</code> with <code>max_new_tokens=min_tokens=1024</code>, <code>temperature=1.0</code>, <code>top_p=1.0</code>, <code>top_k=-1</code>, and actor venv serialization/unlocked build controls. Current estimate: <code>20:21:17 PDT</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3330758</code></td>
+        <td>online PARD-2 K3, generation-bound 1024</td>
+        <td><span class="status warn">PENDING</span></td>
+        <td>0:00 at 20:01 poll</td>
+        <td>Same generation-bound shape as <code>3330757</code>, with online draft training/refit enabled. It will pick up <code>NRL_REFIT_INFO_MERGE_V1</code> and <code>NRL_MEGATRON_PG_TIMEOUT_V1</code> from the patched remote Math repo when allocated.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>SWE-RL PARD-2 Gate</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Mode</th>
+        <th>Status</th>
+        <th>Elapsed at Poll</th>
+        <th>Read</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>3308774</code></td>
+        <td>PARD-2 step-1 proof</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>02:45:44 before cancellation</td>
+        <td>No Step 1 marker. Repeated async vLLM actor startup failure under <code>/opt/ray_venvs_swerl_ray254_r14/.../VllmAsyncGenerationWorker/bin/python</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3322381</code></td>
+        <td>PARD-2 step-1 proof, r17 fresh actor venv</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:02:16</td>
+        <td>Different bootstrap failure: uv rejected blank <code>UV_PYTHON_DOWNLOADS</code>, so Ray command path was never created.</td>
+      </tr>
+      <tr>
+        <td><code>3322475</code></td>
+        <td>PARD-2 step-1 proof, r18 fresh actor venv</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>00:51:09 before cancellation</td>
+        <td>Outer <code>VllmAsyncGenerationWorker</code> initialized 32/32 workers under r18, but nested vLLM Ray workers still launched from stale <code>/opt/ray_venvs_swerl_ray254_r14</code> because the shared overlay had a concrete runtime env. Superseded by r20 job <code>3322947</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3322947</code></td>
+        <td>PARD-2 step-1 proof, r20 dynamic nested runtime env</td>
+        <td><span class="status warn">CANCELLED</span></td>
+        <td>00:49:33 before cancellation</td>
+        <td>Passed the long TransformerEngine build stage and async vLLM worker init, then failed in EngineCore startup because the configured PARD-2 draft snapshot lacked <code>warp_model.bin</code>. vLLM raised <code>HFValidationError</code> after treating the absolute snapshot path as a Hub repo id. Superseded by <code>3324256</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3324256</code></td>
+        <td>PARD-2 step-1 proof, r21 warp snapshot fix</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:03:02</td>
+        <td>Failed before real driver startup: <code>uv sync</code> rejected an empty <code>UV_PYTHON_DOWNLOADS</code> value. This was a launcher/env bootstrap issue, not a PARD-2 drafter issue.</td>
+      </tr>
+      <tr>
+        <td><code>3324276</code></td>
+        <td>PARD-2 step-1 proof, r22 UV downloads fix</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:04:16</td>
+        <td>Reached the driver and loaded train/validation datasets, then failed in <code>wandb.init</code> with <code>No API key configured</code>. This was not a PARD-2/vLLM failure.</td>
+      </tr>
+      <tr>
+        <td><code>3324381</code></td>
+        <td>PARD-2 step-1 proof, r23 W&B key env</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:34:16</td>
+        <td>Reached <code>SETUP COMPLETE</code>, async vLLM Uvicorn serving, PARD-2 drafter load, CUDA graph capture, and 32/32 policy workers. Failed before Step 1 when <code>NemoGym.__init__()</code> raised <code>ModuleNotFoundError: No module named 'nemo_gym'</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3324728</code></td>
+        <td>PARD-2 step-1 proof, r24 fresh NemoGym actor venv path</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:03:55</td>
+        <td>Failed before model setup in <code>init_ray()</code>: Ray head was <code>2.49.2</code> / Python <code>3.12.13</code>, while the driver process was Ray <code>2.54.0</code> / Python <code>3.13.13</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3324801</code></td>
+        <td>PARD-2 step-1 proof, r25 Ray 2.54 + NemoGym path</td>
+        <td><span class="status run">RUNNING</span></td>
+        <td>00:17:25 at 17:26 poll</td>
+        <td>Running under <code>nemotron_n3_post</code> with Ray <code>2.54.0</code>, Python <code>3.13.13</code>, fresh actor venv suffix <code>swe_nemo_gym_source_r25</code>, and Gym source <code>PYTHONPATH</code> injection. The early Ray probe errors were startup race noise; the job later reached <code>64/64</code> actors and <code>All workers connected!</code>. Driver evidence shows dataset load, worker initialization, PARD-2 vLLM engine startup, and Qwen3 checkpoint shard loading, but no <code>SETUP COMPLETE</code> or Step 1 yet.</td>
+      </tr>
+      <tr>
+        <td><code>3325343</code></td>
+        <td>PARD-2 step-1 proof, r26 explicit-export fallback</td>
+        <td><span class="status warn">PENDING / DEPENDENCY</span></td>
+        <td>0:00 at 17:26 poll</td>
+        <td>Fallback submitted with <code>--dependency=afternotok:3324801</code>, explicit Ray/Python <code>--export</code>, and W&amp;B disabled. It has no allocation and will only run if r25 exits non-zero.</td>
+      </tr>
+      <tr>
+        <td><code>3327299</code></td>
+        <td>PARD-2 step-1 proof, r27 miniforge bind + NemoGym source</td>
+        <td><span class="status fail">FAILED 1:0</span></td>
+        <td>00:47:00</td>
+        <td>Reached <code>SETUP COMPLETE</code>, total setup <code>1744.9s</code>, and rollout collection up to <code>29/32</code>. Failed during policy-to-generation refit/broadcast with a Megatron tensor-model-parallel NCCL <code>ALLGATHER</code> watchdog timeout at <code>600000ms</code>. Superseded by timeout retry <code>3331533</code>.</td>
+      </tr>
+      <tr>
+        <td><code>3331533</code></td>
+        <td>PARD-2 step-1 proof, r28 Megatron PG timeout retry</td>
+        <td><span class="status warn">PENDING</span></td>
+        <td>0:00 at 20:01 poll</td>
+        <td>Submitted under <code>nemotron_n3_post</code> with <code>max_steps=1</code>, W&amp;B disabled, fresh actor venv suffix <code>swe_nemo_gym_source_miniforgebind_len65k_r28_pgtimeout3600</code>, and <code>NRL_MEGATRON_PROCESS_GROUP_TIMEOUT_SECONDS=3600</code>. Current estimate: <code>20:21:17 PDT</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <section class="section">
+    <h2>Replacement Path</h2>
+    <p>The active replacement path now includes the outer actor-runtime hotfix, nested vLLM Ray runtime-env fix, corrected PARD-2 warp snapshot, and raw spec-counter worker API compatibility:</p>
+    <ul>
+      <li><code>NEMO_RL_VENV_DIR=/opt/ray_venvs_mathrl_ray254_r20</code> for MathRL PARD-2 r20</li>
+      <li><code>NEMO_RL_VENV_DIR=/opt/ray_venvs_mathrl_ray254_r22</code> for static MathRL r22 and <code>/opt/ray_venvs_mathrl_ray254_r23</code> for online MathRL r23</li>
+      <li><code>NEMO_RL_VENV_DIR=/opt/ray_venvs_swerl_ray254_r23</code> for SWE-RL PARD-2 r23; <code>/opt/ray_venvs_swerl_ray254_r25</code> for r25</li>
+      <li><code>NRL_ACTOR_VENV_CACHE_SUFFIX=swe_nemo_gym_source_r25</code> for the r25 NemoGym actor path retry</li>
+      <li><code>NRL_FORCE_REBUILD_ACTOR_VENVS=true</code> was used on earlier fresh-venv attempts; r24 uses a new cache suffix instead of rebuilding in place</li>
+      <li><code>NRL_ACTOR_UV_LOCK_MODE=unlocked</code></li>
+      <li><code>RAY_VERSION=2.54.0</code>, <code>RAY_PYTHON_VERSION=3.13.13</code></li>
+      <li>OCI-HSG PARD-2 draft snapshot preflight now checks <code>warp_model.bin</code> and <code>config.json</code> before launch</li>
+      <li><code>UV_PYTHON_DOWNLOADS=auto</code> is now the SWE submit default so the launcher does not pass an invalid empty value to <code>uv sync</code></li>
+      <li>SWE submitted jobs now fail before SLURM allocation if W&B is enabled but no API key is available</li>
+      <li>Math online PARD-2 now disables sequence packing because NeMo-RL online drafter training currently rejects that combination</li>
+      <li>Math static/online PARD-2 sequence-packing-off runs now use <code>policy.megatron_cfg.context_parallel_size=1</code> to satisfy MCore's context-parallelism constraint</li>
+      <li>SWE submit wrapper now propagates <code>NRL_ACTOR_VENV_CACHE_SUFFIX</code> and the Gym source <code>PYTHONPATH</code> into the Ray driver command path</li>
+      <li>Local patch bundle now includes <code>nemo_rl/environments/utils.py</code> with <code>NRL_NEMO_GYM_CREATE_ENV_PYTHONPATH_V1</code>, so NemoGym actor envs receive the Gym source root even after future patched-source deployments</li>
+      <li>SWE r25 explicitly uses Ray <code>2.54.0</code> and Python <code>3.13.13</code> for the Ray head to avoid the r24 version mismatch</li>
+      <li><code>NRL_ACTOR_RUNTIME_ENV_OVERRIDE_V1</code> forces per-call actor <code>py_executable</code> to override stale Ray class defaults</li>
+      <li><code>NRL_ACTOR_PY_EXEC_V1</code> logs actor class, resolved env, and final executable for diagnosis</li>
+      <li><code>NRL_VLLM_DYNAMIC_RAY_RUNTIME_ENV_V1</code> makes the PARD-2 vLLM overlay derive nested Ray worker Python from <code>sys.executable</code> instead of persisting a concrete venv path</li>
+      <li><code>_get_raw_spec_counters</code> is now exposed on <code>BaseVllmGenerationWorker</code> so generation step metric snapshots do not call a missing method on Ray actor handles</li>
+      <li>active MathRL and SWE-RL PARD-2 source overlays were pre-patched at 13:04 PDT; active <code>ray_executor.py</code> files now have stale r12/r14 path count 0 and pass <code>python3 -m py_compile</code></li>
+      <li><code>NRL_REFIT_INFO_MERGE_V1</code> merges policy-worker refit metadata so <code>draft.*</code> keys are not dropped during PARD-2 refit</li>
+      <li><code>NRL_MEGATRON_PG_TIMEOUT_V1</code> applies extended timeout to Megatron process groups; the SWE wrapper now passes the timeout env vars into the Ray driver/actor command path</li>
+      <li>local PARD-2 snapshot and SWE-compatible PARD-2 Python overlay vLLM site</li>
+    </ul>
+    <p class="subtle">Latest poll: 2026-06-15 20:01 PDT. MathRL generation-bound baseline <code>3330755</code> and Eagle-3 K3 <code>3330756</code> are <code>RUNNING</code> after <code>All workers connected!</code> and actor venv materialization is still in progress. Math static/online PARD-2 generation-bound jobs <code>3330757</code>/<code>3330758</code> and SWE-RL retry <code>3331533</code> are <code>PENDING|Priority</code>, estimated at <code>20:21:17 PDT</code>. SWE-RL r27 <code>3327299</code> failed after rollout collection <code>29/32</code> from a Megatron NCCL process-group timeout; r28 is the timeout retry.</p>
+  </section>
+
+  <h2>Artifacts</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Artifact</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="oci_hsg_mathrl_qwen235b_reduced64_temp1_pard_k3k5_speedups_step2_10_20260615.csv">MathRL speedup CSV</a></td>
+        <td>Baseline/PARD K3/PARD K5 Step 2-10 summary with speedups.</td>
+      </tr>
+      <tr>
+        <td><a href="oci_hsg_mathrl_qwen235b_reduced64_temp1_pard_k3k5_summary_step2_10_20260615.csv">MathRL summary CSV</a></td>
+        <td>Raw aggregate metrics from the NeMo-RL step parser.</td>
+      </tr>
+      <tr>
+        <td><a href="oci_hsg_mathrl_qwen235b_reduced64_temp1_pard_k3k5_steps_20260615.csv">MathRL per-step CSV</a></td>
+        <td>Per-step parser output for baseline/PARD K3/PARD K5.</td>
+      </tr>
+      <tr>
+        <td><a href="lyris_v0202_isl1k_osl10k_mxfp8_bs1_32_20260615.csv">Lyris mxfp8 standalone CSV</a></td>
+        <td>Optimized mxfp8 bf16-KV/fp8-KV bs=1/2/4/8/16/32 throughput rows from completed Lyris jobs.</td>
+      </tr>
+      <tr>
+        <td><a href="qwen8_pard2_official_online_impact_20260613.md">Qwen8 online PARD-2 impact</a></td>
+        <td>Baseline/static/online PARD-2 Step 2-10 comparison for the smaller online drafter refit proof.</td>
+      </tr>
+      <tr>
+        <td><a href="nemorl_10_step_examples_current_20260615.md">10-step status note</a></td>
+        <td>Current best examples and failed/running gate inventory.</td>
+      </tr>
+      <tr>
+        <td><a href="nemorl_235b_active_gates_latest_20260615.md">Active gate snapshot</a></td>
+        <td>Manual gate snapshot with job IDs, status, and latest log paths.</td>
+      </tr>
+      <tr>
+        <td><a href="../scripts/poll_nemorl_r20_pard2_gates_20260615.sh">r20 poll helper</a></td>
+        <td>Sanitized OCI-HSG poll script for the three active r20 PARD-2 gates.</td>
+      </tr>
+      <tr>
+        <td><a href="../scripts/poll_nemorl_r25_pard2_gates_20260615.sh">r25 poll helper</a></td>
+        <td>Sanitized OCI-HSG poll script for the current r25 SWE-RL and MathRL PARD-2 gates.</td>
+      </tr>
+      <tr>
+        <td><a href="../scripts/validate_qwen235b_mathrl_pard2_cp1_contract.py">MathRL PARD-2 CP=1 validator</a></td>
+        <td>Checks that static/online MathRL PARD-2 launcher cases keep sequence packing disabled with context parallelism set to 1, and that online-only draft/refit controls stay scoped to <code>online_pard2_k3</code>.</td>
+      </tr>
+      <tr>
+        <td><a href="swerl_fullgrpo_launcher_contract_validation_20260615.md">SWE-RL launcher contract validation</a></td>
+        <td>Regenerated launcher contract report covering Ray/Python export, NemoGym source path propagation, writable logs/cache, and method-specific SpecDec overrides.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <footer>
+    Generated from local docs/CSV artifacts, OCI-HSG/Lyris SLURM/log poll, and source-overlay verification at 2026-06-15 21:03 PDT. No W&B API key is included in this page.
+  </footer>
+</main>
+</body>
+</html>

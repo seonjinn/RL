@@ -42,6 +42,54 @@ PAIRED = [
     "#b15928",
 ]
 
+REPORT_GROUPS = [
+    {
+        "title": "vLLM Standalone",
+        "summary": "Standalone vLLM benchmark views for Math/SWE, temperature 0/1, batch sweeps, and Qwen235B focused diagnostics.",
+        "items": [
+            ("Latest matched matrix", "vllm_standalone_results_latest.html", "Current ISL4096/OSL32768 matched-baseline view."),
+            ("Latest dated mirror", "vllm_standalone_results_20260621.html", "Same current generation with a dated filename."),
+            ("6/20 result page", "vllm_standalone_results_20260620.html", "Earlier added-result matrix."),
+            ("6/19 batch matrix", "vllm_standalone_results_20260619.html", "All-batch standalone report before later refreshes."),
+            ("Clean result split", "vllm_standalone_clean_results_20260617.html", "Curated primary and supplemental standalone results."),
+            ("Temp0 vs Temp1 trends", "vllm_standalone_temp0_temp1_trends_20260616.html", "Historical aggregate temperature analysis."),
+            ("Qwen235B SWE batch sweep", "lyris_qwen235b_swebench_osl32k_batch_sweep_speedups_20260612.html", "Dedicated SWE OSL32K batch-sweep speedups."),
+            ("Qwen235B diagnostics", "lyris_qwen235b_standalone_live_diagnostics_20260613.html", "Older live diagnostics for Qwen235B standalone jobs."),
+            ("Qwen235B PARD snapshot", "lyris_qwen235b_swebench_osl32k_pard_live_snapshot_20260613.html", "PARD-focused live snapshot."),
+            ("Expected performance", "lyris_specdec_expected_performance_20260612.html", "Early expected-performance summary."),
+            ("Qwen235B SWE/Math status", "qwen235b_specdec_swe_math_status_20260613.html", "Combined historical SWE and Math status page."),
+        ],
+    },
+    {
+        "title": "NeMo-RL",
+        "summary": "NeMo-RL performance recipe and SpecDec integration pages, including live Lyris and OCI-HSG status snapshots.",
+        "items": [
+            ("Latest NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_latest.html", "Current performance-config SpecDec status."),
+            ("6/22 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260622.html", "Dated latest NeMo-RL page."),
+            ("6/21 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260621.html", "Previous Lyris status snapshot."),
+            ("6/19 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260619.html", "Older performance-config status."),
+            ("6/18 OSL step20 matrix", "lyris_nemorl_perfcfg_specdec_live_status_20260618.html", "Current recipe OSL step20 matrix snapshot."),
+            ("PARD/PARD-2 status", "nemorl_pard_pard2_status_20260615.html", "Focused PARD and PARD-2 integration status."),
+            ("OCI-HSG Math RL", "oci_hsg_mathrl_multimodel_specdec_step20_status_20260616.html", "OCI-HSG Math RL multimodel step20 page."),
+        ],
+    },
+    {
+        "title": "Broad Dashboards And Background",
+        "summary": "Cross-cutting dashboards, clean summaries, and older background reports that preserve context outside the latest matched matrix.",
+        "items": [
+            ("Broad metrics dashboard", "specdec_benchmark_metrics_dashboard_20260616.html", "Wide dashboard with vLLM, Math, SWE, and status fragments."),
+            ("Clean benchmark results", "specdec_clean_benchmark_results_20260617.html", "Clean combined benchmark report."),
+            ("Background observations", "specdec_background_and_observations_charts.html", "Early charts and observations."),
+            ("Completed eval bars", "specdec_completed_eval_bar_graphs.html", "Older completed evaluation bar charts."),
+            ("Qwen235B team report", "qwen3_235b_team_report_20260606.html", "Historical team-facing Qwen235B report."),
+        ],
+    },
+]
+
+REPORT_FILE_NAMES = sorted(
+    {filename for group in REPORT_GROUPS for _, filename, _ in group["items"]}
+)
+
 
 def esc(value: object) -> str:
     if value is None:
@@ -421,6 +469,39 @@ def figure_html(src: str, caption: str) -> str:
     )
 
 
+def report_hub_html() -> str:
+    groups = []
+    for group in REPORT_GROUPS:
+        links = []
+        for label, filename, description in group["items"]:
+            src = DOCS / filename
+            if src.exists():
+                links.append(
+                    "<a class=\"report-link\" "
+                    f"href=\"reports/{esc(filename)}\">"
+                    f"<b>{esc(label)}</b>"
+                    f"<span>{esc(description)}</span>"
+                    f"<code>{esc(filename)}</code>"
+                    "</a>"
+                )
+            else:
+                links.append(
+                    "<div class=\"report-link missing\">"
+                    f"<b>{esc(label)}</b>"
+                    f"<span>Missing local file: {esc(filename)}</span>"
+                    f"<code>{esc(filename)}</code>"
+                    "</div>"
+                )
+        groups.append(
+            "<section class=\"report-panel\">"
+            f"<h3>{esc(group['title'])}</h3>"
+            f"<p>{esc(group['summary'])}</p>"
+            f"<div class=\"report-buttons\">{''.join(links)}</div>"
+            "</section>"
+        )
+    return "".join(groups)
+
+
 def build_chart_gallery(vllm: pd.DataFrame, nemorl_all: pd.DataFrame) -> tuple[str, str]:
     FIGURES.mkdir(parents=True, exist_ok=True)
     for old in FIGURES.glob("*.png"):
@@ -634,11 +715,7 @@ def build() -> None:
     ARCHIVE.mkdir(parents=True, exist_ok=True)
     FIGURES.mkdir(parents=True, exist_ok=True)
 
-    report_files = [
-        DOCS / "vllm_standalone_results_latest.html",
-        DOCS / "lyris_nemorl_perfcfg_specdec_live_status_latest.html",
-        DOCS / "specdec_clean_benchmark_results_20260617.html",
-    ]
+    report_files = [DOCS / filename for filename in REPORT_FILE_NAMES]
     data_files = [
         DOCS / "vllm_standalone_added_results_latest.csv",
         DOCS / "vllm_standalone_all_batches_combined_20260619.csv",
@@ -666,6 +743,7 @@ def build() -> None:
     nemorl_all = load_nemorl_rows()
     nemorl = nemorl_best_rows()
     vllm_charts, nemorl_charts = build_chart_gallery(vllm, nemorl_all)
+    report_hub = report_hub_html()
     job = read_job_file(ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt")
     generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
@@ -719,6 +797,15 @@ def build() -> None:
     .pill.warn {{ color: var(--amber); }}
     .links {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }}
     .links a {{ display: inline-flex; align-items: center; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 7px 10px; text-decoration: none; font-weight: 700; }}
+    .report-grid {{ display: grid; grid-template-columns: repeat(1, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }}
+    .report-panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 15px; box-shadow: 0 1px 2px rgba(16,24,40,.06); }}
+    .report-panel h3 {{ margin: 0; font-size: 17px; }}
+    .report-buttons {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }}
+    .report-link {{ display: flex; min-height: 94px; flex-direction: column; gap: 5px; justify-content: flex-start; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; padding: 10px; text-decoration: none; }}
+    .report-link b {{ color: var(--ink); font-size: 14px; line-height: 1.25; }}
+    .report-link span {{ color: var(--muted); font-size: 12px; line-height: 1.3; }}
+    .report-link code {{ margin-top: auto; overflow-wrap: anywhere; }}
+    .report-link.missing {{ opacity: .56; }}
     .table-scroll {{ width: 100%; overflow-x: auto; margin-top: 10px; }}
     table {{ min-width: 1060px; width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }}
     th, td {{ border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; font-size: 13px; }}
@@ -730,7 +817,8 @@ def build() -> None:
     .chart-figure figcaption {{ color: var(--muted); font-size: 13px; margin-top: 7px; }}
     .note {{ border-left: 4px solid var(--blue); background: var(--panel); border-radius: 8px; padding: 13px 14px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 14px; }}
     @media (max-width: 980px) {{ .chart-grid {{ grid-template-columns: 1fr; }} }}
-    @media (max-width: 840px) {{ .grid {{ grid-template-columns: 1fr; }} main {{ padding: 18px 12px 32px; }} }}
+    @media (max-width: 980px) {{ .report-buttons {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    @media (max-width: 840px) {{ .grid {{ grid-template-columns: 1fr; }} .report-buttons {{ grid-template-columns: 1fr; }} main {{ padding: 18px 12px 32px; }} }}
   </style>
 </head>
 <body>
@@ -745,13 +833,21 @@ def build() -> None:
   </div>
 
   <section>
-    <h2>Report Links</h2>
+    <h2>Primary Links</h2>
     <div class=\"links\">
       <a href=\"reports/vllm_standalone_results_latest.html\">vLLM standalone latest</a>
       <a href=\"reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html\">NeMo-RL latest</a>
       <a href=\"reports/specdec_clean_benchmark_results_20260617.html\">Combined clean report</a>
+      <a href=\"reports/qwen235b_specdec_swe_math_status_20260613.html\">Qwen235B SWE/Math historical</a>
+      <a href=\"reports/vllm_standalone_temp0_temp1_trends_20260616.html\">Temp0/Temp1 trends</a>
       <a href=\"archive/specdec_math_progress_report.html\">Archive: old Eagle3 report</a>
     </div>
+  </section>
+
+  <section>
+    <h2>Report Hub</h2>
+    <p>These buttons preserve the broader local HTML archive. The latest vLLM page is intentionally scoped to matched ISL4096/OSL32768 comparisons; older pages keep historical, partial, long-OSL, and diagnostic context separate.</p>
+    <div class=\"report-grid\">{report_hub}</div>
   </section>
 
   <section>
@@ -809,7 +905,19 @@ def build() -> None:
 </html>
 """
     (PUBLIC / "index.html").write_text(html_text)
+
+    local_html_text = html_text
+    local_html_text = local_html_text.replace('href="reports/', 'href="')
+    local_html_text = local_html_text.replace('href="archive/', 'href="../public/archive/')
+    local_html_text = local_html_text.replace('src="figures/', 'src="../public/figures/')
+    local_html_text = local_html_text.replace(
+        'href="data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt"',
+        'href="../latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt"',
+    )
+    local_html_text = local_html_text.replace('href="data/', 'href="')
+    (DOCS / "specdec_reports_index_latest.html").write_text(local_html_text)
     print(PUBLIC / "index.html")
+    print(DOCS / "specdec_reports_index_latest.html")
 
 
 if __name__ == "__main__":
