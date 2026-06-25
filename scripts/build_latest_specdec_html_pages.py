@@ -40,14 +40,28 @@ VLLM_LIVE_SOURCES = [
     ),
 ]
 DFLASH = DOCS / "qwen3_235b_dflash_retry28_openmath_metrics.csv"
+VLLM_LEGACY_NORMALIZED = DOCS / "vllm_standalone_qwen30_qwen8_legacy_breakdowns_20260625.csv"
+VLLM_TEMP_TRENDS = DOCS / "vllm_standalone_temp0_temp1_trends_20260616.csv"
 VLLM_ADDED_OUT = DOCS / "vllm_standalone_added_results_latest.csv"
 VLLM_HTML_LATEST = DOCS / "vllm_standalone_results_latest.html"
 VLLM_HTML_DATED = DOCS / "vllm_standalone_results_20260621.html"
 
-NEMORL_MANIFESTS = sorted(ROOT.glob("latest_lyris_nemorl_qwen235b_*20260621_jobs.csv")) + sorted(
-    DOCS.glob("latest_lyris_nemorl_perfcfg_*wandb_20260622_jobs.csv")
+NEMORL_MANIFESTS = (
+    sorted(ROOT.glob("latest_lyris_nemorl_qwen235b_*20260621_jobs.csv"))
+    + sorted(DOCS.glob("latest_lyris_nemorl_perfcfg_*wandb_20260622_jobs.csv"))
+    + sorted(DOCS.glob("latest_lyris_nemorl_*20260623_jobs.csv"))
+    + sorted(DOCS.glob("latest_lyris_nemorl_*20260624_jobs.csv"))
+    + sorted(DOCS.glob("latest_lyris_nemorl_*20260625_jobs.csv"))
 )
 NEMORL_SUMMARY = DOCS / "lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv"
+NEMORL_ADDITIONAL_SUMMARIES = [
+    DOCS / "lyris_20260623_current_plus_eagerfalse_summary_skip_step1.csv",
+    DOCS / "qwen32_pardk1_20260624_summary_skip1_latest.csv",
+]
+NEMORL_COMPARISON_SUMMARIES = [
+    DOCS / "qwen32_pard_eagerfalse_compare_20260624.csv",
+    DOCS / "nemorl_specdec_slowdown_watchlist_20260624.csv",
+]
 NEMORL_SACCT = DOCS / "lyris_qwen235b_pr2879_sacct_20260621.psv"
 NEMORL_OUT = DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv"
 NEMORL_LYRIS_HISTORICAL_SOURCES = [
@@ -270,6 +284,10 @@ PALETTE = {
     "eagle3_k7": "#3b82f6",
     "eagle3_k9": "#1d4ed8",
     "eagle3_k8": "#2563eb",
+    "pard_k1_tp1": "#f97316",
+    "pard_k1_tp2": "#fb923c",
+    "pard_k8": "#ef4444",
+    "pard_k12": "#f43f5e",
     "pard_k5": "#e31a1c",
     "pard_k16": "#dc2626",
     "pard2": "#6a3d9a",
@@ -336,6 +354,10 @@ def nemorl_method_label(value: object) -> str:
         return "PARD-2 8B"
     if text == "pard2_14b":
         return "PARD-2 14B"
+    if text == "pard_k1_tp1":
+        return "PARD K1 TP1"
+    if text == "pard_k1_tp2":
+        return "PARD K1 TP2"
     return method_label(text)
 
 
@@ -664,11 +686,15 @@ def nemorl_chart_rows(rows: pd.DataFrame) -> pd.DataFrame:
     current = current.dropna(subset=["generation_worker_tokens_per_sec_per_gpu_mean"])
     if current.empty:
         return current
-    current = current.sort_values(["completed_steps", "gen_tps_speedup"], ascending=[False, False])
+    current["has_gen_speedup"] = current["gen_tps_speedup"].notna()
+    current = current.sort_values(
+        ["has_gen_speedup", "completed_steps", "gen_tps_speedup"],
+        ascending=[False, False, False],
+    )
     return current.drop_duplicates(
         subset=["source_group", "model_name", "mode", "max_new_tokens", "method_k"],
         keep="first",
-    )
+    ).drop(columns=["has_gen_speedup"], errors="ignore")
 
 
 def nemorl_chart_model_order(models: list[str]) -> list[str]:
@@ -747,7 +773,11 @@ def nemorl_method_order(methods: list[str]) -> list[str]:
         "eagle3_k7",
         "eagle3_k9",
         "suffix_k32",
+        "pard_k1_tp1",
+        "pard_k1_tp2",
         "pard_k5",
+        "pard_k8",
+        "pard_k12",
         "pard_k16",
         "pard2",
         "pard2_k5",
@@ -1031,6 +1061,17 @@ def method_with_k(method: object, k: object) -> str:
     return f"{method_text}_k{int(k_value)}"
 
 
+def refine_nemorl_method_from_run(method_k: object, run_id: object) -> str:
+    method = str(method_k)
+    run = str(run_id).lower()
+    if method == "pard_k1":
+        if "drafttp1_targettp1" in run:
+            return "pard_k1_tp1"
+        if "pardk1" in run:
+            return "pard_k1_tp2"
+    return method
+
+
 def parse_completed_last(value: object) -> tuple[float, float]:
     match = re.search(r"(\d+)\s*/\s*(\d+)", str(value))
     if not match:
@@ -1067,6 +1108,18 @@ def normalize_nemorl_method(method: object, label: object = "", k: object = math
     return method_text.lower().replace(" ", "_")
 
 
+def normalize_nemorl_diagnostic_method(method: object) -> str:
+    text = str(method).strip()
+    lower = text.lower()
+    base = normalize_nemorl_method(text)
+    if base == "pard_k1":
+        if "tp1" in lower:
+            return "pard_k1_tp1"
+        if "tp2" in lower:
+            return "pard_k1_tp2"
+    return base
+
+
 def effective_metric(row: pd.Series, final_col: str, live_col: str) -> float:
     final = clean_float(row.get(final_col))
     if not math.isnan(final):
@@ -1088,6 +1141,48 @@ def baseline_lookup(main: pd.DataFrame) -> dict[tuple[object, ...], float]:
         )
         lookup[key] = float(row["tok_s_gpu"])
     return lookup
+
+
+def vllm_baseline_key(row: pd.Series) -> tuple[object, ...] | None:
+    try:
+        return (
+            str(row["domain"]),
+            str(row["model"]),
+            float(row["temperature"]),
+            int(clean_float(row["batch_size"])),
+            int(clean_float(row["isl"])),
+            int(clean_float(row["osl"])),
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def fill_vllm_added_speedups(main: pd.DataFrame, added: pd.DataFrame) -> pd.DataFrame:
+    if added.empty:
+        return added
+    added = added.copy()
+    baselines = baseline_lookup(main)
+    valid_baselines = added[(added["method"].astype(str) == "baseline") & (added["valid_result"])]
+    for _, row in valid_baselines.iterrows():
+        key = vllm_baseline_key(row)
+        tok = clean_float(row.get("tok_s_gpu"))
+        if key is not None and not math.isnan(tok):
+            baselines.setdefault(key, tok)
+    for idx, row in added.iterrows():
+        key = vllm_baseline_key(row)
+        if key is None:
+            continue
+        baseline = baselines.get(key, math.nan)
+        tok = clean_float(row.get("tok_s_gpu"))
+        if str(row.get("method")) == "baseline" and not math.isnan(tok):
+            added.at[idx, "baseline_tok_s_gpu"] = tok
+            added.at[idx, "speedup"] = 1.0
+            continue
+        if math.isnan(clean_float(row.get("baseline_tok_s_gpu"))) and not math.isnan(baseline):
+            added.at[idx, "baseline_tok_s_gpu"] = baseline
+        if math.isnan(clean_float(row.get("speedup"))) and not math.isnan(tok) and not math.isnan(baseline) and baseline:
+            added.at[idx, "speedup"] = tok / baseline
+    return added
 
 
 def load_vllm_added(main: pd.DataFrame) -> pd.DataFrame:
@@ -1137,6 +1232,9 @@ def load_vllm_added(main: pd.DataFrame) -> pd.DataFrame:
                 }
             )
         parts.append(pd.DataFrame(rows))
+    if VLLM_LEGACY_NORMALIZED.exists():
+        legacy = pd.read_csv(VLLM_LEGACY_NORMALIZED)
+        parts.append(legacy)
     if DFLASH.exists():
         dflash = pd.read_csv(DFLASH)
         rows = []
@@ -1170,6 +1268,8 @@ def load_vllm_added(main: pd.DataFrame) -> pd.DataFrame:
     if not parts:
         return pd.DataFrame()
     added = pd.concat(parts, ignore_index=True)
+    added["valid_result"] = added["valid_result"].astype(str).str.lower().isin({"1", "true", "yes"})
+    added = fill_vllm_added_speedups(main, added)
     added = added.sort_values(
         [
             "domain",
@@ -1184,6 +1284,7 @@ def load_vllm_added(main: pd.DataFrame) -> pd.DataFrame:
     )
     key = ["domain", "model", "temperature", "batch_size", "isl", "osl", "method"]
     added = added.groupby(key, dropna=False, as_index=False).tail(1).copy()
+    added = fill_vllm_added_speedups(main, added)
     added = added.sort_values(["domain", "temperature", "model", "method", "batch_size"], na_position="last")
     return added
 
@@ -1227,6 +1328,104 @@ def matrix(df: pd.DataFrame) -> pd.DataFrame:
             row[f"b{batch}_speedup"] = float(values.iloc[-1]) if len(values) else math.nan
         rows.append(row)
     return pd.DataFrame(rows).sort_values(["domain", "temperature", "model", "method"], na_position="last")
+
+
+def temp_trends_section() -> str:
+    if not VLLM_TEMP_TRENDS.exists():
+        return ""
+    rows = pd.read_csv(VLLM_TEMP_TRENDS)
+    if rows.empty:
+        return ""
+    rows = rows.copy()
+    rows = rows.rename(
+        columns={
+            "mean_speedup_vs_baseline": "mean_speedup",
+            "mean_tok_s_per_gpu": "mean_tok_s_gpu",
+            "mean_acceptance_pct": "mean_acceptance",
+            "mean_acceptance_length": "mean_accept_len",
+        }
+    )
+    rows = rows.sort_values(["domain", "model", "temperature", "method"], na_position="last")
+    return (
+        '<section class="section"><h2>Historical Temp0/Temp1 Trend Summary</h2>'
+        '<p class="note">This preserves the older extensive Math/SWE temperature analysis page. It is an aggregate view; exact batch-level rows are reflected in the detailed sections below when the underlying CSV or breakdown JSON exists.</p>'
+        '<div class="table-wrap">'
+        + table(
+            rows,
+            [
+                ("domain", "Domain", "text"),
+                ("dataset", "Dataset", "text"),
+                ("model", "Model", "text"),
+                ("temperature", "Temp", "text"),
+                ("method", "Method", "text"),
+                ("rows", "Rows", "int"),
+                ("mean_speedup", "Mean speedup", "x"),
+                ("min_speedup", "Min", "x"),
+                ("max_speedup", "Max", "x"),
+                ("mean_tok_s_gpu", "tok/s/GPU", "num"),
+                ("mean_acceptance", "Acceptance", "pct"),
+                ("mean_accept_len", "Mean len", "num"),
+                ("basis", "Basis", "text"),
+                ("source", "Source", "text"),
+            ],
+        )
+        + "</div></section>"
+    )
+
+
+def related_vllm_reports_section() -> str:
+    reports = [
+        (
+            "Temp0/Temp1 Trend Page",
+            "Math/SWE temperature 0 vs 1 aggregate trends and key interpretation.",
+            "vllm_standalone_temp0_temp1_trends_20260616.html",
+        ),
+        (
+            "Broad SpecDec Dashboard",
+            "Older wide dashboard with vLLM standalone, SWE/Math snapshots, and status fragments.",
+            "specdec_benchmark_metrics_dashboard_20260616.html",
+        ),
+        (
+            "Clean Primary Results",
+            "Curated 2026-06-17 vLLM standalone primary/supplemental split.",
+            "vllm_standalone_clean_results_20260617.html",
+        ),
+        (
+            "6/19 Batch Matrix",
+            "Earlier all-batch report before the latest legacy-source refresh.",
+            "vllm_standalone_results_20260619.html",
+        ),
+        (
+            "Qwen235B SWE Batch Sweep",
+            "Dedicated Qwen3-235B SWE OSL32K batch-sweep speedup page.",
+            "lyris_qwen235b_swebench_osl32k_batch_sweep_speedups_20260612.html",
+        ),
+        (
+            "Qwen235B Diagnostics",
+            "Live diagnostic page from the older Qwen3-235B standalone runs.",
+            "lyris_qwen235b_standalone_live_diagnostics_20260613.html",
+        ),
+    ]
+    items = []
+    for title, desc, href in reports:
+        if not (DOCS / href).exists():
+            continue
+        items.append(
+            '<div class="card">'
+            f'<b><a href="{esc(href)}">{esc(title)}</a></b>'
+            f'<span>{esc(desc)}</span>'
+            f'<code>{esc(href)}</code>'
+            '</div>'
+        )
+    if not items:
+        return ""
+    return (
+        '<section class="section"><h2>Related Broader Reports</h2>'
+        '<p class="note">This latest page is intentionally focused on matched ISL4096/OSL32768 comparisons. Use these archive pages for broader historical, long-OSL, partial, or aggregate views that are not all directly comparable in one speedup matrix.</p>'
+        '<div class="cards">'
+        + "".join(items)
+        + "</div></section>"
+    )
 
 
 def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
@@ -1301,9 +1500,9 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:15px;line-height:1.42}main{max-width:1500px;margin:0 auto;padding:24px}h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:28px 0 10px}h3{font-size:16px;margin:18px 0 8px}.sub,.note{color:var(--muted)}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:18px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}.card b{display:block;font-size:22px}.pill{display:inline-block;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;color:#374151}.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:14px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff;margin:8px 0 14px}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.good{background:var(--good)}.bad{background:var(--bad)}.warn{background:var(--warn)}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1000px){.charts{grid-template-columns:1fr}}@media(max-width:900px){main{padding:16px}.cards{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
     parts = [
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
-        f"<title>vLLM Standalone SpecDec Results 2026-06-21</title><style>{css}</style></head><body><main>",
+        f"<title>vLLM Standalone SpecDec Results</title><style>{css}</style></head><body><main>",
         "<h1>vLLM Standalone SpecDec Results</h1>",
-        f"<p class=\"sub\">Updated {esc(updated)}. Data-only refresh from the existing 6/19 baseline matrix plus refreshed 6/20 live-log CSVs.</p>",
+        f"<p class=\"sub\">Updated {esc(updated)}. Data refresh from the 6/19 batch matrix, 6/20 extra-K/PARD sweeps, 6/16 temp0/temp1 trend analysis, and refreshed Lyris legacy breakdown JSONs for Qwen3-30B-A3B and Qwen3-8B.</p>",
         "<div><span class=\"pill\">ISL 4096</span><span class=\"pill\">OSL 32768</span><span class=\"pill\">batch 1/2/4/8/16/32</span><span class=\"pill\">temperature 0.0 and 1.0</span><span class=\"pill\">top_p 1.0 where available</span></div>",
         "<div class=\"cards\">",
         f"<div class=\"card\"><b>{len(main)}</b><span>existing 6/19 rows</span></div>",
@@ -1311,8 +1510,11 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
         f"<div class=\"card\"><b>{len(failed)}</b><span>failed or invalid added rows</span></div>",
         f"<div class=\"card\"><b>{len(added_summary)}</b><span>added summary groups</span></div>",
         "</div>",
+        "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
+        related_vllm_reports_section(),
         "<section class=\"section\"><h2>Key Findings</h2><p>" + esc(key_finding) + "</p><p class=\"note\">Speedups are computed only when a matched baseline exists with the same domain, model, temperature, batch size, ISL and OSL.</p></section>",
         charts_section(added),
+        temp_trends_section(),
         "<section class=\"section\"><h2>PARD / PARD-2 K=16 Focus</h2><div class=\"table-wrap\">",
         table(
             focus,
@@ -1349,7 +1551,7 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
             ],
         ),
         "</div></section>",
-        "<section class=\"section\"><h2>6/20 Added Results Summary</h2><div class=\"table-wrap\">",
+        "<section class=\"section\"><h2>Added And Legacy Results Summary</h2><div class=\"table-wrap\">",
         table(
             added_summary,
             [
@@ -1367,7 +1569,7 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
             ],
         ),
         "</div></section>",
-        "<section class=\"section\"><h2>6/20 Added Speedup Matrix</h2><div class=\"table-wrap\">",
+        "<section class=\"section\"><h2>Added And Legacy Speedup Matrix</h2><div class=\"table-wrap\">",
         table(
             added_matrix,
             [
@@ -1400,7 +1602,7 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
             ],
         ),
         "</div></section>",
-        "<section class=\"section\"><h2>Sources</h2><p class=\"note\"><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code>, <code>docs/vllm_standalone_all_batches_combined_matrix_20260619.csv</code>, <code>docs/oci_qmath_extra_k_live_log_metrics_20260620.csv</code>, <code>docs/oci_qmath_pard2_k_sweep_live_log_metrics_20260620.csv</code>, <code>docs/oci_qmath_pard_pard2_k16_focus_live_log_metrics_20260620.csv</code>, <code>docs/lyris_qwen235b_swe_pard2_k_sweep_live_log_metrics_20260620.csv</code>, <code>docs/qwen3_235b_dflash_retry28_openmath_metrics.csv</code>.</p></section>",
+        "<section class=\"section\"><h2>Sources</h2><p class=\"note\"><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code>, <code>docs/vllm_standalone_all_batches_combined_matrix_20260619.csv</code>, <code>docs/vllm_standalone_temp0_temp1_trends_20260616.csv</code>, <code>docs/vllm_standalone_qwen30_qwen8_legacy_breakdowns_20260625.csv</code>, <code>docs/oci_qmath_extra_k_live_log_metrics_20260620.csv</code>, <code>docs/oci_qmath_pard2_k_sweep_live_log_metrics_20260620.csv</code>, <code>docs/oci_qmath_pard_pard2_k16_focus_live_log_metrics_20260620.csv</code>, <code>docs/lyris_qwen235b_swe_pard2_k_sweep_live_log_metrics_20260620.csv</code>, and <code>docs/qwen3_235b_dflash_retry28_openmath_metrics.csv</code>.</p></section>",
         "</main></body></html>",
     ]
     return "\n".join(parts)
@@ -1442,8 +1644,27 @@ def load_nemorl_manifest() -> pd.DataFrame:
     return rows
 
 
+def load_nemorl_summary() -> pd.DataFrame:
+    parts = []
+    for path in [NEMORL_SUMMARY, *NEMORL_ADDITIONAL_SUMMARIES]:
+        if not path.exists():
+            continue
+        raw = pd.read_csv(path)
+        raw["summary_source"] = str(path.relative_to(ROOT))
+        parts.append(raw)
+    if not parts:
+        return pd.DataFrame()
+    rows = pd.concat(parts, ignore_index=True, sort=False)
+    rows["job_id"] = rows["job_id"].astype(str)
+    return rows.drop_duplicates(subset=["job_id"], keep="last")
+
+
 def nemorl_source_group_from_run_id(run_id: object) -> str:
     text = str(run_id)
+    if "20260624" in text:
+        return "Lyris PerfCfg enforce_eager=false PARD diagnostics 2026-06-24"
+    if "20260623" in text or "cudagraphoff" in text:
+        return "Lyris PerfCfg enforce_eager=false triton W&B matrix 2026-06-23"
     if "eagerfalse_triton" in text and "wandb" in text:
         return "Lyris PerfCfg enforce_eager=false triton W&B matrix 2026-06-22"
     return "Lyris Qwen235B PR2879 OSL8192 2026-06-21"
@@ -1451,6 +1672,16 @@ def nemorl_source_group_from_run_id(run_id: object) -> str:
 
 def nemorl_config_basis_from_run_id(run_id: object) -> str:
     text = str(run_id)
+    if "20260624" in text:
+        return (
+            "performance recipe default plus latest-main+PR2879 topology-aware fix; "
+            "enforce_eager=false, MoE backend=triton, max_num_seqs=64, max_num_batched_tokens=32760/32768; PARD diagnostic sweep"
+        )
+    if "20260623" in text or "cudagraphoff" in text:
+        return (
+            "performance recipe default plus latest-main+PR2879 topology-aware fix; "
+            "enforce_eager=false, MoE backend=triton, max_num_seqs=64, max_num_batched_tokens=32768, W&B enabled"
+        )
     if "eagerfalse_triton" in text and "wandb" in text:
         return (
             "performance recipe default plus latest-main+PR2879 topology-aware fix; "
@@ -1461,7 +1692,7 @@ def nemorl_config_basis_from_run_id(run_id: object) -> str:
 
 def enrich_nemorl() -> pd.DataFrame:
     manifest = load_nemorl_manifest()
-    summary = pd.read_csv(NEMORL_SUMMARY) if NEMORL_SUMMARY.exists() else pd.DataFrame()
+    summary = load_nemorl_summary()
     sacct = load_sacct()
     if manifest.empty:
         return pd.DataFrame()
@@ -1478,6 +1709,7 @@ def enrich_nemorl() -> pd.DataFrame:
             rows[col] = rows[col].where(rows[col].map(text_value).ne(""), rows[metric_col])
     rows["wandb_url"] = rows["wandb_url"].map(normalize_wandb_url)
     rows["method_k"] = rows.apply(lambda r: method_with_k(r.get("method"), r.get("num_speculative_tokens")), axis=1)
+    rows["method_k"] = rows.apply(lambda r: refine_nemorl_method_from_run(r.get("method_k"), r.get("run_id")), axis=1)
     rows["model_name"] = rows["model"].map(model_name)
     rows["cluster"] = "lyris"
     rows["source_group"] = rows["run_id"].map(nemorl_source_group_from_run_id)
@@ -1736,6 +1968,83 @@ def load_lyris_live_k_sweep_nemorl() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_nemorl_comparison_summaries() -> pd.DataFrame:
+    rows = []
+    for path in NEMORL_COMPARISON_SUMMARIES:
+        if not path.exists():
+            continue
+        raw = pd.read_csv(path)
+        for _, row in raw.iterrows():
+            method = row.get("method", "")
+            job_id = str(row.get("job_id", ""))
+            if not job_id or job_id.lower() == "nan":
+                continue
+            completed = row.get("completed", row.get("steps", ""))
+            completed_steps, last_step = parse_completed_last(completed)
+            max_steps = clean_float(row.get("max_steps"))
+            if math.isnan(max_steps):
+                max_steps = 20
+            max_osl = clean_float(row.get("max_osl"))
+            if math.isnan(max_osl):
+                max_osl = 4096
+            model_text = text_value(row.get("model", ""))
+            if not model_text and "qwen32" in path.name.lower():
+                model = "Qwen3-32B"
+            else:
+                model = model_name(model_text)
+            source_group = "Lyris PerfCfg enforce_eager=false PARD diagnostics 2026-06-24"
+            status = first_text(row, "status")
+            rows.append(
+                {
+                    "job_id": job_id,
+                    "model": model,
+                    "model_name": model,
+                    "mode": str(row.get("mode", "sync") or "sync"),
+                    "method": str(method),
+                    "method_k": normalize_nemorl_diagnostic_method(method),
+                    "max_steps": max_steps,
+                    "max_new_tokens": max_osl,
+                    "temperature": clean_float(row.get("temp", 1.0)),
+                    "top_p": clean_float(row.get("top_p", 1.0)),
+                    "enforce_eager": row.get("enforce_eager", False),
+                    "isl": "",
+                    "cluster": "lyris",
+                    "source_group": source_group,
+                    "comparison_group": source_group,
+                    "config_basis": (
+                        "performance recipe default plus latest-main+PR2879 topology-aware fix; "
+                        "enforce_eager=false, MoE backend=triton; diagnostic CSV with precomputed baseline-relative speedups"
+                    ),
+                    "source_priority": 0.25,
+                    "slurm_state": status,
+                    "exit_code": "",
+                    "completed_steps": completed_steps,
+                    "last_step": last_step,
+                    "completed_last_step": str(completed),
+                    "metric_state": status,
+                    "total_step_time_s_mean": clean_float(row.get("e2e_step_time_s")),
+                    "generation_time_s_mean": clean_float(row.get("generation_time_s")),
+                    "e2e_tokens_per_sec_per_gpu_mean": clean_float(row.get("e2e_tps_gpu")),
+                    "generation_worker_tokens_per_sec_per_gpu_mean": clean_float(row.get("generation_tps_gpu")),
+                    "e2e_step_time_speedup": clean_float(row.get("e2e_step_time_vs_baseline_speedup", row.get("e2e_step_time_speedup"))),
+                    "e2e_tps_speedup": clean_float(row.get("e2e_tps_vs_baseline_speedup", row.get("e2e_throughput_speedup"))),
+                    "generation_time_speedup": clean_float(row.get("generation_time_vs_baseline_speedup", row.get("generation_time_speedup"))),
+                    "gen_tps_speedup": clean_float(row.get("generation_tps_vs_baseline_speedup", row.get("generation_throughput_speedup"))),
+                    "vllm_token_acceptance_pct": clean_float(row.get("acceptance_pct")),
+                    "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accept_len")),
+                    "manifest": str(path.relative_to(ROOT)),
+                    "wandb_enabled": "true" if normalize_wandb_url(row.get("wandb_url", row.get("wandb_or_run", ""))) else "",
+                    "wandb_project": "",
+                    "wandb_name": "",
+                    "wandb_url": normalize_wandb_url(row.get("wandb_url", row.get("wandb_or_run", ""))),
+                    "notes": str(row.get("action_note", "")),
+                    "latest_error": "",
+                    "log_path": str(row.get("source", "")),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
     if rows.empty:
         return rows
@@ -1787,6 +2096,7 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
         part
         for part in [
             live_rows,
+            load_nemorl_comparison_summaries(),
             load_lyris_live_k_sweep_nemorl(),
             load_lyris_historical_nemorl(),
             load_oci_historical_nemorl(),
@@ -1797,11 +2107,27 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     rows = pd.concat(parts, ignore_index=True, sort=False)
     rows = fill_nemorl_speedups(rows)
+    rows["has_speedup_metric"] = pd.to_numeric(rows.get("gen_tps_speedup"), errors="coerce").notna()
+    rows["completed_steps_numeric"] = pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0)
     rows = rows.sort_values(
-        ["source_priority", "model_name", "mode", "max_new_tokens", "method_k", "job_id"],
+        ["source_group", "job_id", "method_k", "has_speedup_metric", "completed_steps_numeric"],
+        ascending=[True, True, True, False, False],
         na_position="last",
     )
-    return rows
+    rows = rows.drop_duplicates(subset=["source_group", "job_id", "method_k"], keep="first")
+    rows = rows.sort_values(
+        [
+            "source_priority",
+            "model_name",
+            "mode",
+            "max_new_tokens",
+            "method_k",
+            "job_id",
+        ],
+        ascending=[True, True, True, True, True, True],
+        na_position="last",
+    )
+    return rows.drop(columns=["has_speedup_metric", "completed_steps_numeric"], errors="ignore")
 
 
 def nemorl_live_k_sweep_rows(rows: pd.DataFrame) -> pd.DataFrame:
@@ -1944,9 +2270,9 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
     return "\n".join(
         [
             "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
-            f"<title>Lyris NeMo-RL SpecDec Status 2026-06-21</title><style>{css}</style></head><body>",
+            f"<title>Lyris NeMo-RL SpecDec Status Latest</title><style>{css}</style></head><body>",
             "<header><div class=\"hero\"><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
-            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main live rows plus Qwen3-30B-A3B/Qwen3-32B Lyris and OCI-HSG artifacts.</div>",
+            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main rows, 2026-06-23 enforce_eager=false W&B rows, 2026-06-24 PARD diagnostics, and historical Qwen3-30B-A3B/Qwen3-32B Lyris/OCI-HSG artifacts.</div>",
             "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#fresh\">Fresh enforce_eager=true K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
             "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">enforce_eager shown per row</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
             "<div class=\"kpis\">",
@@ -1985,7 +2311,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<section id=\"smoke\"><h2>Step3 Smoke / K Sweep</h2><div class=\"table-wrap\">",
             table(smoke, cols),
             "</div></section>",
-            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv</code>, <code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_qwen235b_*20260621_jobs.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
+            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv</code>, <code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_20260623_current_plus_eagerfalse_summary_skip_step1.csv</code>, <code>docs/qwen32_pardk1_20260624_summary_skip1_latest.csv</code>, <code>docs/qwen32_pard_eagerfalse_compare_20260624.csv</code>, <code>docs/nemorl_specdec_slowdown_watchlist_20260624.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_*20260621-20260625_jobs.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
             "</main></body></html>",
         ]
     )

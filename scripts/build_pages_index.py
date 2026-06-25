@@ -7,7 +7,9 @@ import html
 import math
 import shutil
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -20,6 +22,8 @@ REPORTS = PUBLIC / "reports"
 DATA = PUBLIC / "data"
 ARCHIVE = PUBLIC / "archive"
 FIGURES = PUBLIC / "figures"
+
+LOCAL_REF_SKIP_SCHEMES = {"http", "https", "mailto", "tel", "ftp", "javascript", "data"}
 
 MODELS = ["Qwen3-30B-A3B", "Qwen3-32B", "Qwen3-235B-A22B"]
 MODEL_SHORT = {
@@ -47,12 +51,12 @@ REPORT_GROUPS = [
         "title": "vLLM Standalone",
         "summary": "Standalone vLLM benchmark views for Math/SWE, temperature 0/1, batch sweeps, and Qwen235B focused diagnostics.",
         "items": [
-            ("Latest matched matrix", "vllm_standalone_results_latest.html", "Current ISL4096/OSL32768 matched-baseline view."),
-            ("Latest dated mirror", "vllm_standalone_results_20260621.html", "Same current generation with a dated filename."),
-            ("6/20 result page", "vllm_standalone_results_20260620.html", "Earlier added-result matrix."),
+            ("Canonical latest matched matrix", "vllm_standalone_results_latest.html", "Current ISL4096/OSL32768 matched-baseline view; use this as the canonical standalone page."),
+            ("Latest dated mirror", "vllm_standalone_results_20260621.html", "Dated mirror of the canonical latest page."),
+            ("6/20 historical page", "vllm_standalone_results_20260620.html", "Superseded historical added-result matrix; retained for traceability."),
             ("6/19 batch matrix", "vllm_standalone_results_20260619.html", "All-batch standalone report before later refreshes."),
             ("Clean result split", "vllm_standalone_clean_results_20260617.html", "Curated primary and supplemental standalone results."),
-            ("Temp0 vs Temp1 trends", "vllm_standalone_temp0_temp1_trends_20260616.html", "Historical aggregate temperature analysis."),
+            ("Temp0 vs Temp1 trends", "vllm_standalone_temp0_temp1_trends_20260616.html", "Historical aggregate temperature analysis; later standalone additions are in the canonical latest page."),
             ("Qwen235B SWE batch sweep", "lyris_qwen235b_swebench_osl32k_batch_sweep_speedups_20260612.html", "Dedicated SWE OSL32K batch-sweep speedups."),
             ("Qwen235B diagnostics", "lyris_qwen235b_standalone_live_diagnostics_20260613.html", "Older live diagnostics for Qwen235B standalone jobs."),
             ("Qwen235B PARD snapshot", "lyris_qwen235b_swebench_osl32k_pard_live_snapshot_20260613.html", "PARD-focused live snapshot."),
@@ -89,6 +93,22 @@ REPORT_GROUPS = [
 REPORT_FILE_NAMES = sorted(
     {filename for group in REPORT_GROUPS for _, filename, _ in group["items"]}
 )
+
+REPORT_COMPANION_FILES = [
+    "qwen235b_specdec_swe_math_status_20260613.csv",
+    "qwen235b_specdec_swe_math_status_20260613.png",
+]
+
+
+class LocalRefParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.refs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        for key, value in attrs:
+            if key in {"href", "src"} and value:
+                self.refs.append(value)
 
 
 def esc(value: object) -> str:
@@ -132,6 +152,59 @@ def copy_if_exists(src: Path, dst_dir: Path) -> Path | None:
         raw = dst.read_bytes()
         dst.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
     return dst
+
+
+def normalize_text_file(path: Path) -> None:
+    if path.suffix in {".csv", ".html", ".json", ".txt", ".md", ".py", ".sh", ".yaml", ".yml"}:
+        raw = path.read_bytes()
+        path.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+
+
+def resolve_local_ref(base: Path, ref: str) -> Path | None:
+    if not ref or ref.startswith("#") or ref.startswith("//"):
+        return None
+    parsed = urlsplit(ref)
+    if parsed.scheme.lower() in LOCAL_REF_SKIP_SCHEMES:
+        return None
+    if parsed.path.startswith("/") or not parsed.path:
+        return None
+    return (base.parent / unquote(parsed.path)).resolve()
+
+
+def public_destination_for_source(src: Path) -> Path | None:
+    src = src.resolve()
+    if src.suffix.lower() == ".html":
+        return None
+    try:
+        return REPORTS / src.relative_to(DOCS)
+    except ValueError:
+        pass
+    try:
+        return PUBLIC / src.relative_to(ROOT)
+    except ValueError:
+        return None
+
+
+def copy_report_local_refs(report_src: Path) -> list[Path]:
+    if not report_src.exists():
+        return []
+    parser = LocalRefParser()
+    parser.feed(report_src.read_text(encoding="utf-8", errors="ignore"))
+    copied: list[Path] = []
+    seen: set[Path] = set()
+    for ref in parser.refs:
+        src = resolve_local_ref(report_src, ref)
+        if src is None or src in seen or not src.exists() or src.is_dir():
+            continue
+        seen.add(src)
+        dst = public_destination_for_source(src)
+        if dst is None:
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        normalize_text_file(dst)
+        copied.append(dst)
+    return copied
 
 
 def load_csv(path: Path) -> pd.DataFrame:
@@ -734,6 +807,9 @@ def build() -> None:
     ]
     for src in report_files:
         copy_if_exists(src, REPORTS)
+        copy_report_local_refs(src)
+    for filename in REPORT_COMPANION_FILES:
+        copy_if_exists(DOCS / filename, REPORTS)
     for src in data_files:
         copy_if_exists(src, DATA)
     for src in archive_files:

@@ -1,0 +1,145 @@
+domain,dataset,model,source,batch_size,method,measurement,tok_s_per_gpu,baseline_tok_s_per_gpu,speedup_vs_baseline,acceptance_pct,mean_acceptance_length,job_id,state,final_rows,note
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,Lyris,1,Suffix K32,final_breakdown,15.984290318025291,1.8787992711387316,8.507715839349505,83.79409382134178,7.817495506291192,,,1,math500_osl32k_qwen235b_suffix_k32
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,Lyris,1,PARD K5,final_breakdown,6.30997421417052,1.8787992711387316,3.358514297456627,56.096258236813846,3.804812911840692,,,1,math500_osl32k_qwen235b_pard_k5
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,Lyris,1,Eagle-3 K3,final_breakdown,6.191062021824798,1.8787992711387316,3.295222707890675,69.41583180471285,3.082474954141386,,,1,math500_osl32k_qwen235b_eagle3_k3
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K32,final_breakdown,32.1754673637065,,,88.71337013867088,8.710948419301165,,,1,math500_osl32k_qwen235b_suffix_k32
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K5,final_breakdown,10.590819712249058,,,50.07886224503435,3.5039431122517177,,,1,math500_osl32k_qwen235b_pard_k5
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K3,final_breakdown,12.003517572303213,,,69.74386800984578,3.0923160402953735,,,1,math500_osl32k_qwen235b_eagle3_k3
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,baseline,final_breakdown,1.8787992711387316,1.8787992711387316,1.0,,,,,1,math500_osl32k_qwen235b_baseline
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,Suffix K32,final_breakdown,15.30715057059265,1.8787992711387316,8.147304933387087,83.79409382134178,7.817495506291192,,,1,math500_osl32k_qwen235b_suffix_k32
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,PARD K5,final_breakdown,4.781790439743302,1.8787992711387316,2.545131091542888,56.096258236813846,3.804812911840692,,,1,math500_osl32k_qwen235b_pard_k5
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,PARD K9,final_breakdown,6.095855043398037,1.8787992711387316,3.244548333097536,30.21832491439166,3.7196492422952496,,,1,math500_osl32k_qwen235b_pard_k9
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,PARD K11,final_breakdown,5.87264044874567,1.8787992711387316,3.1257412853829187,24.848329488165426,3.733316243698197,,,1,math500_osl32k_qwen235b_pard_k11
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,PARD-2 K1,final_breakdown,1.6022696172492639,1.8787992711387316,0.8528157541162636,3.1097824804311056,1.031097824804311,,,1,math500_osl32k_qwen235b_official_pard2_k1
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,PARD-2 K9,final_breakdown,1.6419241916963523,1.8787992711387316,0.8739220931787937,0.3296008826599908,1.0296640794393992,,,1,math500_osl32k_qwen235b_official_pard2_k9
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,PARD-2 K11,final_breakdown,1.650841368800794,1.8787992711387316,0.8786683038258933,0.255795694331633,1.0281375263764796,,,1,math500_osl32k_qwen235b_official_pard2_k11
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,Eagle-3 K3,final_breakdown,5.671275712703453,1.8787992711387316,3.0185639306034644,69.41583180471285,3.082474954141386,,,1,math500_osl32k_qwen235b_eagle3_k3
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,Eagle-3 K9,final_breakdown,5.107016625981676,1.8787992711387316,2.7182343023192344,22.261942954916968,3.003574865942527,,,1,math500_osl32k_qwen235b_eagle3_k9
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,1,Eagle-3 K11,final_breakdown,4.7323647176402615,1.8787992711387316,2.5188240118764775,18.21494269875231,3.003643696862754,,,1,math500_osl32k_qwen235b_eagle3_k11
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,Suffix K32,final_breakdown,28.722186286463476,,,86.03775276868582,8.31148790245761,,,1,math500_osl32k_qwen235b_suffix_k32
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,PARD K5,final_breakdown,10.404991985923173,,,50.07886224503435,3.5039431122517177,,,1,math500_osl32k_qwen235b_pard_k5
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,PARD K9,final_breakdown,12.304378218932332,,,32.54691528269081,3.9292223754421727,,,1,math500_osl32k_qwen235b_pard_k9
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,PARD K11,final_breakdown,12.761597757625093,,,29.977347242921017,4.297508196721312,,,1,math500_osl32k_qwen235b_pard_k11
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,Eagle-3 K3,final_breakdown,10.943272164913713,,,69.74386800984578,3.0923160402953735,,,1,math500_osl32k_qwen235b_eagle3_k3
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,Eagle-3 K9,final_breakdown,10.663916819810526,,,24.310673314686447,3.1879605983217805,,,1,math500_osl32k_qwen235b_eagle3_k9
+MATH500 OSL32K,math500,Qwen/Qwen3-235B-A22B,OCI-HSG,2,Eagle-3 K11,final_breakdown,9.012725118892716,,,17.814585441654334,2.959604398581977,,,1,math500_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K8,final_breakdown_no_baseline,23.39224565483761,,,86.49601855915732,6.441376590079874,,,1,full_osl32k_qwen235b_suffix_k8
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K16,final_breakdown_no_baseline,25.444559645829216,,,87.55372798510358,7.432284541723666,,,1,full_osl32k_qwen235b_suffix_k16
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K32,final_spec_vs_live_baseline,25.17399444152723,4.125,6.102786531279329,87.55372798510358,7.432284541723666,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K5,live_only,1.675,4.125,0.40606060606060607,5.8,1.29,2109551,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K9,final_breakdown_no_baseline,6.180444452220702,,,16.248147452355603,2.4623332707120045,,,1,full_osl32k_qwen235b_pard_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K11,final_breakdown_no_baseline,7.808713812765077,,,17.940521366111202,2.9734573502722323,,,1,full_osl32k_qwen235b_pard_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,PARD-2 K1,live_only,5.075,4.125,1.2303030303030305,48.6,1.49,2109552,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,PARD-2 K9,final_breakdown_no_baseline,3.762946150899901,,,5.088122605363984,1.4579310344827587,,,1,full_osl32k_qwen235b_pard2_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,PARD-2 K11,final_breakdown_no_baseline,3.6768116526714607,,,1.8513756749807149,1.2036513242478786,,,1,full_osl32k_qwen235b_pard2_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K3,final_spec_vs_live_baseline,10.318086704345731,4.125,2.501354352568662,57.78380257212375,2.7335140771637123,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K9,final_breakdown_no_baseline,8.541511122524488,,,19.15052780317513,2.723547502285762,,,1,full_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K11,final_breakdown_no_baseline,9.852215324483561,,,17.275422723048514,2.9002964995353366,,,1,full_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,Suffix K8,final_breakdown_no_baseline,30.550580772183938,,,77.12145319543887,5.02618827872635,,,1,full_osl32k_qwen235b_suffix_k8
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,Suffix K16,final_breakdown_no_baseline,28.273132038519893,,,76.24354619809132,5.417373939091363,,,1,full_osl32k_qwen235b_suffix_k16
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,Suffix K32,final_spec_vs_live_baseline,27.970944623387158,8.15,3.432017745200878,76.24354619809132,5.417373939091363,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,PARD K5,live_only,8.575,8.15,1.0521472392638036,14.1,1.71,2109556,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,PARD K9,final_breakdown_no_baseline,9.588587451235687,,,14.456284904486305,2.301065641403768,,,1,full_osl32k_qwen235b_pard_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,PARD K11,final_breakdown_no_baseline,11.801948198970372,,,12.882140725690183,2.41703547982592,,,1,full_osl32k_qwen235b_pard_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,PARD-2 K1,live_only,8.325,8.15,1.0214723926380367,25.4,1.25,2109557,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,PARD-2 K9,final_breakdown_no_baseline,7.1029852556651605,,,1.829029299418395,1.1646126369476555,,,1,full_osl32k_qwen235b_pard2_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,PARD-2 K11,final_breakdown_no_baseline,7.298968469364517,,,1.6838396443409736,1.185222360877507,,,1,full_osl32k_qwen235b_pard2_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,Eagle-3 K3,final_spec_vs_live_baseline,15.624454287999786,8.15,1.9171109555827957,46.47365056169514,2.3942095168508537,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,Eagle-3 K9,final_breakdown_no_baseline,16.379069988945393,,,17.035920364035398,2.533232832763186,,,1,full_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,4,Eagle-3 K11,final_breakdown_no_baseline,14.246350629011957,,,12.411637807288804,2.3652801588017685,,,1,full_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,Suffix K8,final_breakdown_no_baseline,56.811913846566945,,,81.41009335575795,5.549669014682169,,,1,full_osl32k_qwen235b_suffix_k8
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,Suffix K16,final_breakdown_no_baseline,62.96145285750576,,,81.19485775849517,6.835766232407262,,,1,full_osl32k_qwen235b_suffix_k16
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,Suffix K32,final_spec_vs_live_baseline,63.64152749887743,16.4,3.8805809450535023,81.19485775849517,6.835766232407262,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,PARD K5,live_only,18.325,16.4,1.1173780487804879,21.6,2.08,2109563,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,PARD K9,final_breakdown_no_baseline,19.978514633349025,,,18.12369519832985,2.631132567849687,,,1,full_osl32k_qwen235b_pard_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,PARD K11,final_breakdown_no_baseline,19.739432176214272,,,13.913541016723663,2.530489511839603,,,1,full_osl32k_qwen235b_pard_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,PARD-2 K1,live_only,21.825,16.4,1.3307926829268293,63.2,1.63,2109564,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,PARD-2 K9,final_breakdown_no_baseline,13.56201789880469,,,3.3148809455018933,1.2983392850951705,,,1,full_osl32k_qwen235b_pard2_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,PARD-2 K11,final_breakdown_no_baseline,13.592827685697895,,,2.7703947040963612,1.3047434174505999,,,1,full_osl32k_qwen235b_pard2_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,Eagle-3 K3,final_spec_vs_live_baseline,29.849107586033213,16.4,1.8200675357337326,54.28720406710319,2.6286161220130957,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,Eagle-3 K9,final_breakdown_no_baseline,30.440258326710083,,,18.855097612890983,2.6969587851601884,,,1,full_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,8,Eagle-3 K11,final_breakdown_no_baseline,27.98347504004081,,,15.104750266282949,2.6615225292911244,,,1,full_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,Suffix K8,final_breakdown_no_baseline,90.79503343293588,,,75.5866250038183,5.087678554076377,,,1,full_osl32k_qwen235b_suffix_k8
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,Suffix K16,final_breakdown_no_baseline,109.24074242909217,,,81.08209516593588,6.866966580976864,,,1,full_osl32k_qwen235b_suffix_k16
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,Suffix K32,final_spec_vs_live_baseline,110.07211626064351,32.2,3.4183887037466927,81.08209516593588,6.866966580976864,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,PARD K5,live_only,20.275,32.2,0.6296583850931676,8.2,1.41,2109572,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,PARD K9,final_breakdown_no_baseline,29.51311020589426,,,10.425950573466102,1.9383355516119491,,,1,full_osl32k_qwen235b_pard_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,PARD K11,final_breakdown_no_baseline,35.13728722094467,,,10.833933799720898,2.1917327179692987,,,1,full_osl32k_qwen235b_pard_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,PARD-2 K1,live_only,42.2,32.2,1.31055900621118,59.9,1.6,2109574,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,PARD-2 K9,final_breakdown_no_baseline,25.37832442458432,,,2.064677910999829,1.1858210119899846,,,1,full_osl32k_qwen235b_pard2_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,PARD-2 K11,final_breakdown_no_baseline,25.51416791174551,,,1.7806157182484443,1.195867729007329,,,1,full_osl32k_qwen235b_pard2_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,Eagle-3 K3,final_spec_vs_live_baseline,63.41951850729513,32.2,1.969550264201712,57.29432975345327,2.7188298926035976,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,Eagle-3 K9,final_breakdown_no_baseline,66.08095071534132,,,20.026249992576357,2.8023624993318723,,,1,full_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,16,Eagle-3 K11,final_breakdown_no_baseline,60.847495209421496,,,16.574830401524206,2.823231344167663,,,1,full_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,Suffix K8,final_breakdown_no_baseline,101.19115893698067,,,72.67668927840856,4.9049162210004775,,,1,full_osl32k_qwen235b_suffix_k8
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,Suffix K16,final_breakdown_no_baseline,220.88396856482092,,,78.85689859383208,6.46431348349275,,,1,full_osl32k_qwen235b_suffix_k16
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,Suffix K32,final_spec_vs_live_baseline,223.1537434699867,64.525,3.4584074927545396,78.92476127742981,6.456228240441199,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,PARD K5,live_only,118.15,64.525,1.831073227431228,26.2,2.31,2109578,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,PARD K9,final_breakdown_no_baseline,71.80661751757303,,,17.2067586165177,2.5486082754865933,,,1,full_osl32k_qwen235b_pard_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,PARD K11,final_breakdown_no_baseline,69.24958772019768,,,12.059744219028518,2.326571864093137,,,1,full_osl32k_qwen235b_pard_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,PARD-2 K1,live_only,15.55,64.525,0.2409918636187524,4.8,1.05,2109579,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,PARD-2 K9,final_breakdown_no_baseline,49.4461355232001,,,2.4480217743318304,1.2203219596898647,,,1,full_osl32k_qwen235b_pard2_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,PARD-2 K11,final_breakdown_no_baseline,49.975904556849436,,,1.7757554546812173,1.1953331000149339,,,1,full_osl32k_qwen235b_pard2_k11
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,Eagle-3 K3,final_spec_vs_live_baseline,126.83143557619856,64.525,1.9656169790964517,56.89055240061951,2.7067165720185855,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,Eagle-3 K9,final_breakdown_no_baseline,108.23410656403995,,,18.251964085297416,2.6426767676767677,,,1,full_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,full,Qwen/Qwen3-235B-A22B,Lyris,32,Eagle-3 K11,final_breakdown_no_baseline,115.75942624109322,,,16.324163256659784,2.7956579582325762,,,1,full_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K8,final_breakdown_no_baseline,19.951129844658315,,,83.57795324353616,5.762085391672548,,,1,verified_osl32k_qwen235b_suffix_k8
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K16,final_breakdown_no_baseline,18.94752863611662,,,71.52884345934693,5.632929991356957,,,1,verified_osl32k_qwen235b_suffix_k16
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,Suffix K32,final_spec_vs_live_baseline,25.80173477418671,4.175,6.180056233338134,84.52071077140666,7.225756400310318,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K5,live_only,4.175,4.175,1.0,10.2,1.51,2109519,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K9,final_breakdown_no_baseline,5.602614552588358,,,8.771354977291137,1.7894219479562024,,,1,verified_osl32k_qwen235b_pard_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,PARD K11,final_breakdown_no_baseline,5.686502140466446,,,7.177451586397273,1.7895196745037,,,1,verified_osl32k_qwen235b_pard_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,PARD-2 K1,live_only,3.6,4.175,0.8622754491017964,5.8,1.06,2109521,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,PARD-2 K9,final_breakdown_no_baseline,3.768119474151238,,,1.6790305613618044,1.1511127505225625,,,1,verified_osl32k_qwen235b_pard2_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,PARD-2 K11,final_breakdown_no_baseline,3.731025547976389,,,1.3741199165148295,1.1511531908166313,,,1,verified_osl32k_qwen235b_pard2_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K3,final_spec_vs_live_baseline,7.694697282528511,4.175,1.8430412652762902,46.326076650986394,2.3897822995295916,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K9,final_breakdown_no_baseline,10.231563087679145,,,21.980862935191496,2.978277664167235,,,1,verified_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,2,Eagle-3 K11,final_breakdown_no_baseline,7.623999028251447,,,12.488022680351268,2.3736824948386395,,,1,verified_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,Suffix K8,final_breakdown_no_baseline,33.74751667145881,,,84.78083332024563,5.753654455794294,,,1,verified_osl32k_qwen235b_suffix_k8
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,Suffix K16,final_breakdown_no_baseline,48.98712395333806,,,86.20053731615135,7.620985135529001,,,1,verified_osl32k_qwen235b_suffix_k16
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,Suffix K32,final_spec_vs_live_baseline,48.65576378814184,8.25,5.897668337956587,86.20053731615135,7.620985135529001,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,PARD K5,live_only,6.75,8.25,0.8181818181818182,10.6,1.53,2109528,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,PARD K9,final_breakdown_no_baseline,9.801426306098987,,,10.517387616624257,1.9465648854961832,,,1,verified_osl32k_qwen235b_pard_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,PARD K11,final_breakdown_no_baseline,9.114295607187248,,,9.952330516169996,2.0947563567786993,,,1,verified_osl32k_qwen235b_pard_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,PARD-2 K1,live_only,8.025,8.25,0.9727272727272728,17.8,1.18,2109530,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,PARD-2 K9,final_breakdown_no_baseline,7.080491164032667,,,1.4990624245345556,1.13491561820811,,,1,verified_osl32k_qwen235b_pard2_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,PARD-2 K11,final_breakdown_no_baseline,7.0650000314002295,,,1.4211137123558053,1.1563225083591386,,,1,verified_osl32k_qwen235b_pard2_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,Eagle-3 K3,final_spec_vs_live_baseline,18.653783441530067,8.25,2.261064659579402,55.276358129850465,2.658290743895514,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,Eagle-3 K9,final_breakdown_no_baseline,19.448340400032105,,,22.15395313542912,2.9938557821886205,,,1,verified_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,4,Eagle-3 K11,final_breakdown_no_baseline,18.09688436284481,,,16.070050562638933,2.7677055618902826,,,1,verified_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,Suffix K8,final_breakdown_no_baseline,66.11775389906161,,,81.38709099161292,5.426402256886824,,,1,verified_osl32k_qwen235b_suffix_k8
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,Suffix K16,final_breakdown_no_baseline,65.69603260123576,,,80.05159133846824,6.347912621359224,,,1,verified_osl32k_qwen235b_suffix_k16
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,Suffix K32,final_spec_vs_live_baseline,67.05400838149801,16.425,4.082435822313425,80.05159133846824,6.347912621359224,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,PARD K5,live_only,9.95,16.425,0.6057838660578386,13.0,1.65,2109535,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,PARD K9,final_breakdown_no_baseline,16.381541215876187,,,11.66989947023735,2.0502909523213617,,,1,verified_osl32k_qwen235b_pard_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,PARD K11,final_breakdown_no_baseline,17.166940831741353,,,12.483159725222679,2.3731475697744946,,,1,verified_osl32k_qwen235b_pard_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,PARD-2 K1,live_only,17.65,16.425,1.0745814307458141,33.4,1.33,2109536,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,PARD-2 K9,final_breakdown_no_baseline,13.847933543463311,,,1.8944535733847727,1.1705008216046295,,,1,verified_osl32k_qwen235b_pard2_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,PARD-2 K11,final_breakdown_no_baseline,13.412162282341354,,,2.1909974056469785,1.2410097146211676,,,1,verified_osl32k_qwen235b_pard2_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,Eagle-3 K3,final_spec_vs_live_baseline,36.45700617192063,16.425,2.219604637559856,62.34210363038471,2.8702631089115416,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,Eagle-3 K9,final_breakdown_no_baseline,30.967462255351656,,,18.934494152921477,2.704104473762933,,,1,verified_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,8,Eagle-3 K11,final_breakdown_no_baseline,29.319970370595982,,,15.687699734113192,2.725646970752451,,,1,verified_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,Suffix K8,final_breakdown_no_baseline,105.89103752195345,,,79.69053489941544,5.3840940411790115,,,1,verified_osl32k_qwen235b_suffix_k8
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,Suffix K16,final_breakdown_no_baseline,124.25422844874421,,,79.92425881843756,6.519390271239632,,,1,verified_osl32k_qwen235b_suffix_k16
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,Suffix K32,final_spec_vs_live_baseline,124.49863867784283,33.225,3.7471373567447053,79.92425881843756,6.519390271239632,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,PARD K5,live_only,38.95,33.225,1.1723100075244546,17.6,1.88,2109540,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,PARD K9,final_breakdown_no_baseline,33.72038099549647,,,13.75651889322889,2.2380867003905998,,,1,verified_osl32k_qwen235b_pard_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,PARD K11,final_breakdown_no_baseline,32.49519756026144,,,10.986638787725607,2.2085302666498166,,,1,verified_osl32k_qwen235b_pard_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,PARD-2 K1,live_only,37.425,33.225,1.1264108352144468,39.5,1.4,2109541,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,PARD-2 K9,final_breakdown_no_baseline,27.502767389840443,,,1.780448191876384,1.1602403372688745,,,1,verified_osl32k_qwen235b_pard2_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,PARD-2 K11,final_breakdown_no_baseline,26.543370675175264,,,1.8002664045277137,1.1980293044980486,,,1,verified_osl32k_qwen235b_pard2_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,Eagle-3 K3,final_spec_vs_live_baseline,60.35924688588145,33.225,1.8166816218474475,51.453845656252014,2.5436153696875605,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,Eagle-3 K9,final_breakdown_no_baseline,59.01312633333158,,,18.096912549629785,2.6287221294666807,,,1,verified_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,16,Eagle-3 K11,final_breakdown_no_baseline,55.13380700535224,,,15.43406194262652,2.6977468136889176,,,1,verified_osl32k_qwen235b_eagle3_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,Suffix K8,final_breakdown_no_baseline,170.0761859626625,,,82.01338647017775,5.77292990296291,,,1,verified_osl32k_qwen235b_suffix_k8
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,Suffix K16,final_breakdown_no_baseline,163.7995706081224,,,81.29572677168426,6.930674465072581,,,1,verified_osl32k_qwen235b_suffix_k16
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,Suffix K32,final_spec_vs_live_baseline,223.2523510073745,64.375,3.4679976855514485,82.9313421121639,7.3144027980424875,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,PARD K5,live_only,91.425,64.375,1.4201941747572815,22.6,2.13,2109545,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,PARD K9,final_breakdown_no_baseline,64.58917599633706,,,18.17777565494331,2.635999808944898,,,1,verified_osl32k_qwen235b_pard_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,PARD K11,final_breakdown_no_baseline,66.36612568491628,,,12.625283496139318,2.3887811845753246,,,1,verified_osl32k_qwen235b_pard_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,PARD-2 K1,live_only,91.2,64.375,1.4166990291262136,75.5,1.76,2109546,RUNNING,0,live telemetry only: no final breakdown.json yet
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,PARD-2 K9,final_breakdown_no_baseline,48.05448356928531,,,3.1797647542420258,1.2861788278817823,,,1,verified_osl32k_qwen235b_pard2_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,PARD-2 K11,final_breakdown_no_baseline,46.84639147478202,,,2.0447403439424563,1.2249214378336701,,,1,verified_osl32k_qwen235b_pard2_k11
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,Eagle-3 K3,final_spec_vs_live_baseline,122.58412498282196,64.375,1.9042194172088849,54.291535259029736,2.6287460577708917,,,,provisional: final spec breakdown / live baseline telemetry
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,Eagle-3 K9,final_breakdown_no_baseline,116.15560376400177,,,19.229839968588045,2.730685597172924,,,1,verified_osl32k_qwen235b_eagle3_k9
+SWE OSL32K,verified,Qwen/Qwen3-235B-A22B,Lyris,32,Eagle-3 K11,final_breakdown_no_baseline,114.6611767500972,,,15.949879163601977,2.754486707996217,,,1,verified_osl32k_qwen235b_eagle3_k11
