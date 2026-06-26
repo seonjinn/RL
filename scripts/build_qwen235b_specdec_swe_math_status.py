@@ -1100,13 +1100,15 @@ def write_html(
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 14px;
-      overflow: auto;
+      overflow-x: auto;
       margin: 0;
     }}
     .chart img {{
       display: block;
-      width: 100%;
-      min-width: 900px;
+      width: min(100%, 1180px);
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto;
     }}
     .note {{
       background: #fbfcfe;
@@ -1215,6 +1217,9 @@ def write_html(
       color: #344054;
       text-align: left;
       white-space: nowrap;
+    }}
+    td {{
+      overflow-wrap: anywhere;
     }}
     .group td {{
       background: #f4f7fb;

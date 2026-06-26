@@ -542,34 +542,63 @@ def figure_html(src: str, caption: str) -> str:
     )
 
 
+def source_artifact_link(value: object) -> str:
+    text = str(value or "")
+    if not text or text.lower() == "nan":
+        return "n/a"
+    name = Path(text).name
+    if not name:
+        return f"<code>{esc(text)}</code>"
+    if (DATA / name).exists() or (DOCS / name).exists():
+        return f'<a class="source-link" href="data/{esc(name)}"><code>{esc(name)}</code></a>'
+    return f"<code>{esc(text)}</code>"
+
+
+def report_link_card(label: str, filename: str, description: str) -> str:
+    src = DOCS / filename
+    if src.exists():
+        return (
+            '<a class="report-link" '
+            f'href="reports/{esc(filename)}">'
+            f"<b>{esc(label)}</b>"
+            f"<span>{esc(description)}</span>"
+            f'<code class="file-code">{esc(filename)}</code>'
+            "</a>"
+        )
+    return (
+        '<div class="report-link missing">'
+        f"<b>{esc(label)}</b>"
+        f"<span>Missing local file: {esc(filename)}</span>"
+        f'<code class="file-code">{esc(filename)}</code>'
+        "</div>"
+    )
+
+
 def report_hub_html() -> str:
     groups = []
     for group in REPORT_GROUPS:
-        links = []
-        for label, filename, description in group["items"]:
-            src = DOCS / filename
-            if src.exists():
-                links.append(
-                    "<a class=\"report-link\" "
-                    f"href=\"reports/{esc(filename)}\">"
-                    f"<b>{esc(label)}</b>"
-                    f"<span>{esc(description)}</span>"
-                    f"<code>{esc(filename)}</code>"
-                    "</a>"
-                )
+        primary = []
+        archive = []
+        for index, (label, filename, description) in enumerate(group["items"]):
+            card = report_link_card(label, filename, description)
+            if index == 0 or "latest" in filename:
+                primary.append(card)
             else:
-                links.append(
-                    "<div class=\"report-link missing\">"
-                    f"<b>{esc(label)}</b>"
-                    f"<span>Missing local file: {esc(filename)}</span>"
-                    f"<code>{esc(filename)}</code>"
-                    "</div>"
-                )
+                archive.append(card)
+        archive_html = ""
+        if archive:
+            archive_cards = "".join(archive)
+            archive_html = (
+                '<details class="archive-links"><summary>Historical, diagnostic, and dated pages</summary>'
+                f'<div class="report-buttons archive">{archive_cards}</div>'
+                "</details>"
+            )
         groups.append(
             "<section class=\"report-panel\">"
             f"<h3>{esc(group['title'])}</h3>"
             f"<p>{esc(group['summary'])}</p>"
-            f"<div class=\"report-buttons\">{''.join(links)}</div>"
+            f"<div class=\"report-buttons primary\">{''.join(primary)}</div>"
+            f"{archive_html}"
             "</section>"
         )
     return "".join(groups)
@@ -704,7 +733,7 @@ def vllm_table(df: pd.DataFrame) -> str:
                 fmt(row["speedup"], 2, "x"),
                 fmt(row["acceptance_pct"], 1, "%"),
                 fmt(row["mean_accept_len"], 2),
-                f"<code>{esc(row['source_file'])}</code>",
+                source_artifact_link(row["source_file"]),
             ]
         )
     return rows_to_table(
@@ -745,7 +774,7 @@ def nemorl_table(df: pd.DataFrame) -> str:
                 fmt(row["e2e_step_speedup"], 2, "x"),
                 fmt(row["acceptance_pct"], 1, "%"),
                 fmt(row["mean_accept_len"], 2),
-                f"<code>{esc(row['source_file'])}</code>",
+                source_artifact_link(row["source_file"]),
             ]
         )
     return rows_to_table(
@@ -799,6 +828,7 @@ def build() -> None:
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv",
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
+        DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv",
         DOCS / "lyris_angelslim_checkpoint_prewarm_summary_20260622.json",
         ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt",
     ]
@@ -877,11 +907,17 @@ def build() -> None:
     .report-panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 15px; box-shadow: 0 1px 2px rgba(16,24,40,.06); }}
     .report-panel h3 {{ margin: 0; font-size: 17px; }}
     .report-buttons {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }}
-    .report-link {{ display: flex; min-height: 94px; flex-direction: column; gap: 5px; justify-content: flex-start; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; padding: 10px; text-decoration: none; }}
+    .report-buttons.primary {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .report-buttons.archive {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    .archive-links {{ margin-top: 10px; border-top: 1px solid var(--line); padding-top: 9px; }}
+    .archive-links summary {{ cursor: pointer; color: var(--muted); font-weight: 750; }}
+    .report-link {{ display: flex; min-height: 82px; flex-direction: column; gap: 5px; justify-content: flex-start; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; padding: 10px; text-decoration: none; }}
     .report-link b {{ color: var(--ink); font-size: 14px; line-height: 1.25; }}
     .report-link span {{ color: var(--muted); font-size: 12px; line-height: 1.3; }}
     .report-link code {{ margin-top: auto; overflow-wrap: anywhere; }}
+    .report-link .file-code {{ color: var(--muted); font-size: 11px; }}
     .report-link.missing {{ opacity: .56; }}
+    .source-link code {{ color: var(--blue); }}
     .table-scroll {{ width: 100%; overflow-x: auto; margin-top: 10px; }}
     table {{ min-width: 1060px; width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }}
     th, td {{ border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; font-size: 13px; }}
@@ -893,7 +929,7 @@ def build() -> None:
     .chart-figure figcaption {{ color: var(--muted); font-size: 13px; margin-top: 7px; }}
     .note {{ border-left: 4px solid var(--blue); background: var(--panel); border-radius: 8px; padding: 13px 14px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 14px; }}
     @media (max-width: 980px) {{ .chart-grid {{ grid-template-columns: 1fr; }} }}
-    @media (max-width: 980px) {{ .report-buttons {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    @media (max-width: 980px) {{ .report-buttons,.report-buttons.primary,.report-buttons.archive {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
     @media (max-width: 840px) {{ .grid {{ grid-template-columns: 1fr; }} .report-buttons {{ grid-template-columns: 1fr; }} main {{ padding: 18px 12px 32px; }} }}
   </style>
 </head>

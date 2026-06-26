@@ -741,7 +741,7 @@ def nemorl_charts_section(rows: pd.DataFrame) -> str:
         )
     return (
         '<section><h2>Baseline-Relative Charts</h2>'
-        '<p class="note">Charts use parsed step20 rows and are grouped by model. Baselines are matched by model, mode, max OSL, temperature/top_p, and source setup; each model section keeps those setup slices separate on the x-axis.</p>'
+        '<p class="note">Charts use parsed step20 rows and are grouped by model. Baselines are matched by model, mode, max OSL, temperature/top_p, and source setup; each model section keeps those setup slices separate on the x-axis. Dense charts show baseline plus the top visible methods for that metric; the full method set remains in the tables below.</p>'
         + "".join(model_sections)
         + '</section>'
     )
@@ -800,6 +800,7 @@ def nemorl_multigroup_metric_svg(
     reference_line: bool = True,
     max_groups: int = 10,
     include_model_in_group: bool = True,
+    max_methods: int = 8,
 ) -> str:
     if rows.empty:
         return ""
@@ -820,12 +821,24 @@ def nemorl_multigroup_metric_svg(
     methods = nemorl_method_order(rows["method_k"].astype(str).tolist())
     if not group_labels or not methods:
         return ""
+    if len(methods) > max_methods:
+        always = [method for method in ["baseline", "baseline_fuselossfalse"] if method in methods]
+        metric_rank = (
+            rows.groupby("method_k")[metric]
+            .mean()
+            .sort_values(ascending=False)
+            .index.astype(str)
+            .tolist()
+        )
+        selected = list(dict.fromkeys(always + metric_rank))[:max_methods]
+        methods = [method for method in methods if method in selected]
+        rows = rows[rows["method_k"].astype(str).isin(methods)]
 
     max_value = clean_float(rows[metric].max())
     if math.isnan(max_value) or max_value <= 0:
         return ""
     y_max = max(1.15 if reference_line else 0.1, max_value * 1.18)
-    legend_cols = min(5, len(methods))
+    legend_cols = min(4, len(methods))
     legend_rows = math.ceil(len(methods) / legend_cols)
     width = max(820, 110 + 108 * len(group_labels))
     height = 338 + max(0, legend_rows - 1) * 22
@@ -1002,6 +1015,18 @@ def link_html(value: object, label: str = "W&B") -> str:
     if not url:
         return ""
     return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+
+
+def published_data_html(value: object) -> str:
+    text = text_value(value)
+    if not text:
+        return ""
+    name = Path(text).name
+    if name and (ROOT / "public" / "data" / name).exists():
+        return f'<a href="../data/{esc(name)}"><code>{esc(name)}</code></a>'
+    if text.startswith("docs/") and name:
+        return f"<code>{esc(name)}</code>"
+    return esc(text)
 
 
 def wandb_link_html(row: pd.Series) -> str:
@@ -1440,11 +1465,23 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
         return '<p class="note">No rows.</p>'
     head = "".join(f"<th>{esc(label)}</th>" for _, label, _ in columns)
     body = []
+    text_classes = {
+        "source_group": "source-col",
+        "source_label": "source-col",
+        "source": "source-col",
+        "source_file": "source-col",
+        "basis": "note-col",
+        "manifest": "manifest-col",
+        "wandb_name": "name-col",
+        "latest_error": "note-col error-col",
+        "notes": "note-col",
+        "logs_dir": "path-col",
+    }
     for _, row in rows.iterrows():
         cells = []
         for key, _, kind in columns:
             value = row.get(key, "")
-            cls = "num" if kind in {"num", "x", "pct"} else ""
+            cls = "num" if kind in {"num", "x", "pct", "int", "temp"} else text_classes.get(key, "")
             if key == "slurm_state":
                 cls = str(value).strip()
             if kind == "num":
@@ -1460,8 +1497,11 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
             elif kind == "link":
                 text = wandb_link_html(row) if key == "wandb_url" else link_html(value)
             else:
-                text = esc(value)
-            cells.append(f'<td class="{cls}">{text}</td>' if cls else f"<td>{text}</td>")
+                text = published_data_html(value) if key in {"source", "source_file", "manifest"} else esc(value)
+            title = esc(value) if key in text_classes and text else ""
+            attr = f' class="{cls}"' if cls else ""
+            attr += f' title="{title}"' if title else ""
+            cells.append(f"<td{attr}>{text}</td>")
         body.append("<tr>" + "".join(cells) + "</tr>")
     return "<table><thead><tr>" + head + "</tr></thead><tbody>" + "\n".join(body) + "</tbody></table>"
 
@@ -1471,6 +1511,8 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
     added_summary = aggregate_added(added)
     main_matrix = pd.read_csv(DOCS / "vllm_standalone_all_batches_combined_matrix_20260619.csv")
     added_matrix = matrix(added[added["valid_result"]]) if not added.empty else pd.DataFrame()
+    valid_added = added[added["valid_result"]].copy() if not added.empty else pd.DataFrame()
+    unmatched = valid_added[pd.to_numeric(valid_added.get("speedup"), errors="coerce").isna()].copy() if not valid_added.empty else pd.DataFrame()
     focus = added[
         added["method"].isin(["pard_k16", "pard2_k16"])
         & added["model"].isin(["Qwen3-32B", "Qwen3-235B-A22B", "Qwen3-30B-A3B", "Qwen3-8B"])
@@ -1504,16 +1546,18 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
     key_finding = " ".join(eagle_lines) if eagle_lines else "Latest CSV refresh completed; no new valid rows found."
     css = """
 :root{--text:#111827;--muted:#6b7280;--line:#d8dee8;--bg:#f7f8fb;--panel:#fff;--blue:#1f5fbf;--good:#e8f3ff;--bad:#fff0f0;--warn:#fff7df}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:15px;line-height:1.42}main{max-width:1500px;margin:0 auto;padding:24px}h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:28px 0 10px}h3{font-size:16px;margin:18px 0 8px}.sub,.note{color:var(--muted)}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:18px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}.card b{display:block;font-size:22px}.pill{display:inline-block;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;color:#374151}.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:14px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff;margin:8px 0 14px}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.good{background:var(--good)}.bad{background:var(--bad)}.warn{background:var(--warn)}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1000px){.charts{grid-template-columns:1fr}}@media(max-width:900px){main{padding:16px}.cards{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:15px;line-height:1.42}main{max-width:1500px;margin:0 auto;padding:24px}h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:28px 0 10px}h3{font-size:16px;margin:18px 0 8px}.topbar{margin-bottom:12px}.topbar a{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px;text-decoration:none;font-weight:700;color:var(--blue)}.sub,.note{color:var(--muted)}.cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:18px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}.card b{display:block;font-size:22px}.pill{display:inline-block;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;color:#374151}.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:14px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff;margin:8px 0 14px}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.source-col,.manifest-col,.path-col,.note-col,.name-col{max-width:260px;white-space:normal;overflow-wrap:anywhere}.manifest-col,.path-col{font-size:12px}.error-col{max-width:360px}.good{background:var(--good)}.bad{background:var(--bad)}.warn{background:var(--warn)}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}a code{color:var(--blue)}details.archive-table{margin-top:12px}details.archive-table summary{cursor:pointer;font-weight:750;color:#374151}@media(max-width:1200px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:1000px){.charts{grid-template-columns:1fr}}@media(max-width:900px){main{padding:16px}.cards{grid-template-columns:1fr 1fr}table{font-size:13px}}"""
     parts = [
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
         f"<title>vLLM Standalone SpecDec Results</title><style>{css}</style></head><body><main>",
+        '<div class="topbar"><a href="../index.html">Back to report hub</a></div>',
         "<h1>vLLM Standalone SpecDec Results</h1>",
         f"<p class=\"sub\">Updated {esc(updated)}. Data refresh from the 6/19 batch matrix, 6/20 extra-K/PARD sweeps, 6/16 temp0/temp1 trend analysis, and refreshed Lyris legacy breakdown JSONs for Qwen3-30B-A3B and Qwen3-8B.</p>",
         "<div><span class=\"pill\">ISL 4096</span><span class=\"pill\">OSL 32768</span><span class=\"pill\">batch 1/2/4/8/16/32</span><span class=\"pill\">temperature 0.0 and 1.0</span><span class=\"pill\">top_p 1.0 where available</span></div>",
         "<div class=\"cards\">",
         f"<div class=\"card\"><b>{len(main)}</b><span>existing 6/19 rows</span></div>",
         f"<div class=\"card\"><b>{int(added['valid_result'].sum()) if not added.empty else 0}</b><span>valid added rows</span></div>",
+        f"<div class=\"card\"><b>{len(unmatched)}</b><span>valid rows waiting baseline</span></div>",
         f"<div class=\"card\"><b>{len(failed)}</b><span>failed or invalid added rows</span></div>",
         f"<div class=\"card\"><b>{len(added_summary)}</b><span>added summary groups</span></div>",
         "</div>",
@@ -1593,7 +1637,27 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
             ],
         ),
         "</div></section>",
-        "<section class=\"section\"><h2>Failed Or Invalid Added Rows</h2><div class=\"table-wrap\">",
+        '<section class="section"><details class="archive-table"><summary>Rows Waiting For Matched Baseline</summary><p class="note">These rows have valid throughput/acceptance measurements but no exact baseline with the same domain, model, temperature, batch size, ISL, and OSL. They are excluded from speedup-focused interpretation until a baseline exists.</p><div class="table-wrap">',
+        table(
+            unmatched,
+            [
+                ("domain", "Domain", "text"),
+                ("model", "Model", "text"),
+                ("temperature", "Temp", "temp"),
+                ("batch_size", "Batch", "int"),
+                ("isl", "ISL", "int"),
+                ("osl", "OSL", "int"),
+                ("method", "Method", "text"),
+                ("state", "State", "text"),
+                ("tok_s_gpu", "tok/s/GPU", "num"),
+                ("acceptance_pct", "Acceptance", "pct"),
+                ("mean_accept_len", "Mean len", "num"),
+                ("basis", "Basis", "text"),
+                ("source", "Source", "text"),
+            ],
+        ),
+        "</div></details></section>",
+        '<section class="section"><details class="archive-table"><summary>Failed Or Invalid Added Rows</summary><div class="table-wrap">',
         table(
             failed,
             [
@@ -1608,7 +1672,7 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
                 ("source_label", "Source", "text"),
             ],
         ),
-        "</div></section>",
+        "</div></details></section>",
         "<section class=\"section\"><h2>Sources</h2><p class=\"note\"><code>docs/vllm_standalone_all_batches_combined_20260619.csv</code>, <code>docs/vllm_standalone_all_batches_combined_matrix_20260619.csv</code>, <code>docs/vllm_standalone_temp0_temp1_trends_20260616.csv</code>, <code>docs/vllm_standalone_qwen30_qwen8_legacy_breakdowns_20260625.csv</code>, <code>docs/oci_qmath_extra_k_live_log_metrics_20260620.csv</code>, <code>docs/oci_qmath_pard2_k_sweep_live_log_metrics_20260620.csv</code>, <code>docs/oci_qmath_pard_pard2_k16_focus_live_log_metrics_20260620.csv</code>, <code>docs/lyris_qwen235b_swe_pard2_k_sweep_live_log_metrics_20260620.csv</code>, and <code>docs/qwen3_235b_dflash_retry28_openmath_metrics.csv</code>.</p></section>",
         "</main></body></html>",
     ]
@@ -2116,12 +2180,36 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
     rows = fill_nemorl_speedups(rows)
     rows["has_speedup_metric"] = pd.to_numeric(rows.get("gen_tps_speedup"), errors="coerce").notna()
     rows["completed_steps_numeric"] = pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0)
+    rows["source_priority_numeric"] = pd.to_numeric(rows.get("source_priority"), errors="coerce").fillna(999)
+    rows["job_id_text"] = rows.get("job_id", "").astype(str)
+    rows["method_k_text"] = rows.get("method_k", "").astype(str)
+    rows["has_job_key"] = rows["job_id_text"].str.strip().ne("") & rows["job_id_text"].str.lower().ne("nan")
+    if rows["has_job_key"].any():
+        alt_sources = (
+            rows[rows["has_job_key"]]
+            .groupby(["job_id_text", "method_k_text"])["source_group"]
+            .apply(lambda values: " | ".join(dict.fromkeys(str(v) for v in values if str(v) and str(v) != "nan")))
+        )
+        duplicate_keys = alt_sources[alt_sources.str.contains(r"\|", regex=True)]
+        if not duplicate_keys.empty:
+            def add_alt_note(row: pd.Series) -> str:
+                key = (str(row.get("job_id_text", "")), str(row.get("method_k_text", "")))
+                alt = duplicate_keys.get(key, "")
+                existing = text_value(row.get("notes", ""))
+                if not alt:
+                    return existing
+                note = f"alternate source groups: {alt}"
+                return f"{existing}; {note}" if existing else note
+
+            rows.loc[rows["has_job_key"], "notes"] = rows.loc[rows["has_job_key"]].apply(add_alt_note, axis=1)
     rows = rows.sort_values(
-        ["source_group", "job_id", "method_k", "has_speedup_metric", "completed_steps_numeric"],
-        ascending=[True, True, True, False, False],
+        ["job_id_text", "method_k_text", "has_speedup_metric", "completed_steps_numeric", "source_priority_numeric"],
+        ascending=[True, True, False, False, True],
         na_position="last",
     )
-    rows = rows.drop_duplicates(subset=["source_group", "job_id", "method_k"], keep="first")
+    rows_with_job = rows[rows["has_job_key"]].drop_duplicates(subset=["job_id_text", "method_k_text"], keep="first")
+    rows_without_job = rows[~rows["has_job_key"]].drop_duplicates(subset=["source_group", "job_id", "method_k"], keep="first")
+    rows = pd.concat([rows_with_job, rows_without_job], ignore_index=True, sort=False)
     rows = rows.sort_values(
         [
             "source_priority",
@@ -2134,7 +2222,17 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
         ascending=[True, True, True, True, True, True],
         na_position="last",
     )
-    return rows.drop(columns=["has_speedup_metric", "completed_steps_numeric"], errors="ignore")
+    return rows.drop(
+        columns=[
+            "has_speedup_metric",
+            "completed_steps_numeric",
+            "source_priority_numeric",
+            "job_id_text",
+            "method_k_text",
+            "has_job_key",
+        ],
+        errors="ignore",
+    )
 
 
 def nemorl_live_k_sweep_rows(rows: pd.DataFrame) -> pd.DataFrame:
@@ -2221,7 +2319,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         key = "Step20 rows are running or pending; matched speedup will update as baseline and spec rows complete more steps."
     css = """
 :root{--ink:#111827;--muted:#5f6b7a;--line:#d6dee9;--bg:#f4f6f9;--panel:#fff;--soft:#eef3f8;--blue:#2457a6;--green:#157f47;--amber:#946200;--red:#b42318}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:10px 0 18px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:8px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums}.RUNNING,.COMPLETED{color:var(--green);font-weight:700}.PENDING,.SUBMITTED{color:var(--amber);font-weight:700}.FAILED,.TIMEOUT,.CANCELLED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.model-charts,.kpis,.chapter-grid{grid-template-columns:1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.charts,.kpis,.chapter-grid{grid-template-columns:1fr}}"""
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.topbar{margin-bottom:10px}.topbar a{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px;text-decoration:none;font-weight:700;color:var(--blue)}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:10px 0 18px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:8px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.source-col,.manifest-col,.path-col,.note-col,.name-col{max-width:260px;white-space:normal;overflow-wrap:anywhere}.manifest-col,.path-col{font-size:12px}.error-col{max-width:380px}.RUNNING,.COMPLETED{color:var(--green);font-weight:700}.PENDING,.SUBMITTED{color:var(--amber);font-weight:700}.FAILED,.TIMEOUT,.CANCELLED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}a code{color:var(--blue)}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.model-charts,.kpis,.chapter-grid{grid-template-columns:1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.charts,.kpis,.chapter-grid{grid-template-columns:1fr}}"""
     cols = [
         ("source_group", "Source group", "text"),
         ("cluster", "Cluster", "text"),
@@ -2278,7 +2376,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         [
             "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
             f"<title>Lyris NeMo-RL SpecDec Status Latest</title><style>{css}</style></head><body>",
-            "<header><div class=\"hero\"><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
+            "<header><div class=\"hero\"><div class=\"topbar\"><a href=\"../index.html\">Back to report hub</a></div><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
             f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main rows, 2026-06-23 enforce_eager=false W&B rows, 2026-06-24 PARD diagnostics, and historical Qwen3-30B-A3B/Qwen3-32B Lyris/OCI-HSG artifacts.</div>",
             "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#fresh\">Fresh enforce_eager=true K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
             "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">enforce_eager shown per row</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
