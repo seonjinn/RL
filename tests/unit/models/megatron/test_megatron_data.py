@@ -954,30 +954,32 @@ class TestGetMicrobatchIterator:
         assert micro_batch_size == 1
         assert data_iterator_len == 10
 
-    @patch("nemo_rl.models.megatron.data.torch.distributed.all_reduce")
-    @patch("nemo_rl.models.megatron.data.torch.distributed.is_initialized")
-    @patch("nemo_rl.models.megatron.data.torch.distributed.is_available")
-    @patch("nemo_rl.models.megatron.data.get_expert_tensor_and_model_parallel_group")
-    def test_hybridep_alignment_requires_initialized_expert_group(
-        self,
-        mock_get_group,
-        mock_dist_available,
-        mock_dist_initialized,
-        mock_all_reduce,
-    ):
+    def test_hybridep_alignment_requires_initialized_expert_group(self):
         """Never silently align HybridEP lengths over the WORLD group."""
-        from nemo_rl.models.megatron.data import _get_hybridep_aligned_seq_len
+        from nemo_rl.models.megatron import data as data_module
 
         group = MagicMock()
-        mock_get_group.return_value = group
-        mock_dist_available.return_value = True
-        mock_dist_initialized.return_value = True
-
-        aligned_seq_len = _get_hybridep_aligned_seq_len(
-            local_seq_len=3072,
-            multiple=512,
-            device=torch.device("cpu"),
-        )
+        with (
+            patch.object(
+                data_module,
+                "get_expert_tensor_and_model_parallel_group",
+                return_value=group,
+            ) as mock_get_group,
+            patch.object(
+                data_module.torch.distributed, "is_available", return_value=True
+            ),
+            patch.object(
+                data_module.torch.distributed, "is_initialized", return_value=True
+            ),
+            patch.object(
+                data_module.torch.distributed, "all_reduce"
+            ) as mock_all_reduce,
+        ):
+            aligned_seq_len = data_module._get_hybridep_aligned_seq_len(
+                local_seq_len=3072,
+                multiple=512,
+                device=torch.device("cpu"),
+            )
 
         mock_get_group.assert_called_once_with()
         mock_all_reduce.assert_called_once()
