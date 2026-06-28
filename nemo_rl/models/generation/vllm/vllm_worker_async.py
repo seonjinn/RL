@@ -45,7 +45,10 @@ from nemo_rl.models.generation.vllm.utils import (
     pad_and_align_routed_expert_indices,
 )
 from nemo_rl.models.generation.vllm.sleep import validate_vllm_sleep_level
-from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
+from nemo_rl.models.generation.vllm.vllm_worker import (
+    BaseVllmGenerationWorker,
+    _all_worker_updates_succeeded,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1374,14 +1377,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(worker_results)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
@@ -1410,14 +1406,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(worker_results)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback

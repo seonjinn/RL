@@ -1840,6 +1840,37 @@ def test_async_grpo_refits_before_starting_collection(
     assert events[: len(expected_events)] == expected_events
 
 
+@pytest.mark.parametrize(
+    ("wake_results", "error_match"),
+    [
+        ([False], "wake weights before policy refit"),
+        ([True, False], "wake the KV cache after policy refit"),
+    ],
+)
+def test_refit_policy_generation_fails_on_partial_wake(
+    wake_results,
+    error_match,
+):
+    from nemo_rl.algorithms import grpo as grpo_mod
+
+    policy = MagicMock()
+    policy.stream_weights_via_ipc_zmq.return_value = []
+    policy_generation = MagicMock()
+    policy_generation.prepare_for_generation.side_effect = wake_results
+    policy_generation.update_weights_via_ipc_zmq.return_value = [True]
+
+    with (
+        patch.object(grpo_mod.ray, "get", side_effect=lambda value: value),
+        pytest.raises(RuntimeError, match=error_match),
+    ):
+        grpo_mod.refit_policy_generation(
+            policy,
+            policy_generation,
+            colocated_inference=True,
+            _refit_buffer_size_gb=1,
+        )
+
+
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
 def test_grpo_train_skips_reference_policy_logprobs(mock_grpo_components, train_func):
     """Regression test for issue #1968 (Bug 1) and PRs #2174 / #2178.

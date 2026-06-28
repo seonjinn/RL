@@ -37,6 +37,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
 from nemo_rl.models.generation.vllm.vllm_worker import (
+    _all_worker_updates_succeeded,
     _resolve_enable_prefix_caching,
 )
 from nemo_rl.models.generation.vllm.vllm_worker_async import (
@@ -47,6 +48,14 @@ from nemo_rl.models.policy import LoRAConfig, PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 
 model_name = "Qwen/Qwen3-0.6B"
+
+
+def test_all_worker_updates_succeeded_checks_every_rank(capsys):
+    assert _all_worker_updates_succeeded([True, True, True])
+    assert not _all_worker_updates_succeeded([True, False, True, False])
+    assert "ranks [1, 3]" in capsys.readouterr().out
+
+
 # Define basic vLLM test config
 basic_vllm_test_config: VllmConfig = {
     "backend": "vllm",

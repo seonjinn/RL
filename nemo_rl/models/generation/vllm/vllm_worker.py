@@ -49,6 +49,14 @@ from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 logger = logging.getLogger(__name__)
 
 
+def _all_worker_updates_succeeded(worker_results: list[Any]) -> bool:
+    failed_ranks = [rank for rank, result in enumerate(worker_results) if not result]
+    if failed_ranks:
+        print(f"Error: Workers failed to update weights at ranks {failed_ranks}.")
+        return False
+    return True
+
+
 def _resolve_enable_prefix_caching(vllm_cfg: dict[str, Any]) -> bool:
     enable_prefix_caching = vllm_cfg.get("enable_prefix_caching", None)
     if enable_prefix_caching is None:
@@ -873,14 +881,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "update_weights_via_ipc_zmq",
                 args=tuple(),
             )
-            worker_result = result_or_coro[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(result_or_coro)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
@@ -904,14 +905,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             result_or_coro = self.llm.collective_rpc(
                 "update_weights_from_collective", args=tuple()
             )
-            worker_result = result_or_coro[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(result_or_coro)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
