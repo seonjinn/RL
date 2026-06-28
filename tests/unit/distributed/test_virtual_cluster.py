@@ -401,3 +401,19 @@ class TestVllmPortAssignment:
         BaseVllmGenerationWorker.finalize_worker_env_vars(env_vars)
 
         assert env_vars == {"VLLM_USE_RAY_V2_EXECUTOR_BACKEND": "1"}
+
+    def test_worker_init_removes_recipe_vllm_port(self, monkeypatch):
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            BaseVllmGenerationWorker,
+        )
+
+        def fake_init_config(worker, *args, **kwargs):
+            worker.is_model_owner = False
+
+        monkeypatch.setattr(BaseVllmGenerationWorker, "_init_config", fake_init_config)
+        monkeypatch.setenv("VLLM_USE_RAY_V2_EXECUTOR_BACKEND", "1")
+        monkeypatch.setenv("VLLM_PORT", "20001")
+
+        BaseVllmGenerationWorker(config={})
+
+        assert "VLLM_PORT" not in os.environ
