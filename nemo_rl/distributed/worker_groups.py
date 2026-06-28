@@ -205,6 +205,14 @@ class RayWorkerBuilder:
                         options["runtime_env"], runtime_env_overrides
                     )
 
+                finalize_worker_env_vars = getattr(
+                    worker_class, "finalize_worker_env_vars", None
+                )
+                if finalize_worker_env_vars is not None:
+                    runtime_env = options.setdefault("runtime_env", {})
+                    worker_env_vars = runtime_env.setdefault("env_vars", {})
+                    finalize_worker_env_vars(worker_env_vars)
+
                 # Apply initialization parameters
                 if init_kwargs:
                     worker_kwargs.update(init_kwargs)
