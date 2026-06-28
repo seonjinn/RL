@@ -387,3 +387,17 @@ class TestVllmPortAssignment:
         )
 
         assert "VLLM_PORT" not in env_vars
+
+    def test_recipe_ray_v2_removes_merged_vllm_port(self):
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            BaseVllmGenerationWorker,
+        )
+
+        env_vars = {
+            "VLLM_USE_RAY_V2_EXECUTOR_BACKEND": "1",
+            "VLLM_PORT": "20001",
+        }
+
+        BaseVllmGenerationWorker.finalize_worker_env_vars(env_vars)
+
+        assert env_vars == {"VLLM_USE_RAY_V2_EXECUTOR_BACKEND": "1"}

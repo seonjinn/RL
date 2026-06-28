@@ -141,6 +141,11 @@ class PrecedenceActor:
             {},  # runtime_env_overrides
         )
 
+    @staticmethod
+    def finalize_worker_env_vars(env_vars):
+        env_vars.pop("REMOVE_AFTER_MERGE", None)
+        env_vars["FINALIZE_WORKER_ENV_CALLED"] = "1"
+
 
 MY_TEST_ACTOR_FQN = f"{MyTestActor.__module__}.MyTestActor"
 
@@ -1288,6 +1293,7 @@ def test_environment_variable_precedence_full(
         env_vars = {
             "TEST_VAR_1": "yaml_worker_group_value",
             "TEST_VAR_2": "yaml_worker_group_value",
+            "REMOVE_AFTER_MERGE": "1",
         }
 
         # Create worker group
@@ -1320,6 +1326,8 @@ def test_environment_variable_precedence_full(
         assert (
             ray.get(worker.get_env_var.remote("WORKER_VAR")) == "worker_only"
         )  # configure_worker value set
+        assert ray.get(worker.get_env_var.remote("REMOVE_AFTER_MERGE")) is None
+        assert ray.get(worker.get_env_var.remote("FINALIZE_WORKER_ENV_CALLED")) == "1"
         assert (
             ray.get(worker.get_env_var.remote("RAY_REMOTE_VAR")) == "ray_remote_only"
         )  # ray.remote runtime_env value preserved
