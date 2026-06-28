@@ -20,6 +20,7 @@ import ray
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 
+import nemo_rl.algorithms.grpo as grpo_mod
 from nemo_rl.algorithms.advantage_estimator import (
     GDPOAdvantageEstimator,
     GRPOAdvantageEstimator,
@@ -667,8 +668,9 @@ class StubAsyncTrajectoryCollector:
     Each method is a property that returns a MagicMock with a 'remote' attribute.
     """
 
-    def __init__(self, event_log=None):
+    def __init__(self, event_log=None, health_error=None):
         self._event_log = event_log
+        self._health_error = health_error
 
     def _record(self, event):
         if self._event_log is not None:
@@ -736,6 +738,21 @@ class StubAsyncTrajectoryCollector:
         mock = MagicMock()
         mock.remote = MagicMock(return_value=MagicMock())
         return mock
+
+    @property
+    def raise_if_failed(self):
+        mock = MagicMock()
+        mock.remote = MagicMock(side_effect=self._health_error)
+        return mock
+
+
+def test_async_collector_health_check_propagates_failure():
+    collector = StubAsyncTrajectoryCollector(
+        health_error=RuntimeError("vLLM engine is dead")
+    )
+
+    with pytest.raises(RuntimeError, match="vLLM engine is dead"):
+        grpo_mod._raise_if_trajectory_collector_failed(collector)
 
 
 def mock_async_grpo_infrastructure(
