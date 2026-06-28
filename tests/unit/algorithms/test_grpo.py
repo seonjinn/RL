@@ -689,7 +689,9 @@ class StubAsyncTrajectoryCollector:
         """Set weight version - returns a remote-callable mock"""
         mock = MagicMock()
         mock.remote = MagicMock(
-            side_effect=lambda *_args, **_kwargs: self._record("set_weight_version")
+            side_effect=lambda version, **_kwargs: self._record(
+                f"set_weight_version:{version}"
+            )
         )
         return mock
 
@@ -823,8 +825,14 @@ def mock_async_grpo_infrastructure(
     stack.enter_context(
         patch("nemo_rl.algorithms.grpo.refit_policy_generation", side_effect=mock_refit)
     )
+
+    def mock_validate(*_args, **_kwargs):
+        if event_log is not None:
+            event_log.append("validate")
+        return {}, {}
+
     stack.enter_context(
-        patch("nemo_rl.algorithms.grpo.validate", return_value=({}, {}))
+        patch("nemo_rl.algorithms.grpo.validate", side_effect=mock_validate)
     )
 
     # Mock print_performance_metrics to avoid needing real timing metrics
@@ -1768,15 +1776,35 @@ def test_grpo_train_collects_generation_logger_and_seq_metrics(
     assert train_metrics["masked_correct_pct"] == 0.5
 
 
-def test_async_grpo_refits_before_starting_collection(mock_grpo_components):
+@pytest.mark.parametrize(
+    ("current_step", "val_at_start", "expected_events"),
+    [
+        (0, False, ["refit", "set_weight_version:0", "start_collection"]),
+        (
+            0,
+            True,
+            ["refit", "validate", "set_weight_version:0", "start_collection"],
+        ),
+        (5, True, ["refit", "set_weight_version:5", "start_collection"]),
+    ],
+)
+def test_async_grpo_refits_before_starting_collection(
+    mock_grpo_components,
+    current_step,
+    val_at_start,
+    expected_events,
+):
     """Do not let vLLM collect trajectories before real weights are loaded."""
     master_config = mock_grpo_components["master_config"]
-    master_config.grpo["max_num_steps"] = 1
+    master_config.grpo["max_num_steps"] = current_step + 1
     master_config.grpo["max_num_epochs"] = 1
     master_config.grpo["val_period"] = 0
-    master_config.grpo["val_at_start"] = False
+    master_config.grpo["val_at_start"] = val_at_start
     master_config.grpo["use_dynamic_sampling"] = False
     master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    save_state = _default_grpo_save_state()
+    save_state["current_step"] = current_step
 
     mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
     mock_rollout_metrics = {
@@ -1805,11 +1833,11 @@ def test_async_grpo_refits_before_starting_collection(mock_grpo_components):
             mock_grpo_components["val_task_to_env"],
             mock_grpo_components["logger"],
             mock_grpo_components["checkpointer"],
-            _default_grpo_save_state(),
+            save_state,
             master_config,
         )
 
-    assert events[:3] == ["refit", "set_weight_version", "start_collection"]
+    assert events[: len(expected_events)] == expected_events
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
