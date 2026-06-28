@@ -100,6 +100,28 @@ def init_model_parallel_group(group_ranks, local_rank, backend):
     assert patched == source
 
 
+def test_vllm_timeout_patch_preserves_decorated_top_level_classes():
+    source = """
+from dataclasses import dataclass
+
+@dataclass
+class ProcessGroup:
+    ranks: list[int]
+
+def init_model_parallel_group(group_ranks, local_rank, backend):
+    device_group = torch.distributed.new_group(
+        ranks,
+        backend=torch_distributed_backend,
+    )
+    return device_group
+"""
+
+    patched = _patch_vllm_parallel_state_timeout_content(source, "parallel_state.py")
+
+    assert "@dataclass\nclass ProcessGroup:" in patched
+    compile(patched, "parallel_state.py", "exec")
+
+
 def test_vllm_timeout_patch_raises_when_device_group_pattern_is_missing():
     source = """
 def init_model_parallel_group(group_ranks, local_rank, backend):
