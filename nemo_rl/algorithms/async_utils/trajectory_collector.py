@@ -94,6 +94,26 @@ class AsyncTrajectoryCollector:
         self._spawning_targets: set[int] = set()
         self._counter_lock: _threading.Lock = _threading.Lock()
 
+        self._fatal_error: Optional[str] = None
+        self._fatal_error_lock: _threading.Lock = _threading.Lock()
+
+    def _record_fatal_error(self, error: Exception, context: str) -> None:
+        detail = f"{context}: {type(error).__name__}: {error}"
+        with self._fatal_error_lock:
+            if self._fatal_error is None:
+                self._fatal_error = detail
+
+        self.running = False
+        self._manual_pause_cleared.set()
+        self._refit_pause_cleared.set()
+        self._generation_limit_cleared.set()
+
+    def raise_if_failed(self) -> None:
+        with self._fatal_error_lock:
+            fatal_error = self._fatal_error
+        if fatal_error is not None:
+            raise RuntimeError(f"Async trajectory collector failed: {fatal_error}")
+
     def _calculate_target_weights(self, generation_weight_version: int) -> list[int]:
         """Calculate target weight versions for given generation weight version.
 
@@ -675,6 +695,13 @@ class AsyncTrajectoryCollector:
             import traceback
 
             traceback.print_exc()
+            self._record_fatal_error(
+                e,
+                "prompt group generation failed "
+                f"(generation_weight_version={generation_weight_version}, "
+                f"target_weight_version={target_weight_version}, "
+                f"prompt_idx={prompt_idx})",
+            )
         finally:
             with self._counter_lock:
                 self._completed_per_target[target_weight_version] = (
