@@ -1106,6 +1106,7 @@ class TestAsyncTrajectoryCollector:
                 "async_grpo": {"max_trajectory_age_steps": 2},
             },
             "policy": {"max_total_sequence_length": 512},
+            "env": {},
         }
         return MasterConfig.model_construct(**config)
 
