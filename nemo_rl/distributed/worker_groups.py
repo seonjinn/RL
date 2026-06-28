@@ -169,16 +169,18 @@ class RayWorkerBuilder:
             module_name, class_name = self.ray_actor_class_fqn.rsplit(".", 1)
             module = importlib.import_module(module_name)
             worker_class = getattr(module, class_name)
+            ray_metadata = getattr(worker_class, "__ray_metadata__", None)
+            worker_config_class = getattr(ray_metadata, "modified_class", worker_class)
             worker_kwargs = dict(self.init_kwargs)
             default_options = getattr(worker_class, "_default_options", {})
             options = recursive_merge_options(default_options, extra_options)
 
             # Use the worker's configuration interface if available
-            if hasattr(worker_class, "configure_worker"):
+            if hasattr(worker_config_class, "configure_worker"):
                 # Get complete worker configuration from the worker class.
                 # Returns (resources, env_vars, init_kwargs, runtime_env_overrides).
                 resources, env_vars, init_kwargs, runtime_env_overrides = (
-                    worker_class.configure_worker(
+                    worker_config_class.configure_worker(
                         num_gpus=num_gpus,
                         bundle_indices=bundle_indices,
                     )
@@ -206,7 +208,7 @@ class RayWorkerBuilder:
                     )
 
                 finalize_worker_env_vars = getattr(
-                    worker_class, "finalize_worker_env_vars", None
+                    worker_config_class, "finalize_worker_env_vars", None
                 )
                 if finalize_worker_env_vars is not None:
                     runtime_env = options.setdefault("runtime_env", {})
