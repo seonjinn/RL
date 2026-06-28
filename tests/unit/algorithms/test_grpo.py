@@ -669,9 +669,10 @@ class StubAsyncTrajectoryCollector:
     Each method is a property that returns a MagicMock with a 'remote' attribute.
     """
 
-    def __init__(self, event_log=None, health_error=None):
+    def __init__(self, event_log=None, health_error=None, start_error=None):
         self._event_log = event_log
         self._health_error = health_error
+        self._start_error = start_error
 
     def _record(self, event):
         if self._event_log is not None:
@@ -683,7 +684,9 @@ class StubAsyncTrajectoryCollector:
         """Start collection - returns a remote-callable mock"""
         mock = MagicMock()
         mock.remote = MagicMock(
-            side_effect=lambda *_args, **_kwargs: self._record("start_collection")
+            side_effect=lambda *_args, **_kwargs: (
+                self._start_error or self._record("start_collection")
+            )
         )
         return mock
 
@@ -757,7 +760,11 @@ def test_async_collector_health_check_propagates_failure():
 
 
 def mock_async_grpo_infrastructure(
-    mock_batch, mock_rollout_metrics, seq_logprob_error_result=None, event_log=None
+    mock_batch,
+    mock_rollout_metrics,
+    seq_logprob_error_result=None,
+    event_log=None,
+    collector_start_error=None,
 ):
     """
     Context manager that mocks all async GRPO infrastructure (Ray actors, venv, etc).
@@ -774,7 +781,10 @@ def mock_async_grpo_infrastructure(
         mock_batch=mock_batch,
         mock_rollout_metrics=mock_rollout_metrics,
     )
-    stub_collector = StubAsyncTrajectoryCollector(event_log=event_log)
+    stub_collector = StubAsyncTrajectoryCollector(
+        event_log=event_log,
+        start_error=collector_start_error,
+    )
 
     # Patch venv creation
     stack.enter_context(
@@ -807,6 +817,8 @@ def mock_async_grpo_infrastructure(
 
     # Patch ray.get to return values from our stubs (not remote refs)
     def mock_ray_get(ref):
+        if isinstance(ref, BaseException):
+            raise ref
         # If it's already a plain value (from our stubs), return it
         if isinstance(ref, (int, str, dict, list)):
             return ref
@@ -1856,6 +1868,52 @@ def test_async_grpo_refits_before_starting_collection(
         )
 
     assert events[: len(expected_events)] == expected_events
+
+
+def test_async_grpo_propagates_collector_start_failure_and_cleans_up(
+    mock_grpo_components,
+    capsys,
+):
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = 1
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["val_at_start"] = False
+    master_config.grpo["use_dynamic_sampling"] = False
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            collector_start_error=RuntimeError("collector thread failed to start"),
+        ),
+        _patched_logprob_phase(policy),
+        pytest.raises(RuntimeError, match="collector thread failed to start"),
+    ):
+        async_grpo_train(
+            policy,
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert "Stopping trajectory collection" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
