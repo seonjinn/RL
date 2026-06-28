@@ -141,13 +141,7 @@ def _insert_vllm_distributed_timeout_helper(content: str) -> str:
     if "def _nemo_rl_get_distributed_timeout_or_none(" in content:
         return content
 
-    lines = content.splitlines(keepends=True)
-    for idx, line in enumerate(lines):
-        if re.match(r"^(def|class)\s+", line):
-            lines.insert(idx, _VLLM_DISTRIBUTED_TIMEOUT_HELPER)
-            return "".join(lines)
-
-    return content + _VLLM_DISTRIBUTED_TIMEOUT_HELPER
+    return content.rstrip() + _VLLM_DISTRIBUTED_TIMEOUT_HELPER + "\n"
 
 
 def _line_indent(line: str) -> str:
