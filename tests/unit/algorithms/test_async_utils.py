@@ -1342,6 +1342,9 @@ class TestAsyncTrajectoryCollector:
         assert target_weight not in collector._spawned_per_target
         assert target_weight not in collector._completed_per_target
         assert target_weight not in collector._buffered_per_target
+        with pytest.raises(RuntimeError, match="thread start failed"):
+            collector.raise_if_failed()
+        assert not collector.running
 
     def test_collector_health_preserves_first_failure(self):
         collector = self.create_local_collector()
@@ -1380,6 +1383,46 @@ class TestAsyncTrajectoryCollector:
         assert "prompt_idx=3" in str(exc_info.value)
         assert not collector.running
         replay_buffer.add.remote.assert_not_called()
+
+    def test_collection_loop_records_processing_failure(self, monkeypatch):
+        collector = self.create_local_collector()
+        collector.running = True
+        collector.dataloader = [self.create_mock_batch(size=1)]
+
+        def fail_processing(batch):
+            raise RuntimeError("batch processing failed")
+
+        monkeypatch.setattr(collector, "_process_batch", fail_processing)
+
+        collector._collection_loop()
+
+        with pytest.raises(RuntimeError, match="batch processing failed"):
+            collector.raise_if_failed()
+        assert not collector.running
+
+    def test_prompt_group_worker_records_enqueue_failure(self, monkeypatch):
+        replay_buffer = mock.MagicMock()
+        replay_buffer.add.remote.side_effect = RuntimeError("buffer unavailable")
+        collector = self.create_local_collector(replay_buffer=replay_buffer)
+        collector.running = True
+        batch = self.create_mock_batch(size=1)
+
+        monkeypatch.setattr(
+            trajectory_collector_mod,
+            "run_async_multi_turn_rollout",
+            lambda **kwargs: (batch, {}),
+        )
+
+        collector._run_prompt_group_worker(
+            repeated_batch=batch,
+            generation_weight_version=6,
+            target_weight_version=7,
+            prompt_idx=3,
+        )
+
+        with pytest.raises(RuntimeError, match="buffer unavailable"):
+            collector.raise_if_failed()
+        assert not collector.running
 
     def test_process_batch_gap_fill_spawns_only_needed(self, monkeypatch):
         """Gap-fill generates only the trajectories still needed for a target."""
