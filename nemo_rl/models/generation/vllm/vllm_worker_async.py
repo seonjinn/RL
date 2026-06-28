@@ -198,6 +198,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         self.server_thread = None
         self.base_url = None
         self.http_server = None
+        self._collective_weight_update_lock: asyncio.Lock | None = None
 
         super().__init__(
             config,
@@ -1387,36 +1388,49 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
 
     async def update_weights_from_collective_async(self) -> bool:
         """Async version of update_weights_from_collective."""
-        try:
-            assert self.llm is not None, (
-                "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
-            )
+        weight_update_lock = getattr(self, "_collective_weight_update_lock", None)
+        if weight_update_lock is None:
+            weight_update_lock = asyncio.Lock()
+            self._collective_weight_update_lock = weight_update_lock
 
-            if not self.cfg["vllm_cfg"]["async_engine"]:
-                raise RuntimeError(
-                    "update_weights_from_collective_async can only be used with async_engine=True. Use update_weights_from_collective instead."
-                )
-
-            await self.llm.pause_generation(mode="keep", clear_cache=False)
+        async with weight_update_lock:
             try:
-                result_or_coro = await self.llm.collective_rpc(
-                    "update_weights_from_collective", args=tuple()
+                assert self.llm is not None, (
+                    "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
                 )
 
-                if asyncio.iscoroutine(result_or_coro):
-                    worker_results = await result_or_coro
-                else:
-                    worker_results = result_or_coro
-            finally:
-                await self.llm.resume_generation()
+                if not self.cfg["vllm_cfg"]["async_engine"]:
+                    raise RuntimeError(
+                        "update_weights_from_collective_async can only be used with async_engine=True. Use update_weights_from_collective instead."
+                    )
 
-            return _all_worker_updates_succeeded(worker_results)
-        except Exception as e:
-            print(f"Exception during collective_rpc for weight update: {e}")
-            import traceback
+                pause_started = True
+                try:
+                    await self.llm.pause_generation(mode="keep", clear_cache=False)
+                    result_or_coro = await self.llm.collective_rpc(
+                        "update_weights_from_collective", args=tuple()
+                    )
 
-            traceback.print_exc()
-            return False
+                    if asyncio.iscoroutine(result_or_coro):
+                        worker_results = await result_or_coro
+                    else:
+                        worker_results = result_or_coro
+                finally:
+                    if pause_started:
+                        resume_task = asyncio.create_task(self.llm.resume_generation())
+                        try:
+                            await asyncio.shield(resume_task)
+                        except asyncio.CancelledError:
+                            await resume_task
+                            raise
+
+                return _all_worker_updates_succeeded(worker_results)
+            except Exception as e:
+                print(f"Exception during collective_rpc for weight update: {e}")
+                import traceback
+
+                traceback.print_exc()
+                return False
 
     async def reset_prefix_cache_async(self):
         """Async version of reset_prefix_cache."""
