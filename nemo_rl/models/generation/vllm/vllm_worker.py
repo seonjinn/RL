@@ -73,8 +73,8 @@ class BaseVllmGenerationWorker:
         """
         return f"{self.__class__.__name__}"
 
-    @staticmethod
-    def finalize_worker_env_vars(env_vars: dict[str, str]) -> None:
+    @classmethod
+    def finalize_worker_env_vars(cls, env_vars: dict[str, str]) -> None:
         if env_vars.get("VLLM_USE_RAY_V2_EXECUTOR_BACKEND") == "1":
             env_vars.pop("VLLM_PORT", None)
 

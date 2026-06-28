@@ -141,8 +141,8 @@ class PrecedenceActor:
             {},  # runtime_env_overrides
         )
 
-    @staticmethod
-    def finalize_worker_env_vars(env_vars):
+    @classmethod
+    def finalize_worker_env_vars(cls, env_vars):
         env_vars.pop("REMOVE_AFTER_MERGE", None)
         env_vars["FINALIZE_WORKER_ENV_CALLED"] = "1"
 
