@@ -3368,14 +3368,6 @@ def async_grpo_train(
         start_step=step,
     )
 
-    # Start trajectory collection in background
-    collection_task = trajectory_collector.start_collection.remote(dataloader)
-
-    # Ensure collector knows initial weight version
-    trajectory_collector.set_weight_version.remote(weight_version)
-
-    print("📦 Started continuous background trajectory collection")
-
     print(
         f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, max_age={max_trajectory_age_steps} steps"
     )
@@ -3410,9 +3402,6 @@ def async_grpo_train(
     # Run validation at start if configured
     if val_at_start and step == 0:
         print("\n🔍 Running initial validation...")
-        # Pause trajectory collection during initial validation
-        trajectory_collector.pause.remote()
-
         try:
             val_metrics, validation_timings = validate(
                 policy_generation,
@@ -3439,9 +3428,12 @@ def async_grpo_train(
 
             traceback.print_exc()
             # Continue anyway since validation is optional
-        finally:
-            # Resume trajectory collection after initial validation
-            trajectory_collector.resume.remote()
+
+    # vLLM starts with dummy weights. Do not allow the collector to generate
+    # trajectories until the initial refit and validation have completed.
+    ray.get(trajectory_collector.set_weight_version.remote(weight_version))
+    trajectory_collector.start_collection.remote(dataloader)
+    print("📦 Started continuous background trajectory collection")
 
     print("✅ All setup complete, starting buffer wait...")
     # Clear logger metrics at start of training

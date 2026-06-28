@@ -667,18 +667,30 @@ class StubAsyncTrajectoryCollector:
     Each method is a property that returns a MagicMock with a 'remote' attribute.
     """
 
+    def __init__(self, event_log=None):
+        self._event_log = event_log
+
+    def _record(self, event):
+        if self._event_log is not None:
+            self._event_log.append(event)
+        return MagicMock()
+
     @property
     def start_collection(self):
         """Start collection - returns a remote-callable mock"""
         mock = MagicMock()
-        mock.remote = MagicMock(return_value=MagicMock())  # Returns a fake ObjectRef
+        mock.remote = MagicMock(
+            side_effect=lambda *_args, **_kwargs: self._record("start_collection")
+        )
         return mock
 
     @property
     def set_weight_version(self):
         """Set weight version - returns a remote-callable mock"""
         mock = MagicMock()
-        mock.remote = MagicMock(return_value=MagicMock())
+        mock.remote = MagicMock(
+            side_effect=lambda *_args, **_kwargs: self._record("set_weight_version")
+        )
         return mock
 
     @property
@@ -725,7 +737,7 @@ class StubAsyncTrajectoryCollector:
 
 
 def mock_async_grpo_infrastructure(
-    mock_batch, mock_rollout_metrics, seq_logprob_error_result=None
+    mock_batch, mock_rollout_metrics, seq_logprob_error_result=None, event_log=None
 ):
     """
     Context manager that mocks all async GRPO infrastructure (Ray actors, venv, etc).
@@ -742,7 +754,7 @@ def mock_async_grpo_infrastructure(
         mock_batch=mock_batch,
         mock_rollout_metrics=mock_rollout_metrics,
     )
-    stub_collector = StubAsyncTrajectoryCollector()
+    stub_collector = StubAsyncTrajectoryCollector(event_log=event_log)
 
     # Patch venv creation
     stack.enter_context(
@@ -804,8 +816,12 @@ def mock_async_grpo_infrastructure(
     )
 
     # Patch refit and validate functions
+    def mock_refit(*_args, **_kwargs):
+        if event_log is not None:
+            event_log.append("refit")
+
     stack.enter_context(
-        patch("nemo_rl.algorithms.grpo.refit_policy_generation", return_value=None)
+        patch("nemo_rl.algorithms.grpo.refit_policy_generation", side_effect=mock_refit)
     )
     stack.enter_context(
         patch("nemo_rl.algorithms.grpo.validate", return_value=({}, {}))
@@ -1750,6 +1766,50 @@ def test_grpo_train_collects_generation_logger_and_seq_metrics(
     assert train_metrics["min_seq_mult_prob_error_after_mask"] == 1.0
     assert train_metrics["num_masked_seqs_by_logprob_error"] == 2
     assert train_metrics["masked_correct_pct"] == 0.5
+
+
+def test_async_grpo_refits_before_starting_collection(mock_grpo_components):
+    """Do not let vLLM collect trajectories before real weights are loaded."""
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = 1
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["val_at_start"] = False
+    master_config.grpo["use_dynamic_sampling"] = False
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+        ),
+        _patched_logprob_phase(policy),
+    ):
+        async_grpo_train(
+            policy,
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert events[:3] == ["refit", "set_weight_version", "start_collection"]
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
