@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -48,6 +49,50 @@ from nemo_rl.models.policy import LoRAConfig, PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 
 model_name = "Qwen/Qwen3-0.6B"
+
+
+def test_async_generation_timeout_includes_wait_for_first_worker_result(monkeypatch):
+    class BlockingWorkerProxy:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Event().wait()
+
+    class WorkerGroup:
+        dp_size = 1
+
+        def get_dp_leader_worker_idx(self, _shard_idx):
+            return 0
+
+        def run_single_worker_single_data(self, **_kwargs):
+            return BlockingWorkerProxy()
+
+        def shutdown(self, **_kwargs):
+            pass
+
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = WorkerGroup()
+    generation.current_generate_dp_shard_idx = 0
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1]], dtype=torch.long),
+            "input_lengths": torch.tensor([1], dtype=torch.int32),
+        }
+    )
+    monkeypatch.setenv("NRL_VLLM_ASYNC_TIMEOUT_SECONDS", "0.01")
+
+    async def get_first_result():
+        result_stream = generation._async_generate_base(
+            data,
+            "generate_async",
+            lambda _data: True,
+        )
+        return await asyncio.wait_for(anext(result_stream), timeout=0.1)
+
+    with pytest.raises(RuntimeError, match="worker results after 0.01s"):
+        asyncio.run(get_first_result())
 
 
 def test_all_worker_updates_succeeded_checks_every_rank(capsys):
