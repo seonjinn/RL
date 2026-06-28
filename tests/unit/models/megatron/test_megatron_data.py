@@ -956,6 +956,63 @@ class TestGetMicrobatchIterator:
 
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
     @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
+    @patch("nemo_rl.models.megatron.data._get_hybridep_aligned_seq_len")
+    def test_get_microbatch_iterator_aligns_hybridep_pp_length_across_dp(
+        self,
+        mock_get_aligned_seq_len,
+        mock_get_params,
+        mock_make_iterator,
+        mock_get_and_validate_seqlen,
+    ):
+        """Pipeline metadata must match HybridEP's cross-DP padded tensor length."""
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 8192)
+        mock_get_params.return_value = (8, 1024, 6144)
+        mock_get_aligned_seq_len.return_value = 4096
+        mock_make_iterator.return_value = iter([MagicMock()])
+
+        mock_data = MagicMock()
+        mock_data.__getitem__.return_value = torch.zeros(1, 8192, dtype=torch.long)
+        mock_data.make_microbatch_iterator_for_packable_sequences.return_value = iter(
+            []
+        )
+        mock_data.get_microbatch_iterator_for_packable_sequences_len.return_value = (
+            10,
+            6144,
+        )
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {"enabled": True},
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 2,
+                "sequence_parallel": True,
+                "pipeline_model_parallel_size": 4,
+                "context_parallel_size": 2,
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+            },
+            "make_sequence_length_divisible_by": 8,
+        }
+
+        *_, padded_seq_length = get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=1,
+            straggler_timer=MagicMock(),
+        )
+
+        mock_get_aligned_seq_len.assert_called_once_with(
+            local_seq_len=3072,
+            multiple=512,
+            device=mock_data["input_ids"].device,
+        )
+        assert padded_seq_length == 8192
+        assert mock_make_iterator.call_args.kwargs["pad_full_seq_to"] == 8192
+
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
     def test_get_microbatch_iterator_regular(
         self, mock_make_iterator, mock_get_and_validate_seqlen
     ):
@@ -1405,7 +1462,9 @@ def test_hybridep_padding_mask_uses_cp_local_layout_for_cp2():
     input_ids_cp_sharded = torch.cat(
         (
             _get_tokens_on_this_cp_rank(input_ids[:, 0:4], cp_rank, cp_size, seq_dim=1),
-            _get_tokens_on_this_cp_rank(input_ids[:, 4:12], cp_rank, cp_size, seq_dim=1),
+            _get_tokens_on_this_cp_rank(
+                input_ids[:, 4:12], cp_rank, cp_size, seq_dim=1
+            ),
         ),
         dim=1,
     )
