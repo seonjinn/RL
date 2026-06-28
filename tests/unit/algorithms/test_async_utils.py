@@ -1342,6 +1342,44 @@ class TestAsyncTrajectoryCollector:
         assert target_weight not in collector._completed_per_target
         assert target_weight not in collector._buffered_per_target
 
+    def test_collector_health_preserves_first_failure(self):
+        collector = self.create_local_collector()
+
+        collector._record_fatal_error(RuntimeError("first failure"), "generation")
+        collector._record_fatal_error(RuntimeError("second failure"), "cleanup")
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError, match="first failure") as exc_info:
+                collector.raise_if_failed()
+            assert "second failure" not in str(exc_info.value)
+
+    def test_prompt_group_worker_records_generation_failure(self, monkeypatch):
+        replay_buffer = mock.MagicMock()
+        collector = self.create_local_collector(replay_buffer=replay_buffer)
+        collector.running = True
+
+        def fail_rollout(**kwargs):
+            raise RuntimeError("vLLM engine is dead")
+
+        monkeypatch.setattr(
+            trajectory_collector_mod, "run_async_multi_turn_rollout", fail_rollout
+        )
+
+        collector._run_prompt_group_worker(
+            repeated_batch=self.create_mock_batch(size=1),
+            generation_weight_version=6,
+            target_weight_version=7,
+            prompt_idx=3,
+        )
+
+        with pytest.raises(RuntimeError, match="vLLM engine is dead") as exc_info:
+            collector.raise_if_failed()
+        assert "generation_weight_version=6" in str(exc_info.value)
+        assert "target_weight_version=7" in str(exc_info.value)
+        assert "prompt_idx=3" in str(exc_info.value)
+        assert not collector.running
+        replay_buffer.add.remote.assert_not_called()
+
     def test_process_batch_gap_fill_spawns_only_needed(self, monkeypatch):
         """Gap-fill generates only the trajectories still needed for a target."""
 
