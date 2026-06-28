@@ -3175,6 +3175,10 @@ def aggregate_rollout_metrics(
     return aggregated
 
 
+def _raise_if_trajectory_collector_failed(trajectory_collector: Any) -> None:
+    ray.get(trajectory_collector.raise_if_failed.remote())
+
+
 def async_grpo_train(
     policy: ColocatablePolicyInterface,
     policy_generation: Optional[GenerationInterface],
@@ -3446,46 +3450,51 @@ def async_grpo_train(
     if policy_generation is not None:
         policy_generation.clear_logger_metrics()
 
-    # Wait for initial buffer fill for the current training step.
-    print(
-        f"⏳ Waiting for replay buffer to have sufficient trajectories for step {step}..."
-    )
-    wait_iterations = 0
-    while True:
-        buffer_size_current = ray.get(replay_buffer.size.remote())
-        current_step_ready = ray.get(
-            replay_buffer.has_complete_batch.remote(
-                step, num_prompts_per_step, max_trajectory_age_steps
-            )
-        )
-
-        print(
-            f"  Wait iteration {wait_iterations}: buffer_size={buffer_size_current}, "
-            f"step {step} ready={current_step_ready}"
-        )
-
-        if current_step_ready:
-            break
-
-        trajectories_needed = ray.get(
-            replay_buffer.get_trajectories_needed.remote(
-                step, num_prompts_per_step, max_trajectory_age_steps
-            )
-        )
-        if buffer_size_current >= min_trajectories_needed and trajectories_needed > 0:
-            print(
-                f"  ⏳ Gap-filling in progress: need {trajectories_needed} more "
-                f"trajectories for step {step}"
-            )
-
-        wait_iterations += 1
-        time.sleep(1.0)
-
-    print(f"✅ Buffer ready for step {step}! Starting training loop...")
-
-    # Main training loop
     try:
+        # Wait for initial buffer fill for the current training step.
+        print(
+            f"⏳ Waiting for replay buffer to have sufficient trajectories for step {step}..."
+        )
+        wait_iterations = 0
+        while True:
+            _raise_if_trajectory_collector_failed(trajectory_collector)
+            buffer_size_current = ray.get(replay_buffer.size.remote())
+            current_step_ready = ray.get(
+                replay_buffer.has_complete_batch.remote(
+                    step, num_prompts_per_step, max_trajectory_age_steps
+                )
+            )
+
+            print(
+                f"  Wait iteration {wait_iterations}: buffer_size={buffer_size_current}, "
+                f"step {step} ready={current_step_ready}"
+            )
+
+            if current_step_ready:
+                break
+
+            trajectories_needed = ray.get(
+                replay_buffer.get_trajectories_needed.remote(
+                    step, num_prompts_per_step, max_trajectory_age_steps
+                )
+            )
+            if (
+                buffer_size_current >= min_trajectories_needed
+                and trajectories_needed > 0
+            ):
+                print(
+                    f"  ⏳ Gap-filling in progress: need {trajectories_needed} more "
+                    f"trajectories for step {step}"
+                )
+
+            wait_iterations += 1
+            time.sleep(1.0)
+
+        print(f"✅ Buffer ready for step {step}! Starting training loop...")
+
+        # Main training loop
         while step < master_config.grpo["max_num_steps"]:
+            _raise_if_trajectory_collector_failed(trajectory_collector)
             print(
                 f"\n{'=' * 25} Step {step + 1}/{master_config.grpo['max_num_steps']} {'=' * 25}"
             )
@@ -4140,6 +4149,7 @@ def async_grpo_train(
         import traceback
 
         traceback.print_exc()
+        raise
 
     finally:
         # Clean up
