@@ -88,6 +88,7 @@ from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.generation.sglang.config import SGLangConfig
 from nemo_rl.models.generation.sglang.sglang_generation import SGLangGeneration
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
+from nemo_rl.models.generation.vllm.sleep import get_vllm_sleep_level
 from nemo_rl.models.megatron.router_replay import (
     configure_vllm_for_router_replay,
     router_replay_enabled,
@@ -2209,7 +2210,14 @@ def grpo_train(
                             max_rollout_turns=master_config.grpo["max_rollout_turns"],
                             greedy=False,
                         )
-                    policy_generation.finish_generation()
+                    generation_sleep_level = (
+                        None
+                        if master_config.grpo["use_dynamic_sampling"]
+                        else get_vllm_sleep_level()
+                    )
+                    policy_generation.finish_generation(
+                        sleep_level=generation_sleep_level
+                    )
                     # Collect generation logger metrics for performance reporting after each generation step
                     # inflight batch sizes and num pending samples are collected from each worker
                     if policy_generation is not None:

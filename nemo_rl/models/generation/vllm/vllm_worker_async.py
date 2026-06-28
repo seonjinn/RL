@@ -44,7 +44,7 @@ from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
 )
-from nemo_rl.models.generation.vllm.sleep import get_vllm_sleep_level
+from nemo_rl.models.generation.vllm.sleep import validate_vllm_sleep_level
 from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
 
 LOGGER = logging.getLogger(__name__)
@@ -1440,7 +1440,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         gc.collect()
         torch.cuda.empty_cache()
 
-    async def sleep_async(self):
+    async def sleep_async(self, sleep_level: int = 1):
         """Async version of sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -1459,7 +1459,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         # the receiver and sends data=None, causing an assertion error.
         if hasattr(self.llm, "reset_mm_cache"):
             await self.llm.reset_mm_cache()
-        await self.llm.sleep(level=get_vllm_sleep_level())
+        await self.llm.sleep(level=validate_vllm_sleep_level(sleep_level))
 
         gc.collect()
         torch.cuda.empty_cache()

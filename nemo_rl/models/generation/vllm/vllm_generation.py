@@ -876,12 +876,16 @@ class VllmGeneration(GenerationInterface):
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Sleep workers and reset prefix cache."""
         try:
+            sleep_level = kwargs.get("sleep_level")
+            worker_kwargs = {}
             # Choose the appropriate method based on setting
             # non-colocated only needs reset prefix cache, no need to sleep.
             if self.cfg["colocated"]["enabled"]:
                 method_name = (
                     "sleep_async" if self.cfg["vllm_cfg"]["async_engine"] else "sleep"
                 )
+                if sleep_level is not None:
+                    worker_kwargs["sleep_level"] = sleep_level
             else:
                 method_name = (
                     "reset_prefix_cache_async"
@@ -892,6 +896,7 @@ class VllmGeneration(GenerationInterface):
             futures = self.worker_group.run_all_workers_single_data(
                 method_name,
                 run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+                **worker_kwargs,
             )
             # Wait for all futures to complete
             results = ray.get(futures)

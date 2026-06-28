@@ -14,6 +14,17 @@
 
 import os
 
+_SUPPORTED_VLLM_SLEEP_LEVELS = (1, 2)
+
+
+def validate_vllm_sleep_level(sleep_level: int) -> int:
+    if sleep_level not in _SUPPORTED_VLLM_SLEEP_LEVELS:
+        raise ValueError(
+            "NEMO_RL_VLLM_SLEEP_LEVEL must be one of the sleep levels supported "
+            f"by vLLM: {_SUPPORTED_VLLM_SLEEP_LEVELS}"
+        )
+    return sleep_level
+
 
 def get_vllm_sleep_level() -> int:
     raw_level = os.environ.get("NEMO_RL_VLLM_SLEEP_LEVEL", "1")
@@ -23,6 +34,4 @@ def get_vllm_sleep_level() -> int:
         raise ValueError(
             "NEMO_RL_VLLM_SLEEP_LEVEL must be an integer sleep level supported by vLLM"
         ) from exc
-    if sleep_level < 1:
-        raise ValueError("NEMO_RL_VLLM_SLEEP_LEVEL must be >= 1")
-    return sleep_level
+    return validate_vllm_sleep_level(sleep_level)

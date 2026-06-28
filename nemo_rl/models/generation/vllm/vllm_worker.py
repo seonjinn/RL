@@ -36,7 +36,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
-from nemo_rl.models.generation.vllm.sleep import get_vllm_sleep_level
+from nemo_rl.models.generation.vllm.sleep import validate_vllm_sleep_level
 from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
@@ -934,7 +934,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         gc.collect()
         torch.cuda.empty_cache()
 
-    def sleep(self):
+    def sleep(self, sleep_level: int = 1):
         """Put the vLLM engine to sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -957,7 +957,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             self.llm.renderer, "clear_mm_cache"
         ):
             self.llm.renderer.clear_mm_cache()
-        self.llm.sleep(level=get_vllm_sleep_level())
+        self.llm.sleep(level=validate_vllm_sleep_level(sleep_level))
 
         gc.collect()
         torch.cuda.empty_cache()

@@ -27,6 +27,7 @@ assert SLEEP_SPEC.loader is not None
 SLEEP_SPEC.loader.exec_module(SLEEP_MODULE)
 
 get_vllm_sleep_level = SLEEP_MODULE.get_vllm_sleep_level
+validate_vllm_sleep_level = SLEEP_MODULE.validate_vllm_sleep_level
 
 
 def test_get_vllm_sleep_level_defaults_to_existing_behavior(monkeypatch):
@@ -51,5 +52,17 @@ def test_get_vllm_sleep_level_rejects_invalid_values(monkeypatch):
 def test_get_vllm_sleep_level_rejects_non_positive_values(monkeypatch):
     monkeypatch.setenv("NEMO_RL_VLLM_SLEEP_LEVEL", "0")
 
-    with pytest.raises(ValueError, match="must be >= 1"):
+    with pytest.raises(ValueError, match="must be one of"):
         get_vllm_sleep_level()
+
+
+def test_get_vllm_sleep_level_rejects_unsupported_values(monkeypatch):
+    monkeypatch.setenv("NEMO_RL_VLLM_SLEEP_LEVEL", "3")
+
+    with pytest.raises(ValueError, match="must be one of"):
+        get_vllm_sleep_level()
+
+
+def test_validate_vllm_sleep_level_accepts_supported_values():
+    assert validate_vllm_sleep_level(1) == 1
+    assert validate_vllm_sleep_level(2) == 2
