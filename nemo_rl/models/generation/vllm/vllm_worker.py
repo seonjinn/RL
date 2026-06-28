@@ -17,6 +17,7 @@ import gc
 import logging
 import os
 import sys
+from collections.abc import MutableMapping
 from typing import Any, Optional, cast
 
 import ray
@@ -74,7 +75,7 @@ class BaseVllmGenerationWorker:
         return f"{self.__class__.__name__}"
 
     @classmethod
-    def finalize_worker_env_vars(cls, env_vars: dict[str, str]) -> None:
+    def finalize_worker_env_vars(cls, env_vars: MutableMapping[str, str]) -> None:
         if env_vars.get("VLLM_USE_RAY_V2_EXECUTOR_BACKEND") == "1":
             env_vars.pop("VLLM_PORT", None)
 
@@ -195,6 +196,7 @@ class BaseVllmGenerationWorker:
                 _load_model() later to perform the heavy model loading. This
                 enables overlapping vLLM model loading with NeMo Gym init.
         """
+        self.finalize_worker_env_vars(os.environ)
         self._init_config(
             config, bundle_indices, fraction_of_gpus, seed, extra_env_vars
         )

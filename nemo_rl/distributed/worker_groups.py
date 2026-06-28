@@ -169,18 +169,16 @@ class RayWorkerBuilder:
             module_name, class_name = self.ray_actor_class_fqn.rsplit(".", 1)
             module = importlib.import_module(module_name)
             worker_class = getattr(module, class_name)
-            ray_metadata = getattr(worker_class, "__ray_metadata__", None)
-            worker_config_class = getattr(ray_metadata, "modified_class", worker_class)
             worker_kwargs = dict(self.init_kwargs)
             default_options = getattr(worker_class, "_default_options", {})
             options = recursive_merge_options(default_options, extra_options)
 
             # Use the worker's configuration interface if available
-            if hasattr(worker_config_class, "configure_worker"):
+            if hasattr(worker_class, "configure_worker"):
                 # Get complete worker configuration from the worker class.
                 # Returns (resources, env_vars, init_kwargs, runtime_env_overrides).
                 resources, env_vars, init_kwargs, runtime_env_overrides = (
-                    worker_config_class.configure_worker(
+                    worker_class.configure_worker(
                         num_gpus=num_gpus,
                         bundle_indices=bundle_indices,
                     )
@@ -206,14 +204,6 @@ class RayWorkerBuilder:
                     options["runtime_env"] = recursive_merge_options(
                         options["runtime_env"], runtime_env_overrides
                     )
-
-                finalize_worker_env_vars = getattr(
-                    worker_config_class, "finalize_worker_env_vars", None
-                )
-                if finalize_worker_env_vars is not None:
-                    runtime_env = options.setdefault("runtime_env", {})
-                    worker_env_vars = runtime_env.setdefault("env_vars", {})
-                    finalize_worker_env_vars(worker_env_vars)
 
                 # Apply initialization parameters
                 if init_kwargs:
@@ -500,9 +490,7 @@ class RayWorkerGroup:
         # env_vars are passed through create_worker(). This reduces GCS actor
         # registrations from N_workers to N_nodes.
         unique_pg_indices = sorted({pg_idx for pg_idx, _ in bundle_indices_list})
-        initializer_runtime_env: dict[str, Any] = {"py_executable": py_executable}
-        if pythonpath := os.environ.get("PYTHONPATH"):
-            initializer_runtime_env["env_vars"] = {"PYTHONPATH": pythonpath}
+        initializer_runtime_env = {"py_executable": py_executable}
         self._initializer_pool: dict[int, ray.actor.ActorHandle] = {}
         for pg_idx in unique_pg_indices:
             # num_cpus=0 so the initializer doesn't consume a CPU slot — it
