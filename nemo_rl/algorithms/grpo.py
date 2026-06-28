@@ -3439,18 +3439,18 @@ def async_grpo_train(
             traceback.print_exc()
             # Continue anyway since validation is optional
 
-    # vLLM starts with dummy weights. Do not allow the collector to generate
-    # trajectories until the initial refit and validation have completed.
-    ray.get(trajectory_collector.set_weight_version.remote(weight_version))
-    trajectory_collector.start_collection.remote(dataloader)
-    print("📦 Started continuous background trajectory collection")
-
-    print("✅ All setup complete, starting buffer wait...")
-    # Clear logger metrics at start of training
-    if policy_generation is not None:
-        policy_generation.clear_logger_metrics()
-
     try:
+        # vLLM starts with dummy weights. Do not allow the collector to generate
+        # trajectories until the initial refit and validation have completed.
+        ray.get(trajectory_collector.set_weight_version.remote(weight_version))
+        ray.get(trajectory_collector.start_collection.remote(dataloader))
+        print("📦 Started continuous background trajectory collection")
+
+        print("✅ All setup complete, starting buffer wait...")
+        # Clear logger metrics at start of training
+        if policy_generation is not None:
+            policy_generation.clear_logger_metrics()
+
         # Wait for initial buffer fill for the current training step.
         print(
             f"⏳ Waiting for replay buffer to have sufficient trajectories for step {step}..."
