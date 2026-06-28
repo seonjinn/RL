@@ -1418,11 +1418,15 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 finally:
                     if pause_started:
                         resume_task = asyncio.create_task(self.llm.resume_generation())
-                        try:
-                            await asyncio.shield(resume_task)
-                        except asyncio.CancelledError:
-                            await resume_task
-                            raise
+                        cancelled_during_resume = False
+                        while not resume_task.done():
+                            try:
+                                await asyncio.shield(resume_task)
+                            except asyncio.CancelledError:
+                                cancelled_during_resume = True
+                        if cancelled_during_resume:
+                            resume_task.result()
+                            raise asyncio.CancelledError
 
                 return _all_worker_updates_succeeded(worker_results)
             except Exception as e:

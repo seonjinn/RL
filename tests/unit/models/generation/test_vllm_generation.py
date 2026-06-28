@@ -162,6 +162,47 @@ def test_async_collective_weight_update_resumes_generation_when_pause_is_cancell
     ]
 
 
+def test_async_collective_weight_update_finishes_resume_after_repeated_cancellation():
+    pause_started = asyncio.Event()
+    resume_started = asyncio.Event()
+    release_resume = asyncio.Event()
+    resume_completed = False
+
+    class FakeAsyncLLM:
+        async def pause_generation(self, *, mode, clear_cache):
+            pause_started.set()
+            await asyncio.sleep(10)
+
+        async def collective_rpc(self, method, args):
+            raise AssertionError("collective_rpc should not run after cancellation")
+
+        async def resume_generation(self):
+            nonlocal resume_completed
+            resume_started.set()
+            await release_resume.wait()
+            resume_completed = True
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = FakeAsyncLLM()
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+    async def cancel_repeatedly_during_resume():
+        task = asyncio.create_task(worker.update_weights_from_collective_async())
+        await pause_started.wait()
+        task.cancel()
+        await resume_started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release_resume.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_repeatedly_during_resume())
+
+    assert resume_completed
+
+
 def test_async_collective_weight_updates_are_serialized():
     events = []
     first_collective_started = asyncio.Event()
