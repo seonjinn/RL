@@ -294,6 +294,7 @@ class AsyncTrajectoryCollector:
             import traceback
 
             traceback.print_exc()
+            self._record_fatal_error(e, "trajectory collection loop failed")
         finally:
             self.running = False
             print("🛑 Trajectory collection stopped")
@@ -440,6 +441,11 @@ class AsyncTrajectoryCollector:
             import traceback
 
             traceback.print_exc()
+            self._record_fatal_error(
+                e,
+                "trajectory batch processing failed "
+                f"(target_weight_version={target_weight})",
+            )
 
     def get_weight_version(self) -> int:
         return self.current_weight_version
@@ -690,6 +696,7 @@ class AsyncTrajectoryCollector:
                 import traceback
 
                 traceback.print_exc()
+                raise
         except Exception as e:
             print(f"❌ Error in prompt group worker: {e}")
             import traceback
