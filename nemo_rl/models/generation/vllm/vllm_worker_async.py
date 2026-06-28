@@ -1397,14 +1397,18 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                     "update_weights_from_collective_async can only be used with async_engine=True. Use update_weights_from_collective instead."
                 )
 
-            result_or_coro = await self.llm.collective_rpc(
-                "update_weights_from_collective", args=tuple()
-            )
+            await self.llm.pause_generation(mode="keep", clear_cache=False)
+            try:
+                result_or_coro = await self.llm.collective_rpc(
+                    "update_weights_from_collective", args=tuple()
+                )
 
-            if asyncio.iscoroutine(result_or_coro):
-                worker_results = await result_or_coro
-            else:
-                worker_results = result_or_coro
+                if asyncio.iscoroutine(result_or_coro):
+                    worker_results = await result_or_coro
+                else:
+                    worker_results = result_or_coro
+            finally:
+                await self.llm.resume_generation()
 
             return _all_worker_updates_succeeded(worker_results)
         except Exception as e:

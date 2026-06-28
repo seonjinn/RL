@@ -101,6 +101,34 @@ def test_all_worker_updates_succeeded_checks_every_rank(capsys):
     assert "ranks [1, 3]" in capsys.readouterr().out
 
 
+def test_async_collective_weight_update_quiesces_generation_at_token_boundary():
+    events = []
+
+    class FakeAsyncLLM:
+        async def pause_generation(self, *, mode, clear_cache):
+            events.append(("pause_generation", mode, clear_cache))
+
+        async def collective_rpc(self, method, args):
+            events.append(("collective_rpc", method, args))
+            return [True, True]
+
+        async def resume_generation(self):
+            events.append(("resume_generation",))
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = FakeAsyncLLM()
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+    result = asyncio.run(worker.update_weights_from_collective_async())
+
+    assert result
+    assert events == [
+        ("pause_generation", "keep", False),
+        ("collective_rpc", "update_weights_from_collective", ()),
+        ("resume_generation",),
+    ]
+
+
 # Define basic vLLM test config
 basic_vllm_test_config: VllmConfig = {
     "backend": "vllm",
