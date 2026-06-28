@@ -187,7 +187,9 @@ def get_microbatch_iterator(
     pad_factor = 1
     pad_full_seq_to = None
     pad_packed_seq_to_multiple_of = 1
-    pad_packed_seq_for_hybridep = _uses_hybridep_flex_dispatcher(cfg["megatron_cfg"])
+    pad_packed_seq_for_hybridep = _uses_hybridep_flex_dispatcher(
+        cfg.get("megatron_cfg", {})
+    )
 
     _, seq_dim_size = get_and_validate_seqlen(data)
 
@@ -212,6 +214,34 @@ def get_microbatch_iterator(
             cfg["make_sequence_length_divisible_by"],
             pack_seq_dim_size,
         )
+        # PP allocates receive buffers before the lazy iterator runs, so expose
+        # the same cross-rank length that HybridEP padding will materialize.
+        if pad_packed_seq_for_hybridep and pad_full_seq_to is not None:
+            cp_size = int(cfg["megatron_cfg"]["context_parallel_size"])
+            assert pad_full_seq_to % cp_size == 0, (
+                "HybridEP pipeline sequence length must be divisible by context "
+                f"parallel size; got length={pad_full_seq_to}, cp_size={cp_size}."
+            )
+            local_pad_multiple = _get_hybridep_local_pad_multiple(
+                pad_packed_seq_to_multiple_of,
+                cp_size,
+            )
+            alignment_device = data["input_ids"].device
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                group = get_expert_tensor_and_model_parallel_group(
+                    check_initialized=False
+                )
+                if (
+                    torch.distributed.get_backend(group)
+                    == torch.distributed.Backend.NCCL
+                ):
+                    alignment_device = torch.device("cuda", torch.cuda.current_device())
+            aligned_local_seq_len = _get_hybridep_aligned_seq_len(
+                local_seq_len=pad_full_seq_to // cp_size,
+                multiple=local_pad_multiple,
+                device=alignment_device,
+            )
+            pad_full_seq_to = aligned_local_seq_len * cp_size
         micro_batch_size = 1
     else:
         raw_iterator = data.make_microbatch_iterator(mbs)
@@ -269,7 +299,9 @@ def _get_hybridep_aligned_seq_len(
     target = torch.tensor([local_seq_len], dtype=torch.int64, device=device)
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         group = get_expert_tensor_and_model_parallel_group(check_initialized=False)
-        torch.distributed.all_reduce(target, op=torch.distributed.ReduceOp.MAX, group=group)
+        torch.distributed.all_reduce(
+            target, op=torch.distributed.ReduceOp.MAX, group=group
+        )
 
     target_seq_len = int(target.item())
     if multiple > 1:
@@ -298,7 +330,9 @@ def _get_packed_seq_boundaries(
     cu_seqlens_padded: torch.Tensor,
 ) -> list[tuple[int, int]]:
     cu_vals = cu_seqlens_padded.detach().cpu().tolist()
-    return [(int(cu_vals[idx]), int(cu_vals[idx + 1])) for idx in range(len(cu_vals) - 1)]
+    return [
+        (int(cu_vals[idx]), int(cu_vals[idx + 1])) for idx in range(len(cu_vals) - 1)
+    ]
 
 
 def _get_valid_seq_lengths(cu_seqlens: torch.Tensor) -> list[int]:
@@ -390,12 +424,15 @@ def _pad_packed_seq_for_hybridep(
             _HYBRIDEP_PACKING_LOG_CALLS += 1
             rank = (
                 torch.distributed.get_rank()
-                if torch.distributed.is_available() and torch.distributed.is_initialized()
+                if torch.distributed.is_available()
+                and torch.distributed.is_initialized()
                 else 0
             )
             log_ranks = {
                 int(rank_str)
-                for rank_str in os.getenv("NEMO_RL_HYBRIDEP_LOG_PACKING_RANKS", "0").split(",")
+                for rank_str in os.getenv(
+                    "NEMO_RL_HYBRIDEP_LOG_PACKING_RANKS", "0"
+                ).split(",")
                 if rank_str.strip()
             }
             reduce_group = (
@@ -406,13 +443,17 @@ def _pad_packed_seq_for_hybridep(
             group_raw_tokens = local_seq_len
             group_padded_tokens = target_seq_len
             if reduce_group:
-                group = get_expert_tensor_and_model_parallel_group(check_initialized=False)
+                group = get_expert_tensor_and_model_parallel_group(
+                    check_initialized=False
+                )
                 totals = torch.tensor(
                     [local_seq_len, target_seq_len],
                     dtype=torch.int64,
                     device=input_ids_cp_sharded.device,
                 )
-                torch.distributed.all_reduce(totals, op=torch.distributed.ReduceOp.SUM, group=group)
+                torch.distributed.all_reduce(
+                    totals, op=torch.distributed.ReduceOp.SUM, group=group
+                )
                 group_raw_tokens = int(totals[0].item())
                 group_padded_tokens = int(totals[1].item())
 
@@ -422,7 +463,9 @@ def _pad_packed_seq_for_hybridep(
                 100.0 * local_added_tokens / local_seq_len if local_seq_len else 0.0
             )
             group_overhead_pct = (
-                100.0 * group_added_tokens / group_raw_tokens if group_raw_tokens else 0.0
+                100.0 * group_added_tokens / group_raw_tokens
+                if group_raw_tokens
+                else 0.0
             )
             if rank in log_ranks:
                 logger.warning(
@@ -481,7 +524,9 @@ def _get_packed_seq_padding_mask(
     packed_boundaries: Optional[list[tuple[int, int]]] = None,
     valid_seq_lengths: Optional[list[int]] = None,
 ) -> torch.Tensor:
-    padding_mask = torch.ones((1, total_tokens), dtype=torch.bool, device=cu_seqlens.device)
+    padding_mask = torch.ones(
+        (1, total_tokens), dtype=torch.bool, device=cu_seqlens.device
+    )
     if packed_boundaries is None:
         packed_boundaries = _get_packed_seq_boundaries(cu_seqlens_padded)
     if valid_seq_lengths is None:
