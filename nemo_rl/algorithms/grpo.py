@@ -825,7 +825,7 @@ def setup(
         """Initialize vLLM generation workers."""
         t0 = time.perf_counter()
         pg = VllmGeneration(cluster=inference_cluster, config=generation_config)
-        pg.finish_generation()
+        pg.finish_generation(sleep_level=get_vllm_sleep_level())
         return pg, time.perf_counter() - t0
 
     def init_sglang():
@@ -996,7 +996,7 @@ def setup(
                 """Complete the deferred vLLM model load started above."""
                 t0 = time.perf_counter()
                 deferred_vllm.load_and_start()
-                deferred_vllm.finish_generation()
+                deferred_vllm.finish_generation(sleep_level=get_vllm_sleep_level())
                 return deferred_vllm, time.perf_counter() - t0
 
             def init_nemo_gym():
