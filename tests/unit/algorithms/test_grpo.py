@@ -829,9 +829,12 @@ def mock_async_grpo_infrastructure(
     stack.enter_context(
         patch("ray.wait", side_effect=lambda refs, **kwargs: (refs, []))
     )
-    stack.enter_context(
-        patch("ray.kill", return_value=None)
-    )  # Mock ray.kill for cleanup
+
+    def mock_ray_kill(actor):
+        if event_log is not None:
+            event_log.append(f"kill:{type(actor).__name__}")
+
+    stack.enter_context(patch("ray.kill", side_effect=mock_ray_kill))
 
     # Patch the rollout functions used inside async_grpo_train
     stack.enter_context(
@@ -1888,11 +1891,13 @@ def test_async_grpo_propagates_collector_start_failure_and_cleans_up(
         "mean_gen_tokens_per_sample": 2.0,
     }
     policy = mock_grpo_components["policy"]
+    events = []
 
     with (
         mock_async_grpo_infrastructure(
             mock_batch,
             mock_rollout_metrics,
+            event_log=events,
             collector_start_error=RuntimeError("collector thread failed to start"),
         ),
         _patched_logprob_phase(policy),
@@ -1914,6 +1919,8 @@ def test_async_grpo_propagates_collector_start_failure_and_cleans_up(
         )
 
     assert "Stopping trajectory collection" in capsys.readouterr().out
+    assert "kill:StubAsyncTrajectoryCollector" in events
+    assert "kill:StubReplayBuffer" in events
 
 
 @pytest.mark.parametrize(
