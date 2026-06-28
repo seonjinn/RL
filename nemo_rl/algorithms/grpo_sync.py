@@ -50,6 +50,7 @@ from nemo_rl.algorithms.grpo import (
     MasterConfig,
     _clip_grpo_advantages,
     _create_advantage_estimator,
+    _finish_validation_generation,
     _log_mixed_rewards_and_advantages_information,
     _should_log_nemo_gym_responses,
     _should_use_nemo_gym,
@@ -508,7 +509,10 @@ def grpo_train_sync(
             master_config=master_config,
             logger=logger,
         )
-        policy_generation.finish_generation()
+        if _finish_validation_generation(
+            policy_generation, master_config, colocated_inference
+        ):
+            POLICY_GENERATION_STALE = True
         logger.log_metrics(val_metrics, current_step, prefix="validation")
         logger.log_metrics(validation_timings, current_step, prefix="timing/validation")
 
@@ -981,7 +985,10 @@ def grpo_train_sync(
                         master_config=master_config,
                         logger=logger,
                     )
-                    policy_generation.finish_generation()
+                    if _finish_validation_generation(
+                        policy_generation, master_config, colocated_inference
+                    ):
+                        POLICY_GENERATION_STALE = True
                     logger.log_metrics(
                         validation_timings, total_steps + 1, prefix="timing/validation"
                     )

@@ -1797,6 +1797,25 @@ def refit_policy_generation(
         policy_generation.resume_after_refit()
 
 
+def _finish_validation_generation(
+    policy_generation: GenerationInterface,
+    master_config: MasterConfig,
+    colocated_inference: bool,
+    allow_weight_discard: bool = True,
+) -> bool:
+    """Sleep validation generation and report whether weights were discarded."""
+    sleep_level = None
+    if (
+        allow_weight_discard
+        and colocated_inference
+        and isinstance(policy_generation, VllmGeneration)
+    ):
+        sleep_level = get_vllm_sleep_level()
+
+    policy_generation.finish_generation(sleep_level=sleep_level)
+    return sleep_level == 2
+
+
 def _log_mixed_rewards_and_advantages_information(
     logger: Logger,
     total_steps: int,
@@ -2036,7 +2055,10 @@ def grpo_train(
             master_config=master_config,
             logger=logger,
         )
-        policy_generation.finish_generation()
+        if _finish_validation_generation(
+            policy_generation, master_config, colocated_inference
+        ):
+            POLICY_GENERATION_STALE = True
         logger.log_metrics(val_metrics, current_step, prefix="validation")
         logger.log_metrics(validation_timings, current_step, prefix="timing/validation")
 
@@ -2604,7 +2626,10 @@ def grpo_train(
                         master_config=master_config,
                         logger=logger,
                     )
-                    policy_generation.finish_generation()
+                    if _finish_validation_generation(
+                        policy_generation, master_config, colocated_inference
+                    ):
+                        POLICY_GENERATION_STALE = True
                     logger.log_metrics(
                         validation_timings, total_steps + 1, prefix="timing/validation"
                     )
@@ -3398,7 +3423,13 @@ def async_grpo_train(
                 master_config=master_config,
                 logger=logger,
             )
-            policy_generation.finish_generation()
+            if _finish_validation_generation(
+                policy_generation,
+                master_config,
+                colocated_inference,
+                allow_weight_discard=False,
+            ):
+                POLICY_GENERATION_STALE = True
             logger.log_metrics(val_metrics, step, prefix="validation")
             logger.log_metrics(validation_timings, step, prefix="timing/validation")
             print("✅ Initial validation completed successfully")
@@ -3813,7 +3844,13 @@ def async_grpo_train(
                         master_config=master_config,
                         logger=logger,
                     )
-                    policy_generation.finish_generation()
+                    if _finish_validation_generation(
+                        policy_generation,
+                        master_config,
+                        colocated_inference,
+                        allow_weight_discard=False,
+                    ):
+                        POLICY_GENERATION_STALE = True
                     logger.log_metrics(
                         validation_timings, step + 1, prefix="timing/validation"
                     )
