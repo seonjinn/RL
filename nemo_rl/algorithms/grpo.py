@@ -17,7 +17,16 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from typing import Any, Callable, NotRequired, Optional, TypedDict, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    NotRequired,
+    Optional,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    cast,
+)
 
 import numpy as np
 import ray
@@ -111,6 +120,14 @@ from nemo_rl.utils.venvs import create_local_venv_on_each_node
 # Configuration
 # ===============================================================================
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+class _RemoteShutdownMethod(Protocol):
+    def remote(self) -> ray.ObjectRef: ...
+
+
+class _EnvironmentActor(Protocol):
+    shutdown: _RemoteShutdownMethod
 
 
 class RewardScalingConfig(TypedDict):
@@ -3208,7 +3225,8 @@ def _cleanup_async_grpo_resources(
         for task_name, env in env_dict.items():
             print(f"🛑 Shutting down environment {task_name}...")
             try:
-                ray.get(cast(Any, env).shutdown.remote(), timeout=10)
+                environment_actor = cast(_EnvironmentActor, env)
+                ray.get(environment_actor.shutdown.remote(), timeout=10)
             except Exception:
                 try:
                     ray.kill(env)
@@ -3218,7 +3236,7 @@ def _cleanup_async_grpo_resources(
     print("🛑 Shutting down generation workers...")
     if policy_generation is not None:
         try:
-            cast(Any, policy_generation).shutdown()
+            policy_generation.shutdown()
         except Exception as e:
             print(f"Error shutting down generation workers: {e}")
 
@@ -3371,9 +3389,10 @@ def async_grpo_train(
             num_prompts_per_step * max_trajectory_age_steps * late_arrival_slack
         )
 
-        replay_buffer = ReplayBuffer.options(runtime_env=_replay_runtime_env).remote(
-            max_size=optimal_buffer_size
-        )
+        replay_buffer_actor = ReplayBuffer.options(
+            runtime_env=_replay_runtime_env
+        ).remote(max_size=optimal_buffer_size)
+        replay_buffer = replay_buffer_actor
 
         last_checkpoint_path = checkpointer.get_latest_checkpoint_path()
         if last_checkpoint_path is not None:
@@ -3386,7 +3405,7 @@ def async_grpo_train(
                 # not plain tensors. The checkpoint is a trusted same-job artifact.
                 replay_buffer_state = torch.load(replay_buffer_path, weights_only=False)
                 ray.get(
-                    replay_buffer.load_state_dict.remote(
+                    replay_buffer_actor.load_state_dict.remote(
                         replay_buffer_state,
                         num_prompts_per_step=num_prompts_per_step,
                         current_training_step=step,
@@ -3430,7 +3449,7 @@ def async_grpo_train(
             tokenizer=tokenizer,
             task_to_env=task_to_env,
             master_config=master_config,
-            replay_buffer=replay_buffer,
+            replay_buffer=replay_buffer_actor,
             start_step=step,
         )
 
