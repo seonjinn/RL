@@ -1234,6 +1234,96 @@ class TestAsyncTrajectoryCollector:
         ray.kill(buffer)
         ray.kill(mock_env)
 
+    def test_blocked_worker_waits_for_refit_and_uses_new_weight_version(
+        self, monkeypatch
+    ):
+        """A semaphore-blocked worker must not start across a refit boundary."""
+
+        class RemoteMethod:
+            def __init__(self, value):
+                self.value = value
+
+            def remote(self, *args, **kwargs):
+                return self.value
+
+        class FakeReplayBuffer:
+            def __init__(self):
+                self.get_trajectories_needed = RemoteMethod(2)
+
+        first_started = threading.Event()
+        second_started = threading.Event()
+        second_prompt_ready = threading.Event()
+        started_args = []
+
+        class FakeBatch:
+            size = 2
+
+            def slice(self, start, end):
+                if start == 1:
+                    second_prompt_ready.set()
+                return self
+
+            def repeat_interleave(self, repeats):
+                return self
+
+        class RecordingThread:
+            def __init__(self, *args, **kwargs):
+                self._args = kwargs.get("args", ())
+
+            def start(self):
+                started_args.append(self._args)
+                if len(started_args) == 1:
+                    first_started.set()
+                else:
+                    second_started.set()
+
+            def is_alive(self):
+                return False
+
+        target_weight = 1
+        collector = self.create_local_collector(replay_buffer=FakeReplayBuffer())
+        collector.master_config.policy["generation"] = {
+            "backend": "vllm",
+            "vllm_cfg": {"async_engine": True},
+        }
+        collector.master_config.grpo["async_grpo"]["in_flight_weight_updates"] = True
+        collector.running = True
+        collector._inflight_sema = threading.Semaphore(1)
+
+        def reserve_target(generation_weight_version):
+            collector._generating_targets.add(target_weight)
+            return target_weight
+
+        collector._get_next_target_for_generation = reserve_target
+        real_thread = threading.Thread
+        monkeypatch.setattr(trajectory_collector_mod.ray, "get", lambda value: value)
+        monkeypatch.setattr(
+            trajectory_collector_mod._threading,
+            "Thread",
+            RecordingThread,
+        )
+
+        processing_thread = real_thread(
+            target=collector._process_batch,
+            args=(FakeBatch(),),
+        )
+        processing_thread.start()
+        assert first_started.wait(timeout=1)
+        assert second_prompt_ready.wait(timeout=1)
+
+        collector.prepare_for_refit()
+        try:
+            collector._inflight_sema.release()
+            assert not second_started.wait(timeout=0.1)
+        finally:
+            collector.set_weight_version(1)
+            collector.resume_after_refit()
+            processing_thread.join(timeout=1)
+
+        assert not processing_thread.is_alive()
+        assert second_started.is_set()
+        assert started_args[1][1] == 1
+
     def test_calculate_target_weights(self):
         """Test target weight calculation logic."""
         buffer = ReplayBuffer.remote(max_size=10)
@@ -1356,6 +1446,27 @@ class TestAsyncTrajectoryCollector:
             with pytest.raises(RuntimeError, match="first failure") as exc_info:
                 collector.raise_if_failed()
             assert "second failure" not in str(exc_info.value)
+
+    def test_fatal_stop_waits_for_generation_admission_boundary(self):
+        collector = self.create_local_collector()
+        collector.running = True
+        stop_completed = threading.Event()
+
+        def record_failure():
+            collector._record_fatal_error(RuntimeError("generation failed"), "worker")
+            stop_completed.set()
+
+        collector._pg_lock.acquire()
+        stop_thread = threading.Thread(target=record_failure)
+        try:
+            stop_thread.start()
+            assert not stop_completed.wait(timeout=0.1)
+        finally:
+            collector._pg_lock.release()
+            stop_thread.join(timeout=1)
+
+        assert stop_completed.is_set()
+        assert not collector.running
 
     def test_prompt_group_worker_records_generation_failure(self, monkeypatch):
         replay_buffer = mock.MagicMock()

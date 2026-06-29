@@ -51,7 +51,6 @@ class AsyncTrajectoryCollector:
         self.master_config = master_config
         self.replay_buffer = replay_buffer
         self.running = False
-
         self._pg_lock: _threading.Lock = _threading.Lock()
 
         # Event for manual pause/resume control
@@ -103,7 +102,8 @@ class AsyncTrajectoryCollector:
             if self._fatal_error is None:
                 self._fatal_error = detail
 
-        self.running = False
+        with self._pg_lock:
+            self.running = False
         self._manual_pause_cleared.set()
         self._refit_pause_cleared.set()
         self._generation_limit_cleared.set()
@@ -184,7 +184,8 @@ class AsyncTrajectoryCollector:
         return None
 
     def set_weight_version(self, version: int) -> None:
-        self.current_weight_version = version
+        with self._pg_lock:
+            self.current_weight_version = version
 
         # Resume collection if it was paused due to generation limits
         was_paused = not self._generation_limit_cleared.is_set()
@@ -355,66 +356,79 @@ class AsyncTrajectoryCollector:
                 self._spawning_targets.add(target_weight)
             try:
                 for prompt_idx in range(num_prompts_to_generate):
-                    # Wait for refit to complete if in progress
-                    if not self._refit_pause_cleared.is_set() and self.running:
-                        with self._threads_lock:
-                            active_threads = len(self._inflight_threads)
-                        print(
-                            f"⏸️ Waiting for refit to complete before starting new generation ({active_threads} threads still active)"
-                        )
-                        print(
-                            "   Note: With vLLM V1 async engine, active threads can complete during weight update"
-                        )
-                        self._refit_pause_cleared.wait()
-
-                        # After refit finishes if weight version has updated, reflect that in the new trajectories
-                        generation_weight_version = self.current_weight_version
-
                     single_prompt_batch = batch.slice(prompt_idx, prompt_idx + 1)
                     repeated_batch = single_prompt_batch.repeat_interleave(
                         num_generations
                     )
 
-                    worker = _threading.Thread(
-                        target=self._run_prompt_group_worker,
-                        args=(
-                            repeated_batch,
-                            generation_weight_version,
-                            target_weight,
-                            prompt_idx,
-                        ),
-                        daemon=True,
-                    )
-                    self._inflight_sema.acquire()
-                    registered = False
-                    try:
-                        with self._threads_lock:
-                            self._inflight_threads.add(worker)
-                        with self._counter_lock:
-                            self._spawned_per_target[target_weight] = (
-                                self._spawned_per_target.get(target_weight, 0) + 1
-                            )
-                            spawned_count = self._spawned_per_target[target_weight]
-                        registered = True
-                        worker.start()
-                    except Exception:
-                        # The worker never ran, so it won't release its slot or
-                        # run its finally block; undo the bookkeeping here.
-                        with self._threads_lock:
-                            self._inflight_threads.discard(worker)
-                        if registered:
-                            with self._counter_lock:
-                                updated_count = (
-                                    self._spawned_per_target.get(target_weight, 0) - 1
+                    worker_started = False
+                    spawned_count = 0
+                    while self.running and not worker_started:
+                        self._refit_pause_cleared.wait()
+                        if not self.running:
+                            break
+
+                        self._inflight_sema.acquire()
+                        registered = False
+                        worker = None
+                        try:
+                            with self._pg_lock:
+                                if not self.running:
+                                    self._inflight_sema.release()
+                                    break
+                                if not self._refit_pause_cleared.is_set():
+                                    self._inflight_sema.release()
+                                    continue
+
+                                generation_weight_version = self.current_weight_version
+                                worker = _threading.Thread(
+                                    target=self._run_prompt_group_worker,
+                                    args=(
+                                        repeated_batch,
+                                        generation_weight_version,
+                                        target_weight,
+                                        prompt_idx,
+                                    ),
+                                    daemon=True,
                                 )
-                                if updated_count > 0:
+                                with self._threads_lock:
+                                    self._inflight_threads.add(worker)
+                                with self._counter_lock:
                                     self._spawned_per_target[target_weight] = (
-                                        updated_count
+                                        self._spawned_per_target.get(target_weight, 0)
+                                        + 1
                                     )
-                                else:
-                                    self._spawned_per_target.pop(target_weight, None)
-                        self._inflight_sema.release()
-                        raise
+                                    spawned_count = self._spawned_per_target[
+                                        target_weight
+                                    ]
+                                registered = True
+                                worker.start()
+                                worker_started = True
+                        except Exception:
+                            # The worker never ran, so it won't release its slot or
+                            # run its finally block; undo the bookkeeping here.
+                            if worker is not None:
+                                with self._threads_lock:
+                                    self._inflight_threads.discard(worker)
+                            if registered:
+                                with self._counter_lock:
+                                    updated_count = (
+                                        self._spawned_per_target.get(target_weight, 0)
+                                        - 1
+                                    )
+                                    if updated_count > 0:
+                                        self._spawned_per_target[target_weight] = (
+                                            updated_count
+                                        )
+                                    else:
+                                        self._spawned_per_target.pop(
+                                            target_weight, None
+                                        )
+                            self._inflight_sema.release()
+                            raise
+
+                    if not worker_started:
+                        break
                     started += 1
                     print(
                         f"📊 Started worker {started}/{num_prompts_to_generate} for "
@@ -472,8 +486,10 @@ class AsyncTrajectoryCollector:
         start_time = time.time()
         print("🔄 Preparing for refit: pausing new generations...")
 
-        # Pause new generation starts
-        self._refit_pause_cleared.clear()
+        # Linearize the refit boundary with worker admission. Once this returns,
+        # no new worker can start until resume_after_refit() publishes the update.
+        with self._pg_lock:
+            self._refit_pause_cleared.clear()
         print("⏸️ New generation starts paused")
 
         # Check if we're using async engine
@@ -536,7 +552,8 @@ class AsyncTrajectoryCollector:
             except Exception as e:
                 print(f"⚠️ Failed to invalidate vLLM caches: {e}")
 
-        self._refit_pause_cleared.set()
+        with self._pg_lock:
+            self._refit_pause_cleared.set()
 
     def wait_for_pending_generations(self) -> None:
         """Wait for all in-flight generation threads to complete."""
