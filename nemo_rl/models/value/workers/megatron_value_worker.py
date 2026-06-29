@@ -794,6 +794,10 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
     ) -> torch.nn.Module:
         """Move model parameters and gradient buffers to the specified device."""
         if isinstance(model, DistributedDataParallel):
+            if device == "cpu" and move_grads and not move_params:
+                model.offload_grad_buffers(synchronize=True, empty_cache=False)
+                return model
+
             for buffers in [model.buffers, model.expert_parallel_buffers]:
                 for buffer_idx in range(len(buffers)):
                     if device == "cpu":

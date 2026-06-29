@@ -1559,6 +1559,10 @@ class MegatronPolicyWorkerImpl(
     ) -> torch.nn.Module:
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
+            if device == "cpu" and move_grads and not move_params:
+                model.offload_grad_buffers(synchronize=True, empty_cache=False)
+                return model
+
             # DDP case
             for buffers in [model.buffers, model.expert_parallel_buffers]:
                 for buffer_idx in range(len(buffers)):

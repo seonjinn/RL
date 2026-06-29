@@ -30,6 +30,7 @@ Modeled after `tests/unit/models/policy/test_megatron_worker.py`.
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import ray
@@ -46,6 +47,33 @@ from nemo_rl.models.value.config import ValueConfig
 from nemo_rl.models.value.lm_value import Value
 
 pytestmark = pytest.mark.mcore
+
+
+def test_move_model_uses_synchronized_mcore_grad_buffer_offload(monkeypatch):
+    from nemo_rl.models.value.workers import megatron_value_worker
+
+    class FakeDDP:
+        def __init__(self):
+            self.offload_calls = []
+            self.buffers = [SimpleNamespace(offload_to_cpu=lambda **_: None)]
+            self.expert_parallel_buffers = []
+
+        def offload_grad_buffers(self, *, synchronize, empty_cache):
+            self.offload_calls.append((synchronize, empty_cache))
+
+    monkeypatch.setattr(megatron_value_worker, "DistributedDataParallel", FakeDDP)
+    worker = object.__new__(megatron_value_worker.MegatronValueWorkerImpl)
+    model = FakeDDP()
+
+    result = worker.move_model(
+        model,
+        "cpu",
+        move_params=False,
+        move_grads=True,
+    )
+
+    assert result is model
+    assert model.offload_calls == [(True, False)]
 
 
 def _create_value_test_config(

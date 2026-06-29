@@ -75,6 +75,33 @@ def test_megatron_prepare_for_training_restores_optimizer():
     assert restored_devices == ["cuda"]
 
 
+def test_move_model_uses_synchronized_mcore_grad_buffer_offload(monkeypatch):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    class FakeDDP:
+        def __init__(self):
+            self.offload_calls = []
+            self.buffers = [SimpleNamespace(offload_to_cpu=lambda **_: None)]
+            self.expert_parallel_buffers = []
+
+        def offload_grad_buffers(self, *, synchronize, empty_cache):
+            self.offload_calls.append((synchronize, empty_cache))
+
+    monkeypatch.setattr(megatron_policy_worker, "DistributedDataParallel", FakeDDP)
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    model = FakeDDP()
+
+    result = worker.move_model(
+        model,
+        "cpu",
+        move_params=False,
+        move_grads=True,
+    )
+
+    assert result is model
+    assert model.offload_calls == [(True, False)]
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
