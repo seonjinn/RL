@@ -96,6 +96,63 @@ def test_move_optimizer_prefers_identity_preserving_distributed_offload(monkeypa
     assert calls == [(optimizer, "cuda")]
 
 
+def test_checkpoint_temporarily_restores_offloaded_optimizer(monkeypatch, tmp_path):
+    from nemo_rl.models.value.workers import megatron_value_worker
+
+    events = []
+    checkpoint_cfg = SimpleNamespace(save="original")
+    worker = object.__new__(megatron_value_worker.MegatronValueWorkerImpl)
+    worker.optimizer = object()
+    worker.scheduler = None
+    worker.model = object()
+    worker.mcore_state = SimpleNamespace(
+        cfg=SimpleNamespace(checkpoint=checkpoint_cfg),
+        train_state=SimpleNamespace(floating_point_operations_so_far=0),
+    )
+    worker.should_disable_forward_pre_hook = False
+    worker.checkpointing_context = None
+    worker.move_optimizer = lambda device: events.append(f"move:{device}")
+
+    monkeypatch.setattr(
+        megatron_value_worker.torch.distributed, "is_initialized", lambda: True
+    )
+    monkeypatch.setattr(
+        megatron_value_worker,
+        "is_distributed_optimizer_state_offloaded",
+        lambda optimizer: True,
+    )
+    monkeypatch.setattr(
+        megatron_value_worker,
+        "save_checkpoint",
+        lambda **kwargs: events.append("save"),
+    )
+    monkeypatch.setattr(
+        megatron_value_worker,
+        "maybe_finalize_async_save",
+        lambda *args, blocking, **kwargs: events.append(f"finalize:{blocking}"),
+    )
+    monkeypatch.setattr(
+        megatron_value_worker.torch.distributed,
+        "barrier",
+        lambda: events.append("barrier"),
+    )
+
+    worker.save_checkpoint(
+        weights_path=str(tmp_path / "weights"),
+        optimizer_path=str(tmp_path / "optimizer"),
+    )
+
+    assert events == [
+        "finalize:False",
+        "move:cuda",
+        "save",
+        "finalize:True",
+        "barrier",
+        "move:cpu",
+    ]
+    assert checkpoint_cfg.save == "original"
+
+
 def _create_value_test_config(
     model_name: str,
     tp: int = 1,

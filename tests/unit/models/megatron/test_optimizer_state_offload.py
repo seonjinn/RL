@@ -59,7 +59,7 @@ class _FakeOffloader:
 def _patch_offload_runtime(monkeypatch, events: list[str]):
     if importlib.util.find_spec("torch") is None:
         torch_stub = ModuleType("torch")
-        torch_stub.cuda = SimpleNamespace(synchronize=lambda: None)
+        setattr(torch_stub, "cuda", SimpleNamespace(synchronize=lambda: None))
         monkeypatch.setitem(sys.modules, "torch", torch_stub)
 
     from nemo_rl.models.megatron import optimizer_state_offload
@@ -141,6 +141,70 @@ def test_repeated_cpu_move_is_a_noop_while_state_is_offloaded(monkeypatch):
 
     assert handled is True
     assert events == []
+
+
+def test_offload_finalizes_successful_children_before_propagating_failure(monkeypatch):
+    events: list[str] = []
+    module = _patch_offload_runtime(monkeypatch, events)
+
+    class FailingOffloader(_FakeOffloader):
+        def offload(self) -> None:
+            self.optimizer.events.append(f"offload:{self.optimizer.name}")
+            if self.optimizer.name == "expert":
+                raise RuntimeError("injected D2H failure")
+            self._offloaded = True
+
+    monkeypatch.setattr(module, "OptimizerStateOffloader", FailingOffloader)
+    optimizer = _FakeChainedOptimizer(
+        [
+            _FakeDistributedOptimizer("dense", events),
+            _FakeDistributedOptimizer("expert", events),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="injected D2H failure"):
+        module.move_distributed_optimizer_state(optimizer, "cpu")
+
+    assert events[-2:] == ["synchronize", "release:dense"]
+
+
+def test_restore_joins_successful_children_before_propagating_failure(monkeypatch):
+    events: list[str] = []
+    module = _patch_offload_runtime(monkeypatch, events)
+    optimizer = _FakeChainedOptimizer(
+        [
+            _FakeDistributedOptimizer("dense", events),
+            _FakeDistributedOptimizer("expert", events),
+        ]
+    )
+    module.move_distributed_optimizer_state(optimizer, "cpu")
+    offloaders = [
+        item._nemo_rl_optimizer_state_offloader for item in optimizer.chained_optimizers
+    ]
+
+    def fail_expert_reload() -> None:
+        events.append("reload:expert")
+        raise RuntimeError("injected H2D failure")
+
+    offloaders[1].reload = fail_expert_reload
+    events.clear()
+
+    with pytest.raises(RuntimeError, match="injected H2D failure"):
+        module.move_distributed_optimizer_state(optimizer, "cuda")
+
+    assert events == ["reload:dense", "reload:expert", "wait:dense"]
+
+
+def test_reports_whether_any_distributed_optimizer_state_is_offloaded(monkeypatch):
+    events: list[str] = []
+    module = _patch_offload_runtime(monkeypatch, events)
+    optimizer = _FakeChainedOptimizer([_FakeDistributedOptimizer("dense", events)])
+
+    assert module.is_distributed_optimizer_state_offloaded(optimizer) is False
+    module.move_distributed_optimizer_state(optimizer, "cpu")
+    assert module.is_distributed_optimizer_state_offloaded(optimizer) is True
+    module.move_distributed_optimizer_state(optimizer, "cuda")
+    assert module.is_distributed_optimizer_state_offloaded(optimizer) is False
 
 
 def test_unsupported_optimizer_uses_existing_fallback(monkeypatch):

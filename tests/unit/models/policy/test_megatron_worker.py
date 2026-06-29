@@ -122,6 +122,57 @@ def test_move_optimizer_prefers_identity_preserving_distributed_offload(monkeypa
     assert calls == [(optimizer, "cpu")]
 
 
+def test_checkpoint_temporarily_restores_offloaded_optimizer(monkeypatch, tmp_path):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    events = []
+    checkpoint_cfg = SimpleNamespace(save="original", async_save=True)
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker.optimizer = object()
+    worker.scheduler = None
+    worker.model = SimpleNamespace(training=True)
+    worker.mcore_state = SimpleNamespace(
+        cfg=SimpleNamespace(checkpoint=checkpoint_cfg),
+        train_state=SimpleNamespace(floating_point_operations_so_far=0),
+    )
+    worker.should_disable_forward_pre_hook = False
+    worker.checkpointing_context = None
+    worker.move_optimizer = lambda device: events.append(f"move:{device}")
+
+    monkeypatch.setattr(
+        megatron_policy_worker.torch.distributed, "is_initialized", lambda: True
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "is_distributed_optimizer_state_offloaded",
+        lambda optimizer: True,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "save_checkpoint",
+        lambda **kwargs: events.append("save"),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "maybe_finalize_async_save",
+        lambda *args, blocking, **kwargs: events.append(f"finalize:{blocking}"),
+    )
+
+    worker.save_checkpoint(
+        weights_path=str(tmp_path / "weights"),
+        optimizer_path=str(tmp_path / "optimizer"),
+    )
+
+    assert events == [
+        "finalize:True",
+        "move:cuda",
+        "save",
+        "finalize:True",
+        "move:cpu",
+    ]
+    assert checkpoint_cfg.save == "original"
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (

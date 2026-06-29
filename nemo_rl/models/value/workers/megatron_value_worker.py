@@ -61,6 +61,7 @@ from nemo_rl.models.megatron.data import (
     process_global_batch,
 )
 from nemo_rl.models.megatron.optimizer_state_offload import (
+    is_distributed_optimizer_state_offloaded,
     move_distributed_optimizer_state,
 )
 from nemo_rl.models.megatron.setup import (
@@ -873,6 +874,8 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
             )
 
         original_save_path = self.mcore_state.cfg.checkpoint.save
+        optimizer_was_offloaded = False
+        checkpoint_completed = False
 
         try:
             maybe_finalize_async_save(
@@ -886,6 +889,11 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
             scheduler_to_save = None
             if optimizer_path is not None:
                 if self.optimizer is not None:
+                    optimizer_was_offloaded = is_distributed_optimizer_state_offloaded(
+                        self.optimizer
+                    )
+                    if optimizer_was_offloaded:
+                        self.move_optimizer("cuda")
                     optimizer_to_save = self.optimizer
                 if self.scheduler is not None:
                     scheduler_to_save = self.scheduler
@@ -914,12 +922,15 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
                 self.enable_forward_pre_hook()
 
             torch.distributed.barrier()
+            checkpoint_completed = True
             print(f"Saved value model checkpoint to {weights_path}")
 
         except Exception as e:
             print(f"Failed to save value checkpoint to {weights_path}: {e}")
             raise
         finally:
+            if optimizer_was_offloaded and checkpoint_completed:
+                self.move_optimizer("cpu")
             self.mcore_state.cfg.checkpoint.save = original_save_path
 
     def load_checkpoint(self, weights_path: str, optimizer_path: Optional[str] = None):

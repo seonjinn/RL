@@ -22,6 +22,7 @@ import torch
 
 DistributedOptimizer: type[Any] | None = None
 OptimizerStateOffloader: type[Any] | None = None
+_TRANSFER_LOCK_CREATION_LOCK = threading.Lock()
 
 
 def _load_mcore_offloader_types() -> tuple[type[Any], type[Any]]:
@@ -74,11 +75,27 @@ def _get_offloaders(distributed_optimizers: list[Any]) -> list[Any]:
 
 
 def _get_transfer_lock(optimizer: Any) -> threading.Lock:
-    lock = getattr(optimizer, "_nemo_rl_optimizer_state_transfer_lock", None)
-    if lock is None:
-        lock = threading.Lock()
-        optimizer._nemo_rl_optimizer_state_transfer_lock = lock
-    return lock
+    with _TRANSFER_LOCK_CREATION_LOCK:
+        lock = getattr(optimizer, "_nemo_rl_optimizer_state_transfer_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            optimizer._nemo_rl_optimizer_state_transfer_lock = lock
+        return lock
+
+
+def is_distributed_optimizer_state_offloaded(optimizer: Any) -> bool:
+    """Return whether any managed distributed optimizer child is offloaded."""
+    distributed_optimizers = _get_distributed_optimizers(optimizer)
+    return any(
+        getattr(
+            distributed_optimizer,
+            "_nemo_rl_optimizer_state_offloader",
+            None,
+        )
+        is not None
+        and distributed_optimizer._nemo_rl_optimizer_state_offloader._offloaded
+        for distributed_optimizer in distributed_optimizers
+    )
 
 
 def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
@@ -110,10 +127,22 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
             pending_offloaders = [
                 offloader for offloader in offloaders if not offloader._offloaded
             ]
-            for offloader in pending_offloaders:
-                if offloader.adam_optimizer.state:
-                    offloader.mark_optimizer_states_initialized()
-                offloader.offload()
+            try:
+                for offloader in pending_offloaders:
+                    if offloader.adam_optimizer.state:
+                        offloader.mark_optimizer_states_initialized()
+                    offloader.offload()
+            except Exception:
+                completed_offloaders = [
+                    offloader
+                    for offloader in pending_offloaders
+                    if offloader._offloaded
+                ]
+                if completed_offloaders:
+                    torch.cuda.synchronize()
+                    for offloader in completed_offloaders:
+                        offloader.release_gpu_memory()
+                raise
 
             if pending_offloaders:
                 # Preserve the old blocking move_optimizer contract. Synchronizing
@@ -125,10 +154,14 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
             pending_offloaders = [
                 offloader for offloader in offloaders if offloader._offloaded
             ]
-            for offloader in pending_offloaders:
-                offloader.reload()
-            for offloader in pending_offloaders:
-                offloader.sync_before_step()
+            completed_offloaders = []
+            try:
+                for offloader in pending_offloaders:
+                    offloader.reload()
+                    completed_offloaders.append(offloader)
+            finally:
+                for offloader in completed_offloaders:
+                    offloader.sync_before_step()
     finally:
         lock.release()
 
