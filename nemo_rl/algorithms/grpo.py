@@ -3179,6 +3179,57 @@ def _raise_if_trajectory_collector_failed(trajectory_collector: Any) -> None:
     ray.get(trajectory_collector.raise_if_failed.remote())
 
 
+def _cleanup_async_grpo_resources(
+    trajectory_collector: Any | None,
+    replay_buffer: Any | None,
+    task_to_env: dict[str, EnvironmentInterface],
+    val_task_to_env: Optional[dict[str, EnvironmentInterface]],
+    policy_generation: Optional[GenerationInterface],
+    policy: ColocatablePolicyInterface,
+) -> None:
+    if trajectory_collector is not None:
+        print("🛑 Stopping trajectory collection...")
+        try:
+            ray.kill(trajectory_collector)
+        except Exception as e:
+            print(f"Error stopping trajectory collector: {e}")
+
+    if replay_buffer is not None:
+        try:
+            ray.kill(replay_buffer)
+        except Exception as e:
+            print(f"Error stopping replay buffer: {e}")
+
+    # Environments must be shut down before generation workers because
+    # they may have in-flight HTTP requests to vLLM HTTP endpoints.
+    for env_dict in (task_to_env, val_task_to_env):
+        if env_dict is None:
+            continue
+        for task_name, env in env_dict.items():
+            print(f"🛑 Shutting down environment {task_name}...")
+            try:
+                ray.get(cast(Any, env).shutdown.remote(), timeout=10)
+            except Exception:
+                try:
+                    ray.kill(env)
+                except Exception as e:
+                    print(f"Error shutting down environment {task_name}: {e}")
+
+    print("🛑 Shutting down generation workers...")
+    if policy_generation is not None:
+        try:
+            cast(Any, policy_generation).shutdown()
+        except Exception as e:
+            print(f"Error shutting down generation workers: {e}")
+
+    if policy is not policy_generation:
+        print("🛑 Shutting down policy workers...")
+        try:
+            policy.shutdown()
+        except Exception as e:
+            print(f"Error shutting down policy workers: {e}")
+
+
 def async_grpo_train(
     policy: ColocatablePolicyInterface,
     policy_generation: Optional[GenerationInterface],
@@ -3285,160 +3336,177 @@ def async_grpo_train(
     print(f"   - train_global_batch_size: {train_gbs}")
     print(f"   - min_trajectories_needed: {min_trajectories_needed} (async mode)")
 
-    _replay_py_exec = get_actor_python_env(
-        "nemo_rl.algorithms.async_utils.ReplayBuffer"
-    )
-    if _replay_py_exec.startswith("uv"):
-        # Lazily build a dedicated venv across all Ray nodes on-demand.
-        _replay_py_exec = create_local_venv_on_each_node(
-            _replay_py_exec,
-            "nemo_rl.algorithms.async_utils.ReplayBuffer",
+    trajectory_collector: Any | None = None
+    replay_buffer: Any | None = None
+    try:
+        _replay_py_exec = get_actor_python_env(
+            "nemo_rl.algorithms.async_utils.ReplayBuffer"
+        )
+        if _replay_py_exec.startswith("uv"):
+            # Lazily build a dedicated venv across all Ray nodes on-demand.
+            _replay_py_exec = create_local_venv_on_each_node(
+                _replay_py_exec,
+                "nemo_rl.algorithms.async_utils.ReplayBuffer",
+            )
+
+        _replay_py_venv = os.path.dirname(
+            os.path.dirname(_replay_py_exec)
+        )  # to remove the "bin/python" suffix
+
+        _replay_runtime_env = {
+            "py_executable": _replay_py_exec,
+            "env_vars": {
+                **os.environ,
+                "VIRTUAL_ENV": _replay_py_venv,
+                "UV_PROJECT_ENVIRONMENT": _replay_py_venv,
+            },
+        }
+
+        # Calculate optimal buffer size based on generation limits to prevent length bias
+        # Each weight version generates exactly num_prompts_per_step trajectories
+        # With max_age_steps, we keep trajectories from multiple weight versions
+        num_prompts_per_step = master_config.grpo["num_prompts_per_step"]
+        late_arrival_slack = 2
+        optimal_buffer_size = (
+            num_prompts_per_step * max_trajectory_age_steps * late_arrival_slack
         )
 
-    _replay_py_venv = os.path.dirname(
-        os.path.dirname(_replay_py_exec)
-    )  # to remove the "bin/python" suffix
+        replay_buffer = ReplayBuffer.options(runtime_env=_replay_runtime_env).remote(
+            max_size=optimal_buffer_size
+        )
 
-    _replay_runtime_env = {
-        "py_executable": _replay_py_exec,
-        "env_vars": {
-            **os.environ,
-            "VIRTUAL_ENV": _replay_py_venv,
-            "UV_PROJECT_ENVIRONMENT": _replay_py_venv,
-        },
-    }
-
-    # Calculate optimal buffer size based on generation limits to prevent length bias
-    # Each weight version generates exactly num_prompts_per_step trajectories
-    # With max_age_steps, we keep trajectories from multiple weight versions
-    num_prompts_per_step = master_config.grpo["num_prompts_per_step"]
-    late_arrival_slack = 2
-    optimal_buffer_size = (
-        num_prompts_per_step * max_trajectory_age_steps * late_arrival_slack
-    )
-
-    replay_buffer = ReplayBuffer.options(runtime_env=_replay_runtime_env).remote(
-        max_size=optimal_buffer_size
-    )
-
-    last_checkpoint_path = checkpointer.get_latest_checkpoint_path()
-    if last_checkpoint_path is not None:
-        replay_buffer_path = os.path.join(last_checkpoint_path, "replay_buffer.pt")
-        if os.path.exists(replay_buffer_path):
-            print(f"📦 Restoring replay buffer from checkpoint: {replay_buffer_path}")
-            # weights_only=False: trajectories are pickled BatchedDataDict/dicts,
-            # not plain tensors. The checkpoint is a trusted same-job artifact.
-            replay_buffer_state = torch.load(replay_buffer_path, weights_only=False)
-            ray.get(
-                replay_buffer.load_state_dict.remote(
-                    replay_buffer_state,
-                    num_prompts_per_step=num_prompts_per_step,
-                    current_training_step=step,
-                    max_age_steps=max_trajectory_age_steps,
+        last_checkpoint_path = checkpointer.get_latest_checkpoint_path()
+        if last_checkpoint_path is not None:
+            replay_buffer_path = os.path.join(last_checkpoint_path, "replay_buffer.pt")
+            if os.path.exists(replay_buffer_path):
+                print(
+                    f"📦 Restoring replay buffer from checkpoint: {replay_buffer_path}"
                 )
-            )
-            print("✅ Replay buffer restored from checkpoint")
-        else:
-            print(
-                f"⚠️ No replay buffer checkpoint found at {replay_buffer_path}. "
-                "Starting with an empty replay buffer."
+                # weights_only=False: trajectories are pickled BatchedDataDict/dicts,
+                # not plain tensors. The checkpoint is a trusted same-job artifact.
+                replay_buffer_state = torch.load(replay_buffer_path, weights_only=False)
+                ray.get(
+                    replay_buffer.load_state_dict.remote(
+                        replay_buffer_state,
+                        num_prompts_per_step=num_prompts_per_step,
+                        current_training_step=step,
+                        max_age_steps=max_trajectory_age_steps,
+                    )
+                )
+                print("✅ Replay buffer restored from checkpoint")
+            else:
+                print(
+                    f"⚠️ No replay buffer checkpoint found at {replay_buffer_path}. "
+                    "Starting with an empty replay buffer."
+                )
+
+        _tc_py_exec = get_actor_python_env(
+            "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector"
+        )
+        if _tc_py_exec.startswith("uv"):
+            _tc_py_exec = create_local_venv_on_each_node(
+                _tc_py_exec,
+                "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
             )
 
-    _tc_py_exec = get_actor_python_env(
-        "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector"
-    )
-    if _tc_py_exec.startswith("uv"):
-        _tc_py_exec = create_local_venv_on_each_node(
-            _tc_py_exec,
-            "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
+        _tc_py_venv = os.path.dirname(
+            os.path.dirname(_tc_py_exec)
+        )  # to remove the "bin/python" suffix
+
+        _tc_runtime_env = {
+            "py_executable": _tc_py_exec,
+            "env_vars": {
+                **os.environ,
+                "VIRTUAL_ENV": _tc_py_venv,
+                "UV_PROJECT_ENVIRONMENT": _tc_py_venv,
+            },
+        }
+
+        # Initialize trajectory collector with synchronized collection
+        trajectory_collector = AsyncTrajectoryCollector.options(
+            runtime_env=_tc_runtime_env
+        ).remote(
+            policy_generation=policy_generation,
+            tokenizer=tokenizer,
+            task_to_env=task_to_env,
+            master_config=master_config,
+            replay_buffer=replay_buffer,
+            start_step=step,
         )
 
-    _tc_py_venv = os.path.dirname(
-        os.path.dirname(_tc_py_exec)
-    )  # to remove the "bin/python" suffix
+        print(
+            f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, max_age={max_trajectory_age_steps} steps"
+        )
 
-    _tc_runtime_env = {
-        "py_executable": _tc_py_exec,
-        "env_vars": {
-            **os.environ,
-            "VIRTUAL_ENV": _tc_py_venv,
-            "UV_PROJECT_ENVIRONMENT": _tc_py_venv,
-        },
-    }
+        print("⏳ Preparing policy generation for training...")
+        if NEED_REFIT and POLICY_GENERATION_STALE:
+            print("🔄 Refitting policy generation with actual model weights...")
+            try:
+                refit_policy_generation(policy, policy_generation, colocated_inference)
+                print("✅ Policy generation refit completed successfully")
+                POLICY_GENERATION_STALE = False
+            except Exception as e:
+                print(f"❌ Policy generation refit failed: {e}")
+                import traceback
 
-    # Initialize trajectory collector with synchronized collection
-    trajectory_collector = AsyncTrajectoryCollector.options(
-        runtime_env=_tc_runtime_env
-    ).remote(
-        policy_generation=policy_generation,
-        tokenizer=tokenizer,
-        task_to_env=task_to_env,
-        master_config=master_config,
-        replay_buffer=replay_buffer,
-        start_step=step,
-    )
+                traceback.print_exc()
+                raise
+        else:
+            print("🔄 Preparing policy generation for inference...")
+            try:
+                policy_generation.prepare_for_generation()
+                print("✅ Policy generation preparation completed successfully")
+            except Exception as e:
+                print(f"❌ Policy generation preparation failed: {e}")
+                import traceback
 
-    print(
-        f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, max_age={max_trajectory_age_steps} steps"
-    )
+                traceback.print_exc()
+                raise
 
-    print("⏳ Preparing policy generation for training...")
-    if NEED_REFIT and POLICY_GENERATION_STALE:
-        print("🔄 Refitting policy generation with actual model weights...")
-        try:
-            refit_policy_generation(policy, policy_generation, colocated_inference)
-            print("✅ Policy generation refit completed successfully")
-            POLICY_GENERATION_STALE = False
-        except Exception as e:
-            print(f"❌ Policy generation refit failed: {e}")
-            import traceback
+        print("✅ Policy generation setup complete, proceeding to validation...")
 
-            traceback.print_exc()
-            return
-    else:
-        print("🔄 Preparing policy generation for inference...")
-        try:
-            policy_generation.prepare_for_generation()
-            print("✅ Policy generation preparation completed successfully")
-        except Exception as e:
-            print(f"❌ Policy generation preparation failed: {e}")
-            import traceback
+        # Run validation at start if configured
+        if val_at_start and step == 0:
+            print("\n🔍 Running initial validation...")
+            try:
+                val_metrics, validation_timings = validate(
+                    policy_generation,
+                    val_dataloader,
+                    tokenizer,
+                    val_task_to_env,
+                    step=0,
+                    master_config=master_config,
+                    logger=logger,
+                )
+                if _finish_validation_generation(
+                    policy_generation,
+                    master_config,
+                    colocated_inference,
+                    allow_weight_discard=False,
+                ):
+                    POLICY_GENERATION_STALE = True
+                logger.log_metrics(val_metrics, step, prefix="validation")
+                logger.log_metrics(validation_timings, step, prefix="timing/validation")
+                print("✅ Initial validation completed successfully")
+            except Exception as e:
+                print(f"❌ Initial validation failed: {e}")
+                import traceback
 
-            traceback.print_exc()
-            return
+                traceback.print_exc()
+                # Continue anyway since validation is optional
+    except Exception:
+        _cleanup_async_grpo_resources(
+            trajectory_collector,
+            replay_buffer,
+            task_to_env,
+            val_task_to_env,
+            policy_generation,
+            policy,
+        )
+        raise
 
-    print("✅ Policy generation setup complete, proceeding to validation...")
-
-    # Run validation at start if configured
-    if val_at_start and step == 0:
-        print("\n🔍 Running initial validation...")
-        try:
-            val_metrics, validation_timings = validate(
-                policy_generation,
-                val_dataloader,
-                tokenizer,
-                val_task_to_env,
-                step=0,
-                master_config=master_config,
-                logger=logger,
-            )
-            if _finish_validation_generation(
-                policy_generation,
-                master_config,
-                colocated_inference,
-                allow_weight_discard=False,
-            ):
-                POLICY_GENERATION_STALE = True
-            logger.log_metrics(val_metrics, step, prefix="validation")
-            logger.log_metrics(validation_timings, step, prefix="timing/validation")
-            print("✅ Initial validation completed successfully")
-        except Exception as e:
-            print(f"❌ Initial validation failed: {e}")
-            import traceback
-
-            traceback.print_exc()
-            # Continue anyway since validation is optional
-
+    assert trajectory_collector is not None
+    assert replay_buffer is not None
     try:
         # vLLM starts with dummy weights. Do not allow the collector to generate
         # trajectories until the initial refit and validation have completed.
@@ -4152,45 +4220,12 @@ def async_grpo_train(
         raise
 
     finally:
-        # Clean up
-        print("🛑 Stopping trajectory collection...")
-        try:
-            ray.kill(trajectory_collector)
-        except Exception as e:
-            print(f"Error stopping trajectory collector: {e}")
-
-        try:
-            ray.kill(replay_buffer)
-        except Exception as e:
-            print(f"Error stopping replay buffer: {e}")
-
-        # Environments must be shut down before generation workers because
-        # they may have in-flight HTTP requests to vLLM HTTP endpoints.
-        # Killing generation first leaves environments retrying dead connections.
-        for env_dict in (task_to_env, val_task_to_env):
-            if env_dict is None:
-                continue
-            for task_name, env in env_dict.items():
-                print(f"🛑 Shutting down environment {task_name}...")
-                try:
-                    ray.get(env.shutdown.remote(), timeout=10)
-                except Exception:
-                    try:
-                        ray.kill(env)
-                    except Exception as e:
-                        print(f"Error shutting down environment {task_name}: {e}")
-
-        print("🛑 Shutting down generation workers...")
-        try:
-            policy_generation.shutdown()
-        except Exception as e:
-            print(f"Error shutting down generation workers: {e}")
-
-        if policy is not policy_generation:
-            print("🛑 Shutting down policy workers...")
-            try:
-                policy.shutdown()
-            except Exception as e:
-                print(f"Error shutting down policy workers: {e}")
-
+        _cleanup_async_grpo_resources(
+            trajectory_collector,
+            replay_buffer,
+            task_to_env,
+            val_task_to_env,
+            policy_generation,
+            policy,
+        )
         print("Async GRPO training complete!")

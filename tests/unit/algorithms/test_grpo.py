@@ -765,6 +765,7 @@ def mock_async_grpo_infrastructure(
     seq_logprob_error_result=None,
     event_log=None,
     collector_start_error=None,
+    collector_creation_error=None,
 ):
     """
     Context manager that mocks all async GRPO infrastructure (Ray actors, venv, etc).
@@ -807,7 +808,12 @@ def mock_async_grpo_infrastructure(
     )
 
     mock_collector_cls = MagicMock()
-    mock_collector_cls.options.return_value.remote.return_value = stub_collector
+    if collector_creation_error is None:
+        mock_collector_cls.options.return_value.remote.return_value = stub_collector
+    else:
+        mock_collector_cls.options.return_value.remote.side_effect = (
+            collector_creation_error
+        )
     stack.enter_context(
         patch(
             "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
@@ -1921,6 +1927,110 @@ def test_async_grpo_propagates_collector_start_failure_and_cleans_up(
     assert "Stopping trajectory collection" in capsys.readouterr().out
     assert "kill:StubAsyncTrajectoryCollector" in events
     assert "kill:StubReplayBuffer" in events
+
+
+def test_async_grpo_propagates_initial_refit_failure_and_cleans_up(
+    mock_grpo_components,
+):
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = 1
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["val_at_start"] = False
+    master_config.grpo["use_dynamic_sampling"] = False
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    policy_generation = _mock_policy_generation()
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.refit_policy_generation",
+            side_effect=RuntimeError("initial refit failed"),
+        ),
+        _patched_logprob_phase(policy),
+        pytest.raises(RuntimeError, match="initial refit failed"),
+    ):
+        async_grpo_train(
+            policy,
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert "kill:StubAsyncTrajectoryCollector" in events
+    assert "kill:StubReplayBuffer" in events
+    mock_grpo_components["task_to_env"]["math"].shutdown.remote.assert_called_once()
+    mock_grpo_components["val_task_to_env"]["math"].shutdown.remote.assert_called_once()
+    policy_generation.shutdown.assert_called_once()
+    policy.shutdown.assert_called_once()
+
+
+def test_async_grpo_cleans_up_partial_resources_when_collector_creation_fails(
+    mock_grpo_components,
+):
+    master_config = mock_grpo_components["master_config"]
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    policy_generation = _mock_policy_generation()
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+            collector_creation_error=RuntimeError("collector actor creation failed"),
+        ),
+        _patched_logprob_phase(policy),
+        pytest.raises(RuntimeError, match="collector actor creation failed"),
+    ):
+        async_grpo_train(
+            policy,
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert "kill:StubReplayBuffer" in events
+    assert "kill:NoneType" not in events
+    mock_grpo_components["task_to_env"]["math"].shutdown.remote.assert_called_once()
+    mock_grpo_components["val_task_to_env"]["math"].shutdown.remote.assert_called_once()
+    policy_generation.shutdown.assert_called_once()
+    policy.shutdown.assert_called_once()
 
 
 @pytest.mark.parametrize(
