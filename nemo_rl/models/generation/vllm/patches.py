@@ -117,6 +117,49 @@ def _patch_vllm_init_workers_ray(
             write_back(content)
 
 
+_VLLM_PARTIAL_WAKE_RESUME = (
+    "        # Resume scheduling (applies to all levels)\n"
+    "        self.resume_scheduler()\n"
+)
+_VLLM_FULL_WAKE_RESUME = (
+    "        # Partial wakes intentionally keep the remaining allocations asleep.\n"
+    "        # Resume scheduling only once all executor memory is resident again.\n"
+    "        if not self.model_executor.is_sleeping:\n"
+    "            self.resume_scheduler()\n"
+)
+
+
+def _patch_vllm_partial_wake_scheduler_content(
+    content: str, engine_core_file: str
+) -> str:
+    """Keep scheduling paused between staged weights and KV-cache wake-ups."""
+    if _VLLM_FULL_WAKE_RESUME in content:
+        return content
+
+    matches = content.count(_VLLM_PARTIAL_WAKE_RESUME)
+    if matches != 1:
+        raise RuntimeError(
+            "Could not apply vLLM partial wake scheduler patch: expected one "
+            f"resume block in {engine_core_file}, found {matches}."
+        )
+
+    return content.replace(_VLLM_PARTIAL_WAKE_RESUME, _VLLM_FULL_WAKE_RESUME, 1)
+
+
+def _patch_vllm_partial_wake_scheduler(logger) -> None:
+    """Backport vLLM PR #44483 for staged RLHF wake-ups."""
+    file_to_patch = _get_vllm_file("v1/engine/core.py")
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        patched = _patch_vllm_partial_wake_scheduler_content(content, file_to_patch)
+        if patched == content:
+            logger.info("vLLM partial wake scheduler patch already applied.")
+            return
+        write_back(patched)
+
+    logger.info("Patched vLLM scheduler to remain paused during partial wake-up.")
+
+
 _VLLM_DISTRIBUTED_TIMEOUT_HELPER = (
     "\n\n"
     "def _nemo_rl_get_distributed_timeout_or_none():\n"
@@ -257,9 +300,7 @@ def _patch_vllm_distributed_timeout_to_nccl_groups(logger) -> None:
             return
         write_back(patched)
 
-    logger.info(
-        "Patched vLLM NCCL device groups to use distributed_timeout_seconds."
-    )
+    logger.info("Patched vLLM NCCL device groups to use distributed_timeout_seconds.")
 
 
 def _patch_vllm_llama_eagle3_own_lm_head(logger) -> None:
@@ -439,6 +480,7 @@ def _apply_vllm_patches(
     _patch_vllm_init_workers_ray(py_executable, extra_env_vars)
     patch_logger.info("Successfully patched vllm _init_workers_ray.")
 
+    _patch_vllm_partial_wake_scheduler(patch_logger)
     _patch_vllm_distributed_timeout_to_nccl_groups(patch_logger)
     _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
     _patch_vllm_hermes_tool_parser_thread_safety(patch_logger)

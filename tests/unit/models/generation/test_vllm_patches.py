@@ -17,9 +17,7 @@ from pathlib import Path
 
 import pytest
 
-PATCHES_PATH = (
-    Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/patches.py"
-)
+PATCHES_PATH = Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/patches.py"
 PATCHES_SPEC = importlib.util.spec_from_file_location(
     "nemo_rl_vllm_patches_under_test", PATCHES_PATH
 )
@@ -31,6 +29,69 @@ PATCHES_SPEC.loader.exec_module(PATCHES_MODULE)
 _patch_vllm_parallel_state_timeout_content = (
     PATCHES_MODULE._patch_vllm_parallel_state_timeout_content
 )
+_patch_vllm_partial_wake_scheduler_content = (
+    PATCHES_MODULE._patch_vllm_partial_wake_scheduler_content
+)
+
+
+_VLLM_ENGINE_CORE_SOURCE = """
+class ModelExecutor:
+    def __init__(self):
+        self.is_sleeping = True
+
+    def wake_up(self, tags):
+        if tags is None or "kv_cache" in tags:
+            self.is_sleeping = False
+
+
+class EngineCore:
+    def __init__(self):
+        self.model_executor = ModelExecutor()
+        self.resume_count = 0
+
+    def resume_scheduler(self):
+        self.resume_count += 1
+
+    def wake_up(self, tags: list[str] | None = None):
+        if tags is not None and "scheduling" in tags:
+            tags = [t for t in tags if t != "scheduling"]
+
+        if tags is None or tags:
+            self.model_executor.wake_up(tags)
+
+        # Resume scheduling (applies to all levels)
+        self.resume_scheduler()
+"""
+
+
+def test_vllm_partial_wake_patch_resumes_only_after_full_wake():
+    patched = _patch_vllm_partial_wake_scheduler_content(
+        _VLLM_ENGINE_CORE_SOURCE, "core.py"
+    )
+    namespace = {}
+    exec(patched, namespace)
+    engine = namespace["EngineCore"]()
+
+    engine.wake_up(["weights"])
+    assert engine.resume_count == 0
+
+    engine.wake_up(["kv_cache"])
+    assert engine.resume_count == 1
+
+
+def test_vllm_partial_wake_patch_is_idempotent():
+    patched = _patch_vllm_partial_wake_scheduler_content(
+        _VLLM_ENGINE_CORE_SOURCE, "core.py"
+    )
+
+    assert _patch_vllm_partial_wake_scheduler_content(patched, "core.py") == patched
+
+
+def test_vllm_partial_wake_patch_raises_when_resume_pattern_is_missing():
+    with pytest.raises(RuntimeError, match="partial wake"):
+        _patch_vllm_partial_wake_scheduler_content(
+            "class EngineCore:\n    pass\n", "core.py"
+        )
 
 
 def test_vllm_timeout_patch_handles_current_parallel_state_import_shape():
