@@ -60,6 +60,9 @@ from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
 )
+from nemo_rl.models.megatron.optimizer_state_offload import (
+    move_distributed_optimizer_state,
+)
 from nemo_rl.models.megatron.setup import (
     finalize_megatron_setup,
     handle_model_import,
@@ -837,6 +840,9 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
 
     def move_optimizer(self, device: str):
         """Move optimizer state to the specified device."""
+        if move_distributed_optimizer_state(self.optimizer, device):
+            return
+
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
         else:

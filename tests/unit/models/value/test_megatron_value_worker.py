@@ -76,6 +76,26 @@ def test_move_model_uses_synchronized_mcore_grad_buffer_offload(monkeypatch):
     assert model.offload_calls == [(True, False)]
 
 
+def test_move_optimizer_prefers_identity_preserving_distributed_offload(monkeypatch):
+    from nemo_rl.models.value.workers import megatron_value_worker
+
+    optimizer = object()
+    calls = []
+    monkeypatch.setattr(
+        megatron_value_worker,
+        "move_distributed_optimizer_state",
+        lambda actual_optimizer, device: (
+            calls.append((actual_optimizer, device)) or True
+        ),
+    )
+    worker = object.__new__(megatron_value_worker.MegatronValueWorkerImpl)
+    worker.optimizer = optimizer
+
+    worker.move_optimizer("cuda")
+
+    assert calls == [(optimizer, "cuda")]
+
+
 def _create_value_test_config(
     model_name: str,
     tp: int = 1,

@@ -102,6 +102,26 @@ def test_move_model_uses_synchronized_mcore_grad_buffer_offload(monkeypatch):
     assert model.offload_calls == [(True, False)]
 
 
+def test_move_optimizer_prefers_identity_preserving_distributed_offload(monkeypatch):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    optimizer = object()
+    calls = []
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "move_distributed_optimizer_state",
+        lambda actual_optimizer, device: (
+            calls.append((actual_optimizer, device)) or True
+        ),
+    )
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker.optimizer = optimizer
+
+    worker.move_optimizer("cpu")
+
+    assert calls == [(optimizer, "cpu")]
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (

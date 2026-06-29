@@ -58,6 +58,9 @@ from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
 )
+from nemo_rl.models.megatron.optimizer_state_offload import (
+    move_distributed_optimizer_state,
+)
 from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_loss_metrics_from_last_stage,
     broadcast_obj_from_pp_rank,
@@ -1603,6 +1606,9 @@ class MegatronPolicyWorkerImpl(
         return model
 
     def move_optimizer(self, device: str):
+        if move_distributed_optimizer_state(self.optimizer, device):
+            return
+
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
