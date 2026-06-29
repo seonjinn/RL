@@ -929,9 +929,11 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
             print(f"Failed to save value checkpoint to {weights_path}: {e}")
             raise
         finally:
-            if optimizer_was_offloaded and checkpoint_completed:
-                self.move_optimizer("cpu")
-            self.mcore_state.cfg.checkpoint.save = original_save_path
+            try:
+                if optimizer_was_offloaded and checkpoint_completed:
+                    self.move_optimizer("cpu")
+            finally:
+                self.mcore_state.cfg.checkpoint.save = original_save_path
 
     def load_checkpoint(self, weights_path: str, optimizer_path: Optional[str] = None):
         """Load a checkpoint for the value model."""

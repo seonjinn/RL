@@ -41,6 +41,10 @@ class _FakeOffloader:
     def mark_optimizer_states_initialized(self) -> None:
         self.optimizer.events.append(f"mark:{self.optimizer.name}")
 
+    @property
+    def is_offloaded(self) -> bool:
+        return self._offloaded
+
     def offload(self) -> None:
         self.optimizer.events.append(f"offload:{self.optimizer.name}")
         self._offloaded = True

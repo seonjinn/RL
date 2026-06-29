@@ -93,7 +93,7 @@ def is_distributed_optimizer_state_offloaded(optimizer: Any) -> bool:
             None,
         )
         is not None
-        and distributed_optimizer._nemo_rl_optimizer_state_offloader._offloaded
+        and distributed_optimizer._nemo_rl_optimizer_state_offloader.is_offloaded
         for distributed_optimizer in distributed_optimizers
     )
 
@@ -125,7 +125,7 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
             return False
         if device == "cpu":
             pending_offloaders = [
-                offloader for offloader in offloaders if not offloader._offloaded
+                offloader for offloader in offloaders if not offloader.is_offloaded
             ]
             try:
                 for offloader in pending_offloaders:
@@ -136,7 +136,7 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
                 completed_offloaders = [
                     offloader
                     for offloader in pending_offloaders
-                    if offloader._offloaded
+                    if offloader.is_offloaded
                 ]
                 if completed_offloaders:
                     torch.cuda.synchronize()
@@ -152,7 +152,7 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
                     offloader.release_gpu_memory()
         else:
             pending_offloaders = [
-                offloader for offloader in offloaders if offloader._offloaded
+                offloader for offloader in offloaders if offloader.is_offloaded
             ]
             completed_offloaders = []
             try:

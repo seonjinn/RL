@@ -172,6 +172,19 @@ def test_checkpoint_temporarily_restores_offloaded_optimizer(monkeypatch, tmp_pa
     ]
     assert checkpoint_cfg.save == "original"
 
+    def fail_reoffload(device):
+        events.append(f"move:{device}")
+        if device == "cpu":
+            raise RuntimeError("injected reoffload failure")
+
+    worker.move_optimizer = fail_reoffload
+    with pytest.raises(RuntimeError, match="injected reoffload failure"):
+        worker.save_checkpoint(
+            weights_path=str(tmp_path / "weights-failing"),
+            optimizer_path=str(tmp_path / "optimizer-failing"),
+        )
+    assert checkpoint_cfg.save == "original"
+
 
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""

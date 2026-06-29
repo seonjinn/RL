@@ -152,6 +152,19 @@ def test_checkpoint_temporarily_restores_offloaded_optimizer(monkeypatch, tmp_pa
     ]
     assert checkpoint_cfg.save == "original"
 
+    def fail_reoffload(device):
+        events.append(f"move:{device}")
+        if device == "cpu":
+            raise RuntimeError("injected reoffload failure")
+
+    worker.move_optimizer = fail_reoffload
+    with pytest.raises(RuntimeError, match="injected reoffload failure"):
+        worker.save_checkpoint(
+            weights_path=str(tmp_path / "weights-failing"),
+            optimizer_path=str(tmp_path / "optimizer-failing"),
+        )
+    assert checkpoint_cfg.save == "original"
+
 
 def _create_value_test_config(
     model_name: str,
