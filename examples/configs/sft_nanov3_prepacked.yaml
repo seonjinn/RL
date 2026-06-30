@@ -2,6 +2,7 @@
 sft:
   max_num_epochs: 10000
   max_num_steps: 18750
+  only_unmask_final: false
   val_period: 100000
   val_batches: 14
   val_global_batch_size: 64
