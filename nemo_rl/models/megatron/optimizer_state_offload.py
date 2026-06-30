@@ -85,7 +85,10 @@ def _get_transfer_lock(optimizer: Any) -> threading.Lock:
 
 def is_distributed_optimizer_state_offloaded(optimizer: Any) -> bool:
     """Return whether any managed distributed optimizer child is offloaded."""
-    distributed_optimizers = _get_distributed_optimizers(optimizer)
+    try:
+        distributed_optimizers = _get_distributed_optimizers(optimizer)
+    except ModuleNotFoundError:
+        return False
     return any(
         getattr(
             distributed_optimizer,
@@ -110,7 +113,10 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
             f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
         )
 
-    distributed_optimizers = _get_distributed_optimizers(optimizer)
+    try:
+        distributed_optimizers = _get_distributed_optimizers(optimizer)
+    except ModuleNotFoundError:
+        return False
     if not distributed_optimizers:
         return False
 
