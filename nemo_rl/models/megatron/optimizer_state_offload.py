@@ -23,6 +23,10 @@ import torch
 DistributedOptimizer: type[Any] | None = None
 OptimizerStateOffloader: type[Any] | None = None
 _TRANSFER_LOCK_CREATION_LOCK = threading.Lock()
+_MCORE_OFFLOADER_MODULE = (
+    "megatron.core.optimizer.cpu_offloading.optimizer_state_offloader"
+)
+_NATIVE_OFFLOAD_STATE_ATTR = "_nemo_rl_optimizer_state_offloaded"
 
 
 def _load_mcore_offloader_types() -> tuple[type[Any], type[Any]]:
@@ -83,12 +87,41 @@ def _get_transfer_lock(optimizer: Any) -> threading.Lock:
         return lock
 
 
+def _is_missing_mcore_offloader(error: ModuleNotFoundError) -> bool:
+    return error.name == _MCORE_OFFLOADER_MODULE
+
+
+def _move_with_native_mcore_api(optimizer: Any, device: str) -> bool:
+    method_name = "offload_to_cpu" if device == "cpu" else "restore_from_cpu"
+    move = getattr(optimizer, method_name, None)
+    if not callable(move):
+        return False
+
+    target_is_offloaded = device == "cpu"
+    lock = _get_transfer_lock(optimizer)
+    if not lock.acquire(blocking=False):
+        raise RuntimeError("Optimizer state transfer is already in progress")
+
+    try:
+        tracked_state = getattr(optimizer, _NATIVE_OFFLOAD_STATE_ATTR, None)
+        if tracked_state is target_is_offloaded:
+            return True
+        move()
+        setattr(optimizer, _NATIVE_OFFLOAD_STATE_ATTR, target_is_offloaded)
+    finally:
+        lock.release()
+
+    return True
+
+
 def is_distributed_optimizer_state_offloaded(optimizer: Any) -> bool:
     """Return whether any managed distributed optimizer child is offloaded."""
     try:
         distributed_optimizers = _get_distributed_optimizers(optimizer)
-    except ModuleNotFoundError:
-        return False
+    except ModuleNotFoundError as error:
+        if not _is_missing_mcore_offloader(error):
+            raise
+        return bool(getattr(optimizer, _NATIVE_OFFLOAD_STATE_ATTR, False))
     return any(
         getattr(
             distributed_optimizer,
@@ -102,7 +135,10 @@ def is_distributed_optimizer_state_offloaded(optimizer: Any) -> bool:
 
 
 def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
-    """Move MCore distributed optimizer state without rebinding optimizer tensors.
+    """Move MCore distributed optimizer state between CPU and GPU.
+
+    The pinned offloader preserves tensor identity. Newer MCore versions without
+    that offloader use their native optimizer transfer methods instead.
 
     Returns ``False`` when the optimizer is not an MCore ``DistributedOptimizer``
     (or a chain composed entirely of them), allowing callers to use their existing
@@ -115,8 +151,10 @@ def move_distributed_optimizer_state(optimizer: Any, device: str) -> bool:
 
     try:
         distributed_optimizers = _get_distributed_optimizers(optimizer)
-    except ModuleNotFoundError:
-        return False
+    except ModuleNotFoundError as error:
+        if not _is_missing_mcore_offloader(error):
+            raise
+        return _move_with_native_mcore_api(optimizer, device)
     if not distributed_optimizers:
         return False
 
