@@ -75,6 +75,33 @@ def _patch_vllm_postload(monkeypatch):
 
 
 @pytest.mark.vllm
+def test_collective_weight_update_joins_transfer_streams_before_postload(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    events = []
+    extension = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    extension.state_dict_info = {"weight": (torch.Size([1]), torch.float32)}
+    extension.model_update_group = object()
+    extension._load_weights = MagicMock()
+    extension._maybe_process_fp8_kv_cache = lambda: events.append("postload")
+
+    def consume_weights(**_kwargs):
+        events.append("consume")
+
+    monkeypatch.setattr(vllm_backend, "packed_broadcast_consumer", consume_weights)
+    monkeypatch.setattr(
+        vllm_backend.torch.cuda,
+        "synchronize",
+        lambda: events.append("synchronize"),
+    )
+
+    assert extension.update_weights_from_collective()
+    assert events == ["consume", "synchronize", "postload"]
+
+
+@pytest.mark.vllm
 def test_read_mtp_layer_weights_from_checkpoint_filters_and_reads(tmp_path):
     """Only the requested MTP layer tensors are read, across the shards holding them."""
     from nemo_rl.models.generation.vllm.vllm_backend import (

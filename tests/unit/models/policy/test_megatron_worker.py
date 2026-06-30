@@ -75,6 +75,117 @@ def test_megatron_prepare_for_training_restores_optimizer():
     assert restored_devices == ["cuda"]
 
 
+def test_move_model_uses_synchronized_mcore_grad_buffer_offload(monkeypatch):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    class FakeDDP:
+        def __init__(self):
+            self.offload_calls = []
+            self.buffers = [SimpleNamespace(offload_to_cpu=lambda **_: None)]
+            self.expert_parallel_buffers = []
+
+        def offload_grad_buffers(self, *, synchronize, empty_cache):
+            self.offload_calls.append((synchronize, empty_cache))
+
+    monkeypatch.setattr(megatron_policy_worker, "DistributedDataParallel", FakeDDP)
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    model = FakeDDP()
+
+    result = worker.move_model(
+        model,
+        "cpu",
+        move_params=False,
+        move_grads=True,
+    )
+
+    assert result is model
+    assert model.offload_calls == [(True, False)]
+
+
+def test_move_optimizer_prefers_identity_preserving_distributed_offload(monkeypatch):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    optimizer = object()
+    calls = []
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "move_distributed_optimizer_state",
+        lambda actual_optimizer, device: (
+            calls.append((actual_optimizer, device)) or True
+        ),
+    )
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker.optimizer = optimizer
+
+    worker.move_optimizer("cpu")
+
+    assert calls == [(optimizer, "cpu")]
+
+
+def test_checkpoint_temporarily_restores_offloaded_optimizer(monkeypatch, tmp_path):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    events = []
+    checkpoint_cfg = SimpleNamespace(save="original", async_save=True)
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker.optimizer = object()
+    worker.scheduler = None
+    worker.model = SimpleNamespace(training=True)
+    worker.mcore_state = SimpleNamespace(
+        cfg=SimpleNamespace(checkpoint=checkpoint_cfg),
+        train_state=SimpleNamespace(floating_point_operations_so_far=0),
+    )
+    worker.should_disable_forward_pre_hook = False
+    worker.checkpointing_context = None
+    worker.move_optimizer = lambda device: events.append(f"move:{device}")
+
+    monkeypatch.setattr(
+        megatron_policy_worker.torch.distributed, "is_initialized", lambda: True
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "is_distributed_optimizer_state_offloaded",
+        lambda optimizer: True,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "save_checkpoint",
+        lambda **kwargs: events.append("save"),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "maybe_finalize_async_save",
+        lambda *args, blocking, **kwargs: events.append(f"finalize:{blocking}"),
+    )
+
+    worker.save_checkpoint(
+        weights_path=str(tmp_path / "weights"),
+        optimizer_path=str(tmp_path / "optimizer"),
+    )
+
+    assert events == [
+        "finalize:True",
+        "move:cuda",
+        "save",
+        "finalize:True",
+        "move:cpu",
+    ]
+    assert checkpoint_cfg.save == "original"
+
+    def fail_reoffload(device):
+        events.append(f"move:{device}")
+        if device == "cpu":
+            raise RuntimeError("injected reoffload failure")
+
+    worker.move_optimizer = fail_reoffload
+    with pytest.raises(RuntimeError, match="injected reoffload failure"):
+        worker.save_checkpoint(
+            weights_path=str(tmp_path / "weights-failing"),
+            optimizer_path=str(tmp_path / "optimizer-failing"),
+        )
+    assert checkpoint_cfg.save == "original"
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (

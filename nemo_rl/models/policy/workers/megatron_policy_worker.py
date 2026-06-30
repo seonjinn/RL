@@ -58,6 +58,10 @@ from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
 )
+from nemo_rl.models.megatron.optimizer_state_offload import (
+    is_distributed_optimizer_state_offloaded,
+    move_distributed_optimizer_state,
+)
 from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_loss_metrics_from_last_stage,
     broadcast_obj_from_pp_rank,
@@ -1562,6 +1566,10 @@ class MegatronPolicyWorkerImpl(
     ) -> torch.nn.Module:
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
+            if device == "cpu" and move_grads and not move_params:
+                model.offload_grad_buffers(synchronize=True, empty_cache=False)
+                return model
+
             # DDP case
             for buffers in [model.buffers, model.expert_parallel_buffers]:
                 for buffer_idx in range(len(buffers)):
@@ -1602,6 +1610,9 @@ class MegatronPolicyWorkerImpl(
         return model
 
     def move_optimizer(self, device: str):
+        if move_distributed_optimizer_state(self.optimizer, device):
+            return
+
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
@@ -1648,6 +1659,8 @@ class MegatronPolicyWorkerImpl(
 
         original_save_path = self.mcore_state.cfg.checkpoint.save
         is_async = self.mcore_state.cfg.checkpoint.async_save
+        optimizer_was_offloaded = False
+        checkpoint_completed = False
 
         try:
             # Block until any previous async save is fully written to disk.
@@ -1664,6 +1677,11 @@ class MegatronPolicyWorkerImpl(
 
             if optimizer_path is not None:
                 if self.optimizer is not None:
+                    optimizer_was_offloaded = is_distributed_optimizer_state_offloaded(
+                        self.optimizer
+                    )
+                    if optimizer_was_offloaded:
+                        self.move_optimizer("cuda")
                     optimizer_to_save = self.optimizer
                 if self.scheduler is not None:
                     scheduler_to_save = self.scheduler
@@ -1686,13 +1704,14 @@ class MegatronPolicyWorkerImpl(
                 checkpointing_context=self.checkpointing_context,
             )
 
-            if not is_async:
+            if not is_async or optimizer_was_offloaded:
                 # Sync path: finalize immediately (runs finalize_fns + barrier).
                 maybe_finalize_async_save(
                     self.mcore_state,
                     ckpt_cfg=self.mcore_state.cfg.checkpoint,
                     blocking=True,
                 )
+            checkpoint_completed = True
             if self.should_disable_forward_pre_hook:
                 self.enable_forward_pre_hook()
 
@@ -1703,7 +1722,11 @@ class MegatronPolicyWorkerImpl(
             print(f"Failed to save checkpoint to {weights_path}: {e}")
             raise
         finally:
-            self.mcore_state.cfg.checkpoint.save = original_save_path
+            try:
+                if optimizer_was_offloaded and checkpoint_completed:
+                    self.move_optimizer("cpu")
+            finally:
+                self.mcore_state.cfg.checkpoint.save = original_save_path
 
     def load_checkpoint(self, weights_path: str, optimizer_path: Optional[str] = None):
         """Load a training checkpoint.

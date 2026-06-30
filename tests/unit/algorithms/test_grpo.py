@@ -20,6 +20,7 @@ import ray
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 
+import nemo_rl.algorithms.grpo as grpo_mod
 from nemo_rl.algorithms.advantage_estimator import (
     GDPOAdvantageEstimator,
     GRPOAdvantageEstimator,
@@ -655,8 +656,9 @@ class StubReplayBuffer:
         """Return a mock that reports whether the current step can train."""
         mock = MagicMock()
         mock.remote = MagicMock(
-            side_effect=lambda _target_step, num_prompts_per_step, *_args: self._size
-            >= num_prompts_per_step
+            side_effect=lambda _target_step, num_prompts_per_step, *_args: (
+                self._size >= num_prompts_per_step
+            )
         )
         return mock
 
@@ -667,18 +669,36 @@ class StubAsyncTrajectoryCollector:
     Each method is a property that returns a MagicMock with a 'remote' attribute.
     """
 
+    def __init__(self, event_log=None, health_error=None, start_error=None):
+        self._event_log = event_log
+        self._health_error = health_error
+        self._start_error = start_error
+
+    def _record(self, event):
+        if self._event_log is not None:
+            self._event_log.append(event)
+        return MagicMock()
+
     @property
     def start_collection(self):
         """Start collection - returns a remote-callable mock"""
         mock = MagicMock()
-        mock.remote = MagicMock(return_value=MagicMock())  # Returns a fake ObjectRef
+        mock.remote = MagicMock(
+            side_effect=lambda *_args, **_kwargs: (
+                self._start_error or self._record("start_collection")
+            )
+        )
         return mock
 
     @property
     def set_weight_version(self):
         """Set weight version - returns a remote-callable mock"""
         mock = MagicMock()
-        mock.remote = MagicMock(return_value=MagicMock())
+        mock.remote = MagicMock(
+            side_effect=lambda version, **_kwargs: self._record(
+                f"set_weight_version:{version}"
+            )
+        )
         return mock
 
     @property
@@ -723,9 +743,29 @@ class StubAsyncTrajectoryCollector:
         mock.remote = MagicMock(return_value=MagicMock())
         return mock
 
+    @property
+    def raise_if_failed(self):
+        mock = MagicMock()
+        mock.remote = MagicMock(side_effect=self._health_error)
+        return mock
+
+
+def test_async_collector_health_check_propagates_failure():
+    collector = StubAsyncTrajectoryCollector(
+        health_error=RuntimeError("vLLM engine is dead")
+    )
+
+    with pytest.raises(RuntimeError, match="vLLM engine is dead"):
+        grpo_mod._raise_if_trajectory_collector_failed(collector)
+
 
 def mock_async_grpo_infrastructure(
-    mock_batch, mock_rollout_metrics, seq_logprob_error_result=None
+    mock_batch,
+    mock_rollout_metrics,
+    seq_logprob_error_result=None,
+    event_log=None,
+    collector_start_error=None,
+    collector_creation_error=None,
 ):
     """
     Context manager that mocks all async GRPO infrastructure (Ray actors, venv, etc).
@@ -742,7 +782,10 @@ def mock_async_grpo_infrastructure(
         mock_batch=mock_batch,
         mock_rollout_metrics=mock_rollout_metrics,
     )
-    stub_collector = StubAsyncTrajectoryCollector()
+    stub_collector = StubAsyncTrajectoryCollector(
+        event_log=event_log,
+        start_error=collector_start_error,
+    )
 
     # Patch venv creation
     stack.enter_context(
@@ -765,7 +808,12 @@ def mock_async_grpo_infrastructure(
     )
 
     mock_collector_cls = MagicMock()
-    mock_collector_cls.options.return_value.remote.return_value = stub_collector
+    if collector_creation_error is None:
+        mock_collector_cls.options.return_value.remote.return_value = stub_collector
+    else:
+        mock_collector_cls.options.return_value.remote.side_effect = (
+            collector_creation_error
+        )
     stack.enter_context(
         patch(
             "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
@@ -775,6 +823,8 @@ def mock_async_grpo_infrastructure(
 
     # Patch ray.get to return values from our stubs (not remote refs)
     def mock_ray_get(ref):
+        if isinstance(ref, BaseException):
+            raise ref
         # If it's already a plain value (from our stubs), return it
         if isinstance(ref, (int, str, dict, list)):
             return ref
@@ -785,9 +835,12 @@ def mock_async_grpo_infrastructure(
     stack.enter_context(
         patch("ray.wait", side_effect=lambda refs, **kwargs: (refs, []))
     )
-    stack.enter_context(
-        patch("ray.kill", return_value=None)
-    )  # Mock ray.kill for cleanup
+
+    def mock_ray_kill(actor):
+        if event_log is not None:
+            event_log.append(f"kill:{type(actor).__name__}")
+
+    stack.enter_context(patch("ray.kill", side_effect=mock_ray_kill))
 
     # Patch the rollout functions used inside async_grpo_train
     stack.enter_context(
@@ -804,11 +857,21 @@ def mock_async_grpo_infrastructure(
     )
 
     # Patch refit and validate functions
+    def mock_refit(*_args, **_kwargs):
+        if event_log is not None:
+            event_log.append("refit")
+
     stack.enter_context(
-        patch("nemo_rl.algorithms.grpo.refit_policy_generation", return_value=None)
+        patch("nemo_rl.algorithms.grpo.refit_policy_generation", side_effect=mock_refit)
     )
+
+    def mock_validate(*_args, **_kwargs):
+        if event_log is not None:
+            event_log.append("validate")
+        return {}, {}
+
     stack.enter_context(
-        patch("nemo_rl.algorithms.grpo.validate", return_value=({}, {}))
+        patch("nemo_rl.algorithms.grpo.validate", side_effect=mock_validate)
     )
 
     # Mock print_performance_metrics to avoid needing real timing metrics
@@ -1750,6 +1813,255 @@ def test_grpo_train_collects_generation_logger_and_seq_metrics(
     assert train_metrics["min_seq_mult_prob_error_after_mask"] == 1.0
     assert train_metrics["num_masked_seqs_by_logprob_error"] == 2
     assert train_metrics["masked_correct_pct"] == 0.5
+
+
+@pytest.mark.parametrize(
+    ("current_step", "val_at_start", "expected_events"),
+    [
+        (0, False, ["refit", "set_weight_version:0", "start_collection"]),
+        (
+            0,
+            True,
+            ["refit", "validate", "set_weight_version:0", "start_collection"],
+        ),
+        (5, True, ["refit", "set_weight_version:5", "start_collection"]),
+    ],
+)
+def test_async_grpo_refits_before_starting_collection(
+    mock_grpo_components,
+    current_step,
+    val_at_start,
+    expected_events,
+):
+    """Do not let vLLM collect trajectories before real weights are loaded."""
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = current_step + 1
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["val_at_start"] = val_at_start
+    master_config.grpo["use_dynamic_sampling"] = False
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    save_state = _default_grpo_save_state()
+    save_state["current_step"] = current_step
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+        ),
+        _patched_logprob_phase(policy),
+    ):
+        async_grpo_train(
+            policy,
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            save_state,
+            master_config,
+        )
+
+    assert events[: len(expected_events)] == expected_events
+
+
+def test_async_grpo_propagates_collector_start_failure_and_cleans_up(
+    mock_grpo_components,
+    capsys,
+):
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = 1
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["val_at_start"] = False
+    master_config.grpo["use_dynamic_sampling"] = False
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+            collector_start_error=RuntimeError("collector thread failed to start"),
+        ),
+        _patched_logprob_phase(policy),
+        pytest.raises(RuntimeError, match="collector thread failed to start"),
+    ):
+        async_grpo_train(
+            policy,
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert "Stopping trajectory collection" in capsys.readouterr().out
+    assert "kill:StubAsyncTrajectoryCollector" in events
+    assert "kill:StubReplayBuffer" in events
+
+
+def test_async_grpo_propagates_initial_refit_failure_and_cleans_up(
+    mock_grpo_components,
+):
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = 1
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["val_at_start"] = False
+    master_config.grpo["use_dynamic_sampling"] = False
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    policy_generation = _mock_policy_generation()
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.refit_policy_generation",
+            side_effect=RuntimeError("initial refit failed"),
+        ),
+        _patched_logprob_phase(policy),
+        pytest.raises(RuntimeError, match="initial refit failed"),
+    ):
+        async_grpo_train(
+            policy,
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert "kill:StubAsyncTrajectoryCollector" in events
+    assert "kill:StubReplayBuffer" in events
+    mock_grpo_components["task_to_env"]["math"].shutdown.remote.assert_called_once()
+    mock_grpo_components["val_task_to_env"]["math"].shutdown.remote.assert_called_once()
+    policy_generation.shutdown.assert_called_once()
+    policy.shutdown.assert_called_once()
+
+
+def test_async_grpo_cleans_up_partial_resources_when_collector_creation_fails(
+    mock_grpo_components,
+):
+    master_config = mock_grpo_components["master_config"]
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {
+        "gen_kl_error": 0.0,
+        "mean_gen_tokens_per_sample": 2.0,
+    }
+    policy = mock_grpo_components["policy"]
+    policy_generation = _mock_policy_generation()
+    events = []
+
+    with (
+        mock_async_grpo_infrastructure(
+            mock_batch,
+            mock_rollout_metrics,
+            event_log=events,
+            collector_creation_error=RuntimeError("collector actor creation failed"),
+        ),
+        _patched_logprob_phase(policy),
+        pytest.raises(RuntimeError, match="collector actor creation failed"),
+    ):
+        async_grpo_train(
+            policy,
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    assert "kill:StubReplayBuffer" in events
+    assert "kill:NoneType" not in events
+    mock_grpo_components["task_to_env"]["math"].shutdown.remote.assert_called_once()
+    mock_grpo_components["val_task_to_env"]["math"].shutdown.remote.assert_called_once()
+    policy_generation.shutdown.assert_called_once()
+    policy.shutdown.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("wake_results", "error_match"),
+    [
+        ([False], "wake weights before policy refit"),
+        ([True, False], "wake the KV cache after policy refit"),
+    ],
+)
+def test_refit_policy_generation_fails_on_partial_wake(
+    wake_results,
+    error_match,
+):
+    from nemo_rl.algorithms import grpo as grpo_mod
+
+    policy = MagicMock()
+    policy.stream_weights_via_ipc_zmq.return_value = []
+    policy_generation = MagicMock()
+    policy_generation.prepare_for_generation.side_effect = wake_results
+    policy_generation.update_weights_via_ipc_zmq.return_value = [True]
+
+    with (
+        patch.object(grpo_mod.ray, "get", side_effect=lambda value: value),
+        pytest.raises(RuntimeError, match=error_match),
+    ):
+        grpo_mod.refit_policy_generation(
+            policy,
+            policy_generation,
+            colocated_inference=True,
+            _refit_buffer_size_gb=1,
+        )
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])

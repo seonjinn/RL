@@ -17,6 +17,7 @@ import gc
 import logging
 import os
 import sys
+from collections.abc import MutableMapping
 from typing import Any, Optional, cast
 
 import ray
@@ -36,6 +37,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
+from nemo_rl.models.generation.vllm.sleep import validate_vllm_sleep_level
 from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
@@ -46,6 +48,14 @@ from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 
 logger = logging.getLogger(__name__)
+
+
+def _all_worker_updates_succeeded(worker_results: list[Any]) -> bool:
+    failed_ranks = [rank for rank, result in enumerate(worker_results) if not result]
+    if failed_ranks:
+        print(f"Error: Workers failed to update weights at ranks {failed_ranks}.")
+        return False
+    return True
 
 
 def _resolve_enable_prefix_caching(vllm_cfg: dict[str, Any]) -> bool:
@@ -63,6 +73,11 @@ class BaseVllmGenerationWorker:
         This makes it easier to identify which worker is producing specific log messages.
         """
         return f"{self.__class__.__name__}"
+
+    @classmethod
+    def finalize_worker_env_vars(cls, env_vars: MutableMapping[str, str]) -> None:
+        if env_vars.get("VLLM_USE_RAY_V2_EXECUTOR_BACKEND") == "1":
+            env_vars.pop("VLLM_PORT", None)
 
     @staticmethod
     def configure_worker(
@@ -119,20 +134,19 @@ class BaseVllmGenerationWorker:
                 + f"_{seed}"
             )
 
-            # Give each vLLM engine a deterministic starting port for TP/DP
-            # rendezvous.  vLLM's _get_open_port() reads VLLM_PORT and
-            # auto-increments on collision, so the per-engine spacing
-            # provides headroom.  See the port layout in virtual_cluster.py.
-            if len(local_bundle_indices) == 1:
-                engine_index_on_node = local_bundle_indices[0]
-            else:
-                engine_index_on_node = local_bundle_indices[0] // len(
-                    local_bundle_indices
+            # RayExecutorV2 allocates a TCPStore port before creating its message
+            # queue. A fixed VLLM_PORT lets the queue claim that same port first.
+            if os.environ.get("VLLM_USE_RAY_V2_EXECUTOR_BACKEND") != "1":
+                if len(local_bundle_indices) == 1:
+                    engine_index_on_node = local_bundle_indices[0]
+                else:
+                    engine_index_on_node = local_bundle_indices[0] // len(
+                        local_bundle_indices
+                    )
+                env_vars["VLLM_PORT"] = str(
+                    DEFAULT_VLLM_PORT_RANGE_LOW
+                    + engine_index_on_node * DEFAULT_VLLM_PORTS_PER_ENGINE
                 )
-            env_vars["VLLM_PORT"] = str(
-                DEFAULT_VLLM_PORT_RANGE_LOW
-                + engine_index_on_node * DEFAULT_VLLM_PORTS_PER_ENGINE
-            )
 
         # Check if this worker is part of a parallel group (TP or TP+PP).
         # A worker is part of a parallel group if it's a secondary member (local_bundle_indices is None)
@@ -182,6 +196,7 @@ class BaseVllmGenerationWorker:
                 _load_model() later to perform the heavy model loading. This
                 enables overlapping vLLM model loading with NeMo Gym init.
         """
+        self.finalize_worker_env_vars(os.environ)
         self._init_config(
             config, bundle_indices, fraction_of_gpus, seed, extra_env_vars
         )
@@ -907,14 +922,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "update_weights_via_ipc_zmq",
                 args=tuple(),
             )
-            worker_result = result_or_coro[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(result_or_coro)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
@@ -938,14 +946,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             result_or_coro = self.llm.collective_rpc(
                 "update_weights_from_collective", args=tuple()
             )
-            worker_result = result_or_coro[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(result_or_coro)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
@@ -968,7 +969,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         gc.collect()
         torch.cuda.empty_cache()
 
-    def sleep(self):
+    def sleep(self, sleep_level: int = 1):
         """Put the vLLM engine to sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -991,7 +992,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             self.llm.renderer, "clear_mm_cache"
         ):
             self.llm.renderer.clear_mm_cache()
-        self.llm.sleep(level=1)
+        self.llm.sleep(level=validate_vllm_sleep_level(sleep_level))
 
         gc.collect()
         torch.cuda.empty_cache()

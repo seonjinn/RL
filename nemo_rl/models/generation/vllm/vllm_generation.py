@@ -775,10 +775,19 @@ class VllmGeneration(GenerationInterface):
         )  # Default 15 minutes
 
         try:
-            sample_result_ref = await anext(worker_gen_proxy)
+            sample_result_ref = await asyncio.wait_for(
+                anext(worker_gen_proxy), timeout=timeout_seconds
+            )
         except StopAsyncIteration:
             raise RuntimeError(
                 f"Worker produced no output for the given sample {data}."
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"Timeout waiting for worker results after {timeout_seconds}s. "
+                f"For longer sequences, increase timeout by setting: "
+                f"export NRL_VLLM_ASYNC_TIMEOUT_SECONDS="
+                f"{int(timeout_seconds * 2)}"
             )
 
         # Materialize the result from Ray's object store. ``anext`` above
@@ -876,12 +885,16 @@ class VllmGeneration(GenerationInterface):
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Sleep workers and reset prefix cache."""
         try:
+            sleep_level = kwargs.get("sleep_level")
+            worker_kwargs = {}
             # Choose the appropriate method based on setting
             # non-colocated only needs reset prefix cache, no need to sleep.
             if self.cfg["colocated"]["enabled"]:
                 method_name = (
                     "sleep_async" if self.cfg["vllm_cfg"]["async_engine"] else "sleep"
                 )
+                if sleep_level is not None:
+                    worker_kwargs["sleep_level"] = sleep_level
             else:
                 method_name = (
                     "reset_prefix_cache_async"
@@ -892,6 +905,7 @@ class VllmGeneration(GenerationInterface):
             futures = self.worker_group.run_all_workers_single_data(
                 method_name,
                 run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+                **worker_kwargs,
             )
             # Wait for all futures to complete
             results = ray.get(futures)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -37,6 +38,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
 from nemo_rl.models.generation.vllm.vllm_worker import (
+    _all_worker_updates_succeeded,
     _resolve_enable_prefix_caching,
 )
 from nemo_rl.models.generation.vllm.vllm_worker_async import (
@@ -47,6 +49,207 @@ from nemo_rl.models.policy import LoRAConfig, PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 
 model_name = "Qwen/Qwen3-0.6B"
+
+
+def test_async_generation_timeout_includes_wait_for_first_worker_result(monkeypatch):
+    class BlockingWorkerProxy:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Event().wait()
+
+    class WorkerGroup:
+        dp_size = 1
+
+        def get_dp_leader_worker_idx(self, _shard_idx):
+            return 0
+
+        def run_single_worker_single_data(self, **_kwargs):
+            return BlockingWorkerProxy()
+
+        def shutdown(self, **_kwargs):
+            pass
+
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = WorkerGroup()
+    generation.current_generate_dp_shard_idx = 0
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1]], dtype=torch.long),
+            "input_lengths": torch.tensor([1], dtype=torch.int32),
+        }
+    )
+    monkeypatch.setenv("NRL_VLLM_ASYNC_TIMEOUT_SECONDS", "0.01")
+
+    async def get_first_result():
+        result_stream = generation._async_generate_base(
+            data,
+            "generate_async",
+            lambda _data: True,
+        )
+        return await asyncio.wait_for(anext(result_stream), timeout=0.1)
+
+    with pytest.raises(RuntimeError, match="worker results after 0.01s"):
+        asyncio.run(get_first_result())
+
+
+def test_all_worker_updates_succeeded_checks_every_rank(capsys):
+    assert _all_worker_updates_succeeded([True, True, True])
+    assert not _all_worker_updates_succeeded([True, False, True, False])
+    assert "ranks [1, 3]" in capsys.readouterr().out
+
+
+def test_async_collective_weight_update_quiesces_generation_at_token_boundary():
+    events = []
+
+    class FakeAsyncLLM:
+        async def pause_generation(self, *, mode, clear_cache):
+            events.append(("pause_generation", mode, clear_cache))
+
+        async def collective_rpc(self, method, args):
+            events.append(("collective_rpc", method, args))
+            return [True, True]
+
+        async def resume_generation(self):
+            events.append(("resume_generation",))
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = FakeAsyncLLM()
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+    result = asyncio.run(worker.update_weights_from_collective_async())
+
+    assert result
+    assert events == [
+        ("pause_generation", "keep", False),
+        ("collective_rpc", "update_weights_from_collective", ()),
+        ("resume_generation",),
+    ]
+
+
+def test_async_collective_weight_update_resumes_generation_when_pause_is_cancelled():
+    events = []
+
+    class FakeAsyncLLM:
+        async def pause_generation(self, *, mode, clear_cache):
+            events.append(("pause_generation", mode, clear_cache))
+            await asyncio.sleep(10)
+
+        async def collective_rpc(self, method, args):
+            raise AssertionError("collective_rpc should not run after cancellation")
+
+        async def resume_generation(self):
+            events.append(("resume_generation",))
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = FakeAsyncLLM()
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+    async def cancel_during_pause():
+        task = asyncio.create_task(worker.update_weights_from_collective_async())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_during_pause())
+
+    assert events == [
+        ("pause_generation", "keep", False),
+        ("resume_generation",),
+    ]
+
+
+def test_async_collective_weight_update_finishes_resume_after_repeated_cancellation():
+    pause_started = asyncio.Event()
+    resume_started = asyncio.Event()
+    release_resume = asyncio.Event()
+    resume_completed = False
+
+    class FakeAsyncLLM:
+        async def pause_generation(self, *, mode, clear_cache):
+            pause_started.set()
+            await asyncio.sleep(10)
+
+        async def collective_rpc(self, method, args):
+            raise AssertionError("collective_rpc should not run after cancellation")
+
+        async def resume_generation(self):
+            nonlocal resume_completed
+            resume_started.set()
+            await release_resume.wait()
+            resume_completed = True
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = FakeAsyncLLM()
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+    async def cancel_repeatedly_during_resume():
+        task = asyncio.create_task(worker.update_weights_from_collective_async())
+        await pause_started.wait()
+        task.cancel()
+        await resume_started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release_resume.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_repeatedly_during_resume())
+
+    assert resume_completed
+
+
+def test_async_collective_weight_updates_are_serialized():
+    events = []
+    first_collective_started = asyncio.Event()
+    release_first_collective = asyncio.Event()
+    collective_calls = 0
+
+    class FakeAsyncLLM:
+        async def pause_generation(self, *, mode, clear_cache):
+            events.append(("pause_generation", mode, clear_cache))
+
+        async def collective_rpc(self, method, args):
+            nonlocal collective_calls
+            collective_calls += 1
+            call_number = collective_calls
+            events.append(("collective_rpc", call_number))
+            if call_number == 1:
+                first_collective_started.set()
+                await release_first_collective.wait()
+            return [True]
+
+        async def resume_generation(self):
+            events.append(("resume_generation",))
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = FakeAsyncLLM()
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+    async def run_concurrent_updates():
+        first = asyncio.create_task(worker.update_weights_from_collective_async())
+        await first_collective_started.wait()
+        second = asyncio.create_task(worker.update_weights_from_collective_async())
+        await asyncio.sleep(0)
+        release_first_collective.set()
+        assert await asyncio.gather(first, second) == [True, True]
+
+    asyncio.run(run_concurrent_updates())
+
+    assert events == [
+        ("pause_generation", "keep", False),
+        ("collective_rpc", 1),
+        ("resume_generation",),
+        ("pause_generation", "keep", False),
+        ("collective_rpc", 2),
+        ("resume_generation",),
+    ]
+
+
 # Define basic vLLM test config
 basic_vllm_test_config: VllmConfig = {
     "backend": "vllm",

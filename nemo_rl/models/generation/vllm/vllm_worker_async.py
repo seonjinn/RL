@@ -44,7 +44,11 @@ from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
 )
-from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
+from nemo_rl.models.generation.vllm.sleep import validate_vllm_sleep_level
+from nemo_rl.models.generation.vllm.vllm_worker import (
+    BaseVllmGenerationWorker,
+    _all_worker_updates_succeeded,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -194,6 +198,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         self.server_thread = None
         self.base_url = None
         self.http_server = None
+        self._collective_weight_update_lock: asyncio.Lock | None = None
 
         super().__init__(
             config,
@@ -1373,14 +1378,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
+            return _all_worker_updates_succeeded(worker_results)
         except Exception as e:
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
@@ -1390,39 +1388,53 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
 
     async def update_weights_from_collective_async(self) -> bool:
         """Async version of update_weights_from_collective."""
-        try:
-            assert self.llm is not None, (
-                "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
-            )
+        weight_update_lock = getattr(self, "_collective_weight_update_lock", None)
+        if weight_update_lock is None:
+            weight_update_lock = asyncio.Lock()
+            self._collective_weight_update_lock = weight_update_lock
 
-            if not self.cfg["vllm_cfg"]["async_engine"]:
-                raise RuntimeError(
-                    "update_weights_from_collective_async can only be used with async_engine=True. Use update_weights_from_collective instead."
+        async with weight_update_lock:
+            try:
+                assert self.llm is not None, (
+                    "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
                 )
 
-            result_or_coro = await self.llm.collective_rpc(
-                "update_weights_from_collective", args=tuple()
-            )
+                if not self.cfg["vllm_cfg"]["async_engine"]:
+                    raise RuntimeError(
+                        "update_weights_from_collective_async can only be used with async_engine=True. Use update_weights_from_collective instead."
+                    )
 
-            if asyncio.iscoroutine(result_or_coro):
-                worker_results = await result_or_coro
-            else:
-                worker_results = result_or_coro
+                pause_started = True
+                try:
+                    await self.llm.pause_generation(mode="keep", clear_cache=False)
+                    result_or_coro = await self.llm.collective_rpc(
+                        "update_weights_from_collective", args=tuple()
+                    )
 
-            worker_result = worker_results[0]
+                    if asyncio.iscoroutine(result_or_coro):
+                        worker_results = await result_or_coro
+                    else:
+                        worker_results = result_or_coro
+                finally:
+                    if pause_started:
+                        resume_task = asyncio.create_task(self.llm.resume_generation())
+                        cancelled_during_resume = False
+                        while not resume_task.done():
+                            try:
+                                await asyncio.shield(resume_task)
+                            except asyncio.CancelledError:
+                                cancelled_during_resume = True
+                        if cancelled_during_resume:
+                            resume_task.result()
+                            raise asyncio.CancelledError
 
-            if not worker_result:
-                print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
-                )
+                return _all_worker_updates_succeeded(worker_results)
+            except Exception as e:
+                print(f"Exception during collective_rpc for weight update: {e}")
+                import traceback
+
+                traceback.print_exc()
                 return False
-            return True
-        except Exception as e:
-            print(f"Exception during collective_rpc for weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
 
     async def reset_prefix_cache_async(self):
         """Async version of reset_prefix_cache."""
@@ -1439,7 +1451,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         gc.collect()
         torch.cuda.empty_cache()
 
-    async def sleep_async(self):
+    async def sleep_async(self, sleep_level: int = 1):
         """Async version of sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -1458,7 +1470,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         # the receiver and sends data=None, causing an assertion error.
         if hasattr(self.llm, "reset_mm_cache"):
             await self.llm.reset_mm_cache()
-        await self.llm.sleep(level=1)
+        await self.llm.sleep(level=validate_vllm_sleep_level(sleep_level))
 
         gc.collect()
         torch.cuda.empty_cache()
