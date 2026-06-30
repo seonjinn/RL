@@ -1,7 +1,7 @@
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 	url = https://github.com/seonjinn/Megatron-Bridge.git
-	branch = sna/pin-mlm-main-only-20260630
+	branch = sna/pin-mlm-main-pr3386-20260630
 	shallow = true
 [submodule "3rdparty/Automodel-workspace/Automodel"]
 	path = 3rdparty/Automodel-workspace/Automodel
