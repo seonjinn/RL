@@ -219,22 +219,54 @@ def test_unsupported_optimizer_uses_existing_fallback(monkeypatch):
     assert events == []
 
 
-def test_missing_mcore_offloader_uses_existing_fallback(monkeypatch):
+def test_missing_mcore_offloader_uses_native_mcore_offload(monkeypatch):
     events: list[str] = []
     module = _patch_offload_runtime(monkeypatch, events)
-    optimizer = _FakeChainedOptimizer([_FakeDistributedOptimizer("dense", events)])
+
+    class NativeOptimizer:
+        def offload_to_cpu(self) -> None:
+            events.append("native:cpu")
+
+        def restore_from_cpu(self) -> None:
+            events.append("native:cuda")
+
+    optimizer = NativeOptimizer()
 
     def raise_missing_module() -> None:
         raise ModuleNotFoundError(
             "No module named "
-            "'megatron.core.optimizer.cpu_offloading.optimizer_state_offloader'"
+            "'megatron.core.optimizer.cpu_offloading.optimizer_state_offloader'",
+            name="megatron.core.optimizer.cpu_offloading.optimizer_state_offloader",
         )
 
     monkeypatch.setattr(module, "_load_mcore_offloader_types", raise_missing_module)
 
     assert module.is_distributed_optimizer_state_offloaded(optimizer) is False
-    assert module.move_distributed_optimizer_state(optimizer, "cpu") is False
-    assert events == []
+    assert module.move_distributed_optimizer_state(optimizer, "cuda") is True
+    assert module.move_distributed_optimizer_state(optimizer, "cpu") is True
+    assert module.is_distributed_optimizer_state_offloaded(optimizer) is True
+    assert module.move_distributed_optimizer_state(optimizer, "cpu") is True
+    assert module.move_distributed_optimizer_state(optimizer, "cuda") is True
+    assert module.is_distributed_optimizer_state_offloaded(optimizer) is False
+    assert events == ["native:cuda", "native:cpu", "native:cuda"]
+
+
+def test_unrelated_missing_module_is_not_masked(monkeypatch):
+    events: list[str] = []
+    module = _patch_offload_runtime(monkeypatch, events)
+
+    def raise_missing_dependency() -> None:
+        raise ModuleNotFoundError(
+            "No module named 'transformer_engine'",
+            name="transformer_engine",
+        )
+
+    monkeypatch.setattr(module, "_load_mcore_offloader_types", raise_missing_dependency)
+
+    with pytest.raises(ModuleNotFoundError, match="transformer_engine"):
+        module.move_distributed_optimizer_state(object(), "cpu")
+    with pytest.raises(ModuleNotFoundError, match="transformer_engine"):
+        module.is_distributed_optimizer_state_offloaded(object())
 
 
 def test_distributed_optimizer_without_supported_fused_adam_uses_fallback(monkeypatch):
