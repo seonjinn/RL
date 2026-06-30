@@ -219,6 +219,24 @@ def test_unsupported_optimizer_uses_existing_fallback(monkeypatch):
     assert events == []
 
 
+def test_missing_mcore_offloader_uses_existing_fallback(monkeypatch):
+    events: list[str] = []
+    module = _patch_offload_runtime(monkeypatch, events)
+    optimizer = _FakeChainedOptimizer([_FakeDistributedOptimizer("dense", events)])
+
+    def raise_missing_module() -> None:
+        raise ModuleNotFoundError(
+            "No module named "
+            "'megatron.core.optimizer.cpu_offloading.optimizer_state_offloader'"
+        )
+
+    monkeypatch.setattr(module, "_load_mcore_offloader_types", raise_missing_module)
+
+    assert module.is_distributed_optimizer_state_offloaded(optimizer) is False
+    assert module.move_distributed_optimizer_state(optimizer, "cpu") is False
+    assert events == []
+
+
 def test_distributed_optimizer_without_supported_fused_adam_uses_fallback(monkeypatch):
     events: list[str] = []
     module = _patch_offload_runtime(monkeypatch, events)
