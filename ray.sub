@@ -370,6 +370,21 @@ log-sync-sidecar() {
 }
 log-sync-sidecar &
 
+# Write GPU -> cpulist mapping for NUMA binding inside this node container.
+export NRL_GPU_CPU_AFFINITY_FILE="/tmp/nrl_gpu_cpu_affinity"
+nvidia-smi topo -m 2>/dev/null | awk '/^GPU[0-9]/ { gpu = \$1; sub(/GPU/, "", gpu); print gpu ":" \$(NF-2) }' > "\$NRL_GPU_CPU_AFFINITY_FILE" || true
+if [[ -s "\$NRL_GPU_CPU_AFFINITY_FILE" ]]; then
+  echo "NUMA affinity map written to \$NRL_GPU_CPU_AFFINITY_FILE:"
+  cat "\$NRL_GPU_CPU_AFFINITY_FILE"
+else
+  echo "WARNING: Could not generate NUMA affinity map (nvidia-smi topo unavailable)"
+fi
+
+if [[ -n "\${NRL_PRE_RAY_PIP_INSTALL:-}" ]]; then
+  echo "Installing pre-Ray package override on head: \${NRL_PRE_RAY_PIP_INSTALL}"
+  uv pip install --python /opt/nemo_rl_venv/bin/python \${NRL_PRE_RAY_UV_PIP_ARGS:---no-cache} \${NRL_PRE_RAY_PIP_INSTALL}
+fi
+
 # Patch nsight.py before starting Ray head
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
@@ -482,6 +497,21 @@ log-sync-sidecar() {
 }
 log-sync-sidecar &
 
+# Write GPU -> cpulist mapping for NUMA binding inside this node container.
+export NRL_GPU_CPU_AFFINITY_FILE="/tmp/nrl_gpu_cpu_affinity"
+nvidia-smi topo -m 2>/dev/null | awk '/^GPU[0-9]/ { gpu = \$1; sub(/GPU/, "", gpu); print gpu ":" \$(NF-2) }' > "\$NRL_GPU_CPU_AFFINITY_FILE" || true
+if [[ -s "\$NRL_GPU_CPU_AFFINITY_FILE" ]]; then
+  echo "NUMA affinity map written to \$NRL_GPU_CPU_AFFINITY_FILE:"
+  cat "\$NRL_GPU_CPU_AFFINITY_FILE"
+else
+  echo "WARNING: Could not generate NUMA affinity map (nvidia-smi topo unavailable)"
+fi
+
+if [[ -n "\${NRL_PRE_RAY_PIP_INSTALL:-}" ]]; then
+  echo "Installing pre-Ray package override on worker: \${NRL_PRE_RAY_PIP_INSTALL}"
+  uv pip install --python /opt/nemo_rl_venv/bin/python \${NRL_PRE_RAY_UV_PIP_ARGS:---no-cache} \${NRL_PRE_RAY_PIP_INSTALL}
+fi
+
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
@@ -576,7 +606,7 @@ fi
 # Before we launch a job on this cluster we need to make sure that the bringup is complete
 # We do so by querying the number of worker_units in the ray cluster and asserting = NUM_ACTORS
 extract_worker_units() {
-  status_output=$(srun --overlap --container-name=ray-head --nodes=1 --ntasks=1 -w "$head_node" ray status)
+  status_output=$(timeout 20s srun --overlap --container-name=ray-head --nodes=1 --ntasks=1 -w "$head_node" ray status 2>/dev/null || true)
   if echo "$status_output" | grep -q "worker_units"; then
     worker_units=$(echo "$status_output" | grep "worker_units" | awk -F'[/. ]' '{print $4}')
     echo $worker_units
