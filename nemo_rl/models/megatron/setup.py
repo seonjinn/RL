@@ -650,6 +650,21 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         ]
     if "moe_hybridep_num_sms" in config["megatron_cfg"]:
         model_cfg.moe_hybridep_num_sms = config["megatron_cfg"]["moe_hybridep_num_sms"]
+    if config["megatron_cfg"].get("moe_hybridep_pad_variable_tokens"):
+        if (
+            config["megatron_cfg"]["moe_token_dispatcher_type"] != "flex"
+            or config["megatron_cfg"].get("moe_flex_dispatcher_backend") != "hybridep"
+        ):
+            raise ValueError(
+                "moe_hybridep_pad_variable_tokens requires the flex dispatcher "
+                "with the hybridep backend"
+            )
+        if not hasattr(model_cfg, "moe_hybridep_pad_variable_tokens"):
+            raise RuntimeError(
+                "The pinned Megatron-LM does not support PR5008 variable-token "
+                "HybridEP padding"
+            )
+        model_cfg.moe_hybridep_pad_variable_tokens = True
 
     # HybridEP environment variables
     # These are required by DeepEP's hybrid-ep branch for NVLink domain configuration.

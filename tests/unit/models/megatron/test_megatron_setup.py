@@ -747,6 +747,80 @@ class TestApplyMoeConfig:
         hybridep_warns = [w for w in caught if "HybridEP" in str(w.message)]
         assert hybridep_warns == []
 
+    def test_hybridep_variable_token_padding_is_forwarded(self, monkeypatch):
+        """Forward the optional MCore HybridEP variable-token padding flag."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        monkeypatch.setenv("NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN", "16")
+        monkeypatch.setenv("USE_MNNVL", "1")
+
+        model_cfg = SimpleNamespace(moe_hybridep_pad_variable_tokens=False)
+        config = self._base_moe_cfg(
+            moe_flex_dispatcher_backend="hybridep",
+            moe_hybridep_pad_variable_tokens=True,
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_hybridep_pad_variable_tokens is True
+
+    def test_hybridep_variable_token_padding_preserves_default(self, monkeypatch):
+        """Keep the MCore default when the optional NeMo-RL flag is false."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        monkeypatch.setenv("NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN", "16")
+        monkeypatch.setenv("USE_MNNVL", "1")
+
+        original_value = object()
+        model_cfg = SimpleNamespace(moe_hybridep_pad_variable_tokens=original_value)
+        config = self._base_moe_cfg(
+            moe_flex_dispatcher_backend="hybridep",
+            moe_hybridep_pad_variable_tokens=False,
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_hybridep_pad_variable_tokens is original_value
+
+    @pytest.mark.parametrize(
+        "dispatcher,backend",
+        [("alltoall", "hybridep"), ("flex", "deepep")],
+    )
+    def test_hybridep_variable_token_padding_requires_hybridep_dispatcher(
+        self, monkeypatch, dispatcher, backend
+    ):
+        """Reject an enabled PR5008 flag when HybridEP is not active."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        monkeypatch.setenv("NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN", "16")
+        monkeypatch.setenv("USE_MNNVL", "1")
+
+        model_cfg = SimpleNamespace(moe_hybridep_pad_variable_tokens=False)
+        config = self._base_moe_cfg(
+            moe_token_dispatcher_type=dispatcher,
+            moe_flex_dispatcher_backend=backend,
+            moe_hybridep_pad_variable_tokens=True,
+        )
+
+        with pytest.raises(ValueError, match="requires the flex dispatcher"):
+            _apply_moe_config(model_cfg, config)
+
+    def test_hybridep_variable_token_padding_requires_mcore_support(self, monkeypatch):
+        """Fail clearly when the pinned MCore config lacks PR5008 support."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        monkeypatch.setenv("NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN", "16")
+        monkeypatch.setenv("USE_MNNVL", "1")
+
+        model_cfg = SimpleNamespace()
+        config = self._base_moe_cfg(
+            moe_flex_dispatcher_backend="hybridep",
+            moe_hybridep_pad_variable_tokens=True,
+        )
+
+        with pytest.raises(RuntimeError, match="does not support PR5008"):
+            _apply_moe_config(model_cfg, config)
+
     def test_hybridep_use_mnnvl_explicit_false(self, monkeypatch):
         """hybridep_use_mnnvl=False → USE_MNNVL='0'."""
         from nemo_rl.models.megatron.setup import _apply_moe_config
