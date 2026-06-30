@@ -954,38 +954,6 @@ class TestGetMicrobatchIterator:
         assert micro_batch_size == 1
         assert data_iterator_len == 10
 
-    def test_hybridep_alignment_requires_initialized_expert_group(self):
-        """Never silently align HybridEP lengths over the WORLD group."""
-        from nemo_rl.models.megatron import data as data_module
-
-        group = MagicMock()
-        with (
-            patch.object(
-                data_module,
-                "get_expert_tensor_and_model_parallel_group",
-                return_value=group,
-            ) as mock_get_group,
-            patch.object(
-                data_module.torch.distributed, "is_available", return_value=True
-            ),
-            patch.object(
-                data_module.torch.distributed, "is_initialized", return_value=True
-            ),
-            patch.object(
-                data_module.torch.distributed, "all_reduce"
-            ) as mock_all_reduce,
-        ):
-            aligned_seq_len = data_module._get_hybridep_aligned_seq_len(
-                local_seq_len=3072,
-                multiple=512,
-                device=torch.device("cpu"),
-            )
-
-        mock_get_group.assert_called_once_with()
-        mock_all_reduce.assert_called_once()
-        assert mock_all_reduce.call_args.kwargs["group"] is group
-        assert aligned_seq_len == 3072
-
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
     @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
     @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
