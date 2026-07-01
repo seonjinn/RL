@@ -45,6 +45,11 @@ from nemo_rl.models.huggingface.common import ModelFlag
 from nemo_rl.models.policy.utils import is_vllm_v1_engine_enabled
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
+from nemo_rl.utils.vllm_runtime_patches import (
+    atomic_replace_text,
+    ensure_draft_model_cudagraph_support,
+    requires_draft_model_cudagraph_support,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -301,8 +306,7 @@ class BaseVllmGenerationWorker:
                     content = f.read()
 
                 def write_back(new_content: str):
-                    with open(file_path, "w") as f:
-                        f.write(new_content)
+                    atomic_replace_text(file_path, new_content)
 
                 yield content, write_back
             finally:
@@ -514,11 +518,34 @@ class BaseVllmGenerationWorker:
 
             logger.info("Successfully patched hermes tool parser for thread-safety.")
 
+        def _patch_vllm_draft_model_cudagraph_init() -> bool:
+            """Require PARD's generic draft proposer to use CUDA Graph setup."""
+            file_to_patch = _get_vllm_file("v1/worker/gpu_model_runner.py")
+            with _locked_file_patch(file_to_patch) as (content, write_back):
+                patched_content, changed = ensure_draft_model_cudagraph_support(content)
+                if changed:
+                    write_back(patched_content)
+            return changed
+
         _patch_vllm_init_workers_ray()
         logger.info("Successfully patched vllm _init_workers_ray.")
 
         _patch_vllm_llama_eagle3_own_lm_head()
         _patch_vllm_hermes_tool_parser_thread_safety()
+        speculative_config = self.cfg.get("vllm_kwargs", {}).get(
+            "speculative_config", {}
+        )
+        draft_model_cudagraph_required = requires_draft_model_cudagraph_support(
+            speculative_config.get("method"),
+            self.cfg["vllm_cfg"].get("enforce_eager", False),
+            has_draft_model=bool(speculative_config.get("model")),
+        )
+        if draft_model_cudagraph_required:
+            changed = _patch_vllm_draft_model_cudagraph_init()
+            logger.info(
+                "Verified generic draft-model CUDA Graph initialization (%s).",
+                "patched" if changed else "already supported",
+            )
         log_gpu_memory_diagnostics(
             label="load_model_start", worker_type="VllmGenerationWorker"
         )
