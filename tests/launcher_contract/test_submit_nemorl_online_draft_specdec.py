@@ -75,4 +75,9 @@ def test_import_smoke_uses_container_venv_without_gres() -> None:
     assert result.returncode == 0, result.stderr
     assert "--segment=1" in result.stdout
     assert "--gres" not in result.stdout
-    assert "/opt/nemo_rl_venv/bin/python" in result.stdout
+    assert (
+        "/opt/nemo_rl_venv/bin/python"
+        in result.stdout
+    )
+    assert "scripts/nemorl_import_smoke.py" in result.stdout
+    assert "python\\ -c" not in result.stdout

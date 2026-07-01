@@ -51,7 +51,7 @@ case "${USE_GRES}" in
 esac
 
 read -r -a extra_args <<< "${SBATCH_EXTRA_ARGS}"
-smoke_command="cd ${REMOTE_REPO} && /opt/nemo_rl_venv/bin/python -c 'import nemo_rl, torch, vllm; print(\"nemo_rl_import_ok\"); print(\"torch=\" + torch.__version__); print(\"vllm=\" + vllm.__version__)'"
+smoke_command="cd ${REMOTE_REPO} && /opt/nemo_rl_venv/bin/python ${REMOTE_REPO}/scripts/nemorl_import_smoke.py"
 run_command="srun --nodes=1 --ntasks=1 --no-container-mount-home --container-image=${CONTAINER} --container-mounts=/lustre:/lustre --container-workdir=${REMOTE_REPO} bash -lc \"${smoke_command}\""
 
 if [[ "${DRY_RUN}" == "true" || "${DRY_RUN}" == "True" ]]; then
