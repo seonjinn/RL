@@ -178,6 +178,30 @@ if [[ -z "${SPECDEC_PARALLEL_DRAFTING+x}" ]]; then
     SPECDEC_PARALLEL_DRAFTING="false"
   fi
 fi
+VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-}"
+VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-}"
+if [[ -n "${VLLM_MAX_NUM_BATCHED_TOKENS}" || -n "${VLLM_MAX_NUM_SEQS}" ]]; then
+  if ! [[ "${VLLM_MAX_NUM_BATCHED_TOKENS}" =~ ^[0-9]+$ ]] ||
+     ! [[ "${VLLM_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] ||
+     (( VLLM_MAX_NUM_BATCHED_TOKENS <= 0 || VLLM_MAX_NUM_SEQS <= 0 )); then
+    echo "ERROR: VLLM_MAX_NUM_BATCHED_TOKENS and VLLM_MAX_NUM_SEQS must both be positive integers." >&2
+    exit 2
+  fi
+fi
+if [[ ("${DRAFT_FORMAT}" == "pard" || "${DRAFT_FORMAT}" == "pard2") &&
+      ("${SPECDEC_PARALLEL_DRAFTING}" == "true" || "${SPECDEC_PARALLEL_DRAFTING}" == "True") ]]; then
+  if [[ -z "${VLLM_MAX_NUM_BATCHED_TOKENS}" || -z "${VLLM_MAX_NUM_SEQS}" ]]; then
+    echo "ERROR: parallel PARD requires explicit VLLM_MAX_NUM_BATCHED_TOKENS and VLLM_MAX_NUM_SEQS." >&2
+    exit 2
+  fi
+  reserved_draft_tokens=$((NUM_SPECULATIVE_TOKENS * VLLM_MAX_NUM_SEQS))
+  max_num_scheduled_tokens=$((VLLM_MAX_NUM_BATCHED_TOKENS - reserved_draft_tokens))
+  if (( max_num_scheduled_tokens <= 0 )); then
+    echo "ERROR: parallel PARD scheduler budget must be positive." >&2
+    echo "Computed ${VLLM_MAX_NUM_BATCHED_TOKENS} - (${NUM_SPECULATIVE_TOKENS} * ${VLLM_MAX_NUM_SEQS}) = ${max_num_scheduled_tokens}." >&2
+    exit 2
+  fi
+fi
 PROMPT_LOOKUP_MAX="${PROMPT_LOOKUP_MAX:-}"
 PROMPT_LOOKUP_MIN="${PROMPT_LOOKUP_MIN:-}"
 SUFFIX_DECODING_MAX_TREE_DEPTH="${SUFFIX_DECODING_MAX_TREE_DEPTH:-}"
@@ -287,6 +311,11 @@ RUNTIME_SPECDEC_GATE_ENABLED="false"
 RUNTIME_SPECDEC_GATE_BATCH_SIZE="0"
 RUNTIME_SPECDEC_GATE_TOKEN_THRESHOLD="0"
 SPECDEC_OVERRIDES=""
+VLLM_SCHEDULER_OVERRIDES=""
+if [[ -n "${VLLM_MAX_NUM_BATCHED_TOKENS}" ]]; then
+  VLLM_SCHEDULER_OVERRIDES="++policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS} \
+++policy.generation.vllm_kwargs.max_num_seqs=${VLLM_MAX_NUM_SEQS}"
+fi
 
 case "${DRAFT_FORMAT}" in
   auto)
@@ -667,6 +696,7 @@ grpo.num_generations_per_prompt=${NUM_GENERATIONS} \
 policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE} \
 grpo.max_num_steps=${MAX_STEPS} \
 ${SPECDEC_OVERRIDES} \
+${VLLM_SCHEDULER_OVERRIDES} \
 ${ONLINE_EXTRA_OVERRIDES} \
 logger.wandb_enabled=${WANDB_ENABLED} \
 logger.wandb.project='${WANDB_PROJECT}' \

@@ -194,6 +194,83 @@ def test_launcher_rejects_unsupported_pard_draft_tp_mismatch() -> None:
     assert "draft TP=1" in result.stderr
 
 
+def test_launcher_rejects_zero_parallel_draft_scheduler_budget() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEMO_RL_DIR": str(REPO_ROOT),
+            "MODEL_LABEL": "qwen30-pard-k16-zero-budget",
+            "CONFIG_FILE": "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+            "TARGET_MODEL_ID": "/tmp/qwen30",
+            "DRAFT_MODEL": "/tmp/pard",
+            "CONTAINER": str(REPO_ROOT / "pyproject.toml"),
+            "DRY_RUN": "true",
+            "DRAFT_FORMAT": "pard",
+            "SPECDEC_METHOD": "draft_model",
+            "POLICY_DRAFT_ENABLED": "false",
+            "TARGET_TP": "1",
+            "DRAFT_TP": "1",
+            "NUM_SPECULATIVE_TOKENS": "16",
+            "VLLM_MAX_NUM_BATCHED_TOKENS": "2048",
+            "VLLM_MAX_NUM_SEQS": "128",
+            "WANDB_ENABLED": "false",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "scheduler budget" in result.stderr
+    assert "2048 - (16 * 128) = 0" in result.stderr
+
+
+def test_launcher_propagates_matched_vllm_scheduler_limits() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEMO_RL_DIR": str(REPO_ROOT),
+            "MODEL_LABEL": "qwen30-pard-k16-valid-budget",
+            "CONFIG_FILE": "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+            "TARGET_MODEL_ID": "/tmp/qwen30",
+            "DRAFT_MODEL": "/tmp/pard",
+            "CONTAINER": str(REPO_ROOT / "pyproject.toml"),
+            "DRY_RUN": "true",
+            "DRAFT_FORMAT": "pard",
+            "SPECDEC_METHOD": "draft_model",
+            "POLICY_DRAFT_ENABLED": "false",
+            "TARGET_TP": "1",
+            "DRAFT_TP": "1",
+            "NUM_SPECULATIVE_TOKENS": "16",
+            "VLLM_MAX_NUM_BATCHED_TOKENS": "32768",
+            "VLLM_MAX_NUM_SEQS": "128",
+            "WANDB_ENABLED": "false",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        "++policy.generation.vllm_kwargs.max_num_batched_tokens=32768"
+        in result.stdout
+    )
+    assert "++policy.generation.vllm_kwargs.max_num_seqs=128" in result.stdout
+
+
 def test_import_smoke_uses_container_venv_without_gres() -> None:
     env = os.environ.copy()
     env.update(
