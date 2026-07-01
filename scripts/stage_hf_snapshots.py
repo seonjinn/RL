@@ -16,7 +16,7 @@ def main() -> None:
         raise ValueError("MODEL_IDS must contain at least one Hugging Face repository")
 
     for model_id in model_ids:
-        snapshot = Path(snapshot_download(repo_id=model_id, cache_dir=hf_home))
+        snapshot = Path(snapshot_download(repo_id=model_id, cache_dir=hf_home / "hub"))
         config = snapshot / "config.json"
         weights = sorted(snapshot.glob("*.safetensors")) + sorted(snapshot.glob("*.bin"))
         if not config.is_file() or not weights:
