@@ -311,9 +311,10 @@ RUNTIME_SPECDEC_GATE_ENABLED="false"
 RUNTIME_SPECDEC_GATE_BATCH_SIZE="0"
 RUNTIME_SPECDEC_GATE_TOKEN_THRESHOLD="0"
 SPECDEC_OVERRIDES=""
-VLLM_SCHEDULER_OVERRIDES=""
+VLLM_ENGINE_OVERRIDES="++policy.generation.vllm_kwargs.attention_backend=${VLLM_ATTENTION_BACKEND}"
 if [[ -n "${VLLM_MAX_NUM_BATCHED_TOKENS}" ]]; then
-  VLLM_SCHEDULER_OVERRIDES="++policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS} \
+  VLLM_ENGINE_OVERRIDES="${VLLM_ENGINE_OVERRIDES} \
+++policy.generation.vllm_kwargs.max_num_batched_tokens=${VLLM_MAX_NUM_BATCHED_TOKENS} \
 ++policy.generation.vllm_kwargs.max_num_seqs=${VLLM_MAX_NUM_SEQS}"
 fi
 
@@ -696,7 +697,7 @@ grpo.num_generations_per_prompt=${NUM_GENERATIONS} \
 policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE} \
 grpo.max_num_steps=${MAX_STEPS} \
 ${SPECDEC_OVERRIDES} \
-${VLLM_SCHEDULER_OVERRIDES} \
+${VLLM_ENGINE_OVERRIDES} \
 ${ONLINE_EXTRA_OVERRIDES} \
 logger.wandb_enabled=${WANDB_ENABLED} \
 logger.wandb.project='${WANDB_PROJECT}' \

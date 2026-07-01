@@ -300,6 +300,10 @@ def test_launcher_propagates_matched_vllm_scheduler_limits() -> None:
         in result.stdout
     )
     assert "++policy.generation.vllm_kwargs.max_num_seqs=128" in result.stdout
+    assert (
+        "++policy.generation.vllm_kwargs.attention_backend=TRITON_ATTN"
+        in result.stdout
+    )
 
 
 def test_import_smoke_uses_container_venv_without_gres() -> None:
