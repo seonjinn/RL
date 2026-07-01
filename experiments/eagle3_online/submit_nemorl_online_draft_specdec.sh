@@ -25,12 +25,26 @@ GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 PARTITION="${PARTITION:-batch}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_nemorl}"
 if [[ -z "${GRES_FLAG+x}" ]]; then
-  case "${PARTITION}" in
-    gb200*|gb300*)
+  case "${USE_GRES:-auto}" in
+    false|False|FALSE|0|no|No|NO)
       GRES_FLAG=""
       ;;
-    *)
+    true|True|TRUE|1|yes|Yes|YES)
       GRES_FLAG="--gres=gpu:${GPUS_PER_NODE}"
+      ;;
+    auto)
+      case "${PARTITION}" in
+        gb200*|gb300*)
+          GRES_FLAG=""
+          ;;
+        *)
+          GRES_FLAG="--gres=gpu:${GPUS_PER_NODE}"
+          ;;
+      esac
+      ;;
+    *)
+      echo "ERROR: USE_GRES must be true, false, or auto" >&2
+      exit 2
       ;;
   esac
 fi
