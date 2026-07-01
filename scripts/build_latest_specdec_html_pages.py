@@ -68,24 +68,55 @@ NEMORL_LYRIS_HISTORICAL_SOURCES = [
     (
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
         "Lyris Qwen30/Qwen32 PerfCfg OSL4096 latest-main+PR2879 2026-06-22",
-        "performance recipe default plus latest-main+PR2879 topology-aware fix, temp=1.0/top_p=1.0, step>=2 summary",
+        "performance recipe default plus latest-main+PR2879 topology-aware fix, enforce_eager=true (CUDA graph disabled), temp=1.0/top_p=1.0, step>=2 summary",
         1,
     ),
     (
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
         "Lyris Qwen30/Qwen32 PerfCfg OSL4096 2026-06-18",
-        "performance recipe default, temp=1.0/top_p=1.0, step>=2 live summary",
+        "performance recipe default, enforce_eager=true (CUDA graph disabled), temp=1.0/top_p=1.0, step>=2 live summary",
         2,
     ),
 ]
 NEMORL_OCI_HISTORICAL = DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv"
 NEMORL_LIVE_K_SWEEP_SUMMARY = DOCS / "lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv"
-NEMORL_LIVE_K_SWEEP_SOURCE_GROUP = "Lyris Qwen30/Qwen32 PerfCfg OSL4096 enforce_eager=true K sweep 2026-06-22"
+NEMORL_LIVE_K_SWEEP_SOURCE_GROUP = "Lyris Qwen30/Qwen32 PerfCfg OSL4096 CUDA-graph-disabled K sweep 2026-06-22"
 NEMORL_LIVE_K_SWEEP_CHECKED_AT = "2026-06-22 21:31 PDT"
 NEMORL_COMBINED_OUT = DOCS / "lyris_nemorl_perfcfg_specdec_combined_latest.csv"
 NEMORL_HTML = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_latest.html"
 NEMORL_HTML_DATED = DOCS / "lyris_nemorl_perfcfg_specdec_live_status_20260622.html"
 WANDB_ENTITY = "nvidia"
+
+NEMORL_WANDB_URL_BY_JOB = {
+    "2182145": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/5cpkkvty",
+    "2182146": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/5yg0y4re",
+    "2182147": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/lseuvql7",
+    "2182148": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/egbzz2wt",
+    "2182149": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/yx9yziip",
+    "2182151": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/p2i13z4l",
+    "2188681": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/iek8hu2z",
+    "2188682": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/4ig7pz6k",
+    "2191503": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/z7osk7c9",
+    "2191504": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/shd6n6iz",
+    "2191506": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/wnxmitja",
+    "2191507": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/wd0prcvj",
+    "2191509": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/8qese1bd",
+    "2191510": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/fraoa396",
+    "2191511": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/sb7xqyyz",
+    "2191513": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/h0a8bwb1",
+    "2191514": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/5gbqmceg",
+    "2191801": "https://wandb.ai/nvidia/nemo-rl-perfcfg-specdec-lyris/runs/pnq3aguc",
+}
+
+NEMORL_CONFIRMED_WANDB_DISABLED_JOBS = {
+    "2152193",
+    "2152194",
+    "2152195",
+    "2152196",
+    "2175019",
+    "3333528",
+    "3333533",
+}
 
 NEMORL_LIVE_K_SWEEP_META = [
     {
@@ -670,7 +701,7 @@ def nemorl_chart_rows(rows: pd.DataFrame) -> pd.DataFrame:
     if rows.empty:
         return rows
     current = rows[pd.to_numeric(rows.get("max_steps"), errors="coerce") == 20].copy()
-    current = current[pd.to_numeric(current.get("completed_steps"), errors="coerce").fillna(0) > 0]
+    current = current[current.apply(nemorl_has_complete_step20_window, axis=1)]
     metric_cols = [
         "gen_tps_speedup",
         "e2e_tps_speedup",
@@ -697,6 +728,85 @@ def nemorl_chart_rows(rows: pd.DataFrame) -> pd.DataFrame:
     ).drop(columns=["has_gen_speedup"], errors="ignore")
 
 
+def nemorl_metric_window(row: pd.Series) -> str:
+    completed = clean_float(row.get("completed_steps"))
+    last = clean_float(row.get("last_step"))
+    max_steps = clean_float(row.get("max_steps"))
+    span = first_text(row, "completed_step_span")
+    step_filter = first_text(row, "step_filter").lower()
+
+    if not span and not math.isnan(last) and not math.isnan(completed):
+        if "step>=2" in step_filter or (
+            not math.isnan(max_steps)
+            and int(completed) == int(max_steps) - 1
+            and int(last) == int(max_steps)
+        ):
+            span = f"2-{int(last)}"
+        elif int(completed) == int(last):
+            span = f"1-{int(last)}"
+
+    if span and not math.isnan(completed):
+        return f"steps {span} ({int(completed)} metrics)"
+    if not math.isnan(completed) and not math.isnan(max_steps):
+        last_text = f", last step {int(last)}" if not math.isnan(last) else ""
+        return f"partial: {int(completed)}/{int(max_steps)} metrics{last_text}"
+    return "not parsed"
+
+
+def nemorl_has_complete_step20_window(row: pd.Series) -> bool:
+    max_steps = clean_float(row.get("max_steps"))
+    completed = clean_float(row.get("completed_steps"))
+    last = clean_float(row.get("last_step"))
+    if math.isnan(max_steps) or int(max_steps) != 20 or math.isnan(completed):
+        return False
+    if completed >= max_steps:
+        return True
+    return not math.isnan(last) and last >= max_steps and completed >= max_steps - 1
+
+
+def nemorl_cuda_graph_label(row: pd.Series) -> str:
+    explicit = text_value(row.get("enforce_eager", "")).lower()
+    evidence = " ".join(
+        [
+            explicit,
+            text_value(row.get("source_group", "")).lower(),
+            text_value(row.get("config_basis", "")).lower(),
+            text_value(row.get("run_id", "")).lower(),
+        ]
+    )
+    if explicit in {"true", "1", "yes"} or any(
+        token in evidence for token in ["enforce_eager=true", "cuda-graph-disabled", "cudagraphoff", "eagertrue"]
+    ):
+        return "CG-off"
+    if explicit in {"false", "0", "no"} or "enforce_eager=false" in evidence or "eagerfalse" in evidence:
+        return "CG-on"
+    return "CG-unknown"
+
+
+def nemorl_setup_label(row: pd.Series) -> str:
+    cluster = text_value(row.get("cluster", "")).lower()
+    cluster_label = {"lyris": "LYR", "oci-hsg": "OCI"}.get(cluster, cluster.upper() or "cluster?")
+    source = text_value(row.get("source_group", ""))
+    date_match = re.search(r"2026-(\d{2})-(\d{2})", source)
+    date_label = f"{date_match.group(1)}-{date_match.group(2)}" if date_match else "date?"
+    source_lower = source.lower()
+    if "pard diagnostics" in source_lower:
+        source_tag = "PARD"
+    elif "k sweep" in source_lower:
+        source_tag = "K-sweep"
+    elif "pr2879" in source_lower:
+        source_tag = "PR2879"
+    elif "w&b matrix" in source_lower:
+        source_tag = "W&B"
+    elif "math-rl" in source_lower:
+        source_tag = "Math"
+    else:
+        source_tag = ""
+    return " ".join(
+        part for part in [cluster_label, date_label, nemorl_cuda_graph_label(row), source_tag] if part
+    )
+
+
 def nemorl_chart_model_order(models: list[str]) -> list[str]:
     preferred = ["Qwen3-235B-A22B", "Qwen3-30B-A3B", "Qwen3-32B", "Qwen3-8B"]
     present = list(dict.fromkeys(str(model) for model in models if str(model) and str(model) != "nan"))
@@ -705,10 +815,23 @@ def nemorl_chart_model_order(models: list[str]) -> list[str]:
     return ordered
 
 
+def nemorl_verified_eagle_k3_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    verified = nemorl_chart_rows(rows)
+    if verified.empty:
+        return verified
+    verified = verified[verified["method_k"].astype(str).eq("eagle3_k3")].copy()
+    if verified.empty:
+        return verified
+    return verified.sort_values(
+        ["model_name", "mode", "max_new_tokens", "source_group", "job_id"],
+        na_position="last",
+    )
+
+
 def nemorl_charts_section(rows: pd.DataFrame) -> str:
     chart_rows = nemorl_chart_rows(rows)
     if chart_rows.empty:
-        return '<section><h2>Baseline-Relative Charts</h2><p class="note">No parsed step20 timing rows are available yet for charting.</p></section>'
+        return '<section><h2>Completed 20-Step Baseline-Relative Charts</h2><p class="note">No completed step20 timing windows are available yet for charting.</p></section>'
     metric_specs = [
         ("Generation Throughput Speedup", "gen_tps_speedup", "Speedup vs baseline"),
         ("E2E Throughput Speedup", "e2e_tps_speedup", "Speedup vs baseline"),
@@ -740,8 +863,8 @@ def nemorl_charts_section(rows: pd.DataFrame) -> str:
             f'<div class="model-charts">{rendered}</div>'
         )
     return (
-        '<section><h2>Baseline-Relative Charts</h2>'
-        '<p class="note">Charts use parsed step20 rows and are grouped by model. Baselines are matched by model, mode, max OSL, temperature/top_p, and source setup; each model section keeps those setup slices separate on the x-axis. Dense charts show baseline plus the top visible methods for that metric; the full method set remains in the tables below.</p>'
+        '<section><h2>Completed 20-Step Baseline-Relative Charts</h2>'
+        '<p class="note">Charts include only completed 20-step jobs: either all 20 metrics or the steady-state steps 2-20 after excluding cold-start step 1. Baselines are matched by model, mode, max OSL, temperature/top_p, CUDA Graph state, and source setup. Partial jobs remain in the tables but are excluded here.</p>'
         + "".join(model_sections)
         + '</section>'
     )
@@ -751,9 +874,8 @@ def nemorl_group_label(row: pd.Series, *, include_model: bool = True) -> str:
     model = short_model(row.get("model_name", row.get("model", ""))) if include_model else ""
     mode = str(row.get("mode", "") or "sync")
     osl = clean_float(row.get("max_new_tokens"))
-    cluster = str(row.get("cluster", "") or "").upper()
     osl_label = f"OSL{int(osl)}" if not math.isnan(osl) else "OSL?"
-    return "\n".join(part for part in [model, mode, osl_label, cluster] if part)
+    return "\n".join(part for part in [model, mode, osl_label, nemorl_setup_label(row)] if part)
 
 
 def svg_multiline_text(x: float, y: float, lines: list[str], *, size: int = 12, anchor: str = "middle") -> str:
@@ -808,7 +930,7 @@ def nemorl_multigroup_metric_svg(
     rows[metric] = pd.to_numeric(rows.get(metric), errors="coerce")
     rows = rows.dropna(subset=[metric])
     rows = rows[pd.to_numeric(rows.get("max_steps"), errors="coerce") == 20]
-    rows = rows[pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0) > 0]
+    rows = rows[rows.apply(nemorl_has_complete_step20_window, axis=1)]
     if rows.empty:
         return ""
     rows["group_label"] = rows.apply(lambda row: nemorl_group_label(row, include_model=include_model_in_group), axis=1)
@@ -1033,9 +1155,13 @@ def wandb_link_html(row: pd.Series) -> str:
     direct_url = normalize_wandb_url(row.get("wandb_url", ""))
     if direct_url:
         return link_html(direct_url, "run")
+    job_id = text_value(row.get("job_id", ""))
+    enabled = text_value(row.get("wandb_enabled", "")).lower()
+    if job_id in NEMORL_CONFIRMED_WANDB_DISABLED_JOBS or enabled in {"false", "0", "no"}:
+        return '<span class="not-logged" title="logger.wandb_enabled=false">not logged</span>'
     project = first_text(row, "wandb_project")
     if not project:
-        return ""
+        return '<span class="not-logged">not available</span>'
     return link_html(f"https://wandb.ai/{WANDB_ENTITY}/{project}", "project")
 
 
@@ -1731,34 +1857,51 @@ def load_nemorl_summary() -> pd.DataFrame:
 
 
 def nemorl_source_group_from_run_id(run_id: object) -> str:
-    text = str(run_id)
+    text = str(run_id).lower()
     if "20260624" in text:
         return "Lyris PerfCfg enforce_eager=false PARD diagnostics 2026-06-24"
-    if "20260623" in text or "cudagraphoff" in text:
-        return "Lyris PerfCfg enforce_eager=false triton W&B matrix 2026-06-23"
-    if "eagerfalse_triton" in text and "wandb" in text:
-        return "Lyris PerfCfg enforce_eager=false triton W&B matrix 2026-06-22"
+    if "cudagraphoff" in text or "eagertrue" in text:
+        return "Lyris PerfCfg CUDA-graph-disabled triton W&B matrix 2026-06-23"
+    if "eagerfalse" in text:
+        date = "2026-06-22" if "20260622" in text else "2026-06-23"
+        return f"Lyris PerfCfg enforce_eager=false triton W&B matrix {date}"
+    if "20260623" in text:
+        return "Lyris PerfCfg triton W&B matrix 2026-06-23 (CUDA Graph state unknown)"
     return "Lyris Qwen235B PR2879 OSL8192 2026-06-21"
 
 
 def nemorl_config_basis_from_run_id(run_id: object) -> str:
-    text = str(run_id)
+    text = str(run_id).lower()
     if "20260624" in text:
         return (
             "performance recipe default plus latest-main+PR2879 topology-aware fix; "
             "enforce_eager=false, MoE backend=triton, max_num_seqs=64, max_num_batched_tokens=32760/32768; PARD diagnostic sweep"
         )
-    if "20260623" in text or "cudagraphoff" in text:
+    if "cudagraphoff" in text or "eagertrue" in text:
         return (
             "performance recipe default plus latest-main+PR2879 topology-aware fix; "
-            "enforce_eager=false, MoE backend=triton, max_num_seqs=64, max_num_batched_tokens=32768, W&B enabled"
+            "enforce_eager=true (CUDA graph disabled), MoE backend=triton, W&B enabled"
         )
-    if "eagerfalse_triton" in text and "wandb" in text:
+    if "eagerfalse" in text:
         return (
             "performance recipe default plus latest-main+PR2879 topology-aware fix; "
             "enforce_eager=false, MoE backend=triton, max_num_seqs=64, max_num_batched_tokens=32768, W&B enabled"
         )
     return "performance recipe default, latest main plus PR2879 topology-aware fix"
+
+
+def nemorl_enforce_eager(explicit: object, run_id: object) -> bool | str:
+    explicit_text = text_value(explicit).lower()
+    if explicit_text in {"true", "1", "yes"}:
+        return True
+    if explicit_text in {"false", "0", "no"}:
+        return False
+    run_text = str(run_id).lower()
+    if "cudagraphoff" in run_text or "eagertrue" in run_text:
+        return True
+    if "eagerfalse" in run_text:
+        return False
+    return ""
 
 
 def enrich_nemorl() -> pd.DataFrame:
@@ -1785,7 +1928,10 @@ def enrich_nemorl() -> pd.DataFrame:
     rows["cluster"] = "lyris"
     rows["source_group"] = rows["run_id"].map(nemorl_source_group_from_run_id)
     rows["config_basis"] = rows["run_id"].map(nemorl_config_basis_from_run_id)
-    rows["enforce_eager"] = rows["run_id"].map(lambda value: False if "eagerfalse" in str(value) else "")
+    rows["enforce_eager"] = rows.apply(
+        lambda row: nemorl_enforce_eager(row.get("enforce_eager", ""), row.get("run_id", "")),
+        axis=1,
+    )
     rows["source_priority"] = 0
     if "slurm_state" not in rows:
         rows["slurm_state"] = ""
@@ -1861,6 +2007,7 @@ def load_lyris_historical_nemorl() -> pd.DataFrame:
                     "max_new_tokens": clean_float(row.get("max_osl")),
                     "temperature": clean_float(row.get("temperature")),
                     "top_p": clean_float(row.get("top_p")),
+                    "enforce_eager": True,
                     "isl": row.get("isl", ""),
                     "cluster": "lyris",
                     "source_group": source_group,
@@ -1919,6 +2066,7 @@ def load_oci_historical_nemorl() -> pd.DataFrame:
                 "max_new_tokens": clean_float(row.get("max_new_tokens")),
                 "temperature": 1.0,
                 "top_p": 1.0,
+                "enforce_eager": True,
                 "isl": "",
                 "cluster": "oci-hsg",
                 "source_group": "OCI-HSG Qwen30/Qwen32 Math-RL OSL1024 2026-06-16",
@@ -1945,7 +2093,7 @@ def load_oci_historical_nemorl() -> pd.DataFrame:
                 "vllm_token_acceptance_pct": clean_float(row.get("acceptance_rate_pct")),
                 "vllm_acceptance_length_mean_weighted_mean": clean_float(row.get("mean_accepted_length")),
                 "manifest": str(NEMORL_OCI_HISTORICAL.relative_to(ROOT)),
-                "wandb_enabled": str(row.get("wandb_enabled", "")),
+                "wandb_enabled": "false",
                 "wandb_project": str(row.get("wandb_project", "")),
                 "wandb_name": str(row.get("wandb_name", "")),
                 "wandb_url": normalize_wandb_url(row.get("wandb_url", "")),
@@ -2177,6 +2325,13 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
     if not parts:
         return pd.DataFrame()
     rows = pd.concat(parts, ignore_index=True, sort=False)
+    if "wandb_url" not in rows:
+        rows["wandb_url"] = ""
+    known_wandb_urls = rows["job_id"].astype(str).map(NEMORL_WANDB_URL_BY_JOB).fillna("")
+    rows["wandb_url"] = rows["wandb_url"].map(normalize_wandb_url)
+    rows["wandb_url"] = rows["wandb_url"].where(rows["wandb_url"].ne(""), known_wandb_urls)
+    disabled_mask = rows["job_id"].astype(str).isin(NEMORL_CONFIRMED_WANDB_DISABLED_JOBS)
+    rows.loc[disabled_mask, "wandb_enabled"] = "false"
     rows = fill_nemorl_speedups(rows)
     rows["has_speedup_metric"] = pd.to_numeric(rows.get("gen_tps_speedup"), errors="coerce").notna()
     rows["completed_steps_numeric"] = pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0)
@@ -2222,6 +2377,8 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
         ascending=[True, True, True, True, True, True],
         na_position="last",
     )
+    rows["metric_window"] = rows.apply(nemorl_metric_window, axis=1)
+    rows["cuda_graph_state"] = rows.apply(nemorl_cuda_graph_label, axis=1)
     return rows.drop(
         columns=[
             "has_speedup_metric",
@@ -2298,14 +2455,15 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
     current = rows[pd.to_numeric(rows.get("max_steps"), errors="coerce") == 20].copy() if not rows.empty else pd.DataFrame()
     smoke = rows[pd.to_numeric(rows.get("max_steps"), errors="coerce") == 3].copy() if not rows.empty else pd.DataFrame()
     live_k = nemorl_live_k_sweep_rows(rows)
+    verified_k3 = nemorl_verified_eagle_k3_rows(rows)
     fresh_key = nemorl_fresh_finding(live_k)
     async_engine_errors = int(
         (
             live_k.get("metric_state", pd.Series(dtype=str)).astype(str).str.contains("engine_error", na=False)
         ).sum()
     ) if not live_k.empty else 0
-    best = current[~current["method_k"].astype(str).str.startswith("baseline")].copy()
-    best = best[pd.to_numeric(best["completed_steps"], errors="coerce").fillna(0) > 0]
+    best = nemorl_chart_rows(current)
+    best = best[~best["method_k"].astype(str).str.startswith("baseline")].copy()
     best = best[pd.to_numeric(best["gen_tps_speedup"], errors="coerce").notna()]
     if not best.empty:
         top = best.sort_values("gen_tps_speedup", ascending=False).iloc[0]
@@ -2319,21 +2477,18 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         key = "Step20 rows are running or pending; matched speedup will update as baseline and spec rows complete more steps."
     css = """
 :root{--ink:#111827;--muted:#5f6b7a;--line:#d6dee9;--bg:#f4f6f9;--panel:#fff;--soft:#eef3f8;--blue:#2457a6;--green:#157f47;--amber:#946200;--red:#b42318}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.topbar{margin-bottom:10px}.topbar a{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px;text-decoration:none;font-weight:700;color:var(--blue)}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:10px 0 18px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:8px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{background:#eef2f7;font-size:13px}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.source-col,.manifest-col,.path-col,.note-col,.name-col{max-width:260px;white-space:normal;overflow-wrap:anywhere}.manifest-col,.path-col{font-size:12px}.error-col{max-width:380px}.RUNNING,.COMPLETED{color:var(--green);font-weight:700}.PENDING,.SUBMITTED{color:var(--amber);font-weight:700}.FAILED,.TIMEOUT,.CANCELLED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}a code{color:var(--blue)}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.model-charts,.kpis,.chapter-grid{grid-template-columns:1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.charts,.kpis,.chapter-grid{grid-template-columns:1fr}}"""
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg)}header{background:linear-gradient(180deg,#ffffff 0,#f8fafc 100%);border-bottom:1px solid var(--line)}.hero{max-width:1480px;margin:0 auto;padding:26px 28px 18px}.topbar{margin-bottom:10px}.topbar a{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px;text-decoration:none;font-weight:700;color:var(--blue)}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px}main{max-width:1480px;margin:0 auto;padding:20px 28px 42px}h1{margin:0 0 8px;font-size:34px;line-height:1.12;letter-spacing:0}h2{margin:0 0 12px;font-size:21px}h3{margin:18px 0 6px;font-size:16px}.subtitle,.note{color:var(--muted)}.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.toc a{border:1px solid var(--line);background:#fff;color:#263448;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:2px 4px 2px 0;background:#fff}.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0 18px}.kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi b{display:block;font-size:24px;line-height:1.05}.kpi span{color:var(--muted)}section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin:0 0 18px}.chapter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.chapter-card{display:block;text-decoration:none;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.chapter-card strong{display:block;margin-bottom:5px}.chapter-card span{display:block;color:var(--muted);font-size:13px}.callout{border-left:4px solid var(--blue);background:#f8fbff;padding:12px 14px;border-radius:6px;margin:10px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}.model-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:10px 0 18px}.chart-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:8px;min-width:0}.chart-card svg{width:100%;height:auto;display:block}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{position:sticky;top:0;z-index:1;background:#eef2f7;font-size:13px;white-space:nowrap}tbody tr:nth-child(even){background:#f8fafc}.verified-table table{min-width:1180px}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.source-col,.manifest-col,.path-col,.note-col,.name-col{max-width:260px;white-space:normal;overflow-wrap:anywhere}.manifest-col,.path-col{font-size:12px}.error-col{max-width:380px}.not-logged{color:var(--muted);font-size:12px;white-space:nowrap}.RUNNING,.COMPLETED{color:var(--green);font-weight:700}.PENDING,.SUBMITTED{color:var(--amber);font-weight:700}.FAILED,.TIMEOUT,.CANCELLED{color:var(--red);font-weight:700}code{background:#f3f4f6;padding:1px 4px;border-radius:4px}a code{color:var(--blue)}@media(max-width:1100px){.charts,.model-charts,.chapter-grid{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:900px){.hero,main{padding-left:16px;padding-right:16px}.model-charts,.kpis,.chapter-grid{grid-template-columns:1fr}h1{font-size:28px}table{font-size:13px}}@media(max-width:620px){.charts,.kpis,.chapter-grid{grid-template-columns:1fr}}"""
     cols = [
         ("source_group", "Source group", "text"),
-        ("cluster", "Cluster", "text"),
         ("job_id", "Job", "text"),
         ("wandb_url", "W&B", "link"),
-        ("wandb_name", "W&B name", "text"),
         ("model_name", "Model", "text"),
         ("mode", "Mode", "text"),
         ("method_display", "Method", "text"),
-        ("enforce_eager", "enforce_eager", "text"),
-        ("max_steps", "Max steps", "int"),
+        ("cuda_graph_state", "CUDA Graph", "text"),
         ("max_new_tokens", "Max OSL", "int"),
         ("slurm_state", "SLURM", "text"),
-        ("completed_last_step", "completed/last", "text"),
+        ("metric_window", "Metric window", "text"),
         ("total_step_time_s_mean", "E2E step", "num"),
         ("e2e_step_time_speedup", "Step-time speedup", "x"),
         ("e2e_tokens_per_sec_per_gpu_mean", "E2E tok/s/GPU", "num"),
@@ -2372,14 +2527,30 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         ("notes", "Notes", "text"),
         ("latest_error", "First severe error", "text"),
     ]
+    k3_cols = [
+        ("model_name", "Model", "text"),
+        ("mode", "Mode", "text"),
+        ("cuda_graph_state", "CUDA Graph", "text"),
+        ("max_new_tokens", "Max OSL", "int"),
+        ("job_id", "Job", "text"),
+        ("metric_window", "Metric window", "text"),
+        ("generation_worker_tokens_per_sec_per_gpu_mean", "Gen tok/s/GPU", "num"),
+        ("gen_tps_speedup", "Gen tput", "x"),
+        ("e2e_tokens_per_sec_per_gpu_mean", "E2E tok/s/GPU", "num"),
+        ("e2e_tps_speedup", "E2E tput", "x"),
+        ("vllm_token_acceptance_pct", "Acceptance", "pct"),
+        ("vllm_acceptance_length_mean_weighted_mean", "Mean len", "num"),
+        ("wandb_url", "W&B", "link"),
+        ("manifest", "Evidence", "text"),
+    ]
     return "\n".join(
         [
             "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
             f"<title>Lyris NeMo-RL SpecDec Status Latest</title><style>{css}</style></head><body>",
             "<header><div class=\"hero\"><div class=\"topbar\"><a href=\"../index.html\">Back to report hub</a></div><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
-            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main rows, 2026-06-23 enforce_eager=false W&B rows, 2026-06-24 PARD diagnostics, and historical Qwen3-30B-A3B/Qwen3-32B Lyris/OCI-HSG artifacts.</div>",
-            "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#fresh\">Fresh enforce_eager=true K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
-            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">enforce_eager shown per row</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
+            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main rows, CUDA graph enabled W&B rows, 2026-06-24 PARD diagnostics, and historical Qwen3-30B-A3B/Qwen3-32B Lyris/OCI-HSG artifacts.</div>",
+            "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#verified-k3\">Verified Eagle-3 K3</a><a href=\"#fresh\">CUDA-Graph-Disabled K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
+            "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">CUDA graph enabled is default</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">enforce_eager shown per row</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
             "<div class=\"kpis\">",
             f"<div class=\"kpi\"><b>{running}</b><span>running jobs</span></div>",
             f"<div class=\"kpi\"><b>{pending}</b><span>pending jobs</span></div>",
@@ -2390,21 +2561,27 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<section id=\"overview\"><h2>Overview</h2>",
             f"<div class=\"callout\"><strong>Key finding.</strong> {esc(key)}<br><strong>Fresh update.</strong> {esc(fresh_key)}</div>",
             "<div class=\"chapter-grid\">",
-            chapter_card("Fresh enforce_eager=true K Sweep", "Newest Lyris Eagle-3 K5/K7/K9 state and parsed speedups.", "#fresh"),
+            chapter_card("Verified Eagle-3 K3", "Completed 20-step K3 rows with exact metric windows and W&B availability.", "#verified-k3"),
+            chapter_card("CUDA-Graph-Disabled K Sweep", "Older enforce_eager=true Eagle-3 K5/K7/K9 state; useful as an ablation, not the default baseline.", "#fresh"),
             chapter_card("Matched Charts", "Generation/E2E throughput and step-time speedups by model.", "#charts"),
             chapter_card("Step20 Snapshot", "All current and historical step20 rows with acceptance metrics.", "#step20"),
             chapter_card("Raw Evidence", "CSV, log path, and source provenance links for reproducibility.", "#sources"),
             "</div></section>",
-            "<section id=\"fresh\"><h2>Fresh enforce_eager=true K Sweep</h2>",
-            "<p class=\"note\">Newest Lyris run set for Eagle-3 K5/K7/K9 on performance recipes with <code>policy.generation.vllm_cfg.enforce_eager=true</code>, prefix caching disabled, and MoE backend=triton. Sync rows with completed steps are baseline-relative against the matched 2026-06-22 OSL4096 baseline rows. Async timeout rows are listed for status but should not be treated as clean performance data while EngineCore errors are present.</p><div class=\"table-wrap\">",
+            "<section id=\"verified-k3\"><h2>Verified Eagle-3 K3 Results</h2>",
+            "<p class=\"note\">Every row below comes from a completed 20-step job. <code>steps 2-20 (19 metrics)</code> means the cold-start first step was intentionally excluded. The largest historical K3 speedups used <code>enforce_eager=true</code>, so CUDA Graph was disabled. W&B shows <code>not logged</code> when the original Slurm command explicitly set <code>logger.wandb_enabled=false</code>; those runs still retain parsed driver-log evidence.</p><div class=\"table-wrap verified-table\">",
+            table(verified_k3, k3_cols),
+            "</div></section>",
+            "<section id=\"fresh\"><h2>CUDA-Graph-Disabled K Sweep</h2>",
+            "<p class=\"note\">This older Lyris run set used <code>policy.generation.vllm_cfg.enforce_eager=true</code>, which disables CUDA graph capture. Treat it as a diagnostic ablation. The realistic/default scenario for current conclusions is <code>enforce_eager=false</code> with CUDA graph enabled, matched against the same model/mode/OSL/temperature/top_p baseline. Async timeout rows are listed for status but should not be treated as clean performance data while EngineCore errors are present.</p><div class=\"table-wrap\">",
             table(live_k, live_cols),
             "</div></section>",
             "<section id=\"methodology\"><h2>Evaluation Methodology</h2><ul>",
             "<li>Recipes: NeMo-RL <code>examples/configs/recipes/llm/performance</code>.</li>",
             "<li>Matched comparisons keep model, mode, max OSL, temperature=1.0, top_p=1.0, and cluster/source setup fixed.</li>",
             "<li>SpecDec rows add only the generation speculative decoding method, drafter/checkpoint, and <code>num_speculative_tokens</code>; baseline rows use the same recipe with SpecDec disabled.</li>",
-            "<li>Fresh 2026-06-22 Qwen3-30B-A3B/Qwen3-32B Lyris rows use latest-main+PR2879, recipe OSL4096, and step2-20 averages where available.</li>",
-            "<li>The fresh K-sweep section is explicitly <code>enforce_eager=true</code>; the pending W&B matrix rows are separately labeled <code>enforce_eager=false</code> when present.</li>",
+            "<li>Completed 20-step charts require either all 20 parsed metrics or the steady-state steps 2-20 with step 1 excluded. Partial step20 jobs are table-only.</li>",
+            "<li>2026-06-18 and 2026-06-22 historical Qwen3-30B-A3B/Qwen3-32B K3 rows use <code>enforce_eager=true</code>; their large speedups are CUDA-graph-disabled comparisons and are not directly comparable to the current CUDA-graph-enabled default.</li>",
+            "<li>Default/realistic comparisons assume <code>enforce_eager=false</code>, so vLLM CUDA graph capture is enabled. Rows with <code>enforce_eager=true</code> are CUDA-graph-disabled ablations and should not be used as the primary baseline.</li>",
             "</ul></section>",
             f"<section><h2>Metric Notes</h2><p>{esc(fresh_key)}</p><p class=\"note\">Acceptance metrics are shown only when the NeMo-RL driver log includes vLLM SpecDec metrics; Qwen3-235B current driver snapshots mostly expose timing/throughput, while historical Qwen30/Qwen32 rows include acceptance when available.</p></section>",
             '<div id="charts">',

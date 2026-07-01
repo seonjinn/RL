@@ -827,6 +827,7 @@ def build() -> None:
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv",
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
+        DOCS / "latest_lyris_nemorl_cudagraphoff_wandb_best_qwen32_async_20260623_jobs.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
         DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv",
         DOCS / "lyris_angelslim_checkpoint_prewarm_summary_20260622.json",
