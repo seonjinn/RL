@@ -50,6 +50,35 @@ def test_precluster_dry_run_omits_gres_when_disabled() -> None:
     assert "--segment 4" in sbatch_line
 
 
+def test_launcher_rejects_cuda_graph_disabled_without_ablation_opt_in() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEMO_RL_DIR": str(REPO_ROOT),
+            "MODEL_LABEL": "qwen32-eager-ablation",
+            "CONFIG_FILE": "examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
+            "TARGET_MODEL_ID": "/tmp/qwen32",
+            "DRAFT_MODEL": "/tmp/pard",
+            "CONTAINER": str(REPO_ROOT / "pyproject.toml"),
+            "DRY_RUN": "true",
+            "VLLM_ENFORCE_EAGER": "true",
+            "WANDB_ENABLED": "false",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "CUDA Graph" in result.stderr
+
+
 def test_import_smoke_uses_container_venv_without_gres() -> None:
     env = os.environ.copy()
     env.update(
