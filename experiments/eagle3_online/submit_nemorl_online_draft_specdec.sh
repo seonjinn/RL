@@ -545,7 +545,7 @@ fi
 WORKSPACE_PYTHONPATH="${SOURCE_VLLM_SITE:+${SOURCE_VLLM_SITE}:}${SCRIPT_DIR}:${SCRIPT_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${SCRIPT_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM:${PYTHONPATH:-}"
 
 if [[ -z "${NEMO_RL_PY_EXECUTABLES_SYSTEM+x}" ]]; then
-  NEMO_RL_PY_EXECUTABLES_SYSTEM=0
+  NEMO_RL_PY_EXECUTABLES_SYSTEM=1
 elif [[ "${NEMO_RL_PY_EXECUTABLES_SYSTEM}" == "true" || "${NEMO_RL_PY_EXECUTABLES_SYSTEM}" == "True" ]]; then
   NEMO_RL_PY_EXECUTABLES_SYSTEM=1
 elif [[ "${NEMO_RL_PY_EXECUTABLES_SYSTEM}" == "false" || "${NEMO_RL_PY_EXECUTABLES_SYSTEM}" == "False" ]]; then

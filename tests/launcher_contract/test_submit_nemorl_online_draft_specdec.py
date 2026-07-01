@@ -160,6 +160,35 @@ def test_launcher_rejects_cuda_graph_disabled_without_ablation_opt_in() -> None:
     assert "CUDA Graph" in result.stderr
 
 
+def test_launcher_uses_container_system_python_for_actor_tiers_by_default() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEMO_RL_DIR": str(REPO_ROOT),
+            "MODEL_LABEL": "qwen32-system-python",
+            "CONFIG_FILE": "examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
+            "TARGET_MODEL_ID": "/tmp/qwen32",
+            "DRAFT_MODEL": "/tmp/pard",
+            "CONTAINER": str(REPO_ROOT / "pyproject.toml"),
+            "DRY_RUN": "true",
+            "WANDB_ENABLED": "false",
+        }
+    )
+    env.pop("NEMO_RL_PY_EXECUTABLES_SYSTEM", None)
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in result.stdout
+
+
 def test_launcher_rejects_unsupported_pard_draft_tp_mismatch() -> None:
     env = os.environ.copy()
     env.update(
