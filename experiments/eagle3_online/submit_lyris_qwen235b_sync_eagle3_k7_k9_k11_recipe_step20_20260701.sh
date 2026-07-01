@@ -72,8 +72,9 @@ EOF
 
 render_sbatch() {
   local variant="$1"
+  local job_variant="${variant//_/-}"
   local log_root="${RUN_ROOT}/logs/qwen235b_sync_${variant}"
-  printf '%s' "sbatch --nodes=32 --account=${ACCOUNT} --job-name=nemorl-q235-${variant} --partition=${PARTITION} --time=${WALLTIME} --segment=16 --output=${log_root}/slurm-%j.out ray.sub"
+  printf '%s' "sbatch --nodes=32 --account=${ACCOUNT} --job-name=${ACCOUNT}-specdec.q235-${job_variant} --partition=${PARTITION} --time=${WALLTIME} --segment=16 --output=${log_root}/slurm-%j.out ray.sub"
 }
 
 if [[ "${DRY_RUN}" == "true" ]]; then
@@ -110,12 +111,13 @@ submit_variant() {
   local variant="$1"
   local k="$2"
   local command="$3"
+  local job_variant="${variant//_/-}"
   local log_root="${RUN_ROOT}/logs/qwen235b_sync_${variant}"
   local wandb_name="qwen235b_perfcfg_sync_${variant}_recipeosl8192_cudagraph_step20_20260701"
   local sbatch_args=(
     --nodes=32
     --account="${ACCOUNT}"
-    --job-name="nemorl-q235-${variant}"
+    --job-name="${ACCOUNT}-specdec.q235-${job_variant}"
     --partition="${PARTITION}"
     --time="${WALLTIME}"
     --segment=16

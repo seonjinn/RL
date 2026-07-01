@@ -33,6 +33,7 @@ def test_dry_run_preserves_qwen235b_performance_recipe() -> None:
     assert output.count("policy.generation.vllm_cfg.enforce_eager=false") == 4
     assert output.count("--nodes=32") == 4
     assert output.count("--segment=16") == 4
+    assert output.count("--job-name=coreai_dlalgo_llm-specdec.q235-") == 4
     assert "--gres" not in output
     assert "--dependency" not in output
 
@@ -68,4 +69,3 @@ def test_dry_run_uses_offline_eagle3_only_for_speculative_variants() -> None:
         assert "speculative_config.method=eagle3" in section
         assert "speculative_config.draft_tensor_parallel_size=1" in section
         assert "policy.draft.enabled=false" in section
-
