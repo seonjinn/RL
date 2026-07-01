@@ -79,6 +79,40 @@ def test_launcher_rejects_cuda_graph_disabled_without_ablation_opt_in() -> None:
     assert "CUDA Graph" in result.stderr
 
 
+def test_launcher_rejects_unsupported_pard_draft_tp_mismatch() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEMO_RL_DIR": str(REPO_ROOT),
+            "MODEL_LABEL": "qwen32-pard-tp-mismatch",
+            "CONFIG_FILE": "examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
+            "TARGET_MODEL_ID": "/tmp/qwen32",
+            "DRAFT_MODEL": "/tmp/pard",
+            "CONTAINER": str(REPO_ROOT / "pyproject.toml"),
+            "DRY_RUN": "true",
+            "DRAFT_FORMAT": "pard",
+            "SPECDEC_METHOD": "draft_model",
+            "POLICY_DRAFT_ENABLED": "false",
+            "TARGET_TP": "2",
+            "DRAFT_TP": "1",
+            "WANDB_ENABLED": "false",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "target TP=2" in result.stderr
+    assert "draft TP=1" in result.stderr
+
+
 def test_import_smoke_uses_container_venv_without_gres() -> None:
     env = os.environ.copy()
     env.update(

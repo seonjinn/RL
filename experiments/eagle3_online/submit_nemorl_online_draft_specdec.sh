@@ -154,7 +154,21 @@ fi
 SPECDEC_METHOD="${SPECDEC_METHOD:-eagle3}"
 NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-1}"
 DRAFT_TP="${DRAFT_TP:-1}"
+TARGET_TP="${TARGET_TP:-}"
 INCLUDE_DRAFT_TP="${INCLUDE_DRAFT_TP:-true}"
+if [[ "${DRAFT_FORMAT}" == "pard" || "${DRAFT_FORMAT}" == "pard2" ]]; then
+  if [[ "${INCLUDE_DRAFT_TP}" == "true" || "${INCLUDE_DRAFT_TP}" == "True" ]]; then
+    if [[ -z "${TARGET_TP}" ]]; then
+      echo "ERROR: TARGET_TP is required for ${DRAFT_FORMAT} so the launcher can validate vLLM topology." >&2
+      exit 2
+    fi
+    if [[ "${DRAFT_TP}" != "${TARGET_TP}" ]]; then
+      echo "ERROR: vLLM V1 draft_model requires target TP=${TARGET_TP} and draft TP=${DRAFT_TP} to match." >&2
+      echo "Independent draft TP is not supported by the current proposer; use a separate capability branch." >&2
+      exit 2
+    fi
+  fi
+fi
 if [[ -z "${SPECDEC_PARALLEL_DRAFTING+x}" ]]; then
   if [[ "${DRAFT_FORMAT}" == "pard" || "${DRAFT_FORMAT}" == "pard2" ]]; then
     SPECDEC_PARALLEL_DRAFTING="true"
