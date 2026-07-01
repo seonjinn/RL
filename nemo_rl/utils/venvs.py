@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import fcntl
 import logging
 import os
 import shlex
@@ -159,58 +160,50 @@ def create_local_venv(
     return str(python_path)
 
 
+def _build_or_reuse_actor_venv(
+    py_executable: str, venv_name: str, force_rebuild: bool = False
+) -> str:
+    venv_dir = Path(
+        os.path.normpath(os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR))
+    )
+    venv_dir.mkdir(parents=True, exist_ok=True)
+    venv_path = venv_dir / venv_name
+    python_path = venv_path / "bin" / "python"
+    ready_file = _venv_ready_file(venv_path)
+    lock_path = venv_dir / f".{venv_path.name}.lock"
+
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            if (
+                not force_rebuild
+                and ready_file.exists()
+                and _venv_python_is_usable(python_path)
+            ):
+                _ensure_venv_python_is_real_file(venv_path)
+                logger.info("Using existing venv at %s", venv_path)
+                return str(python_path)
+
+            if venv_path.exists():
+                logger.warning("Removing incomplete or stale venv at %s", venv_path)
+                shutil.rmtree(venv_path)
+
+            return create_local_venv(
+                py_executable, venv_name, force_rebuild=force_rebuild
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 # Ray-based helper to create a virtual environment on each Ray node
 @ray.remote(num_cpus=1)  # pragma: no cover
 def _env_builder(
     py_executable: str, venv_name: str, node_idx: int, force_rebuild: bool = False
 ):
-    # Check if another node is already building
-    NEMO_RL_VENV_DIR = os.path.normpath(
-        os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR)
-    )
-    venv_path = Path(NEMO_RL_VENV_DIR) / venv_name
-    python_path = venv_path / "bin" / "python"
-    started_file = venv_path / "STARTED_ENV_BUILDER"
-    ready_file = _venv_ready_file(venv_path)
-
-    # Skip early return if force_rebuild is True
-    if not force_rebuild and ready_file.exists() and _venv_python_is_usable(python_path):
-        _ensure_venv_python_is_real_file(venv_path)
-        logger.info(f"Using existing venv at {venv_path}")
-        return str(python_path)
-    if not force_rebuild and python_path.exists() and not started_file.exists():
-        logger.warning("Removing incomplete or unusable venv at %s", venv_path)
-        shutil.rmtree(venv_path)
-
-    # Sleep to stagger node startup
     time.sleep(1 * node_idx)
-
-    if started_file.exists():
-        # Another node is already building, wait for completion
-        logger.info(
-            f"Node {node_idx}: Another node is building {venv_name}, skipping..."
-        )
-        # Wait for the creator to finish uv sync/install. bin/python appears
-        # before the venv is queryable, so using it as readiness is unsafe.
-        while not ready_file.exists():
-            time.sleep(1)
-        _ensure_venv_python_is_real_file(venv_path)
-        if not _venv_python_is_usable(python_path):
-            raise RuntimeError(f"Completed venv python is not usable: {python_path}")
-        return str(python_path)
-
-    # Create the venv directory if needed
-    venv_path.mkdir(parents=True, exist_ok=True)
-
-    # Touch the started file to signal we're building
-    started_file.touch()
-    try:
-        # Create the virtual environment on this node
-        return create_local_venv(py_executable, venv_name, force_rebuild=force_rebuild)
-    finally:
-        # Clean up the started file
-        if started_file.exists():
-            started_file.unlink()
+    return _build_or_reuse_actor_venv(
+        py_executable, venv_name, force_rebuild=force_rebuild
+    )
 
 
 def create_local_venv_on_each_node(py_executable: str, venv_name: str):
@@ -239,15 +232,13 @@ def create_local_venv_on_each_node(py_executable: str, venv_name: str):
     force_rebuild = _truthy_env("NRL_FORCE_REBUILD_VENVS") or _truthy_env(
         "NRL_FORCE_REBUILD_ACTOR_VENVS"
     )
-    # Launch one actor per node
     actors = [
         _env_builder.options(placement_group=pg).remote(
             py_executable, venv_name, i, force_rebuild
         )
-        for i, _ in enumerate(nodes)
+        for i in range(num_nodes)
     ]
-    # ensure setup runs on each node
-    paths = ray.get([actor for actor in actors])
+    paths = ray.get(actors)
     # Normalize paths to handle double slashes and other path inconsistencies
     normalized_paths = [os.path.normpath(p) for p in paths]
     assert len(set(normalized_paths)) == 1, (

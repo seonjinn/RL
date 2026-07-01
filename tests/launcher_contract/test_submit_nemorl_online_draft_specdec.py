@@ -160,7 +160,7 @@ def test_launcher_rejects_cuda_graph_disabled_without_ablation_opt_in() -> None:
     assert "CUDA Graph" in result.stderr
 
 
-def test_launcher_uses_container_system_python_for_actor_tiers_by_default() -> None:
+def test_launcher_uses_shared_tier_venvs_by_default() -> None:
     env = os.environ.copy()
     env.update(
         {
@@ -175,6 +175,7 @@ def test_launcher_uses_container_system_python_for_actor_tiers_by_default() -> N
         }
     )
     env.pop("NEMO_RL_PY_EXECUTABLES_SYSTEM", None)
+    env.pop("NEMO_RL_VENV_DIR", None)
 
     result = subprocess.run(
         ["bash", str(LAUNCHER)],
@@ -186,7 +187,8 @@ def test_launcher_uses_container_system_python_for_actor_tiers_by_default() -> N
     )
 
     assert result.returncode == 0, result.stderr
-    assert "NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in result.stdout
+    assert "NEMO_RL_PY_EXECUTABLES_SYSTEM=0" in result.stdout
+    assert f"NEMO_RL_VENV_DIR={REPO_ROOT}/venvs" in result.stdout
 
 
 def test_launcher_rejects_unsupported_pard_draft_tp_mismatch() -> None:
