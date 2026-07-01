@@ -11,6 +11,7 @@ LAUNCHER = (
     / "submit_nemorl_online_draft_specdec.sh"
 )
 IMPORT_SMOKE = REPO_ROOT / "scripts" / "submit_nemorl_import_smoke.sh"
+ASSET_STAGE = REPO_ROOT / "scripts" / "submit_hf_snapshot_stage.sh"
 
 
 def test_precluster_dry_run_omits_gres_when_disabled() -> None:
@@ -144,3 +145,34 @@ def test_import_smoke_uses_container_venv_without_gres() -> None:
     )
     assert "scripts/nemorl_import_smoke.py" in result.stdout
     assert "python\\ -c" not in result.stdout
+
+
+def test_hf_asset_stage_uses_lustre_cache_without_gres() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "REMOTE_REPO": str(REPO_ROOT),
+            "CONTAINER": str(REPO_ROOT / "pyproject.toml"),
+            "ACCOUNT": "coreai_dlalgo_llm",
+            "PARTITION": "batch",
+            "USE_GRES": "false",
+            "HF_HOME": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
+            "MODEL_IDS": "amd/PARD-Qwen3-0.6B,RedHatAI/Qwen3-32B-speculator.eagle3",
+            "DRY_RUN": "true",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(ASSET_STAGE)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--segment=1" in result.stdout
+    assert "--gres" not in result.stdout
+    assert "scripts/stage_hf_snapshots.py" in result.stdout
+    assert "amd/PARD-Qwen3-0.6B" in result.stdout
