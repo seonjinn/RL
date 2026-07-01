@@ -28,6 +28,7 @@ render_command() {
   local k="$2"
   local log_root="${RUN_ROOT}/logs/qwen235b_sync_${variant}"
   local checkpoint_root="${RUN_ROOT}/megatron_checkpoints/qwen235b_sync_${variant}"
+  local training_checkpoint_root="${RUN_ROOT}/training_checkpoints/qwen235b_sync_${variant}"
   local node_cache="/tmp/sna/${RUN_ID}_${variant}"
   local wandb_name="qwen235b_perfcfg_sync_${variant}_recipeosl8192_cudagraph_step20_20260701"
   local specdec_overrides=""
@@ -62,6 +63,7 @@ python '${REMOTE_REPO}/examples/run_grpo.py' \
   policy.tokenizer.name='${TARGET_MODEL}' \
   policy.generation.vllm_cfg.enforce_eager=false \
   grpo.max_num_steps=${MAX_STEPS} \
+  checkpointing.checkpoint_dir='${training_checkpoint_root}' \
   ${specdec_overrides} \
   logger.log_dir='${log_root}/nemo_logs' \
   logger.wandb_enabled=true \

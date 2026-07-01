@@ -31,6 +31,9 @@ def test_dry_run_preserves_qwen235b_performance_recipe() -> None:
     assert output.count("grpo-qwen3-235b-32n4g.yaml") == 4
     assert output.count("grpo.max_num_steps=20") == 4
     assert output.count("policy.generation.vllm_cfg.enforce_eager=false") == 4
+    assert output.count("checkpointing.checkpoint_dir=") == 4
+    for variant in ("baseline", "eagle3_k7", "eagle3_k9", "eagle3_k11"):
+        assert f"training_checkpoints/qwen235b_sync_{variant}" in output
     assert output.count("--nodes=32") == 4
     assert output.count("--segment=16") == 4
     assert output.count("--job-name=coreai_dlalgo_llm-specdec.q235-") == 4
