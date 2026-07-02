@@ -11,8 +11,11 @@ DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle
 CONFIG="${CONFIG:-examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml}"
 RUN_ID="${RUN_ID:-20260701_lyris_qwen235b_sync_eagle3_k7_k9_k11_recipe_step20_cudagraph}"
 RUN_ROOT="${RUN_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/${RUN_ID}}"
+RUN_TAG="${RUN_TAG:-20260701}"
+MODE_LABEL="${MODE_LABEL:-sync}"
 WANDB_HOME="${WANDB_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/wandb_netrc_home}"
 WANDB_PROJECT="${WANDB_PROJECT:-sna-nemorl-specdec-lyris}"
+MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR:-}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-gb200}"
 WALLTIME="${WALLTIME:-05:00:00}"
@@ -25,7 +28,7 @@ VARIANTS="${VARIANTS:-baseline,eagle3_k7,eagle3_k9,eagle3_k11}"
 IFS=',' read -r -a variants <<< "${VARIANTS}"
 for variant in "${variants[@]}"; do
   case "${variant}" in
-    baseline|eagle3_k7|eagle3_k9|eagle3_k11) ;;
+    baseline|eagle3_k5|eagle3_k7|eagle3_k9|eagle3_k11) ;;
     *)
       echo "ERROR: unsupported variant: ${variant}" >&2
       exit 2
@@ -36,12 +39,16 @@ done
 render_command() {
   local variant="$1"
   local k="$2"
-  local log_root="${RUN_ROOT}/logs/qwen235b_sync_${variant}"
-  local checkpoint_root="${RUN_ROOT}/megatron_checkpoints/qwen235b_sync_${variant}"
-  local training_checkpoint_root="${RUN_ROOT}/training_checkpoints/qwen235b_sync_${variant}"
+  local log_root="${RUN_ROOT}/logs/qwen235b_${MODE_LABEL}_${variant}"
+  local checkpoint_root="${RUN_ROOT}/megatron_checkpoints/qwen235b_${MODE_LABEL}_${variant}"
+  local training_checkpoint_root="${RUN_ROOT}/training_checkpoints/qwen235b_${MODE_LABEL}_${variant}"
   local node_cache="/tmp/sna/${RUN_ID}_${variant}"
-  local wandb_name="qwen235b_perfcfg_sync_${variant}_recipeosl8192_cudagraph_step20_20260701"
+  local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_step20_${RUN_TAG}"
   local specdec_overrides=""
+
+  if [[ -n "${MEGATRON_CHECKPOINT_DIR}" ]]; then
+    checkpoint_root="${MEGATRON_CHECKPOINT_DIR}"
+  fi
 
   if [[ "${variant}" != "baseline" ]]; then
     specdec_overrides="policy.draft.enabled=false \
@@ -98,8 +105,8 @@ EOF
 render_sbatch() {
   local variant="$1"
   local job_variant="${variant//_/-}"
-  local log_root="${RUN_ROOT}/logs/qwen235b_sync_${variant}"
-  printf '%s' "sbatch --nodes=32 --account=${ACCOUNT} --job-name=${ACCOUNT}-specdec.q235-${job_variant} --partition=${PARTITION} --time=${WALLTIME} --segment=16 --output=${log_root}/slurm-%j.out ray.sub"
+  local log_root="${RUN_ROOT}/logs/qwen235b_${MODE_LABEL}_${variant}"
+  printf '%s' "sbatch --nodes=32 --account=${ACCOUNT} --job-name=${ACCOUNT}-specdec.q235-${MODE_LABEL}-${job_variant} --partition=${PARTITION} --time=${WALLTIME} --segment=16 --output=${log_root}/slurm-%j.out ray.sub"
 }
 
 if [[ "${DRY_RUN}" == "true" ]]; then
@@ -129,20 +136,25 @@ for required in \
   fi
 done
 
+if [[ -n "${MEGATRON_CHECKPOINT_DIR}" && ! -d "${MEGATRON_CHECKPOINT_DIR}" ]]; then
+  echo "ERROR: missing Megatron checkpoint directory: ${MEGATRON_CHECKPOINT_DIR}" >&2
+  exit 2
+fi
+
 repo_head="$(git rev-parse HEAD)"
-printf 'job_id,variant,k,repo_head,config,max_steps,max_new_tokens,enforce_eager,nodes,gpus_per_node,segment,container,log_dir,wandb_project,wandb_name\n'
+printf 'job_id,variant,k,repo_head,config,max_steps,max_new_tokens,enforce_eager,async_engine,attention_backend,nodes,gpus_per_node,segment,container,log_dir,wandb_project,wandb_name\n'
 
 submit_variant() {
   local variant="$1"
   local k="$2"
   local command="$3"
   local job_variant="${variant//_/-}"
-  local log_root="${RUN_ROOT}/logs/qwen235b_sync_${variant}"
-  local wandb_name="qwen235b_perfcfg_sync_${variant}_recipeosl8192_cudagraph_step20_20260701"
+  local log_root="${RUN_ROOT}/logs/qwen235b_${MODE_LABEL}_${variant}"
+  local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_step20_${RUN_TAG}"
   local sbatch_args=(
     --nodes=32
     --account="${ACCOUNT}"
-    --job-name="${ACCOUNT}-specdec.q235-${job_variant}"
+    --job-name="${ACCOUNT}-specdec.q235-${MODE_LABEL}-${job_variant}"
     --partition="${PARTITION}"
     --time="${WALLTIME}"
     --segment=16
@@ -178,9 +190,9 @@ submit_variant() {
     fi
   fi
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "${job_id}" "${variant}" "${k}" "${repo_head}" "${CONFIG}" \
-    "${MAX_STEPS}" 8192 false 32 4 16 "${CONTAINER}" "${log_root}" \
+    "${MAX_STEPS}" 8192 false recipe_true recipe_default 32 4 16 "${CONTAINER}" "${log_root}" \
     "${WANDB_PROJECT}" "${wandb_name}"
 }
 REMOTE
@@ -207,7 +219,10 @@ printf '%s\n' "${remote_payload}" | \
       DRAFT_MODEL="${DRAFT_MODEL}" \
       CONFIG="${CONFIG}" \
       RUN_ROOT="${RUN_ROOT}" \
+      RUN_TAG="${RUN_TAG}" \
+      MODE_LABEL="${MODE_LABEL}" \
       WANDB_PROJECT="${WANDB_PROJECT}" \
+      MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR}" \
       ACCOUNT="${ACCOUNT}" \
       PARTITION="${PARTITION}" \
       WALLTIME="${WALLTIME}" \
