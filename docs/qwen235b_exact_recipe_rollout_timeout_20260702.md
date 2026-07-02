@@ -65,11 +65,12 @@ Slurm `--segment=16`. It passed `sbatch --test-only` and started on nodes
 with zero NCCL timeout, `EngineDeadError`, or distributed-backend fatal
 markers. All 128 Ray actors joined, W&B run `yy7q1jcl` was created, and the
 resolved vLLM 0.20.0 config confirms CUDA Graphs, prefix caching, chunked
-prefill, and the Triton MoE backend. CUDA Graph capture completed and the job
-entered Step 1/20. If it passes policy logprob and completes update boundaries,
-topology placement is the demonstrated root cause for the non-colocated
-failure. The colocated Step 6 sleep/wake failure remains a separate issue until
-an exact-sync control isolates the attention backend.
+prefill, and the Triton MoE backend. CUDA Graph capture completed, the run
+passed the former Step 1 policy/reference-logprob failure boundary, and it has
+reached Step 4/20 with zero strict fatal markers. This demonstrates that missing
+topology-aware segment placement caused the non-colocated failure. The
+colocated Step 6 sleep/wake failure remains a separate issue until an exact-sync
+control isolates the attention backend.
 
 ## Unrelated vLLM Issue
 
