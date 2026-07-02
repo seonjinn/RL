@@ -33,7 +33,7 @@ GPU or one bad host.
 |---|---|---|---|---|
 | `2318729` | true | false | `TRITON_ATTN` | Completed 20/20 |
 | `2319201` | true | true | recipe default, resolved to FlashInfer | Failed in Step 6 |
-| `2319329` | false | true | recipe default | Pending async-1off control |
+| `2319329` | false | true | recipe default | Running; passed five-minute startup gate |
 
 The successful and failed sync jobs differ in two runtime variables, not one:
 vLLM async-engine mode and attention backend. Therefore neither variable is an
@@ -47,7 +47,9 @@ execution. FlashInfer attention remains a competing variable because the
 successful diagnostic explicitly used Triton attention.
 
 The non-colocated async-1off control `2319329` removes sleep/wake while keeping
-the async engine. If it runs beyond the same update boundary, that supports the
+the async engine. It started on 32 Pretyche nodes with `segment=16`, created W&B
+run `80eouh9d`, and passed the five-minute startup gate with zero strict fatal
+markers. If it runs beyond the same update boundary, that supports the
 sleep/wake interaction hypothesis. A second minimal control should keep the
 exact sync recipe and async engine but add only
 `attention_backend=TRITON_ATTN`.
@@ -64,6 +66,6 @@ corruption. That patch is not a demonstrated fix for this failure.
 Pretyche exact-sync Eagle jobs `2319202`-`2319205` and Lyris colocated PARD
 jobs `2261382`-`2261383` are held to avoid consuming 32-node allocations on a
 baseline path that is currently unstable. Lyris exact async-1off jobs remain
-eligible, and Pretyche non-colocated control `2319329` is queued.
+eligible, and Pretyche non-colocated control `2319329` is running.
 
 No NeMo-RL or vLLM core patch has been applied for this issue.
