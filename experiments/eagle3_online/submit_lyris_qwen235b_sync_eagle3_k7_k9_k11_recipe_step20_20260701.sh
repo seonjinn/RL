@@ -20,8 +20,18 @@ MAX_STEPS="${MAX_STEPS:-20}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 OUT="${OUT:-${ROOT_DIR}/docs/latest_lyris_nemorl_qwen235b_sync_eagle3_k7_k9_k11_recipe_step20_cudagraph_20260701_jobs.csv}"
+VARIANTS="${VARIANTS:-baseline,eagle3_k7,eagle3_k9,eagle3_k11}"
 
-variants=(baseline eagle3_k7 eagle3_k9 eagle3_k11)
+IFS=',' read -r -a variants <<< "${VARIANTS}"
+for variant in "${variants[@]}"; do
+  case "${variant}" in
+    baseline|eagle3_k7|eagle3_k9|eagle3_k11) ;;
+    *)
+      echo "ERROR: unsupported variant: ${variant}" >&2
+      exit 2
+      ;;
+  esac
+done
 
 render_command() {
   local variant="$1"
@@ -68,6 +78,7 @@ export TORCH_EXTENSIONS_DIR='${node_cache}/torch_extensions'
 export PYTHONPYCACHEPREFIX='${node_cache}/pycache'
 export PYTHONDONTWRITEBYTECODE=1
 export MEGATRON_DATASET_HELPERS_BUILD_DIR='${node_cache}/megatron_dataset_helpers'
+export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY='FLASHINFER_WORKSPACE_BASE,FLASHINFER_CACHE_DIR,TORCHINDUCTOR_CACHE_DIR,TRITON_CACHE_DIR,CUDA_CACHE_PATH,XDG_CACHE_HOME,TORCH_EXTENSIONS_DIR,PYTHONPYCACHEPREFIX'
 export PYTHONPATH='${REMOTE_REPO}:${REMOTE_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REMOTE_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM'
 python '${REMOTE_REPO}/examples/run_grpo.py' \
   --config '${REMOTE_REPO}/${CONFIG}' \

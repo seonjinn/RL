@@ -107,3 +107,31 @@ def test_dry_run_isolates_compilation_caches_from_wandb_home() -> None:
             assert f"export {name}='{value}'" in section
 
         assert "/wandb_netrc_home/.cache/" not in section
+        assert (
+            "export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY="
+            "'FLASHINFER_WORKSPACE_BASE,FLASHINFER_CACHE_DIR,"
+            "TORCHINDUCTOR_CACHE_DIR,TRITON_CACHE_DIR,CUDA_CACHE_PATH,"
+            "XDG_CACHE_HOME,TORCH_EXTENSIONS_DIR,PYTHONPYCACHEPREFIX'"
+        ) in section
+
+
+def test_dry_run_can_select_speculative_variants_without_baseline() -> None:
+    completed = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "VARIANTS": "eagle3_k7,eagle3_k11",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output = completed.stdout
+
+    assert output.count("[DRY-RUN] variant=") == 2
+    assert "[DRY-RUN] variant=eagle3_k7" in output
+    assert "[DRY-RUN] variant=eagle3_k11" in output
+    assert "[DRY-RUN] variant=baseline" not in output
+    assert "[DRY-RUN] variant=eagle3_k9" not in output
