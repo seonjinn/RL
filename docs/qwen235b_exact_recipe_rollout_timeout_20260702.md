@@ -34,7 +34,7 @@ GPU or one bad host.
 | `2318729` | true | false | `TRITON_ATTN` | Completed 20/20 |
 | `2319201` | true | true | recipe default, resolved to FlashInfer | Failed in Step 6 |
 | `2319329` | false | true | recipe default | Failed in Step 1 policy/reference logprob |
-| `2319427` | false | true | recipe default | Running with topology-aware segment placement |
+| `2319427` | false | true | recipe default | Passed initial topology boundary; rollout TP8 timed out in Step 8 |
 
 The successful and failed sync jobs differ in two runtime variables, not one:
 vLLM async-engine mode and attention backend. Therefore neither variable is an
@@ -60,17 +60,19 @@ role inside one segment.
 
 Job `2319427` is the minimal config-only retry. It preserves the exact
 performance async-1off recipe and adds only `cluster.segment_size=16`, matching
-Slurm `--segment=16`. It passed `sbatch --test-only` and started on nodes
-`ptyche[0181-0196,0217-0232]`. It also passed five minutes of startup monitoring
-with zero NCCL timeout, `EngineDeadError`, or distributed-backend fatal
-markers. All 128 Ray actors joined, W&B run `yy7q1jcl` was created, and the
-resolved vLLM 0.20.0 config confirms CUDA Graphs, prefix caching, chunked
-prefill, and the Triton MoE backend. CUDA Graph capture completed, the run
-passed the former Step 1 policy/reference-logprob failure boundary, and it has
-reached Step 4/20 with zero strict fatal markers. This demonstrates that missing
-topology-aware segment placement caused the non-colocated failure. The
-colocated Step 6 sleep/wake failure remains a separate issue until an exact-sync
-control isolates the attention backend.
+Slurm `--segment=16`. It passed `sbatch --test-only`, all 128 Ray actors joined,
+and W&B run `yy7q1jcl` was created. The run passed the former Step 1
+policy/reference-logprob failure boundary and entered Step 8, confirming that
+missing topology-aware placement caused that earlier failure.
+
+The run then exposed a separate rollout failure. At 12:49 PDT, vLLM TP8
+`_ALLGATHER_BASE` sequence `59786` timed out after 600 seconds during the Step 8
+weight-update path. Each rank had `1,291,456` input elements and `10,331,648`
+output elements. The watchdog aborted Ray rollout workers, the EngineCore became
+dead, and subsequent generation and weight-update calls raised
+`EngineDeadError`. Topology-aware placement therefore fixes initial
+train/inference placement but does not make the exact async rollout weight-sync
+path stable through 20 steps.
 
 ## Unrelated vLLM Issue
 
@@ -81,9 +83,10 @@ corruption. That patch is not a demonstrated fix for this failure.
 
 ## Scheduling Decision
 
-Pretyche exact-sync Eagle jobs `2319202`-`2319205` and Lyris colocated PARD
-jobs `2261382`-`2261383` are held to avoid consuming 32-node allocations on a
-baseline path that is currently unstable. Lyris exact async-1off jobs remain
-eligible, and Pretyche topology-aware control `2319427` is running.
+Pretyche exact-sync Eagle jobs `2319202`-`2319205`, exact async Eagle jobs
+`2319487`-`2319489`, and Lyris colocated PARD jobs `2261382`-`2261383` are held
+to avoid consuming 32-node allocations on an unstable baseline path. Lyris
+exact async-1off jobs remain eligible because they use a separate allocation
+and matched no-fused-all-reduce baseline cohort.
 
 No NeMo-RL or vLLM core patch has been applied for this issue.
