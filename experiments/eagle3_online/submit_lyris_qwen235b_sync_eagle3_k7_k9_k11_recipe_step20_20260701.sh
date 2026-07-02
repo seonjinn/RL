@@ -8,11 +8,14 @@ CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_
 HF_HOME="${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
 TARGET_MODEL="${TARGET_MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65}"
 DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba}"
+PARD_DRAFT_MODEL="${PARD_DRAFT_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
+PARD_DRAFT_TP="${PARD_DRAFT_TP:-8}"
 CONFIG="${CONFIG:-examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml}"
 RUN_ID="${RUN_ID:-20260701_lyris_qwen235b_sync_eagle3_k7_k9_k11_recipe_step20_cudagraph}"
 RUN_ROOT="${RUN_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/${RUN_ID}}"
 RUN_TAG="${RUN_TAG:-20260701}"
 MODE_LABEL="${MODE_LABEL:-sync}"
+STEP_LABEL="${STEP_LABEL:-step20}"
 WANDB_HOME="${WANDB_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/wandb_netrc_home}"
 WANDB_PROJECT="${WANDB_PROJECT:-sna-nemorl-specdec-lyris}"
 MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR:-}"
@@ -28,7 +31,7 @@ VARIANTS="${VARIANTS:-baseline,eagle3_k7,eagle3_k9,eagle3_k11}"
 IFS=',' read -r -a variants <<< "${VARIANTS}"
 for variant in "${variants[@]}"; do
   case "${variant}" in
-    baseline|eagle3_k5|eagle3_k7|eagle3_k9|eagle3_k11) ;;
+    baseline|baseline_noarrms|eagle3_k5|eagle3_k7|eagle3_k9|eagle3_k11|pard_k1|pard_k7|pard_k9|pard_k16) ;;
     *)
       echo "ERROR: unsupported variant: ${variant}" >&2
       exit 2
@@ -43,20 +46,35 @@ render_command() {
   local checkpoint_root="${RUN_ROOT}/megatron_checkpoints/qwen235b_${MODE_LABEL}_${variant}"
   local training_checkpoint_root="${RUN_ROOT}/training_checkpoints/qwen235b_${MODE_LABEL}_${variant}"
   local node_cache="/tmp/sna/${RUN_ID}_${variant}"
-  local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_step20_${RUN_TAG}"
+  local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_${STEP_LABEL}_${RUN_TAG}"
   local specdec_overrides=""
 
   if [[ -n "${MEGATRON_CHECKPOINT_DIR}" ]]; then
     checkpoint_root="${MEGATRON_CHECKPOINT_DIR}"
   fi
 
-  if [[ "${variant}" != "baseline" ]]; then
-    specdec_overrides="policy.draft.enabled=false \
+  case "${variant}" in
+    baseline)
+      ;;
+    baseline_noarrms)
+      specdec_overrides="++policy.generation.vllm_kwargs.compilation_config.pass_config.fuse_allreduce_rms=false"
+      ;;
+    eagle3_k*)
+      specdec_overrides="policy.draft.enabled=false \
 ++policy.generation.vllm_kwargs.speculative_config.method=eagle3 \
 ++policy.generation.vllm_kwargs.speculative_config.model=${DRAFT_MODEL} \
 ++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${k} \
 ++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
-  fi
+      ;;
+    pard_k*)
+      specdec_overrides="policy.draft.enabled=false \
+++policy.generation.vllm_kwargs.compilation_config.pass_config.fuse_allreduce_rms=false \
+++policy.generation.vllm_kwargs.speculative_config.method=pard \
+++policy.generation.vllm_kwargs.speculative_config.model=${PARD_DRAFT_MODEL} \
+++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${k} \
+++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${PARD_DRAFT_TP}"
+      ;;
+  esac
 
   cat <<EOF
 set -euo pipefail
@@ -112,7 +130,7 @@ render_sbatch() {
 if [[ "${DRY_RUN}" == "true" ]]; then
   for variant in "${variants[@]}"; do
     k="${variant##*_k}"
-    [[ "${variant}" == "baseline" ]] && k=0
+    [[ "${variant}" == "baseline" || "${variant}" == "baseline_noarrms" ]] && k=0
     echo "[DRY-RUN] variant=${variant}"
     echo "[DRY-RUN] $(render_sbatch "${variant}")"
     render_command "${variant}" "${k}"
@@ -128,6 +146,7 @@ for required in \
   "${CONTAINER}" \
   "${TARGET_MODEL}/config.json" \
   "${DRAFT_MODEL}/config.json" \
+  "${PARD_DRAFT_MODEL}/config.json" \
   "${CONFIG}" \
   ray.sub; do
   if [[ ! -s "${required}" ]]; then
@@ -150,7 +169,7 @@ submit_variant() {
   local command="$3"
   local job_variant="${variant//_/-}"
   local log_root="${RUN_ROOT}/logs/qwen235b_${MODE_LABEL}_${variant}"
-  local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_step20_${RUN_TAG}"
+  local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_${STEP_LABEL}_${RUN_TAG}"
   local sbatch_args=(
     --nodes=32
     --account="${ACCOUNT}"
@@ -200,7 +219,7 @@ REMOTE
 
 for variant in "${variants[@]}"; do
   k="${variant##*_k}"
-  [[ "${variant}" == "baseline" ]] && k=0
+  [[ "${variant}" == "baseline" || "${variant}" == "baseline_noarrms" ]] && k=0
   command="$(render_command "${variant}" "${k}")"
   printf -v quoted_variant '%q' "${variant}"
   printf -v quoted_k '%q' "${k}"
@@ -217,10 +236,13 @@ printf '%s\n' "${remote_payload}" | \
       HF_HOME="${HF_HOME}" \
       TARGET_MODEL="${TARGET_MODEL}" \
       DRAFT_MODEL="${DRAFT_MODEL}" \
+      PARD_DRAFT_MODEL="${PARD_DRAFT_MODEL}" \
+      PARD_DRAFT_TP="${PARD_DRAFT_TP}" \
       CONFIG="${CONFIG}" \
       RUN_ROOT="${RUN_ROOT}" \
       RUN_TAG="${RUN_TAG}" \
       MODE_LABEL="${MODE_LABEL}" \
+      STEP_LABEL="${STEP_LABEL}" \
       WANDB_PROJECT="${WANDB_PROJECT}" \
       MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR}" \
       ACCOUNT="${ACCOUNT}" \
