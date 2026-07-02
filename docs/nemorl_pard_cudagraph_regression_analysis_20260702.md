@@ -16,9 +16,9 @@ backend, max_num_seqs 128, and max_num_batched_tokens 32768.
 |---|---:|---:|---:|---:|---:|
 | Baseline | 2-20 | 5,173.6 | 1.000x | n/a | n/a |
 | Eagle-3 K5 | 2-20 | 4,695.6 | 0.908x | 50.1% | 3.51 |
-| PARD K1 | 2-16 live | 3,483.9 | 0.673x | 79.7% | 1.80 |
-| PARD K7 | 2-14 live | 2,662.8 | 0.515x | 35.6% | 3.49 |
-| PARD K9 | 2-13 live | 2,410.0 | 0.466x | 28.2% | 3.53 |
+| PARD K1 | 2-20 | 3,484.4 | 0.673x | 79.7% | 1.80 |
+| PARD K7 | 2-19 live | 2,646.6 | 0.512x | 35.7% | 3.50 |
+| PARD K9 | 2-17 live | 2,422.7 | 0.468x | 28.3% | 3.55 |
 | PARD K16 | 2-20 | 1,950.8 | 0.377x | 15.5% | 3.48 |
 
 The live rows are preliminary, but the monotonic cost trend and the completed
