@@ -82,9 +82,10 @@ This is a separate operability bug from the Qwen3-30B-A3B performance regression
 1. Re-run a matched Qwen3-32B baseline and PARD K1 smoke with only
    `compilation_config.pass_config.fuse_allreduce_rms=false`. CUDA Graphs remain
    enabled; this isolates the broken fusion without switching to eager mode.
-   PARD K1 smoke `2261065` is queued after scheduler preflight `2261059` passed.
-   Expand to a matched baseline and K7/K9/K16 only after the smoke reaches a
-   complete step.
+   PARD K1 smoke `2261065` passed scheduler preflight `2261059`, then passed the
+   prior 6m28s-6m44s failure window and completed draft TP2 CUDA Graph capture
+   with the fusion disabled. Expand to a matched baseline and K7/K9/K16 only
+   after the smoke reaches a complete timed step.
 2. Profile one baseline, PARD K1, PARD K7, and Eagle-3 K5 generation window to
    separate target forward, drafter forward, verification, sampler, and collective
    time.
