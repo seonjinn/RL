@@ -56,6 +56,18 @@ export NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=1800
 export RAY_CGRAPH_GET_TIMEOUT=7200
 export RAY_CGRAPH_get_timeout=7200
 export NODE_LOCAL_CACHE_ROOT='${node_cache}'
+export PIP_CACHE_DIR='${RUN_ROOT}/cache/pip'
+export XDG_CACHE_HOME='${node_cache}/xdg'
+export VLLM_CACHE_ROOT='${node_cache}/vllm'
+export FLASHINFER_WORKSPACE_BASE='${node_cache}/flashinfer_workspace'
+export FLASHINFER_CACHE_DIR='${node_cache}/flashinfer_workspace/.cache/flashinfer'
+export TORCHINDUCTOR_CACHE_DIR='${node_cache}/torchinductor'
+export TRITON_CACHE_DIR='${node_cache}/triton'
+export CUDA_CACHE_PATH='${node_cache}/cuda'
+export TORCH_EXTENSIONS_DIR='${node_cache}/torch_extensions'
+export PYTHONPYCACHEPREFIX='${node_cache}/pycache'
+export PYTHONDONTWRITEBYTECODE=1
+export MEGATRON_DATASET_HELPERS_BUILD_DIR='${node_cache}/megatron_dataset_helpers'
 export PYTHONPATH='${REMOTE_REPO}:${REMOTE_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REMOTE_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM'
 python '${REMOTE_REPO}/examples/run_grpo.py' \
   --config '${REMOTE_REPO}/${CONFIG}' \

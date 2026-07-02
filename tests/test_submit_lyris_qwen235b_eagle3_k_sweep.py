@@ -72,3 +72,38 @@ def test_dry_run_uses_offline_eagle3_only_for_speculative_variants() -> None:
         assert "speculative_config.method=eagle3" in section
         assert "speculative_config.draft_tensor_parallel_size=1" in section
         assert "policy.draft.enabled=false" in section
+
+
+def test_dry_run_isolates_compilation_caches_from_wandb_home() -> None:
+    completed = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin", "DRY_RUN": "true"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    sections = completed.stdout.split("[DRY-RUN] variant=")[1:]
+
+    for section in sections:
+        variant = section.splitlines()[0]
+        node_cache = (
+            "/tmp/sna/"
+            "20260701_lyris_qwen235b_sync_eagle3_k7_k9_k11_recipe_"
+            f"step20_cudagraph_{variant}"
+        )
+        expected_cache_env = {
+            "NODE_LOCAL_CACHE_ROOT": node_cache,
+            "XDG_CACHE_HOME": f"{node_cache}/xdg",
+            "VLLM_CACHE_ROOT": f"{node_cache}/vllm",
+            "FLASHINFER_WORKSPACE_BASE": f"{node_cache}/flashinfer_workspace",
+            "TORCHINDUCTOR_CACHE_DIR": f"{node_cache}/torchinductor",
+            "TRITON_CACHE_DIR": f"{node_cache}/triton",
+            "CUDA_CACHE_PATH": f"{node_cache}/cuda",
+            "TORCH_EXTENSIONS_DIR": f"{node_cache}/torch_extensions",
+            "PYTHONPYCACHEPREFIX": f"{node_cache}/pycache",
+        }
+        for name, value in expected_cache_env.items():
+            assert f"export {name}='{value}'" in section
+
+        assert "/wandb_netrc_home/.cache/" not in section
