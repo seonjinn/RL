@@ -63,11 +63,13 @@ performance async-1off recipe and adds only `cluster.segment_size=16`, matching
 Slurm `--segment=16`. It passed `sbatch --test-only` and started on nodes
 `ptyche[0181-0196,0217-0232]`. It also passed five minutes of startup monitoring
 with zero NCCL timeout, `EngineDeadError`, or distributed-backend fatal
-markers; driver and W&B initialization are still pending. If it passes policy
-logprob and completes update boundaries, topology placement is the demonstrated
-root cause for the non-colocated failure. The colocated Step 6 sleep/wake
-failure remains a separate issue until an exact-sync control isolates the
-attention backend.
+markers. All 128 Ray actors joined, W&B run `yy7q1jcl` was created, and the
+resolved vLLM 0.20.0 config confirms CUDA Graphs, prefix caching, chunked
+prefill, and the Triton MoE backend. CUDA Graph capture completed and the job
+entered Step 1/20. If it passes policy logprob and completes update boundaries,
+topology placement is the demonstrated root cause for the non-colocated
+failure. The colocated Step 6 sleep/wake failure remains a separate issue until
+an exact-sync control isolates the attention backend.
 
 ## Unrelated vLLM Issue
 
