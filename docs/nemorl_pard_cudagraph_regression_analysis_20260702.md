@@ -49,9 +49,11 @@ K16 result are already strong enough to reject a CUDA-Graph-disabled hypothesis.
 | PARD drafter | 28 | 1,024 | 3,072 | Dense Qwen3-0.6B with full vocabulary head |
 
 PARD avoids K sequential drafter passes, but it does not make its single pass
-free. At K16 and max_num_seqs 128, the drafter can process up to 2,048 masked
-positions through 28 dense transformer layers plus a 151,936-token vocabulary
-head. The target must then verify K+1 positions per request.
+free. The parallel proposer retains the target query position and adds K masked
+slots per request. At K16 and max_num_seqs 128, one drafter invocation can
+therefore cover up to 2,176 positions through 28 dense transformer layers plus a
+151,936-token vocabulary head. The target must then verify K+1 positions per
+request.
 
 The accepted length saturates near 3.5 from K7 through K16. Increasing K beyond
 7 therefore expands drafter and verifier work without increasing useful accepted
