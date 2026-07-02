@@ -18,6 +18,8 @@ MODE_LABEL="${MODE_LABEL:-sync}"
 STEP_LABEL="${STEP_LABEL:-step20}"
 WANDB_HOME="${WANDB_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/wandb_netrc_home}"
 WANDB_PROJECT="${WANDB_PROJECT:-sna-nemorl-specdec-lyris}"
+ATTENTION_BACKEND="${ATTENTION_BACKEND:-}"
+CONFIG_SEGMENT_SIZE="${CONFIG_SEGMENT_SIZE:-}"
 MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR:-}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-gb200}"
@@ -48,6 +50,7 @@ render_command() {
   local node_cache="/tmp/sna/${RUN_ID}_${variant}"
   local wandb_name="qwen235b_perfcfg_${MODE_LABEL}_${variant}_recipeosl8192_cudagraph_${STEP_LABEL}_${RUN_TAG}"
   local specdec_overrides=""
+  local runtime_overrides=""
 
   if [[ -n "${MEGATRON_CHECKPOINT_DIR}" ]]; then
     checkpoint_root="${MEGATRON_CHECKPOINT_DIR}"
@@ -75,6 +78,13 @@ render_command() {
 ++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${PARD_DRAFT_TP}"
       ;;
   esac
+
+  if [[ -n "${ATTENTION_BACKEND}" ]]; then
+    runtime_overrides+="++policy.generation.vllm_kwargs.attention_backend=${ATTENTION_BACKEND} "
+  fi
+  if [[ -n "${CONFIG_SEGMENT_SIZE}" ]]; then
+    runtime_overrides+="cluster.segment_size=${CONFIG_SEGMENT_SIZE} "
+  fi
 
   cat <<EOF
 set -euo pipefail
@@ -112,6 +122,7 @@ python '${REMOTE_REPO}/examples/run_grpo.py' \
   policy.generation.vllm_cfg.enforce_eager=false \
   grpo.max_num_steps=${MAX_STEPS} \
   checkpointing.checkpoint_dir='${training_checkpoint_root}' \
+  ${runtime_overrides} \
   ${specdec_overrides} \
   logger.log_dir='${log_root}/nemo_logs' \
   logger.wandb_enabled=true \
@@ -211,7 +222,7 @@ submit_variant() {
 
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "${job_id}" "${variant}" "${k}" "${repo_head}" "${CONFIG}" \
-    "${MAX_STEPS}" 8192 false recipe_true recipe_default 32 4 16 "${CONTAINER}" "${log_root}" \
+    "${MAX_STEPS}" 8192 false recipe_true "${ATTENTION_BACKEND:-recipe_default}" 32 4 16 "${CONTAINER}" "${log_root}" \
     "${WANDB_PROJECT}" "${wandb_name}"
 }
 REMOTE
@@ -244,6 +255,8 @@ printf '%s\n' "${remote_payload}" | \
       MODE_LABEL="${MODE_LABEL}" \
       STEP_LABEL="${STEP_LABEL}" \
       WANDB_PROJECT="${WANDB_PROJECT}" \
+      ATTENTION_BACKEND="${ATTENTION_BACKEND}" \
+      CONFIG_SEGMENT_SIZE="${CONFIG_SEGMENT_SIZE}" \
       MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR}" \
       ACCOUNT="${ACCOUNT}" \
       PARTITION="${PARTITION}" \
