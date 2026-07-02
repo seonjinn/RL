@@ -33,28 +33,38 @@ GPU or one bad host.
 |---|---|---|---|---|
 | `2318729` | true | false | `TRITON_ATTN` | Completed 20/20 |
 | `2319201` | true | true | recipe default, resolved to FlashInfer | Failed in Step 6 |
-| `2319329` | false | true | recipe default | Running Step 1; rollout and reward completed |
+| `2319329` | false | true | recipe default | Failed in Step 1 policy/reference logprob |
+| `2319427` | false | true | recipe default | Running with topology-aware segment placement |
 
 The successful and failed sync jobs differ in two runtime variables, not one:
 vLLM async-engine mode and attention backend. Therefore neither variable is an
-isolated root cause yet.
+isolated root cause for the colocated failure yet.
 
 ## Current Hypothesis
 
-The strongest current hypothesis is an interaction between the async vLLM
-engine, colocated level-1 sleep/wake after weight refit, and multi-node TP8
-execution. FlashInfer attention remains a competing variable because the
-successful diagnostic explicitly used Triton attention.
+The non-colocated async-1off control `2319329` removed sleep/wake while keeping
+the async engine. It completed its first rollout and reward computation, but
+then failed after 26:35 in policy/reference logprob. The first observed timeout
+was TP `_ALLGATHER_BASE`; EP `ALLTOALL_BASE` and pipeline collectives timed out
+in the same failure window. The first collective made no progress for 600
+seconds, so increasing the timeout is not supported by the evidence.
 
-The non-colocated async-1off control `2319329` removes sleep/wake while keeping
-the async engine. It started on 32 Pretyche nodes with `segment=16`, created W&B
-run `80eouh9d`, passed the five-minute startup gate, and completed its first
-rollout and reward computation with zero strict fatal markers. It is currently
-executing the Step 1 policy/reference logprob phase. If it runs beyond the same
-update boundary, that supports the
-sleep/wake interaction hypothesis. A second minimal control should keep the
-exact sync recipe and async engine but add only
-`attention_backend=TRITON_ATTN`.
+The resolved config for `2319329` had `cluster.segment_size=None`, even though
+the Slurm allocation used `--segment=16`. NeMo-RL only activates its
+topology-aware Ray placement constraints when `cluster.segment_size` is set.
+With `None`, the 16 training nodes and 16 inference nodes can be interleaved
+across two NVLink segments. This is consistent with the earlier failed smoke
+job `2318035`. In contrast, control job `2318343` completed when Slurm used
+`--segment=8` and Hydra used `cluster.segment_size=8`, keeping each eight-node
+role inside one segment.
+
+Job `2319427` is the minimal config-only retry. It preserves the exact
+performance async-1off recipe and adds only `cluster.segment_size=16`, matching
+Slurm `--segment=16`. It passed `sbatch --test-only` and started on nodes
+`ptyche[0181-0196,0217-0232]`. If it passes policy logprob and completes update
+boundaries, topology placement is the demonstrated root cause for the
+non-colocated failure. The colocated Step 6 sleep/wake failure remains a
+separate issue until an exact-sync control isolates the attention backend.
 
 ## Unrelated vLLM Issue
 
@@ -68,6 +78,6 @@ corruption. That patch is not a demonstrated fix for this failure.
 Pretyche exact-sync Eagle jobs `2319202`-`2319205` and Lyris colocated PARD
 jobs `2261382`-`2261383` are held to avoid consuming 32-node allocations on a
 baseline path that is currently unstable. Lyris exact async-1off jobs remain
-eligible, and Pretyche non-colocated control `2319329` is running.
+eligible, and Pretyche topology-aware control `2319427` is running.
 
 No NeMo-RL or vLLM core patch has been applied for this issue.
