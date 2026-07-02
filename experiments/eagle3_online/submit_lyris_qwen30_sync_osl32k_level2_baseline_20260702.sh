@@ -10,6 +10,7 @@ RUN_ROOT="${RUN_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_r
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-gb200}"
 WALLTIME="${WALLTIME:-03:00:00}"
+MAX_STEPS="${MAX_STEPS:-20}"
 WANDB_NAME="${WANDB_NAME:-qwen30ba3b_perfcfg_sync_osl32k_baseline_level2_cudagraph_cp2_pad8_step20_lyris_r1_20260702}"
 SUBMIT="${SUBMIT:-false}"
 
@@ -21,6 +22,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "${REMOTE_HOST}" bash -s -- \
   "${ACCOUNT}" \
   "${PARTITION}" \
   "${WALLTIME}" \
+  "${MAX_STEPS}" \
   "${WANDB_NAME}" \
   "${SUBMIT}" <<'REMOTE'
 set -euo pipefail
@@ -32,8 +34,9 @@ run_root="$4"
 account="$5"
 partition="$6"
 walltime="$7"
-wandb_name="$8"
-submit="$9"
+max_steps="$8"
+wandb_name="$9"
+submit="${10}"
 
 source_log="${source_run_root}/slurm-${source_job_id}.out"
 if [[ ! -f "${source_log}" ]]; then
@@ -56,6 +59,7 @@ new_cache_root="/tmp/sna/nemorl_qwen30ba3b-osl32k-baseline-level2-step20-r1"
 COMMAND="${COMMAND//${source_run_root}/${run_root}}"
 COMMAND="${COMMAND//${old_cache_root}/${new_cache_root}}"
 COMMAND+=" policy.megatron_cfg.empty_unused_memory_level=2"
+COMMAND+=" grpo.max_num_steps=${max_steps}"
 COMMAND+=" logger.wandb.name=${wandb_name}"
 
 for required in \
@@ -95,7 +99,7 @@ sbatch_args=(
   --parsable
   --nodes=4
   --account="${account}"
-  --job-name="${account}-specdec.q30-32k-baseline-level2"
+  --job-name="${account}-specdec.q30-32k-baseline-level2-step${max_steps}"
   --partition="${partition}"
   --time="${walltime}"
   --segment=4
@@ -106,6 +110,7 @@ echo "source_job_id=${source_job_id}"
 echo "run_root=${run_root}"
 echo "wandb_name=${wandb_name}"
 echo "config_delta=policy.megatron_cfg.empty_unused_memory_level:1->2"
+echo "max_steps=${max_steps}"
 
 test_only_output="$(sbatch --test-only "${sbatch_args[@]}" "${remote_repo}/ray.sub" 2>&1)"
 echo "${test_only_output}"
