@@ -1,6 +1,6 @@
 # NeMo-RL PARD CUDA Graph Regression Analysis
 
-Updated: 2026-07-02 08:30 PDT
+Updated: 2026-07-02 09:10 PDT
 
 ## Scope
 
@@ -16,9 +16,9 @@ backend, max_num_seqs 128, and max_num_batched_tokens 32768.
 |---|---:|---:|---:|---:|---:|
 | Baseline | 2-20 | 5,173.6 | 1.000x | n/a | n/a |
 | Eagle-3 K5 | 2-20 | 4,695.6 | 0.908x | 50.1% | 3.51 |
-| PARD K1 | 2-7 live | 3,482.7 | 0.673x | 79.6% | 1.80 |
-| PARD K7 | 2-7 live | 2,734.5 | 0.529x | 35.6% | 3.49 |
-| PARD K9 | 2-6 live | 2,355.5 | 0.455x | 28.0% | 3.52 |
+| PARD K1 | 2-16 live | 3,483.9 | 0.673x | 79.7% | 1.80 |
+| PARD K7 | 2-14 live | 2,662.8 | 0.515x | 35.6% | 3.49 |
+| PARD K9 | 2-13 live | 2,410.0 | 0.466x | 28.2% | 3.53 |
 | PARD K16 | 2-20 | 1,950.8 | 0.377x | 15.5% | 3.48 |
 
 The live rows are preliminary, but the monotonic cost trend and the completed
@@ -70,14 +70,19 @@ target iterations. Qwen3-30B-A3B makes this especially visible because only 3B
 target parameters are active per token.
 
 For Qwen3-32B, the generic draft-model path currently also requires draft TP2 to
-match target TP2. That adds tensor-parallel communication to the small drafter and
-is expected to be less efficient than a supported draft-TP1 path. This remains a
-hypothesis until the queued K1/K7/K9/K16 TP2 cohort completes.
+match target TP2. The first strict TP2 K1/K7/K9/K16 cohort did not reach a timed
+step: all four jobs failed deterministically during vLLM compilation because the
+FlashInfer TRT-LLM fused all-reduce workspace was initialized for target hidden
+size 5,120 and then reused for the PARD draft hidden size 1,024. At token count
+32,768, vLLM rejected the workspace rather than risking an illegal memory access.
+This is a separate operability bug from the Qwen3-30B-A3B performance regression.
 
 ## Next Evidence Gates
 
-1. Complete the Qwen3-32B target-TP2/draft-TP2 K1/K7/K9/K16 cohort and compare
-   proposer sensitivity against Qwen3-30B-A3B.
+1. Re-run a matched Qwen3-32B baseline and PARD K1 smoke with only
+   `compilation_config.pass_config.fuse_allreduce_rms=false`. CUDA Graphs remain
+   enabled; this isolates the broken fusion without switching to eager mode.
+   Expand to K7/K9/K16 only after the smoke reaches a complete step.
 2. Profile one baseline, PARD K1, PARD K7, and Eagle-3 K5 generation window to
    separate target forward, drafter forward, verification, sampler, and collective
    time.
@@ -91,6 +96,8 @@ hypothesis until the queued K1/K7/K9/K16 TP2 cohort completes.
 
 - Lyris jobs: baseline `2250928`, Eagle-3 K5 `2250930`, PARD K1 `2260579`,
   PARD K7 `2260580`, PARD K9 `2260581`, and PARD K16 `2250929`.
+- Qwen3-32B failed TP2 jobs: K1 `2260695`, K7 `2260697`, K9 `2260699`, and
+  K16 `2260701`.
 - W&B project: `nvidia/sna-nemorl-specdec-lyris`.
 - Runtime vLLM files: `vllm/v1/spec_decode/llm_base_proposer.py`,
   `vllm/v1/spec_decode/draft_model.py`, `vllm/v1/spec_decode/eagle.py`, and
