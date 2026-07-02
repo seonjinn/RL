@@ -61,10 +61,13 @@ role inside one segment.
 Job `2319427` is the minimal config-only retry. It preserves the exact
 performance async-1off recipe and adds only `cluster.segment_size=16`, matching
 Slurm `--segment=16`. It passed `sbatch --test-only` and started on nodes
-`ptyche[0181-0196,0217-0232]`. If it passes policy logprob and completes update
-boundaries, topology placement is the demonstrated root cause for the
-non-colocated failure. The colocated Step 6 sleep/wake failure remains a
-separate issue until an exact-sync control isolates the attention backend.
+`ptyche[0181-0196,0217-0232]`. It also passed five minutes of startup monitoring
+with zero NCCL timeout, `EngineDeadError`, or distributed-backend fatal
+markers; driver and W&B initialization are still pending. If it passes policy
+logprob and completes update boundaries, topology placement is the demonstrated
+root cause for the non-colocated failure. The colocated Step 6 sleep/wake
+failure remains a separate issue until an exact-sync control isolates the
+attention backend.
 
 ## Unrelated vLLM Issue
 
