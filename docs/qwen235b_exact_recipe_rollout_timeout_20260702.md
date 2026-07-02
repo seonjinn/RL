@@ -66,13 +66,21 @@ policy/reference-logprob failure boundary and entered Step 8, confirming that
 missing topology-aware placement caused that earlier failure.
 
 The run then exposed a separate rollout failure. At 12:49 PDT, vLLM TP8
-`_ALLGATHER_BASE` sequence `59786` timed out after 600 seconds during the Step 8
-weight-update path. Each rank had `1,291,456` input elements and `10,331,648`
-output elements. The watchdog aborted Ray rollout workers, the EngineCore became
-dead, and subsequent generation and weight-update calls raised
+`_ALLGATHER_BASE` sequence `59786` timed out after 600 seconds during Step 8
+decode. The captured stack is `qwen3_moe.compute_logits -> LogitsProcessor ->
+tensor_model_parallel_all_gather`; this is not the later weight-update call.
+Each rank had `1,291,456` input elements and `10,331,648` output elements. The
+watchdog aborted Ray rollout workers, the EngineCore became dead, and subsequent
+generation and weight-update calls raised
 `EngineDeadError`. Topology-aware placement therefore fixes initial
-train/inference placement but does not make the exact async rollout weight-sync
+train/inference placement but does not make the exact async rollout TP8 decode
 path stable through 20 steps.
+
+The minimal next control is Pretyche job `2319650`. It keeps the exact
+async-1off recipe, TP8, 32x4 shape, Slurm/Hydra segment 16, CUDA Graphs, and
+Triton MoE unchanged, and changes only the attention backend to `TRITON_ATTN`.
+It passed scheduler preflight as test-only job `2319649`. This separates the
+recipe-default attention path from the async TP8 Ray executor/communicator path.
 
 ## Unrelated vLLM Issue
 
