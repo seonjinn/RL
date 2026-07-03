@@ -340,6 +340,8 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
 
     assert "z-lab/Qwen3-8B-DFlash-b16" in worker
     assert "arctic-inference==0.1.1" in worker
+    assert "grpcio-tools" in worker
+    assert "cmake ninja" in worker
     assert "ee0da84ab9e04ac7610e28580af62c365e898389" in output
     assert "6a97dab2f17c0a3c031065329f092c4f61108a6f" in output
     assert "6f279bf3f1680e0b5d71c562ca5b91bdeef4c038" in output

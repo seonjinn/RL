@@ -90,9 +90,19 @@ fi
 
 common_site_versioned="${ASSET_ROOT}/python/common-py312-arctic-0.1.1"
 if [[ ! -f "${common_site_versioned}/.complete" ]]; then
+  build_tools="${ASSET_ROOT}/python/build-tools-py312-arctic-0.1.1"
+  if [[ ! -f "${build_tools}/.complete" ]]; then
+    mkdir -p "${build_tools}"
+    python3 -m pip install --upgrade --no-cache-dir --target "${build_tools}" \
+      cmake ninja 'nanobind==2.9.2' 'protobuf==5.29.5' grpcio-tools
+    touch "${build_tools}/.complete"
+  fi
   mkdir -p "${common_site_versioned}"
-  CMAKE_BUILD_PARALLEL_LEVEL=16 python3 -m pip install \
-    --no-build-isolation --no-deps --no-cache-dir \
+  PATH="${build_tools}/bin:${PATH}" \
+    PYTHONPATH="${build_tools}" \
+    CMAKE_BUILD_PARALLEL_LEVEL=16 \
+    python3 -m pip install \
+    --upgrade --no-build-isolation --no-deps --no-cache-dir \
     --target "${common_site_versioned}" 'arctic-inference==0.1.1'
   PYTHONPATH="${common_site_versioned}" python3 -c 'import arctic_inference'
   touch "${common_site_versioned}/.complete"
