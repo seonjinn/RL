@@ -42,6 +42,7 @@ DFLARE_REVISION="55e2c8d86d76ce1e79fa3b8642c7f80091285a82"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
+TIME_LIMIT="${TIME_LIMIT:-00:30:00}"
 
 render_sbatch() {
   cat <<EOF
@@ -54,7 +55,7 @@ render_sbatch() {
 #SBATCH --mem=0
 #SBATCH --exclusive
 #SBATCH --segment=1
-#SBATCH --time=02:00:00
+#SBATCH --time=${TIME_LIMIT}
 #SBATCH --job-name=coreai_dlalgo_llm-vllm024.extended-assets
 #SBATCH --output=${RUN_DIR}/slurm-%j.out
 
