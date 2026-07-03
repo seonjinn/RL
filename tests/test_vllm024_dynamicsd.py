@@ -334,6 +334,36 @@ def test_nemorl_perfcfg_dry_run_preserves_per_engine_recipe_shapes() -> None:
     assert "--gres" not in output
 
 
+def test_legacy_0619_replay_dry_run_preserves_strict_contract() -> None:
+    output = run_dry(
+        "submit_legacy_0619_replay_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="false",
+        MODELS="qwen32",
+        DOMAINS="Math",
+        BATCH_SIZES="1",
+    )
+
+    assert output.count("[DRY-RUN] variant=") == 6
+    assert "math_500_data_prompts_qmath_20260617.jsonl" in output
+    assert "--tensor-parallel-size '2'" in output
+    assert "--throughput-gpu-count '4'" in output
+    assert "--isl '4096'" in output
+    assert "--osl '32768'" in output
+    assert "--batch-sizes 1" in output
+    assert "--max-model-len '40960'" in output
+    assert "--max-num-batched-tokens '131072'" in output
+    assert "--static-k '3'" in output
+    assert "--enforce-eager" in output
+    assert "--attention-backend 'TRITON_ATTN'" in output
+    assert "--disable-custom-all-reduce" in output
+    assert "--temperature 0.0" in output
+    assert "--temperature 1.0" in output
+    assert "suffix" not in output
+    assert "pard" not in output
+    assert "--gres" not in output
+
+
 def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(
     tmp_path: Path,
 ) -> None:
@@ -383,9 +413,11 @@ def test_scripts_do_not_depend_on_home_storage() -> None:
     for script_name in (
         "stage_image.sh",
         "stage_math_datasets.sh",
+        "stage_ray_site.sh",
         "submit_matrix.sh",
         "submit_nsys.sh",
         "submit_nemorl_perfcfg_sync_matrix.sh",
+        "submit_legacy_0619_replay_matrix.sh",
         "submit_sync_rollout.sh",
     ):
         text = (EXPERIMENT / script_name).read_text(encoding="utf-8")

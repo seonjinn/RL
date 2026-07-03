@@ -343,10 +343,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-model-len", type=int, default=1792)
     parser.add_argument("--max-num-batched-tokens", type=int, default=32768)
     parser.add_argument("--attention-backend", default="")
+    parser.add_argument("--moe-backend", default="")
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
+    parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--enable-prefix-caching", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-chunked-prefill", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--disable-custom-all-reduce", action="store_true")
+    parser.add_argument("--throughput-gpu-count", type=int)
     parser.add_argument("--isl", type=int, default=1024)
     parser.add_argument("--osl", type=int, default=512)
     parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 2, 4, 8, 16, 32, 64])
@@ -389,6 +392,7 @@ def main() -> None:
         "enable_prefix_caching": args.enable_prefix_caching,
         "enable_chunked_prefill": args.enable_chunked_prefill,
         "disable_custom_all_reduce": args.disable_custom_all_reduce,
+        "enforce_eager": args.enforce_eager,
         "seed": args.seed,
         "disable_log_stats": False,
         "compilation_config": {"cudagraph_mode": args.cudagraph_mode},
@@ -399,6 +403,8 @@ def main() -> None:
         llm_kwargs["distributed_executor_backend"] = args.distributed_executor_backend
     if args.attention_backend:
         llm_kwargs["attention_backend"] = args.attention_backend
+    if args.moe_backend:
+        llm_kwargs["kernel_config"] = {"moe_backend": args.moe_backend}
 
     llm = LLM(**llm_kwargs)
     tokenizer = llm.get_tokenizer()
@@ -434,7 +440,9 @@ def main() -> None:
             "pipeline_parallel_size": args.pipeline_parallel_size,
             "tp": args.tensor_parallel_size,
             "pp": args.pipeline_parallel_size,
-            "total_gpus": args.tensor_parallel_size * args.pipeline_parallel_size,
+            "engine_gpus": args.tensor_parallel_size * args.pipeline_parallel_size,
+            "total_gpus": args.throughput_gpu_count
+            or args.tensor_parallel_size * args.pipeline_parallel_size,
             "dtype": args.dtype,
             "kv_cache_dtype": args.kv_cache_dtype,
             "gpu_memory_utilization": args.gpu_memory_utilization,
@@ -445,7 +453,9 @@ def main() -> None:
             "enable_chunked_prefill": args.enable_chunked_prefill,
             "disable_custom_all_reduce": args.disable_custom_all_reduce,
             "attention_backend": args.attention_backend or "auto",
+            "moe_backend": args.moe_backend or "auto",
             "cudagraph_mode": args.cudagraph_mode,
+            "enforce_eager": args.enforce_eager,
             "isl": args.isl,
             "osl": args.osl,
             "batch_sizes": sorted(set(args.batch_sizes)),
@@ -514,7 +524,10 @@ def main() -> None:
 
         total_output_tokens = sum(row["output_tokens"] for row in repeats)
         total_latency_s = sum(row["latency_s"] for row in repeats)
-        total_gpus = args.tensor_parallel_size * args.pipeline_parallel_size
+        total_gpus = (
+            args.throughput_gpu_count
+            or args.tensor_parallel_size * args.pipeline_parallel_size
+        )
         metrics = sum_spec_decode_counters(
             [row["spec_decode_metrics"] for row in repeats]
         )

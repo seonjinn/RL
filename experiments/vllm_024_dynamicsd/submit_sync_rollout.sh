@@ -49,6 +49,7 @@ ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS:-64}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-}"
 MOE_BACKEND="${MOE_BACKEND:-}"
 DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
+RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-py312}"
 PROMPT_JSONL="${PROMPT_JSONL:-}"
 PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
 SOURCE_RECIPE="${SOURCE_RECIPE:-}"
@@ -147,6 +148,9 @@ fi
 if [[ -n '${PROMPT_JSONL}' ]]; then
   test -s '${PROMPT_JSONL}'
 fi
+if (( ${NODES} > 1 )); then
+  test -d '${RAY_SITE}/ray'
+fi
 
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
@@ -197,6 +201,9 @@ srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
   bash -lc "set -euo pipefail
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
+if (( ${NODES} > 1 )); then
+  export PYTHONPATH='${RAY_SITE}':"\${PYTHONPATH:-}"
+fi
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
 ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --model '${MODEL}' \\

@@ -197,6 +197,36 @@ Baseline, static K5, and DynamicSD all use PIECEWISE graphs here for a matched
 comparison. This differs from an untouched NeMo-RL runtime and must remain a
 separate setup label in reports.
 
+Qwen3-235B TP8 spans two four-GPU GB200 nodes. The official image does not
+ship Ray, so stage the pinned relocatable Ray site once before that run:
+
+```bash
+CLUSTER=lyris TEST_ONLY=true ./stage_ray_site.sh
+CLUSTER=lyris ./stage_ray_site.sh
+```
+
+### June 19 Standalone Replay
+
+`submit_legacy_0619_replay_matrix.sh` reproduces the contract used by the
+June 19 standalone report: Math500 and SWE-verified prompts, ISL 4096, OSL
+32768, batch sizes 1/2/4/8/16/32, temperatures 0/1, model-specific TP, four
+allocated GPUs, eager execution, Triton attention, Triton MoE, and disabled
+custom all-reduce. Qwen3-235B also keeps the original FP8 KV cache setting.
+
+The unmodified vLLM 0.24 image supports baseline and Eagle-3, so this replay
+compares baseline, static Eagle-3 K3, and DynamicSD. Suffix and PARD rows from
+the old report require separate v0.24 patch ports and are not silently mapped
+to another method.
+
+```bash
+CLUSTER=lyris TEST_ONLY=true ./submit_legacy_0619_replay_matrix.sh
+CLUSTER=lyris ./submit_legacy_0619_replay_matrix.sh
+
+CLUSTER=lyris SMOKE=false TEST_ONLY=true \
+  ./submit_legacy_0619_replay_matrix.sh
+CLUSTER=lyris SMOKE=false ./submit_legacy_0619_replay_matrix.sh
+```
+
 At temperature 1, exact token hashes can differ because of numerical and batch
 invariance effects. `summarize_sync_rollout.py` marks direct time comparison as
 valid only when total generated-token counts agree within 1%; otherwise use

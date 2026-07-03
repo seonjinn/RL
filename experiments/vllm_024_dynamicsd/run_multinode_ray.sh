@@ -10,15 +10,19 @@ world_size="${SLURM_NTASKS:-1}"
 gpus_per_node="${GPUS_PER_NODE:-4}"
 done_file="${RAY_SYNC_DIR}/done"
 
+ray_cli() {
+  python3 -m ray.scripts.scripts "$@"
+}
+
 mkdir -p "${RAY_SYNC_DIR}"
 
 if [[ "${rank}" == "0" ]]; then
   cleanup() {
     touch "${done_file}"
-    ray stop --force >/dev/null 2>&1 || true
+    ray_cli stop --force >/dev/null 2>&1 || true
   }
   trap cleanup EXIT
-  ray start --head \
+  ray_cli start --head \
     --node-ip-address="${HEAD_IP}" \
     --port="${RAY_PORT}" \
     --num-gpus="${gpus_per_node}" \
@@ -41,10 +45,10 @@ if [[ "${rank}" == "0" ]]; then
   "$@"
 else
   cleanup() {
-    ray stop --force >/dev/null 2>&1 || true
+    ray_cli stop --force >/dev/null 2>&1 || true
   }
   trap cleanup EXIT
-  ray start \
+  ray_cli start \
     --address="${HEAD_IP}:${RAY_PORT}" \
     --num-gpus="${gpus_per_node}" \
     --disable-usage-stats

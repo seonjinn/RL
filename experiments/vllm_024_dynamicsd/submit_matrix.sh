@@ -32,6 +32,7 @@ DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculato
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/runs}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 VARIANTS="${VARIANTS:-baseline static dynamic}"
+JOB_LABEL="${JOB_LABEL:-q32}"
 TEMPERATURES="${TEMPERATURES:-0 1}"
 STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}"
@@ -41,9 +42,16 @@ ISL="${ISL:-1024}"
 TOP_P="${TOP_P:-1.0}"
 SMOKE="${SMOKE:-true}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-}"
+MOE_BACKEND="${MOE_BACKEND:-}"
+ENFORCE_EAGER="${ENFORCE_EAGER:-false}"
+DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
+THROUGHPUT_GPU_COUNT="${THROUGHPUT_GPU_COUNT:-}"
+PROMPT_JSONL="${PROMPT_JSONL:-}"
+PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
 DEPENDENCY="${DEPENDENCY:-}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
@@ -76,8 +84,28 @@ render_sbatch() {
   local run_dir="$3"
   local output_json="${run_dir}/result.json"
   local attention_arg=""
+  local moe_arg=""
+  local eager_arg=""
+  local custom_all_reduce_arg=""
+  local throughput_gpu_arg=""
+  local prompt_arg=""
   if [[ -n "${ATTENTION_BACKEND}" ]]; then
     attention_arg="--attention-backend '${ATTENTION_BACKEND}'"
+  fi
+  if [[ -n "${MOE_BACKEND}" ]]; then
+    moe_arg="--moe-backend '${MOE_BACKEND}'"
+  fi
+  if [[ "${ENFORCE_EAGER}" == "true" ]]; then
+    eager_arg="--enforce-eager"
+  fi
+  if [[ "${DISABLE_CUSTOM_ALL_REDUCE}" == "true" ]]; then
+    custom_all_reduce_arg="--disable-custom-all-reduce"
+  fi
+  if [[ -n "${THROUGHPUT_GPU_COUNT}" ]]; then
+    throughput_gpu_arg="--throughput-gpu-count '${THROUGHPUT_GPU_COUNT}'"
+  fi
+  if [[ -n "${PROMPT_JSONL}" ]]; then
+    prompt_arg="--prompt-jsonl '${PROMPT_JSONL}' --prompt-offset '${PROMPT_OFFSET}'"
   fi
   cat <<EOF
 #!/usr/bin/env bash
@@ -90,7 +118,7 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=coreai_dlalgo_llm-vllm024.q32-${variant}-t$(normalize_temperature "${temperature}")
+#SBATCH --job-name=coreai_dlalgo_llm-vllm024.${JOB_LABEL}-${variant}-t$(normalize_temperature "${temperature}")
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
@@ -99,6 +127,9 @@ test -s '${CONTAINER_IMAGE}'
 test -d '${MODEL}'
 if [[ '${variant}' != 'baseline' ]]; then
   test -d '${DRAFT_MODEL}'
+fi
+if [[ -n '${PROMPT_JSONL}' ]]; then
+  test -s '${PROMPT_JSONL}'
 fi
 
 export VLLM_USE_V2_MODEL_RUNNER=0
@@ -146,7 +177,7 @@ python3 /workspace/experiment/benchmark.py \\
   --tensor-parallel-size '${TP}' \\
   --pipeline-parallel-size '${PP}' \\
   --dtype bfloat16 \\
-  --kv-cache-dtype auto \\
+  --kv-cache-dtype '${KV_CACHE_DTYPE}' \\
   --gpu-memory-utilization '${GPU_MEMORY_UTILIZATION}' \\
   --max-model-len '${MAX_MODEL_LEN}' \\
   --max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}' \\
@@ -161,6 +192,11 @@ python3 /workspace/experiment/benchmark.py \\
   --warmup-repeats '${WARMUP_REPEATS}' \\
   --measure-repeats '${MEASURE_REPEATS}' \\
   ${attention_arg} \\
+  ${moe_arg} \\
+  ${eager_arg} \\
+  ${custom_all_reduce_arg} \\
+  ${throughput_gpu_arg} \\
+  ${prompt_arg} \\
   --output '${output_json}' \\
   --tag '${RUN_ID}_${variant}_t$(normalize_temperature "${temperature}")'" \\
   2>&1 | tee '${run_dir}/benchmark.log'
