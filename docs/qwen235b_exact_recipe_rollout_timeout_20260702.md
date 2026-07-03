@@ -117,10 +117,30 @@ attention backend or topology placement.
 
 A target TP4 exact-recipe smoke run is the smallest useful isolation control:
 it would keep each rollout TP group within one four-GPU node while retaining the
-async engine and other recipe settings. TP4 memory fit and the resulting engine
-layout have not been validated, so this is a proposed control rather than a
-confirmed fix. No TP4 job or core-code change has been launched from this
-analysis.
+async engine and other recipe settings. The checkpoint contains 437.90 GiB of
+safetensor shards. Job `2319650` measured 54.92 GiB of model memory per TP8 rank,
+which is consistent with the 54.74 GiB static shard estimate; TP4 therefore
+requires about 109.48 GiB per rank before KV cache and CUDA Graph overhead. The
+resolved recipe uses dedicated generation GPUs with
+`gpu_memory_utilization=0.8`, and TP8 engine initialization consumed 154,482 MB
+of the 189,471 MB visible per GPU. TP4 is therefore plausible on a 192 GB B200
+because vLLM can trade KV-cache capacity for the larger weight shard, but it is
+not proven until engine initialization and one complete rollout pass.
+
+The engine layout must be controlled separately from memory fit. The exact
+recipe reserves 16 generation nodes, or 64 GPUs. TP8 creates eight engines; a
+TP4-only override would create 16 engines and halve requests per engine, so it
+would not isolate cross-node TP communication. The controlled smoke should use
+TP4 and eight generation nodes to retain eight engines. Keeping the 32-node
+allocation and segment 16 for the three-step diagnostic preserves the training
+shape and topology at the cost of eight idle nodes. A later performance run
+would need a separately matched TP4 baseline rather than comparison against the
+published TP8 baseline.
+
+This control is also directly supported by the runtime warning: vLLM reports
+that TP8 exceeds the four GPUs reserved per node, spreads each engine across two
+nodes, and disables custom all-reduce for the cross-node process group. No TP4
+job or core-code change has been launched from this analysis.
 
 ## Unrelated vLLM Issue
 
