@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import statistics
@@ -215,7 +216,7 @@ def main() -> None:
         "compilation_config": {"cudagraph_mode": args.cudagraph_mode},
     }
     if speculative_config is not None:
-        llm_kwargs["speculative_config"] = speculative_config
+        llm_kwargs["speculative_config"] = copy.deepcopy(speculative_config)
     if args.attention_backend:
         llm_kwargs["attention_backend"] = args.attention_backend
 

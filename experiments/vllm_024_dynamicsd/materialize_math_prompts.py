@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -166,3 +167,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Streaming datasets may leave an Arrow worker that crashes during ARM64
+    # interpreter finalization after every durable artifact has been written.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
