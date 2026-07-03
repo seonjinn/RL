@@ -305,6 +305,35 @@ def test_sync_rollout_dry_run_models_barriered_rl_sampling() -> None:
     assert "--gres" not in output
 
 
+def test_nemorl_perfcfg_dry_run_preserves_per_engine_recipe_shapes() -> None:
+    output = run_dry(
+        "submit_nemorl_perfcfg_sync_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="false",
+        MODELS="qwen30ba3b qwen32 qwen235b",
+    )
+
+    assert "grpo-qwen3-30ba3b-4n4g.yaml" in output
+    assert "per_engine_prompts=4" in output
+    assert "target_tp=1" in output
+    assert "grpo-qwen3-32b-4n4g.yaml" in output
+    assert "per_engine_prompts=8" in output
+    assert "target_tp=2" in output
+    assert "grpo-qwen3-235b-32n4g.yaml" in output
+    assert "per_engine_prompts=1" in output
+    assert "target_tp=8" in output
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "--distributed-executor-backend 'ray'" in output
+    assert "--max-model-len '8192'" in output
+    assert "--max-new-tokens 8192" in output
+    assert "--samples-per-prompt 32" in output
+    assert "--top-p 1.0" in output
+    assert "moe_backend=triton" in output
+    assert "--max-num-batched-tokens" not in output
+    assert "--gres" not in output
+
+
 def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(
     tmp_path: Path,
 ) -> None:
@@ -356,6 +385,7 @@ def test_scripts_do_not_depend_on_home_storage() -> None:
         "stage_math_datasets.sh",
         "submit_matrix.sh",
         "submit_nsys.sh",
+        "submit_nemorl_perfcfg_sync_matrix.sh",
         "submit_sync_rollout.sh",
     ):
         text = (EXPERIMENT / script_name).read_text(encoding="utf-8")

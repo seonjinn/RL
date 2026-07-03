@@ -162,6 +162,41 @@ verifier work, policy training, and weight synchronization. A 256-request
 global batch is queued through one engine capped at 64 active sequences; use a
 multi-replica NeMo-RL run to validate the final rollout-step reduction.
 
+### NeMo-RL Performance Recipe Shapes
+
+`submit_nemorl_perfcfg_sync_matrix.sh` maps the synchronous NeMo-RL
+performance recipes to one representative vLLM generation replica:
+
+| Model | Source recipe | Global rollout | Generation replicas | Per-engine rollout | Target TP | Max sequence |
+|---|---|---:|---:|---:|---:|---:|
+| Qwen3-30B-A3B | `grpo-qwen3-30ba3b-4n4g.yaml` | 64 x 32 | 16 | 4 x 32 | 1 | 4096 |
+| Qwen3-32B | `grpo-qwen3-32b-4n4g.yaml` | 64 x 32 | 8 | 8 x 32 | 2 | 4096 |
+| Qwen3-235B-A22B | `grpo-qwen3-235b-32n4g.yaml` | 16 x 32 | 16 | 1 x 32 | 8 | 8192 |
+
+The launcher uses OpenMathInstruct-2 prompts, temperature 1.0, top-p 1.0,
+recipe GPU-memory utilization, and the recipe Triton MoE backend where
+specified. Qwen3-235B uses two GB200 nodes with `--segment=2` and a Ray-backed
+TP8 engine. The other models use one representative generation engine.
+
+```bash
+CLUSTER=lyris TEST_ONLY=true ./submit_nemorl_perfcfg_sync_matrix.sh
+CLUSTER=lyris ./submit_nemorl_perfcfg_sync_matrix.sh
+
+CLUSTER=lyris SMOKE=false TEST_ONLY=true \
+  ./submit_nemorl_perfcfg_sync_matrix.sh
+CLUSTER=lyris SMOKE=false ./submit_nemorl_perfcfg_sync_matrix.sh
+```
+
+Smoke runs preserve recipe concurrency but cap output at 256 tokens for
+runtime validation. Full runs use the recipe output cap and three rollout
+batches. The recipe does not set `max_num_batched_tokens`, so the launcher
+leaves it at the vLLM 0.24 default and records that choice in each result.
+
+DynamicSD requires Model Runner V1 and PIECEWISE CUDA graphs in vLLM 0.24.
+Baseline, static K5, and DynamicSD all use PIECEWISE graphs here for a matched
+comparison. This differs from an untouched NeMo-RL runtime and must remain a
+separate setup label in reports.
+
 At temperature 1, exact token hashes can differ because of numerical and batch
 invariance effects. `summarize_sync_rollout.py` marks direct time comparison as
 valid only when total generated-token counts agree within 1%; otherwise use

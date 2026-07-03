@@ -32,10 +32,13 @@ DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculato
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/sync-rollout}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 VARIANTS="${VARIANTS:-baseline static dynamic}"
+JOB_LABEL="${JOB_LABEL:-sync}"
 STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}"
 TP="${TP:-2}"
 PP="${PP:-1}"
+NODES="${NODES:-1}"
+SEGMENT="${SEGMENT:-${NODES}}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-0.9}"
 SEED="${SEED:-1234}"
@@ -44,8 +47,13 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
 ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS:-64}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-}"
+MOE_BACKEND="${MOE_BACKEND:-}"
+DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
 PROMPT_JSONL="${PROMPT_JSONL:-}"
 PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
+SOURCE_RECIPE="${SOURCE_RECIPE:-}"
+GLOBAL_NUM_PROMPTS="${GLOBAL_NUM_PROMPTS:-}"
+GLOBAL_GENERATION_REPLICAS="${GLOBAL_GENERATION_REPLICAS:-}"
 DEPENDENCY="${DEPENDENCY:-}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
@@ -81,24 +89,52 @@ render_sbatch() {
   local run_dir="$2"
   local prompt_arg=""
   local attention_arg=""
+  local moe_arg=""
+  local distributed_arg=""
+  local batched_tokens_arg=""
+  local recipe_arg=""
+  local global_prompts_arg=""
+  local global_replicas_arg=""
+  local runner_prefix=""
   if [[ -n "${PROMPT_JSONL}" ]]; then
     prompt_arg="--prompt-jsonl '${PROMPT_JSONL}' --prompt-offset '${PROMPT_OFFSET}'"
   fi
   if [[ -n "${ATTENTION_BACKEND}" ]]; then
     attention_arg="--attention-backend '${ATTENTION_BACKEND}'"
   fi
+  if [[ -n "${MOE_BACKEND}" ]]; then
+    moe_arg="--moe-backend '${MOE_BACKEND}'"
+  fi
+  if [[ -n "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
+    distributed_arg="--distributed-executor-backend '${DISTRIBUTED_EXECUTOR_BACKEND}'"
+  fi
+  if [[ "${MAX_NUM_BATCHED_TOKENS}" != "recipe" && "${MAX_NUM_BATCHED_TOKENS}" != "default" ]]; then
+    batched_tokens_arg="--max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}'"
+  fi
+  if [[ -n "${SOURCE_RECIPE}" ]]; then
+    recipe_arg="--source-recipe '${SOURCE_RECIPE}'"
+  fi
+  if [[ -n "${GLOBAL_NUM_PROMPTS}" ]]; then
+    global_prompts_arg="--global-num-prompts '${GLOBAL_NUM_PROMPTS}'"
+  fi
+  if [[ -n "${GLOBAL_GENERATION_REPLICAS}" ]]; then
+    global_replicas_arg="--global-generation-replicas '${GLOBAL_GENERATION_REPLICAS}'"
+  fi
+  if (( NODES > 1 )); then
+    runner_prefix="/workspace/experiment/run_multinode_ray.sh"
+  fi
   cat <<EOF
 #!/usr/bin/env bash
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
-#SBATCH --nodes=1
+#SBATCH --nodes=${NODES}
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=0
 #SBATCH --exclusive
-#SBATCH --segment=1
+#SBATCH --segment=${SEGMENT}
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=coreai_dlalgo_llm-vllm024.sync-${variant}
+#SBATCH --job-name=coreai_dlalgo_llm-vllm024.${JOB_LABEL}-${variant}
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
@@ -138,8 +174,21 @@ echo 'num_prompts=${NUM_PROMPTS}'
 echo 'samples_per_prompt=${SAMPLES_PER_PROMPT}'
 echo 'requests_per_rollout_batch=$((NUM_PROMPTS * SAMPLES_PER_PROMPT))'
 echo 'engine_max_num_seqs=${ENGINE_MAX_NUM_SEQS}'
+echo 'source_recipe=${SOURCE_RECIPE}'
+echo 'moe_backend=${MOE_BACKEND:-auto}'
+echo 'nodes=${NODES}'
+echo 'target_tp=${TP}'
 
-srun --ntasks=1 \\
+if (( ${NODES} > 1 )); then
+  export HEAD_NODE="\$(scontrol show hostnames "\${SLURM_JOB_NODELIST}" | head -n 1)"
+  export HEAD_IP="\$(srun --nodes=1 --ntasks=1 --nodelist="\${HEAD_NODE}" hostname -I | awk '{print \$1}')"
+  export RAY_PORT="\$((20000 + SLURM_JOB_ID % 10000))"
+  export RAY_SYNC_DIR='${run_dir}/ray-sync'
+  export GPUS_PER_NODE=4
+  rm -rf "\${RAY_SYNC_DIR}"
+fi
+
+srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
   --container-image='${CONTAINER_IMAGE}' \\
   --container-mounts='/lustre:/lustre,${SCRIPT_DIR}:/workspace/experiment' \\
   --no-container-mount-home \\
@@ -149,7 +198,7 @@ srun --ntasks=1 \\
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
-python3 /workspace/experiment/benchmark_sync_rollout.py \\
+${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --model '${MODEL}' \\
   --draft-model '${DRAFT_MODEL}' \\
   --mode '${variant}' \\
@@ -161,7 +210,7 @@ python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --kv-cache-dtype auto \\
   --gpu-memory-utilization '${GPU_MEMORY_UTILIZATION}' \\
   --max-model-len '${MAX_MODEL_LEN}' \\
-  --max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}' \\
+  ${batched_tokens_arg} \\
   --engine-max-num-seqs ${ENGINE_MAX_NUM_SEQS} \\
   --cudagraph-mode '${CUDAGRAPH_MODE}' \\
   --num-prompts ${NUM_PROMPTS} \\
@@ -174,6 +223,11 @@ python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --seed ${SEED} \\
   ${prompt_arg} \\
   ${attention_arg} \\
+  ${moe_arg} \\
+  ${distributed_arg} \\
+  ${recipe_arg} \\
+  ${global_prompts_arg} \\
+  ${global_replicas_arg} \\
   --output '${run_dir}/result.json' \\
   --tag '${RUN_ID}_${variant}'" \\
   2>&1 | tee '${run_dir}/benchmark.log'

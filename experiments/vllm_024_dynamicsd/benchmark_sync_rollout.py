@@ -166,9 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kv-cache-dtype", default="auto")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--max-model-len", type=int, default=8448)
-    parser.add_argument("--max-num-batched-tokens", type=int, default=65536)
+    parser.add_argument("--max-num-batched-tokens", type=int)
     parser.add_argument("--engine-max-num-seqs", type=int, default=64)
     parser.add_argument("--attention-backend", default="")
+    parser.add_argument("--moe-backend", default="")
+    parser.add_argument("--distributed-executor-backend", default="")
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
     parser.add_argument("--num-prompts", type=int, default=16)
     parser.add_argument("--samples-per-prompt", type=int, default=16)
@@ -181,6 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-max-tokens", type=int, default=32)
     parser.add_argument("--prompt-jsonl", type=Path)
     parser.add_argument("--prompt-offset", type=int, default=0)
+    parser.add_argument("--source-recipe", default="")
+    parser.add_argument("--global-num-prompts", type=int)
+    parser.add_argument("--global-generation-replicas", type=int)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--tag", default="")
     return parser
@@ -211,7 +216,6 @@ def main() -> None:
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "max_model_len": args.max_model_len,
         "max_num_seqs": min(args.engine_max_num_seqs, request_count),
-        "max_num_batched_tokens": args.max_num_batched_tokens,
         "enable_prefix_caching": True,
         "enable_chunked_prefill": True,
         "seed": args.seed,
@@ -222,6 +226,14 @@ def main() -> None:
         llm_kwargs["speculative_config"] = copy.deepcopy(speculative_config)
     if args.attention_backend:
         llm_kwargs["attention_backend"] = args.attention_backend
+    if args.max_num_batched_tokens is not None:
+        llm_kwargs["max_num_batched_tokens"] = args.max_num_batched_tokens
+    if args.moe_backend:
+        llm_kwargs["kernel_config"] = {"moe_backend": args.moe_backend}
+    if args.distributed_executor_backend:
+        llm_kwargs["distributed_executor_backend"] = (
+            args.distributed_executor_backend
+        )
 
     llm = LLM(**llm_kwargs)
     tokenizer = llm.get_tokenizer()
@@ -290,6 +302,10 @@ def main() -> None:
             "enable_prefix_caching": True,
             "enable_chunked_prefill": True,
             "attention_backend": args.attention_backend or "auto",
+            "moe_backend": args.moe_backend or "auto",
+            "distributed_executor_backend": (
+                args.distributed_executor_backend or "auto"
+            ),
             "cudagraph_mode": args.cudagraph_mode,
             "num_prompts": args.num_prompts,
             "samples_per_prompt": args.samples_per_prompt,
@@ -304,6 +320,9 @@ def main() -> None:
             "warmup_max_tokens": args.warmup_max_tokens,
             "prompt_jsonl": str(args.prompt_jsonl) if args.prompt_jsonl else None,
             "prompt_offset": args.prompt_offset,
+            "source_recipe": args.source_recipe or None,
+            "global_num_prompts": args.global_num_prompts,
+            "global_generation_replicas": args.global_generation_replicas,
             "prompt_batch_hashes": [
                 prompt_batch_hash(batch) for batch in prompt_batches
             ],
