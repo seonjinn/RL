@@ -152,10 +152,12 @@ corruption. That patch is not a demonstrated fix for this failure.
 ## Scheduling Decision
 
 Pretyche exact-sync Eagle jobs `2319202`-`2319205`, exact async Eagle jobs
-`2319487`-`2319489`, Triton-attention async Eagle jobs `2319975`-`2319977`, and
-Lyris colocated PARD jobs `2261382`-`2261383` are held to avoid consuming
-32-node allocations on an unstable baseline path. Lyris exact async-1off jobs
-`2261942`-`2261946` remain eligible because they use a separate allocation and
-matched no-fused-all-reduce baseline cohort.
+`2319487`-`2319489`, and Triton-attention async Eagle jobs `2319975`-`2319977`
+remain held. On Lyris, the matched PARD smoke baseline `2261382` remains held,
+while the target-TP8/draft-TP8 PARD K1 smoke `2261383` is eligible and scheduled.
+The exact async baseline `2261942`, exact async baseline/Eagle pair
+`2264402`-`2264403`, and exact sync baseline `2264443` are also eligible. The
+target-TP8/draft-TP1 PARD jobs `2261943`-`2261946` and `2264444`-`2264447`
+remain held because vLLM V1 rejects unequal target and draft TP sizes.
 
 No NeMo-RL or vLLM core patch has been applied for this issue.
