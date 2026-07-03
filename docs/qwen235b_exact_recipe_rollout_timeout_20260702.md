@@ -6,7 +6,9 @@ Date: 2026-07-02
 
 Pretyche job `2319201` inherited the Qwen3-235B performance recipe's
 `async_engine=true` setting and reached Step 6. It then failed with exit code
-`1:0` after every async rollout engine lost at least one TP8 worker.
+`1:0` after every async rollout engine lost at least one TP8 worker. The later
+Triton-attention control `2319650` passed the earlier Step 8 boundary and
+preserved W&B Steps 2-11, but reproduced the rollout TP8 timeout in Step 12.
 
 The first failing collective was a 600-second NCCL `_ALLGATHER_BASE` during
 vLLM `sample_tokens()`. Workers in the same failure window reported collective
@@ -35,6 +37,7 @@ GPU or one bad host.
 | `2319201` | true | true | recipe default, resolved to FlashInfer | Failed in Step 6 |
 | `2319329` | false | true | recipe default | Failed in Step 1 policy/reference logprob |
 | `2319427` | false | true | recipe default | Passed initial topology boundary; rollout TP8 timed out in Step 8 |
+| `2319650` | false | true | `TRITON_ATTN` | Passed Step 8; rollout TP8 timed out in Step 12 |
 
 The successful and failed sync jobs differ in two runtime variables, not one:
 vLLM async-engine mode and attention backend. Therefore neither variable is an
@@ -76,11 +79,48 @@ generation and weight-update calls raised
 train/inference placement but does not make the exact async rollout TP8 decode
 path stable through 20 steps.
 
-The minimal next control is Pretyche job `2319650`. It keeps the exact
-async-1off recipe, TP8, 32x4 shape, Slurm/Hydra segment 16, CUDA Graphs, and
-Triton MoE unchanged, and changes only the attention backend to `TRITON_ATTN`.
-It passed scheduler preflight as test-only job `2319649`. This separates the
-recipe-default attention path from the async TP8 Ray executor/communicator path.
+Pretyche job `2319650` kept the exact async-1off recipe, TP8, 32x4 shape,
+Slurm/Hydra segment 16, CUDA Graphs, and Triton MoE unchanged, and changed only
+the attention backend to `TRITON_ATTN`. It passed scheduler preflight as
+test-only job `2319649` and ran farther than the default-attention control, but
+still failed in the same rollout logits-gather path. Attention backend selection
+therefore changes when the failure appears but is not a demonstrated fix.
+
+## Step 12 Rank-Level Evidence
+
+The first fatal operation in job `2319650` was TP process group 2 sequence
+`104532`, `_ALLGATHER_BASE`, with `1,595,328` input elements and `12,762,624`
+output elements. All eight TP ranks reported the same sequence number, operation,
+input/output sizes, and process-group progress: last enqueued `104532`, last
+completed `104531`. The logged placement put ranks 0-3 on `10.52.103.44` and
+ranks 4-7 on `10.52.103.45`, so this TP8 group spanned two four-GPU compute
+nodes.
+
+The stack is:
+
+`qwen3_moe.compute_logits -> LogitsProcessor._gather_logits ->`
+`tensor_model_parallel_all_gather -> torch.distributed.all_gather_into_tensor`.
+
+This evidence argues against collective-order or tensor-shape divergence for
+this occurrence: every rank reached the same collective, but it made no progress
+for 600 seconds. It does not by itself distinguish a cross-node NCCL transport
+stall, a device-side execution stall, or an interaction with the vLLM
+`AsyncLLM` EngineCore/Ray compiled-DAG executor. The later Megatron EP and PP
+timeouts occurred only after the rollout engine died and are secondary.
+
+Cross-node TP8 is not sufficient to reproduce the problem by itself. Diagnostic
+job `2318729` also used TP8 and `TRITON_ATTN` and completed 20/20, but it used
+the synchronous vLLM engine rather than the performance recipe's
+`async_engine=true` path. The remaining boundary is therefore the long-lived
+async EngineCore/Ray execution path combined with cross-node TP8, not simply the
+attention backend or topology placement.
+
+A target TP4 exact-recipe smoke run is the smallest useful isolation control:
+it would keep each rollout TP group within one four-GPU node while retaining the
+async engine and other recipe settings. TP4 memory fit and the resulting engine
+layout have not been validated, so this is a proposed control rather than a
+confirmed fix. No TP4 job or core-code change has been launched from this
+analysis.
 
 ## Unrelated vLLM Issue
 
@@ -92,9 +132,10 @@ corruption. That patch is not a demonstrated fix for this failure.
 ## Scheduling Decision
 
 Pretyche exact-sync Eagle jobs `2319202`-`2319205`, exact async Eagle jobs
-`2319487`-`2319489`, and Lyris colocated PARD jobs `2261382`-`2261383` are held
-to avoid consuming 32-node allocations on an unstable baseline path. Lyris
-exact async-1off jobs remain eligible because they use a separate allocation
-and matched no-fused-all-reduce baseline cohort.
+`2319487`-`2319489`, Triton-attention async Eagle jobs `2319975`-`2319977`, and
+Lyris colocated PARD jobs `2261382`-`2261383` are held to avoid consuming
+32-node allocations on an unstable baseline path. Lyris exact async-1off jobs
+`2261942`-`2261946` remain eligible because they use a separate allocation and
+matched no-fused-all-reduce baseline cohort.
 
 No NeMo-RL or vLLM core patch has been applied for this issue.
