@@ -18,17 +18,28 @@ temperature 1.0, top-p 1.0, and exclude cold Step 1 when 20 steps completed.
 | Qwen3-30B-A3B | async-1off | complete, Steps 2-20 | complete, including replicate cohort | K=5/7/9 complete | 1.07x, Eagle K9 | 1.07x, Eagle K9 | Complete; PARD has material run-to-run variance |
 | Qwen3-32B | sync | complete, Steps 2-20 | complete | K=5/7/9 complete | 1.21x, Eagle K5 | 1.33x, Eagle K5 | Complete |
 | Qwen3-32B | async-1off | complete, Steps 2-20 | complete | K=7/9 complete | 1.09x, PARD K1 | 1.09x, PARD K1 | Complete for requested PARD set and Eagle K>3 |
-| Qwen3-235B-A22B | sync | queued as `2264443` | K1 TP8 smoke `2261383` failed before engine initialization because the launcher emitted invalid `method=pard`; draft-TP1 K1/7/9/16 held | K7/K9 complete, absolute only | waiting baseline | waiting baseline | Incomplete |
+| Qwen3-235B-A22B | sync | queued as `2264443` | K1 TP8 smoke `2261383` failed before engine initialization because the launcher emitted invalid `method=pard`; draft-TP1 K1/7/9/16 held | K7/K9 complete; preliminary matched Steps 2-4 | waiting final baseline | waiting final baseline | Incomplete |
 | Qwen3-235B-A22B | async-1off | baselines `2261942` and `2264402` queued | draft-TP1 K1/7/9/16 held | K7 `2264403` queued | waiting baseline | waiting baseline | Incomplete |
 
-Qwen3-235B sync Eagle absolute Step 2-20 results are already available:
+Qwen3-235B sync Eagle runs completed 20/20, but the matched baseline currently
+has only clean Steps 2-4. The preliminary matched comparison is:
+
+| Method | Matched steps | E2E throughput speedup | Generation throughput speedup | E2E step-time speedup | Generation-time speedup | Acceptance | Mean accept length | W&B |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| Eagle K7 | 2-4 | 1.195x | 1.286x | 1.162x | 1.284x | 18.20% | 2.27 | [run](https://wandb.ai/nvidia/sna-nemorl-specdec-lyris/runs/bra22f2d) |
+| Eagle K9 | 2-4 | 1.147x | 1.194x | 1.169x | 1.198x | 14.19% | 2.28 | [run](https://wandb.ai/nvidia/sna-nemorl-specdec-lyris/runs/y99qvnc9) |
+
+These speedups are preliminary because the matched baseline failed after Step 4
+with the TP8 logits all-gather timeout. They are not substituted for a matched
+Steps 2-20 result. The completed Eagle absolute Step 2-20 metrics are:
 
 | Method | E2E step time | Generation time | E2E throughput/GPU | Generation throughput/GPU | Acceptance | Mean accept length | W&B |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Eagle K7 | 230.74 s | 114.60 s | 108.72 tok/s | 196.38 tok/s | 17.23% | 2.21 | [run](https://wandb.ai/nvidia/sna-nemorl-specdec-lyris/runs/bra22f2d) |
 | Eagle K9 | 262.32 s | 131.11 s | 95.81 tok/s | 174.21 tok/s | 13.41% | 2.21 | [run](https://wandb.ai/nvidia/sna-nemorl-specdec-lyris/runs/y99qvnc9) |
 
-No Qwen3-235B speedup is publishable until a matched baseline completes.
+No final Qwen3-235B Steps 2-20 speedup is publishable until a matched baseline
+completes.
 
 ## Long-Context OSL 32768
 
