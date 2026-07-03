@@ -1,14 +1,15 @@
 # NeMo-RL PARD CUDA Graph Regression Analysis
 
-Updated: 2026-07-02 15:48 PDT
+Updated: 2026-07-02 17:02 PDT
 
 ## Scope
 
-This note analyzes the Qwen3-30B-A3B sync performance-recipe cohort with CUDA
-Graphs enabled. All comparisons use steady-state Steps 2-20 for completed runs
-or Steps 2-N for explicitly marked live runs. The matched baseline uses the same
-model, recipe, temperature 1.0, top-p 1.0, max OSL 4096, TRITON_ATTN, Triton MoE
-backend, max_num_seqs 128, and max_num_batched_tokens 32768.
+This note analyzes the Qwen3-30B-A3B and Qwen3-32B sync performance-recipe
+cohorts with CUDA Graphs enabled. All comparisons use steady-state Steps 2-20
+for completed runs or Steps 2-N for explicitly marked live runs. Baselines are
+matched within each model on recipe, temperature 1.0, top-p 1.0, max OSL 4096,
+TRITON_ATTN, Triton MoE backend, and max_num_batched_tokens 32768. Qwen3-30B-A3B
+uses max_num_seqs 128; Qwen3-32B uses max_num_seqs 64.
 
 ## Current Evidence
 
@@ -65,15 +66,46 @@ tokens. K1 remains slower in the sync cohort even though its 256-token proposer
 shape is covered, demonstrating a second intrinsic cost from the 28-layer dense
 proposer and full-vocabulary head.
 
+## Qwen3-32B Graph-Covered Live Evidence
+
+The full-run K9/K16 confirmations isolate CUDA Graph coverage from intrinsic
+speculation cost. K9 uses cap 640 and K16 uses cap 1,088, exactly covering
+`max_num_seqs * (K + 1)` for max_num_seqs 64.
+
+| Method | Step span | Generation tok/s/GPU | Gen speedup | E2E tok/s/GPU | E2E speedup | Acceptance | Mean accepted length |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Baseline | 2-7 | 1,272.7 | 1.000x | 811.1 | 1.000x | n/a | n/a |
+| PARD K9, cap 640 | 2-7 | 1,292.4 | 1.015x | 811.9 | 1.001x | 23.9% | 3.15 |
+| Baseline | 2-3 | 1,266.8 | 1.000x | 808.4 | 1.000x | n/a | n/a |
+| PARD K16, cap 1,088 | 2-3 | 867.5 | 0.685x | 623.4 | 0.771x | 12.4% | 2.99 |
+
+The mean accepted length includes the target token emitted after accepted draft
+tokens. A useful approximation for draft work per emitted token is
+`K / mean_accepted_length`; target verification work scales as
+`(K + 1) / mean_accepted_length`.
+
+| Method | Draft proposals per emitted token | Verified positions per emitted token |
+|---|---:|---:|
+| PARD K9 | 2.86 | 3.18 |
+| PARD K16 | 5.35 | 5.69 |
+
+K16 therefore performs about 1.87x more draft proposal work and 1.79x more
+target verification work per emitted token than K9. Over matched Steps 2-3,
+K9 is 1.45x faster than K16 in generation throughput. This difference is not a
+CUDA Graph fallback: both proposer shapes are covered. It follows directly from
+K16 proposing seven additional positions while accepting fewer useful tokens
+per cycle.
+
 ## Root Cause
 
 The regression has two confirmed layers:
 
 1. **Graph coverage:** the default 512-token capture limit leaves large PARD
    proposer shapes on an eager fallback. On Qwen3-32B with `max_num_seqs=64`,
-   raising the cap from 512 to 640 recovered 1.317x generation throughput for K9
-   and reached 0.989x of baseline over matched Steps 2-3. Raising it to 1,088 for
-   K16 recovered only 1.074x and reached 0.701x of baseline.
+   raising the cap from 512 to 640 recovers 1.330x generation and 1.208x E2E
+   throughput for K9 over matched Steps 2-7, reaching baseline parity. Raising
+   it to 1,088 for K16 recovers only 1.050x generation and 1.039x E2E throughput
+   over matched Steps 2-3, reaching only 0.685x and 0.771x of baseline.
 2. **Intrinsic proposer and verifier cost:** the 28-layer dense drafter,
    full-vocabulary sampling, high concurrency, and K+1 target verification still
    dominate when acceptance saturates. The covered K1 sync result and the
@@ -121,7 +153,8 @@ This is a separate operability bug from the Qwen3-30B-A3B performance regression
   PARD K7 `2260580`, PARD K9 `2260581`, and PARD K16 `2250929`.
 - Qwen3-32B failed TP2 jobs: K1 `2260695`, K7 `2260697`, K9 `2260699`, and
   K16 `2260701`.
-- Qwen3-32B graph-cap smoke jobs: K9 `2262236` and K16 `2262238`.
+- Qwen3-32B graph-cap smoke jobs: K9 `2262236` and K16 `2262238`; full-run
+  confirmations: K9 `2262387` and K16 `2262687`.
 - Qwen3-30B-A3B async replacement jobs: K1 `2260883`, K7 `2260885`, K9
   `2260886`, and K16 `2260887`.
 - W&B project: `nvidia/sna-nemorl-specdec-lyris`.
