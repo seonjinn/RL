@@ -334,13 +334,18 @@ def test_extended_qwen8_matrix_preserves_legacy_methodology() -> None:
 
 def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     output = run_dry("stage_extended_method_assets.sh", CLUSTER="lyris")
+    worker = (
+        EXPERIMENT / "stage_extended_method_assets_in_container.sh"
+    ).read_text(encoding="utf-8")
 
-    assert "z-lab/Qwen3-8B-DFlash-b16" in output
-    assert "arctic-inference==0.1.1" in output
+    assert "z-lab/Qwen3-8B-DFlash-b16" in worker
+    assert "arctic-inference==0.1.1" in worker
     assert "ee0da84ab9e04ac7610e28580af62c365e898389" in output
     assert "6a97dab2f17c0a3c031065329f092c4f61108a6f" in output
     assert "6f279bf3f1680e0b5d71c562ca5b91bdeef4c038" in output
-    assert "vllm024_pard2_target_features.patch" in output
+    assert "vllm024_pard2_target_features.patch" in worker
+    assert "stage_extended_method_assets_in_container.sh" in output
+    assert "/home/" not in worker
     assert "--segment=1" in output
     assert "--gres" not in output
 
