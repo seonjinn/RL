@@ -33,24 +33,51 @@ for repo_id, revision in assets:
     print(f"staged={repo_id}@{revision} path={path}", flush=True)
 PY
 
-clone_pinned() {
+stage_github_archive() {
   local repository="$1"
   local commit="$2"
   local destination="$3"
-  if [[ ! -d "${destination}/.git" ]]; then
-    git clone --filter=blob:none "${repository}" "${destination}"
-  fi
-  git -C "${destination}" fetch origin "${commit}" --depth=1
-  git -C "${destination}" checkout --detach "${commit}"
-  test "$(git -C "${destination}" rev-parse HEAD)" = "${commit}"
+  GITHUB_REPOSITORY="${repository}" \
+    GITHUB_COMMIT="${commit}" \
+    GITHUB_DESTINATION="${destination}" \
+    python3 - <<'PY'
+import os
+import shutil
+import tarfile
+import urllib.request
+from pathlib import Path
+
+repository = os.environ["GITHUB_REPOSITORY"]
+commit = os.environ["GITHUB_COMMIT"]
+destination = Path(os.environ["GITHUB_DESTINATION"])
+marker = destination / ".source_commit"
+if marker.exists() and marker.read_text(encoding="utf-8").strip() == commit:
+    raise SystemExit(0)
+
+temporary = destination.with_name(destination.name + ".partial")
+shutil.rmtree(temporary, ignore_errors=True)
+temporary.mkdir(parents=True)
+url = f"https://github.com/{repository}/archive/{commit}.tar.gz"
+with urllib.request.urlopen(url) as response:
+    with tarfile.open(fileobj=response, mode="r|gz") as archive:
+        archive.extractall(temporary, filter="fully_trusted")
+roots = [path for path in temporary.iterdir() if path.is_dir()]
+if len(roots) != 1:
+    raise RuntimeError(f"expected one archive root in {temporary}, got {roots}")
+shutil.rmtree(destination, ignore_errors=True)
+roots[0].replace(destination)
+marker.write_text(commit + "\n", encoding="utf-8")
+temporary.rmdir()
+print(f"staged=https://github.com/{repository}@{commit} path={destination}")
+PY
 }
 
 vllm_source="${ASSET_ROOT}/src/vllm-${VLLM_COMMIT}"
 angelslim_source="${ASSET_ROOT}/src/angelslim-${ANGELSLIM_COMMIT}"
 pard_source="${ASSET_ROOT}/src/pard-${PARD_COMMIT}"
-clone_pinned https://github.com/vllm-project/vllm.git "${VLLM_COMMIT}" "${vllm_source}"
-clone_pinned https://github.com/Tencent/AngelSlim.git "${ANGELSLIM_COMMIT}" "${angelslim_source}"
-clone_pinned https://github.com/AMD-AGI/PARD.git "${PARD_COMMIT}" "${pard_source}"
+stage_github_archive vllm-project/vllm "${VLLM_COMMIT}" "${vllm_source}"
+stage_github_archive Tencent/AngelSlim "${ANGELSLIM_COMMIT}" "${angelslim_source}"
+stage_github_archive AMD-AGI/PARD "${PARD_COMMIT}" "${pard_source}"
 
 if ! grep -q 'method in ("draft_model", "pard2")' "${vllm_source}/vllm/config/speculative.py"; then
   patch -p1 -d "${vllm_source}" \

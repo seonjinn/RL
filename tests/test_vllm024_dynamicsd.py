@@ -345,6 +345,8 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     assert "6f279bf3f1680e0b5d71c562ca5b91bdeef4c038" in output
     assert "vllm024_pard2_target_features.patch" in worker
     assert "stage_extended_method_assets_in_container.sh" in output
+    assert "git clone" not in worker
+    assert "urllib.request" in worker
     assert "/home/" not in worker
     assert "--segment=1" in output
     assert "--gres" not in output
