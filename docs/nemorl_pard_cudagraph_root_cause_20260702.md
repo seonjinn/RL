@@ -53,6 +53,28 @@ drafter runs outside CUDA Graphs. The current leading causes are:
 4. Lower amortization for Qwen3-30B-A3B because the target activates only about
    3B parameters per token.
 
+## Qwen3-235B Draft-TP Gate
+
+The Qwen3-235B target-TP8/draft-TP1 cohorts cannot run on the currently staged
+nightly image without a dedicated implementation. The image symlink
+`nemo_rl_nightly.sqsh` resolves to `nemo_rl_nightly_20260701.sqsh`. Its packaged
+`vllm/v1/spec_decode/draft_model.py` calls `_raise_if_draft_tp_mismatch()` and
+raises `ValueError` whenever `draft_tp != target_tp`. The guard explains that
+multiple target ranks otherwise compile the TP1 drafter on rank 0 and corrupt
+the shared Torch compile cache.
+
+This is a deterministic configuration rejection, not a scheduler or model
+checkpoint failure. On 2026-07-02, the following pending jobs were held before
+allocation to avoid guaranteed startup failures:
+
+- Async PARD K1/K7/K9/K16: `2261943`-`2261946`
+- Sync PARD K1/K7/K9/K16: `2264444`-`2264447`
+
+The matched baselines `2261942` and `2264443` and async Eagle jobs `2264402`
+and `2264403` remain eligible. Qwen3-235B PARD can be tested immediately with
+draft TP8, but a meaningful draft-TP1 optimization requires isolated compile
+caches and proposal broadcast semantics rather than deleting the safety guard.
+
 ## Proposed Isolated Optimization
 
 No core patch is applied by this note.
