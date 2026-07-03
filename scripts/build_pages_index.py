@@ -90,6 +90,35 @@ REPORT_GROUPS = [
     },
 ]
 
+PINNED_REPORT_FILES = {
+    "vllm_standalone_results_20260619.html",
+}
+
+PRIMARY_LINKS = [
+    ("vLLM standalone latest", "reports/vllm_standalone_results_latest.html"),
+    (
+        "vLLM standalone 6/19 all-batch matrix",
+        "reports/vllm_standalone_results_20260619.html",
+    ),
+    (
+        "NeMo-RL latest",
+        "reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html",
+    ),
+    (
+        "Combined clean report",
+        "reports/specdec_clean_benchmark_results_20260617.html",
+    ),
+    (
+        "Qwen235B SWE/Math historical",
+        "reports/qwen235b_specdec_swe_math_status_20260613.html",
+    ),
+    (
+        "Temp0/Temp1 trends",
+        "reports/vllm_standalone_temp0_temp1_trends_20260616.html",
+    ),
+    ("Archive: old Eagle3 report", "archive/specdec_math_progress_report.html"),
+]
+
 REPORT_FILE_NAMES = sorted(
     {filename for group in REPORT_GROUPS for _, filename, _ in group["items"]}
 )
@@ -574,6 +603,12 @@ def report_link_card(label: str, filename: str, description: str) -> str:
     )
 
 
+def primary_links_html() -> str:
+    return "\n      ".join(
+        f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in PRIMARY_LINKS
+    )
+
+
 def report_hub_html() -> str:
     groups = []
     for group in REPORT_GROUPS:
@@ -581,7 +616,7 @@ def report_hub_html() -> str:
         archive = []
         for index, (label, filename, description) in enumerate(group["items"]):
             card = report_link_card(label, filename, description)
-            if index == 0 or "latest" in filename:
+            if index == 0 or "latest" in filename or filename in PINNED_REPORT_FILES:
                 primary.append(card)
             else:
                 archive.append(card)
@@ -948,12 +983,7 @@ def build() -> None:
   <section>
     <h2>Primary Links</h2>
     <div class=\"links\">
-      <a href=\"reports/vllm_standalone_results_latest.html\">vLLM standalone latest</a>
-      <a href=\"reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html\">NeMo-RL latest</a>
-      <a href=\"reports/specdec_clean_benchmark_results_20260617.html\">Combined clean report</a>
-      <a href=\"reports/qwen235b_specdec_swe_math_status_20260613.html\">Qwen235B SWE/Math historical</a>
-      <a href=\"reports/vllm_standalone_temp0_temp1_trends_20260616.html\">Temp0/Temp1 trends</a>
-      <a href=\"archive/specdec_math_progress_report.html\">Archive: old Eagle3 report</a>
+      {primary_links_html()}
     </div>
   </section>
 
