@@ -1,0 +1,146 @@
+diff --git a/angelslim/__init__.py b/angelslim/__init__.py
+index f0386e7..9a96829 100644
+--- a/angelslim/__init__.py
++++ b/angelslim/__init__.py
+@@ -12,4 +12,4 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-from .engine import Engine  # noqa: F401
++"""Lightweight package initialization for standalone draft benchmarking."""
+diff --git a/angelslim/compressor/__init__.py b/angelslim/compressor/__init__.py
+index b3ae4fb..1b2dd3f 100644
+--- a/angelslim/compressor/__init__.py
++++ b/angelslim/compressor/__init__.py
+@@ -12,8 +12,4 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-from .compressor_factory import CompressorFactory  # noqa: F401
+-from .distill import Distill  # noqa: F401
+-from .qad import QAD  # noqa: F401
+-from .qat.qat import QAT  # noqa: F401
+-from .quant import PTQ  # noqa: F401
++"""Lightweight compressor namespace for standalone draft benchmarking."""
+diff --git a/angelslim/compressor/speculative/__init__.py b/angelslim/compressor/speculative/__init__.py
+index b108957..f0c24aa 100644
+--- a/angelslim/compressor/speculative/__init__.py
++++ b/angelslim/compressor/speculative/__init__.py
+@@ -12,38 +12,4 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-from .benchmark import BenchmarkConfig, BenchmarkEngine, BenchmarkMode
+-from .train import (
+-    DatasetManager,
+-    DraftModelConfig,
+-    Eagle3TrainerFactory,
+-    GaussianNoise,
+-    TargetHead,
+-    TransformDataset,
+-    convert_sharegpt_data,
+-    convert_ultrachat_data,
+-    create_draft_model,
+-    create_target_model,
+-    data_generation_work_flow,
+-    get_supported_chat_template_type_strings,
+-    infer_model_params,
+-)
+-
+-__all__ = [
+-    "BenchmarkEngine",
+-    "BenchmarkConfig",
+-    "BenchmarkMode",
+-    "create_draft_model",
+-    "DraftModelConfig",
+-    "create_target_model",
+-    "Eagle3TrainerFactory",
+-    "data_generation_work_flow",
+-    "convert_sharegpt_data",
+-    "convert_ultrachat_data",
+-    "DatasetManager",
+-    "GaussianNoise",
+-    "TransformDataset",
+-    "get_supported_chat_template_type_strings",
+-    "TargetHead",
+-    "infer_model_params",
+-]
++"""Lightweight speculative namespace for standalone draft benchmarking."""
+diff --git a/angelslim/compressor/speculative/train/__init__.py b/angelslim/compressor/speculative/train/__init__.py
+index b2b6716..8399cce 100644
+--- a/angelslim/compressor/speculative/train/__init__.py
++++ b/angelslim/compressor/speculative/train/__init__.py
+@@ -1,33 +1 @@
+-from .data import (
+-    DatasetManager,
+-    GaussianNoise,
+-    TransformDataset,
+-    convert_sharegpt_data,
+-    convert_ultrachat_data,
+-    data_generation_work_flow,
+-    get_supported_chat_template_type_strings,
+-)
+-from .models import (
+-    DraftModelConfig,
+-    TargetHead,
+-    create_draft_model,
+-    create_target_model,
+-    infer_model_params,
+-)
+-from .trainer import Eagle3TrainerFactory
+-
+-__all__ = [
+-    "create_draft_model",
+-    "DraftModelConfig",
+-    "create_target_model",
+-    "Eagle3TrainerFactory",
+-    "data_generation_work_flow",
+-    "convert_sharegpt_data",
+-    "convert_ultrachat_data",
+-    "DatasetManager",
+-    "GaussianNoise",
+-    "TransformDataset",
+-    "get_supported_chat_template_type_strings",
+-    "TargetHead",
+-    "infer_model_params",
+-]
++"""Lightweight training namespace for standalone draft benchmarking."""
+diff --git a/angelslim/compressor/speculative/train/models/__init__.py b/angelslim/compressor/speculative/train/models/__init__.py
+index 1e35c67..bc28979 100644
+--- a/angelslim/compressor/speculative/train/models/__init__.py
++++ b/angelslim/compressor/speculative/train/models/__init__.py
+@@ -1,11 +1 @@
+-from .draft import DraftModelConfig, create_draft_model
+-from .model_utils import infer_model_params
+-from .target import TargetHead, create_target_model
+-
+-__all__ = [
+-    "create_draft_model",
+-    "DraftModelConfig",
+-    "create_target_model",
+-    "TargetHead",
+-    "infer_model_params",
+-]
++"""Lightweight model namespace for standalone draft benchmarking."""
+diff --git a/angelslim/compressor/speculative/train/models/draft/__init__.py b/angelslim/compressor/speculative/train/models/draft/__init__.py
+index 58940d9..848aea4 100644
+--- a/angelslim/compressor/speculative/train/models/draft/__init__.py
++++ b/angelslim/compressor/speculative/train/models/draft/__init__.py
+@@ -12,16 +12,4 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-from .draft_model_factory import DraftModelConfig, create_draft_model
+-from .llama_eagle3 import CosyVoice3Eagle3LlamaForCausalLM, Eagle3LlamaForCausalLM
+-from .qwen_dflare import QwenDFlareDraftModel
+-from .qwen_dflash import QwenDFlashDraftModel
+-
+-__all__ = [
+-    "create_draft_model",
+-    "DraftModelConfig",
+-    "Eagle3LlamaForCausalLM",
+-    "CosyVoice3Eagle3LlamaForCausalLM",
+-    "QwenDFlashDraftModel",
+-    "QwenDFlareDraftModel",
+-]
++"""Lightweight draft namespace for direct DFlash and DFlare imports."""

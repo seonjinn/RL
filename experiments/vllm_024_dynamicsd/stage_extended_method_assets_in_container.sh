@@ -87,6 +87,10 @@ if ! grep -q 'output-json' "${angelslim_source}/tools/dflash_benchmark.py"; then
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_benchmark_json.patch
 fi
+if ! grep -q 'Lightweight package initialization' "${angelslim_source}/angelslim/__init__.py"; then
+  patch -p1 -d "${angelslim_source}" \
+    < /workspace/experiment/patches/angelslim_lightweight_imports.patch
+fi
 
 common_site_versioned="${ASSET_ROOT}/python/common-py312-arctic-0.1.1"
 if [[ ! -f "${common_site_versioned}/.complete" ]]; then
@@ -108,6 +112,17 @@ if [[ ! -f "${common_site_versioned}/.complete" ]]; then
   touch "${common_site_versioned}/.complete"
 fi
 ln -sfn "${common_site_versioned}" "${ASSET_ROOT}/python/common"
+
+angelslim_runtime_site="${ASSET_ROOT}/python/angelslim-runtime-py312-v1"
+if [[ ! -f "${angelslim_runtime_site}/.complete" ]]; then
+  mkdir -p "${angelslim_runtime_site}"
+  python3 -m pip install --upgrade --no-cache-dir \
+    --target "${angelslim_runtime_site}" \
+    'datasets==4.4.1' 'loguru==0.7.3' 'rich==14.2.0'
+  touch "${angelslim_runtime_site}/.complete"
+fi
+ln -sfn "${angelslim_runtime_site}" \
+  "${ASSET_ROOT}/python/angelslim_runtime"
 
 pard2_overlay_versioned="${ASSET_ROOT}/python/pard2-overlay-${VLLM_COMMIT}"
 if [[ ! -f "${pard2_overlay_versioned}/.complete" ]]; then
@@ -152,7 +167,9 @@ assert vllm.__version__ == "0.24.0", vllm.__version__
 assert "pard2" in inspect.getsource(SpeculativeConfig.uses_draft_model)
 print(f"validated_vllm={vllm.__version__}")
 PY
-PYTHONPATH="${angelslim_source}" python3 - <<'PY'
+PYTHONPATH="${ASSET_ROOT}/python/angelslim_runtime:${angelslim_source}" \
+  python3 - <<'PY'
+import datasets
 from angelslim.compressor.speculative.train.models.draft.qwen_dflare import (
     QwenDFlareDraftModel,
 )
@@ -160,5 +177,5 @@ from angelslim.compressor.speculative.train.models.draft.qwen_dflash import (
     QwenDFlashDraftModel,
 )
 
-print(QwenDFlashDraftModel.__name__, QwenDFlareDraftModel.__name__)
+print(datasets.__version__, QwenDFlashDraftModel.__name__, QwenDFlareDraftModel.__name__)
 PY

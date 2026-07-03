@@ -30,6 +30,7 @@ ASSET_ROOT="${ASSET_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/assets}"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.0-aarch64-ubuntu2404.sqsh}"
 ANGELSLIM_COMMIT="6a97dab2f17c0a3c031065329f092c4f61108a6f"
 ANGELSLIM_SOURCE="${ASSET_ROOT}/src/angelslim-${ANGELSLIM_COMMIT}"
+ANGELSLIM_RUNTIME_SITE="${ANGELSLIM_RUNTIME_SITE:-${ASSET_ROOT}/python/angelslim_runtime}"
 MODEL="${MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218}"
 DFLASH_MODEL="${DFLASH_MODEL:-${HF_HOME}/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4}"
 DFLARE_MODEL="${DFLARE_MODEL:-${HF_HOME}/hub/models--AngelSlim--Qwen3-8b-dflare/snapshots/55e2c8d86d76ce1e79fa3b8642c7f80091285a82}"
@@ -83,6 +84,7 @@ set -euo pipefail
 
 test -s '${CONTAINER_IMAGE}'
 test -d '${ANGELSLIM_SOURCE}'
+test -d '${ANGELSLIM_RUNTIME_SITE}'
 test -d '${MODEL}'
 test -d '${draft_model}'
 
@@ -109,7 +111,7 @@ srun --ntasks=1 \\
   --container-remap-root \\
   --mpi=pmix \\
   bash -lc "set -euo pipefail
-export PYTHONPATH='${ANGELSLIM_SOURCE}'
+export PYTHONPATH='${ANGELSLIM_RUNTIME_SITE}:${ANGELSLIM_SOURCE}'
 export HF_HOME='${HF_HOME}'
 export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
 export HF_DATASETS_CACHE='${HF_HOME}/datasets'

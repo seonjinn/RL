@@ -346,6 +346,8 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     assert "6a97dab2f17c0a3c031065329f092c4f61108a6f" in output
     assert "6f279bf3f1680e0b5d71c562ca5b91bdeef4c038" in output
     assert "vllm024_pard2_target_features.patch" in worker
+    assert "angelslim_lightweight_imports.patch" in worker
+    assert "datasets==4.4.1" in worker
     assert "stage_extended_method_assets_in_container.sh" in output
     assert "git clone" not in worker
     assert "urllib.request" in worker
@@ -368,6 +370,7 @@ def test_angelslim_matrix_keeps_native_results_separate() -> None:
     assert "--draft-arch 'dflare'" in output
     assert "--block-size '16'" in output
     assert "backend=angelslim_transformers_native" in output
+    assert "angelslim_runtime" in output
     assert "--segment=1" in output
     assert "--gres" not in output
 
