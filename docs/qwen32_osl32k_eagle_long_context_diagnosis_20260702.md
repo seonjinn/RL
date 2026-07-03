@@ -1,6 +1,7 @@
-# Qwen3-32B 32K Eagle Long-Context Diagnosis
+# Qwen3-32B 32K SpecDec Long-Context Diagnosis
 
 Date: 2026-07-02
+Updated: 2026-07-02 20:31 PDT
 
 ## Setup
 
@@ -13,9 +14,34 @@ Date: 2026-07-02
 - Context parallel size: 2
 - CUDA Graphs: enabled (`enforce_eager=false`)
 - Attention/MoE: `TRITON_ATTN` / Triton MoE
-- Comparison window: matched W&B Steps 2-4
+- Final comparison window: baseline Steps 2-20; each timeout-partial SpecDec
+  row uses its own Steps 2-N window and the same baseline step span
 
-## Matched Results
+## Final Five-Hour Outcomes
+
+Both baselines completed 20/20. Every SpecDec row reached valid steady-state
+steps and then exhausted the five-hour walltime; none of these rows is a crash
+or a completed 20-step result. Eagle uses the standard baseline `2319103`.
+PARD uses the `fuse_allreduce_rms=false` baseline `2319107` because the generic
+draft-model path cannot share the target's fused-all-reduce workspace safely.
+
+| Method | Job | State / steps | Gen time | Gen tok/s/GPU | Gen speedup | E2E time | E2E tok/s/GPU | E2E speedup | Acceptance | Mean accepted length |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Baseline, standard | `2319103` | completed, 2-20 | 750.3s | 187.4 | 1.000x | 828.2s | 168.0 | 1.000x | n/a | n/a |
+| Eagle K5 | `2319104` | timeout partial, 2-14 | 1,121.1s | 133.6 | 0.704x | 1,201.6s | 122.4 | 0.722x | 27.8% | 2.39 |
+| Eagle K7 | `2319105` | timeout partial, 2-13 | 1,082.0s | 137.1 | 0.698x | 1,162.5s | 125.6 | 0.718x | 20.5% | 2.44 |
+| Eagle K9 | `2319106` | timeout partial, 2-13 | 1,168.0s | 120.3 | 0.613x | 1,247.8s | 111.7 | 0.639x | 16.1% | 2.45 |
+| Baseline, no fused all-reduce RMS | `2319107` | completed, 2-20 | 775.5s | 179.2 | 1.000x | 855.7s | 161.1 | 1.000x | n/a | n/a |
+| PARD K1 | `2319108` | timeout partial, 2-6 | 2,446.7s | 62.8 | 0.365x | 2,531.6s | 60.1 | 0.388x | 60.8% | 1.61 |
+| PARD K7 | `2319109` | timeout partial, 2-8 | 1,924.9s | 81.2 | 0.439x | 2,009.4s | 76.5 | 0.463x | 19.3% | 2.35 |
+| PARD K9 | `2319110` | timeout partial, 2-7 | 2,168.9s | 69.5 | 0.403x | 2,252.3s | 66.3 | 0.427x | 15.1% | 2.36 |
+| PARD K16 | `2319111` | timeout partial, 2-6 | 2,662.7s | 62.6 | 0.364x | 2,750.3s | 59.7 | 0.385x | 8.5% | 2.36 |
+
+The speedup columns use each SpecDec row's exact observed step span against the
+same baseline steps. Absolute baseline values above show final Steps 2-20 means
+and are not used as a mismatched denominator for shorter partial rows.
+
+## Early Steps 2-4 Diagnosis
 
 | Method | Mean generated tokens | Max generated tokens | Acceptance | Mean accepted length | Verifier work amplification | Generation throughput speedup | E2E throughput speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -78,11 +104,45 @@ selected from scheduled request and scheduled token counts; they do not use
 the active sequence/context length. The current mechanism therefore cannot
 directly correct the observed Eagle long-context regression.
 
+## Async-1off Coverage Gap
+
+No Qwen3-32B async-1off 32K NeMo-RL manifest or result exists yet. The official
+async performance recipe inherits the same Megatron TP2 policy but moves vLLM
+to four dedicated generation nodes with target TP1 and
+`gpu_memory_utilization=0.8`. Dedicated generation GPUs remove the colocated
+vLLM sleep/wake memory boundary, but they do not reduce policy activation memory.
+
+The sync smoke sequence already established the policy requirements:
+
+1. CP1 failed policy training with 178.8-178.9 GiB in use.
+2. CP2 passed the memory boundary but required packed lengths divisible by 8.
+3. CP2 plus `policy.make_sequence_length_divisible_by=8` completed the smoke and
+   the later 20-step baseline.
+
+A valid async-1off 32K baseline smoke must therefore inherit
+`grpo-qwen3-32b-8n4g-async-1off.yaml` and apply the same CP2/pad8, 16x16 batch,
+max OSL 32,768, `max_num_seqs=16`, `max_num_batched_tokens=32768`, CUDA Graph,
+TRITON_ATTN, and Triton MoE settings. It should run for three steps with a new
+`sna-nemorl-specdec-lyris` W&B name before any async SpecDec rows are submitted.
+This control has not been submitted.
+
 ## Current Conclusion
 
-The first three matched steady-state steps show a real 23-26% generation
-throughput regression for Eagle K5/K7/K9 at 32K OSL. Low acceptance combined
-with long-context verification work is the leading explanation. The full
-Steps 2-20 result is still required to quantify the final effect and determine
-whether the additional step-to-step degradation is entirely context-length
-driven or includes a persistent runtime-state cost.
+The five-hour outcomes confirm that the early regression persists. Eagle
+K5/K7/K9 finish at 0.704x, 0.698x, and 0.613x generation throughput and 0.722x,
+0.718x, and 0.639x E2E throughput. PARD K1/K7/K9/K16 finish at 0.365x, 0.439x,
+0.403x, and 0.364x generation throughput. None completes 20 steps before the
+walltime.
+
+Low acceptance and long-context target verification remain the leading Eagle
+explanation. PARD adds a much larger 28-layer dense drafter cost; even K1's high
+60.8% acceptance cannot offset that proposer at this context and runtime shape.
+The evidence does not support increasing K for either method. The next valid
+long-context experiment is the missing async baseline smoke, not another sync K
+sweep.
+
+## Sources
+
+- `docs/pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv`
+- `docs/latest_pretyche_qwen32_sync_osl32k_matched_step20_20260702_jobs.csv`
+- `docs/latest_pretyche_qwen32_sync_osl32k_smoke_20260702_jobs.csv`
