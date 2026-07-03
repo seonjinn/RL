@@ -18,7 +18,7 @@ temperature 1.0, top-p 1.0, and exclude cold Step 1 when 20 steps completed.
 | Qwen3-30B-A3B | async-1off | complete, Steps 2-20 | complete, including replicate cohort | K=5/7/9 complete | 1.07x, Eagle K9 | 1.07x, Eagle K9 | Complete; PARD has material run-to-run variance |
 | Qwen3-32B | sync | complete, Steps 2-20 | complete | K=5/7/9 complete | 1.21x, Eagle K5 | 1.33x, Eagle K5 | Complete |
 | Qwen3-32B | async-1off | complete, Steps 2-20 | complete | K=7/9 complete | 1.09x, PARD K1 | 1.09x, PARD K1 | Complete for requested PARD set and Eagle K>3 |
-| Qwen3-235B-A22B | sync | queued as `2264443` | K1 TP8 smoke queued as `2261383`; draft-TP1 K1/7/9/16 held | K7/K9 complete, absolute only | waiting baseline | waiting baseline | Incomplete |
+| Qwen3-235B-A22B | sync | queued as `2264443` | K1 TP8 smoke `2261383` failed before engine initialization because the launcher emitted invalid `method=pard`; draft-TP1 K1/7/9/16 held | K7/K9 complete, absolute only | waiting baseline | waiting baseline | Incomplete |
 | Qwen3-235B-A22B | async-1off | baselines `2261942` and `2264402` queued | draft-TP1 K1/7/9/16 held | K7 `2264403` queued | waiting baseline | waiting baseline | Incomplete |
 
 Qwen3-235B sync Eagle absolute Step 2-20 results are already available:
@@ -51,19 +51,24 @@ Runnable Lyris jobs:
 
 | Job | Model/mode | Method | Expected start (PDT) |
 |---:|---|---|---|
-| 2261383 | Qwen3-235B sync | PARD K1, target TP8/draft TP8 smoke | 2026-07-02 23:36 |
-| 2261942 | Qwen3-235B async-1off | matched no-AR-RMS baseline | 2026-07-03 02:10 |
-| 2264402 | Qwen3-235B async-1off | exact baseline | 2026-07-03 02:22 |
+| 2261942 | Qwen3-235B async-1off | matched no-AR-RMS baseline | 2026-07-03 02:17 |
+| 2264402 | Qwen3-235B async-1off | exact baseline | 2026-07-03 02:37 |
 | 2264403 | Qwen3-235B async-1off | exact Eagle K7 | 2026-07-03 04:06 |
-| 2264443 | Qwen3-235B sync | exact no-AR-RMS baseline | 2026-07-03 04:52 |
+| 2264443 | Qwen3-235B sync | exact no-AR-RMS baseline | 2026-07-03 05:07 |
 
-All use 32 nodes, four GPUs per node, `--segment=16`, no `--gres`, Lustre
+All remaining runnable jobs use 32 nodes, four GPUs per node, `--segment=16`, no `--gres`, Lustre
 artifacts, the nightly container, CUDA Graphs, and the
 `sna-nemorl-specdec-lyris` W&B project.
 
+Failed PARD smoke `2261383` produced no performance sample. Its W&B run is
+[`vl2euq7r`](https://wandb.ai/nvidia/sna-nemorl-specdec-lyris/runs/vl2euq7r).
+The required one-variable correction is `method=pard` to
+`method=draft_model`; this is the stock-vLLM PARD contract already enforced by
+the canonical NeMo-RL SpecDec launcher.
+
 ## Required Next Cohorts
 
-1. Collect the five runnable Qwen3-235B jobs and publish matched Step 2-20 rows
+1. Collect the four runnable Qwen3-235B jobs and publish matched Step 2-20 rows
    where both sides complete.
 2. Run Qwen3-30B-A3B and Qwen3-32B async-1off 32K matched baseline, PARD
    K1/7/9/16, and Eagle K5/7/9 using their existing non-colocated async

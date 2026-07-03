@@ -149,13 +149,35 @@ unquantized MoE weights in FlashInfer CUTLASS/TRTLLM layouts. This run used the
 Triton MoE backend and failed with a TP collective timeout, not silent output
 corruption. That patch is not a demonstrated fix for this failure.
 
+## PARD Smoke Configuration Failure
+
+Lyris job `2261383` did not measure PARD performance. It failed after 4:53 while
+constructing the vLLM worker because the submitted Hydra override contained
+`speculative_config.method=pard`. Stock vLLM 0.20.0 rejected that value in
+`SpeculativeConfig.method` before engine initialization.
+
+The invalid value originates in
+`submit_lyris_qwen235b_sync_eagle3_k7_k9_k11_recipe_step20_20260701.sh`, where
+the Qwen3-235B `pard_k*` branch renders `method=pard`. The established launcher
+contract in `submit_nemorl_online_draft_specdec.sh` instead maps
+`DRAFT_FORMAT=pard` to `SPECDEC_METHOD=draft_model` and validates that mapping
+before submission. PARD-2 remains a separate patched-vLLM path with
+`method=pard2`.
+
+Therefore this failure is a launcher/configuration defect, not a PARD runtime
+failure or performance regression. A corrected smoke must change only the
+method to `draft_model`, retain the same target TP8/draft TP8 shape and all
+other matched settings, and pass a dry-run contract check before submission.
+No NeMo-RL or vLLM core patch is required for this specific failure.
+
 ## Scheduling Decision
 
 Pretyche exact-sync Eagle jobs `2319202`-`2319205`, exact async Eagle jobs
 `2319487`-`2319489`, and Triton-attention async Eagle jobs `2319975`-`2319977`
 remain held. On Lyris, the matched PARD smoke baseline `2261382` remains held,
-while the target-TP8/draft-TP8 PARD K1 smoke `2261383` is eligible and scheduled.
-The exact async baseline `2261942`, exact async baseline/Eagle pair
+and the target-TP8/draft-TP8 PARD K1 smoke `2261383` failed before engine
+initialization because it submitted the invalid method `pard` instead of
+`draft_model`. The exact async baseline `2261942`, exact async baseline/Eagle pair
 `2264402`-`2264403`, and exact sync baseline `2264443` are also eligible. The
 target-TP8/draft-TP1 PARD jobs `2261943`-`2261946` and `2264444`-`2264447`
 remain held because vLLM V1 rejects unequal target and draft TP sizes.
