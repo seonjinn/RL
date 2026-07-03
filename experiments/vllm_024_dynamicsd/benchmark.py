@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark static and dynamic speculative decoding with vLLM 0.24."""
+"""Benchmark vLLM 0.24 speculative-decoding methods."""
 
 from __future__ import annotations
 
@@ -15,7 +15,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-Mode = Literal["baseline", "static", "dynamic"]
+Mode = Literal[
+    "baseline",
+    "static",
+    "dynamic",
+    "suffix",
+    "pard",
+    "pard2",
+    "dflash",
+]
 DEFAULT_DYNAMIC_SCHEDULE = "1:16:5,17:32:4,33:64:3,65:128:1,129:512:0"
 
 
@@ -59,6 +67,10 @@ def build_speculative_config(
     draft_model: str,
     static_k: int,
     dynamic_schedule: list[list[int]],
+    draft_tensor_parallel_size: int,
+    suffix_max_cached_requests: int,
+    suffix_max_spec_factor: float,
+    suffix_min_token_prob: float,
 ) -> dict[str, Any] | None:
     if mode == "baseline":
         return None
@@ -67,11 +79,37 @@ def build_speculative_config(
         global_k = max(row[2] for row in dynamic_schedule)
     if global_k <= 0:
         raise ValueError("the global speculative-token count must be > 0")
+    if mode == "suffix":
+        return {
+            "method": "suffix",
+            "num_speculative_tokens": global_k,
+            "suffix_decoding_max_tree_depth": global_k,
+            "suffix_decoding_max_cached_requests": suffix_max_cached_requests,
+            "suffix_decoding_max_spec_factor": suffix_max_spec_factor,
+            "suffix_decoding_min_token_prob": suffix_min_token_prob,
+        }
+    if not draft_model:
+        raise ValueError(f"mode={mode!r} requires --draft-model")
+    if mode in ("pard", "pard2"):
+        return {
+            "method": "draft_model" if mode == "pard" else "pard2",
+            "model": draft_model,
+            "num_speculative_tokens": global_k,
+            "draft_tensor_parallel_size": draft_tensor_parallel_size,
+            "parallel_drafting": True,
+        }
+    if mode == "dflash":
+        return {
+            "method": "dflash",
+            "model": draft_model,
+            "num_speculative_tokens": global_k,
+            "draft_tensor_parallel_size": draft_tensor_parallel_size,
+        }
     config: dict[str, Any] = {
         "method": "eagle3",
         "model": draft_model,
         "num_speculative_tokens": global_k,
-        "draft_tensor_parallel_size": 1,
+        "draft_tensor_parallel_size": draft_tensor_parallel_size,
     }
     if mode == "dynamic":
         config["num_speculative_tokens_per_batch_size"] = dynamic_schedule
@@ -330,10 +368,26 @@ def runtime_metadata() -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--draft-model", required=True)
-    parser.add_argument("--mode", choices=("baseline", "static", "dynamic"), required=True)
+    parser.add_argument("--draft-model", default="")
+    parser.add_argument(
+        "--mode",
+        choices=(
+            "baseline",
+            "static",
+            "dynamic",
+            "suffix",
+            "pard",
+            "pard2",
+            "dflash",
+        ),
+        required=True,
+    )
     parser.add_argument("--static-k", type=int, default=5)
     parser.add_argument("--dynamic-schedule", default=DEFAULT_DYNAMIC_SCHEDULE)
+    parser.add_argument("--draft-tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--suffix-max-cached-requests", type=int, default=10000)
+    parser.add_argument("--suffix-max-spec-factor", type=float, default=1.0)
+    parser.add_argument("--suffix-min-token-prob", type=float, default=0.1)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--pipeline-parallel-size", type=int, default=1)
     parser.add_argument("--distributed-executor-backend", default="")
@@ -374,6 +428,10 @@ def main() -> None:
         draft_model=args.draft_model,
         static_k=args.static_k,
         dynamic_schedule=dynamic_schedule,
+        draft_tensor_parallel_size=args.draft_tensor_parallel_size,
+        suffix_max_cached_requests=args.suffix_max_cached_requests,
+        suffix_max_spec_factor=args.suffix_max_spec_factor,
+        suffix_min_token_prob=args.suffix_min_token_prob,
     )
 
     from vllm import LLM, SamplingParams  # pyright: ignore[reportMissingImports]
@@ -532,7 +590,7 @@ def main() -> None:
             [row["spec_decode_metrics"] for row in repeats]
         )
         expected_k = 0
-        if args.mode == "static":
+        if args.mode in ("static", "pard", "pard2", "dflash"):
             expected_k = args.static_k
         elif args.mode == "dynamic":
             expected_k = dynamic_k_for_batch_size(dynamic_schedule, batch_size)

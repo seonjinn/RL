@@ -86,12 +86,20 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         draft_model="unused",
         static_k=5,
         dynamic_schedule=schedule,
+        draft_tensor_parallel_size=1,
+        suffix_max_cached_requests=10000,
+        suffix_max_spec_factor=1.0,
+        suffix_min_token_prob=0.1,
     ) is None
     assert benchmark.build_speculative_config(
         mode="static",
         draft_model="draft",
         static_k=5,
         dynamic_schedule=schedule,
+        draft_tensor_parallel_size=1,
+        suffix_max_cached_requests=10000,
+        suffix_max_spec_factor=1.0,
+        suffix_min_token_prob=0.1,
     ) == {
         "method": "eagle3",
         "model": "draft",
@@ -103,6 +111,10 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         draft_model="draft",
         static_k=5,
         dynamic_schedule=schedule,
+        draft_tensor_parallel_size=1,
+        suffix_max_cached_requests=10000,
+        suffix_max_spec_factor=1.0,
+        suffix_min_token_prob=0.1,
     ) == {
         "method": "eagle3",
         "model": "draft",
@@ -110,6 +122,76 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         "num_speculative_tokens_per_batch_size": schedule,
         "draft_tensor_parallel_size": 1,
     }
+
+
+@pytest.mark.parametrize(
+    ("mode", "draft_model", "static_k", "expected"),
+    (
+        (
+            "suffix",
+            "",
+            32,
+            {
+                "method": "suffix",
+                "num_speculative_tokens": 32,
+                "suffix_decoding_max_tree_depth": 32,
+                "suffix_decoding_max_cached_requests": 10000,
+                "suffix_decoding_max_spec_factor": 1.0,
+                "suffix_decoding_min_token_prob": 0.1,
+            },
+        ),
+        (
+            "pard",
+            "amd/PARD-Qwen3-0.6B",
+            12,
+            {
+                "method": "draft_model",
+                "model": "amd/PARD-Qwen3-0.6B",
+                "num_speculative_tokens": 12,
+                "draft_tensor_parallel_size": 1,
+                "parallel_drafting": True,
+            },
+        ),
+        (
+            "pard2",
+            "amd/PARD2-Qwen3-8B",
+            15,
+            {
+                "method": "pard2",
+                "model": "amd/PARD2-Qwen3-8B",
+                "num_speculative_tokens": 15,
+                "draft_tensor_parallel_size": 1,
+                "parallel_drafting": True,
+            },
+        ),
+        (
+            "dflash",
+            "z-lab/Qwen3-8B-DFlash-b16",
+            15,
+            {
+                "method": "dflash",
+                "model": "z-lab/Qwen3-8B-DFlash-b16",
+                "num_speculative_tokens": 15,
+                "draft_tensor_parallel_size": 1,
+            },
+        ),
+    ),
+)
+def test_extended_speculative_configs(
+    mode: str, draft_model: str, static_k: int, expected: dict[str, object]
+) -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.build_speculative_config(
+        mode=mode,
+        draft_model=draft_model,
+        static_k=static_k,
+        dynamic_schedule=[[1, 16, 5]],
+        draft_tensor_parallel_size=1,
+        suffix_max_cached_requests=10000,
+        suffix_max_spec_factor=1.0,
+        suffix_min_token_prob=0.1,
+    ) == expected
 
 
 @pytest.mark.parametrize(
@@ -217,6 +299,68 @@ def test_matrix_dry_run_uses_model_runner_v1_and_matched_graph_mode() -> None:
     assert "--batch-sizes 1 2" in output
     assert "--temperature 0" in output
     assert "--temperature 1" in output
+
+
+def test_extended_qwen8_matrix_preserves_legacy_methodology() -> None:
+    output = run_dry(
+        "submit_qwen8_extended_methods_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="false",
+        DOMAINS="Math SWE",
+        TEMPERATURES="0.0 1.0",
+    )
+
+    assert output.count("[DRY-RUN] variant=") == 20
+    assert "models--Qwen--Qwen3-8B/snapshots/b968826" in output
+    assert "models--amd--PARD-Qwen3-0.6B/snapshots/f9f650" in output
+    assert "models--amd--PARD2-Qwen3-8B/snapshots/67a151" in output
+    assert "models--z-lab--Qwen3-8B-DFlash-b16" in output
+    assert "--mode 'suffix'" in output
+    assert "--mode 'pard'" in output
+    assert "--mode 'pard2'" in output
+    assert "--mode 'dflash'" in output
+    assert "--static-k '32'" in output
+    assert "--static-k '12'" in output
+    assert "--static-k '15'" in output
+    assert "--isl '4096'" in output
+    assert "--osl '32768'" in output
+    assert "--batch-sizes 1 2 4 8 16 32" in output
+    assert "--max-model-len '40960'" in output
+    assert "--enforce-eager" in output
+    assert "--attention-backend 'TRITON_ATTN'" in output
+    assert "PYTHONPATH=" in output
+    assert "--gres" not in output
+
+
+def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
+    output = run_dry("stage_extended_method_assets.sh", CLUSTER="lyris")
+
+    assert "z-lab/Qwen3-8B-DFlash-b16" in output
+    assert "arctic-inference==0.1.1" in output
+    assert "ee0da84ab9e04ac7610e28580af62c365e898389" in output
+    assert "6a97dab2f17c0a3c031065329f092c4f61108a6f" in output
+    assert "6f279bf3f1680e0b5d71c562ca5b91bdeef4c038" in output
+    assert "vllm024_pard2_target_features.patch" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
+
+
+def test_angelslim_matrix_keeps_native_results_separate() -> None:
+    output = run_dry(
+        "submit_angelslim_matrix.sh",
+        CLUSTER="lyris",
+        METHODS="dflash dflare",
+        DOMAINS="Math SWE",
+        TEMPERATURES="0.0 1.0",
+    )
+
+    assert output.count("[DRY-RUN] native_method=") == 8
+    assert "--draft-arch 'dflash'" in output
+    assert "--draft-arch 'dflare'" in output
+    assert "--block-size '16'" in output
+    assert "backend=angelslim_transformers_native" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
 
 
 def test_nsys_dry_run_profiles_one_steady_state_measurement() -> None:
@@ -359,8 +503,8 @@ def test_legacy_0619_replay_dry_run_preserves_strict_contract() -> None:
     assert "--disable-custom-all-reduce" in output
     assert "--temperature 0.0" in output
     assert "--temperature 1.0" in output
-    assert "suffix" not in output
-    assert "pard" not in output
+    assert "[DRY-RUN] variant=suffix" not in output
+    assert "[DRY-RUN] variant=pard" not in output
     assert "--gres" not in output
 
 
@@ -413,11 +557,14 @@ def test_scripts_do_not_depend_on_home_storage() -> None:
     for script_name in (
         "stage_image.sh",
         "stage_math_datasets.sh",
+        "stage_extended_method_assets.sh",
         "stage_ray_site.sh",
         "submit_matrix.sh",
         "submit_nsys.sh",
         "submit_nemorl_perfcfg_sync_matrix.sh",
         "submit_legacy_0619_replay_matrix.sh",
+        "submit_qwen8_extended_methods_matrix.sh",
+        "submit_angelslim_matrix.sh",
         "submit_sync_rollout.sh",
     ):
         text = (EXPERIMENT / script_name).read_text(encoding="utf-8")

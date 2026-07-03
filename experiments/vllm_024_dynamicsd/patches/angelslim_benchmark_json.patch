@@ -1,0 +1,68 @@
+diff --git a/tools/dflash_benchmark.py b/tools/dflash_benchmark.py
+index 376311d..70980b9 100644
+--- a/tools/dflash_benchmark.py
++++ b/tools/dflash_benchmark.py
+@@ -32,11 +32,13 @@ Usage (8 GPUs)::
+ from __future__ import annotations
+ 
+ import argparse
++import json
+ import os
+ import random
+ import time
+ import warnings
+ from itertools import chain
++from pathlib import Path
+ from types import SimpleNamespace
+ from typing import Any, List, Optional
+ 
+@@ -404,6 +406,7 @@ def main() -> None:
+     parser.add_argument("--max-samples", type=int, default=None)
+     parser.add_argument("--max-new-tokens", type=int, default=16384)
+     parser.add_argument("--temperature", type=float, default=0.0)
++    parser.add_argument("--output-json", type=Path)
+     args = parser.parse_args()
+ 
+     random.seed(0)
+@@ -520,6 +523,41 @@ def main() -> None:
+         f"[draft_arch={args.draft_arch}] Acceptance length histogram: "
+         f"{[f'{x * 100:.1f}%' for x in histogram]}"
+     )
++    if args.output_json is not None:
++        payload = {
++            "schema_version": 1,
++            "backend": "angelslim_transformers_native",
++            "status": "complete",
++            "config": {
++                "target_model": args.model_name_or_path,
++                "draft_model": args.draft_name_or_path,
++                "draft_arch": args.draft_arch,
++                "dataset": args.dataset,
++                "max_samples": args.max_samples,
++                "max_new_tokens": args.max_new_tokens,
++                "temperature": args.temperature,
++                "top_p": 1.0,
++                "block_size": block_size,
++                "world_size": _dist_size(),
++            },
++            "results": {
++                "samples": len(responses),
++                "baseline_decode_time_per_token_s": float(t1),
++                "spec_decode_time_per_token_s": float(tb),
++                "baseline_decode_tok_s": float(1.0 / t1),
++                "spec_decode_tok_s": float(1.0 / tb),
++                "decode_throughput_speedup": float(t1 / tb),
++                "mean_acceptance_length": float(tau),
++                "acceptance_rate": float(
++                    (tau - 1.0) / (block_size - 1) if block_size > 1 else 0.0
++                ),
++                "acceptance_length_histogram": [float(value) for value in histogram],
++            },
++        }
++        args.output_json.parent.mkdir(parents=True, exist_ok=True)
++        temporary = args.output_json.with_suffix(args.output_json.suffix + ".partial")
++        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
++        temporary.replace(args.output_json)
+ 
+ 
+ if __name__ == "__main__":

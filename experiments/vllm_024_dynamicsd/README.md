@@ -214,9 +214,7 @@ allocated GPUs, eager execution, Triton attention, Triton MoE, and disabled
 custom all-reduce. Qwen3-235B also keeps the original FP8 KV cache setting.
 
 The unmodified vLLM 0.24 image supports baseline and Eagle-3, so this replay
-compares baseline, static Eagle-3 K3, and DynamicSD. Suffix and PARD rows from
-the old report require separate v0.24 patch ports and are not silently mapped
-to another method.
+compares baseline, static Eagle-3 K3, and DynamicSD.
 
 ```bash
 CLUSTER=lyris TEST_ONLY=true ./submit_legacy_0619_replay_matrix.sh
@@ -231,6 +229,46 @@ At temperature 1, exact token hashes can differ because of numerical and batch
 invariance effects. `summarize_sync_rollout.py` marks direct time comparison as
 valid only when total generated-token counts agree within 1%; otherwise use
 throughput and repeated-run confidence intervals rather than raw makespan.
+
+### Qwen3-8B Extended Methods
+
+The extended matrix adds methods that have an exact Qwen3-8B checkpoint or do
+not require one. It preserves the June 19 ISL 4096, OSL 32768, BS
+1/2/4/8/16/32, Math/SWE, and temperature 0/1 contract:
+
+| Method | Runtime path | K | Checkpoint |
+|---|---|---:|---|
+| Suffix | vLLM 0.24 native | 32 | none |
+| PARD | vLLM 0.24 `draft_model` parallel drafting | 12 | `amd/PARD-Qwen3-0.6B` |
+| PARD-2 | minimal vLLM 0.24 target-feature overlay | 15 | `amd/PARD2-Qwen3-8B` |
+| DFlash | vLLM 0.24 native | 15 | `z-lab/Qwen3-8B-DFlash-b16` |
+
+Stage the pinned repositories, checkpoints, Arctic Inference dependency, and
+PARD-2 overlay before submission:
+
+```bash
+CLUSTER=lyris TEST_ONLY=true ./stage_extended_method_assets.sh
+CLUSTER=lyris ./stage_extended_method_assets.sh
+
+CLUSTER=lyris TEST_ONLY=true ./submit_qwen8_extended_methods_matrix.sh
+CLUSTER=lyris ./submit_qwen8_extended_methods_matrix.sh
+```
+
+The default is an OSL 256, BS4 smoke. Set `SMOKE=false` for the full legacy
+shape. Baseline and every method use the same target model, prompt files,
+sampling parameters, eager mode, attention backend, and throughput GPU
+denominator.
+
+DFlare is not a vLLM 0.24 method. `submit_angelslim_matrix.sh` therefore runs
+the pinned AngelSlim reference benchmark and keeps those Transformer-native
+results in a separate result tree. Each DFlash/DFlare job runs its own matched
+autoregressive baseline and records decode throughput speedup, acceptance
+rate, mean acceptance length, and the full acceptance-length histogram:
+
+```bash
+CLUSTER=lyris TEST_ONLY=true ./submit_angelslim_matrix.sh
+CLUSTER=lyris ./submit_angelslim_matrix.sh
+```
 
 ## NSys Profiling
 

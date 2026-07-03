@@ -38,6 +38,7 @@ STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}"
 TP="${TP:-1}"
 PP="${PP:-1}"
+DRAFT_TP="${DRAFT_TP:-1}"
 ISL="${ISL:-1024}"
 TOP_P="${TOP_P:-1.0}"
 SMOKE="${SMOKE:-true}"
@@ -52,6 +53,10 @@ DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
 THROUGHPUT_GPU_COUNT="${THROUGHPUT_GPU_COUNT:-}"
 PROMPT_JSONL="${PROMPT_JSONL:-}"
 PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
+SUFFIX_MAX_CACHED_REQUESTS="${SUFFIX_MAX_CACHED_REQUESTS:-10000}"
+SUFFIX_MAX_SPEC_FACTOR="${SUFFIX_MAX_SPEC_FACTOR:-1.0}"
+SUFFIX_MIN_TOKEN_PROB="${SUFFIX_MIN_TOKEN_PROB:-0.1}"
+EXTRA_PYTHONPATH="${EXTRA_PYTHONPATH:-}"
 DEPENDENCY="${DEPENDENCY:-}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
@@ -125,7 +130,7 @@ set -euo pipefail
 
 test -s '${CONTAINER_IMAGE}'
 test -d '${MODEL}'
-if [[ '${variant}' != 'baseline' ]]; then
+if [[ '${variant}' == 'static' || '${variant}' == 'dynamic' || '${variant}' == 'pard' || '${variant}' == 'pard2' || '${variant}' == 'dflash' ]]; then
   test -d '${DRAFT_MODEL}'
 fi
 if [[ -n '${PROMPT_JSONL}' ]]; then
@@ -139,6 +144,7 @@ export PYTHONUNBUFFERED=1
 export HF_HOME='${HF_HOME}'
 export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
 export HF_DATASETS_CACHE='${HF_HOME}/datasets'
+export PYTHONPATH='${EXTRA_PYTHONPATH}'
 export NODE_LOCAL_CACHE_ROOT="/tmp/sna/vllm024_\${SLURM_JOB_ID}_${variant}_t$(normalize_temperature "${temperature}")"
 export XDG_CACHE_HOME="\${NODE_LOCAL_CACHE_ROOT}/xdg"
 export VLLM_CACHE_ROOT="\${NODE_LOCAL_CACHE_ROOT}/vllm"
@@ -167,6 +173,7 @@ srun --ntasks=1 \\
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 export CUDA_MODULE_LOADING=LAZY
+export PYTHONPATH='${EXTRA_PYTHONPATH}'
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
 python3 /workspace/experiment/benchmark.py \\
   --model '${MODEL}' \\
@@ -174,6 +181,10 @@ python3 /workspace/experiment/benchmark.py \\
   --mode '${variant}' \\
   --static-k '${STATIC_K}' \\
   --dynamic-schedule '${DYNAMIC_SCHEDULE}' \\
+  --draft-tensor-parallel-size '${DRAFT_TP}' \\
+  --suffix-max-cached-requests '${SUFFIX_MAX_CACHED_REQUESTS}' \\
+  --suffix-max-spec-factor '${SUFFIX_MAX_SPEC_FACTOR}' \\
+  --suffix-min-token-prob '${SUFFIX_MIN_TOKEN_PROB}' \\
   --tensor-parallel-size '${TP}' \\
   --pipeline-parallel-size '${PP}' \\
   --dtype bfloat16 \\
@@ -219,7 +230,7 @@ fi
 for temperature in ${TEMPERATURES}; do
   for variant in ${VARIANTS}; do
     case "${variant}" in
-      baseline|static|dynamic) ;;
+      baseline|static|dynamic|suffix|pard|pard2|dflash) ;;
       *)
         echo "Unsupported variant: ${variant}" >&2
         exit 2

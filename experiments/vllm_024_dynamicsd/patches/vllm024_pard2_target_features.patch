@@ -1,0 +1,418 @@
+diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
+index de505e1..fd309f2 100644
+--- a/vllm/config/speculative.py
++++ b/vllm/config/speculative.py
+@@ -62,6 +62,7 @@ SpeculativeMethod = Literal[
+     "medusa",
+     "mlp_speculator",
+     "draft_model",
++    "pard2",
+     "suffix",
+     "custom_class",
+     EagleModelTypes,
+@@ -289,16 +290,18 @@ class SpeculativeConfig:
+             "eagle3",
+             "extract_hidden_states",
+             "dflash",
++            "pard2",
+         )
+         factors.append(uses_aux_hidden_states)
+ 
+         # The specific layers used also affect the computation graph
+         if uses_aux_hidden_states and self.draft_model_config is not None:
+-            layer_ids = getattr(
+-                self.draft_model_config.hf_config,
+-                "eagle_aux_hidden_state_layer_ids",
+-                None,
++            layer_key = (
++                "pard2_target_layers"
++                if self.method == "pard2"
++                else "eagle_aux_hidden_state_layer_ids"
+             )
++            layer_ids = getattr(self.draft_model_config.hf_config, layer_key, None)
+             if layer_ids is not None:
+                 # Convert to tuple to make it hashable
+                 factors.append(tuple(layer_ids))
+@@ -745,6 +748,12 @@ class SpeculativeConfig:
+                     self.method = "eagle3"
+                 elif "dflash" in self.draft_model_config.model.lower():
+                     self.method = "dflash"
++                elif (
++                    getattr(self.draft_model_config.hf_config, "spd_type", None)
++                    == "pard2"
++                    or getattr(self.draft_model_config.hf_config, "pard2", False)
++                ):
++                    self.method = "pard2"
+                 elif self.draft_model_config.hf_config.model_type == "medusa":
+                     self.method = "medusa"
+                 elif self.draft_model_config.hf_config.model_type == "mlp_speculator":
+@@ -1059,7 +1068,7 @@ class SpeculativeConfig:
+ 
+     def verify_equal_vocab_size_if_draft_model(self):
+         if (
+-            self.method == "draft_model"
++            self.uses_draft_model()
+             and self.target_model_config is not None
+             and self.draft_model_config is not None
+         ):
+@@ -1116,7 +1125,7 @@ class SpeculativeConfig:
+         return self.num_speculative_tokens_per_batch_size is not None
+ 
+     def uses_draft_model(self) -> bool:
+-        return self.method == "draft_model"
++        return self.method in ("draft_model", "pard2")
+ 
+     def uses_extract_hidden_states(self) -> bool:
+         return self.method == "extract_hidden_states"
+diff --git a/vllm/model_executor/models/qwen3.py b/vllm/model_executor/models/qwen3.py
+index b070eac..7231630 100644
+--- a/vllm/model_executor/models/qwen3.py
++++ b/vllm/model_executor/models/qwen3.py
+@@ -319,17 +319,72 @@ class Qwen3ForCausalLM(
+     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+         return self.model.embed_input_ids(input_ids)
+ 
++    def make_pard2_target_projection(self) -> None:
++        if hasattr(self, "target_proj"):
++            return
++        config = self.config
++        if not (
++            getattr(config, "spd_type", None) == "pard2"
++            or getattr(config, "pard2", False)
++        ):
++            raise ValueError("Qwen3 draft config is not marked as PARD-2.")
++        target_dim = getattr(config, "pard2_target_dim", None)
++        if target_dim is None:
++            raise ValueError(
++                "PARD-2 Qwen3 draft config must define `pard2_target_dim`."
++            )
++        try:
++            param = next(self.model.parameters())
++            factory_kwargs = {"device": param.device, "dtype": param.dtype}
++        except StopIteration:
++            factory_kwargs = {}
++        self.target_proj = nn.Linear(
++            int(target_dim),
++            config.hidden_size,
++            bias=bool(getattr(config, "pard2_proj_bias", False)),
++            **factory_kwargs,
++        )
++        self.pard2_scale = float(getattr(config, "pard2_scale", 0.02))
++
+     def forward(
+         self,
+         input_ids: torch.Tensor | None,
+         positions: torch.Tensor,
+         intermediate_tensors: IntermediateTensors | None = None,
+         inputs_embeds: torch.Tensor | None = None,
++        hidden_states: torch.Tensor | None = None,
+     ) -> torch.Tensor | IntermediateTensors:
+-        hidden_states = self.model(
++        if hidden_states is not None and get_pp_group().is_first_rank:
++            if not hasattr(self, "target_proj"):
++                raise ValueError(
++                    "PARD-2 target features were provided, but this Qwen3 "
++                    "draft model has no `target_proj`."
++                )
++            if inputs_embeds is None:
++                if input_ids is None:
++                    raise ValueError(
++                        "PARD-2 target-feature injection needs either "
++                        "`input_ids` or `inputs_embeds`."
++                    )
++                inputs_embeds = self.embed_input_ids(input_ids)
++            target_feat = hidden_states.to(
++                device=inputs_embeds.device, dtype=inputs_embeds.dtype
++            )
++            projected = self.target_proj(target_feat) * self.pard2_scale
++            if projected.shape != inputs_embeds.shape:
++                raise ValueError(
++                    "Projected PARD-2 target features do not match draft "
++                    "embeddings: "
++                    f"target={tuple(projected.shape)} "
++                    f"embeddings={tuple(inputs_embeds.shape)}."
++                )
++            inputs_embeds = inputs_embeds + projected
++            input_ids = None
++
++        model_hidden_states = self.model(
+             input_ids, positions, intermediate_tensors, inputs_embeds
+         )
+-        return hidden_states
++        return model_hidden_states
+ 
+     def compute_logits(
+         self,
+diff --git a/vllm/v1/spec_decode/draft_model.py b/vllm/v1/spec_decode/draft_model.py
+index a8c8ab0..027b62f 100644
+--- a/vllm/v1/spec_decode/draft_model.py
++++ b/vllm/v1/spec_decode/draft_model.py
+@@ -1,8 +1,11 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
++
+ import torch
+ import torch.nn as nn
++from huggingface_hub import hf_hub_download
+ from typing_extensions import override
+ 
+ from vllm.config import VllmConfig
+@@ -24,12 +27,61 @@ class DraftModelProposer(SpecDecodeBaseProposer):
+         super().__init__(
+             vllm_config=vllm_config,
+             device=device,
+-            pass_hidden_states_to_model=False,
++            pass_hidden_states_to_model=(
++                vllm_config.speculative_config is not None
++                and vllm_config.speculative_config.method == "pard2"
++            ),
+             runner=runner,
+         )
+         self._raise_if_vocab_size_mismatch()
+         self._raise_if_draft_tp_mismatch()
+ 
++    def _is_pard2(self) -> bool:
++        return self.speculative_config.method == "pard2"
++
++    def _resolve_pard2_warp_model(self) -> str:
++        model_name = self.draft_model_config.model
++        local_path = os.path.join(model_name, "warp_model.bin")
++        if os.path.exists(local_path):
++            return local_path
++        return hf_hub_download(
++            repo_id=model_name,
++            filename="warp_model.bin",
++            revision=self.speculative_config.revision,
++        )
++
++    def _load_pard2_target_projection(self, model: nn.Module) -> None:
++        if not self._is_pard2():
++            return
++        make_projection = getattr(model, "make_pard2_target_projection", None)
++        if callable(make_projection):
++            make_projection()
++        if not hasattr(model, "target_proj"):
++            raise RuntimeError(
++                "PARD-2 draft model did not create `target_proj`. "
++                "Check the draft config for `pard2_target_dim`."
++            )
++        warp_path = self._resolve_pard2_warp_model()
++        try:
++            warp_state = torch.load(warp_path, map_location="cpu", weights_only=True)
++        except TypeError:
++            warp_state = torch.load(warp_path, map_location="cpu")
++        weights = [
++            (name, tensor)
++            for name, tensor in warp_state.items()
++            if name.startswith("target_proj.")
++        ]
++        if not weights:
++            raise RuntimeError(
++                f"PARD-2 warp model {warp_path!r} does not contain "
++                "`target_proj.*` weights."
++            )
++        loaded = model.load_weights(weights)
++        if "target_proj.weight" not in loaded:
++            raise RuntimeError(
++                "PARD-2 `target_proj.weight` was not loaded into the draft model."
++            )
++
+     def _raise_if_vocab_size_mismatch(self):
+         self.speculative_config.verify_equal_vocab_size_if_draft_model()
+ 
+@@ -75,6 +127,7 @@ class DraftModelProposer(SpecDecodeBaseProposer):
+                 vllm_config=draft_vllm_config,
+                 prefix="draft_model",
+             )
++        self._load_pard2_target_projection(model)
+         return model
+ 
+     @override
+diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
+index 9f46cbd..9deb691 100644
+--- a/vllm/v1/spec_decode/llm_base_proposer.py
++++ b/vllm/v1/spec_decode/llm_base_proposer.py
+@@ -94,6 +94,13 @@ class SpecDecodeBaseProposer:
+             draft_hf_config, "hc_mult"
+         ):
+             self.hidden_size = self.hidden_size * draft_hf_config.hc_mult
++        if self.method == "pard2":
++            pard2_target_dim = getattr(draft_hf_config, "pard2_target_dim", None)
++            if pard2_target_dim is None:
++                raise ValueError(
++                    "PARD-2 draft config must define `pard2_target_dim`."
++                )
++            self.hidden_size = int(pard2_target_dim)
+ 
+         # Unifying eagle, draft model, and parallel drafting support.
+         # DFlash always uses parallel drafting (all tokens in one pass),
+@@ -348,7 +355,7 @@ class SpecDecodeBaseProposer:
+                 "`dflash_config.mask_token_id` specified in its config.json."
+             )
+ 
+-        if self.pass_hidden_states_to_model:
++        if self.pass_hidden_states_to_model and self.method != "pard2":
+             self.parallel_drafting_hidden_state_tensor = torch.empty(
+                 self.hidden_size, dtype=self.dtype, device=self.device
+             )
+@@ -836,16 +843,48 @@ class SpecDecodeBaseProposer:
+                 BLOCK_SIZE_TOKENS=BLOCK_SIZE_TOKENS,
+             )
+             if self.pass_hidden_states_to_model:
+-                assert self.parallel_drafting_hidden_state_tensor is not None
+                 self.hidden_states[out_hidden_state_mapping] = target_hidden_states
+-                # Use torch.where to avoid DtoH sync from boolean indexing
+-                mask = self.is_masked_token_mask[:total_num_output_tokens]
+-                torch.where(
+-                    mask.unsqueeze(1),
+-                    self.parallel_drafting_hidden_state_tensor,
+-                    self.hidden_states[:total_num_output_tokens],
+-                    out=self.hidden_states[:total_num_output_tokens],
+-                )
++                if self.method == "pard2":
++                    parallel_mask_slots = self.extra_slots_per_request - 1
++                    if parallel_mask_slots > 0:
++                        req_offsets = torch.arange(
++                            batch_size,
++                            dtype=query_start_loc.dtype,
++                            device=self.device,
++                        )
++                        request_output_starts = query_start_loc[:-1] + req_offsets * (
++                            self.extra_slots_per_request - 1
++                        )
++                        num_valid_tokens = query_end_loc - query_start_loc[:-1]
++                        mask_offsets = torch.arange(
++                            1,
++                            self.extra_slots_per_request,
++                            dtype=query_start_loc.dtype,
++                            device=self.device,
++                        )
++                        masked_indices = (
++                            request_output_starts[:, None]
++                            + num_valid_tokens[:, None]
++                            + mask_offsets[None, :]
++                        ).reshape(-1)
++                        last_target_features = target_hidden_states[
++                            query_end_loc.long()
++                        ]
++                        self.hidden_states[masked_indices.long()] = (
++                            last_target_features.repeat_interleave(
++                                parallel_mask_slots, dim=0
++                            )
++                        )
++                else:
++                    assert self.parallel_drafting_hidden_state_tensor is not None
++                    # Use torch.where to avoid DtoH sync from boolean indexing.
++                    mask = self.is_masked_token_mask[:total_num_output_tokens]
++                    torch.where(
++                        mask.unsqueeze(1),
++                        self.parallel_drafting_hidden_state_tensor,
++                        self.hidden_states[:total_num_output_tokens],
++                        out=self.hidden_states[:total_num_output_tokens],
++                    )
+ 
+             # 2.
+             # Recompute the slot mapping based on the new positions and
+@@ -925,7 +964,7 @@ class SpecDecodeBaseProposer:
+             return "DeepSeekMTPModel" in (
+                 self.draft_model_config.hf_config.architectures or []
+             )
+-        return self.method not in ("mtp", "draft_model", "dflash")
++        return self.method not in ("mtp", "draft_model", "pard2", "dflash")
+ 
+     def prepare_next_token_ids_cpu(
+         self,
+@@ -1310,6 +1349,7 @@ class SpecDecodeBaseProposer:
+         if (
+             self.parallel_drafting
+             and self.pass_hidden_states_to_model
++            and self.method != "pard2"
+             and self.parallel_drafting_hidden_state_tensor is not None
+         ):
+             flat_mask = self.model.mask_hidden.view(-1)
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 74938a8..f7759da 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -571,6 +571,8 @@ class GPUModelRunner(
+                     device=self.device,
+                     runner=self,
+                 )
++                if self.speculative_config.method == "pard2":
++                    self.use_aux_hidden_state_outputs = True
+             elif self.speculative_config.use_ngram_gpu():
+                 self.drafter = NgramProposerGPU(self.vllm_config, self.device, self)
+                 self.num_tokens_no_spec_gpu = torch.zeros(
+@@ -5338,18 +5340,55 @@ class GPUModelRunner(
+                 "Model does not support EAGLE3 interface but "
+                 "aux_hidden_state_outputs was requested"
+             )
+-        # Try to get auxiliary layers from speculative config,
+-        # otherwise use model's default layers
+-        aux_layers = self._get_eagle3_aux_layers_from_config()
+-        if aux_layers:
++        if self.speculative_config.method == "pard2":
++            aux_layers = self._get_pard2_aux_layers_from_config()
++            if not aux_layers:
++                raise RuntimeError(
++                    "PARD-2 requires `pard2_target_layers` in the draft "
++                    "model config."
++                )
+             logger.info(
+-                "Using auxiliary layers from speculative config: %s", aux_layers
++                "Using PARD-2 target layers from draft config: %s", aux_layers
+             )
+         else:
+-            aux_layers = self.model.get_eagle3_default_aux_hidden_state_layers()
++            # Try the draft config first, then the target model defaults.
++            aux_layers = self._get_eagle3_aux_layers_from_config()
++            if aux_layers:
++                logger.info(
++                    "Using auxiliary layers from speculative config: %s", aux_layers
++                )
++            else:
++                aux_layers = self.model.get_eagle3_default_aux_hidden_state_layers()
+ 
+         self.model.set_aux_hidden_state_layers(aux_layers)
+ 
++    def _normalize_aux_layers(
++        self, layer_ids: list[int] | tuple[int, ...]
++    ) -> tuple[int, ...]:
++        num_layers = self.model_config.hf_text_config.num_hidden_layers
++        normalized: list[int] = []
++        for layer_id in layer_ids:
++            normalized_layer_id = int(layer_id)
++            if normalized_layer_id < 0:
++                normalized_layer_id = num_layers + 1 + normalized_layer_id
++            if normalized_layer_id < 0 or normalized_layer_id > num_layers:
++                raise ValueError(
++                    f"Auxiliary hidden-state layer {normalized_layer_id} is "
++                    f"outside the valid range [0, {num_layers}]."
++                )
++            normalized.append(normalized_layer_id)
++        return tuple(normalized)
++
++    def _get_pard2_aux_layers_from_config(self) -> tuple[int, ...] | None:
++        if not (self.speculative_config and self.speculative_config.draft_model_config):
++            return None
++
++        hf_config = self.speculative_config.draft_model_config.hf_config
++        layer_ids = getattr(hf_config, "pard2_target_layers", None)
++        if layer_ids and isinstance(layer_ids, (list, tuple)):
++            return self._normalize_aux_layers(layer_ids)
++        return None
++
+     def _get_eagle3_aux_layers_from_config(self) -> tuple[int, ...] | None:
+         """Extract Eagle3 auxiliary layer indices from speculative config.
+ 
+@@ -5381,7 +5420,7 @@ class GPUModelRunner(
+                 layer_ids = eagle_config.get("eagle_aux_hidden_state_layer_ids")
+ 
+         if layer_ids and isinstance(layer_ids, (list, tuple)):
+-            return tuple(layer_ids)
++            return self._normalize_aux_layers(layer_ids)
+ 
+         return None
+ 
