@@ -75,6 +75,23 @@ and `2264403` remain eligible. Qwen3-235B PARD can be tested immediately with
 draft TP8, but a meaningful draft-TP1 optimization requires isolated compile
 caches and proposal broadcast semantics rather than deleting the safety guard.
 
+### Upstream Support Status
+
+vLLM PR [#5414](https://github.com/vllm-project/vllm/pull/5414) added a
+`SmallerTPProposerWorker` for target TP greater than one and draft TP1 in the
+older V0 multi-step-worker architecture. That implementation was merged in
+2024, but it is not a patch that can be applied directly to the current V1
+engine. V1 generic draft-model speculation was introduced separately by PR
+[#24322](https://github.com/vllm-project/vllm/pull/24322) in January 2026.
+Both the staged vLLM 0.20 image and current upstream `main` retain the explicit
+same-TP guard in `vllm/v1/spec_decode/draft_model.py`.
+
+Eagle-3 target-TP8/draft-TP1 runs are not contradictory: Eagle uses
+`EagleProposer`, while PARD uses the guarded generic `DraftModelProposer`.
+Therefore, the immediate correctness-safe PARD controls are matched target and
+draft TP8, or a separately matched target/draft TP4 cohort. Heterogeneous TP1
+requires a V1-native design and cannot be enabled by configuration alone.
+
 ## Proposed Isolated Optimization
 
 No core patch is applied by this note.
