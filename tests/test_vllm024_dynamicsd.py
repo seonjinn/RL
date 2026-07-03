@@ -259,6 +259,30 @@ def test_sync_rollout_expands_prompt_samples_with_unique_seeds() -> None:
     assert [request[1] for request in requests] == [100, 101, 102, 103, 104, 105]
 
 
+def test_sync_rollout_renders_chat_template_before_tokenizing() -> None:
+    sync_rollout = load_sync_rollout_module()
+
+    class FakeTokenizer:
+        def apply_chat_template(
+            self,
+            messages: list[dict[str, str]],
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> str:
+            assert messages == [{"role": "user", "content": "solve it"}]
+            assert tokenize is False
+            assert add_generation_prompt is True
+            return "rendered chat prompt"
+
+        def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+            assert text == "rendered chat prompt"
+            assert add_special_tokens is False
+            return [10, 20, 30]
+
+    assert sync_rollout.tokenize_prompt(FakeTokenizer(), "solve it", 2) == [20, 30]
+
+
 def test_sync_rollout_dry_run_models_barriered_rl_sampling() -> None:
     output = run_dry(
         "submit_sync_rollout.sh",

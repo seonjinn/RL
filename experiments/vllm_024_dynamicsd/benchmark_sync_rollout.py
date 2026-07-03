@@ -87,14 +87,17 @@ def length_statistics(lengths: list[int]) -> dict[str, float | int]:
 def tokenize_prompt(tokenizer: Any, text: str, max_prompt_tokens: int) -> list[int]:
     messages = [{"role": "user", "content": text}]
     if hasattr(tokenizer, "apply_chat_template"):
-        token_ids = tokenizer.apply_chat_template(
+        rendered = tokenizer.apply_chat_template(
             messages,
-            tokenize=True,
+            tokenize=False,
             add_generation_prompt=True,
         )
+        token_ids = tokenizer.encode(rendered, add_special_tokens=False)
     else:
         token_ids = tokenizer.encode(text, add_special_tokens=True)
     result = list(token_ids)
+    if any(not isinstance(token_id, int) for token_id in result):
+        raise TypeError("tokenizer returned non-integer prompt token IDs")
     if len(result) > max_prompt_tokens:
         result = result[-max_prompt_tokens:]
     if not result:
