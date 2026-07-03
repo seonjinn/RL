@@ -30,3 +30,4 @@ __pycache__/
 
 # Nested/temporary checkouts that should not become implicit submodules
 experiments/qwen3-235b-swe-full-run/report/
+.worktrees/
