@@ -87,6 +87,7 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         static_k=5,
         dynamic_schedule=schedule,
         draft_tensor_parallel_size=1,
+        draft_attention_backend="",
         suffix_max_cached_requests=10000,
         suffix_max_spec_factor=1.0,
         suffix_min_token_prob=0.1,
@@ -97,6 +98,7 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         static_k=5,
         dynamic_schedule=schedule,
         draft_tensor_parallel_size=1,
+        draft_attention_backend="",
         suffix_max_cached_requests=10000,
         suffix_max_spec_factor=1.0,
         suffix_min_token_prob=0.1,
@@ -112,6 +114,7 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         static_k=5,
         dynamic_schedule=schedule,
         draft_tensor_parallel_size=1,
+        draft_attention_backend="",
         suffix_max_cached_requests=10000,
         suffix_max_spec_factor=1.0,
         suffix_min_token_prob=0.1,
@@ -173,6 +176,7 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
                 "model": "z-lab/Qwen3-8B-DFlash-b16",
                 "num_speculative_tokens": 15,
                 "draft_tensor_parallel_size": 1,
+                "attention_backend": "FLASH_ATTN",
             },
         ),
     ),
@@ -188,6 +192,7 @@ def test_extended_speculative_configs(
         static_k=static_k,
         dynamic_schedule=[[1, 16, 5]],
         draft_tensor_parallel_size=1,
+        draft_attention_backend="FLASH_ATTN" if mode == "dflash" else "",
         suffix_max_cached_requests=10000,
         suffix_max_spec_factor=1.0,
         suffix_min_token_prob=0.1,
@@ -328,6 +333,7 @@ def test_extended_qwen8_matrix_preserves_legacy_methodology() -> None:
     assert "--max-model-len '40960'" in output
     assert "--enforce-eager" in output
     assert "--attention-backend 'TRITON_ATTN'" in output
+    assert "--draft-attention-backend 'FLASH_ATTN'" in output
     assert "PYTHONPATH=" in output
     assert "--gres" not in output
 

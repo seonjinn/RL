@@ -39,6 +39,7 @@ DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}
 TP="${TP:-1}"
 PP="${PP:-1}"
 DRAFT_TP="${DRAFT_TP:-1}"
+DRAFT_ATTENTION_BACKEND="${DRAFT_ATTENTION_BACKEND:-}"
 ISL="${ISL:-1024}"
 TOP_P="${TOP_P:-1.0}"
 SMOKE="${SMOKE:-true}"
@@ -182,6 +183,7 @@ python3 /workspace/experiment/benchmark.py \\
   --static-k '${STATIC_K}' \\
   --dynamic-schedule '${DYNAMIC_SCHEDULE}' \\
   --draft-tensor-parallel-size '${DRAFT_TP}' \\
+  --draft-attention-backend '${DRAFT_ATTENTION_BACKEND}' \\
   --suffix-max-cached-requests '${SUFFIX_MAX_CACHED_REQUESTS}' \\
   --suffix-max-spec-factor '${SUFFIX_MAX_SPEC_FACTOR}' \\
   --suffix-min-token-prob '${SUFFIX_MIN_TOKEN_PROB}' \\

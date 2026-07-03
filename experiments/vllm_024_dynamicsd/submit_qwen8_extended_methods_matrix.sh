@@ -54,6 +54,7 @@ for domain in ${DOMAINS}; do
   esac
 
   for method in ${METHODS}; do
+    draft_attention_backend=""
     case "${method}" in
       baseline)
         draft_model=""
@@ -79,6 +80,7 @@ for domain in ${DOMAINS}; do
         draft_model="${DFLASH_MODEL}"
         static_k=15
         extra_pythonpath="${COMMON_SITE}"
+        draft_attention_backend="FLASH_ATTN"
         ;;
       *)
         echo "Unsupported method: ${method}" >&2
@@ -107,6 +109,7 @@ for domain in ${DOMAINS}; do
       TEMPERATURES="${TEMPERATURES}" \
       STATIC_K="${static_k}" \
       DRAFT_TP=1 \
+      DRAFT_ATTENTION_BACKEND="${draft_attention_backend}" \
       TP=1 \
       PP=1 \
       ISL=4096 \

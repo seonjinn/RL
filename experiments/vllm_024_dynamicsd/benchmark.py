@@ -67,10 +67,11 @@ def build_speculative_config(
     draft_model: str,
     static_k: int,
     dynamic_schedule: list[list[int]],
-    draft_tensor_parallel_size: int,
-    suffix_max_cached_requests: int,
-    suffix_max_spec_factor: float,
-    suffix_min_token_prob: float,
+    draft_tensor_parallel_size: int = 1,
+    draft_attention_backend: str = "",
+    suffix_max_cached_requests: int = 10000,
+    suffix_max_spec_factor: float = 1.0,
+    suffix_min_token_prob: float = 0.1,
 ) -> dict[str, Any] | None:
     if mode == "baseline":
         return None
@@ -91,20 +92,26 @@ def build_speculative_config(
     if not draft_model:
         raise ValueError(f"mode={mode!r} requires --draft-model")
     if mode in ("pard", "pard2"):
-        return {
+        config = {
             "method": "draft_model" if mode == "pard" else "pard2",
             "model": draft_model,
             "num_speculative_tokens": global_k,
             "draft_tensor_parallel_size": draft_tensor_parallel_size,
             "parallel_drafting": True,
         }
+        if draft_attention_backend:
+            config["attention_backend"] = draft_attention_backend
+        return config
     if mode == "dflash":
-        return {
+        config = {
             "method": "dflash",
             "model": draft_model,
             "num_speculative_tokens": global_k,
             "draft_tensor_parallel_size": draft_tensor_parallel_size,
         }
+        if draft_attention_backend:
+            config["attention_backend"] = draft_attention_backend
+        return config
     config: dict[str, Any] = {
         "method": "eagle3",
         "model": draft_model,
@@ -385,6 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--static-k", type=int, default=5)
     parser.add_argument("--dynamic-schedule", default=DEFAULT_DYNAMIC_SCHEDULE)
     parser.add_argument("--draft-tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--draft-attention-backend", default="")
     parser.add_argument("--suffix-max-cached-requests", type=int, default=10000)
     parser.add_argument("--suffix-max-spec-factor", type=float, default=1.0)
     parser.add_argument("--suffix-min-token-prob", type=float, default=0.1)
@@ -429,6 +437,7 @@ def main() -> None:
         static_k=args.static_k,
         dynamic_schedule=dynamic_schedule,
         draft_tensor_parallel_size=args.draft_tensor_parallel_size,
+        draft_attention_backend=args.draft_attention_backend,
         suffix_max_cached_requests=args.suffix_max_cached_requests,
         suffix_max_spec_factor=args.suffix_max_spec_factor,
         suffix_min_token_prob=args.suffix_min_token_prob,
