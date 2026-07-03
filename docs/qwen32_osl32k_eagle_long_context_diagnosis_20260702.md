@@ -80,6 +80,34 @@ verification becoming KV-attention-bandwidth dominated as the active context
 grows. Each speculative iteration verifies `K + 1` query tokens, while the
 observed mean accepted length remains near 2.4 tokens.
 
+## Default OSL Versus 32K
+
+The same CUDA-Graph-enabled sync recipe improves at the default OSL for small K
+but regresses at 32K. This comparison uses the original graph-cap rows for PARD
+so that the runtime path remains aligned with the 32K runs.
+
+| Method | Default OSL gen speedup | 32K gen speedup | Default OSL E2E speedup | 32K E2E speedup | Acceptance, default to 32K | Verifier work amplification, default to 32K |
+|---|---:|---:|---:|---:|---:|---:|
+| Eagle K5 | 1.331x | 0.704x | 1.212x | 0.722x | 31.3% to 27.8% | 2.34x to 2.51x |
+| Eagle K7 | 1.163x | 0.698x | 1.140x | 0.718x | 23.1% to 20.5% | 3.05x to 3.28x |
+| Eagle K9 | 0.851x | 0.613x | 0.925x | 0.639x | 18.1% to 16.1% | 3.80x to 4.08x |
+| PARD K1, target/draft TP2 | 1.085x | 0.365x | 1.051x | 0.388x | 76.2% to 60.8% | 1.14x to 1.24x |
+| PARD K7, target/draft TP2 | 1.131x | 0.439x | 1.079x | 0.463x | 30.8% to 19.3% | 2.54x to 3.41x |
+| PARD K9, target/draft TP2 | 0.756x | 0.403x | 0.823x | 0.427x | 24.5% to 15.1% | 3.12x to 4.24x |
+| PARD K16, target/draft TP2 | 0.648x | 0.364x | 0.739x | 0.385x | 13.3% to 8.5% | 5.44x to 7.20x |
+
+Eagle K5 is the cleanest isolation: acceptance falls only 3.5 percentage points
+and verifier work amplification rises about 7%, yet generation changes from a
+33% gain to a 30% loss. The long-context reversal therefore cannot be explained
+by acceptance alone. The cost per target verification query increases with the
+active KV-cache length, so fixed K becomes progressively less economical.
+
+PARD K1 strengthens the same conclusion. Its 32K acceptance remains high at
+60.8%, but target/draft TP2 generation throughput falls to 0.365x. The dense
+28-layer draft model and target verification cost dominate at this context.
+Moving the async-1off target and draft to TP1 can remove TP2 proposer overhead,
+but it cannot remove the active-context-dependent target verification cost.
+
 ## E2E Breakdown
 
 Across Steps 2-4, non-generation stages remain close:
@@ -103,6 +131,12 @@ parallel drafting but not the sequential Eagle proposer. Its tiers are also
 selected from scheduled request and scheduled token counts; they do not use
 the active sequence/context length. The current mechanism therefore cannot
 directly correct the observed Eagle long-context regression.
+
+The evidence supports a context-aware gate as the next implementation design:
+retain the default-OSL winning K, reduce K as active context grows, and disable
+SpecDec once the predicted verifier work exceeds the baseline decode cost. The
+gate must cover both sequential Eagle and parallel PARD paths and log its chosen
+K per step. This design is not implemented or submitted yet.
 
 ## Async-1off Coverage Gap
 
