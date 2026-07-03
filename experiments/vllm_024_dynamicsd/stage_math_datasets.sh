@@ -94,10 +94,10 @@ srun --ntasks=1 \\
 export HF_HOME='${HF_HOME}'
 export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
 export HF_DATASETS_CACHE='${HF_HOME}/datasets'
-export PYDEPS=/tmp/vllm024_dataset_pydeps
-rm -rf \"\${PYDEPS}\"
-python3 -m pip install --quiet --no-cache-dir --target \"\${PYDEPS}\" 'datasets>=3.6,<5'
-export PYTHONPATH=\"\${PYDEPS}:\${PYTHONPATH:-}\"
+rm -rf /tmp/vllm024_dataset_pydeps
+python3 -m pip install --quiet --no-cache-dir \
+  --target /tmp/vllm024_dataset_pydeps 'datasets>=3.6,<5'
+export PYTHONPATH=/tmp/vllm024_dataset_pydeps
 python3 /workspace/experiment/materialize_math_prompts.py \\
   --source '${source}' \\
   --output '${output}' \\
