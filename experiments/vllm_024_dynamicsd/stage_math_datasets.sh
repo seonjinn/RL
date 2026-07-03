@@ -114,7 +114,7 @@ if [[ "${DRY_RUN}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
 fi
 
 if [[ "${DRY_RUN}" != "true" ]]; then
-  if [[ ! -s "${CONTAINER_IMAGE}" && -z "${DEPENDENCY}" ]]; then
+  if [[ "${TEST_ONLY}" != "true" && ! -s "${CONTAINER_IMAGE}" && -z "${DEPENDENCY}" ]]; then
     echo "Missing image and no dependency supplied: ${CONTAINER_IMAGE}" >&2
     exit 3
   fi
