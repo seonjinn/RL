@@ -90,7 +90,7 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=v024-q32-${variant}-t$(normalize_temperature "${temperature}")
+#SBATCH --job-name=coreai_dlalgo_llm-vllm024.q32-${variant}-t$(normalize_temperature "${temperature}")
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail

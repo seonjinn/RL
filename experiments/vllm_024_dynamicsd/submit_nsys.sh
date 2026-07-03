@@ -67,7 +67,7 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=v024-nsys-${variant}-bs${PROFILE_BATCH_SIZE}
+#SBATCH --job-name=coreai_dlalgo_llm-vllm024.nsys-${variant}-bs${PROFILE_BATCH_SIZE}
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail

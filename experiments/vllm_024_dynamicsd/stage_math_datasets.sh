@@ -72,7 +72,7 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=v024-data-${source}
+#SBATCH --job-name=coreai_dlalgo_llm-vllm024.data-${source}
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail

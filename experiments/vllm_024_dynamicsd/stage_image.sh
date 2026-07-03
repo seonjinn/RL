@@ -50,7 +50,7 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=vllm024-image-${CLUSTER}
+#SBATCH --job-name=coreai_dlalgo_llm-vllm024.image
 #SBATCH --output=${RUN_ROOT}/slurm-%j.out
 
 set -euo pipefail
