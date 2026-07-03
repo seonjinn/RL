@@ -39,6 +39,63 @@ time comparisons passed the 1% work-equivalence gate. Exact token hashes are
 not expected to match at temperature 1.0; this benchmark does not replace a
 reward or accuracy evaluation.
 
+## NeMo-RL Performance-Recipe Smoke
+
+These rows model one representative generation replica from each NeMo-RL
+performance recipe. They preserve recipe request concurrency and topology but
+cap output at 256 tokens, so they validate runtime behavior rather than predict
+the final long-generation speedup.
+
+| Model | Variant | Rollout time (s) | tok/s/GPU | Speedup | Acceptance | Mean accepted length |
+|---|---|---:|---:|---:|---:|---:|
+| Qwen3-30B-A3B | Baseline | 3.282 | 9,983.65 | 1.000x | n/a | n/a |
+| Qwen3-30B-A3B | Static Eagle-3 K5 | 4.724 | 6,936.46 | 0.695x | 56.5% | 3.83 |
+| Qwen3-30B-A3B | DynamicSD | 3.757 | 8,720.80 | 0.873x | 85.8% | 1.87 |
+| Qwen3-32B | Baseline | 3.918 | 8,362.59 | 1.000x | n/a | n/a |
+| Qwen3-32B | Static Eagle-3 K5 | 6.696 | 4,893.83 | 0.585x | 34.2% | 2.71 |
+| Qwen3-32B | DynamicSD | 4.407 | 7,435.18 | 0.889x | 55.0% | 3.75 |
+| Qwen3-235B-A22B | Baseline | 5.646 | 181.38 | 1.000x | n/a | n/a |
+| Qwen3-235B-A22B | Static Eagle-3 K5 | 2.983 | 343.29 | 1.893x | 39.4% | 2.97 |
+| Qwen3-235B-A22B | DynamicSD fixed K5 diagnostic | 4.447 | 230.25 | 1.269x | 40.1% | 3.01 |
+
+The default multi-range DynamicSD schedule hung after CUDA graph capture for
+Qwen3-235B TP8, while an otherwise identical single-range K5 schedule completed.
+This rules out Ray, TP8, and PIECEWISE CUDA graphs as the general cause. A fixed
+K4 diagnostic is queued to distinguish K4 execution from multi-range schedule
+selection. The full recipe-length jobs are `2270333-2270338` and
+`2270341-2270342`; Qwen3-235B DynamicSD is intentionally excluded until that
+diagnostic is resolved.
+
+## June 19 Replay Smoke
+
+This is a short OSL=256 validation of the June 19 report contract: ISL=4096,
+BS=4, eager execution, Math500 or SWE-verified prompts, temperature 0 or 1,
+and the original model-specific TP and four-GPU throughput denominator. Static
+uses Eagle-3 K3. DynamicSD selects K5 at BS=4. These speedups are not the final
+OSL=32768 results.
+
+| Domain | Model | Temp | Static speedup (acceptance) | Dynamic speedup (acceptance) |
+|---|---|---:|---:|---:|
+| Math | Qwen3-30B-A3B | 0 | 2.74x (94.9%) | 3.59x (91.4%) |
+| Math | Qwen3-30B-A3B | 1 | 2.88x (90.9%) | 3.66x (90.5%) |
+| Math | Qwen3-32B | 0 | 3.00x (88.6%) | 3.70x (83.7%) |
+| Math | Qwen3-32B | 1 | 2.26x (77.1%) | 2.92x (70.0%) |
+| Math | Qwen3-235B-A22B | 0 | 2.66x (78.0%) | 2.76x (51.7%) |
+| Math | Qwen3-235B-A22B | 1 | 2.64x (78.0%) | 2.85x (51.7%) |
+| SWE | Qwen3-30B-A3B | 0 | 2.36x (74.7%) | 2.74x (65.4%) |
+| SWE | Qwen3-30B-A3B | 1 | 2.42x (71.5%) | 2.92x (65.4%) |
+| SWE | Qwen3-32B | 0 | 2.55x (67.1%) | 2.79x (54.2%) |
+| SWE | Qwen3-32B | 1 | 2.53x (73.0%) | 2.64x (56.3%) |
+| SWE | Qwen3-235B-A22B | 0 | 2.38x (55.5%) | 2.14x (32.7%) |
+| SWE | Qwen3-235B-A22B | 1 | 2.26x (56.3%) | 2.23x (33.4%) |
+
+The complete OSL=32768 matrix contains 216 jobs across both domains, three
+models, temperatures 0/1, batch sizes 1/2/4/8/16/32, and the three variants.
+Jobs `2270108-2270323` were submitted on July 3, 2026. Three jobs hit a Lyris
+`spank_sybil` credential retrieval error before the container started and were
+resubmitted as `2270324-2270326`; no benchmark-code failure was observed during
+the initial five-minute monitoring window.
+
 ## Fixed-Length Tier Test
 
 The batch-size 1, 2, 4, 8, 16, 32, and 64 matrix completed for temperature 0
