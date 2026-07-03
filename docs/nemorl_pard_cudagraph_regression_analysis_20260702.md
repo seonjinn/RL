@@ -1,6 +1,6 @@
 # NeMo-RL PARD CUDA Graph Regression Analysis
 
-Updated: 2026-07-02 19:05 PDT
+Updated: 2026-07-02 20:10 PDT
 
 ## Scope
 
@@ -76,8 +76,8 @@ speculation cost. K9 uses cap 640 and K16 uses cap 1,088, exactly covering
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Baseline | 2-20 | 1,270.6 | 1.000x | 811.3 | 1.000x | n/a | n/a |
 | PARD K9, cap 640 | 2-20 | 1,254.7 | 0.987x | 797.4 | 0.983x | 24.5% | 3.20 |
-| Baseline | 2-14 | 1,269.4 | 1.000x | 810.6 | 1.000x | n/a | n/a |
-| PARD K16, cap 1,088 | 2-14 | 858.0 | 0.676x | 619.3 | 0.764x | 12.9% | 3.06 |
+| Baseline | 2-20 | 1,270.6 | 1.000x | 811.3 | 1.000x | n/a | n/a |
+| PARD K16, cap 1,088 | 2-20 | 872.4 | 0.687x | 627.5 | 0.773x | 13.2% | 3.11 |
 
 The mean accepted length includes the target token emitted after accepted draft
 tokens. A useful approximation for draft work per emitted token is
@@ -87,11 +87,11 @@ tokens. A useful approximation for draft work per emitted token is
 | Method | Draft proposals per emitted token | Verified positions per emitted token |
 |---|---:|---:|
 | PARD K9 | 2.81 | 3.12 |
-| PARD K16 | 5.23 | 5.56 |
+| PARD K16 | 5.15 | 5.47 |
 
-K16 therefore performs about 1.86x more draft proposal work and 1.78x more
-target verification work per emitted token than K9. Over matched Steps 2-14,
-K9 is 1.46x faster than K16 in generation throughput. This difference is not a
+K16 therefore performs about 1.83x more draft proposal work and 1.75x more
+target verification work per emitted token than K9. Over final Steps 2-20,
+K9 is 1.44x faster than K16 in generation throughput. This difference is not a
 CUDA Graph fallback: both proposer shapes are covered. It follows directly from
 K16 proposing seven additional positions while accepting fewer useful tokens
 per cycle.
@@ -104,9 +104,9 @@ The regression has two confirmed layers:
    proposer shapes on an eager fallback. On Qwen3-32B with `max_num_seqs=64`,
    raising the cap from 512 to 640 recovers 1.307x generation and 1.194x E2E
    throughput for K9 over final Steps 2-20, reaching 0.987x and 0.983x of
-   baseline. Raising it to 1,088 for K16 recovers only 1.050x generation and
-   1.041x E2E throughput over matched Steps 2-14, reaching only 0.676x and
-   0.764x of baseline.
+   baseline. Raising it to 1,088 for K16 recovers only 1.060x generation and
+   1.047x E2E throughput over final Steps 2-20, reaching only 0.687x and
+   0.773x of baseline.
 2. **Intrinsic proposer and verifier cost:** the 28-layer dense drafter,
    full-vocabulary sampling, high concurrency, and K+1 target verification still
    dominate when acceptance saturates. The covered K1 sync result and the
@@ -133,9 +133,9 @@ This is a separate operability bug from the Qwen3-30B-A3B performance regression
 
 ## Next Evidence Gates
 
-1. Complete the remaining Qwen3-32B graph-covered K16 run `2262687` with cap
-   1,088. K9 job `2262387` completed all 20 steps with exit 0:0; both use the
-   completed no-fused-all-reduce-RMS baseline `2261208`.
+1. Preserve the completed Qwen3-32B graph-covered K9 job `2262387` and K16 job
+   `2262687` as final controls. Both completed all 20 steps with exit 0:0 and
+   use the no-fused-all-reduce-RMS baseline `2261208`.
 2. Run Qwen3-30B-A3B baseline and PARD K1/K7/K9/K16 as one time-matched cohort.
    K7/K9/K16 require capture caps 1,024/1,280/2,176 respectively. Do not use the
    existing cross-wave replicate spread as a final speedup claim.
