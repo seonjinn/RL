@@ -1,6 +1,6 @@
 # NeMo-RL PARD CUDA Graph Regression Analysis
 
-Updated: 2026-07-02 20:10 PDT
+Updated: 2026-07-02 20:29 PDT
 
 ## Scope
 
@@ -24,6 +24,33 @@ uses max_num_seqs 128; Qwen3-32B uses max_num_seqs 64.
 
 These completed rows establish the slowdown, but they do not by themselves
 prove that every runtime shape uses a captured graph.
+
+## Correctness Proxy Audit
+
+The completed 20-step cohorts use temperature 1.0, top-p 1.0, and steady-state
+Steps 2-20. Reward and generation-KL comparisons below use only the matched
+baseline for each model, mode, recipe, and runtime setup.
+
+| Cohort | Largest absolute reward delta | Largest absolute generation-KL delta | Generation-length observation |
+|---|---:|---:|---|
+| Qwen3-30B-A3B sync | 0.002647 | 0.000006 | Not emitted in the summary CSV |
+| Qwen3-30B-A3B async-1off | 0.002724 | 0.000026 | Not emitted in the summary CSV |
+| Qwen3-32B sync Eagle-3 | 0.000616 | 0.000003 | K5 +3.254%; K7 -0.145%; K9 -0.370% |
+| Qwen3-32B sync PARD | 0.004163 | 0.000003 | All absolute deltas <= 0.311% |
+| Qwen3-32B async-1off | 0.003803 | 0.000011 | Not emitted in the summary CSV |
+
+The largest observed reward difference is Qwen3-32B sync PARD K9 with capture
+cap 640: `0.519506` versus baseline `0.523669`, while generation KL is identical
+to six decimal places and mean generation length differs by -0.123%. Qwen3-32B
+sync Eagle-3 K5 produces 3.254% more tokens per trajectory than its matched
+baseline, but reward differs by only -0.000335 and generation KL by +0.000003.
+The reported throughput metrics are token-normalized, so the longer K5 output
+does not by itself explain its 1.331x generation-throughput speedup.
+
+These proxies show no clear correctness regression in the completed rows, but
+they are not a substitute for a held-out accuracy evaluation or deterministic
+token-equality test. Any optimized implementation still needs the greedy-token
+equality and temperature-1 reward/KL gates listed below.
 
 ## Confirmed Runtime Facts
 
@@ -150,6 +177,13 @@ This is a separate operability bug from the Qwen3-30B-A3B performance regression
 
 ## Sources
 
+- Correctness proxy summaries:
+  `docs/lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv`,
+  `docs/lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv`,
+  `docs/lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv`,
+  `docs/lyris_qwen32_sync_pard_tp2_noarrms_matched_live_metrics_20260702.csv`,
+  `docs/lyris_qwen32_async1off_eagle3_matched_live_metrics_20260702.csv`, and
+  `docs/lyris_qwen32_sync_baseline_absolute_metrics_20260702.csv`.
 - Lyris jobs: baseline `2250928`, Eagle-3 K5 `2250930`, PARD K1 `2260579`,
   PARD K7 `2260580`, PARD K9 `2260581`, and PARD K16 `2250929`.
 - Qwen3-32B failed TP2 jobs: K1 `2260695`, K7 `2260697`, K9 `2260699`, and
