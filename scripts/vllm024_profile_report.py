@@ -213,6 +213,13 @@ def _cuda_graph_mode(value: object) -> str:
     return mode if mode and mode != "NAN" else "UNKNOWN"
 
 
+def _effective_cuda_graph_mode(config: Mapping[str, object]) -> str:
+    enforce_eager = config.get("enforce_eager")
+    if enforce_eager is True or str(enforce_eager).strip().lower() == "true":
+        return "NONE"
+    return _cuda_graph_mode(config.get("cudagraph_mode"))
+
+
 def _cuda_graph_label(value: object) -> str:
     mode = _cuda_graph_mode(value)
     if mode == "NONE":
@@ -319,7 +326,7 @@ def _normalize_batch_result(
         "osl": osl,
         "context_profile": _context_profile(isl, osl, position_encoding),
         "position_encoding": position_encoding,
-        "cuda_graph": _cuda_graph_mode(config.get("cudagraph_mode")),
+        "cuda_graph": _effective_cuda_graph_mode(config),
         "setup_signature": _setup_signature(config),
         "attention_backend": str(config.get("attention_backend", "")),
         "method": _method(config),

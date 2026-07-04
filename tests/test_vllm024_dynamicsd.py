@@ -740,9 +740,9 @@ def test_legacy_0619_replay_dry_run_preserves_strict_contract() -> None:
     assert "--enforce-eager" not in output
     assert "--attention-backend 'TRITON_ATTN'" in output
     assert "--disable-custom-all-reduce" not in output
-    assert "/contract_cg-piecewise/" in output
-    assert ".0619-math-qwen32-b1-cg-piecewise-baseline-" in output
-    assert "--tag 'matrix_cg-piecewise_baseline_" in output
+    assert "/contract_cg-on-piecewise/" in output
+    assert ".0619-math-qwen32-b1-cg-on-piecewise-baseline-" in output
+    assert "--tag 'matrix_cg-on-piecewise_baseline_" in output
     assert "--temperature 0.0" in output
     assert "--temperature 1.0" in output
     assert "[DRY-RUN] variant=suffix" not in output
@@ -771,9 +771,34 @@ def test_legacy_0619_replay_allows_explicit_cuda_graph_off_override() -> None:
     assert "--cudagraph-mode 'NONE'" in output
     assert "--enforce-eager" in output
     assert "--disable-custom-all-reduce" in output
-    assert "/legacy_cg-none/" in output
-    assert ".0619-math-qwen32-b1-cg-none-baseline-" in output
-    assert "--tag 'matrix_cg-none_baseline_" in output
+    assert "/legacy_cg-off-none/" in output
+    assert ".0619-math-qwen32-b1-cg-off-none-baseline-" in output
+    assert "--tag 'matrix_cg-off-none_baseline_" in output
+
+
+def test_legacy_0619_replay_rejects_eager_with_non_none_cuda_graph_mode() -> None:
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "DRY_RUN": "true",
+        "CLUSTER": "lyris",
+        "ENFORCE_EAGER": "true",
+        "CUDAGRAPH_MODE": "PIECEWISE",
+    }
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_legacy_0619_replay_matrix.sh")],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "ENFORCE_EAGER=true requires CUDAGRAPH_MODE=NONE"
+        in completed.stderr
+    )
+    assert completed.stdout == ""
 
 
 def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(

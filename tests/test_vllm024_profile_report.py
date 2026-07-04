@@ -373,6 +373,28 @@ def test_load_profile_results_filters_non_vllm_native_runtime_and_derives_profil
     assert rows["job_id"].tolist() == ["1234567", "12345678901", "1234568"]
 
 
+def test_enforce_eager_overrides_piecewise_mode_as_historical_cuda_graph_off(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    result = write_payload(
+        tmp_path / "eager-piecewise/job-1234567/result.json",
+        config=make_config(
+            extra={"enforce_eager": True, "cudagraph_mode": "PIECEWISE"}
+        ),
+        results=[make_result(1, tok_s_gpu=10.0, latency_s=100.0)],
+    )
+
+    rows = module.match_profile_baselines(module.load_profile_results([result]))
+    rendered = module.render_profile_section(rows)
+
+    assert rows["cuda_graph"].tolist() == ["NONE"]
+    assert "No CUDA Graph ON results are available yet." in rendered
+    assert "<summary>Historical CUDA Graph OFF results</summary>" in rendered
+    assert 'data-cuda-graph="NONE"' in rendered
+    assert 'data-cuda-graph="PIECEWISE"' not in rendered
+
+
 def test_match_profile_baselines_matches_real_native_rows_without_row_multiplication() -> None:
     module = load_module()
 

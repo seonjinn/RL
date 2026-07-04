@@ -8,11 +8,26 @@ MODELS="${MODELS:-qwen30ba3b qwen32 qwen235b}"
 DOMAINS="${DOMAINS:-Math SWE}"
 VARIANTS="${VARIANTS:-baseline static dynamic}"
 TEMPERATURES="${TEMPERATURES:-0.0 1.0}"
-ENFORCE_EAGER="${ENFORCE_EAGER:-false}"
-CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
+ENFORCE_EAGER="$(printf '%s' "${ENFORCE_EAGER:-false}" | tr '[:upper:]' '[:lower:]')"
+CUDAGRAPH_MODE="$(printf '%s' "${CUDAGRAPH_MODE:-PIECEWISE}" | tr '[:lower:]' '[:upper:]')"
 DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
+
+if [[ "${ENFORCE_EAGER}" == "true" && "${CUDAGRAPH_MODE}" != "NONE" ]]; then
+  echo "ENFORCE_EAGER=true requires CUDAGRAPH_MODE=NONE" >&2
+  exit 2
+fi
+
+case "${CUDAGRAPH_MODE}" in
+  NONE) CUDA_GRAPH_STATE=off ;;
+  PIECEWISE|FULL*) CUDA_GRAPH_STATE=on ;;
+  *)
+    echo "Unsupported CUDAGRAPH_MODE=${CUDAGRAPH_MODE}" >&2
+    exit 2
+    ;;
+esac
+
 CUDA_GRAPH_SLUG="$(printf '%s' "${CUDAGRAPH_MODE}" | tr '[:upper:]_' '[:lower:]-')"
-CUDA_GRAPH_PROVENANCE="cg-${CUDA_GRAPH_SLUG}"
+CUDA_GRAPH_PROVENANCE="cg-${CUDA_GRAPH_STATE}-${CUDA_GRAPH_SLUG}"
 RUN_ID_BASE="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_legacy_0619_replay}"
 RUN_ID="${RUN_ID_BASE}_${CUDA_GRAPH_PROVENANCE}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/legacy-0619-replay}"
