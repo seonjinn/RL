@@ -1021,6 +1021,47 @@ def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(
     assert by_variant["dynamic"]["rollout_time_reduction_vs_static_pct"] == 12.5
 
 
+def test_sync_rollout_summary_supports_native_mtp_variants(tmp_path: Path) -> None:
+    summary_module = load_sync_summary_module()
+    variants = {
+        "baseline": (100.0, 100.0),
+        "mtp_static": (75.0, 140.0),
+        "mtp_dynamic": (65.0, 160.0),
+    }
+    for variant, (rollout_time, throughput) in variants.items():
+        result_dir = tmp_path / variant
+        result_dir.mkdir()
+        (result_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "config": {
+                        "mode": variant,
+                        "temperature": 1.0,
+                        "top_p": 0.95,
+                    },
+                    "summary": {
+                        "total_rollout_time_s": rollout_time,
+                        "output_tok_s_per_gpu": throughput,
+                        "total_output_tokens": 10000,
+                        "spec_decode_metrics": {},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    rows = summary_module.build_summary(tmp_path)
+    by_variant = {row["variant"]: row for row in rows}
+
+    assert by_variant["mtp_dynamic"]["throughput_speedup_vs_baseline"] == 1.6
+    assert (
+        by_variant["mtp_dynamic"]["rollout_time_reduction_vs_baseline_pct"]
+        == 35.0
+    )
+    assert by_variant["mtp_dynamic"]["throughput_speedup_vs_static"] == 1.142857
+
+
 def test_scripts_do_not_depend_on_home_storage() -> None:
     for script_name in (
         "stage_image.sh",

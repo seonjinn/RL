@@ -91,21 +91,36 @@ def output_hashes(payload: dict[str, Any]) -> list[str]:
 
 def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
     results = load_results(matrix_root)
-    required = {"baseline", "static", "dynamic"}
-    missing = required - set(results)
-    if missing:
+    if "baseline" not in results:
         raise ValueError(
-            f"incomplete synchronous-rollout matrix; missing complete variants: "
-            f"{sorted(missing)}"
+            "incomplete synchronous-rollout matrix; missing complete baseline"
         )
+    variant_families = (
+        ("static", "dynamic"),
+        ("mtp_static", "mtp_dynamic"),
+    )
+    selected_family = next(
+        (
+            family
+            for family in variant_families
+            if all(variant in results for variant in family)
+        ),
+        None,
+    )
+    if selected_family is None:
+        raise ValueError(
+            "incomplete synchronous-rollout matrix; expected complete "
+            "static/dynamic or mtp_static/mtp_dynamic variants"
+        )
+    static_variant, dynamic_variant = selected_family
     validate_matched_configs(results)
     baseline = results.get("baseline")
-    static = results.get("static")
+    static = results.get(static_variant)
     baseline_summary = baseline.get("summary", {}) if baseline else {}
     static_summary = static.get("summary", {}) if static else {}
     baseline_hashes = output_hashes(baseline) if baseline else []
     rows: list[dict[str, Any]] = []
-    order = {"baseline": 0, "static": 1, "dynamic": 2}
+    order = {"baseline": 0, static_variant: 1, dynamic_variant: 2}
     for variant, payload in sorted(
         results.items(), key=lambda item: (order.get(item[0], 99), item[0])
     ):
