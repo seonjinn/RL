@@ -26,6 +26,14 @@ DFLARE_COMPLETED = (
     ROOT
     / "experiments/vllm_024_dynamicsd/report/dflare_completed_latest.csv"
 )
+DFLARE_STATUS = (
+    ROOT
+    / "experiments/vllm_024_dynamicsd/report/dflare_job_status_latest.csv"
+)
+VLLM024_PROFILES = (
+    ROOT
+    / "experiments/vllm_024_dynamicsd/report/vllm024_profiles_latest.csv"
+)
 DFLARE_PROFILES = {"Native 32K", "YaRN 64K", "YaRN total-128K"}
 
 LOCAL_REF_SKIP_SCHEMES = {"http", "https", "mailto", "tel", "ftp", "javascript", "data"}
@@ -593,8 +601,9 @@ def source_artifact_link(value: object) -> str:
 
 
 def report_link_card(label: str, filename: str, description: str) -> str:
-    src = DOCS / filename
-    if src.exists():
+    local_src = DOCS / filename
+    published_src = REPORTS / filename
+    if local_src.exists() or published_src.exists():
         return (
             '<a class="report-link" '
             f'href="reports/{esc(filename)}">'
@@ -874,7 +883,9 @@ def build() -> None:
         DOCS / "latest_lyris_nemorl_cudagraphoff_wandb_best_qwen32_async_20260623_jobs.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
         DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv",
+        VLLM024_PROFILES,
         DFLARE_COMPLETED,
+        DFLARE_STATUS,
         DOCS / "lyris_angelslim_checkpoint_prewarm_summary_20260622.json",
         ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt",
     ]
@@ -893,6 +904,7 @@ def build() -> None:
 
     vllm = vllm_best_rows()
     dflare = load_csv(DFLARE_COMPLETED)
+    dflare_status_rows = load_csv(DFLARE_STATUS)
     nemorl_all = load_nemorl_rows()
     nemorl = nemorl_best_rows()
     vllm_charts, nemorl_charts = build_chart_gallery(vllm, nemorl_all)
@@ -918,9 +930,20 @@ def build() -> None:
         dflare_summary = "No completed target-profile DFlare rows are available yet."
     else:
         latest_dflare = dflare_completed.iloc[-1]
+        completed_jobs = dflare_completed["job_id"].astype(str).nunique()
+        performance_rows = len(dflare_completed)
+        failed_rows = len(dflare_status_rows)
+        timeout_rows = (
+            dflare_status_rows["state"].astype(str).eq("TIMEOUT").sum()
+            if not dflare_status_rows.empty
+            else 0
+        )
         acceptance = as_float(latest_dflare.get("acceptance_rate")) * 100
         dflare_summary = (
-            f"{len(dflare_completed)} completed target-profile row(s). Latest: "
+            f"{completed_jobs} completed target-profile DFlare job(s) produced "
+            f"{performance_rows} performance row(s). "
+            f"{failed_rows} failure/status row(s) remain separate, including "
+            f"{int(timeout_rows)} TIMEOUT row(s). Latest performance row: "
             f"{latest_dflare.get('context_profile', 'n/a')} "
             f"{latest_dflare.get('domain', 'n/a')} "
             f"temp={fmt(latest_dflare.get('temperature'), 1)}, "
@@ -1054,7 +1077,7 @@ def build() -> None:
     <div class=\"note\">
       <span class=\"pill {status_class}\">{esc(status_label)}</span>
       <p>{esc(dflare_summary)}</p>
-      <p><a href=\"reports/vllm_standalone_results_latest.html#vllm024-dflare\">Open the completed DFlare table</a>. DFlare uses AngelSlim's standalone runtime and is kept separate from vLLM-native speedups.</p>
+      <p><a href=\"reports/vllm_standalone_results_latest.html#vllm024-profile\">Open the vLLM-native section</a>, <a href=\"reports/vllm_standalone_results_latest.html#vllm024-dflare\">open the completed DFlare table</a>, or <a href=\"reports/vllm_standalone_results_latest.html#vllm024-dflare-status\">open the failure/status table</a>. DFlare uses AngelSlim's standalone runtime and is kept separate from vLLM-native speedups.</p>
       <p>DFlare public checkpoints staged here include <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>.</p>
       <p>Models requested in staging job: <code>{esc(model_ids)}</code></p>
       <p>Logs: <code>{esc(logs_dir)}</code></p>
@@ -1075,7 +1098,9 @@ def build() -> None:
       <a href=\"data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv\">Qwen30/32 NeMo-RL CSV</a>
       <a href=\"data/lyris_angelslim_checkpoint_prewarm_summary_20260622.json\">AngelSlim prewarm summary</a>
       <a href=\"data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt\">AngelSlim job record</a>
+      <a href=\"data/vllm024_profiles_latest.csv\">vLLM 0.24 native profiles</a>
       <a href=\"data/dflare_completed_latest.csv\">DFlare completed rows</a>
+      <a href=\"data/dflare_job_status_latest.csv\">DFlare failure and status rows</a>
     </div>
   </section>
 </main>

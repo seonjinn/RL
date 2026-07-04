@@ -28,6 +28,7 @@ CANONICAL_COLUMNS = [
     "osl",
     "context_profile",
     "position_encoding",
+    "setup_signature",
     "method",
     "k",
     "tok_s_gpu",
@@ -40,6 +41,22 @@ CANONICAL_COLUMNS = [
 ]
 
 PROFILE_ORDER = ["Native 32K", "YaRN 64K", "YaRN total-128K"]
+SETUP_EXCLUDED_KEYS = frozenset({"draft_arch", "draft_model", "block_size", "run_mode"})
+MATCH_KEYS = [
+    "runtime",
+    "backend",
+    "attention_backend",
+    "domain",
+    "model",
+    "temperature",
+    "top_p",
+    "batch_size",
+    "isl",
+    "osl",
+    "context_profile",
+    "position_encoding",
+    "setup_signature",
+]
 
 
 def _domain(dataset: object) -> str:
@@ -95,16 +112,38 @@ def _paired_speedup(config: dict[str, Any], results: dict[str, Any]) -> float:
     return float(results["decode_throughput_speedup"])
 
 
-def normalize_dflare_result(payload: dict[str, Any], source: Path) -> dict[str, object]:
+def _stable_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _stable_value(value[key]) for key in sorted(str(item) for item in value.keys())}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_stable_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _setup_signature(config: dict[str, Any]) -> str:
+    filtered = {
+        str(key): config.get(key)
+        for key in sorted(str(item) for item in config.keys())
+        if str(key) not in SETUP_EXCLUDED_KEYS
+    }
+    return json.dumps(_stable_value(filtered), sort_keys=True, separators=(",", ":"))
+
+
+def _base_row(
+    payload: dict[str, Any],
+    source: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, object]]:
     config = dict(payload.get("config", {}))
     results = dict(payload.get("results", {}))
     target_model = config.get("target_model", "")
     isl = int(config.get("input_length", 0))
     osl = int(config.get("max_new_tokens", 0))
     position_encoding = _position_encoding(target_model)
-    k = int(config.get("block_size", 0))
-    speedup = _paired_speedup(config, results)
-    return {
+    row = {
         "status": str(payload.get("status", "")),
         "runtime": "AngelSlim",
         "backend": str(payload.get("backend", "")),
@@ -118,16 +157,53 @@ def normalize_dflare_result(payload: dict[str, Any], source: Path) -> dict[str, 
         "osl": osl,
         "context_profile": _context_profile(isl, osl, position_encoding),
         "position_encoding": position_encoding,
-        "method": f"dflare_k{k}",
-        "k": k,
-        "tok_s_gpu": float(results.get("spec_decode_tok_s", math.nan)),
-        "speedup": speedup,
-        "speedup_label": f"{speedup:.2f}x" if math.isfinite(speedup) else "waiting matched baseline",
-        "acceptance_rate": float(results.get("acceptance_rate", math.nan)),
-        "mean_accept_len": float(results.get("mean_acceptance_length", math.nan)),
+        "setup_signature": _setup_signature(config),
         "job_id": _job_id(source),
         "source": str(source),
     }
+    return config, results, row
+
+
+def normalize_dflare_result(payload: dict[str, Any], source: Path) -> list[dict[str, object]]:
+    config, results, base = _base_row(payload, source)
+    k = int(config.get("block_size", 0))
+    run_mode = str(config.get("run_mode", "")).lower()
+    has_baseline = "baseline_decode_tok_s" in results
+    has_spec = "spec_decode_tok_s" in results
+    if has_baseline and has_spec and not run_mode:
+        run_mode = "both"
+
+    rows: list[dict[str, object]] = []
+    if run_mode in {"baseline", "both"} and has_baseline:
+        rows.append(
+            {
+                **base,
+                "method": "baseline",
+                "k": math.nan,
+                "tok_s_gpu": float(results.get("baseline_decode_tok_s", math.nan)),
+                "speedup": 1.0,
+                "speedup_label": "1.00x",
+                "acceptance_rate": math.nan,
+                "mean_accept_len": math.nan,
+            }
+        )
+    if run_mode in {"spec", "both"} and has_spec:
+        speedup = _paired_speedup(config, results)
+        rows.append(
+            {
+                **base,
+                "method": f"dflare_k{k}",
+                "k": k,
+                "tok_s_gpu": float(results.get("spec_decode_tok_s", math.nan)),
+                "speedup": speedup,
+                "speedup_label": f"{speedup:.2f}x"
+                if math.isfinite(speedup)
+                else "waiting matched baseline",
+                "acceptance_rate": float(results.get("acceptance_rate", math.nan)),
+                "mean_accept_len": float(results.get("mean_acceptance_length", math.nan)),
+            }
+        )
+    return rows
 
 
 def load_completed_dflare_results(paths: Iterable[Path]) -> pd.DataFrame:
@@ -136,9 +212,10 @@ def load_completed_dflare_results(paths: Iterable[Path]) -> pd.DataFrame:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("status") != "complete":
             continue
-        if payload.get("config", {}).get("draft_arch") != "dflare":
+        draft_arch = str(payload.get("config", {}).get("draft_arch", "")).lower()
+        if draft_arch not in {"dflare", "baseline"}:
             continue
-        rows.append(normalize_dflare_result(payload, path))
+        rows.extend(normalize_dflare_result(payload, path))
     return pd.DataFrame(rows, columns=CANONICAL_COLUMNS)
 
 
@@ -147,6 +224,32 @@ def match_dflare_baselines(rows: pd.DataFrame) -> pd.DataFrame:
     if matched.empty:
         return matched
     matched["speedup"] = pd.to_numeric(matched["speedup"], errors="coerce")
+    baseline_rows = matched.loc[matched["method"].astype(str).eq("baseline")].copy()
+    if not baseline_rows.empty:
+        baseline_rows = baseline_rows.sort_values(
+            MATCH_KEYS + ["source", "job_id"],
+            kind="stable",
+        )
+        baseline_rows = baseline_rows.drop_duplicates(subset=MATCH_KEYS, keep="last")
+        baseline_lookup = baseline_rows[MATCH_KEYS + ["tok_s_gpu"]].rename(
+            columns={"tok_s_gpu": "baseline_tok_s_gpu"}
+        )
+        spec_mask = matched["method"].astype(str).ne("baseline") & matched["speedup"].isna()
+        if spec_mask.any():
+            spec_rows = matched.loc[spec_mask].copy()
+            original_index = spec_rows.index
+            spec_rows = spec_rows.merge(
+                baseline_lookup,
+                on=MATCH_KEYS,
+                how="left",
+                sort=False,
+                validate="many_to_one",
+            )
+            computed_speedup = spec_rows["tok_s_gpu"] / spec_rows["baseline_tok_s_gpu"]
+            matched.loc[original_index, "speedup"] = pd.to_numeric(
+                computed_speedup,
+                errors="coerce",
+            ).to_numpy(dtype=float)
     matched["speedup_label"] = matched["speedup"].map(
         lambda value: f"{value:.2f}x" if pd.notna(value) else "waiting matched baseline"
     )
@@ -248,6 +351,58 @@ def render_dflare_section(rows: pd.DataFrame) -> str:
         '<p class="note">Qwen3-8B on Lyris GB200; AngelSlim Transformers-native runtime, '
         "temperature 0/1, top-p 1.0, and DFlare K16. FlashAttention is unavailable, "
         "so these runs use PyTorch SDPA. Speedup is reported only for an exact "
-        "AngelSlim baseline; spec-only rows remain waiting matched baseline.</p>"
+        "AngelSlim baseline with the same runtime/model/domain/temperature/top-p/batch/ISL/OSL/profile "
+        "and normalized timing setup. Baseline rows render explicitly as Baseline "
+        "1.00x, and spec-only rows remain waiting matched baseline.</p>"
         f"{tables}</section>"
+    )
+
+
+def render_dflare_status_section(rows: pd.DataFrame) -> str:
+    if rows.empty:
+        return ""
+    ordered = rows.copy().sort_values(
+        ["profile", "domain", "temperature", "job_id"],
+        kind="stable",
+    )
+    body: list[str] = []
+    for row in ordered.itertuples(index=False):
+        retry_of = getattr(row, "retry_of", math.nan)
+        retry_of_text = "n/a"
+        if pd.notna(retry_of):
+            retry_of_text = str(int(float(retry_of)))
+        result_available = "yes" if bool(getattr(row, "result_available", False)) else "no"
+        cells = [
+            escape(str(getattr(row, "job_id", ""))),
+            escape(str(getattr(row, "state", ""))),
+            escape(str(getattr(row, "profile", ""))),
+            escape(str(getattr(row, "domain", ""))),
+            f'<span class="num">{_fmt_number(getattr(row, "temperature", math.nan), 1)}</span>',
+            escape(str(getattr(row, "elapsed", ""))),
+            escape(str(getattr(row, "root_cause", ""))),
+            escape(retry_of_text),
+            escape(result_available),
+        ]
+        body.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
+    headings = [
+        "Job ID",
+        "State",
+        "Profile",
+        "Domain",
+        "Temperature",
+        "Elapsed",
+        "Root cause",
+        "retry_of",
+        "Result available",
+    ]
+    header = "".join(f"<th>{escape(heading)}</th>" for heading in headings)
+    return (
+        '<section class="section" id="vllm024-dflare-status">'
+        "<h2>DFlare Failure and Status</h2>"
+        '<p class="note">Failures, TIMEOUT rows, retry ancestry, and root causes stay separate from '
+        "performance tables. These rows are status-only and are never used for speedup.</p>"
+        '<div class="table-wrap"><table>'
+        f"<thead><tr>{header}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table></div></section>"
     )

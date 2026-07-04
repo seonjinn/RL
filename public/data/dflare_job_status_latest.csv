@@ -1,0 +1,13 @@
+job_id,state,profile,domain,temperature,elapsed,root_cause,result_available,retry_of
+2271131,FAILED,Native 32K,SWE,1.0,03:58:23,process_group_timeout_600s,false,
+2271721,FAILED,YaRN 64K,Math,0.0,01:10:10,process_group_timeout_600s,false,
+2271722,FAILED,YaRN 64K,Math,1.0,01:15:56,process_group_timeout_600s,false,
+2271724,FAILED,YaRN 64K,SWE,1.0,01:42:17,process_group_timeout_600s,false,
+2271725,FAILED,YaRN total-128K,Math,0.0,02:37:45,process_group_timeout_600s,false,
+2271726,FAILED,YaRN total-128K,Math,1.0,02:34:20,process_group_timeout_600s,false,
+2271727,FAILED,YaRN total-128K,SWE,0.0,02:48:42,process_group_timeout_600s,false,
+2271728,FAILED,YaRN total-128K,SWE,1.0,03:42:57,process_group_timeout_600s,false,
+2272239,TIMEOUT,YaRN 64K,Math,0.0,05:00:14,slurm_wall_time_5h,false,2271721
+2272939,TIMEOUT,YaRN total-128K,Math,0.0,05:00:15,slurm_wall_time_5h,false,2271725
+2272942,FAILED,YaRN total-128K,SWE,0.0,03:05:50,gather_object_cuda_oom_after_generation,false,2271727
+2272943,TIMEOUT,YaRN total-128K,SWE,1.0,05:00:16,slurm_wall_time_5h,false,2271728

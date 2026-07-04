@@ -17,8 +17,10 @@ from vllm024_dflare_report import (
     match_dflare_baselines,
     relativize_sources,
     render_dflare_section,
+    render_dflare_status_section,
     target_profile_rows,
 )
+from vllm024_profile_report import render_profile_section
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,11 +28,29 @@ DOCS = ROOT / "docs"
 PUBLIC_DATA = ROOT / "public/data"
 DFLARE_RESULT_ROOT = ROOT / "experiments/vllm_024_dynamicsd/report"
 DFLARE_COMPLETED_OUT = DFLARE_RESULT_ROOT / "dflare_completed_latest.csv"
+DFLARE_STATUS_CSV = DFLARE_RESULT_ROOT / "dflare_job_status_latest.csv"
+VLLM024_PROFILE_CSV = DFLARE_RESULT_ROOT / "vllm024_profiles_latest.csv"
+DFLARE_COMPLETED_DIRS = [
+    DFLARE_RESULT_ROOT / "20260703_dflare_completed",
+    DFLARE_RESULT_ROOT / "20260704_dflare_completed",
+]
 
 
 def resolve_data_source(name: str) -> Path:
     docs_path = DOCS / name
     return docs_path if docs_path.exists() else PUBLIC_DATA / name
+
+
+def publish_public_data(src: Path) -> Path | None:
+    if not src.exists():
+        return None
+    PUBLIC_DATA.mkdir(parents=True, exist_ok=True)
+    dst = PUBLIC_DATA / src.name
+    shutil.copy2(src, dst)
+    if dst.suffix in {".csv", ".html", ".json", ".txt"}:
+        raw = dst.read_bytes()
+        dst.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+    return dst
 
 
 MAIN_VLLM = resolve_data_source("vllm_standalone_all_batches_combined_20260619.csv")
@@ -1655,7 +1675,9 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
 def build_vllm_html(
     main: pd.DataFrame,
     added: pd.DataFrame,
+    native_rows: pd.DataFrame,
     dflare_rows: pd.DataFrame,
+    dflare_status: pd.DataFrame,
 ) -> str:
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     added_summary = aggregate_added(added)
@@ -1715,7 +1737,10 @@ def build_vllm_html(
         "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
         related_vllm_reports_section(),
         "<section class=\"section\"><h2>Key Findings</h2><p>" + esc(key_finding) + "</p><p class=\"note\">Speedups are computed only when a matched baseline exists with the same domain, model, temperature, batch size, ISL and OSL.</p></section>",
+        render_profile_section(native_rows),
         render_dflare_section(dflare_rows),
+        render_dflare_status_section(dflare_status),
+        "<section class=\"section\"><h2>Task 5 Data Artifacts</h2><p class=\"note\"><code>vllm024_profiles_latest.csv</code>, <code>dflare_completed_latest.csv</code>, and <code>dflare_job_status_latest.csv</code> are published under <code>public/data</code> and linked from the report index.</p></section>",
         charts_section(added),
         temp_trends_section(),
         "<section class=\"section\"><h2>PARD / PARD-2 K=16 Focus</h2><div class=\"table-wrap\">",
@@ -2629,18 +2654,25 @@ def main() -> None:
     main_vllm = pd.read_csv(MAIN_VLLM)
     added = load_vllm_added(main_vllm)
     added.to_csv(VLLM_ADDED_OUT, index=False)
+    native_rows = pd.read_csv(VLLM024_PROFILE_CSV) if VLLM024_PROFILE_CSV.exists() else pd.DataFrame()
+    dflare_status = pd.read_csv(DFLARE_STATUS_CSV) if DFLARE_STATUS_CSV.exists() else pd.DataFrame()
     dflare_rows = match_dflare_baselines(
         relativize_sources(
             target_profile_rows(
                 load_completed_dflare_results(
-                    DFLARE_RESULT_ROOT.glob("**/result.json")
+                    path
+                    for completed_dir in DFLARE_COMPLETED_DIRS
+                    for path in completed_dir.glob("**/result.json")
                 )
             ),
             ROOT,
         )
     )
     dflare_rows.to_csv(DFLARE_COMPLETED_OUT, index=False)
-    vllm_html = build_vllm_html(main_vllm, added, dflare_rows)
+    publish_public_data(VLLM024_PROFILE_CSV)
+    publish_public_data(DFLARE_COMPLETED_OUT)
+    publish_public_data(DFLARE_STATUS_CSV)
+    vllm_html = build_vllm_html(main_vllm, added, native_rows, dflare_rows, dflare_status)
     VLLM_HTML_DATED.write_text(vllm_html, encoding="utf-8")
     shutil.copyfile(VLLM_HTML_DATED, VLLM_HTML_LATEST)
 
