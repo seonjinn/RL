@@ -90,6 +90,7 @@ export UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-/opt/nemo_rl_venv}; \
 UV_HTTP_TIMEOUT=600 \
 HF_HOME=/mnt/nemo_cache/hf_home \
 HF_MODULES_CACHE=/mnt/nemo_cache/hf_modules \
+NEMO_RL_VENV_DIR=/mnt/nemo_cache/venvs/${NAME} \
 NRL_MEGATRON_CHECKPOINT_DIR=/mnt/nemo_cache/nemo_rl \
 PYTHONPATH=${PYTHONPATH_PREFIX} \
 VLLM_PRECOMPILED_WHEEL_LOCATION=https://github.com/vllm-project/vllm/releases/download/v0.11.2/vllm-0.11.2+cu129-cp38-abi3-manylinux1_x86_64.whl \
@@ -103,7 +104,7 @@ NRL_SKIP_MOE_METRICS=${NRL_SKIP_MOE_METRICS:-0} \
 NRL_CHECK_FOR_NAN_IN_GRAD=${NRL_CHECK_FOR_NAN_IN_GRAD:-1} \
 NRL_LIGHTWEIGHT_STEP_BREAKDOWN=${NRL_LIGHTWEIGHT_STEP_BREAKDOWN:-0} \
 WANDB_MODE=${WANDB_MODE:-offline} \
-uv run examples/run_sft.py \
+uv run --locked --extra mcore examples/run_sft.py \
   --config ${CONFIG_PATH} \
   logger.wandb.name=${WANDB_NAME} \
   logger.wandb.project=${WANDB_PROJECT} \
