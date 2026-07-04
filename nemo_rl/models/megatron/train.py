@@ -74,10 +74,12 @@ def model_forward(
     model: GPTModel,
     data_dict: BatchedDataDict[Any],
     input_ids_cp_sharded: torch.Tensor,
-    position_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+    position_ids: Optional[torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
     packed_seq_params: Optional[PackedSeqParams] = None,
     defer_fp32_logits: Optional[bool] = False,
+    labels_cp_sharded: Optional[torch.Tensor] = None,
+    loss_mask_cp_sharded: Optional[torch.Tensor] = None,
     mtp_loss_mask: Optional[torch.Tensor] = None,
     straggler_timer: Optional[StragglerDetector] = None,
     use_fused_linear_logprobs: bool = False,
@@ -92,6 +94,8 @@ def model_forward(
         attention_mask: Attention mask for the sequence
         packed_seq_params: Parameters for packed sequences (optional)
         defer_fp32_logits: Whether to skip the conversion of logits to fp32
+        labels_cp_sharded: Target-aligned labels for direct MCore loss computation
+        loss_mask_cp_sharded: Target-aligned mask for direct MCore loss computation
         mtp_loss_mask: MTP loss mask to exclude prompt tokens from MTP loss (optional)
         straggler_timer: Straggler detector for profiling the forward pass
         use_fused_linear_logprobs: Whether to compute logprobs with the fused
@@ -100,6 +104,15 @@ def model_forward(
     Returns:
         torch.Tensor: Output tensor from the model (logits)
     """
+    if labels_cp_sharded is not None and use_fused_linear_logprobs:
+        raise ValueError(
+            "Prepacked direct labels and fused linear logprobs are mutually exclusive."
+        )
+    if (labels_cp_sharded is None) != (loss_mask_cp_sharded is None):
+        raise ValueError(
+            "labels_cp_sharded and loss_mask_cp_sharded must be provided together."
+        )
+
     multimodal_data = data_dict.get_multimodal_dict(
         as_tensors=True, device=input_ids_cp_sharded.device
     )
@@ -111,8 +124,10 @@ def model_forward(
     if packed_seq_params is not None:
         additional_kwargs["packed_seq_params"] = packed_seq_params
 
-    # Pass MTP loss mask to exclude prompt tokens from MTP loss
-    if mtp_loss_mask is not None:
+    if labels_cp_sharded is not None:
+        additional_kwargs["labels"] = labels_cp_sharded
+        additional_kwargs["loss_mask"] = loss_mask_cp_sharded
+    elif mtp_loss_mask is not None:
         additional_kwargs["loss_mask"] = mtp_loss_mask
 
     if defer_fp32_logits:
@@ -201,6 +216,8 @@ def forward_with_post_processing_fn(
     position_ids = processed_mb.position_ids
     packed_seq_params = processed_mb.packed_seq_params
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
+    labels_cp_sharded = processed_mb.labels_cp_sharded
+    loss_mask_cp_sharded = processed_mb.loss_mask_cp_sharded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
 
@@ -223,6 +240,8 @@ def forward_with_post_processing_fn(
                 attention_mask=attention_mask,
                 packed_seq_params=packed_seq_params,
                 defer_fp32_logits=defer_fp32_logits,
+                labels_cp_sharded=labels_cp_sharded,
+                loss_mask_cp_sharded=loss_mask_cp_sharded,
                 mtp_loss_mask=mtp_loss_mask,
                 straggler_timer=straggler_timer,
                 use_fused_linear_logprobs=use_fused_linear_logprobs,
@@ -259,9 +278,12 @@ def forward_with_post_processing_fn(
 
     # Apply temperature scaling only for sampling-oriented post-processors.
     # Loss computation should use unscaled logits.
-    if isinstance(
-        post_processing_fn,
-        (LossPostProcessor, LogprobsPostProcessor, TopkLogitsPostProcessor),
+    if (
+        isinstance(
+            post_processing_fn,
+            (LossPostProcessor, LogprobsPostProcessor, TopkLogitsPostProcessor),
+        )
+        and labels_cp_sharded is None
     ):
         # Temperature scaling is element-wise, directly applying it here.
         # Other sampling parameters like top-k and top-p need the logits from whole vocabulary,
@@ -275,6 +297,7 @@ def forward_with_post_processing_fn(
             packed_seq_params=packed_seq_params,
             global_valid_seqs=global_valid_seqs,
             global_valid_toks=global_valid_toks,
+            prepacked_loss_mask=loss_mask_cp_sharded,
         )
     elif isinstance(post_processing_fn, LogprobsPostProcessor):
         post_processing_fn_wrapped = post_processing_fn(
@@ -416,6 +439,7 @@ class LossPostProcessor:
         packed_seq_params: Optional[PackedSeqParams] = None,
         global_valid_seqs: Optional[torch.Tensor] = None,
         global_valid_toks: Optional[torch.Tensor] = None,
+        prepacked_loss_mask: Optional[torch.Tensor] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, Any]]]:
         """Create a loss post-processing function for training.
 
@@ -428,10 +452,57 @@ class LossPostProcessor:
             packed_seq_params: Parameters for packed sequences (optional)
             global_valid_seqs: Global valid sequence count for loss normalization
             global_valid_toks: Global valid token count for loss normalization
+            prepacked_loss_mask: CP-local target-aligned mask when the model already
+                returned per-token losses for prepacked SFT input
 
         Returns:
             Callable: Function that takes output tensor and returns (loss, metrics) tuple
         """
+        if prepacked_loss_mask is not None:
+            if global_valid_toks is None:
+                raise ValueError(
+                    "global_valid_toks is required for prepacked model loss."
+                )
+            if self.prepare_fn is not None:
+                raise ValueError(
+                    "Prepacked direct model loss does not support a custom prepare_fn."
+                )
+
+            def _prepacked_model_loss(
+                model_losses: torch.Tensor,
+            ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+                if model_losses.shape != prepacked_loss_mask.shape:
+                    raise ValueError(
+                        "Prepacked model loss and loss mask shapes must match: "
+                        f"loss={tuple(model_losses.shape)} "
+                        f"mask={tuple(prepacked_loss_mask.shape)}"
+                    )
+                mask = prepacked_loss_mask.to(
+                    device=model_losses.device, dtype=torch.float32
+                )
+                normalizer = global_valid_toks.to(
+                    device=model_losses.device, dtype=torch.float32
+                ).clamp(min=1)
+                loss = (model_losses.float() * mask).sum() / normalizer
+                metrics: Dict[str, Any] = {
+                    "loss": loss.detach().item(),
+                    "num_unmasked_tokens": mask.sum().item(),
+                }
+                if "sample_mask" in data_dict:
+                    metrics["num_valid_samples"] = data_dict["sample_mask"].sum().item()
+                return loss, metrics
+
+            cp_size = get_context_parallel_world_size()
+            num_microbatches = self.num_microbatches
+
+            def _counteract_prepacked_mcore_loss_averaging(
+                model_losses: torch.Tensor,
+            ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+                loss, metrics = _prepacked_model_loss(model_losses)
+                return loss * num_microbatches / cp_size, metrics
+
+            return _counteract_prepacked_mcore_loss_averaging
+
         # A custom prepare_fn (e.g. value models) overrides the default logit prep.
         logprob_chunk_size = self.cfg.get("logprob_chunk_size", None)
         if self.prepare_fn is not None:

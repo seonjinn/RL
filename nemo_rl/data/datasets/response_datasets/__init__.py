@@ -74,6 +74,7 @@ DATASET_REGISTRY = {
     "GSM8K": GSM8KDataset,
     "geometry3k": Geometry3KDataset,
     "mmpr-tiny": MMPRTinyDataset,
+    "megatron_sft_packed": MegatronSFTPackedDataset,
     "HelpSteer3": HelpSteer3Dataset,
     "intent-train": IntentTrainDataset,
     "intent-bench": IntentBenchDataset,

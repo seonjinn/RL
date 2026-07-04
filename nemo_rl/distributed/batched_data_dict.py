@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 from collections import UserDict
 from copy import deepcopy
 from typing import (
@@ -447,6 +448,78 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 data[k] = sorted_v
 
         elif sequence_packing_args is not None:
+            packing_algorithm = str(sequence_packing_args["algorithm"]).lower()
+            fast_prepacked_sharding = os.environ.get(
+                "NRL_FAST_PREPACKED_SHARDING", "0"
+            ).lower() in {"1", "true", "yes"}
+            if fast_prepacked_sharding:
+                if allow_uneven_shards:
+                    raise ValueError(
+                        "NRL_FAST_PREPACKED_SHARDING does not support "
+                        "allow_uneven_shards=True."
+                    )
+                if "packed_cu_seqlens" not in self.data:
+                    raise ValueError(
+                        "NRL_FAST_PREPACKED_SHARDING requires packed_cu_seqlens."
+                    )
+                if packing_algorithm != "modified_first_fit_decreasing":
+                    raise ValueError(
+                        "NRL_FAST_PREPACKED_SHARDING requires "
+                        "modified_first_fit_decreasing."
+                    )
+
+                input_lengths_key = sequence_packing_args["input_lengths_key"]
+                input_lens = self.data[input_lengths_key]
+                if not isinstance(input_lens, torch.Tensor):
+                    input_lens = torch.tensor(input_lens)
+                max_tokens_per_microbatch = sequence_packing_args[
+                    "max_tokens_per_microbatch"
+                ]
+                pad_multiple = sequence_packing_args["sequence_length_pad_multiple"]
+                if max_tokens_per_microbatch % pad_multiple != 0:
+                    raise ValueError(
+                        "NRL_FAST_PREPACKED_SHARDING requires "
+                        "max_tokens_per_microbatch to be divisible by "
+                        "sequence_length_pad_multiple."
+                    )
+                if bool((input_lens != max_tokens_per_microbatch).any().item()):
+                    raise ValueError(
+                        "NRL_FAST_PREPACKED_SHARDING requires every packed row "
+                        "input_length to equal max_tokens_per_microbatch."
+                    )
+
+                aggregated_shards = []
+                batch_sorted_indices = []
+                shard_rows_per_chunk = batch_size // shards
+                for shard_idx in range(shards):
+                    shard_indices: list[int] = []
+                    micro_batch_indices = []
+                    micro_batch_lengths = []
+                    elem_counts_per_gb = []
+                    for chunk_idx in range(num_chunks):
+                        chunk_start = chunk_idx * batch_size
+                        chunk_indices = [
+                            chunk_start + bin_idx
+                            for bin_idx in range(shard_idx, batch_size, shards)
+                        ]
+                        shard_indices.extend(chunk_indices)
+                        micro_batch_indices.append(
+                            [[i, i + 1] for i in range(shard_rows_per_chunk)]
+                        )
+                        micro_batch_lengths.append(
+                            [max_tokens_per_microbatch] * shard_rows_per_chunk
+                        )
+                        elem_counts_per_gb.append(shard_rows_per_chunk)
+
+                    batch_sorted_indices.extend(shard_indices)
+                    shard = SlicedDataDict(self.select_indices(shard_indices).data)
+                    shard.micro_batch_indices = micro_batch_indices
+                    shard.micro_batch_lengths = micro_batch_lengths
+                    shard.elem_counts_per_gb = elem_counts_per_gb
+                    aggregated_shards.append(shard)
+
+                return aggregated_shards, batch_sorted_indices
+
             bin_packer = get_packer(
                 algorithm=sequence_packing_args["algorithm"],
                 bin_capacity=sequence_packing_args["max_tokens_per_microbatch"],

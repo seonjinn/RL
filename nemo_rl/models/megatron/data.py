@@ -27,7 +27,7 @@ from megatron.core.utils import StragglerDetector
 from nemo_rl.algorithms.loss.interfaces import LossFunction, LossType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import (
-    _get_packed_tokens_on_this_cp_rank,
+    _get_packed_thd_partitioned_indices,
     _get_tokens_on_this_cp_rank,
 )
 from nemo_rl.models.megatron.common import _round_up_to_multiple
@@ -47,6 +47,8 @@ class ProcessedInputs:
     position_ids: Optional[torch.Tensor]
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
+    labels_cp_sharded: Optional[torch.Tensor] = None
+    loss_mask_cp_sharded: Optional[torch.Tensor] = None
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
@@ -67,6 +69,8 @@ class ProcessedMicrobatch:
         position_ids: Position IDs tensor (None for packed sequences)
         packed_seq_params: PackedSeqParams for sequence packing (None if not packing)
         cu_seqlens_padded: Padded cumulative sequence lengths (None if not packing)
+        labels_cp_sharded: Context-parallel sharded prepacked labels
+        loss_mask_cp_sharded: Target-aligned mask for prepacked model loss
         mtp_loss_mask: Pre-computed MTP loss mask (token_mask × sample_mask).
             None when MTP is disabled or token/sample masks are absent.
         routed_experts: Optional token-aligned routed expert ids
@@ -80,6 +84,8 @@ class ProcessedMicrobatch:
     position_ids: Optional[torch.Tensor]
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
+    labels_cp_sharded: Optional[torch.Tensor] = None
+    loss_mask_cp_sharded: Optional[torch.Tensor] = None
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
@@ -138,6 +144,8 @@ def make_processed_microbatch_iterator(
             position_ids=processed_inputs.position_ids,
             packed_seq_params=processed_inputs.packed_seq_params,
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
+            labels_cp_sharded=processed_inputs.labels_cp_sharded,
+            loss_mask_cp_sharded=processed_inputs.loss_mask_cp_sharded,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
@@ -278,6 +286,8 @@ def process_microbatch(
         seq_lengths = None  # Will be set if using packed sequences
         cu_seqlens = None
         cu_seqlens_padded = None
+        labels_cp_sharded = None
+        loss_mask_cp_sharded = None
         mtp_loss_mask = None
 
         if "packed_cu_seqlens" in data_dict:
@@ -289,21 +299,34 @@ def process_microbatch(
             cu_seqlens = data_dict["packed_cu_seqlens"][0, :cu_len].to(torch.int32)
             cu_seqlens_padded = cu_seqlens
             max_seqlen = int(data_dict["packed_max_seqlens"][0].item())
-            input_ids_cp_sharded = _get_packed_tokens_on_this_cp_rank(
-                input_ids,
+            cp_rank = get_context_parallel_rank()
+            cp_size = get_context_parallel_world_size()
+            packed_indices = _get_packed_thd_partitioned_indices(
                 cu_seqlens,
-                get_context_parallel_rank(),
-                get_context_parallel_world_size(),
-                seq_dim=1,
+                input_ids.shape[1],
+                cp_size,
+                cp_rank,
+                device=input_ids.device,
+            )
+            input_ids_cp_sharded = input_ids.index_select(1, packed_indices)
+            if "target_ids" not in data_dict:
+                raise ValueError(
+                    "Megatron SFT prepacked microbatches require target_ids."
+                )
+            if "token_mask" not in data_dict or "sample_mask" not in data_dict:
+                raise ValueError(
+                    "Megatron SFT prepacked microbatches require token_mask and "
+                    "sample_mask."
+                )
+            labels_cp_sharded = data_dict["target_ids"].index_select(1, packed_indices)
+            target_aligned_loss_mask = data_dict["token_mask"] * data_dict[
+                "sample_mask"
+            ].unsqueeze(-1)
+            loss_mask_cp_sharded = target_aligned_loss_mask.index_select(
+                1, packed_indices
             )
             if "position_ids" in data_dict:
-                position_ids = _get_packed_tokens_on_this_cp_rank(
-                    data_dict["position_ids"],
-                    cu_seqlens,
-                    get_context_parallel_rank(),
-                    get_context_parallel_world_size(),
-                    seq_dim=1,
-                )
+                position_ids = data_dict["position_ids"].index_select(1, packed_indices)
             packed_seq_params = PackedSeqParams(
                 cu_seqlens_q=cu_seqlens_padded,
                 cu_seqlens_kv=cu_seqlens_padded,
@@ -502,6 +525,8 @@ def process_microbatch(
         position_ids=position_ids,
         packed_seq_params=packed_seq_params,
         cu_seqlens_padded=cu_seqlens_padded,
+        labels_cp_sharded=labels_cp_sharded,
+        loss_mask_cp_sharded=loss_mask_cp_sharded,
         mtp_loss_mask=mtp_loss_mask,
         routed_experts=routed_experts,
         routed_experts_cp_sharded=routed_experts_cp_sharded,
