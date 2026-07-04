@@ -83,6 +83,17 @@ def test_task5_latest_vllm_html_contains_native_and_status_sections(tmp_path: Pa
 
     assert "vLLM 0.24 / Native Profile Results" in html_text
     assert "vLLM 0.24 / DFlare Completed Results" in html_text
+    assert html_text.count('class="native-profile-grid"') == 3
+    assert html_text.count('class="native-speedup-matrix"') == 12
+    assert "speed-cell slowdown" in html_text
+    assert "speed-cell speedup" in html_text
+    assert "speed-cell neutral" in html_text
+    assert "partial" in html_text
+    assert '<details class="native-profile-details">' in html_text
+    assert ".native-profile-grid{display:grid" in html_text
+    assert ".native-profile-matrix{min-width:0}" in html_text
+    assert ".native-speedup-matrix{font-size:14px}" in html_text
+    assert "@media(max-width:1000px){.native-profile-grid{grid-template-columns:1fr}" in html_text
     assert "DFlare Failure and Status" in html_text
     assert "2272937" in html_text
     assert "2272938" in html_text
