@@ -42,7 +42,7 @@ import numpy as np
 import torch
 from pydantic import BaseModel, Field
 from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import PreTrainedTokenizerBase
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import (
     CrossTokenizerDistillationLossConfig,

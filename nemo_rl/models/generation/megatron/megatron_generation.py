@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional
 
 import ray
 from transformers import AutoProcessor
-from transformers import PreTrainedTokenizerBase
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
