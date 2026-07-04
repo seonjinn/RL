@@ -153,6 +153,12 @@ runner now uses a six-hour process-group timeout. Math 64K retry `2272240`
 completed; retry `2272239` is still running. Running and failed jobs remain
 excluded from the performance table.
 
+Additional timeout-patched retries are Native 32K SWE temperature 1
+`2272937`, YaRN 64K SWE temperature 1 `2272938`, and YaRN total-128K
+Math/SWE temperature 0/1 `2272939`, `2272941`, `2272942`, and `2272943`.
+All six remained running after the initial five-minute monitoring gate with no
+traceback, OOM, or NCCL error in their benchmark logs.
+
 ## Fixed-Length Tier Test
 
 The batch-size 1, 2, 4, 8, 16, 32, and 64 matrix completed for temperature 0
