@@ -1,0 +1,25 @@
+diff --git a/tools/dflash_benchmark.py b/tools/dflash_benchmark.py
+index af7c1a2..08be7a5 100644
+--- a/tools/dflash_benchmark.py
++++ b/tools/dflash_benchmark.py
+@@ -33,6 +33,7 @@ Usage (8 GPUs)::
+ from __future__ import annotations
+ 
+ import argparse
++import datetime
+ import json
+ import os
+ import random
+@@ -62,7 +63,11 @@ def _dist_init() -> None:
+             stacklevel=2,
+         )
+         return
+-    torch_dist.init_process_group(backend="nccl", init_method="env://")
++    torch_dist.init_process_group(
++        backend="nccl",
++        init_method="env://",
++        timeout=datetime.timedelta(hours=6),
++    )
+ 
+ 
+ def _dist_is_initialized() -> bool:

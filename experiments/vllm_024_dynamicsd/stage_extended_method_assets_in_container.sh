@@ -99,6 +99,10 @@ if ! grep -q 'run-mode' "${angelslim_source}/tools/dflash_benchmark.py"; then
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_split_run_modes.patch
 fi
+if ! grep -q 'timeout=datetime.timedelta(hours=6)' "${angelslim_source}/tools/dflash_benchmark.py"; then
+  patch -p1 -d "${angelslim_source}" \
+    < /workspace/experiment/patches/angelslim_distributed_timeout.patch
+fi
 python3 -m compileall -q "${angelslim_source}/tools/dflash_benchmark.py"
 
 common_site_versioned="${ASSET_ROOT}/python/common-py312-arctic-0.1.1"

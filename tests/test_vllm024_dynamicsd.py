@@ -464,6 +464,7 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     assert "angelslim_lightweight_imports.patch" in worker
     assert "angelslim_fixed_length.patch" in worker
     assert "angelslim_split_run_modes.patch" in worker
+    assert "angelslim_distributed_timeout.patch" in worker
     assert "datasets==4.4.1" in worker
     assert "stage_extended_method_assets_in_container.sh" in output
     assert "git clone" not in worker
@@ -471,6 +472,15 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     assert "/home/" not in worker
     assert "--segment=1" in output
     assert "--gres" not in output
+
+
+def test_angelslim_distributed_timeout_covers_long_context_rank_skew() -> None:
+    patch = (
+        EXPERIMENT / "patches/angelslim_distributed_timeout.patch"
+    ).read_text(encoding="utf-8")
+
+    assert "import datetime" in patch
+    assert "timeout=datetime.timedelta(hours=6)" in patch
 
 
 def test_angelslim_matrix_keeps_native_results_separate() -> None:
