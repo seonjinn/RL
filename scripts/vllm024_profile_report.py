@@ -22,7 +22,16 @@ METHOD_ORDER = {
     "pard2": 3,
     "suffix": 4,
 }
-SPECULATIVE_EXCLUDED_CONFIG_KEYS = frozenset({"draft_model", "mode", "speculative_config", "tag"})
+SPECULATIVE_EXCLUDED_CONFIG_KEYS = frozenset(
+    {
+        "batch_sizes",
+        "draft_model",
+        "mode",
+        "prompt_count_loaded",
+        "speculative_config",
+        "tag",
+    }
+)
 RUNTIME_ENV_EXCLUDED_KEYS = frozenset({"CUDA_VISIBLE_DEVICES", "SLURM_JOB_ID"})
 MATCH_KEYS = [
     "runtime_family",
@@ -96,26 +105,24 @@ def _to_int(value: object, default: int = 0) -> int:
     return default
 
 
-def _stable_value(value: object, *, excluded_keys: frozenset[str] = frozenset()) -> object:
+def _stable_value(value: object) -> object:
     if isinstance(value, Mapping):
         normalized: dict[str, object] = {}
         for key in sorted(str(item) for item in value.keys()):
-            if key in excluded_keys:
-                continue
-            normalized[key] = _stable_value(value.get(key), excluded_keys=excluded_keys)
+            normalized[key] = _stable_value(value.get(key))
         return normalized
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_stable_value(item, excluded_keys=excluded_keys) for item in value]
+        return [_stable_value(item) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
 
 
-def _stable_json(value: object, *, excluded_keys: frozenset[str] = frozenset()) -> str:
+def _stable_json(value: object) -> str:
     return json.dumps(
-        _stable_value(value, excluded_keys=excluded_keys),
+        _stable_value(value),
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -210,7 +217,12 @@ def _k(config: Mapping[str, object]) -> float:
 
 
 def _setup_signature(config: Mapping[str, object]) -> str:
-    return _stable_json(config, excluded_keys=SPECULATIVE_EXCLUDED_CONFIG_KEYS)
+    filtered_config = {
+        str(key): config.get(key)
+        for key in sorted(str(item) for item in config.keys())
+        if str(key) not in SPECULATIVE_EXCLUDED_CONFIG_KEYS
+    }
+    return _stable_json(filtered_config)
 
 
 def _acceptance_metric(batch_result: Mapping[str, object], key: str) -> float:

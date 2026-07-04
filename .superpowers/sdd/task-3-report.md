@@ -21,6 +21,13 @@ Implemented the Task 3 review findings in the owned files only:
   exclusion, variable-length job IDs, and HTML escaping
 - malformed or missing `K` now renders as `n/a`
 - pyright is clean for both owned files
+- top-level `batch_sizes` and `prompt_count_loaded` are excluded from
+  `setup_signature`, so targeted retry payloads can match full-sweep baselines
+  on per-row batch size while nested setup differences still break the match
+- setup normalization exclusions now apply only to the top-level config, so
+  nested fields with the same names are preserved in the normalized signature
+- real-input integration tests now skip cleanly when the 60-file corpus is not
+  present, while synthetic fixtures fully cover the matching behavior
 
 ## Red Step
 
@@ -49,6 +56,11 @@ The failures were the expected contract gaps:
   bind to baselines
 - duplicate baselines were not deduplicated or rejected
 - render still attempted `int(row.k)` and crashed on missing `K`
+- `setup_signature` still included top-level `batch_sizes` and
+  `prompt_count_loaded`, which blocked targeted retry matching
+- recursive key exclusion also erased nested fields that should have remained
+  part of exact setup matching
+- real-input tests were hard-pinned to the local 60-file corpus
 
 ## Implementation
 
@@ -85,6 +97,20 @@ Reworked `scripts/vllm024_profile_report.py` around the review findings:
 - source paths and text cells are HTML-escaped
 - AngelSlim rows are excluded even if they are passed in a mixed DataFrame
 
+### Second Review Adjustments
+
+- `setup_signature` now excludes `batch_sizes` and `prompt_count_loaded` only
+  at the top-level config, alongside the speculative-only knobs already
+  excluded
+- nested config values are normalized recursively without applying the
+  top-level exclusion list to child dictionaries
+- the synthetic test suite now proves:
+  - targeted retry `[16, 32]` rows match a full-sweep baseline at row batches
+    `16` and `32`
+  - a nested setup difference with the same field names still prevents a match
+  - real-input integration tests skip cleanly when the 60-file corpus is not
+    available locally
+
 ## Green Step
 
 Command:
@@ -98,6 +124,19 @@ Output:
 ```text
 .......                                                                  [100%]
 7 passed in 0.54s
+```
+
+Second review verification:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_profile_report.py
+```
+
+Output:
+
+```text
+........                                                                 [100%]
+8 passed in 0.69s
 ```
 
 ## Additional Verification

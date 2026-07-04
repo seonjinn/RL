@@ -29,8 +29,13 @@ def load_module() -> ModuleType:
 
 
 def real_input_paths() -> list[Path]:
-    paths = sorted(REAL_INPUT_ROOT.rglob("*.json"))
-    assert len(paths) == 60, "expected 60 checked-in vLLM-native result JSON files"
+    return sorted(REAL_INPUT_ROOT.rglob("*.json"))
+
+
+def require_real_input_paths() -> list[Path]:
+    paths = real_input_paths()
+    if len(paths) != 60:
+        pytest.skip("60-file vLLM-native corpus is absent until Task 4 data commit")
     return paths
 
 
@@ -272,7 +277,7 @@ def baseline_frame_row(
 def test_load_profile_results_normalizes_real_inputs() -> None:
     module = load_module()
 
-    rows = module.load_profile_results(real_input_paths())
+    rows = module.load_profile_results(require_real_input_paths())
 
     assert len(rows) == 154
     assert rows["runtime_family"].value_counts().to_dict() == {"vllm_native": 154}
@@ -369,7 +374,7 @@ def test_load_profile_results_filters_non_vllm_native_runtime_and_derives_profil
 def test_match_profile_baselines_matches_real_native_rows_without_row_multiplication() -> None:
     module = load_module()
 
-    loaded = module.load_profile_results(real_input_paths())
+    loaded = module.load_profile_results(require_real_input_paths())
     rows = module.match_profile_baselines(loaded)
 
     assert len(rows) == len(loaded)
@@ -459,6 +464,73 @@ def test_match_profile_baselines_requires_exact_runtime_and_setup_signature(
         "waiting matched baseline",
         "waiting matched baseline",
     ]
+
+
+def test_match_profile_baselines_targeted_retry_matches_full_sweep_but_nested_setup_difference_does_not(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    baseline = write_payload(
+        tmp_path / "baseline/job-3333331/result.json",
+        config=make_config(
+            profile="native32k",
+            method="baseline",
+            extra={
+                "batch_sizes": [1, 2, 4, 8, 16, 32],
+                "prompt_count_loaded": 32,
+            },
+        ),
+        results=[
+            make_result(16, tok_s_gpu=160.0, latency_s=100.0),
+            make_result(32, tok_s_gpu=320.0, latency_s=100.0),
+        ],
+    )
+    targeted_retry = write_payload(
+        tmp_path / "retry/job-3333332/result.json",
+        config=make_config(
+            profile="native32k",
+            method="pard2",
+            extra={
+                "batch_sizes": [16, 32],
+                "prompt_count_loaded": 2,
+            },
+        ),
+        results=[
+            make_result(16, tok_s_gpu=80.0, latency_s=200.0, acceptance_rate=0.1, mean_accept_len=1.2),
+            make_result(32, tok_s_gpu=160.0, latency_s=200.0, acceptance_rate=0.1, mean_accept_len=1.2),
+        ],
+    )
+    nested_difference = write_payload(
+        tmp_path / "nested/job-3333333/result.json",
+        config=make_config(
+            profile="native32k",
+            method="dflash",
+            extra={
+                "batch_sizes": [16],
+                "prompt_count_loaded": 1,
+                "engine_metadata": {
+                    "batch_sizes": [99],
+                    "prompt_count_loaded": 777,
+                    "max_num_seqs": 999,
+                },
+            },
+        ),
+        results=[
+            make_result(16, tok_s_gpu=120.0, latency_s=120.0, acceptance_rate=0.2, mean_accept_len=4.0),
+        ],
+    )
+
+    rows = module.match_profile_baselines(
+        module.load_profile_results([baseline, targeted_retry, nested_difference])
+    )
+
+    retry_rows = rows.loc[rows["source"].astype(str).str.endswith("retry/job-3333332/result.json")]
+    assert retry_rows["throughput_speedup_label"].tolist() == ["0.50x", "0.50x"]
+    assert retry_rows["latency_speedup_label"].tolist() == ["0.50x", "0.50x"]
+
+    nested_row = rows.loc[rows["source"].astype(str).str.endswith("nested/job-3333333/result.json")].iloc[0]
+    assert nested_row["throughput_speedup_label"] == "waiting matched baseline"
+    assert nested_row["latency_speedup_label"] == "waiting matched baseline"
 
 
 def test_match_profile_baselines_prefers_complete_duplicate_baseline_without_row_multiplication() -> None:
