@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -88,12 +89,27 @@ def test_task5_latest_vllm_html_contains_native_and_status_sections(tmp_path: Pa
     assert "speed-cell slowdown" in html_text
     assert "speed-cell speedup" in html_text
     assert "speed-cell neutral" in html_text
-    assert "partial" in html_text
+    assert re.search(
+        r'class="speed-cell (?:slowdown|neutral|speedup|empty waiting) partial"[^>]*>'
+        r"[^<]*†</td>",
+        html_text,
+    )
     assert '<details class="native-profile-details">' in html_text
     assert ".native-profile-grid{display:grid" in html_text
     assert ".native-profile-matrix{min-width:0}" in html_text
     assert ".native-speedup-matrix{font-size:14px}" in html_text
     assert "@media(max-width:1000px){.native-profile-grid{grid-template-columns:1fr}" in html_text
+    style_text = html_text.split("<style>", 1)[1].split("</style>", 1)[0]
+    speed_cell_selectors = [
+        selector.strip()
+        for selector in re.findall(r"([^{}]+)\{", style_text)
+        if ".speed-cell" in selector
+    ]
+    assert speed_cell_selectors
+    assert all(
+        selector.startswith(".native-speedup-matrix .speed-cell")
+        for selector in speed_cell_selectors
+    )
     assert "DFlare Failure and Status" in html_text
     assert "2272937" in html_text
     assert "2272938" in html_text
