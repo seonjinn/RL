@@ -132,6 +132,12 @@ row is partial and does not yet have its matched baseline:
 The raw row is stored at
 `report/20260703_q8_long_context_partial/64k/math/suffix_t0p0/result.json`.
 
+The consolidated vLLM-native corpus now contains 154 batch rows: 136 complete
+and 18 partial rows. Native 32K contributes 114 rows; YaRN 64K and total-128K
+contribute 20 rows each. Every speculative row is matched only to an exact
+vLLM-native baseline. The 18 partial rows are Native 32K PARD-2 batches saved
+before the original five-hour jobs timed out.
+
 ### DFlare Completed Snapshot
 
 The AngelSlim-native long-context DFlare table includes completed target
@@ -143,21 +149,30 @@ installed in the staged runtime.
 | Native 32K | Math | 0.0 | 4,096 | 32,768 | 1 | DFlare K16 | 9.53 | 3.28x | 35.85% | 6.38 | `2271128` |
 | Native 32K | Math | 1.0 | 4,096 | 32,768 | 1 | DFlare K16 | 12.34 | 4.23x | 52.34% | 8.85 | `2271129` |
 | Native 32K | SWE | 0.0 | 4,096 | 32,768 | 1 | DFlare K16 | 13.47 | 4.76x | 55.30% | 9.29 | `2271130` |
+| Native 32K | SWE | 1.0 | 4,096 | 32,768 | 1 | DFlare K16 | 10.96 | 3.76x | 43.65% | 7.55 | `2272937` |
 | YaRN 64K | Math | 1.0 | 4,096 | 65,536 | 1 | DFlare K16 | 12.47 | waiting matched baseline | 54.13% | 9.12 | `2272240` |
 | YaRN 64K | SWE | 0.0 | 4,096 | 65,536 | 1 | DFlare K16 | 15.52 | waiting matched baseline | 65.91% | 10.89 | `2271723` |
+| YaRN 64K | SWE | 1.0 | 4,096 | 65,536 | 1 | DFlare K16 | 5.96 | waiting matched baseline | 26.90% | 5.03 | `2272938` |
+| YaRN total-128K | Math | 1.0 | 4,096 | 126,976 | 1 | DFlare K16 | 10.06 | waiting matched baseline | 49.14% | 8.37 | `2272941` |
 
-The native SWE temperature-1 job, the original 64K Math/SWE failures, and the
-original 128K jobs all hit the same 600-second PyTorch process-group timeout
-when faster ranks entered result gathering before slower ranks. The staged
-runner now uses a six-hour process-group timeout. Math 64K retry `2272240`
-completed; retry `2272239` is still running. Running and failed jobs remain
-excluded from the performance table.
+The original failures had three distinct causes. Eight jobs used a 600-second
+PyTorch process-group timeout and failed when faster ranks reached result
+gathering first. Retries `2272239`, `2272939`, and `2272943` then reached the
+five-hour SLURM wall limit without a CUDA or NCCL failure. Job `2272942`
+finished generation but OOMed while `gather_object` reconstructed CUDA
+`output_ids` on rank 0.
 
-Additional timeout-patched retries are Native 32K SWE temperature 1
-`2272937`, YaRN 64K SWE temperature 1 `2272938`, and YaRN total-128K
-Math/SWE temperature 0/1 `2272939`, `2272941`, `2272942`, and `2272943`.
-All six remained running after the initial five-minute monitoring gate with no
-traceback, OOM, or NCCL error in their benchmark logs.
+The staged runner now compacts each response to CPU scalar statistics, writes
+one atomic partial JSON per rank before the collective, gathers only compact
+records, and retains the six-hour process-group timeout. Smoke job `2274742`
+completed in 2:49, produced four rank partials plus the final JSON, and reported
+3.15x decode throughput (2.88 to 9.09 tok/s) with mean accepted length 5.95.
+
+Missing spec rows were resubmitted as `2274775-2274778` on the eight-hour
+`gb200-backfill` partition. Exact AngelSlim baseline jobs are `2274767-2274774`.
+All twelve were running after the five-minute monitoring gate with no startup,
+CUDA, NCCL, or Python error. Separate vLLM-native PARD-2 missing-batch retries
+are `2274749-2274754`; they were also running cleanly after five minutes.
 
 ## Fixed-Length Tier Test
 
