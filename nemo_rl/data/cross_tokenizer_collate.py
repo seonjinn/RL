@@ -39,7 +39,7 @@ from dataclasses import fields as dataclass_fields
 from typing import Any, List, Optional
 
 import torch
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.x_token.token_aligner import TokenAligner
 from nemo_rl.data.interfaces import DatumSpec

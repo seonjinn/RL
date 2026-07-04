@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoConfig, AutoTokenizer
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.grpo import (
     _should_log_nemo_gym_responses,

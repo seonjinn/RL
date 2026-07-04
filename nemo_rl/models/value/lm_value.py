@@ -17,7 +17,7 @@ from typing import Any, Optional, Union
 
 import numpy as np
 import ray
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.distributed.batched_data_dict import (

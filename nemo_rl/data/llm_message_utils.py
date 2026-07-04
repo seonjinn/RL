@@ -17,7 +17,7 @@ from typing import Any, Optional, Union, cast
 import numpy as np
 import torch
 from datasets import Dataset
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.data.interfaces import (
     FlatMessagesType,

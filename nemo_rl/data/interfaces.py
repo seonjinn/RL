@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, NotRequired, Optional, Protocol, TypedDict, Union
 
 import torch
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.data.multimodal_utils import PackedTensor
 
