@@ -66,7 +66,7 @@ def test_compact_response_map_retains_metrics_and_drops_output_ids() -> None:
         ),
     }
     with pytest.raises(FrozenInstanceError):
-        compact[1].num_output_tokens = 99
+        setattr(compact[1], "num_output_tokens", 99)
 
     payload = {block_size: asdict(response) for block_size, response in compact.items()}
     serialized = json.dumps(payload, sort_keys=True)

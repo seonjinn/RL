@@ -138,3 +138,31 @@ Notes:
 
 - The untracked report artifacts were already present and were left untouched.
 - The owned changes are limited to the two requested files.
+
+## Review Follow-Up
+
+Reviewer issue:
+
+- `tests/test_angelslim_dflare_transport.py:69` assigned directly to a frozen
+  dataclass field, which Pyright reports as `reportAttributeAccessIssue`.
+
+Change made:
+
+- Replaced the direct assignment with `setattr(compact[1], "num_output_tokens", 99)`
+  inside the existing `pytest.raises(FrozenInstanceError)` block.
+
+Commands:
+
+```bash
+python3 -m pytest -q tests/test_angelslim_dflare_transport.py
+pyright experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py tests/test_angelslim_dflare_transport.py
+```
+
+Outputs:
+
+```text
+..                                                                       [100%]
+2 passed in 0.05s
+
+0 errors, 0 warnings, 0 informations
+```
