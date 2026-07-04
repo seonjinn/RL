@@ -583,22 +583,66 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
     module = load_module()
     rows = pd.DataFrame(
         [
-            baseline_frame_row(domain="Math <baseline>", source="baseline<&>.json"),
+            baseline_frame_row(source="baseline<&>.json")
+            | {
+                "batch_size": 1,
+                "throughput_speedup": 1.0,
+                "latency_speedup": 1.0,
+                "throughput_speedup_label": "1.00x",
+                "latency_speedup_label": "1.00x",
+            },
             baseline_frame_row(
-                domain="Math <tag>",
                 source="spec<&>.json",
                 method="dflash",
-                k=math.nan,
+                k=15.0,
             )
             | {
+                "batch_size": 1,
+                "tok_s_gpu": 90.0,
+                "latency_s": 44.0,
+                "acceptance_rate": 0.625,
+                "mean_accept_len": 4.5,
+                "throughput_speedup": 2.25,
+                "latency_speedup": 2.25,
+                "throughput_speedup_label": "2.25x",
+                "latency_speedup_label": "2.25x",
+            },
+            baseline_frame_row(source="slowdown.json", method="dflash", k=15.0)
+            | {
+                "batch_size": 2,
+                "tok_s_gpu": 30.0,
+                "latency_s": 133.0,
+                "acceptance_rate": 0.5,
+                "mean_accept_len": 3.0,
+                "throughput_speedup": 0.75,
+                "latency_speedup": 0.75,
+                "throughput_speedup_label": "0.75x",
+                "latency_speedup_label": "0.75x",
+            },
+            baseline_frame_row(source="partial.json", method="dflash", k=15.0)
+            | {
+                "batch_size": 4,
+                "source_status": "partial",
                 "tok_s_gpu": 20.0,
                 "latency_s": 200.0,
                 "acceptance_rate": 0.25,
-                "mean_accept_len": 4.5,
+                "mean_accept_len": 2.0,
                 "throughput_speedup": 0.5,
                 "latency_speedup": 0.5,
                 "throughput_speedup_label": "0.50x",
                 "latency_speedup_label": "0.50x",
+            },
+            baseline_frame_row(source="unmatched.json", method="suffix", k=32.0)
+            | {
+                "batch_size": 8,
+                "tok_s_gpu": 25.0,
+                "latency_s": 160.0,
+                "acceptance_rate": 0.7,
+                "mean_accept_len": 8.0,
+                "throughput_speedup": math.nan,
+                "latency_speedup": math.nan,
+                "throughput_speedup_label": "waiting matched baseline",
+                "latency_speedup_label": "waiting matched baseline",
             },
             baseline_frame_row(
                 runtime_family="angelslim",
@@ -617,9 +661,35 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
     rendered = module.render_profile_section(rows)
 
     assert '<section class="section" id="vllm024-profile">' in rendered
-    assert "Math &lt;tag&gt;" in rendered
-    assert "Math &lt;baseline&gt;" in rendered
+    assert '<table class="native-speedup-matrix">' in rendered
+    assert all(f">B{batch}<" in rendered for batch in (1, 2, 4, 8, 16, 32))
+    assert 'class="speed-cell speedup"' in rendered
+    assert 'class="speed-cell neutral"' in rendered
+    assert 'class="speed-cell slowdown"' in rendered
+    assert 'class="speed-cell slowdown partial"' in rendered
+    assert "0.50x†" in rendered
+    assert 'class="speed-cell empty">n/a</td>' in rendered
+    assert "waiting baseline" in rendered
     assert "spec&lt;&amp;&gt;.json" in rendered
     assert "baseline&lt;&amp;&gt;.json" in rendered
-    assert "DFlash K=n/a" in rendered
+    assert "DFlash K=15" in rendered
+    assert '<details class="native-profile-details">' in rendered
+    assert "Detailed native metrics and sources" in rendered
     assert "AngelSlim &lt;drop&gt;" not in rendered
+
+
+def test_render_profile_section_rejects_duplicate_native_matrix_cells() -> None:
+    module = load_module()
+    duplicate = baseline_frame_row(method="dflash", k=15.0, source="spec-a.json") | {
+        "throughput_speedup": 2.0,
+        "latency_speedup": 2.0,
+    }
+    rows = pd.DataFrame(
+        [
+            duplicate,
+            duplicate | {"source": "spec-b.json", "job_id": "7654321"},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate native matrix cell"):
+        module.render_profile_section(rows)

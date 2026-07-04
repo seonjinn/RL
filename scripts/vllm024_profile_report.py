@@ -15,6 +15,18 @@ import pandas as pd
 
 
 PROFILE_ORDER = ["Native 32K", "YaRN 64K", "YaRN total-128K"]
+BATCH_ORDER = (1, 2, 4, 8, 16, 32)
+DOMAIN_ORDER = ("Math", "SWE")
+TEMPERATURE_ORDER = (0.0, 1.0)
+DISPLAY_KEYS = [
+    "context_profile",
+    "domain",
+    "temperature",
+    "model",
+    "method",
+    "k",
+    "batch_size",
+]
 METHOD_ORDER = {
     "baseline": 0,
     "dflash": 1,
@@ -426,7 +438,111 @@ def _display_source(source: object) -> str:
     return "/".join(parts[-6:])
 
 
-def _profile_table(rows: pd.DataFrame, profile: str) -> str:
+def _validate_matrix_cells(rows: pd.DataFrame) -> None:
+    duplicate = rows.duplicated(DISPLAY_KEYS, keep=False)
+    if duplicate.any():
+        raise ValueError("duplicate native matrix cell")
+
+
+def _row_value(row: object, key: str) -> object:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key)
+
+
+def _speedup_cell(row: object | None) -> str:
+    if row is None:
+        return '<td class="speed-cell empty">n/a</td>'
+
+    status = str(_row_value(row, "source_status"))
+    source = str(_row_value(row, "source"))
+    tooltip = escape(
+        "; ".join(
+            [
+                f"status: {status}",
+                f"source: {source}",
+                f"tok/s/GPU: {_fmt_number(_row_value(row, 'tok_s_gpu'))}",
+                f"acceptance: {_fmt_percent(_row_value(row, 'acceptance_rate'))}",
+                f"mean accepted length: {_fmt_number(_row_value(row, 'mean_accept_len'))}",
+            ]
+        ),
+        quote=True,
+    )
+    speedup = _to_float(_row_value(row, "throughput_speedup"))
+    if not math.isfinite(speedup):
+        return f'<td class="speed-cell empty waiting" title="{tooltip}">waiting baseline</td>'
+
+    if speedup < 1.0:
+        state = "slowdown"
+    elif speedup > 1.0:
+        state = "speedup"
+    else:
+        state = "neutral"
+    partial = status == "partial"
+    classes = f"speed-cell {state}" + (" partial" if partial else "")
+    marker = "†" if partial else ""
+    return f'<td class="{classes}" title="{tooltip}">{speedup:.2f}x{marker}</td>'
+
+
+def _matrix_table(rows: pd.DataFrame, domain: str, temperature: float) -> str:
+    slice_rows = rows.loc[
+        rows["domain"].eq(domain) & rows["temperature"].eq(temperature)
+    ].copy()
+    slice_rows["method_rank"] = slice_rows["method"].map(METHOD_ORDER).fillna(999)
+    row_keys = (
+        slice_rows[["model", "method", "k", "method_rank"]]
+        .drop_duplicates(subset=["model", "method", "k"])
+        .sort_values(["model", "method_rank", "method", "k"], kind="stable")
+    )
+
+    body: list[str] = []
+    for key in row_keys.itertuples(index=False):
+        key_rows = slice_rows.loc[
+            slice_rows["model"].eq(key.model) & slice_rows["method"].eq(key.method)
+        ]
+        key_rows = key_rows.loc[
+            key_rows["k"].isna() if pd.isna(key.k) else key_rows["k"].eq(key.k)
+        ]
+        cells = [
+            f"<td>{escape(str(key.model))}</td>",
+            f"<td>{escape(_method_label(key.method, key.k))}</td>",
+        ]
+        for batch_size in BATCH_ORDER:
+            matches = key_rows.loc[key_rows["batch_size"].eq(batch_size)]
+            row = None if matches.empty else matches.iloc[0]
+            cells.append(_speedup_cell(row))
+        body.append(f"<tr>{''.join(cells)}</tr>")
+
+    batch_headings = "".join(f"<th>B{batch_size}</th>" for batch_size in BATCH_ORDER)
+    return (
+        '<div class="native-profile-matrix">'
+        f"<h4>{escape(domain)} Temp {temperature:.1f}</h4>"
+        '<div class="table-wrap">'
+        '<table class="native-speedup-matrix">'
+        f"<thead><tr><th>Model</th><th>Method</th>{batch_headings}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table></div></div>"
+    )
+
+
+def _profile_matrix(rows: pd.DataFrame, profile: str) -> str:
+    profile_rows = rows.loc[rows["context_profile"].eq(profile)].copy()
+    if profile_rows.empty:
+        return ""
+    matrices = "".join(
+        _matrix_table(profile_rows, domain, temperature)
+        for domain in DOMAIN_ORDER
+        for temperature in TEMPERATURE_ORDER
+    )
+    return (
+        f'<div class="native-profile" data-profile="{escape(profile, quote=True)}">'
+        f"<h3>{escape(profile)}</h3>"
+        f'<div class="native-profile-grid">{matrices}</div>'
+        "</div>"
+    )
+
+
+def _profile_detail_table(rows: pd.DataFrame, profile: str) -> str:
     profile_rows = rows.loc[rows["context_profile"].eq(profile)].copy()
     if profile_rows.empty:
         return ""
@@ -492,9 +608,18 @@ def render_profile_section(rows: pd.DataFrame) -> str:
         target_rows["throughput_speedup_label"] = target_rows["throughput_speedup"].map(_speedup_label)
     if "latency_speedup_label" not in target_rows.columns:
         target_rows["latency_speedup_label"] = target_rows["latency_speedup"].map(_speedup_label)
-    tables = "".join(_profile_table(target_rows, profile) for profile in PROFILE_ORDER)
-    if not tables:
+    _validate_matrix_cells(target_rows)
+    matrices = "".join(_profile_matrix(target_rows, profile) for profile in PROFILE_ORDER)
+    if not matrices:
         return ""
+    detail_tables = "".join(
+        _profile_detail_table(target_rows, profile) for profile in PROFILE_ORDER
+    )
+    details = (
+        '<details class="native-profile-details">'
+        "<summary>Detailed native metrics and sources</summary>"
+        f"{detail_tables}</details>"
+    )
     return (
         '<section class="section" id="vllm024-profile">'
         "<h2>vLLM 0.24 / Native Profile Results</h2>"
@@ -503,5 +628,5 @@ def render_profile_section(rows: pd.DataFrame) -> str:
         "temperature, top-p, batch, ISL, OSL, profile, position encoding, CUDA graph mode, "
         "and normalized non-speculative setup. Persisted batch results from interrupted "
         "sources are shown as partial.</p>"
-        f"{tables}</section>"
+        f"{matrices}{details}</section>"
     )
