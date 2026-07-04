@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import re
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -579,7 +580,63 @@ def test_match_profile_baselines_rejects_ambiguous_duplicate_exact_keys() -> Non
         module.match_profile_baselines(rows)
 
 
-def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_missing_k() -> None:
+def test_speedup_cell_emits_bounded_magnitude_sensitive_color_properties() -> None:
+    module = load_module()
+
+    def alpha(cell: str, property_name: str) -> float:
+        match = re.search(rf"{property_name}:rgba\([^)]*,([0-9.]+)\)", cell)
+        assert match is not None
+        return float(match.group(1))
+
+    mild_speedup = module._speedup_cell(
+        baseline_frame_row(source="mild-speedup.json") | {"throughput_speedup": 1.01}
+    )
+    strong_speedup = module._speedup_cell(
+        baseline_frame_row(source="strong-speedup.json") | {"throughput_speedup": 100.0}
+    )
+    mild_slowdown = module._speedup_cell(
+        baseline_frame_row(source="mild-slowdown.json") | {"throughput_speedup": 0.99}
+    )
+    strong_slowdown = module._speedup_cell(
+        baseline_frame_row(source="strong-slowdown.json") | {"throughput_speedup": 0.05}
+    )
+
+    blue_alphas = [
+        alpha(mild_speedup, "--matrix-blue"),
+        alpha(strong_speedup, "--matrix-blue"),
+    ]
+    red_alphas = [
+        alpha(mild_slowdown, "--matrix-red"),
+        alpha(strong_slowdown, "--matrix-red"),
+    ]
+    assert blue_alphas[0] < blue_alphas[1]
+    assert red_alphas[0] < red_alphas[1]
+    assert all(0.14 <= value <= 0.82 for value in blue_alphas + red_alphas)
+    assert "--matrix-text:" in mild_speedup
+    assert "--matrix-text:" in strong_speedup
+
+
+def test_speedup_cell_preserves_partial_unmatched_state_and_escapes_title() -> None:
+    module = load_module()
+    cell = module._speedup_cell(
+        baseline_frame_row(source='spec<&>"\'.json', method="suffix", k=32.0)
+        | {
+            "source_status": "partial",
+            "throughput_speedup": math.nan,
+            "acceptance_rate": 0.7,
+            "mean_accept_len": 8.0,
+        }
+    )
+
+    assert 'class="speed-cell empty waiting partial"' in cell
+    assert "waiting baseline†" in cell
+    assert (
+        'title="status: partial; source: spec&lt;&amp;&gt;&quot;&#x27;.json; '
+        'tok/s/GPU: 40.00; acceptance: 70.00%; mean accepted length: 8.00"'
+    ) in cell
+
+
+def test_render_profile_section_renders_matrix_states_and_separate_k_rows() -> None:
     module = load_module()
     rows = pd.DataFrame(
         [
@@ -592,7 +649,7 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
                 "latency_speedup_label": "1.00x",
             },
             baseline_frame_row(
-                source="spec<&>.json",
+                source='spec<&>"\'.json',
                 method="dflash",
                 k=15.0,
             )
@@ -606,6 +663,18 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
                 "latency_speedup": 2.25,
                 "throughput_speedup_label": "2.25x",
                 "latency_speedup_label": "2.25x",
+            },
+            baseline_frame_row(source="spec-k7.json", method="dflash", k=7.0)
+            | {
+                "batch_size": 1,
+                "tok_s_gpu": 50.0,
+                "latency_s": 80.0,
+                "acceptance_rate": 0.4,
+                "mean_accept_len": 3.5,
+                "throughput_speedup": 1.25,
+                "latency_speedup": 1.25,
+                "throughput_speedup_label": "1.25x",
+                "latency_speedup_label": "1.25x",
             },
             baseline_frame_row(source="slowdown.json", method="dflash", k=15.0)
             | {
@@ -635,6 +704,7 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
             baseline_frame_row(source="unmatched.json", method="suffix", k=32.0)
             | {
                 "batch_size": 8,
+                "source_status": "partial",
                 "tok_s_gpu": 25.0,
                 "latency_s": 160.0,
                 "acceptance_rate": 0.7,
@@ -659,6 +729,7 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
     )
 
     rendered = module.render_profile_section(rows)
+    matrix = module._profile_matrix(rows, "Native 32K")
 
     assert '<section class="section" id="vllm024-profile">' in rendered
     assert '<table class="native-speedup-matrix">' in rendered
@@ -669,10 +740,16 @@ def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_
     assert 'class="speed-cell slowdown partial"' in rendered
     assert "0.50x†" in rendered
     assert 'class="speed-cell empty">n/a</td>' in rendered
-    assert "waiting baseline" in rendered
-    assert "spec&lt;&amp;&gt;.json" in rendered
+    assert 'class="speed-cell empty waiting partial"' in rendered
+    assert "waiting baseline†" in rendered
+    assert "spec&lt;&amp;&gt;&quot;&#x27;.json" in rendered
     assert "baseline&lt;&amp;&gt;.json" in rendered
-    assert "DFlash K=15" in rendered
+    assert matrix.count("<td>DFlash K=7</td>") == 1
+    assert matrix.count("<td>DFlash K=15</td>") == 1
+    assert matrix.index("DFlash K=7") < matrix.index("DFlash K=15")
+    assert matrix.index("Math Temp 0.0") < matrix.index("Math Temp 1.0")
+    assert matrix.index("Math Temp 1.0") < matrix.index("SWE Temp 0.0")
+    assert matrix.index("SWE Temp 0.0") < matrix.index("SWE Temp 1.0")
     assert '<details class="native-profile-details">' in rendered
     assert "Detailed native metrics and sources" in rendered
     assert "AngelSlim &lt;drop&gt;" not in rendered

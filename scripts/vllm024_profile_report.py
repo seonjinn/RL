@@ -450,6 +450,10 @@ def _row_value(row: object, key: str) -> object:
     return getattr(row, key)
 
 
+def _bounded_intensity(magnitude: float) -> float:
+    return min(0.82, max(0.14, 0.14 + 0.68 * magnitude))
+
+
 def _speedup_cell(row: object | None) -> str:
     if row is None:
         return '<td class="speed-cell empty">n/a</td>'
@@ -469,19 +473,38 @@ def _speedup_cell(row: object | None) -> str:
         quote=True,
     )
     speedup = _to_float(_row_value(row, "throughput_speedup"))
+    partial = status == "partial"
+    partial_class = " partial" if partial else ""
+    marker = "†" if partial else ""
     if not math.isfinite(speedup):
-        return f'<td class="speed-cell empty waiting" title="{tooltip}">waiting baseline</td>'
+        return (
+            f'<td class="speed-cell empty waiting{partial_class}" title="{tooltip}">'
+            f"waiting baseline{marker}</td>"
+        )
 
     if speedup < 1.0:
         state = "slowdown"
+        severity = min(1.0, max(0.0, 1.0 - speedup))
+        intensity = _bounded_intensity(severity)
+        style = f"--matrix-red:rgba(220,38,38,{intensity:.2f})"
     elif speedup > 1.0:
         state = "speedup"
+        gain = min(1.0, max(0.0, math.log2(speedup) / 3.0))
+        intensity = _bounded_intensity(gain)
+        text_color = "#ffffff" if intensity >= 0.55 else "#17406d"
+        style = (
+            f"--matrix-blue:rgba(37,99,235,{intensity:.2f});"
+            f"--matrix-text:{text_color}"
+        )
     else:
         state = "neutral"
-    partial = status == "partial"
-    classes = f"speed-cell {state}" + (" partial" if partial else "")
-    marker = "†" if partial else ""
-    return f'<td class="{classes}" title="{tooltip}">{speedup:.2f}x{marker}</td>'
+        style = ""
+    classes = f"speed-cell {state}{partial_class}"
+    style_attribute = f' style="{style}"' if style else ""
+    return (
+        f'<td class="{classes}"{style_attribute} title="{tooltip}">'
+        f"{speedup:.2f}x{marker}</td>"
+    )
 
 
 def _matrix_table(rows: pd.DataFrame, domain: str, temperature: float) -> str:
