@@ -115,7 +115,8 @@ validate_method() {
 
 supports_method() {
   case "$1:$2" in
-    qwen30ba3b:suffix|qwen32:suffix|qwen32:eagle3) return 0 ;;
+    qwen30ba3b:baseline|qwen30ba3b:suffix) return 0 ;;
+    qwen32:baseline|qwen32:suffix|qwen32:eagle3) return 0 ;;
     qwen235b:baseline|qwen235b:suffix|qwen235b:eagle3) return 0 ;;
     *) return 1 ;;
   esac

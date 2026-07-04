@@ -240,10 +240,14 @@ def test_default_final_run_renders_all_supported_contracts() -> None:
     sections = job_sections(run_dry().stdout)
 
     assert set(sections) == {
+        ("qwen30ba3b", "sync", "baseline"),
         ("qwen30ba3b", "sync", "suffix"),
+        ("qwen30ba3b", "async1off", "baseline"),
         ("qwen30ba3b", "async1off", "suffix"),
+        ("qwen32", "sync", "baseline"),
         ("qwen32", "sync", "suffix"),
         ("qwen32", "sync", "eagle3"),
+        ("qwen32", "async1off", "baseline"),
         ("qwen32", "async1off", "suffix"),
         ("qwen32", "async1off", "eagle3"),
         ("qwen235b", "sync", "baseline"),
@@ -337,6 +341,28 @@ def test_q32_async_keeps_four_worker_cluster_segment_size() -> None:
         assert "cluster.segment_size=4" in section
         assert "--nodes=8" in section
         assert "--segment=8" in section
+
+
+def test_q30_q32_baselines_are_supported_for_strict_current_config_matching() -> None:
+    sections = job_sections(
+        run_dry(
+            MODELS="qwen30ba3b qwen32",
+            MODES="sync",
+            METHODS="baseline",
+        ).stdout
+    )
+
+    assert set(sections) == {
+        ("qwen30ba3b", "sync", "baseline"),
+        ("qwen32", "sync", "baseline"),
+    }
+    for section in sections.values():
+        assert "speculative_config" not in section
+        assert "policy.generation.vllm_cfg.enforce_eager=false" in section
+        assert "attention_backend=TRITON_ATTN" in section
+        assert "kernel_config.moe_backend=triton" in section
+        assert "policy.generation.max_new_tokens" not in section
+        assert "max_num_batched_tokens" not in section
 
 
 def test_run_kind_enforces_steps_and_smoke_model_scope() -> None:
