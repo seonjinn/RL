@@ -137,6 +137,8 @@ policy:
     apply_rope_fusion: True
     bias_activation_fusion: False
     defer_fp32_logits: False
+    use_fused_linear_logprobs: false
+    gradient_accumulation_fusion: true
     nrl_minimal_loss_metrics: true
     moe_per_layer_logging: False
     # Attention backend: 'flash' uses FlashAttention for improved throughput
@@ -215,7 +217,7 @@ policy:
       grad_reduce_in_fp32: true          # matches M-LM DDP config
       overlap_grad_reduce: true         # matches --overlap-grad-reduce
       overlap_param_gather: true        # matches --overlap-param-gather
-      data_parallel_sharding_strategy: "no_shard"
+      data_parallel_sharding_strategy: "optim_grads_params"
       use_custom_fsdp: false
       # Matches M-LM Super's logged --ddp-num-buckets 10 expansion:
       # DistributedDataParallelConfig(... bucket_size=499400281 ...)

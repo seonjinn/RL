@@ -9,6 +9,7 @@ set -euo pipefail
 NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-64}
 STEPS=${STEPS:-20}
 TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-992}
+DATA_PARALLEL_SHARDING_STRATEGY=${DATA_PARALLEL_SHARDING_STRATEGY:-optim_grads_params}
 RUN_KIND=${RUN_KIND:-superv3_nemorl_main}
 RUN_ID=${RUN_ID:-$(date +%H%M%S)}
 
@@ -132,9 +133,11 @@ uv run --locked --extra mcore examples/run_sft.py \
   policy.megatron_cfg.mtp_num_layers=2 \
   policy.megatron_cfg.mtp_use_repeated_layer=True \
   policy.megatron_cfg.mtp_detach_heads=False \
+  policy.megatron_cfg.use_fused_linear_logprobs=False \
+  policy.megatron_cfg.gradient_accumulation_fusion=True \
   policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=True \
   policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=True \
-  policy.megatron_cfg.distributed_data_parallel_config.data_parallel_sharding_strategy=no_shard \
+  policy.megatron_cfg.distributed_data_parallel_config.data_parallel_sharding_strategy=${DATA_PARALLEL_SHARDING_STRATEGY} \
   ${EXTRA_OVERRIDES} \
   2>&1 | tee ${LOG_DIR}/${NAME}.log"
 
