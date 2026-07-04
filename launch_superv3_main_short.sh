@@ -156,6 +156,10 @@ SBATCH_ARGS=(
   --gres=gpu:8
 )
 
+if [[ -n "${SBATCH_COMMENT:-}" ]]; then
+  SBATCH_ARGS+=(--comment="${SBATCH_COMMENT}")
+fi
+
 if [[ -n "${DEPENDENCY:-}" ]]; then
   SBATCH_ARGS+=(--dependency="${DEPENDENCY}")
 fi
