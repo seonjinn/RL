@@ -136,6 +136,35 @@ def test_dynamic_schedule_and_speculative_configs() -> None:
         "num_speculative_tokens_per_batch_size": schedule,
         "draft_tensor_parallel_size": 1,
     }
+    assert benchmark.build_speculative_config(
+        mode="mtp_static",
+        draft_model="",
+        static_k=5,
+        dynamic_schedule=schedule,
+        draft_tensor_parallel_size=1,
+        draft_attention_backend="",
+        suffix_max_cached_requests=10000,
+        suffix_max_spec_factor=1.0,
+        suffix_min_token_prob=0.1,
+    ) == {
+        "method": "mtp",
+        "num_speculative_tokens": 5,
+    }
+    assert benchmark.build_speculative_config(
+        mode="mtp_dynamic",
+        draft_model="",
+        static_k=5,
+        dynamic_schedule=schedule,
+        draft_tensor_parallel_size=1,
+        draft_attention_backend="",
+        suffix_max_cached_requests=10000,
+        suffix_max_spec_factor=1.0,
+        suffix_min_token_prob=0.1,
+    ) == {
+        "method": "mtp",
+        "num_speculative_tokens": 5,
+        "num_speculative_tokens_per_batch_size": schedule,
+    }
 
 
 @pytest.mark.parametrize(
@@ -315,6 +344,72 @@ def test_matrix_dry_run_uses_model_runner_v1_and_matched_graph_mode() -> None:
     assert "--batch-sizes 1 2" in output
     assert "--temperature 0" in output
     assert "--temperature 1" in output
+
+
+def test_matrix_dry_run_supports_multinode_native_mtp() -> None:
+    output = run_dry(
+        "submit_matrix.sh",
+        CLUSTER="ptyche",
+        VARIANTS="baseline mtp_static mtp_dynamic",
+        TEMPERATURES="1",
+        NODES="2",
+        SEGMENT="2",
+        TP="8",
+        DRAFT_MODEL="",
+        DISTRIBUTED_EXECUTOR_BACKEND="ray",
+        ENABLE_EXPERT_PARALLEL="true",
+    )
+
+    assert output.count("[DRY-RUN] variant=") == 3
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "--ntasks=2" in output
+    assert "/workspace/experiment/run_multinode_ray.sh" in output
+    assert "--distributed-executor-backend 'ray'" in output
+    assert "--enable-expert-parallel" in output
+    assert "--tensor-parallel-size '8'" in output
+    assert "--mode 'mtp_static'" in output
+    assert "--mode 'mtp_dynamic'" in output
+    assert "method=mtp" in output
+    assert "--gres" not in output
+
+
+def test_nemotron_ultra_bf16_mtp_matrix_matches_official_tp8_profile() -> None:
+    output = run_dry(
+        "submit_nemotron_ultra_bf16_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        STATIC_K_VALUES="5",
+        TEMPERATURES="0 1",
+        RUN_ID="ultra-bf16-test",
+    )
+
+    assert output.count("[DRY-RUN] variant=") == 6
+    assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
+    assert "snapshots/624ba927cfbef0427354998700de3d51173c8c04" in output
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "--tensor-parallel-size '8'" in output
+    assert "--distributed-executor-backend 'ray'" in output
+    assert "--enable-expert-parallel" in output
+    assert "--dtype bfloat16" in output
+    assert "--kv-cache-dtype 'fp8'" in output
+    assert "--moe-backend 'flashinfer_trtllm'" in output
+    assert "--cudagraph-mode 'PIECEWISE'" in output
+    assert "--disable-fuse-allreduce-rms" in output
+    assert "--model-loader-num-threads '96'" in output
+    assert "--distributed-timeout-seconds '3600'" in output
+    assert "--mamba-ssm-cache-dtype 'float16'" in output
+    assert "--mamba-backend 'flashinfer'" in output
+    assert "--enable-mamba-cache-stochastic-rounding" in output
+    assert "--mamba-cache-philox-rounds '5'" in output
+    assert "--mode 'mtp_static'" in output
+    assert "--mode 'mtp_dynamic'" in output
+    assert "--static-k '5'" in output
+    assert "--temperature 0" in output
+    assert "--top-p 1.0" in output
+    assert "--temperature 1" in output
+    assert "--top-p 0.95" in output
+    assert "--gres" not in output
 
 
 def test_extended_qwen8_matrix_preserves_legacy_methodology() -> None:

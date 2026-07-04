@@ -38,6 +38,8 @@ STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}"
 TP="${TP:-1}"
 PP="${PP:-1}"
+NODES="${NODES:-1}"
+SEGMENT="${SEGMENT:-${NODES}}"
 DRAFT_TP="${DRAFT_TP:-1}"
 DRAFT_ATTENTION_BACKEND="${DRAFT_ATTENTION_BACKEND:-}"
 ISL="${ISL:-1024}"
@@ -49,6 +51,16 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-}"
 MOE_BACKEND="${MOE_BACKEND:-}"
+DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
+DIST_TIMEOUT_SECONDS="${DIST_TIMEOUT_SECONDS:-}"
+RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-py312}"
+ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-false}"
+MODEL_LOADER_NUM_THREADS="${MODEL_LOADER_NUM_THREADS:-0}"
+DISABLE_FUSE_ALLREDUCE_RMS="${DISABLE_FUSE_ALLREDUCE_RMS:-false}"
+MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-}"
+MAMBA_BACKEND="${MAMBA_BACKEND:-}"
+ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING="${ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING:-false}"
+MAMBA_CACHE_PHILOX_ROUNDS="${MAMBA_CACHE_PHILOX_ROUNDS:-}"
 ENFORCE_EAGER="${ENFORCE_EAGER:-false}"
 DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
 THROUGHPUT_GPU_COUNT="${THROUGHPUT_GPU_COUNT:-}"
@@ -93,8 +105,18 @@ render_sbatch() {
   local moe_arg=""
   local eager_arg=""
   local custom_all_reduce_arg=""
+  local distributed_arg=""
+  local expert_parallel_arg=""
+  local timeout_arg=""
+  local model_loader_arg=""
+  local compilation_arg=""
+  local mamba_ssm_arg=""
+  local mamba_backend_arg=""
+  local mamba_rounding_arg=""
+  local mamba_philox_arg=""
   local throughput_gpu_arg=""
   local prompt_arg=""
+  local runner_prefix=""
   if [[ -n "${ATTENTION_BACKEND}" ]]; then
     attention_arg="--attention-backend '${ATTENTION_BACKEND}'"
   fi
@@ -107,22 +129,52 @@ render_sbatch() {
   if [[ "${DISABLE_CUSTOM_ALL_REDUCE}" == "true" ]]; then
     custom_all_reduce_arg="--disable-custom-all-reduce"
   fi
+  if [[ -n "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
+    distributed_arg="--distributed-executor-backend '${DISTRIBUTED_EXECUTOR_BACKEND}'"
+  fi
+  if [[ "${ENABLE_EXPERT_PARALLEL}" == "true" ]]; then
+    expert_parallel_arg="--enable-expert-parallel"
+  fi
+  if [[ -n "${DIST_TIMEOUT_SECONDS}" ]]; then
+    timeout_arg="--distributed-timeout-seconds '${DIST_TIMEOUT_SECONDS}'"
+  fi
+  if (( MODEL_LOADER_NUM_THREADS > 0 )); then
+    model_loader_arg="--model-loader-num-threads '${MODEL_LOADER_NUM_THREADS}'"
+  fi
+  if [[ "${DISABLE_FUSE_ALLREDUCE_RMS}" == "true" ]]; then
+    compilation_arg="--disable-fuse-allreduce-rms"
+  fi
+  if [[ -n "${MAMBA_SSM_CACHE_DTYPE}" ]]; then
+    mamba_ssm_arg="--mamba-ssm-cache-dtype '${MAMBA_SSM_CACHE_DTYPE}'"
+  fi
+  if [[ -n "${MAMBA_BACKEND}" ]]; then
+    mamba_backend_arg="--mamba-backend '${MAMBA_BACKEND}'"
+  fi
+  if [[ "${ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING}" == "true" ]]; then
+    mamba_rounding_arg="--enable-mamba-cache-stochastic-rounding"
+  fi
+  if [[ -n "${MAMBA_CACHE_PHILOX_ROUNDS}" ]]; then
+    mamba_philox_arg="--mamba-cache-philox-rounds '${MAMBA_CACHE_PHILOX_ROUNDS}'"
+  fi
   if [[ -n "${THROUGHPUT_GPU_COUNT}" ]]; then
     throughput_gpu_arg="--throughput-gpu-count '${THROUGHPUT_GPU_COUNT}'"
   fi
   if [[ -n "${PROMPT_JSONL}" ]]; then
     prompt_arg="--prompt-jsonl '${PROMPT_JSONL}' --prompt-offset '${PROMPT_OFFSET}'"
   fi
+  if (( NODES > 1 )); then
+    runner_prefix="/workspace/experiment/run_multinode_ray.sh"
+  fi
   cat <<EOF
 #!/usr/bin/env bash
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
-#SBATCH --nodes=1
+#SBATCH --nodes=${NODES}
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=0
 #SBATCH --exclusive
-#SBATCH --segment=1
+#SBATCH --segment=${SEGMENT}
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --job-name=coreai_dlalgo_llm-vllm024.${JOB_LABEL}-${variant}-t$(normalize_temperature "${temperature}")
 #SBATCH --output=${run_dir}/slurm-%j.out
@@ -137,6 +189,9 @@ fi
 if [[ -n '${PROMPT_JSONL}' ]]; then
   test -s '${PROMPT_JSONL}'
 fi
+if (( ${NODES} > 1 )); then
+  test -d '${RAY_SITE}/ray'
+fi
 
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
@@ -146,6 +201,9 @@ export HF_HOME='${HF_HOME}'
 export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
 export HF_DATASETS_CACHE='${HF_HOME}/datasets'
 export PYTHONPATH='${EXTRA_PYTHONPATH}'
+if (( ${NODES} > 1 )); then
+  export PYTHONPATH='${RAY_SITE}':"\${PYTHONPATH:-}"
+fi
 export NODE_LOCAL_CACHE_ROOT="/tmp/sna/vllm024_\${SLURM_JOB_ID}_${variant}_t$(normalize_temperature "${temperature}")"
 export XDG_CACHE_HOME="\${NODE_LOCAL_CACHE_ROOT}/xdg"
 export VLLM_CACHE_ROOT="\${NODE_LOCAL_CACHE_ROOT}/vllm"
@@ -160,11 +218,28 @@ echo 'cudagraph_mode=${CUDAGRAPH_MODE}'
 echo 'variant=${variant}'
 echo 'temperature=${temperature}'
 echo 'top_p=${TOP_P}'
+if [[ '${variant}' == 'mtp_static' || '${variant}' == 'mtp_dynamic' ]]; then
+  echo 'method=mtp'
+fi
 if [[ '${variant}' == 'dynamic' ]]; then
   echo 'num_speculative_tokens_per_batch_size=${DYNAMIC_SCHEDULE}'
 fi
+if [[ '${variant}' == 'mtp_dynamic' ]]; then
+  echo 'num_speculative_tokens_per_batch_size=${DYNAMIC_SCHEDULE}'
+fi
+echo 'nodes=${NODES}'
+echo 'target_tp=${TP}'
 
-srun --ntasks=1 \\
+if (( ${NODES} > 1 )); then
+  export HEAD_NODE="\$(scontrol show hostnames "\${SLURM_JOB_NODELIST}" | head -n 1)"
+  export HEAD_IP="\$(srun --nodes=1 --ntasks=1 --nodelist="\${HEAD_NODE}" hostname -I | awk '{print \$1}')"
+  export RAY_PORT="\$((20000 + SLURM_JOB_ID % 10000))"
+  export RAY_SYNC_DIR='${run_dir}/ray-sync'
+  export GPUS_PER_NODE=4
+  rm -rf "\${RAY_SYNC_DIR}"
+fi
+
+srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
   --container-image='${CONTAINER_IMAGE}' \\
   --container-mounts='/lustre:/lustre,${SCRIPT_DIR}:/workspace/experiment' \\
   --no-container-mount-home \\
@@ -175,8 +250,11 @@ export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 export CUDA_MODULE_LOADING=LAZY
 export PYTHONPATH='${EXTRA_PYTHONPATH}'
+if (( ${NODES} > 1 )); then
+  export PYTHONPATH='${RAY_SITE}':"\${PYTHONPATH:-}"
+fi
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
-python3 /workspace/experiment/benchmark.py \\
+${runner_prefix} python3 /workspace/experiment/benchmark.py \\
   --model '${MODEL}' \\
   --draft-model '${DRAFT_MODEL}' \\
   --mode '${variant}' \\
@@ -208,6 +286,15 @@ python3 /workspace/experiment/benchmark.py \\
   ${moe_arg} \\
   ${eager_arg} \\
   ${custom_all_reduce_arg} \\
+  ${distributed_arg} \\
+  ${expert_parallel_arg} \\
+  ${timeout_arg} \\
+  ${model_loader_arg} \\
+  ${compilation_arg} \\
+  ${mamba_ssm_arg} \\
+  ${mamba_backend_arg} \\
+  ${mamba_rounding_arg} \\
+  ${mamba_philox_arg} \\
   ${throughput_gpu_arg} \\
   ${prompt_arg} \\
   --output '${output_json}' \\
@@ -232,7 +319,7 @@ fi
 for temperature in ${TEMPERATURES}; do
   for variant in ${VARIANTS}; do
     case "${variant}" in
-      baseline|static|dynamic|suffix|pard|pard2|dflash) ;;
+      baseline|static|dynamic|mtp_static|mtp_dynamic|suffix|pard|pard2|dflash) ;;
       *)
         echo "Unsupported variant: ${variant}" >&2
         exit 2

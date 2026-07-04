@@ -19,6 +19,8 @@ Mode = Literal[
     "baseline",
     "static",
     "dynamic",
+    "mtp_static",
+    "mtp_dynamic",
     "suffix",
     "pard",
     "pard2",
@@ -76,7 +78,7 @@ def build_speculative_config(
     if mode == "baseline":
         return None
     global_k = static_k
-    if mode == "dynamic":
+    if mode in ("dynamic", "mtp_dynamic"):
         global_k = max(row[2] for row in dynamic_schedule)
     if global_k <= 0:
         raise ValueError("the global speculative-token count must be > 0")
@@ -89,6 +91,14 @@ def build_speculative_config(
             "suffix_decoding_max_spec_factor": suffix_max_spec_factor,
             "suffix_decoding_min_token_prob": suffix_min_token_prob,
         }
+    if mode in ("mtp_static", "mtp_dynamic"):
+        config = {
+            "method": "mtp",
+            "num_speculative_tokens": global_k,
+        }
+        if mode == "mtp_dynamic":
+            config["num_speculative_tokens_per_batch_size"] = dynamic_schedule
+        return config
     if not draft_model:
         raise ValueError(f"mode={mode!r} requires --draft-model")
     if mode in ("pard", "pard2"):
@@ -382,6 +392,8 @@ def build_parser() -> argparse.ArgumentParser:
             "baseline",
             "static",
             "dynamic",
+            "mtp_static",
+            "mtp_dynamic",
             "suffix",
             "pard",
             "pard2",
@@ -399,6 +411,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--pipeline-parallel-size", type=int, default=1)
     parser.add_argument("--distributed-executor-backend", default="")
+    parser.add_argument("--distributed-timeout-seconds", type=int)
+    parser.add_argument("--enable-expert-parallel", action="store_true")
+    parser.add_argument("--model-loader-num-threads", type=int, default=0)
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--kv-cache-dtype", default="auto")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
@@ -407,6 +422,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attention-backend", default="")
     parser.add_argument("--moe-backend", default="")
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
+    parser.add_argument("--disable-fuse-allreduce-rms", action="store_true")
+    parser.add_argument("--mamba-ssm-cache-dtype", default="")
+    parser.add_argument("--mamba-backend", default="")
+    parser.add_argument(
+        "--enable-mamba-cache-stochastic-rounding", action="store_true"
+    )
+    parser.add_argument("--mamba-cache-philox-rounds", type=int)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--enable-prefix-caching", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-chunked-prefill", action=argparse.BooleanOptionalAction, default=True)
@@ -445,6 +467,12 @@ def main() -> None:
 
     from vllm import LLM, SamplingParams  # pyright: ignore[reportMissingImports]
 
+    compilation_config: dict[str, Any] = {
+        "cudagraph_mode": args.cudagraph_mode,
+    }
+    if args.disable_fuse_allreduce_rms:
+        compilation_config["pass_config"] = {"fuse_allreduce_rms": False}
+
     llm_kwargs: dict[str, Any] = {
         "model": args.model,
         "tensor_parallel_size": args.tensor_parallel_size,
@@ -459,15 +487,31 @@ def main() -> None:
         "enable_prefix_caching": args.enable_prefix_caching,
         "enable_chunked_prefill": args.enable_chunked_prefill,
         "disable_custom_all_reduce": args.disable_custom_all_reduce,
+        "enable_expert_parallel": args.enable_expert_parallel,
         "enforce_eager": args.enforce_eager,
         "seed": args.seed,
         "disable_log_stats": False,
-        "compilation_config": {"cudagraph_mode": args.cudagraph_mode},
+        "compilation_config": compilation_config,
     }
     if speculative_config is not None:
         llm_kwargs["speculative_config"] = copy.deepcopy(speculative_config)
     if args.distributed_executor_backend:
         llm_kwargs["distributed_executor_backend"] = args.distributed_executor_backend
+    if args.distributed_timeout_seconds is not None:
+        llm_kwargs["distributed_timeout_seconds"] = args.distributed_timeout_seconds
+    if args.model_loader_num_threads > 0:
+        llm_kwargs["model_loader_extra_config"] = {
+            "enable_multithread_load": True,
+            "num_threads": args.model_loader_num_threads,
+        }
+    if args.mamba_ssm_cache_dtype:
+        llm_kwargs["mamba_ssm_cache_dtype"] = args.mamba_ssm_cache_dtype
+    if args.mamba_backend:
+        llm_kwargs["mamba_backend"] = args.mamba_backend
+    if args.enable_mamba_cache_stochastic_rounding:
+        llm_kwargs["enable_mamba_cache_stochastic_rounding"] = True
+    if args.mamba_cache_philox_rounds is not None:
+        llm_kwargs["mamba_cache_philox_rounds"] = args.mamba_cache_philox_rounds
     if args.attention_backend:
         llm_kwargs["attention_backend"] = args.attention_backend
     if args.moe_backend:
@@ -519,9 +563,21 @@ def main() -> None:
             "enable_prefix_caching": args.enable_prefix_caching,
             "enable_chunked_prefill": args.enable_chunked_prefill,
             "disable_custom_all_reduce": args.disable_custom_all_reduce,
+            "enable_expert_parallel": args.enable_expert_parallel,
+            "distributed_timeout_seconds": args.distributed_timeout_seconds,
+            "model_loader_extra_config": llm_kwargs.get(
+                "model_loader_extra_config"
+            ),
             "attention_backend": args.attention_backend or "auto",
             "moe_backend": args.moe_backend or "auto",
             "cudagraph_mode": args.cudagraph_mode,
+            "compilation_config": compilation_config,
+            "mamba_ssm_cache_dtype": args.mamba_ssm_cache_dtype or "auto",
+            "mamba_backend": args.mamba_backend or "auto",
+            "enable_mamba_cache_stochastic_rounding": (
+                args.enable_mamba_cache_stochastic_rounding
+            ),
+            "mamba_cache_philox_rounds": args.mamba_cache_philox_rounds,
             "enforce_eager": args.enforce_eager,
             "isl": args.isl,
             "osl": args.osl,
@@ -599,9 +655,9 @@ def main() -> None:
             [row["spec_decode_metrics"] for row in repeats]
         )
         expected_k = 0
-        if args.mode in ("static", "pard", "pard2", "dflash"):
+        if args.mode in ("static", "mtp_static", "pard", "pard2", "dflash"):
             expected_k = args.static_k
-        elif args.mode == "dynamic":
+        elif args.mode in ("dynamic", "mtp_dynamic"):
             expected_k = dynamic_k_for_batch_size(dynamic_schedule, batch_size)
         if expected_k > 0 and (
             not metrics.get("metrics_available") or not metrics.get("active")
