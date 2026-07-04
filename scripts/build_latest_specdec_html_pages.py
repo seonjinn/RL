@@ -12,9 +12,17 @@ from pathlib import Path
 
 import pandas as pd
 
+from vllm024_dflare_report import (
+    load_completed_dflare_results,
+    match_dflare_baselines,
+    render_dflare_section,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
+DFLARE_RESULT_ROOT = ROOT / "experiments/vllm_024_dynamicsd/report"
+DFLARE_COMPLETED_OUT = DFLARE_RESULT_ROOT / "dflare_completed_latest.csv"
 
 MAIN_VLLM = DOCS / "vllm_standalone_all_batches_combined_20260619.csv"
 VLLM_LIVE_SOURCES = [
@@ -1632,7 +1640,11 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
     return "<table><thead><tr>" + head + "</tr></thead><tbody>" + "\n".join(body) + "</tbody></table>"
 
 
-def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
+def build_vllm_html(
+    main: pd.DataFrame,
+    added: pd.DataFrame,
+    dflare_rows: pd.DataFrame,
+) -> str:
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     added_summary = aggregate_added(added)
     main_matrix = pd.read_csv(DOCS / "vllm_standalone_all_batches_combined_matrix_20260619.csv")
@@ -1690,6 +1702,7 @@ def build_vllm_html(main: pd.DataFrame, added: pd.DataFrame) -> str:
         "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
         related_vllm_reports_section(),
         "<section class=\"section\"><h2>Key Findings</h2><p>" + esc(key_finding) + "</p><p class=\"note\">Speedups are computed only when a matched baseline exists with the same domain, model, temperature, batch size, ISL and OSL.</p></section>",
+        render_dflare_section(dflare_rows),
         charts_section(added),
         temp_trends_section(),
         "<section class=\"section\"><h2>PARD / PARD-2 K=16 Focus</h2><div class=\"table-wrap\">",
@@ -2603,7 +2616,11 @@ def main() -> None:
     main_vllm = pd.read_csv(MAIN_VLLM)
     added = load_vllm_added(main_vllm)
     added.to_csv(VLLM_ADDED_OUT, index=False)
-    vllm_html = build_vllm_html(main_vllm, added)
+    dflare_rows = match_dflare_baselines(
+        load_completed_dflare_results(DFLARE_RESULT_ROOT.glob("**/result.json"))
+    )
+    dflare_rows.to_csv(DFLARE_COMPLETED_OUT, index=False)
+    vllm_html = build_vllm_html(main_vllm, added, dflare_rows)
     VLLM_HTML_DATED.write_text(vllm_html, encoding="utf-8")
     shutil.copyfile(VLLM_HTML_DATED, VLLM_HTML_LATEST)
 
@@ -2616,6 +2633,7 @@ def main() -> None:
     shutil.copyfile(NEMORL_HTML_DATED, NEMORL_HTML)
 
     print(VLLM_ADDED_OUT)
+    print(DFLARE_COMPLETED_OUT)
     print(VLLM_HTML_LATEST)
     print(NEMORL_OUT)
     print(NEMORL_COMBINED_OUT)

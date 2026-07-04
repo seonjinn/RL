@@ -6,9 +6,12 @@ import math
 from pathlib import Path
 from types import ModuleType
 
+import pandas as pd
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/vllm024_dflare_report.py"
+BUILDER_PATH = ROOT / "scripts/build_latest_specdec_html_pages.py"
 
 
 def load_module() -> ModuleType:
@@ -28,6 +31,7 @@ def write_result(
     osl: int = 65_536,
     temperature: float = 0.0,
     include_baseline: bool = False,
+    dataset: str = "math500",
 ) -> Path:
     results: dict[str, object] = {
         "samples": 4,
@@ -58,7 +62,7 @@ def write_result(
                 else "/models/yarn4/qwen3-8b-dflare"
             ),
             "draft_arch": "dflare",
-            "dataset": "math500",
+            "dataset": dataset,
             "max_samples": 4,
             "input_length": 4096,
             "max_new_tokens": osl,
@@ -139,3 +143,74 @@ def test_paired_result_preserves_exact_angelslim_speedup(tmp_path: Path) -> None
     assert row["context_profile"] == "Native 32K"
     assert row["speedup"] == 2.0
     assert row["speedup_label"] == "2.00x"
+
+
+def test_render_groups_context_profiles_and_required_columns(tmp_path: Path) -> None:
+    module = load_module()
+    paths = [
+        write_result(
+            tmp_path / "32k/math/job-2271128/result.json",
+            run_mode="both",
+            osl=32_768,
+            include_baseline=True,
+        ),
+        write_result(tmp_path / "64k/math/job-2271721/result.json", osl=65_536),
+        write_result(
+            tmp_path / "128k/swe/job-2271728/result.json",
+            osl=126_976,
+            temperature=1.0,
+            dataset="swe_verified",
+        ),
+    ]
+    rows = module.match_dflare_baselines(
+        module.load_completed_dflare_results(paths)
+    )
+
+    rendered = module.render_dflare_section(rows)
+
+    assert "Native 32K" in rendered
+    assert "YaRN 64K" in rendered
+    assert "YaRN total-128K" in rendered
+    for heading in [
+        "Domain",
+        "Temperature",
+        "ISL",
+        "OSL",
+        "Batch",
+        "Method / K",
+        "tok/s/GPU",
+        "Speedup",
+        "Acceptance",
+        "Mean accept length",
+        "Job ID",
+    ]:
+        assert heading in rendered
+    assert "2271128" in rendered
+    assert "2271721" in rendered
+    assert "2271728" in rendered
+    assert "waiting matched baseline" in rendered
+
+
+def test_render_does_not_show_incomplete_rows(tmp_path: Path) -> None:
+    module = load_module()
+    complete = write_result(tmp_path / "64k/math/job-2271721/result.json")
+    rows = module.load_completed_dflare_results([complete])
+    running = rows.iloc[0].copy()
+    running["status"] = "running"
+    running["job_id"] = "2271999"
+
+    rendered = module.render_dflare_section(
+        pd.concat([rows, running.to_frame().T], ignore_index=True)
+    )
+
+    assert "2271721" in rendered
+    assert "2271999" not in rendered
+
+
+def test_existing_standalone_builder_includes_dflare_section() -> None:
+    source = BUILDER_PATH.read_text(encoding="utf-8")
+
+    assert "load_completed_dflare_results" in source
+    assert "match_dflare_baselines" in source
+    assert "render_dflare_section" in source
+    assert "dflare_completed_latest.csv" in source

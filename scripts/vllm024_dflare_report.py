@@ -7,6 +7,7 @@ import json
 import math
 import re
 from collections.abc import Iterable
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,8 @@ CANONICAL_COLUMNS = [
     "job_id",
     "source",
 ]
+
+PROFILE_ORDER = ["Native 32K", "YaRN 64K", "YaRN total-128K"]
 
 
 def _domain(dataset: object) -> str:
@@ -148,3 +151,78 @@ def match_dflare_baselines(rows: pd.DataFrame) -> pd.DataFrame:
         lambda value: f"{value:.2f}x" if pd.notna(value) else "waiting matched baseline"
     )
     return matched
+
+
+def _fmt_number(value: object, digits: int = 2) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    return f"{number:.{digits}f}" if math.isfinite(number) else "n/a"
+
+
+def _profile_table(rows: pd.DataFrame, profile: str) -> str:
+    profile_rows = rows.loc[rows["context_profile"].eq(profile)].copy()
+    if profile_rows.empty:
+        return ""
+    profile_rows = profile_rows.sort_values(
+        ["domain", "temperature", "method", "batch_size", "job_id"],
+        kind="stable",
+    )
+    body: list[str] = []
+    for row in profile_rows.itertuples(index=False):
+        cells = [
+            escape(str(row.domain)),
+            f'<span class="num">{_fmt_number(row.temperature, 1)}</span>',
+            f'<span class="num">{int(row.isl):,}</span>',
+            f'<span class="num">{int(row.osl):,}</span>',
+            f'<span class="num">{int(row.batch_size)}</span>',
+            escape(str(row.method)),
+            f'<span class="num">{_fmt_number(row.tok_s_gpu)}</span>',
+            escape(str(row.speedup_label)),
+            f'<span class="num">{_fmt_number(float(row.acceptance_rate) * 100)}%</span>',
+            f'<span class="num">{_fmt_number(row.mean_accept_len)}</span>',
+            escape(str(row.job_id or "n/a")),
+        ]
+        body.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
+    headings = [
+        "Domain",
+        "Temperature",
+        "ISL",
+        "OSL",
+        "Batch",
+        "Method / K",
+        "tok/s/GPU",
+        "Speedup",
+        "Acceptance",
+        "Mean accept length",
+        "Job ID",
+    ]
+    header = "".join(f"<th>{escape(heading)}</th>" for heading in headings)
+    return (
+        f"<h3>{escape(profile)}</h3>"
+        '<div class="table-wrap"><table>'
+        f"<thead><tr>{header}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table></div>"
+    )
+
+
+def render_dflare_section(rows: pd.DataFrame) -> str:
+    if rows.empty:
+        return ""
+    completed = rows.loc[rows["status"].eq("complete")].copy()
+    if completed.empty:
+        return ""
+    tables = "".join(_profile_table(completed, profile) for profile in PROFILE_ORDER)
+    if not tables:
+        return ""
+    return (
+        '<section class="section" id="vllm024-dflare">'
+        "<h2>vLLM 0.24 / DFlare Completed Results</h2>"
+        '<p class="note">Qwen3-8B on Lyris GB200; AngelSlim Transformers-native runtime, '
+        "temperature 0/1, top-p 1.0, and DFlare K16. FlashAttention is unavailable, "
+        "so these runs use PyTorch SDPA. Speedup is reported only for an exact "
+        "AngelSlim baseline; spec-only rows remain waiting matched baseline.</p>"
+        f"{tables}</section>"
+    )
