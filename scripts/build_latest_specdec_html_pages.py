@@ -151,6 +151,8 @@ NEMORL_JULY_SOURCES = [
         "config_segment_size": 4,
         "attention_backend": "TRITON_ATTN",
         "moe_backend": "triton",
+        "max_num_seqs": 64,
+        "max_num_batched_tokens": 32768,
         "fuse_allreduce_rms": False,
     },
     {
@@ -2468,16 +2470,27 @@ def normalize_nemorl_result_state(
 ) -> str:
     state_text = text_value(state).lower()
     notes_text = text_value(notes).lower()
-    evidence = f"{state_text} {notes_text}"
-    if "held" in evidence:
-        return "held"
-    if "partial" in evidence or ("timeout" in evidence and clean_float(completed_steps) > 0):
-        return "partial"
-    if any(token in evidence for token in ["fail", "error", "cancel", "oom"]):
-        return "failed"
-    if "complete" in state_text:
-        return "completed"
     completed = clean_float(completed_steps)
+    if state_text:
+        if "held" in state_text:
+            return "held"
+        if "partial" in state_text:
+            return "partial"
+        if "timeout" in state_text:
+            return "partial" if not math.isnan(completed) and completed > 0 else "failed"
+        if any(token in state_text for token in ["fail", "error", "cancel", "oom"]):
+            return "failed"
+        if "complete" in state_text:
+            return "completed"
+        if state_text in {"pending", "submitted", "running"}:
+            return state_text
+
+    if "held" in notes_text:
+        return "held"
+    if "partial" in notes_text or ("timeout" in notes_text and not math.isnan(completed) and completed > 0):
+        return "partial"
+    if any(token in notes_text for token in ["fail", "error", "cancel", "oom"]):
+        return "failed"
     maximum = clean_float(max_steps)
     if not math.isnan(completed) and not math.isnan(maximum) and completed >= maximum - 1:
         return "completed"
@@ -2592,6 +2605,18 @@ def load_july_nemorl_results(
             wandb_url = normalize_wandb_url(row.get("wandb_url", ""))
             cohort = first_text(row, "cohort") or str(source.get("cohort", "standard"))
             baseline_job_id = first_text(row, "baseline_job_id", "matched_baseline_job_id")
+            source_speedups = [
+                first_float(row, "e2e_step_time_speedup"),
+                first_float(row, "e2e_throughput_speedup"),
+                first_float(row, "generation_time_speedup"),
+                first_float(row, "generation_throughput_speedup"),
+            ]
+            if method_k == "baseline":
+                baseline_match_state = "baseline"
+            elif any(not math.isnan(value) for value in source_speedups):
+                baseline_match_state = "precomputed"
+            else:
+                baseline_match_state = "unmatched_baseline"
             normalized.append(
                 {
                     "job_id": text_value(row.get("job_id")),
@@ -2621,7 +2646,8 @@ def load_july_nemorl_results(
                     "raw_state": raw_state,
                     "result_state": result_state,
                     "metric_state": result_state,
-                    "baseline_match_state": "unmatched_baseline",
+                    "baseline_match_state": baseline_match_state,
+                    "strict_match_eligible": True,
                     "completed_steps": completed_steps,
                     "last_step": last_step,
                     "completed_step_span": span,
@@ -2701,6 +2727,19 @@ def load_july_nemorl_results(
     return rows
 
 
+def nemorl_baseline_is_usable(row: pd.Series) -> bool:
+    if text_value(row.get("result_state")).lower() != "completed":
+        return False
+    required = [
+        clean_float(row.get("generation_worker_tokens_per_sec_per_gpu_mean")),
+        clean_float(row.get("e2e_tokens_per_sec_per_gpu_mean")),
+        clean_float(row.get("total_step_time_s_mean")),
+    ]
+    if text_value(row.get("mode")).lower() != "async-1off":
+        required.append(clean_float(row.get("generation_time_s_mean")))
+    return all(not math.isnan(value) and value > 0 for value in required)
+
+
 def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
     if rows.empty:
         return rows
@@ -2729,7 +2768,18 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
         rows[col] = pd.to_numeric(rows[col], errors="coerce")
     if "result_state" not in rows:
         rows["result_state"] = "unknown"
-    rows["baseline_match_state"] = "unmatched_baseline"
+    if "baseline_match_state" not in rows:
+        rows["baseline_match_state"] = ""
+    existing_match_state = rows["baseline_match_state"].map(text_value)
+    fallback_match_state = pd.Series("unmatched_baseline", index=rows.index, dtype=object)
+    baseline_mask = rows["method_k"].astype(str).eq("baseline")
+    precomputed_mask = rows[speedup_cols].notna().any(axis=1)
+    fallback_match_state.loc[baseline_mask] = "baseline"
+    fallback_match_state.loc[~baseline_mask & precomputed_mask] = "precomputed"
+    rows["baseline_match_state"] = existing_match_state.where(
+        existing_match_state.ne(""),
+        fallback_match_state,
+    )
 
     string_match_cols = [
         "model_name",
@@ -2762,6 +2812,20 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
         rows["fuse_allreduce_rms"] = ""
     rows["_match_fuse_allreduce_rms"] = rows["fuse_allreduce_rms"].map(optional_bool).map(str)
     rows["_match_cuda_graph"] = rows.apply(nemorl_cuda_graph_label, axis=1)
+    if "strict_match_eligible" not in rows:
+        rows["strict_match_eligible"] = False
+    rows["_strict_declared"] = rows["strict_match_eligible"].map(
+        lambda value: optional_bool(value) is True
+    )
+
+    strict_complete = rows["_comparison_group"].map(text_value).ne("")
+    for col in string_match_cols:
+        strict_complete &= rows[f"_match_{col}"].ne("")
+    for col in numeric_match_cols:
+        strict_complete &= rows[f"_match_{col}"].notna()
+    strict_complete &= rows["_match_cuda_graph"].ne("CG-unknown")
+    strict_complete &= rows["_match_fuse_allreduce_rms"].ne("")
+    rows["strict_match_ready"] = rows["_strict_declared"] & strict_complete
 
     group_cols = [
         "_comparison_group",
@@ -2783,22 +2847,29 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
         "_match_config_segment_size",
         "_match_fuse_allreduce_rms",
     ]
-    for _, idx in rows.groupby(group_cols, dropna=False).groups.items():
+    strict_rows = rows[rows["strict_match_ready"]]
+    for _, idx in strict_rows.groupby(group_cols, dropna=False).groups.items():
         sub = rows.loc[list(idx)]
-        base = sub[sub["method_k"].astype(str) == "baseline"]
-        if base.empty:
-            rows.loc[list(idx), speedup_cols] = math.nan
-            continue
-        base = base.copy()
-        base["_completed_sort"] = (
-            pd.to_numeric(base["completed_steps"], errors="coerce").fillna(0)
-            if "completed_steps" in base
-            else 0
-        )
-        base = base.sort_values("_completed_sort", ascending=False).iloc[0]
         baseline_indices = sub[sub["method_k"].astype(str) == "baseline"].index
         spec_indices = sub[sub["method_k"].astype(str) != "baseline"].index
-        rows.loc[baseline_indices, "baseline_match_state"] = "baseline"
+        if baseline_indices.empty:
+            rows.loc[spec_indices, speedup_cols] = math.nan
+            rows.loc[spec_indices, "baseline_match_state"] = "unmatched_baseline"
+            continue
+        baselines = sub.loc[baseline_indices].copy()
+        usable_baselines = baselines[baselines.apply(nemorl_baseline_is_usable, axis=1)].copy()
+        rows.loc[baseline_indices, "baseline_match_state"] = "unusable_baseline"
+        if usable_baselines.empty:
+            rows.loc[spec_indices, speedup_cols] = math.nan
+            rows.loc[spec_indices, "baseline_match_state"] = "unmatched_baseline"
+            continue
+        usable_baselines["_completed_sort"] = (
+            pd.to_numeric(usable_baselines["completed_steps"], errors="coerce").fillna(0)
+            if "completed_steps" in usable_baselines
+            else 0
+        )
+        base = usable_baselines.sort_values("_completed_sort", ascending=False).iloc[0]
+        rows.loc[usable_baselines.index, "baseline_match_state"] = "baseline"
         rows.loc[spec_indices, "baseline_match_state"] = "matched"
         base_gen = clean_float(base.get("generation_worker_tokens_per_sec_per_gpu_mean"))
         base_e2e = clean_float(base.get("e2e_tokens_per_sec_per_gpu_mean"))
@@ -2817,8 +2888,128 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
                 rows.at[row_idx, "generation_time_speedup"] = base_gen_time / gen_time
             if not math.isnan(base_step_time) and not math.isnan(step_time) and step_time and math.isnan(clean_float(rows.at[row_idx, "e2e_step_time_speedup"])):
                 rows.at[row_idx, "e2e_step_time_speedup"] = base_step_time / step_time
-    temporary_cols = ["_comparison_group", *[col for col in rows.columns if col.startswith("_match_")]]
+    temporary_cols = [
+        "_comparison_group",
+        "_strict_declared",
+        *[col for col in rows.columns if col.startswith("_match_")],
+    ]
     return rows.drop(columns=temporary_cols, errors="ignore")
+
+
+def deduplicate_nemorl_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty:
+        return rows
+    rows = rows.copy()
+    defaults: dict[str, object] = {
+        "job_id": "",
+        "method_k": "",
+        "source_group": "",
+        "source_priority": 999,
+        "completed_steps": 0,
+        "result_state": "unknown",
+        "gen_tps_speedup": math.nan,
+        "manifest": "",
+        "notes": "",
+    }
+    for col, default in defaults.items():
+        if col not in rows:
+            rows[col] = default
+    rows["has_speedup_metric"] = pd.to_numeric(rows["gen_tps_speedup"], errors="coerce").notna()
+    rows["completed_steps_numeric"] = pd.to_numeric(rows["completed_steps"], errors="coerce").fillna(0)
+    rows["source_priority_numeric"] = pd.to_numeric(rows["source_priority"], errors="coerce").fillna(999)
+    rows["job_id_text"] = rows["job_id"].astype(str)
+    rows["method_k_text"] = rows["method_k"].astype(str)
+    rows["has_job_key"] = rows["job_id_text"].str.strip().ne("") & rows["job_id_text"].str.lower().ne("nan")
+
+    def dedup_result_state(row: pd.Series) -> str:
+        existing = text_value(row.get("result_state")).lower()
+        if existing and existing != "unknown":
+            return existing
+        return normalize_nemorl_result_state(
+            row.get("slurm_state"),
+            row.get("completed_steps"),
+            row.get("max_steps"),
+            row.get("notes"),
+        )
+
+    rows["result_state"] = rows.apply(dedup_result_state, axis=1)
+    state_rank = {
+        "completed": 0,
+        "partial": 1,
+        "running": 2,
+        "pending": 3,
+        "submitted": 3,
+        "failed": 4,
+        "held": 5,
+        "unknown": 6,
+    }
+    rows["result_state_rank"] = rows["result_state"].map(
+        lambda value: state_rank.get(text_value(value).lower(), 6)
+    )
+
+    def joined_alternates(values: pd.Series) -> str:
+        unique = list(dict.fromkeys(text_value(value) for value in values if text_value(value)))
+        return " | ".join(unique) if len(unique) > 1 else ""
+
+    rows["alternate_source_groups"] = ""
+    rows["alternate_manifests"] = ""
+    if rows["has_job_key"].any():
+        keyed = rows[rows["has_job_key"]]
+        alt_sources = keyed.groupby(["job_id_text", "method_k_text"])["source_group"].apply(joined_alternates)
+        alt_manifests = keyed.groupby(["job_id_text", "method_k_text"])["manifest"].apply(joined_alternates)
+
+        def add_provenance(row: pd.Series) -> pd.Series:
+            key = (str(row.get("job_id_text", "")), str(row.get("method_k_text", "")))
+            source_provenance = text_value(alt_sources.get(key, ""))
+            manifest_provenance = text_value(alt_manifests.get(key, ""))
+            row["alternate_source_groups"] = source_provenance
+            row["alternate_manifests"] = manifest_provenance
+            notes = text_value(row.get("notes"))
+            additions = []
+            if source_provenance:
+                additions.append(f"alternate source groups: {source_provenance}")
+            if manifest_provenance:
+                additions.append(f"alternate manifests: {manifest_provenance}")
+            if additions:
+                provenance_note = "; ".join(additions)
+                row["notes"] = f"{notes}; {provenance_note}" if notes else provenance_note
+            return row
+
+        rows.loc[rows["has_job_key"]] = rows.loc[rows["has_job_key"]].apply(add_provenance, axis=1)
+
+    rows = rows.sort_values(
+        [
+            "job_id_text",
+            "method_k_text",
+            "result_state_rank",
+            "source_priority_numeric",
+            "completed_steps_numeric",
+            "has_speedup_metric",
+        ],
+        ascending=[True, True, True, True, False, False],
+        na_position="last",
+    )
+    rows_with_job = rows[rows["has_job_key"]].drop_duplicates(
+        subset=["job_id_text", "method_k_text"],
+        keep="first",
+    )
+    rows_without_job = rows[~rows["has_job_key"]].drop_duplicates(
+        subset=["source_group", "job_id", "method_k"],
+        keep="first",
+    )
+    rows = pd.concat([rows_with_job, rows_without_job], ignore_index=True, sort=False)
+    return rows.drop(
+        columns=[
+            "has_speedup_metric",
+            "completed_steps_numeric",
+            "source_priority_numeric",
+            "job_id_text",
+            "method_k_text",
+            "has_job_key",
+            "result_state_rank",
+        ],
+        errors="ignore",
+    )
 
 
 def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
@@ -2845,38 +3036,7 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
     disabled_mask = rows["job_id"].astype(str).isin(NEMORL_CONFIRMED_WANDB_DISABLED_JOBS)
     rows.loc[disabled_mask, "wandb_enabled"] = "false"
     rows = fill_nemorl_speedups(rows)
-    rows["has_speedup_metric"] = pd.to_numeric(rows.get("gen_tps_speedup"), errors="coerce").notna()
-    rows["completed_steps_numeric"] = pd.to_numeric(rows.get("completed_steps"), errors="coerce").fillna(0)
-    rows["source_priority_numeric"] = pd.to_numeric(rows.get("source_priority"), errors="coerce").fillna(999)
-    rows["job_id_text"] = rows.get("job_id", "").astype(str)
-    rows["method_k_text"] = rows.get("method_k", "").astype(str)
-    rows["has_job_key"] = rows["job_id_text"].str.strip().ne("") & rows["job_id_text"].str.lower().ne("nan")
-    if rows["has_job_key"].any():
-        alt_sources = (
-            rows[rows["has_job_key"]]
-            .groupby(["job_id_text", "method_k_text"])["source_group"]
-            .apply(lambda values: " | ".join(dict.fromkeys(str(v) for v in values if str(v) and str(v) != "nan")))
-        )
-        duplicate_keys = alt_sources[alt_sources.str.contains(r"\|", regex=True)]
-        if not duplicate_keys.empty:
-            def add_alt_note(row: pd.Series) -> str:
-                key = (str(row.get("job_id_text", "")), str(row.get("method_k_text", "")))
-                alt = duplicate_keys.get(key, "")
-                existing = text_value(row.get("notes", ""))
-                if not alt:
-                    return existing
-                note = f"alternate source groups: {alt}"
-                return f"{existing}; {note}" if existing else note
-
-            rows.loc[rows["has_job_key"], "notes"] = rows.loc[rows["has_job_key"]].apply(add_alt_note, axis=1)
-    rows = rows.sort_values(
-        ["job_id_text", "method_k_text", "has_speedup_metric", "completed_steps_numeric", "source_priority_numeric"],
-        ascending=[True, True, False, False, True],
-        na_position="last",
-    )
-    rows_with_job = rows[rows["has_job_key"]].drop_duplicates(subset=["job_id_text", "method_k_text"], keep="first")
-    rows_without_job = rows[~rows["has_job_key"]].drop_duplicates(subset=["source_group", "job_id", "method_k"], keep="first")
-    rows = pd.concat([rows_with_job, rows_without_job], ignore_index=True, sort=False)
+    rows = deduplicate_nemorl_rows(rows)
     rows = rows.sort_values(
         [
             "source_priority",
@@ -2891,17 +3051,7 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
     )
     rows["metric_window"] = rows.apply(nemorl_metric_window, axis=1)
     rows["cuda_graph_state"] = rows.apply(nemorl_cuda_graph_label, axis=1)
-    return rows.drop(
-        columns=[
-            "has_speedup_metric",
-            "completed_steps_numeric",
-            "source_priority_numeric",
-            "job_id_text",
-            "method_k_text",
-            "has_job_key",
-        ],
-        errors="ignore",
-    )
+    return rows
 
 
 def nemorl_live_k_sweep_rows(rows: pd.DataFrame) -> pd.DataFrame:

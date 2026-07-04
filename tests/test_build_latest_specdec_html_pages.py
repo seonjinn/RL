@@ -43,6 +43,7 @@ class NemoRlReportTest(unittest.TestCase):
                 "generation_kl_error_mean",
                 "result_state",
                 "metric_state",
+                "strict_match_eligible",
             }.issubset(rows.columns)
         )
 
@@ -79,17 +80,18 @@ class NemoRlReportTest(unittest.TestCase):
         self.assertEqual(qwen32_async_pard["draft_tensor_parallel_size"], 1)
 
     def test_normalizes_failed_held_and_partial_states_without_collapsing_them(self) -> None:
-        cases = {
-            "COMPLETED": "completed",
-            "TIMEOUT_PARTIAL": "partial",
-            "FAILED_STEP2": "failed",
-            "HELD": "held",
-        }
+        cases = [
+            ("COMPLETED", 19, "Partial peers timed out.", "completed"),
+            ("TIMEOUT_PARTIAL", 2, "", "partial"),
+            ("TIMEOUT", 0, "", "failed"),
+            ("FAILED_STEP2", 2, "A completed peer exists.", "failed"),
+            ("HELD", 0, "A completed peer exists.", "held"),
+        ]
 
-        for raw_state, expected in cases.items():
+        for raw_state, completed_steps, notes, expected in cases:
             with self.subTest(raw_state=raw_state):
                 self.assertEqual(
-                    report.normalize_nemorl_result_state(raw_state, 2, 20, ""),
+                    report.normalize_nemorl_result_state(raw_state, completed_steps, 20, notes),
                     expected,
                 )
 
@@ -102,6 +104,8 @@ class NemoRlReportTest(unittest.TestCase):
         self.assertEqual(rows.at["2262236", "baseline_match_state"], "unmatched_baseline")
         self.assertTrue(pd.isna(rows.at["2262236", "gen_tps_speedup"]))
         self.assertEqual(rows.at["2258657", "baseline_match_state"], "unmatched_baseline")
+        self.assertEqual(rows.at["2319104", "baseline_match_state"], "precomputed")
+        self.assertEqual(rows.at["2319104", "gen_tps_speedup"], 0.7038)
 
     def test_strict_baseline_key_isolates_mismatched_july_setups(self) -> None:
         common = {
@@ -119,8 +123,13 @@ class NemoRlReportTest(unittest.TestCase):
             "attention_backend": "TRITON_ATTN",
             "moe_backend": "triton",
             "target_tensor_parallel_size": 2,
+            "max_num_seqs": 64,
+            "max_num_batched_tokens": 32768,
+            "segment": 4,
+            "config_segment_size": 4,
             "cohort": "standard",
             "fuse_allreduce_rms": True,
+            "strict_match_eligible": True,
             "generation_worker_tokens_per_sec_per_gpu_mean": 100.0,
             "e2e_tokens_per_sec_per_gpu_mean": 50.0,
             "generation_time_s_mean": 20.0,
@@ -170,6 +179,149 @@ class NemoRlReportTest(unittest.TestCase):
                 )
                 self.assertTrue(pd.isna(enriched.at[job_id, "gen_tps_speedup"]))
 
+    def test_unknown_strict_keys_do_not_match_and_precomputed_rows_are_untouched(self) -> None:
+        common = {
+            "source_group": "Current incomplete source",
+            "comparison_group": "Current incomplete source",
+            "model_name": "Qwen3-32B",
+            "mode": "sync",
+            "max_steps": 20,
+            "max_new_tokens": 4096,
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "enforce_eager": False,
+            "cluster": "lyris",
+            "nodes_x_gpus": "4x4",
+            "attention_backend": "TRITON_ATTN",
+            "moe_backend": "",
+            "target_tensor_parallel_size": 2,
+            "max_num_seqs": 64,
+            "max_num_batched_tokens": 32768,
+            "segment": 4,
+            "config_segment_size": 4,
+            "fuse_allreduce_rms": True,
+            "strict_match_eligible": True,
+            "result_state": "completed",
+            "generation_worker_tokens_per_sec_per_gpu_mean": 100.0,
+            "e2e_tokens_per_sec_per_gpu_mean": 50.0,
+            "generation_time_s_mean": 20.0,
+            "total_step_time_s_mean": 40.0,
+            "gen_tps_speedup": float("nan"),
+            "e2e_tps_speedup": float("nan"),
+            "generation_time_speedup": float("nan"),
+            "e2e_step_time_speedup": float("nan"),
+        }
+        legacy = {
+            **common,
+            "job_id": "legacy-precomputed",
+            "method_k": "eagle3_k3",
+            "strict_match_eligible": False,
+            "baseline_match_state": "precomputed",
+            "gen_tps_speedup": 1.75,
+            "manifest": "docs/historical.csv",
+        }
+        rows = pd.DataFrame(
+            [
+                {**common, "job_id": "unknown-baseline", "method_k": "baseline"},
+                {
+                    **common,
+                    "job_id": "unknown-spec",
+                    "method_k": "eagle3_k5",
+                    "generation_worker_tokens_per_sec_per_gpu_mean": 200.0,
+                },
+                legacy,
+            ]
+        )
+
+        enriched = report.fill_nemorl_speedups(rows).set_index("job_id")
+
+        self.assertEqual(enriched.at["unknown-spec", "baseline_match_state"], "unmatched_baseline")
+        self.assertTrue(pd.isna(enriched.at["unknown-spec", "gen_tps_speedup"]))
+        self.assertEqual(enriched.at["legacy-precomputed", "baseline_match_state"], "precomputed")
+        self.assertEqual(enriched.at["legacy-precomputed", "gen_tps_speedup"], 1.75)
+        self.assertEqual(enriched.at["legacy-precomputed", "manifest"], "docs/historical.csv")
+
+    def test_strict_match_requires_a_completed_metric_bearing_baseline(self) -> None:
+        common = {
+            "source_group": "Current strict source",
+            "comparison_group": "Current strict source",
+            "model_name": "Qwen3-32B",
+            "mode": "sync",
+            "max_steps": 20,
+            "max_new_tokens": 4096,
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "enforce_eager": False,
+            "cluster": "lyris",
+            "nodes_x_gpus": "4x4",
+            "attention_backend": "TRITON_ATTN",
+            "moe_backend": "triton",
+            "target_tensor_parallel_size": 2,
+            "max_num_seqs": 64,
+            "max_num_batched_tokens": 32768,
+            "segment": 4,
+            "config_segment_size": 4,
+            "fuse_allreduce_rms": True,
+            "strict_match_eligible": True,
+            "completed_steps": 19,
+            "generation_worker_tokens_per_sec_per_gpu_mean": 100.0,
+            "e2e_tokens_per_sec_per_gpu_mean": 50.0,
+            "generation_time_s_mean": 20.0,
+            "total_step_time_s_mean": 40.0,
+            "gen_tps_speedup": float("nan"),
+            "e2e_tps_speedup": float("nan"),
+            "generation_time_speedup": float("nan"),
+            "e2e_step_time_speedup": float("nan"),
+        }
+        cases = {
+            "submitted": {"result_state": "submitted"},
+            "failed": {"result_state": "failed"},
+            "partial": {"result_state": "partial"},
+            "metric-empty": {
+                "result_state": "completed",
+                "generation_worker_tokens_per_sec_per_gpu_mean": float("nan"),
+                "e2e_tokens_per_sec_per_gpu_mean": float("nan"),
+                "generation_time_s_mean": float("nan"),
+                "total_step_time_s_mean": float("nan"),
+            },
+        }
+
+        for name, baseline_changes in cases.items():
+            with self.subTest(name=name):
+                rows = pd.DataFrame(
+                    [
+                        {
+                            **common,
+                            **baseline_changes,
+                            "job_id": f"{name}-baseline",
+                            "method_k": "baseline",
+                        },
+                        {
+                            **common,
+                            "job_id": f"{name}-spec",
+                            "method_k": "eagle3_k5",
+                            "result_state": "completed",
+                            "generation_worker_tokens_per_sec_per_gpu_mean": 200.0,
+                            "e2e_tokens_per_sec_per_gpu_mean": 100.0,
+                            "generation_time_s_mean": 10.0,
+                            "total_step_time_s_mean": 20.0,
+                            "gen_tps_speedup": 9.0,
+                        },
+                    ]
+                )
+
+                enriched = report.fill_nemorl_speedups(rows).set_index("job_id")
+
+                self.assertEqual(
+                    enriched.at[f"{name}-baseline", "baseline_match_state"],
+                    "unusable_baseline",
+                )
+                self.assertEqual(
+                    enriched.at[f"{name}-spec", "baseline_match_state"],
+                    "unmatched_baseline",
+                )
+                self.assertTrue(pd.isna(enriched.at[f"{name}-spec", "gen_tps_speedup"]))
+
     def test_nemorl_html_exposes_july_setup_and_correctness_metadata(self) -> None:
         rows = report.fill_nemorl_speedups(report.load_july_nemorl_results())
 
@@ -218,6 +370,45 @@ class NemoRlReportTest(unittest.TestCase):
                 historical_html.read_text(encoding="utf-8"),
                 "historical sentinel",
             )
+
+    def test_dedup_prefers_completed_current_evidence_and_preserves_provenance(self) -> None:
+        rows = pd.DataFrame(
+            [
+                {
+                    "job_id": "duplicate-job",
+                    "method_k": "eagle3_k5",
+                    "source_group": "July completed source",
+                    "source_priority": -10,
+                    "completed_steps": 19,
+                    "slurm_state": "COMPLETED",
+                    "gen_tps_speedup": float("nan"),
+                    "manifest": "docs/current.csv",
+                    "notes": "completed current evidence",
+                },
+                {
+                    "job_id": "duplicate-job",
+                    "method_k": "eagle3_k5",
+                    "source_group": "Historical partial source",
+                    "source_priority": 0,
+                    "completed_steps": 5,
+                    "result_state": "partial",
+                    "slurm_state": "TIMEOUT_PARTIAL",
+                    "gen_tps_speedup": 1.8,
+                    "manifest": "docs/historical.csv",
+                    "notes": "partial row with speedup",
+                },
+            ]
+        )
+
+        selected = report.deduplicate_nemorl_rows(rows)
+
+        self.assertEqual(len(selected), 1)
+        row = selected.iloc[0]
+        self.assertEqual(row["result_state"], "completed")
+        self.assertEqual(row["manifest"], "docs/current.csv")
+        self.assertIn("Historical partial source", row["notes"])
+        self.assertIn("alternate source groups", row["notes"])
+        self.assertIn("docs/historical.csv", row["alternate_manifests"])
 
     def test_chart_rows_require_a_complete_step20_metric_window(self) -> None:
         rows = pd.DataFrame(
