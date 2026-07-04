@@ -1,0 +1,24 @@
+--- a/tools/dflash_benchmark.py
++++ b/tools/dflash_benchmark.py
+@@ -51,6 +51,8 @@
+ from torch import distributed as torch_dist
+ from tqdm import tqdm
+ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
++
++from angelslim_dflare_transport import compact_response_map, write_rank_partial
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -531,8 +533,11 @@
+             generated_ids = spec_response.output_ids[0, spec_response.num_input_tokens :]
+             output_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+             messages.append({"role": "assistant", "content": output_text})
+-            responses.append(response)
++            responses.append(compact_response_map(response))
+ 
++    if args.output_json is not None:
++        write_rank_partial(args.output_json, _dist_rank(), responses)
++
+     if _dist_size() > 1:
+         gathered = _dist_gather(responses, dst=0)
+         if not _dist_is_main():

@@ -465,6 +465,8 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     assert "angelslim_fixed_length.patch" in worker
     assert "angelslim_split_run_modes.patch" in worker
     assert "angelslim_distributed_timeout.patch" in worker
+    assert "angelslim_compact_result_transport.patch" in worker
+    assert "angelslim_dflare_transport.py" in worker
     assert "datasets==4.4.1" in worker
     assert "stage_extended_method_assets_in_container.sh" in output
     assert "git clone" not in worker
@@ -481,6 +483,24 @@ def test_angelslim_distributed_timeout_covers_long_context_rank_skew() -> None:
 
     assert "import datetime" in patch
     assert "timeout=datetime.timedelta(hours=6)" in patch
+
+
+def test_angelslim_compact_transport_patch_stages_cpu_only_results() -> None:
+    worker = (
+        EXPERIMENT / "stage_extended_method_assets_in_container.sh"
+    ).read_text(encoding="utf-8")
+    patch = (
+        EXPERIMENT / "patches/angelslim_compact_result_transport.patch"
+    ).read_text(encoding="utf-8")
+
+    assert "${angelslim_source}/tools/angelslim_dflare_transport.py" in worker
+    assert "angelslim_compact_result_transport.patch" in worker
+    assert "from angelslim_dflare_transport import" in patch
+    assert "compact_response_map" in patch
+    assert "write_rank_partial" in patch
+    assert "responses.append(response)" in patch
+    assert "responses.append(compact_response_map(response))" in patch
+    assert "write_rank_partial(args.output_json, _dist_rank(), responses)" in patch
 
 
 def test_angelslim_matrix_keeps_native_results_separate() -> None:
