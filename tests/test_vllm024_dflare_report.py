@@ -145,6 +145,30 @@ def test_paired_result_preserves_exact_angelslim_speedup(tmp_path: Path) -> None
     assert row["speedup_label"] == "2.00x"
 
 
+def test_target_profile_filter_excludes_short_canaries(tmp_path: Path) -> None:
+    module = load_module()
+    paths = [
+        write_result(tmp_path / "canary/job-2270811/result.json", osl=256),
+        write_result(tmp_path / "64k/job-2271723/result.json", osl=65_536),
+    ]
+    rows = module.load_completed_dflare_results(paths)
+
+    target_rows = module.target_profile_rows(rows)
+
+    assert target_rows["context_profile"].tolist() == ["YaRN 64K"]
+    assert target_rows["job_id"].tolist() == ["2271723"]
+
+
+def test_source_paths_can_be_made_repository_relative(tmp_path: Path) -> None:
+    module = load_module()
+    result = write_result(tmp_path / "results/job-2271723/result.json")
+    rows = module.load_completed_dflare_results([result])
+
+    relative = module.relativize_sources(rows, tmp_path)
+
+    assert relative.iloc[0]["source"] == "results/job-2271723/result.json"
+
+
 def test_render_groups_context_profiles_and_required_columns(tmp_path: Path) -> None:
     module = load_module()
     paths = [
@@ -214,3 +238,22 @@ def test_existing_standalone_builder_includes_dflare_section() -> None:
     assert "match_dflare_baselines" in source
     assert "render_dflare_section" in source
     assert "dflare_completed_latest.csv" in source
+
+
+def test_standalone_builder_uses_tracked_public_data_fallback() -> None:
+    source = BUILDER_PATH.read_text(encoding="utf-8")
+
+    assert 'PUBLIC_DATA = ROOT / "public/data"' in source
+    assert "resolve_data_source" in source
+    assert 'VLLM_ADDED_INPUT = PUBLIC_DATA / "vllm_standalone_added_results_latest.csv"' in source
+    assert "else matrix(main)" in source
+
+
+def test_pages_index_reports_completed_dflare_rows() -> None:
+    source = (ROOT / "scripts/build_pages_index.py").read_text(encoding="utf-8")
+
+    assert "dflare_completed_latest.csv" in source
+    assert "dflare_summary" in source
+    assert "DFLARE_PROFILES" in source
+    assert ".isin(DFLARE_PROFILES)" in source
+    assert "do not yet include a direct DFlare row" not in source

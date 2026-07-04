@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "backend": "angelslim_transformers_native",
+  "status": "complete",
+  "config": {
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b",
+    "draft_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b-dflare",
+    "draft_arch": "dflare",
+    "dataset": "swe-bench",
+    "max_samples": 4,
+    "input_length": 4096,
+    "max_new_tokens": 65536,
+    "ignore_eos": true,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "block_size": 16,
+    "world_size": 4,
+    "run_mode": "spec"
+  },
+  "results": {
+    "samples": 4,
+    "spec_decode_time_per_token_s": 0.06444645519369518,
+    "spec_decode_tok_s": 15.516757236600196,
+    "mean_acceptance_length": 10.886978748878995,
+    "acceptance_rate": 0.659131916591933,
+    "acceptance_length_histogram": [
+      0.0,
+      0.05250507645766856,
+      0.01603746218557043,
+      0.014338402884256765,
+      0.016120343127097925,
+      0.019269818905142764,
+      0.04645476772616137,
+      0.048029505615183786,
+      0.04508723219095769,
+      0.07413700219634495,
+      0.0848286436533919,
+      0.07654054950064233,
+      0.09784095147320873,
+      0.08192781069992955,
+      0.0752144544362024,
+      0.07591894243918611,
+      0.17574903650905474
+    ]
+  }
+}

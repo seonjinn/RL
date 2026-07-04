@@ -132,6 +132,23 @@ row is partial and does not yet have its matched baseline:
 The raw row is stored at
 `report/20260703_q8_long_context_partial/64k/math/suffix_t0p0/result.json`.
 
+### DFlare Completed Snapshot
+
+The AngelSlim-native long-context DFlare table includes completed target
+profiles only. These jobs use PyTorch SDPA because FlashAttention is not
+installed in the staged runtime.
+
+| Profile | Domain | Temp | ISL | OSL | Batch/GPU | Method | tok/s/GPU | Speedup | Acceptance | Mean accept length | Job |
+|---|---|---:|---:|---:|---:|---|---:|---|---:|---:|---|
+| YaRN 64K | SWE | 0.0 | 4,096 | 65,536 | 1 | DFlare K16 | 15.52 | waiting matched baseline | 65.91% | 10.89 | `2271723` |
+
+Jobs `2271721` and `2271722` failed when faster ranks entered result gathering
+while slower ranks were still generating. The default PyTorch process-group
+timeout was 600 seconds, but long-context rank runtimes differed by more than
+ten minutes. The staged runner now uses a six-hour process-group timeout; Math
+retries are `2272239` and `2272240`. Running jobs remain excluded from the
+performance table.
+
 ## Fixed-Length Tier Test
 
 The batch-size 1, 2, 4, 8, 16, 32, and 64 matrix completed for temperature 0

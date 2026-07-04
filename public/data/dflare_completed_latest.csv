@@ -1,0 +1,2 @@
+status,runtime,backend,attention_backend,domain,model,temperature,top_p,batch_size,isl,osl,context_profile,position_encoding,method,k,tok_s_gpu,speedup,speedup_label,acceptance_rate,mean_accept_len,job_id,source
+complete,AngelSlim,angelslim_transformers_native,torch.sdpa,SWE,Qwen3-8B,0.0,1.0,1,4096,65536,YaRN 64K,yarn4,dflare_k16,16,15.516757236600196,,waiting matched baseline,0.659131916591933,10.886978748878995,2271723,experiments/vllm_024_dynamicsd/report/20260703_dflare_completed/64k/swe/job-2271723/result.json

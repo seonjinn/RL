@@ -153,6 +153,29 @@ def match_dflare_baselines(rows: pd.DataFrame) -> pd.DataFrame:
     return matched
 
 
+def target_profile_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty:
+        return rows.copy()
+    return rows.loc[rows["context_profile"].isin(PROFILE_ORDER)].copy()
+
+
+def relativize_sources(rows: pd.DataFrame, root: Path) -> pd.DataFrame:
+    relative = rows.copy()
+    if relative.empty:
+        return relative
+    resolved_root = root.resolve()
+
+    def convert(value: object) -> str:
+        path = Path(str(value)).resolve()
+        try:
+            return str(path.relative_to(resolved_root))
+        except ValueError:
+            return str(value)
+
+    relative["source"] = relative["source"].map(convert)
+    return relative
+
+
 def _fmt_number(value: object, digits: int = 2) -> str:
     try:
         number = float(value)
@@ -211,7 +234,9 @@ def _profile_table(rows: pd.DataFrame, profile: str) -> str:
 def render_dflare_section(rows: pd.DataFrame) -> str:
     if rows.empty:
         return ""
-    completed = rows.loc[rows["status"].eq("complete")].copy()
+    completed = target_profile_rows(
+        rows.loc[rows["status"].eq("complete")].copy()
+    )
     if completed.empty:
         return ""
     tables = "".join(_profile_table(completed, profile) for profile in PROFILE_ORDER)

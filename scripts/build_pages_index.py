@@ -22,6 +22,11 @@ REPORTS = PUBLIC / "reports"
 DATA = PUBLIC / "data"
 ARCHIVE = PUBLIC / "archive"
 FIGURES = PUBLIC / "figures"
+DFLARE_COMPLETED = (
+    ROOT
+    / "experiments/vllm_024_dynamicsd/report/dflare_completed_latest.csv"
+)
+DFLARE_PROFILES = {"Native 32K", "YaRN 64K", "YaRN total-128K"}
 
 LOCAL_REF_SKIP_SCHEMES = {"http", "https", "mailto", "tel", "ftp", "javascript", "data"}
 
@@ -869,6 +874,7 @@ def build() -> None:
         DOCS / "latest_lyris_nemorl_cudagraphoff_wandb_best_qwen32_async_20260623_jobs.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
         DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv",
+        DFLARE_COMPLETED,
         DOCS / "lyris_angelslim_checkpoint_prewarm_summary_20260622.json",
         ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt",
     ]
@@ -886,6 +892,7 @@ def build() -> None:
         copy_if_exists(src, ARCHIVE)
 
     vllm = vllm_best_rows()
+    dflare = load_csv(DFLARE_COMPLETED)
     nemorl_all = load_nemorl_rows()
     nemorl = nemorl_best_rows()
     vllm_charts, nemorl_charts = build_chart_gallery(vllm, nemorl_all)
@@ -901,6 +908,27 @@ def build() -> None:
     model_ids = job.get("model_ids", "")
     status_class = "ok" if sacct_state == "COMPLETED" else "warn"
     status_label = sacct_state or job_status
+    if dflare.empty:
+        dflare_completed = pd.DataFrame()
+    else:
+        complete_mask = dflare["status"].astype(str).eq("complete")
+        profile_mask = dflare["context_profile"].astype(str).isin(DFLARE_PROFILES)
+        dflare_completed = dflare[complete_mask & profile_mask]
+    if dflare_completed.empty:
+        dflare_summary = "No completed target-profile DFlare rows are available yet."
+    else:
+        latest_dflare = dflare_completed.iloc[-1]
+        acceptance = as_float(latest_dflare.get("acceptance_rate")) * 100
+        dflare_summary = (
+            f"{len(dflare_completed)} completed target-profile row(s). Latest: "
+            f"{latest_dflare.get('context_profile', 'n/a')} "
+            f"{latest_dflare.get('domain', 'n/a')} "
+            f"temp={fmt(latest_dflare.get('temperature'), 1)}, "
+            f"{fmt(latest_dflare.get('tok_s_gpu'))} tok/s/GPU, "
+            f"{fmt(acceptance)}% acceptance, mean accepted length "
+            f"{fmt(latest_dflare.get('mean_accept_len'))}, job "
+            f"{fmt_int(latest_dflare.get('job_id'))}."
+        )
 
     html_text = f"""<!doctype html>
 <html lang=\"en\">
@@ -1025,7 +1053,9 @@ def build() -> None:
     <h2>DFlare and AngelSlim Status</h2>
     <div class=\"note\">
       <span class=\"pill {status_class}\">{esc(status_label)}</span>
-      <p>DFlare public checkpoints found so far are <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>. Current vLLM/NeMo-RL result pages do not yet include a direct DFlare row because the local generation path is vLLM SpecDec, while DFlare is exposed through AngelSlim's standalone tooling. The submitted HF staging job also downloads AngelSlim Eagle3 drafters for Qwen3-A3B, Qwen3-32B, Qwen3-8B, Qwen3-14B, and Qwen3-4B.</p>
+      <p>{esc(dflare_summary)}</p>
+      <p><a href=\"reports/vllm_standalone_results_latest.html#vllm024-dflare\">Open the completed DFlare table</a>. DFlare uses AngelSlim's standalone runtime and is kept separate from vLLM-native speedups.</p>
+      <p>DFlare public checkpoints staged here include <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>.</p>
       <p>Models requested in staging job: <code>{esc(model_ids)}</code></p>
       <p>Logs: <code>{esc(logs_dir)}</code></p>
       <p>Summary JSON: <code>{esc(summary_json)}</code></p>
@@ -1045,6 +1075,7 @@ def build() -> None:
       <a href=\"data/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv\">Qwen30/32 NeMo-RL CSV</a>
       <a href=\"data/lyris_angelslim_checkpoint_prewarm_summary_20260622.json\">AngelSlim prewarm summary</a>
       <a href=\"data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt\">AngelSlim job record</a>
+      <a href=\"data/dflare_completed_latest.csv\">DFlare completed rows</a>
     </div>
   </section>
 </main>

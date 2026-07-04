@@ -15,16 +15,25 @@ import pandas as pd
 from vllm024_dflare_report import (
     load_completed_dflare_results,
     match_dflare_baselines,
+    relativize_sources,
     render_dflare_section,
+    target_profile_rows,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
+PUBLIC_DATA = ROOT / "public/data"
 DFLARE_RESULT_ROOT = ROOT / "experiments/vllm_024_dynamicsd/report"
 DFLARE_COMPLETED_OUT = DFLARE_RESULT_ROOT / "dflare_completed_latest.csv"
 
-MAIN_VLLM = DOCS / "vllm_standalone_all_batches_combined_20260619.csv"
+
+def resolve_data_source(name: str) -> Path:
+    docs_path = DOCS / name
+    return docs_path if docs_path.exists() else PUBLIC_DATA / name
+
+
+MAIN_VLLM = resolve_data_source("vllm_standalone_all_batches_combined_20260619.csv")
 VLLM_LIVE_SOURCES = [
     (
         DOCS / "oci_qmath_extra_k_live_log_metrics_20260620.csv",
@@ -51,6 +60,7 @@ DFLASH = DOCS / "qwen3_235b_dflash_retry28_openmath_metrics.csv"
 VLLM_LEGACY_NORMALIZED = DOCS / "vllm_standalone_qwen30_qwen8_legacy_breakdowns_20260625.csv"
 VLLM_TEMP_TRENDS = DOCS / "vllm_standalone_temp0_temp1_trends_20260616.csv"
 VLLM_ADDED_OUT = DOCS / "vllm_standalone_added_results_latest.csv"
+VLLM_ADDED_INPUT = PUBLIC_DATA / "vllm_standalone_added_results_latest.csv"
 VLLM_HTML_LATEST = DOCS / "vllm_standalone_results_latest.html"
 VLLM_HTML_DATED = DOCS / "vllm_standalone_results_20260621.html"
 
@@ -1431,6 +1441,8 @@ def load_vllm_added(main: pd.DataFrame) -> pd.DataFrame:
                 }
             )
         parts.append(pd.DataFrame(rows))
+    if not parts and VLLM_ADDED_INPUT.exists():
+        parts.append(pd.read_csv(VLLM_ADDED_INPUT))
     if not parts:
         return pd.DataFrame()
     added = pd.concat(parts, ignore_index=True)
@@ -1647,7 +1659,8 @@ def build_vllm_html(
 ) -> str:
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     added_summary = aggregate_added(added)
-    main_matrix = pd.read_csv(DOCS / "vllm_standalone_all_batches_combined_matrix_20260619.csv")
+    matrix_path = DOCS / "vllm_standalone_all_batches_combined_matrix_20260619.csv"
+    main_matrix = pd.read_csv(matrix_path) if matrix_path.exists() else matrix(main)
     added_matrix = matrix(added[added["valid_result"]]) if not added.empty else pd.DataFrame()
     valid_added = added[added["valid_result"]].copy() if not added.empty else pd.DataFrame()
     unmatched = valid_added[pd.to_numeric(valid_added.get("speedup"), errors="coerce").isna()].copy() if not valid_added.empty else pd.DataFrame()
@@ -2617,7 +2630,14 @@ def main() -> None:
     added = load_vllm_added(main_vllm)
     added.to_csv(VLLM_ADDED_OUT, index=False)
     dflare_rows = match_dflare_baselines(
-        load_completed_dflare_results(DFLARE_RESULT_ROOT.glob("**/result.json"))
+        relativize_sources(
+            target_profile_rows(
+                load_completed_dflare_results(
+                    DFLARE_RESULT_ROOT.glob("**/result.json")
+                )
+            ),
+            ROOT,
+        )
     )
     dflare_rows.to_csv(DFLARE_COMPLETED_OUT, index=False)
     vllm_html = build_vllm_html(main_vllm, added, dflare_rows)
