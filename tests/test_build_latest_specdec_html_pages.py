@@ -60,15 +60,15 @@ class NemoRlReportTest(unittest.TestCase):
 
         keys = combined[["job_id", "method_k"]].astype(str)
         self.assertFalse(keys.duplicated().any())
-        self.assertEqual(len(combined), 234)
-        self.assertEqual(len(july), 54)
+        self.assertEqual(len(combined), 235)
+        self.assertEqual(len(july), 55)
         prejuly_keys = set(
             map(tuple, prejuly[["job_id", "method_k"]].astype(str).to_numpy())
         )
         july_keys = set(map(tuple, july[["job_id", "method_k"]].astype(str).to_numpy()))
         combined_keys = set(map(tuple, keys.to_numpy()))
         self.assertEqual(len(prejuly_keys & combined_keys), 180)
-        self.assertEqual(len(july_keys & combined_keys), 54)
+        self.assertEqual(len(july_keys & combined_keys), 55)
         self.assertIn("2172802", set(combined["job_id"].astype(str)))
         self.assertIn("2196588", set(combined["job_id"].astype(str)))
 
@@ -76,6 +76,7 @@ class NemoRlReportTest(unittest.TestCase):
         rows = report.load_july_nemorl_results()
 
         expected_sources = {
+            "lyris_nemorl_v020_best_math_live_metrics_20260704.csv",
             "lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv",
             "lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv",
             "lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv",
@@ -84,7 +85,7 @@ class NemoRlReportTest(unittest.TestCase):
             "lyris_qwen235b_sync_eagle3_absolute_metrics_20260702.csv",
             "pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv",
         }
-        self.assertEqual(len(rows), 54)
+        self.assertEqual(len(rows), 55)
         self.assertEqual(
             {Path(value).name for value in rows["manifest"]},
             expected_sources,
@@ -141,6 +142,27 @@ class NemoRlReportTest(unittest.TestCase):
         qwen32_async_pard = rows[rows["job_id"].eq("2260761")].iloc[0]
         self.assertEqual(qwen32_async_pard["target_tensor_parallel_size"], 1)
         self.assertEqual(qwen32_async_pard["draft_tensor_parallel_size"], 1)
+
+    def test_loads_july4_v020_live_metrics_as_an_unmatched_current_cohort(self) -> None:
+        rows = report.fill_nemorl_speedups(report.load_july_nemorl_results())
+        live = rows[rows["job_id"].astype(str).eq("2275728")].iloc[0]
+
+        self.assertEqual(live["model_name"], "Qwen3-30B-A3B")
+        self.assertEqual(live["mode"], "sync")
+        self.assertEqual(live["method_k"], "suffix_k32")
+        self.assertEqual(live["result_state"], "running")
+        self.assertEqual(live["completed_steps"], 2)
+        self.assertEqual(live["completed_step_span"], "2-3")
+        self.assertEqual(live["max_num_seqs"], 128)
+        self.assertEqual(live["max_num_batched_tokens"], 16384)
+        self.assertAlmostEqual(live["vllm_token_acceptance_pct"], 22.343744, places=5)
+        self.assertAlmostEqual(
+            live["vllm_acceptance_length_mean_weighted_mean"],
+            2.339208,
+            places=5,
+        )
+        self.assertEqual(live["baseline_match_state"], "unmatched_baseline")
+        self.assertTrue(pd.isna(live["gen_tps_speedup"]))
 
     def test_normalizes_failed_held_and_partial_states_without_collapsing_them(self) -> None:
         cases = [

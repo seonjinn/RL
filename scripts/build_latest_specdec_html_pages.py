@@ -106,6 +106,11 @@ NEMORL_PREJULY_CANONICAL = (
 )
 NEMORL_JULY_SOURCES = [
     {
+        "path": DOCS / "lyris_nemorl_v020_best_math_live_metrics_20260704.csv",
+        "source_group": "Lyris NeMo-RL v0.20 best-Math live 2026-07-04",
+        "cluster": "lyris",
+    },
+    {
         "path": DOCS / "lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv",
         "source_group": "Lyris Qwen30 sync PerfCfg CG-on matched 2026-07-02",
         "cluster": "lyris",
@@ -3301,7 +3306,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<section id=\"smoke\"><h2>Step3 Smoke / K Sweep</h2><div class=\"table-wrap\">",
             table(smoke, cols),
             "</div></section>",
-            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv</code>, <code>docs/lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_sync_pard_tp2_noarrms_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_async1off_eagle3_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen235b_sync_eagle3_absolute_metrics_20260702.csv</code>, <code>docs/pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv</code>, and the retained June historical sources listed in the combined CSV provenance column.</p></section>",
+            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_nemorl_v020_best_math_live_metrics_20260704.csv</code>, <code>docs/lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv</code>, <code>docs/lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_sync_pard_tp2_noarrms_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_async1off_eagle3_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen235b_sync_eagle3_absolute_metrics_20260702.csv</code>, <code>docs/pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv</code>, and the retained June historical sources listed in the combined CSV provenance column.</p></section>",
             "</main></body></html>",
         ]
     )
