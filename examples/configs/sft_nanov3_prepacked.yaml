@@ -62,8 +62,8 @@ policy:
 
   megatron_cfg:
     enabled: true
-    use_linear_ce_fusion_loss: false
-    linear_ce_fusion_chunk_size: 256
+    use_fused_linear_logprobs: false
+    fused_linear_logprobs_chunk_size: 256
     force_reconvert_from_hf: false
     env_vars:
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
@@ -100,7 +100,6 @@ policy:
     cross_entropy_loss_fusion: true
     cross_entropy_fusion_impl: "native"
     defer_fp32_logits: false
-    prepacked_sft_loss_mode: "labels"
     nrl_minimal_loss_metrics: true
     moe_per_layer_logging: false
     moe_enable_deepep: false

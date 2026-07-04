@@ -103,7 +103,9 @@ def rl_collate_fn(
             if int(cu_seqlens[0].item()) != 0:
                 raise ValueError("packed_cu_seqlens must start at 0")
             if bool((cu_seqlens[1:] < cu_seqlens[:-1]).any().item()):
-                raise ValueError("packed_cu_seqlens must be monotonically non-decreasing")
+                raise ValueError(
+                    "packed_cu_seqlens must be monotonically non-decreasing"
+                )
             if int(cu_seqlens[-1].item()) != pack_length:
                 raise ValueError(
                     "packed_cu_seqlens final value must equal input length"

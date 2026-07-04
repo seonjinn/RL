@@ -692,9 +692,7 @@ def process_global_batch(
         local_valid_toks = local_valid_seqs * batch["input_ids"].shape[1]
     else:
         token_mask = (
-            batch["token_mask"]
-            if "target_ids" in batch
-            else batch["token_mask"][:, 1:]
+            batch["token_mask"] if "target_ids" in batch else batch["token_mask"][:, 1:]
         )
         local_valid_toks = torch.sum(token_mask * batch["sample_mask"].unsqueeze(-1))
 

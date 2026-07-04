@@ -9,7 +9,9 @@ import torch
 from nemo_rl.data.interfaces import DatumSpec, TaskDataSpec
 
 IGNORE_INDEX = -100
-IDENTITY_TEMPLATE = """{% for message in messages %}{{ message['content'] }}{% endfor %}"""
+IDENTITY_TEMPLATE = (
+    """{% for message in messages %}{{ message['content'] }}{% endfor %}"""
+)
 NEMOTRON_H_ALIGNED_TEMPLATE = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<SPECIAL_10>System\n' + message['content'].strip() + '\n' }}{% elif message['role'] == 'user' %}{{ '<SPECIAL_11>User\n' + message['content'].strip() + '\n' + '<SPECIAL_11>Assistant\n' }}{% elif message['role'] == 'assistant' %}{{ message['content'].strip() + '\n' }}{% endif %}{% endfor %}"""
 NEMOTRON_NANO_V2_TEMPLATE = """{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'system' %}{{ '<SPECIAL_10>System\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'user' %}{{ '<SPECIAL_11>User\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'assistant' %}{{ '<SPECIAL_11>Assistant\n' + content.strip() + '\n<SPECIAL_12>\n' }}{% endif %}{% endfor %}"""
 

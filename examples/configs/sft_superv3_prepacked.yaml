@@ -137,7 +137,6 @@ policy:
     apply_rope_fusion: True
     bias_activation_fusion: False
     defer_fp32_logits: False
-    prepacked_sft_loss_mode: "labels"
     nrl_minimal_loss_metrics: true
     moe_per_layer_logging: False
     # Attention backend: 'flash' uses FlashAttention for improved throughput

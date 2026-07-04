@@ -490,12 +490,14 @@ def sft_train(
                             only_unmask_final=master_config.sft.only_unmask_final,
                         )
 
-                        cat_and_padded, input_lengths = batched_message_log_to_flat_message(
-                            batch["message_log"],
-                            pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                            make_sequence_length_divisible_by=master_config.policy[
-                                "make_sequence_length_divisible_by"
-                            ],
+                        cat_and_padded, input_lengths = (
+                            batched_message_log_to_flat_message(
+                                batch["message_log"],
+                                pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                                make_sequence_length_divisible_by=master_config.policy[
+                                    "make_sequence_length_divisible_by"
+                                ],
+                            )
                         )
 
                         train_data: BatchedDataDict = BatchedDataDict(
