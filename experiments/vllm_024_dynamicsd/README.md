@@ -210,8 +210,9 @@ CLUSTER=lyris ./stage_ray_site.sh
 `submit_legacy_0619_replay_matrix.sh` reproduces the contract used by the
 June 19 standalone report: Math500 and SWE-verified prompts, ISL 4096, OSL
 32768, batch sizes 1/2/4/8/16/32, temperatures 0/1, model-specific TP, four
-allocated GPUs, eager execution, Triton attention, Triton MoE, and disabled
-custom all-reduce. Qwen3-235B also keeps the original FP8 KV cache setting.
+allocated GPUs, Triton attention, and Triton MoE. Qwen3-235B also keeps the
+original FP8 KV cache setting. The historical replay corpus used eager mode;
+new CUDA Graph cohorts use matched PIECEWISE graphs for every compared method.
 
 The unmodified vLLM 0.24 image supports baseline and Eagle-3, so this replay
 compares baseline, static Eagle-3 K3, and DynamicSD.
@@ -223,6 +224,13 @@ CLUSTER=lyris ./submit_legacy_0619_replay_matrix.sh
 CLUSTER=lyris SMOKE=false TEST_ONLY=true \
   ./submit_legacy_0619_replay_matrix.sh
 CLUSTER=lyris SMOKE=false ./submit_legacy_0619_replay_matrix.sh
+```
+
+Use this explicit profile for the CUDA Graph cohort:
+
+```bash
+CLUSTER=lyris ENFORCE_EAGER=false CUDAGRAPH_MODE=PIECEWISE \
+  SMOKE=false ./submit_legacy_0619_replay_matrix.sh
 ```
 
 At temperature 1, exact token hashes can differ because of numerical and batch
@@ -256,8 +264,25 @@ CLUSTER=lyris ./submit_qwen8_extended_methods_matrix.sh
 
 The default is an OSL 256, BS4 smoke. Set `SMOKE=false` for the full legacy
 shape. Baseline and every method use the same target model, prompt files,
-sampling parameters, eager mode, attention backend, and throughput GPU
+sampling parameters, CUDA Graph mode, attention backend, and throughput GPU
 denominator.
+
+The existing Native 32K corpus was measured with eager mode and
+`CUDAGRAPH_MODE=NONE`. Use the following matched PIECEWISE profile to collect
+CUDA Graph enabled rows without mixing the cohorts:
+
+```bash
+CLUSTER=lyris ENFORCE_EAGER=false CUDAGRAPH_MODE=PIECEWISE \
+  TEST_ONLY=true ./submit_qwen8_extended_methods_matrix.sh
+CLUSTER=lyris ENFORCE_EAGER=false CUDAGRAPH_MODE=PIECEWISE \
+  ./submit_qwen8_extended_methods_matrix.sh
+
+CLUSTER=lyris ENFORCE_EAGER=false CUDAGRAPH_MODE=PIECEWISE \
+  SMOKE=false ./submit_qwen8_extended_methods_matrix.sh
+```
+
+DynamicSD in vLLM 0.24 requires PIECEWISE rather than full CUDA graphs, so use
+PIECEWISE when one report must compare baseline, fixed SpecDec, and DynamicSD.
 
 DFlare is not a vLLM 0.24 method. `submit_angelslim_matrix.sh` therefore runs
 the pinned AngelSlim reference benchmark and keeps those Transformer-native

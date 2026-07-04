@@ -14,7 +14,24 @@ PARD2_OVERLAY="${PARD2_OVERLAY:-${ASSET_ROOT}/python/pard2_overlay}"
 METHODS="${METHODS:-baseline suffix pard pard2 dflash}"
 DOMAINS="${DOMAINS:-Math SWE}"
 TEMPERATURES="${TEMPERATURES:-0.0 1.0}"
-RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_qwen8_extended}"
+ENFORCE_EAGER="$(printf '%s' "${ENFORCE_EAGER:-true}" | tr '[:upper:]' '[:lower:]')"
+CUDAGRAPH_MODE="$(printf '%s' "${CUDAGRAPH_MODE:-NONE}" | tr '[:lower:]' '[:upper:]')"
+if [[ "${ENFORCE_EAGER}" == "true" && "${CUDAGRAPH_MODE}" != "NONE" ]]; then
+  echo "ENFORCE_EAGER=true requires CUDAGRAPH_MODE=NONE" >&2
+  exit 2
+fi
+case "${CUDAGRAPH_MODE}" in
+  NONE) CUDA_GRAPH_STATE=off ;;
+  PIECEWISE|FULL*) CUDA_GRAPH_STATE=on ;;
+  *)
+    echo "Unsupported CUDAGRAPH_MODE=${CUDAGRAPH_MODE}" >&2
+    exit 2
+    ;;
+esac
+CUDA_GRAPH_SLUG="$(printf '%s' "${CUDAGRAPH_MODE}" | tr '[:upper:]_' '[:lower:]-')"
+CUDA_GRAPH_PROVENANCE="cg-${CUDA_GRAPH_STATE}-${CUDA_GRAPH_SLUG}"
+RUN_ID_BASE="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_qwen8_extended}"
+RUN_ID="${RUN_ID_BASE}_${CUDA_GRAPH_PROVENANCE}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/extended-methods}"
 SMOKE="${SMOKE:-true}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -98,6 +115,8 @@ for domain in ${DOMAINS}; do
     echo "isl=${ISL}"
     echo "osl=${OSL}"
     echo "batch_sizes=${BATCH_SIZES}"
+    echo "cudagraph_mode=${CUDAGRAPH_MODE}"
+    echo "enforce_eager=${ENFORCE_EAGER}"
 
     env \
       CLUSTER="${CLUSTER:-auto}" \
@@ -108,7 +127,7 @@ for domain in ${DOMAINS}; do
       MODEL="${MODEL}" \
       DRAFT_MODEL="${draft_model}" \
       RESULT_ROOT="${RESULT_ROOT}/${RUN_ID}/${domain_label}/${method}" \
-      RUN_ID=matrix \
+      RUN_ID="matrix_${CUDA_GRAPH_PROVENANCE}" \
       JOB_LABEL="${JOB_LABEL_PREFIX}-${domain_label}-${method}" \
       VARIANTS="${method}" \
       TEMPERATURES="${TEMPERATURES}" \
@@ -126,9 +145,9 @@ for domain in ${DOMAINS}; do
       KV_CACHE_DTYPE=auto \
       MAX_MODEL_LEN="${MAX_MODEL_LEN}" \
       MAX_NUM_BATCHED_TOKENS="${max_num_batched_tokens}" \
-      CUDAGRAPH_MODE=NONE \
+      CUDAGRAPH_MODE="${CUDAGRAPH_MODE}" \
       ATTENTION_BACKEND=TRITON_ATTN \
-      ENFORCE_EAGER=true \
+      ENFORCE_EAGER="${ENFORCE_EAGER}" \
       DISABLE_CUSTOM_ALL_REDUCE=true \
       THROUGHPUT_GPU_COUNT=4 \
       PROMPT_JSONL="${prompt_jsonl}" \

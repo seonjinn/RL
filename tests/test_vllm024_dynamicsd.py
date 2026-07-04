@@ -349,6 +349,28 @@ def test_extended_qwen8_matrix_preserves_legacy_methodology() -> None:
     assert "--gres" not in output
 
 
+def test_extended_qwen8_matrix_allows_matched_piecewise_cuda_graphs() -> None:
+    output = run_dry(
+        "submit_qwen8_extended_methods_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="true",
+        DOMAINS="Math",
+        METHODS="baseline suffix",
+        TEMPERATURES="1.0",
+        RUN_ID="q8-cg",
+        ENFORCE_EAGER="false",
+        CUDAGRAPH_MODE="PIECEWISE",
+    )
+
+    assert output.count("[DRY-RUN] variant=") == 2
+    assert "enforce_eager=false" in output
+    assert "cudagraph_mode=PIECEWISE" in output
+    assert "--cudagraph-mode 'PIECEWISE'" in output
+    assert "--enforce-eager" not in output
+    assert "/q8-cg_cg-on-piecewise/" in output
+    assert "matrix_cg-on-piecewise" in output
+
+
 def test_long_context_model_view_owns_only_config_and_metadata(
     tmp_path: Path,
 ) -> None:
