@@ -38,6 +38,15 @@ def _packed_datum(idx, context_parallel_size=1):
     }
 
 
+def test_megatron_sft_packed_dataset_is_registered():
+    from nemo_rl.data.datasets.response_datasets import (
+        DATASET_REGISTRY,
+        MegatronSFTPackedDataset,
+    )
+
+    assert DATASET_REGISTRY["megatron_sft_packed"] is MegatronSFTPackedDataset
+
+
 def test_megatron_sft_packed_matches_megatron_truncation_shift():
     row = {
         "packed_messages": [

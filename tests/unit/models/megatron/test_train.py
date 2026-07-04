@@ -142,6 +142,29 @@ class TestModelForward:
         call_kwargs = mock_model.call_args[1]
         assert call_kwargs["fp32_output"] is False
 
+    def test_model_forward_passes_prepacked_labels_and_loss_mask(self):
+        from nemo_rl.models.megatron.train import model_forward
+
+        mock_model = MagicMock(return_value=torch.randn(1, 4))
+        mock_data_dict = MagicMock()
+        mock_data_dict.get_multimodal_dict.return_value = {}
+        labels = torch.tensor([[2, 3, 4, 0]])
+        loss_mask = torch.tensor([[1.0, 1.0, 1.0, 0.0]])
+
+        model_forward(
+            model=mock_model,
+            data_dict=mock_data_dict,
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3, 4]]),
+            position_ids=torch.tensor([[0, 1, 2, 3]]),
+            attention_mask=None,
+            labels_cp_sharded=labels,
+            mtp_loss_mask=loss_mask,
+        )
+
+        call_kwargs = mock_model.call_args.kwargs
+        assert torch.equal(call_kwargs["labels"], labels)
+        assert torch.equal(call_kwargs["loss_mask"], loss_mask)
+
     def test_model_forward_clears_position_ids_for_multimodal(self):
         """Test model_forward sets position_ids to None for multimodal data."""
         from nemo_rl.models.megatron.train import model_forward
@@ -845,6 +868,30 @@ class TestLossPostProcessor:
 
         # Loss should be scaled by num_microbatches / (cp_size * cp_size) = 4 / (2 * 2) = 1.0
         assert torch.isclose(loss, torch.tensor(1.0))
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    def test_prepacked_model_loss_uses_target_aligned_mask(self, mock_cp_size):
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+            cp_normalize=True,
+        )
+        target_aligned_mask = torch.tensor([[1.0, 0.0, 1.0, 0.0]])
+        wrapped_fn = processor(
+            data_dict=MagicMock(),
+            packed_seq_params=MagicMock(),
+            global_valid_toks=torch.tensor(2.0),
+            prepacked_loss_mask=target_aligned_mask,
+        )
+
+        loss, metrics = wrapped_fn(torch.tensor([[2.0, 100.0, 4.0, 100.0]]))
+
+        assert torch.isclose(loss, torch.tensor(3.0))
+        assert metrics["num_unmasked_tokens"] == 2.0
 
     @patch(
         "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0

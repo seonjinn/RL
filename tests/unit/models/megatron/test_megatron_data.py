@@ -308,6 +308,45 @@ class TestProcessMicrobatch:
         # Verify pack was called
         mock_pack.assert_called_once()
 
+    @patch("nemo_rl.models.megatron.data.get_context_parallel_rank", return_value=0)
+    @patch(
+        "nemo_rl.models.megatron.data.get_context_parallel_world_size", return_value=2
+    )
+    def test_process_prepacked_microbatch_shards_labels_and_mtp_mask(
+        self, mock_cp_world, mock_cp_rank
+    ):
+        from nemo_rl.models.megatron.data import process_microbatch
+
+        data_dict = {
+            "input_ids": torch.tensor([[10, 20, 30, 0, 40, 50, 60, 0]]),
+            "target_ids": torch.tensor([[20, 30, 0, 40, 50, 60, 0, 0]]),
+            "position_ids": torch.tensor([[0, 1, 2, 3, 0, 1, 2, 3]]),
+            "mtp_loss_mask": torch.tensor([[1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0]]),
+            "packed_cu_seqlens": torch.tensor([[0, 4, 8]], dtype=torch.int32),
+            "packed_cu_seqlens_lengths": torch.tensor([3]),
+            "packed_max_seqlens": torch.tensor([4]),
+        }
+
+        result = process_microbatch(
+            data_dict,
+            pack_sequences=True,
+            straggler_timer=MagicMock(),
+        )
+
+        packed_indices = torch.tensor([0, 3, 4, 7])
+        assert torch.equal(
+            result.input_ids_cp_sharded,
+            data_dict["input_ids"].index_select(1, packed_indices),
+        )
+        assert torch.equal(
+            result.labels_cp_sharded,
+            data_dict["target_ids"].index_select(1, packed_indices),
+        )
+        assert torch.equal(
+            result.mtp_loss_mask,
+            data_dict["mtp_loss_mask"].index_select(1, packed_indices),
+        )
+
     @patch("nemo_rl.models.megatron.data.get_ltor_masks_and_position_ids")
     def test_process_microbatch_no_packing_propagates_mtp_loss_mask(
         self, mock_get_masks
