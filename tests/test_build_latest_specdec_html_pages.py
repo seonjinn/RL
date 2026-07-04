@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
 
 import pandas as pd
 
@@ -6,6 +9,216 @@ from scripts import build_latest_specdec_html_pages as report
 
 
 class NemoRlReportTest(unittest.TestCase):
+    def test_loads_all_july_sources_with_normalized_provenance(self) -> None:
+        rows = report.load_july_nemorl_results()
+
+        expected_sources = {
+            "lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv",
+            "lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv",
+            "lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv",
+            "lyris_qwen32_sync_pard_tp2_noarrms_matched_live_metrics_20260702.csv",
+            "lyris_qwen32_async1off_eagle3_matched_live_metrics_20260702.csv",
+            "lyris_qwen235b_sync_eagle3_absolute_metrics_20260702.csv",
+            "pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv",
+        }
+        self.assertEqual(len(rows), 54)
+        self.assertEqual(
+            {Path(value).name for value in rows["manifest"]},
+            expected_sources,
+        )
+        self.assertTrue(
+            {
+                "cluster",
+                "nodes_x_gpus",
+                "num_nodes",
+                "gpus_per_node",
+                "segment",
+                "target_tensor_parallel_size",
+                "draft_tensor_parallel_size",
+                "attention_backend",
+                "moe_backend",
+                "max_num_batched_tokens",
+                "wandb_url",
+                "avg_reward_mean",
+                "generation_kl_error_mean",
+                "result_state",
+                "metric_state",
+            }.issubset(rows.columns)
+        )
+
+        async_baseline = rows[rows["job_id"].eq("2260469")].iloc[0]
+        self.assertEqual(async_baseline["model_name"], "Qwen3-30B-A3B")
+        self.assertEqual(async_baseline["cluster"], "lyris")
+        self.assertEqual(async_baseline["nodes_x_gpus"], "4x4")
+        self.assertEqual(async_baseline["segment"], 4)
+        self.assertEqual(async_baseline["target_tensor_parallel_size"], 1)
+        self.assertEqual(async_baseline["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(async_baseline["moe_backend"], "triton")
+        self.assertEqual(async_baseline["max_num_batched_tokens"], 32768)
+        self.assertEqual(async_baseline["result_state"], "completed")
+        self.assertEqual(async_baseline["avg_reward_mean"], 0.525416)
+        self.assertEqual(async_baseline["generation_kl_error_mean"], 0.001913)
+        self.assertEqual(
+            async_baseline["wandb_url"],
+            "https://wandb.ai/nvidia/sna-nemorl-specdec-lyris/runs/cj9hx0zo",
+        )
+
+        qwen235 = rows[rows["job_id"].eq("2258657")].iloc[0]
+        self.assertEqual(qwen235["model_name"], "Qwen3-235B-A22B")
+        self.assertEqual(qwen235["nodes_x_gpus"], "32x4")
+        self.assertEqual(qwen235["segment"], 16)
+        self.assertEqual(qwen235["result_state"], "completed")
+
+        pretyche_partial = rows[rows["job_id"].eq("2319104")].iloc[0]
+        self.assertEqual(pretyche_partial["cluster"], "pretyche")
+        self.assertEqual(pretyche_partial["result_state"], "partial")
+        self.assertEqual(pretyche_partial["slurm_state"], "TIMEOUT_PARTIAL")
+
+        qwen32_async_pard = rows[rows["job_id"].eq("2260761")].iloc[0]
+        self.assertEqual(qwen32_async_pard["target_tensor_parallel_size"], 1)
+        self.assertEqual(qwen32_async_pard["draft_tensor_parallel_size"], 1)
+
+    def test_normalizes_failed_held_and_partial_states_without_collapsing_them(self) -> None:
+        cases = {
+            "COMPLETED": "completed",
+            "TIMEOUT_PARTIAL": "partial",
+            "FAILED_STEP2": "failed",
+            "HELD": "held",
+        }
+
+        for raw_state, expected in cases.items():
+            with self.subTest(raw_state=raw_state):
+                self.assertEqual(
+                    report.normalize_nemorl_result_state(raw_state, 2, 20, ""),
+                    expected,
+                )
+
+    def test_july_cg_capture_full_rows_use_the_strict_noarrms_baseline(self) -> None:
+        rows = report.fill_nemorl_speedups(report.load_july_nemorl_results()).set_index("job_id")
+
+        self.assertEqual(rows.at["2262387", "baseline_match_state"], "matched")
+        self.assertEqual(rows.at["2262687", "baseline_match_state"], "matched")
+        self.assertEqual(rows.at["2262387", "gen_tps_speedup"], 0.9875)
+        self.assertEqual(rows.at["2262236", "baseline_match_state"], "unmatched_baseline")
+        self.assertTrue(pd.isna(rows.at["2262236", "gen_tps_speedup"]))
+        self.assertEqual(rows.at["2258657", "baseline_match_state"], "unmatched_baseline")
+
+    def test_strict_baseline_key_isolates_mismatched_july_setups(self) -> None:
+        common = {
+            "source_group": "July strict source",
+            "comparison_group": "July strict source",
+            "model_name": "Qwen3-32B",
+            "mode": "sync",
+            "max_steps": 20,
+            "max_new_tokens": 4096,
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "enforce_eager": False,
+            "cluster": "lyris",
+            "nodes_x_gpus": "4x4",
+            "attention_backend": "TRITON_ATTN",
+            "moe_backend": "triton",
+            "target_tensor_parallel_size": 2,
+            "cohort": "standard",
+            "fuse_allreduce_rms": True,
+            "generation_worker_tokens_per_sec_per_gpu_mean": 100.0,
+            "e2e_tokens_per_sec_per_gpu_mean": 50.0,
+            "generation_time_s_mean": 20.0,
+            "total_step_time_s_mean": 40.0,
+            "gen_tps_speedup": float("nan"),
+            "e2e_tps_speedup": float("nan"),
+            "generation_time_speedup": float("nan"),
+            "e2e_step_time_speedup": float("nan"),
+            "result_state": "completed",
+        }
+        rows = [{**common, "job_id": "baseline", "method_k": "baseline"}]
+        matched = {
+            **common,
+            "job_id": "matched",
+            "method_k": "eagle3_k5",
+            "generation_worker_tokens_per_sec_per_gpu_mean": 200.0,
+            "e2e_tokens_per_sec_per_gpu_mean": 100.0,
+            "generation_time_s_mean": 10.0,
+            "total_step_time_s_mean": 20.0,
+        }
+        rows.append(matched)
+        mismatches = {
+            "cg-off": {"enforce_eager": True},
+            "other-cluster": {"cluster": "oci-hsg"},
+            "other-shape": {"nodes_x_gpus": "8x4"},
+            "other-attention": {"attention_backend": "FLASH_ATTN"},
+            "other-moe": {"moe_backend": "flashinfer"},
+            "other-target-tp": {"target_tensor_parallel_size": 1},
+            "other-cohort": {"cohort": "noarrms", "fuse_allreduce_rms": False},
+        }
+        for job_id, changes in mismatches.items():
+            rows.append({**matched, **changes, "job_id": job_id})
+
+        enriched = report.fill_nemorl_speedups(pd.DataFrame(rows)).set_index("job_id")
+
+        self.assertEqual(enriched.at["baseline", "baseline_match_state"], "baseline")
+        self.assertEqual(enriched.at["matched", "baseline_match_state"], "matched")
+        self.assertEqual(enriched.at["matched", "gen_tps_speedup"], 2.0)
+        self.assertEqual(enriched.at["matched", "e2e_tps_speedup"], 2.0)
+        self.assertEqual(enriched.at["matched", "generation_time_speedup"], 2.0)
+        self.assertEqual(enriched.at["matched", "e2e_step_time_speedup"], 2.0)
+        for job_id in mismatches:
+            with self.subTest(job_id=job_id):
+                self.assertEqual(
+                    enriched.at[job_id, "baseline_match_state"],
+                    "unmatched_baseline",
+                )
+                self.assertTrue(pd.isna(enriched.at[job_id, "gen_tps_speedup"]))
+
+    def test_nemorl_html_exposes_july_setup_and_correctness_metadata(self) -> None:
+        rows = report.fill_nemorl_speedups(report.load_july_nemorl_results())
+
+        html_text = report.build_nemorl_html(rows)
+
+        for heading in [
+            "Result state",
+            "Baseline match",
+            "Cluster",
+            "Nodes x GPUs",
+            "Target TP",
+            "Draft TP",
+            "Attention",
+            "MoE",
+            "Batch-token budget",
+            "segment",
+            "Reward",
+            "Generation KL",
+        ]:
+            with self.subTest(heading=heading):
+                self.assertIn(f">{heading}</th>", html_text)
+        self.assertIn("lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv", html_text)
+        self.assertIn("unmatched_baseline", html_text)
+
+    def test_latest_nemorl_builder_preserves_historical_dated_page(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_html = root / "latest.html"
+            enriched_csv = root / "enriched.csv"
+            combined_csv = root / "combined.csv"
+            historical_html = root / "historical.html"
+            historical_html.write_text("historical sentinel", encoding="utf-8")
+
+            with mock.patch.object(report, "NEMORL_HTML_DATED", historical_html):
+                report.build_latest_nemorl_outputs(
+                    live_rows=pd.DataFrame(),
+                    output_html=output_html,
+                    enriched_csv_out=enriched_csv,
+                    combined_csv_out=combined_csv,
+                )
+
+            self.assertTrue(output_html.exists())
+            self.assertTrue(enriched_csv.exists())
+            self.assertTrue(combined_csv.exists())
+            self.assertEqual(
+                historical_html.read_text(encoding="utf-8"),
+                "historical sentinel",
+            )
+
     def test_chart_rows_require_a_complete_step20_metric_window(self) -> None:
         rows = pd.DataFrame(
             [

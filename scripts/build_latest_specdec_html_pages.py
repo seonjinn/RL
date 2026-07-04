@@ -101,6 +101,98 @@ NEMORL_COMPARISON_SUMMARIES = [
     DOCS / "qwen32_pard_eagerfalse_compare_20260624.csv",
     DOCS / "nemorl_specdec_slowdown_watchlist_20260624.csv",
 ]
+NEMORL_JULY_SOURCES = [
+    {
+        "path": DOCS / "lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv",
+        "source_group": "Lyris Qwen30 sync PerfCfg CG-on matched 2026-07-02",
+        "cluster": "lyris",
+        "num_nodes": 4,
+        "gpus_per_node": 4,
+        "segment": 4,
+        "config_segment_size": 4,
+        "target_tensor_parallel_size": 1,
+        "draft_tensor_parallel_size": 1,
+        "attention_backend": "TRITON_ATTN",
+        "moe_backend": "triton",
+        "cohort": "standard",
+        "fuse_allreduce_rms": True,
+    },
+    {
+        "path": DOCS / "lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv",
+        "source_group": "Lyris Qwen30 async-1off PerfCfg CG-on matched 2026-07-02",
+        "cluster": "lyris",
+        "target_tensor_parallel_size": 1,
+        "draft_tensor_parallel_size": 1,
+        "cohort": "standard",
+        "fuse_allreduce_rms": True,
+    },
+    {
+        "path": DOCS / "lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv",
+        "source_group": "Lyris Qwen32 sync Eagle-3 PerfCfg CG-on matched 2026-07-02",
+        "cluster": "lyris",
+        "num_nodes": 4,
+        "gpus_per_node": 4,
+        "segment": 4,
+        "config_segment_size": 4,
+        "target_tensor_parallel_size": 2,
+        "draft_tensor_parallel_size": 1,
+        "attention_backend": "TRITON_ATTN",
+        "moe_backend": "triton",
+        "cohort": "standard",
+        "fuse_allreduce_rms": True,
+    },
+    {
+        "path": DOCS / "lyris_qwen32_sync_pard_tp2_noarrms_matched_live_metrics_20260702.csv",
+        "source_group": "Lyris Qwen32 sync PARD TP2 no-AR-RMS CG-on matched 2026-07-02",
+        "cluster": "lyris",
+        "num_nodes": 4,
+        "gpus_per_node": 4,
+        "segment": 4,
+        "config_segment_size": 4,
+        "attention_backend": "TRITON_ATTN",
+        "moe_backend": "triton",
+        "fuse_allreduce_rms": False,
+    },
+    {
+        "path": DOCS / "lyris_qwen32_async1off_eagle3_matched_live_metrics_20260702.csv",
+        "source_group": "Lyris Qwen32 async-1off PerfCfg CG-on matched 2026-07-02",
+        "cluster": "lyris",
+        "target_tensor_parallel_size": 1,
+        "draft_tensor_parallel_size": 1,
+        "cohort": "standard",
+        "fuse_allreduce_rms": True,
+    },
+    {
+        "path": DOCS / "lyris_qwen235b_sync_eagle3_absolute_metrics_20260702.csv",
+        "source_group": "Lyris Qwen235B sync Eagle-3 PerfCfg CG-on absolute 2026-07-02",
+        "cluster": "lyris",
+        "model": "Qwen3-235B-A22B",
+        "mode": "sync",
+        "num_nodes": 32,
+        "gpus_per_node": 4,
+        "segment": 16,
+        "config_segment_size": 16,
+        "target_tensor_parallel_size": 8,
+        "draft_tensor_parallel_size": 1,
+        "attention_backend": "TRITON_ATTN",
+        "moe_backend": "triton",
+        "cohort": "standard",
+        "fuse_allreduce_rms": True,
+    },
+    {
+        "path": DOCS / "pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv",
+        "source_group": "Pretyche Qwen32 sync OSL32768 PerfCfg CG-on matched 2026-07-02",
+        "cluster": "pretyche",
+        "num_nodes": 4,
+        "gpus_per_node": 4,
+        "segment": 4,
+        "config_segment_size": 4,
+        "target_tensor_parallel_size": 2,
+        "draft_tensor_parallel_size_by_method": {"eagle3": 1, "pard": 2},
+        "attention_backend": "TRITON_ATTN",
+        "moe_backend": "triton",
+    },
+]
 NEMORL_SACCT = DOCS / "lyris_qwen235b_pr2879_sacct_20260621.psv"
 NEMORL_OUT = DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv"
 NEMORL_LYRIS_HISTORICAL_SOURCES = [
@@ -2368,32 +2460,346 @@ def load_nemorl_comparison_summaries() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def normalize_nemorl_result_state(
+    state: object,
+    completed_steps: object,
+    max_steps: object,
+    notes: object,
+) -> str:
+    state_text = text_value(state).lower()
+    notes_text = text_value(notes).lower()
+    evidence = f"{state_text} {notes_text}"
+    if "held" in evidence:
+        return "held"
+    if "partial" in evidence or ("timeout" in evidence and clean_float(completed_steps) > 0):
+        return "partial"
+    if any(token in evidence for token in ["fail", "error", "cancel", "oom"]):
+        return "failed"
+    if "complete" in state_text:
+        return "completed"
+    completed = clean_float(completed_steps)
+    maximum = clean_float(max_steps)
+    if not math.isnan(completed) and not math.isnan(maximum) and completed >= maximum - 1:
+        return "completed"
+    if not math.isnan(completed) and completed > 0:
+        return "partial"
+    return state_text or "unknown"
+
+
+def first_float(row: pd.Series, *keys: str) -> float:
+    for key in keys:
+        value = clean_float(row.get(key))
+        if not math.isnan(value):
+            return value
+    return math.nan
+
+
+def optional_bool(value: object) -> bool | str:
+    text = text_value(value).lower()
+    if text in {"true", "1", "yes"}:
+        return True
+    if text in {"false", "0", "no"}:
+        return False
+    return ""
+
+
+def nemorl_step_span(row: pd.Series) -> tuple[str, float, float]:
+    candidates = [
+        first_text(row, "matched_step_span", "completed_step_span", "step_filter"),
+        text_value(row.get("completed_steps")),
+    ]
+    for candidate in candidates:
+        match = re.search(r"(?:steps?)?\s*(\d+)\s*-\s*(\d+)", candidate, re.IGNORECASE)
+        if match:
+            first = int(match.group(1))
+            last = int(match.group(2))
+            return f"{first}-{last}", float(last - first + 1), float(last)
+    completed = clean_float(row.get("completed_steps"))
+    return "", completed, math.nan
+
+
+def july_source_value(row: pd.Series, source: dict[str, object], key: str) -> object:
+    value = row.get(key)
+    if text_value(value):
+        return value
+    return source.get(key, "")
+
+
+def load_july_nemorl_results(
+    sources: list[dict[str, object]] | None = None,
+) -> pd.DataFrame:
+    normalized: list[dict[str, object]] = []
+    for source in sources or NEMORL_JULY_SOURCES:
+        path = Path(source["path"])
+        if not path.exists():
+            continue
+        raw = pd.read_csv(path)
+        source_group = str(source["source_group"])
+        manifest = str(path.relative_to(ROOT))
+        for source_row_index, (_, row) in enumerate(raw.iterrows(), start=2):
+            method = first_text(row, "method", "variant") or "baseline"
+            k = first_float(row, "k", "num_speculative_tokens")
+            method_k = normalize_nemorl_method(method, k=k)
+            model = first_text(row, "model") or str(source.get("model", ""))
+            mode = first_text(row, "mode") or str(source.get("mode", ""))
+            span, completed_steps, last_step = nemorl_step_span(row)
+            max_steps = first_float(row, "max_steps")
+            notes = first_text(row, "notes")
+            raw_state = first_text(row, "state", "slurm_state")
+            result_state = normalize_nemorl_result_state(raw_state, completed_steps, max_steps, notes)
+            if raw_state:
+                slurm_state = raw_state
+            elif result_state == "partial" and "timeout" in notes.lower():
+                slurm_state = "TIMEOUT_PARTIAL"
+            else:
+                slurm_state = result_state.upper()
+
+            num_nodes = clean_float(july_source_value(row, source, "num_nodes"))
+            gpus_per_node = clean_float(july_source_value(row, source, "gpus_per_node"))
+            nodes_x_gpus = (
+                f"{int(num_nodes)}x{int(gpus_per_node)}"
+                if not math.isnan(num_nodes) and not math.isnan(gpus_per_node)
+                else ""
+            )
+            segment = first_float(row, "slurm_segment", "segment")
+            if math.isnan(segment):
+                segment = clean_float(source.get("segment"))
+            config_segment_size = first_float(row, "config_segment_size")
+            if math.isnan(config_segment_size):
+                config_segment_size = clean_float(source.get("config_segment_size"))
+
+            target_tp = first_float(row, "target_tensor_parallel_size")
+            if math.isnan(target_tp):
+                target_tp = clean_float(source.get("target_tensor_parallel_size"))
+            draft_tp = first_float(row, "draft_tensor_parallel_size")
+            if method_k != "baseline" and math.isnan(draft_tp):
+                by_method = source.get("draft_tensor_parallel_size_by_method", {})
+                if isinstance(by_method, dict):
+                    draft_tp = clean_float(by_method.get(method.lower()))
+                if math.isnan(draft_tp):
+                    draft_tp = clean_float(source.get("draft_tensor_parallel_size"))
+
+            enforce_eager = optional_bool(july_source_value(row, source, "enforce_eager"))
+            fuse_allreduce_rms = optional_bool(july_source_value(row, source, "fuse_allreduce_rms"))
+            attention_backend = text_value(july_source_value(row, source, "attention_backend"))
+            moe_backend = text_value(july_source_value(row, source, "moe_backend"))
+            max_num_seqs = first_float(row, "max_num_seqs")
+            if math.isnan(max_num_seqs):
+                max_num_seqs = clean_float(source.get("max_num_seqs"))
+            max_num_batched_tokens = first_float(row, "max_num_batched_tokens")
+            if math.isnan(max_num_batched_tokens):
+                max_num_batched_tokens = clean_float(source.get("max_num_batched_tokens"))
+            wandb_url = normalize_wandb_url(row.get("wandb_url", ""))
+            cohort = first_text(row, "cohort") or str(source.get("cohort", "standard"))
+            baseline_job_id = first_text(row, "baseline_job_id", "matched_baseline_job_id")
+            normalized.append(
+                {
+                    "job_id": text_value(row.get("job_id")),
+                    "baseline_job_id": baseline_job_id,
+                    "model": model,
+                    "model_name": model_name(model),
+                    "mode": mode,
+                    "method": method,
+                    "method_k": method_k,
+                    "k": k,
+                    "max_steps": max_steps,
+                    "max_new_tokens": first_float(row, "max_osl", "max_new_tokens"),
+                    "temperature": first_float(row, "temperature"),
+                    "top_p": first_float(row, "top_p"),
+                    "enforce_eager": enforce_eager,
+                    "isl": first_text(row, "isl"),
+                    "cluster": str(source["cluster"]),
+                    "source_group": source_group,
+                    "comparison_group": source_group,
+                    "config_basis": (
+                        "normalized July performance-recipe result; "
+                        f"resource={nodes_x_gpus or 'not recorded'}, segment={fmt(segment, 0)}, "
+                        f"attention={attention_backend or 'not recorded'}, MoE={moe_backend or 'not recorded'}"
+                    ),
+                    "source_priority": -10,
+                    "slurm_state": slurm_state,
+                    "raw_state": raw_state,
+                    "result_state": result_state,
+                    "metric_state": result_state,
+                    "baseline_match_state": "unmatched_baseline",
+                    "completed_steps": completed_steps,
+                    "last_step": last_step,
+                    "completed_step_span": span,
+                    "step_filter": first_text(row, "step_filter", "matched_step_span") or span,
+                    "completed_last_step": (
+                        f"{int(completed_steps)}/{int(max_steps)} last {int(last_step)}"
+                        if not any(math.isnan(value) for value in [completed_steps, max_steps, last_step])
+                        else ""
+                    ),
+                    "total_step_time_s_mean": first_float(row, "e2e_step_time_s_mean", "e2e_step_time_s"),
+                    "generation_time_s_mean": first_float(row, "generation_time_s_mean", "generation_time_s"),
+                    "e2e_tokens_per_sec_per_gpu_mean": first_float(
+                        row,
+                        "e2e_tokens_per_sec_per_gpu_mean",
+                        "e2e_throughput_tok_s_gpu",
+                        "e2e_tokens_per_sec_per_gpu",
+                    ),
+                    "generation_worker_tokens_per_sec_per_gpu_mean": first_float(
+                        row,
+                        "generation_worker_tokens_per_sec_per_gpu_mean",
+                        "generation_throughput_tok_s_gpu",
+                        "generation_tokens_per_sec_per_gpu",
+                    ),
+                    "e2e_step_time_speedup": first_float(row, "e2e_step_time_speedup"),
+                    "e2e_tps_speedup": first_float(row, "e2e_throughput_speedup"),
+                    "generation_time_speedup": first_float(row, "generation_time_speedup"),
+                    "gen_tps_speedup": first_float(row, "generation_throughput_speedup"),
+                    "exposed_generation_time_s_mean": first_float(row, "exposed_generation_time_s_mean"),
+                    "exposed_generation_time_speedup": first_float(row, "exposed_generation_time_speedup"),
+                    "vllm_token_acceptance_pct": first_float(row, "acceptance_rate_pct"),
+                    "vllm_acceptance_length_mean_weighted_mean": first_float(
+                        row,
+                        "mean_accepted_length",
+                        "mean_accept_len",
+                        "mean_accept_length",
+                    ),
+                    "mean_generation_length": first_float(row, "mean_generation_length"),
+                    "avg_reward_mean": first_float(row, "avg_reward_mean", "avg_reward"),
+                    "generation_kl_error_mean": first_float(
+                        row,
+                        "generation_kl_error_mean",
+                        "generation_kl_error",
+                    ),
+                    "error_count": first_float(row, "error_count"),
+                    "manifest": manifest,
+                    "source_file": manifest,
+                    "source_row_index": source_row_index,
+                    "wandb_enabled": "true" if wandb_url else "",
+                    "wandb_project": "",
+                    "wandb_name": "",
+                    "wandb_url": wandb_url,
+                    "basis": first_text(row, "basis"),
+                    "notes": notes,
+                    "log_path": "",
+                    "num_nodes": num_nodes,
+                    "gpus_per_node": gpus_per_node,
+                    "nodes_x_gpus": nodes_x_gpus,
+                    "resource_shape": nodes_x_gpus,
+                    "segment": segment,
+                    "config_segment_size": config_segment_size,
+                    "target_tensor_parallel_size": target_tp,
+                    "draft_tensor_parallel_size": draft_tp,
+                    "attention_backend": attention_backend,
+                    "moe_backend": moe_backend,
+                    "max_num_seqs": max_num_seqs,
+                    "max_num_batched_tokens": max_num_batched_tokens,
+                    "cohort": cohort,
+                    "fuse_allreduce_rms": fuse_allreduce_rms,
+                    "num_prompts_per_step": first_float(row, "num_prompts_per_step"),
+                    "num_generations_per_prompt": first_float(row, "num_generations_per_prompt"),
+                }
+            )
+    rows = pd.DataFrame(normalized)
+    if not rows.empty:
+        rows["cuda_graph_state"] = rows.apply(nemorl_cuda_graph_label, axis=1)
+        rows["metric_window"] = rows.apply(nemorl_metric_window, axis=1)
+    return rows
+
+
 def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
     if rows.empty:
         return rows
     rows = rows.copy()
+    if "source_group" not in rows:
+        rows["source_group"] = ""
     if "comparison_group" not in rows:
         rows["comparison_group"] = ""
     comparison_group = rows["comparison_group"].map(text_value)
     rows["_comparison_group"] = comparison_group.where(comparison_group.ne(""), rows["source_group"])
-    for col in [
+    metric_cols = [
         "generation_worker_tokens_per_sec_per_gpu_mean",
         "e2e_tokens_per_sec_per_gpu_mean",
         "generation_time_s_mean",
         "total_step_time_s_mean",
+    ]
+    speedup_cols = [
         "gen_tps_speedup",
         "e2e_tps_speedup",
         "generation_time_speedup",
         "e2e_step_time_speedup",
-    ]:
-        rows[col] = pd.to_numeric(rows.get(col), errors="coerce")
-    group_cols = ["_comparison_group", "model_name", "mode", "max_steps", "max_new_tokens", "temperature", "top_p"]
+    ]
+    for col in [*metric_cols, *speedup_cols]:
+        if col not in rows:
+            rows[col] = math.nan
+        rows[col] = pd.to_numeric(rows[col], errors="coerce")
+    if "result_state" not in rows:
+        rows["result_state"] = "unknown"
+    rows["baseline_match_state"] = "unmatched_baseline"
+
+    string_match_cols = [
+        "model_name",
+        "mode",
+        "cluster",
+        "nodes_x_gpus",
+        "attention_backend",
+        "moe_backend",
+    ]
+    for col in string_match_cols:
+        if col not in rows:
+            rows[col] = ""
+        rows[f"_match_{col}"] = rows[col].map(lambda value: text_value(value).lower())
+    numeric_match_cols = [
+        "max_steps",
+        "max_new_tokens",
+        "temperature",
+        "top_p",
+        "target_tensor_parallel_size",
+        "max_num_seqs",
+        "max_num_batched_tokens",
+        "segment",
+        "config_segment_size",
+    ]
+    for col in numeric_match_cols:
+        if col not in rows:
+            rows[col] = math.nan
+        rows[f"_match_{col}"] = pd.to_numeric(rows[col], errors="coerce")
+    if "fuse_allreduce_rms" not in rows:
+        rows["fuse_allreduce_rms"] = ""
+    rows["_match_fuse_allreduce_rms"] = rows["fuse_allreduce_rms"].map(optional_bool).map(str)
+    rows["_match_cuda_graph"] = rows.apply(nemorl_cuda_graph_label, axis=1)
+
+    group_cols = [
+        "_comparison_group",
+        "_match_model_name",
+        "_match_mode",
+        "_match_max_steps",
+        "_match_max_new_tokens",
+        "_match_temperature",
+        "_match_top_p",
+        "_match_cuda_graph",
+        "_match_cluster",
+        "_match_nodes_x_gpus",
+        "_match_attention_backend",
+        "_match_moe_backend",
+        "_match_target_tensor_parallel_size",
+        "_match_max_num_seqs",
+        "_match_max_num_batched_tokens",
+        "_match_segment",
+        "_match_config_segment_size",
+        "_match_fuse_allreduce_rms",
+    ]
     for _, idx in rows.groupby(group_cols, dropna=False).groups.items():
         sub = rows.loc[list(idx)]
         base = sub[sub["method_k"].astype(str) == "baseline"]
         if base.empty:
+            rows.loc[list(idx), speedup_cols] = math.nan
             continue
-        base = base.iloc[0]
+        base = base.copy()
+        base["_completed_sort"] = (
+            pd.to_numeric(base["completed_steps"], errors="coerce").fillna(0)
+            if "completed_steps" in base
+            else 0
+        )
+        base = base.sort_values("_completed_sort", ascending=False).iloc[0]
+        baseline_indices = sub[sub["method_k"].astype(str) == "baseline"].index
+        spec_indices = sub[sub["method_k"].astype(str) != "baseline"].index
+        rows.loc[baseline_indices, "baseline_match_state"] = "baseline"
+        rows.loc[spec_indices, "baseline_match_state"] = "matched"
         base_gen = clean_float(base.get("generation_worker_tokens_per_sec_per_gpu_mean"))
         base_e2e = clean_float(base.get("e2e_tokens_per_sec_per_gpu_mean"))
         base_gen_time = clean_float(base.get("generation_time_s_mean"))
@@ -2411,13 +2817,15 @@ def fill_nemorl_speedups(rows: pd.DataFrame) -> pd.DataFrame:
                 rows.at[row_idx, "generation_time_speedup"] = base_gen_time / gen_time
             if not math.isnan(base_step_time) and not math.isnan(step_time) and step_time and math.isnan(clean_float(rows.at[row_idx, "e2e_step_time_speedup"])):
                 rows.at[row_idx, "e2e_step_time_speedup"] = base_step_time / step_time
-    return rows.drop(columns=["_comparison_group"], errors="ignore")
+    temporary_cols = ["_comparison_group", *[col for col in rows.columns if col.startswith("_match_")]]
+    return rows.drop(columns=temporary_cols, errors="ignore")
 
 
 def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
     parts = [
         part
         for part in [
+            load_july_nemorl_results(),
             live_rows,
             load_nemorl_comparison_summaries(),
             load_lyris_live_k_sweep_nemorl(),
@@ -2589,7 +2997,17 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         ("model_name", "Model", "text"),
         ("mode", "Mode", "text"),
         ("method_display", "Method", "text"),
+        ("result_state", "Result state", "text"),
+        ("baseline_match_state", "Baseline match", "text"),
         ("cuda_graph_state", "CUDA Graph", "text"),
+        ("cluster", "Cluster", "text"),
+        ("nodes_x_gpus", "Nodes x GPUs", "text"),
+        ("target_tensor_parallel_size", "Target TP", "int"),
+        ("draft_tensor_parallel_size", "Draft TP", "int"),
+        ("attention_backend", "Attention", "text"),
+        ("moe_backend", "MoE", "text"),
+        ("max_num_batched_tokens", "Batch-token budget", "int"),
+        ("segment", "segment", "int"),
         ("max_new_tokens", "Max OSL", "int"),
         ("slurm_state", "SLURM", "text"),
         ("metric_window", "Metric window", "text"),
@@ -2603,6 +3021,8 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
         ("gen_tps_speedup", "Gen tput speedup", "x"),
         ("vllm_token_acceptance_pct", "Acceptance", "pct"),
         ("vllm_acceptance_length_mean_weighted_mean", "Mean len", "num"),
+        ("avg_reward_mean", "Reward", "num"),
+        ("generation_kl_error_mean", "Generation KL", "num"),
         ("manifest", "Manifest", "text"),
     ]
     live_cols = [
@@ -2652,7 +3072,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
             f"<title>Lyris NeMo-RL SpecDec Status Latest</title><style>{css}</style></head><body>",
             "<header><div class=\"hero\"><div class=\"topbar\"><a href=\"../index.html\">Back to report hub</a></div><div class=\"eyebrow\">LIVE REPORT · SPECULATIVE DECODING · 2026</div><h1>Lyris NeMo-RL SpecDec Status</h1>",
-            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers Qwen3-235B PR2879/latest-main rows, CUDA graph enabled W&B rows, 2026-06-24 PARD diagnostics, and historical Qwen3-30B-A3B/Qwen3-32B Lyris/OCI-HSG artifacts.</div>",
+            f"<div class=\"subtitle\">Updated {esc(updated)}. Fresh K-sweep check: {esc(NEMORL_LIVE_K_SWEEP_CHECKED_AT)}. Data covers the normalized July 2 CUDA-graph-on performance-recipe cohorts, Qwen3-235B absolute rows awaiting baseline, and separated historical Lyris/OCI-HSG artifacts.</div>",
             "<nav class=\"toc\"><a href=\"#overview\">Overview</a><a href=\"#verified-k3\">Verified Eagle-3 K3</a><a href=\"#fresh\">CUDA-Graph-Disabled K Sweep</a><a href=\"#methodology\">Methodology</a><a href=\"#charts\">Charts</a><a href=\"#step20\">Step20 Tables</a><a href=\"#smoke\">Step3 Smoke</a><a href=\"#sources\">Sources</a></nav></div></header><main>",
             "<div><span class=\"pill\">performance recipe configs</span><span class=\"pill\">CUDA graph enabled is default</span><span class=\"pill\">temperature=1.0</span><span class=\"pill\">top_p=1.0</span><span class=\"pill\">enforce_eager shown per row</span><span class=\"pill\">Max OSL separated by section</span><span class=\"pill\">step>=2 metrics where noted</span><span class=\"pill\">GB200 segment captured</span></div>",
             "<div class=\"kpis\">",
@@ -2681,7 +3101,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "</div></section>",
             "<section id=\"methodology\"><h2>Evaluation Methodology</h2><ul>",
             "<li>Recipes: NeMo-RL <code>examples/configs/recipes/llm/performance</code>.</li>",
-            "<li>Matched comparisons keep model, mode, max OSL, temperature=1.0, top_p=1.0, and cluster/source setup fixed.</li>",
+            "<li>Matched comparisons keep source cohort, model, mode, max OSL, temperature/top_p, CUDA Graph state, cluster, node/GPU shape, attention/MoE backend, target TP, batch-token budget, segment, and recipe cohort fixed.</li>",
             "<li>SpecDec rows add only the generation speculative decoding method, drafter/checkpoint, and <code>num_speculative_tokens</code>; baseline rows use the same recipe with SpecDec disabled.</li>",
             "<li>Completed 20-step charts require either all 20 parsed metrics or the steady-state steps 2-20 with step 1 excluded. Partial step20 jobs are table-only.</li>",
             "<li>2026-06-18 and 2026-06-22 historical Qwen3-30B-A3B/Qwen3-32B K3 rows use <code>enforce_eager=true</code>; their large speedups are CUDA-graph-disabled comparisons and are not directly comparable to the current CUDA-graph-enabled default.</li>",
@@ -2697,22 +3117,33 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
             "<section id=\"smoke\"><h2>Step3 Smoke / K Sweep</h2><div class=\"table-wrap\">",
             table(smoke, cols),
             "</div></section>",
-            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_nemorl_qwen30_qwen32_eagle3_k_sweep_live_summary_20260622.csv</code>, <code>docs/lyris_qwen235b_pr2879_live_summary_skip_step1_20260621.csv</code>, <code>docs/lyris_20260623_current_plus_eagerfalse_summary_skip_step1.csv</code>, <code>docs/qwen32_pardk1_20260624_summary_skip1_latest.csv</code>, <code>docs/qwen32_pard_eagerfalse_compare_20260624.csv</code>, <code>docs/nemorl_specdec_slowdown_watchlist_20260624.csv</code>, <code>docs/lyris_qwen235b_pr2879_sacct_20260621.psv</code>, <code>latest_lyris_nemorl_*20260621-20260625_jobs.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv</code>, <code>docs/lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv</code>, <code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code>, and <code>docs/nemorl_integrated_specdec_results_clean_20260617.csv</code>.</p></section>",
+            "<section id=\"sources\"><h2>Sources</h2><p class=\"note\"><code>docs/lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv</code>, <code>docs/lyris_qwen30_async1off_strict_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_sync_eagle3_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_sync_pard_tp2_noarrms_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen32_async1off_eagle3_matched_live_metrics_20260702.csv</code>, <code>docs/lyris_qwen235b_sync_eagle3_absolute_metrics_20260702.csv</code>, <code>docs/pretyche_qwen32_sync_osl32k_matched_live_metrics_20260702.csv</code>, and the retained June historical sources listed in the combined CSV provenance column.</p></section>",
             "</main></body></html>",
         ]
     )
 
 
+def build_latest_nemorl_outputs(
+    *,
+    live_rows: pd.DataFrame | None = None,
+    output_html: Path = NEMORL_HTML,
+    enriched_csv_out: Path = NEMORL_OUT,
+    combined_csv_out: Path = NEMORL_COMBINED_OUT,
+) -> Path:
+    output_html.parent.mkdir(parents=True, exist_ok=True)
+    enriched_csv_out.parent.mkdir(parents=True, exist_ok=True)
+    combined_csv_out.parent.mkdir(parents=True, exist_ok=True)
+    current_rows = enrich_nemorl() if live_rows is None else live_rows.copy()
+    current_rows.to_csv(enriched_csv_out, index=False)
+    combined = combine_nemorl_rows(current_rows)
+    combined.to_csv(combined_csv_out, index=False)
+    output_html.write_text(build_nemorl_html(combined), encoding="utf-8")
+    return output_html
+
+
 def main() -> None:
     build_latest_vllm_outputs()
-
-    nemorl_rows = enrich_nemorl()
-    nemorl_rows.to_csv(NEMORL_OUT, index=False)
-    nemorl_combined = combine_nemorl_rows(nemorl_rows)
-    nemorl_combined.to_csv(NEMORL_COMBINED_OUT, index=False)
-    nemorl_html = build_nemorl_html(nemorl_combined)
-    NEMORL_HTML_DATED.write_text(nemorl_html, encoding="utf-8")
-    shutil.copyfile(NEMORL_HTML_DATED, NEMORL_HTML)
+    build_latest_nemorl_outputs()
 
     print(VLLM_ADDED_OUT)
     print(DFLARE_COMPLETED_OUT)
