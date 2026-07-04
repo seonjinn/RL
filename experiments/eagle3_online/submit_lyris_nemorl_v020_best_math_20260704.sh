@@ -377,7 +377,7 @@ render_sbatch() {
   for arg in "${sbatch_args[@]}"; do
     printf ' %q' "${arg}"
   done
-  printf ' %q\n' ray.sub
+  printf ' %q\n' "${REMOTE_REPO}/ray.sub"
 }
 
 render_job() {
@@ -541,7 +541,7 @@ submit_job() {
     HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
     SOURCE_VLLM_SITE="${source_site}" \
     COMMAND="${command}" \
-      sbatch --test-only "${sbatch_args[@]}" ray.sub 2>&1
+      sbatch --test-only "${sbatch_args[@]}" "${REMOTE_REPO}/ray.sub" 2>&1
   ); then
     printf '%s\n' "${test_only_output}" >&2
     return 1
@@ -564,7 +564,7 @@ submit_job() {
       HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
       SOURCE_VLLM_SITE="${source_site}" \
       COMMAND="${command}" \
-        sbatch "${sbatch_args[@]}" ray.sub
+        sbatch "${sbatch_args[@]}" "${REMOTE_REPO}/ray.sub"
     )
     actual_job_id="$(sed -n 's/^Submitted batch job //p' <<< "${actual_output}" | tail -1)"
     if [[ -z "${actual_job_id}" ]]; then

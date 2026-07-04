@@ -147,6 +147,11 @@ def prepare_fake_submission(tmp_path: Path) -> dict[str, str]:
         count=$((count + 1))
         printf '%s\n' "${count}" > "${FAKE_SBATCH_COUNT}"
         printf '%s\0' "$@" > "${FAKE_SBATCH_PREFIX}.${count}"
+        last_arg="${!#}"
+        if [[ "${last_arg}" != "${FAKE_REMOTE_REPO}/ray.sub" ]]; then
+          printf 'sbatch: unable to open file %s\n' "${last_arg}" >&2
+          exit 43
+        fi
         if [[ "${1:-}" == "--test-only" ]]; then
           if [[ "${FAKE_TEST_ONLY_FAIL:-false}" == "true" ]]; then
             echo 'sbatch: test-only rejected' >&2
