@@ -140,14 +140,18 @@ installed in the staged runtime.
 
 | Profile | Domain | Temp | ISL | OSL | Batch/GPU | Method | tok/s/GPU | Speedup | Acceptance | Mean accept length | Job |
 |---|---|---:|---:|---:|---:|---|---:|---|---:|---:|---|
+| Native 32K | Math | 0.0 | 4,096 | 32,768 | 1 | DFlare K16 | 9.53 | 3.28x | 35.85% | 6.38 | `2271128` |
+| Native 32K | Math | 1.0 | 4,096 | 32,768 | 1 | DFlare K16 | 12.34 | 4.23x | 52.34% | 8.85 | `2271129` |
+| Native 32K | SWE | 0.0 | 4,096 | 32,768 | 1 | DFlare K16 | 13.47 | 4.76x | 55.30% | 9.29 | `2271130` |
+| YaRN 64K | Math | 1.0 | 4,096 | 65,536 | 1 | DFlare K16 | 12.47 | waiting matched baseline | 54.13% | 9.12 | `2272240` |
 | YaRN 64K | SWE | 0.0 | 4,096 | 65,536 | 1 | DFlare K16 | 15.52 | waiting matched baseline | 65.91% | 10.89 | `2271723` |
 
-Jobs `2271721` and `2271722` failed when faster ranks entered result gathering
-while slower ranks were still generating. The default PyTorch process-group
-timeout was 600 seconds, but long-context rank runtimes differed by more than
-ten minutes. The staged runner now uses a six-hour process-group timeout; Math
-retries are `2272239` and `2272240`. Running jobs remain excluded from the
-performance table.
+The native SWE temperature-1 job, the original 64K Math/SWE failures, and the
+original 128K jobs all hit the same 600-second PyTorch process-group timeout
+when faster ranks entered result gathering before slower ranks. The staged
+runner now uses a six-hour process-group timeout. Math 64K retry `2272240`
+completed; retry `2272239` is still running. Running and failed jobs remain
+excluded from the performance table.
 
 ## Fixed-Length Tier Test
 

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "backend": "angelslim_transformers_native",
+  "status": "complete",
+  "config": {
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218",
+    "draft_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--AngelSlim--Qwen3-8b-dflare/snapshots/55e2c8d86d76ce1e79fa3b8642c7f80091285a82",
+    "draft_arch": "dflare",
+    "dataset": "math500",
+    "max_samples": 4,
+    "input_length": 4096,
+    "max_new_tokens": 32768,
+    "ignore_eos": true,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "block_size": 16,
+    "world_size": 4
+  },
+  "results": {
+    "samples": 4,
+    "baseline_decode_time_per_token_s": 0.3427126284651565,
+    "spec_decode_time_per_token_s": 0.08101654257302915,
+    "baseline_decode_tok_s": 2.917896560971548,
+    "spec_decode_tok_s": 12.343158177832505,
+    "decode_throughput_speedup": 4.230156182686169,
+    "mean_acceptance_length": 8.851722956231011,
+    "acceptance_rate": 0.5234481970820675,
+    "acceptance_length_histogram": [
+      0.0,
+      0.23635107118175536,
+      0.039014889740528996,
+      0.03926619337814915,
+      0.03260664698121505,
+      0.039014889740528996,
+      0.033360557894075514,
+      0.04561161022805805,
+      0.0304077401520387,
+      0.03329773198467048,
+      0.03826097882766853,
+      0.0489413834265251,
+      0.03461707608217629,
+      0.1330024502104668,
+      0.03681598291135264,
+      0.035810768360872026,
+      0.14362002889991832
+    ]
+  }
+}
