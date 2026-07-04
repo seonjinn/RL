@@ -84,8 +84,14 @@ def test_task5_latest_vllm_html_contains_native_and_status_sections(tmp_path: Pa
 
     assert "vLLM 0.24 / Native Profile Results" in html_text
     assert "vLLM 0.24 / DFlare Completed Results" in html_text
-    assert html_text.count('class="native-profile-grid"') == 3
-    assert html_text.count('class="native-speedup-matrix"') == 12
+    assert html_text.count('class="native-profile-grid"') >= 4
+    assert html_text.count('class="native-speedup-matrix"') >= 16
+    assert (
+        'class="native-profile" data-profile="Native 32K" '
+        'data-cuda-graph="PIECEWISE"'
+    ) in html_text
+    assert "CUDA Graph ON (PIECEWISE)" in html_text
+    assert "waiting baseline" in html_text
     assert "speed-cell slowdown" in html_text
     assert "speed-cell speedup" in html_text
     assert "speed-cell neutral" in html_text
