@@ -8,29 +8,30 @@ set -euo pipefail
 
 NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-64}
 STEPS=${STEPS:-20}
-TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-992}
+TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-64}
 DATA_PARALLEL_SHARDING_STRATEGY=${DATA_PARALLEL_SHARDING_STRATEGY:-optim_grads_params}
 RUN_KIND=${RUN_KIND:-superv3_nemorl_main}
 RUN_ID=${RUN_ID:-$(date +%H%M%S)}
 
-WORKDIR=${WORKDIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_main_prepacked_latest_48b2cd2}
+WORKDIR=${WORKDIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_main_strict_20260704}
 WORKDIR=$(realpath "${WORKDIR}")
-DATA_DIR=${DATA_DIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/users/pthombre/LongSFTRun}
-ORIG_MLM_CKPT=${ORIG_MLM_CKPT:-${DATA_DIR}/reinit_output/checkpoints/pthombre-reinit-embeddings}
-PRETRAINED_DIR=${PRETRAINED_DIR:-${DATA_DIR}/pretrainedSuperModelHF}
-TOKENIZER_DIR=${TOKENIZER_DIR:-/lustre/fsw/portfolios/llmservice/users/jjennings/workspace/megatron-sft-right-truncation/tokenizers}
+DATA_DIR=${DATA_DIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/data/superv3_yifuw_clean}
+ORIG_MLM_CKPT=${ORIG_MLM_CKPT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/yifuw/megatron_ckpt/mopd-nanov3-public-3teacher/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16}
+PRETRAINED_DIR=${PRETRAINED_DIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/yifuw/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16}
+TOKENIZER_DIR=${TOKENIZER_DIR:-/lustre/fsw/portfolios/llmservice/projects/llmservice_fm_text/users/jjennings/workspace/megatron-sft-right-truncation/tokenizers}
+MODEL_NAME=${MODEL_NAME:-/mnt/superv3_pretrained/snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e}
 
 SHARED_CACHE_ROOT=${SHARED_CACHE_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/.cache/nemo_rl_superv3_main}
 HF_HOME=${SUPER_HF_HOME:-${SHARED_CACHE_ROOT}/hf_home}
 
-TRAIN_FILE=${TRAIN_FILE:-final_shuffled_25pct_materialized_filtered.jsonl}
+TRAIN_FILE=${TRAIN_FILE:-final_shuffled.first_30000.jsonl.packed}
 VAL_FILE=${VAL_FILE:-${TRAIN_FILE}}
-CONFIG_PATH=${CONFIG_PATH:-examples/configs/sft_superv3.yaml}
+CONFIG_PATH=${CONFIG_PATH:-examples/configs/sft_superv3_prepacked.yaml}
 
-CONTAINER=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo-rl-nightly-20260522/nemo_rl_nightly.sqsh}
+CONTAINER=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo-rl-nightly-20260704/nemo_rl_nightly_20260704.sqsh}
 SLURM_ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_nemorl}
 SLURM_PARTITION=${SLURM_PARTITION:-batch}
-SLURM_TIME=${SLURM_TIME:-4:00:0}
+SLURM_TIME=${SLURM_TIME:-2:00:0}
 
 WANDB_PROJECT=${WANDB_PROJECT:-pthombre-nemotron-sft}
 WANDB_NAME=${WANDB_NAME:-superv3_nemorl_main_${RUN_KIND}_${STEPS}step_${RUN_ID}}
@@ -38,7 +39,7 @@ WANDB_ENABLED=${WANDB_ENABLED:-false}
 CHECKPOINTING_ENABLED=${CHECKPOINTING_ENABLED:-false}
 CHECKPOINT_DIR=${CHECKPOINT_DIR:-results/${WANDB_NAME}}
 
-LOG_DIR=${LOG_DIR:-${WORKDIR}/logs/$(date +%Y%m%d)}
+LOG_DIR=${LOG_DIR:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/superv3_20step/logs/nemo}
 mkdir -p "${LOG_DIR}" "${HF_HOME}" "${SHARED_CACHE_ROOT}"
 
 require_dir() {
@@ -110,7 +111,7 @@ uv run --locked --extra mcore examples/run_sft.py \
   logger.wandb.name=${WANDB_NAME} \
   logger.wandb.project=${WANDB_PROJECT} \
   logger.wandb_enabled=${WANDB_ENABLED} \
-  policy.model_name=/mnt/superv3_pretrained \
+  policy.model_name=${MODEL_NAME} \
   policy.tokenizer.name=/mnt/tokenizer \
   ++policy.pretrained_checkpoint.format=megatron_lm \
   ++policy.pretrained_checkpoint.path=/mnt/superv3_pretrained_mlm \
