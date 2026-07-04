@@ -492,18 +492,23 @@ def test_angelslim_compact_transport_patch_stages_cpu_only_results() -> None:
     patch = (
         EXPERIMENT / "patches/angelslim_compact_result_transport.patch"
     ).read_text(encoding="utf-8")
+    append_marker = "responses.append(compact_response_map(response))"
+    partial_marker = "write_rank_partial(args.output_json, _dist_rank(), responses)"
 
     assert "${angelslim_source}/tools/angelslim_dflare_transport.py" in worker
     assert "angelslim_compact_result_transport.patch" in worker
-    assert "compact_response_map' \"${angelslim_source}/tools/dflash_benchmark.py\"" in worker
-    assert "write_rank_partial' \"${angelslim_source}/tools/dflash_benchmark.py\"" in worker
+    assert append_marker in worker
+    assert partial_marker in worker
+    assert 'if [[ "${has_compact_append}" == "1" && "${has_partial_write}" == "1" ]]; then' in worker
+    assert 'elif [[ "${has_compact_append}" == "0" && "${has_partial_write}" == "0" ]]; then' in worker
+    assert "partial AngelSlim compact transport patch state" in worker
     assert "from angelslim_dflare_transport import" in patch
     assert "compact_response_map" in patch
     assert "write_rank_partial" in patch
     assert "responses.append(response)" in patch
-    assert "responses.append(compact_response_map(response))" in patch
-    assert "write_rank_partial(args.output_json, _dist_rank(), responses)" in patch
-    assert patch.index("write_rank_partial(args.output_json, _dist_rank(), responses)") < (
+    assert append_marker in patch
+    assert partial_marker in patch
+    assert patch.index(partial_marker) < (
         patch.index("if _dist_size() > 1:")
     )
 

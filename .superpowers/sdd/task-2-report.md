@@ -242,3 +242,41 @@ FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_s
 ................................                                         [100%]
 32 passed in 2.47s
 ```
+
+## Re-Review Follow-Up
+
+Reviewer correction addressed:
+
+- replaced the loose function-name idempotency guard with exact behavioral
+  postconditions in `tools/dflash_benchmark.py`
+- the staging worker now:
+  - skips only when both
+    `responses.append(compact_response_map(response))` and
+    `write_rank_partial(args.output_json, _dist_rank(), responses)` exist
+  - applies the patch only when neither marker exists
+  - exits with a partial-patch error when exactly one marker exists
+- strengthened the focused test to assert those exact marker strings, the
+  three-state branch structure, and the partial-state rejection message
+
+Commands:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Outputs:
+
+```text
+....................F...........                                         [100%]
+=================================== FAILURES ===================================
+________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
+E       assert 'responses.append(compact_response_map(response))' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
+
+=========================== short test summary info ============================
+FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
+1 failed, 31 passed in 2.40s
+
+................................                                         [100%]
+32 passed in 2.58s
+```

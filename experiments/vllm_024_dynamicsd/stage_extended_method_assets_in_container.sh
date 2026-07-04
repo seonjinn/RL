@@ -106,10 +106,26 @@ fi
 install -D -m 0644 \
   /workspace/experiment/angelslim_dflare_transport.py \
   "${angelslim_source}/tools/angelslim_dflare_transport.py"
-if ! grep -q 'compact_response_map' "${angelslim_source}/tools/dflash_benchmark.py" \
-  || ! grep -q 'write_rank_partial' "${angelslim_source}/tools/dflash_benchmark.py"; then
+append_marker='responses.append(compact_response_map(response))'
+partial_marker='write_rank_partial(args.output_json, _dist_rank(), responses)'
+has_compact_append=0
+has_partial_write=0
+if grep -Fq "${append_marker}" "${angelslim_source}/tools/dflash_benchmark.py"; then
+  has_compact_append=1
+fi
+if grep -Fq "${partial_marker}" "${angelslim_source}/tools/dflash_benchmark.py"; then
+  has_partial_write=1
+fi
+if [[ "${has_compact_append}" == "1" && "${has_partial_write}" == "1" ]]; then
+  :
+elif [[ "${has_compact_append}" == "0" && "${has_partial_write}" == "0" ]]; then
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_compact_result_transport.patch
+else
+  printf '%s\n' \
+    "partial AngelSlim compact transport patch state in ${angelslim_source}/tools/dflash_benchmark.py" \
+    >&2
+  exit 1
 fi
 python3 -m compileall -q \
   "${angelslim_source}/tools/angelslim_dflare_transport.py" \
