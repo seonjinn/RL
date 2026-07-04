@@ -28,7 +28,7 @@ LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.0-aarch64-ubuntu2404.sqsh}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 MODEL="${MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137}"
-DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
+DRAFT_MODEL="${DRAFT_MODEL-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/sync-rollout}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 VARIANTS="${VARIANTS:-baseline static dynamic}"
@@ -44,11 +44,20 @@ TOP_P="${TOP_P:-0.9}"
 SEED="${SEED:-1234}"
 SMOKE="${SMOKE:-true}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"
 CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
 ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS:-64}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-}"
 MOE_BACKEND="${MOE_BACKEND:-}"
 DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
+DIST_TIMEOUT_SECONDS="${DIST_TIMEOUT_SECONDS:-}"
+ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-false}"
+MODEL_LOADER_NUM_THREADS="${MODEL_LOADER_NUM_THREADS:-0}"
+DISABLE_FUSE_ALLREDUCE_RMS="${DISABLE_FUSE_ALLREDUCE_RMS:-false}"
+MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-}"
+MAMBA_BACKEND="${MAMBA_BACKEND:-}"
+ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING="${ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING:-false}"
+MAMBA_CACHE_PHILOX_ROUNDS="${MAMBA_CACHE_PHILOX_ROUNDS:-}"
 RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-py312}"
 PROMPT_JSONL="${PROMPT_JSONL:-}"
 PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
@@ -92,11 +101,20 @@ render_sbatch() {
   local attention_arg=""
   local moe_arg=""
   local distributed_arg=""
+  local timeout_arg=""
+  local expert_parallel_arg=""
+  local model_loader_arg=""
+  local compilation_arg=""
+  local mamba_ssm_arg=""
+  local mamba_backend_arg=""
+  local mamba_rounding_arg=""
+  local mamba_philox_arg=""
   local batched_tokens_arg=""
   local recipe_arg=""
   local global_prompts_arg=""
   local global_replicas_arg=""
   local runner_prefix=""
+  local container_pythonpath=""
   if [[ -n "${PROMPT_JSONL}" ]]; then
     prompt_arg="--prompt-jsonl '${PROMPT_JSONL}' --prompt-offset '${PROMPT_OFFSET}'"
   fi
@@ -108,6 +126,30 @@ render_sbatch() {
   fi
   if [[ -n "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
     distributed_arg="--distributed-executor-backend '${DISTRIBUTED_EXECUTOR_BACKEND}'"
+  fi
+  if [[ -n "${DIST_TIMEOUT_SECONDS}" ]]; then
+    timeout_arg="--distributed-timeout-seconds '${DIST_TIMEOUT_SECONDS}'"
+  fi
+  if [[ "${ENABLE_EXPERT_PARALLEL}" == "true" ]]; then
+    expert_parallel_arg="--enable-expert-parallel"
+  fi
+  if (( MODEL_LOADER_NUM_THREADS > 0 )); then
+    model_loader_arg="--model-loader-num-threads '${MODEL_LOADER_NUM_THREADS}'"
+  fi
+  if [[ "${DISABLE_FUSE_ALLREDUCE_RMS}" == "true" ]]; then
+    compilation_arg="--disable-fuse-allreduce-rms"
+  fi
+  if [[ -n "${MAMBA_SSM_CACHE_DTYPE}" ]]; then
+    mamba_ssm_arg="--mamba-ssm-cache-dtype '${MAMBA_SSM_CACHE_DTYPE}'"
+  fi
+  if [[ -n "${MAMBA_BACKEND}" ]]; then
+    mamba_backend_arg="--mamba-backend '${MAMBA_BACKEND}'"
+  fi
+  if [[ "${ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING}" == "true" ]]; then
+    mamba_rounding_arg="--enable-mamba-cache-stochastic-rounding"
+  fi
+  if [[ -n "${MAMBA_CACHE_PHILOX_ROUNDS}" ]]; then
+    mamba_philox_arg="--mamba-cache-philox-rounds '${MAMBA_CACHE_PHILOX_ROUNDS}'"
   fi
   if [[ "${MAX_NUM_BATCHED_TOKENS}" != "recipe" && "${MAX_NUM_BATCHED_TOKENS}" != "default" ]]; then
     batched_tokens_arg="--max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}'"
@@ -123,6 +165,7 @@ render_sbatch() {
   fi
   if (( NODES > 1 )); then
     runner_prefix="/workspace/experiment/run_multinode_ray.sh"
+    container_pythonpath="${RAY_SITE}"
   fi
   cat <<EOF
 #!/usr/bin/env bash
@@ -142,7 +185,7 @@ set -euo pipefail
 
 test -s '${CONTAINER_IMAGE}'
 test -d '${MODEL}'
-if [[ '${variant}' != 'baseline' ]]; then
+if [[ '${variant}' == 'static' || '${variant}' == 'dynamic' ]]; then
   test -d '${DRAFT_MODEL}'
 fi
 if [[ -n '${PROMPT_JSONL}' ]]; then
@@ -159,6 +202,7 @@ export PYTHONUNBUFFERED=1
 export HF_HOME='${HF_HOME}'
 export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
 export HF_DATASETS_CACHE='${HF_HOME}/datasets'
+export PYTHONPATH='${container_pythonpath}'
 export NODE_LOCAL_CACHE_ROOT="/tmp/sna/vllm024_sync_\${SLURM_JOB_ID}_${variant}"
 export XDG_CACHE_HOME="\${NODE_LOCAL_CACHE_ROOT}/xdg"
 export VLLM_CACHE_ROOT="\${NODE_LOCAL_CACHE_ROOT}/vllm"
@@ -182,6 +226,12 @@ echo 'source_recipe=${SOURCE_RECIPE}'
 echo 'moe_backend=${MOE_BACKEND:-auto}'
 echo 'nodes=${NODES}'
 echo 'target_tp=${TP}'
+if [[ '${variant}' == 'mtp_static' || '${variant}' == 'mtp_dynamic' ]]; then
+  echo 'method=mtp'
+fi
+if [[ '${variant}' == 'mtp_dynamic' ]]; then
+  echo 'num_speculative_tokens_per_batch_size=${DYNAMIC_SCHEDULE}'
+fi
 
 if (( ${NODES} > 1 )); then
   export HEAD_NODE="\$(scontrol show hostnames "\${SLURM_JOB_NODELIST}" | head -n 1)"
@@ -201,9 +251,6 @@ srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
   bash -lc "set -euo pipefail
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
-if (( ${NODES} > 1 )); then
-  export PYTHONPATH='${RAY_SITE}':"\${PYTHONPATH:-}"
-fi
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
 ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --model '${MODEL}' \\
@@ -214,7 +261,7 @@ ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --tensor-parallel-size '${TP}' \\
   --pipeline-parallel-size '${PP}' \\
   --dtype bfloat16 \\
-  --kv-cache-dtype auto \\
+  --kv-cache-dtype '${KV_CACHE_DTYPE}' \\
   --gpu-memory-utilization '${GPU_MEMORY_UTILIZATION}' \\
   --max-model-len '${MAX_MODEL_LEN}' \\
   ${batched_tokens_arg} \\
@@ -232,6 +279,14 @@ ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   ${attention_arg} \\
   ${moe_arg} \\
   ${distributed_arg} \\
+  ${timeout_arg} \\
+  ${expert_parallel_arg} \\
+  ${model_loader_arg} \\
+  ${compilation_arg} \\
+  ${mamba_ssm_arg} \\
+  ${mamba_backend_arg} \\
+  ${mamba_rounding_arg} \\
+  ${mamba_philox_arg} \\
   ${recipe_arg} \\
   ${global_prompts_arg} \\
   ${global_replicas_arg} \\
@@ -256,7 +311,7 @@ fi
 
 for variant in ${VARIANTS}; do
   case "${variant}" in
-    baseline|static|dynamic) ;;
+    baseline|static|dynamic|mtp_static|mtp_dynamic) ;;
     *)
       echo "Unsupported variant: ${variant}" >&2
       exit 2

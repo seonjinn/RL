@@ -28,7 +28,7 @@ LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.0-aarch64-ubuntu2404.sqsh}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 MODEL="${MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137}"
-DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
+DRAFT_MODEL="${DRAFT_MODEL-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/runs}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 VARIANTS="${VARIANTS:-baseline static dynamic}"
@@ -117,6 +117,7 @@ render_sbatch() {
   local throughput_gpu_arg=""
   local prompt_arg=""
   local runner_prefix=""
+  local container_pythonpath="${EXTRA_PYTHONPATH}"
   if [[ -n "${ATTENTION_BACKEND}" ]]; then
     attention_arg="--attention-backend '${ATTENTION_BACKEND}'"
   fi
@@ -164,6 +165,10 @@ render_sbatch() {
   fi
   if (( NODES > 1 )); then
     runner_prefix="/workspace/experiment/run_multinode_ray.sh"
+    container_pythonpath="${RAY_SITE}"
+    if [[ -n "${EXTRA_PYTHONPATH}" ]]; then
+      container_pythonpath="${container_pythonpath}:${EXTRA_PYTHONPATH}"
+    fi
   fi
   cat <<EOF
 #!/usr/bin/env bash
@@ -200,10 +205,7 @@ export PYTHONUNBUFFERED=1
 export HF_HOME='${HF_HOME}'
 export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
 export HF_DATASETS_CACHE='${HF_HOME}/datasets'
-export PYTHONPATH='${EXTRA_PYTHONPATH}'
-if (( ${NODES} > 1 )); then
-  export PYTHONPATH='${RAY_SITE}':"\${PYTHONPATH:-}"
-fi
+export PYTHONPATH='${container_pythonpath}'
 export NODE_LOCAL_CACHE_ROOT="/tmp/sna/vllm024_\${SLURM_JOB_ID}_${variant}_t$(normalize_temperature "${temperature}")"
 export XDG_CACHE_HOME="\${NODE_LOCAL_CACHE_ROOT}/xdg"
 export VLLM_CACHE_ROOT="\${NODE_LOCAL_CACHE_ROOT}/vllm"
@@ -249,10 +251,6 @@ srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 export CUDA_MODULE_LOADING=LAZY
-export PYTHONPATH='${EXTRA_PYTHONPATH}'
-if (( ${NODES} > 1 )); then
-  export PYTHONPATH='${RAY_SITE}':"\${PYTHONPATH:-}"
-fi
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
 ${runner_prefix} python3 /workspace/experiment/benchmark.py \\
   --model '${MODEL}' \\

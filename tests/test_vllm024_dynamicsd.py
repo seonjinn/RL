@@ -371,6 +371,8 @@ def test_matrix_dry_run_supports_multinode_native_mtp() -> None:
     assert "--mode 'mtp_static'" in output
     assert "--mode 'mtp_dynamic'" in output
     assert "method=mtp" in output
+    assert "--draft-model ''" in output
+    assert "Qwen3-32B-speculator.eagle3" not in output
     assert "--gres" not in output
 
 
@@ -798,6 +800,62 @@ def test_sync_rollout_dry_run_models_barriered_rl_sampling() -> None:
     assert "VLLM_USE_V1" not in output
     assert "cudagraph_mode=PIECEWISE" in output
     assert "--segment=1" in output
+    assert "--gres" not in output
+
+
+def test_sync_rollout_dry_run_supports_native_mtp_tp8() -> None:
+    output = run_dry(
+        "submit_sync_rollout.sh",
+        CLUSTER="ptyche",
+        VARIANTS="baseline mtp_static mtp_dynamic",
+        DRAFT_MODEL="",
+        NODES="2",
+        SEGMENT="2",
+        TP="8",
+        DISTRIBUTED_EXECUTOR_BACKEND="ray",
+        ENABLE_EXPERT_PARALLEL="true",
+        KV_CACHE_DTYPE="fp8",
+        MAMBA_SSM_CACHE_DTYPE="float16",
+        MAMBA_BACKEND="flashinfer",
+    )
+
+    assert output.count("[DRY-RUN] sync_variant=") == 3
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "--mode 'mtp_static'" in output
+    assert "--mode 'mtp_dynamic'" in output
+    assert "--draft-model ''" in output
+    assert "Qwen3-32B-speculator.eagle3" not in output
+    assert "--distributed-executor-backend 'ray'" in output
+    assert "--enable-expert-parallel" in output
+    assert "--kv-cache-dtype 'fp8'" in output
+    assert "--mamba-ssm-cache-dtype 'float16'" in output
+    assert "--mamba-backend 'flashinfer'" in output
+
+
+def test_nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16() -> None:
+    output = run_dry(
+        "submit_nemotron_sync_rl_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        MODELS="ultra super",
+        RUN_ID="sync-bf16-test",
+    )
+
+    assert output.count("[DRY-RUN] sync_variant=") == 6
+    assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
+    assert "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in output
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "--tensor-parallel-size '8'" in output
+    assert "#SBATCH --nodes=1" in output
+    assert "#SBATCH --segment=1" in output
+    assert "--tensor-parallel-size '2'" in output
+    assert "--temperature 1.0" in output
+    assert "--top-p 0.95" in output
+    assert "--samples-per-prompt 4" in output
+    assert "--rollout-batches 2" in output
+    assert "--mode 'mtp_static'" in output
+    assert "--mode 'mtp_dynamic'" in output
     assert "--gres" not in output
 
 

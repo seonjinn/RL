@@ -156,8 +156,12 @@ def prompt_batch_hash(prompt_token_ids: list[list[int]]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--draft-model", required=True)
-    parser.add_argument("--mode", choices=("baseline", "static", "dynamic"), required=True)
+    parser.add_argument("--draft-model", default="")
+    parser.add_argument(
+        "--mode",
+        choices=("baseline", "static", "dynamic", "mtp_static", "mtp_dynamic"),
+        required=True,
+    )
     parser.add_argument("--static-k", type=int, default=5)
     parser.add_argument("--dynamic-schedule", default=DEFAULT_DYNAMIC_SCHEDULE)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
@@ -171,7 +175,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attention-backend", default="")
     parser.add_argument("--moe-backend", default="")
     parser.add_argument("--distributed-executor-backend", default="")
+    parser.add_argument("--distributed-timeout-seconds", type=int)
+    parser.add_argument("--enable-expert-parallel", action="store_true")
+    parser.add_argument("--model-loader-num-threads", type=int, default=0)
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
+    parser.add_argument("--disable-fuse-allreduce-rms", action="store_true")
+    parser.add_argument("--mamba-ssm-cache-dtype", default="")
+    parser.add_argument("--mamba-backend", default="")
+    parser.add_argument(
+        "--enable-mamba-cache-stochastic-rounding", action="store_true"
+    )
+    parser.add_argument("--mamba-cache-philox-rounds", type=int)
     parser.add_argument("--num-prompts", type=int, default=16)
     parser.add_argument("--samples-per-prompt", type=int, default=16)
     parser.add_argument("--rollout-batches", type=int, default=3)
@@ -206,6 +220,12 @@ def main() -> None:
 
     from vllm import LLM, SamplingParams  # pyright: ignore[reportMissingImports]
 
+    compilation_config: dict[str, Any] = {
+        "cudagraph_mode": args.cudagraph_mode,
+    }
+    if args.disable_fuse_allreduce_rms:
+        compilation_config["pass_config"] = {"fuse_allreduce_rms": False}
+
     llm_kwargs: dict[str, Any] = {
         "model": args.model,
         "tensor_parallel_size": args.tensor_parallel_size,
@@ -218,9 +238,10 @@ def main() -> None:
         "max_num_seqs": min(args.engine_max_num_seqs, request_count),
         "enable_prefix_caching": True,
         "enable_chunked_prefill": True,
+        "enable_expert_parallel": args.enable_expert_parallel,
         "seed": args.seed,
         "disable_log_stats": False,
-        "compilation_config": {"cudagraph_mode": args.cudagraph_mode},
+        "compilation_config": compilation_config,
     }
     if speculative_config is not None:
         llm_kwargs["speculative_config"] = copy.deepcopy(speculative_config)
@@ -234,6 +255,21 @@ def main() -> None:
         llm_kwargs["distributed_executor_backend"] = (
             args.distributed_executor_backend
         )
+    if args.distributed_timeout_seconds is not None:
+        llm_kwargs["distributed_timeout_seconds"] = args.distributed_timeout_seconds
+    if args.model_loader_num_threads > 0:
+        llm_kwargs["model_loader_extra_config"] = {
+            "enable_multithread_load": True,
+            "num_threads": args.model_loader_num_threads,
+        }
+    if args.mamba_ssm_cache_dtype:
+        llm_kwargs["mamba_ssm_cache_dtype"] = args.mamba_ssm_cache_dtype
+    if args.mamba_backend:
+        llm_kwargs["mamba_backend"] = args.mamba_backend
+    if args.enable_mamba_cache_stochastic_rounding:
+        llm_kwargs["enable_mamba_cache_stochastic_rounding"] = True
+    if args.mamba_cache_philox_rounds is not None:
+        llm_kwargs["mamba_cache_philox_rounds"] = args.mamba_cache_philox_rounds
 
     llm = LLM(**llm_kwargs)
     tokenizer = llm.get_tokenizer()
@@ -301,12 +337,24 @@ def main() -> None:
             "max_num_batched_tokens": args.max_num_batched_tokens,
             "enable_prefix_caching": True,
             "enable_chunked_prefill": True,
+            "enable_expert_parallel": args.enable_expert_parallel,
             "attention_backend": args.attention_backend or "auto",
             "moe_backend": args.moe_backend or "auto",
             "distributed_executor_backend": (
                 args.distributed_executor_backend or "auto"
             ),
+            "distributed_timeout_seconds": args.distributed_timeout_seconds,
+            "model_loader_extra_config": llm_kwargs.get(
+                "model_loader_extra_config"
+            ),
             "cudagraph_mode": args.cudagraph_mode,
+            "compilation_config": compilation_config,
+            "mamba_ssm_cache_dtype": args.mamba_ssm_cache_dtype or "auto",
+            "mamba_backend": args.mamba_backend or "auto",
+            "enable_mamba_cache_stochastic_rounding": (
+                args.enable_mamba_cache_stochastic_rounding
+            ),
+            "mamba_cache_philox_rounds": args.mamba_cache_philox_rounds,
             "num_prompts": args.num_prompts,
             "samples_per_prompt": args.samples_per_prompt,
             "requests_per_rollout_batch": request_count,
