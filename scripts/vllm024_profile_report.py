@@ -20,6 +20,7 @@ DOMAIN_ORDER = ("Math", "SWE")
 TEMPERATURE_ORDER = (0.0, 1.0)
 DISPLAY_KEYS = [
     "context_profile",
+    "cuda_graph",
     "domain",
     "temperature",
     "model",
@@ -205,6 +206,38 @@ def _context_profile(isl: int, osl: int, position_encoding: str) -> str:
     return f"ISL {isl} / OSL {osl}"
 
 
+def _cuda_graph_mode(value: object) -> str:
+    if value is None:
+        return "UNKNOWN"
+    mode = str(value).strip().upper()
+    return mode if mode and mode != "NAN" else "UNKNOWN"
+
+
+def _cuda_graph_label(value: object) -> str:
+    mode = _cuda_graph_mode(value)
+    if mode == "NONE":
+        return "CUDA Graph OFF"
+    if mode == "PIECEWISE" or mode.startswith("FULL"):
+        return f"CUDA Graph ON ({mode})"
+    return f"CUDA Graph UNKNOWN ({mode})"
+
+
+def _cuda_graph_sort_key(value: object) -> tuple[int, str]:
+    mode = _cuda_graph_mode(value)
+    if mode == "PIECEWISE":
+        return (0, mode)
+    if mode.startswith("FULL"):
+        return (1, mode)
+    if mode == "NONE":
+        return (3, mode)
+    return (2, mode)
+
+
+def _cuda_graph_is_on(value: object) -> bool:
+    mode = _cuda_graph_mode(value)
+    return mode == "PIECEWISE" or mode.startswith("FULL")
+
+
 def _job_id(payload: Mapping[str, object], source: Path) -> str:
     runtime = payload.get("runtime")
     if isinstance(runtime, Mapping):
@@ -286,7 +319,7 @@ def _normalize_batch_result(
         "osl": osl,
         "context_profile": _context_profile(isl, osl, position_encoding),
         "position_encoding": position_encoding,
-        "cuda_graph": str(config.get("cudagraph_mode", "")),
+        "cuda_graph": _cuda_graph_mode(config.get("cudagraph_mode")),
         "setup_signature": _setup_signature(config),
         "attention_backend": str(config.get("attention_backend", "")),
         "method": _method(config),
@@ -438,6 +471,37 @@ def _display_source(source: object) -> str:
     return "/".join(parts[-6:])
 
 
+def _cuda_graph_badge(cuda_graph: object) -> str:
+    mode = _cuda_graph_mode(cuda_graph)
+    label = _cuda_graph_label(mode)
+    style = (
+        "display:inline-block;margin-left:0.45rem;padding:0.18rem 0.5rem;"
+        "border-radius:4px;font-size:0.78rem;font-weight:700;vertical-align:middle;"
+    )
+    if mode == "NONE":
+        style += "background:#fff1d6;color:#8a4b08;border:1px solid #d79636;"
+    elif mode == "PIECEWISE" or mode.startswith("FULL"):
+        style += "background:#e4f6eb;color:#17613a;border:1px solid #58a978;"
+    else:
+        style += "background:#f1f3f5;color:#495057;border:1px solid #adb5bd;"
+    return (
+        f'<span class="cuda-graph-badge" data-mode="{escape(mode, quote=True)}" '
+        f'style="{style}">{escape(label)}</span>'
+    )
+
+
+def _cuda_graph_note(cuda_graph: object) -> str:
+    mode = _cuda_graph_mode(cuda_graph)
+    if mode == "NONE":
+        return (
+            "Retained legacy/setup results: CUDA Graph was disabled "
+            "(<code>enforce_eager=true</code>)."
+        )
+    if mode == "PIECEWISE" or mode.startswith("FULL"):
+        return f"CUDA Graph enabled with <code>{escape(mode)}</code> capture mode."
+    return f"CUDA Graph state is not recognized: <code>{escape(mode)}</code>."
+
+
 def _validate_matrix_cells(rows: pd.DataFrame) -> None:
     duplicate = rows.duplicated(DISPLAY_KEYS, keep=False)
     if duplicate.any():
@@ -550,8 +614,24 @@ def _matrix_table(rows: pd.DataFrame, domain: str, temperature: float) -> str:
     )
 
 
-def _profile_matrix(rows: pd.DataFrame, profile: str) -> str:
+def _profile_matrix(
+    rows: pd.DataFrame,
+    profile: str,
+    cuda_graph: str | None = None,
+) -> str:
     profile_rows = rows.loc[rows["context_profile"].eq(profile)].copy()
+    if profile_rows.empty:
+        return ""
+    modes = sorted(
+        {_cuda_graph_mode(value) for value in profile_rows["cuda_graph"]},
+        key=_cuda_graph_sort_key,
+    )
+    if cuda_graph is None:
+        if len(modes) != 1:
+            raise ValueError("cuda_graph is required when a profile has multiple setup slices")
+        cuda_graph = modes[0]
+    mode = _cuda_graph_mode(cuda_graph)
+    profile_rows = profile_rows.loc[profile_rows["cuda_graph"].eq(mode)].copy()
     if profile_rows.empty:
         return ""
     matrices = "".join(
@@ -560,15 +640,20 @@ def _profile_matrix(rows: pd.DataFrame, profile: str) -> str:
         for temperature in TEMPERATURE_ORDER
     )
     return (
-        f'<div class="native-profile" data-profile="{escape(profile, quote=True)}">'
-        f"<h3>{escape(profile)}</h3>"
+        f'<div class="native-profile" data-profile="{escape(profile, quote=True)}" '
+        f'data-cuda-graph="{escape(mode, quote=True)}">'
+        f"<h3>{escape(profile)}{_cuda_graph_badge(mode)}</h3>"
+        f'<p class="note">{_cuda_graph_note(mode)}</p>'
         f'<div class="native-profile-grid">{matrices}</div>'
         "</div>"
     )
 
 
-def _profile_detail_table(rows: pd.DataFrame, profile: str) -> str:
-    profile_rows = rows.loc[rows["context_profile"].eq(profile)].copy()
+def _profile_detail_table(rows: pd.DataFrame, profile: str, cuda_graph: str) -> str:
+    mode = _cuda_graph_mode(cuda_graph)
+    profile_rows = rows.loc[
+        rows["context_profile"].eq(profile) & rows["cuda_graph"].eq(mode)
+    ].copy()
     if profile_rows.empty:
         return ""
     profile_rows["method_rank"] = profile_rows["method"].map(METHOD_ORDER).fillna(999)
@@ -614,7 +699,7 @@ def _profile_detail_table(rows: pd.DataFrame, profile: str) -> str:
     ]
     header = "".join(f"<th>{escape(heading)}</th>" for heading in headings)
     return (
-        f"<h3>{escape(profile)}</h3>"
+        f"<h3>{escape(profile)} · {escape(_cuda_graph_label(mode))}</h3>"
         '<div class="table-wrap"><table>'
         f"<thead><tr>{header}</tr></thead>"
         f"<tbody>{''.join(body)}</tbody>"
@@ -633,18 +718,80 @@ def render_profile_section(rows: pd.DataFrame) -> str:
         target_rows["throughput_speedup_label"] = target_rows["throughput_speedup"].map(_speedup_label)
     if "latency_speedup_label" not in target_rows.columns:
         target_rows["latency_speedup_label"] = target_rows["latency_speedup"].map(_speedup_label)
+    target_rows["cuda_graph"] = target_rows["cuda_graph"].map(_cuda_graph_mode)
     _validate_matrix_cells(target_rows)
-    matrices = "".join(_profile_matrix(target_rows, profile) for profile in PROFILE_ORDER)
-    if not matrices:
+    profile_slices = [
+        (profile, mode)
+        for profile in PROFILE_ORDER
+        for mode in sorted(
+            {
+                _cuda_graph_mode(value)
+                for value in target_rows.loc[
+                    target_rows["context_profile"].eq(profile), "cuda_graph"
+                ]
+            },
+            key=_cuda_graph_sort_key,
+        )
+    ]
+    primary_slices = [
+        item for item in profile_slices if _cuda_graph_is_on(item[1])
+    ]
+    historical_slices = [item for item in profile_slices if item[1] == "NONE"]
+    unclassified_slices = [
+        item
+        for item in profile_slices
+        if not _cuda_graph_is_on(item[1]) and item[1] != "NONE"
+    ]
+    primary_matrices = "".join(
+        _profile_matrix(target_rows, profile, mode)
+        for profile, mode in primary_slices
+    )
+    primary_status = (
+        ""
+        if primary_matrices
+        else '<p class="note native-primary-empty">No CUDA Graph ON results are available yet.</p>'
+    )
+
+    def detail_block(slices: list[tuple[str, str]]) -> str:
+        detail_tables = "".join(
+            _profile_detail_table(target_rows, profile, mode)
+            for profile, mode in slices
+        )
+        if not detail_tables:
+            return ""
+        return (
+            '<details class="native-profile-details">'
+            "<summary>Detailed native metrics and sources</summary>"
+            f"{detail_tables}</details>"
+        )
+
+    primary_details = detail_block(primary_slices)
+    historical_matrices = "".join(
+        _profile_matrix(target_rows, profile, mode)
+        for profile, mode in historical_slices
+    )
+    historical = ""
+    if historical_matrices:
+        historical = (
+            '<details class="historical-cuda-graph-off">'
+            "<summary>Historical CUDA Graph OFF results</summary>"
+            '<p class="note">These retained legacy/setup rows are excluded from primary '
+            "comparisons and best-result summaries.</p>"
+            f"{historical_matrices}{detail_block(historical_slices)}</details>"
+        )
+    unclassified_matrices = "".join(
+        _profile_matrix(target_rows, profile, mode)
+        for profile, mode in unclassified_slices
+    )
+    unclassified = ""
+    if unclassified_matrices:
+        unclassified = (
+            '<details class="unclassified-cuda-graph-results">'
+            "<summary>Unclassified CUDA Graph state results</summary>"
+            f"{unclassified_matrices}{detail_block(unclassified_slices)}</details>"
+        )
+    if not primary_matrices and not historical and not unclassified:
         return ""
-    detail_tables = "".join(
-        _profile_detail_table(target_rows, profile) for profile in PROFILE_ORDER
-    )
-    details = (
-        '<details class="native-profile-details">'
-        "<summary>Detailed native metrics and sources</summary>"
-        f"{detail_tables}</details>"
-    )
     return (
         '<section class="section" id="vllm024-profile">'
         "<h2>vLLM 0.24 / Native Profile Results</h2>"
@@ -652,6 +799,8 @@ def render_profile_section(rows: pd.DataFrame) -> str:
         "vLLM-native baselines on runtime provenance, target checkpoint identity, domain, "
         "temperature, top-p, batch, ISL, OSL, profile, position encoding, CUDA graph mode, "
         "and normalized non-speculative setup. Persisted batch results from interrupted "
-        "sources are shown as partial.</p>"
-        f"{matrices}{details}</section>"
+        "sources are shown as partial. Primary matrices include CUDA Graph ON runs only and "
+        "are separated by context profile and capture mode. CUDA Graph OFF rows are retained "
+        "only as historical setup results.</p>"
+        f"{primary_status}{primary_matrices}{primary_details}{historical}{unclassified}</section>"
     )

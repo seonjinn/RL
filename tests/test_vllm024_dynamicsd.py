@@ -721,6 +721,7 @@ def test_legacy_0619_replay_dry_run_preserves_strict_contract() -> None:
         MODELS="qwen32",
         DOMAINS="Math",
         BATCH_SIZES="1",
+        RUN_ID="contract",
     )
 
     assert output.count("[DRY-RUN] variant=") == 6
@@ -733,14 +734,46 @@ def test_legacy_0619_replay_dry_run_preserves_strict_contract() -> None:
     assert "--max-model-len '40960'" in output
     assert "--max-num-batched-tokens '131072'" in output
     assert "--static-k '3'" in output
-    assert "--enforce-eager" in output
+    assert "enforce_eager=false" in output
+    assert "cudagraph_mode=PIECEWISE" in output
+    assert "--cudagraph-mode 'PIECEWISE'" in output
+    assert "--enforce-eager" not in output
     assert "--attention-backend 'TRITON_ATTN'" in output
-    assert "--disable-custom-all-reduce" in output
+    assert "--disable-custom-all-reduce" not in output
+    assert "/contract_cg-piecewise/" in output
+    assert ".0619-math-qwen32-b1-cg-piecewise-baseline-" in output
+    assert "--tag 'matrix_cg-piecewise_baseline_" in output
     assert "--temperature 0.0" in output
     assert "--temperature 1.0" in output
     assert "[DRY-RUN] variant=suffix" not in output
     assert "[DRY-RUN] variant=pard" not in output
     assert "--gres" not in output
+
+
+def test_legacy_0619_replay_allows_explicit_cuda_graph_off_override() -> None:
+    output = run_dry(
+        "submit_legacy_0619_replay_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="false",
+        MODELS="qwen32",
+        DOMAINS="Math",
+        BATCH_SIZES="1",
+        TEMPERATURES="0.0",
+        VARIANTS="baseline",
+        RUN_ID="legacy",
+        ENFORCE_EAGER="true",
+        CUDAGRAPH_MODE="NONE",
+        DISABLE_CUSTOM_ALL_REDUCE="true",
+    )
+
+    assert "enforce_eager=true" in output
+    assert "cudagraph_mode=NONE" in output
+    assert "--cudagraph-mode 'NONE'" in output
+    assert "--enforce-eager" in output
+    assert "--disable-custom-all-reduce" in output
+    assert "/legacy_cg-none/" in output
+    assert ".0619-math-qwen32-b1-cg-none-baseline-" in output
+    assert "--tag 'matrix_cg-none_baseline_" in output
 
 
 def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(

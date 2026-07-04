@@ -298,6 +298,7 @@ def test_load_profile_results_normalizes_real_inputs() -> None:
         "YaRN 64K": 20,
         "YaRN total-128K": 20,
     }
+    assert rows["cuda_graph"].value_counts().to_dict() == {"NONE": 154}
 
     baseline = rows.loc[
         rows["source"].astype(str).str.endswith(
@@ -756,6 +757,59 @@ def test_render_profile_section_renders_matrix_states_and_separate_k_rows() -> N
     assert '<details class="native-profile-details">' in rendered
     assert "Detailed native metrics and sources" in rendered
     assert "AngelSlim &lt;drop&gt;" not in rendered
+
+
+def test_render_current_corpus_labels_each_profile_as_cuda_graph_off_legacy() -> None:
+    module = load_module()
+    rows = module.match_profile_baselines(
+        module.load_profile_results(require_real_input_paths())
+    )
+
+    rendered = module.render_profile_section(rows)
+
+    historical_summary = "<summary>Historical CUDA Graph OFF results</summary>"
+    assert "No CUDA Graph ON results are available yet." in rendered
+    assert historical_summary in rendered
+    assert rendered.count('data-cuda-graph="NONE"') == 3
+    assert rendered.count(">CUDA Graph OFF</span>") == 3
+    assert rendered.count(
+        "Retained legacy/setup results: CUDA Graph was disabled "
+        "(<code>enforce_eager=true</code>)."
+    ) == 3
+    primary = rendered[: rendered.index(historical_summary)]
+    assert 'data-cuda-graph="NONE"' not in primary
+
+
+def test_render_profile_section_separates_cuda_graph_setup_slices() -> None:
+    module = load_module()
+    off = baseline_frame_row(source="off.json") | {
+        "batch_size": 1,
+        "throughput_speedup": 1.0,
+        "latency_speedup": 1.0,
+    }
+    on = off | {
+        "cuda_graph": "PIECEWISE",
+        "setup_signature": "setup-cg-on",
+        "source": "on.json",
+    }
+
+    rendered = module.render_profile_section(pd.DataFrame([off, on]))
+
+    historical_summary = "<summary>Historical CUDA Graph OFF results</summary>"
+    assert rendered.count('data-profile="Native 32K"') == 2
+    assert rendered.count('data-cuda-graph="NONE"') == 1
+    assert rendered.count('data-cuda-graph="PIECEWISE"') == 1
+    assert rendered.count(">CUDA Graph OFF</span>") == 1
+    assert rendered.count(">CUDA Graph ON (PIECEWISE)</span>") == 1
+    assert rendered.count('<table class="native-speedup-matrix">') == 8
+    assert rendered.index('data-cuda-graph="PIECEWISE"') < rendered.index(
+        historical_summary
+    )
+    assert rendered.index(historical_summary) < rendered.index(
+        'data-cuda-graph="NONE"'
+    )
+    primary = rendered[: rendered.index(historical_summary)]
+    assert 'data-cuda-graph="NONE"' not in primary
 
 
 def test_render_profile_section_rejects_duplicate_native_matrix_cells() -> None:

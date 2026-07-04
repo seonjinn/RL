@@ -8,7 +8,13 @@ MODELS="${MODELS:-qwen30ba3b qwen32 qwen235b}"
 DOMAINS="${DOMAINS:-Math SWE}"
 VARIANTS="${VARIANTS:-baseline static dynamic}"
 TEMPERATURES="${TEMPERATURES:-0.0 1.0}"
-RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_legacy_0619_replay}"
+ENFORCE_EAGER="${ENFORCE_EAGER:-false}"
+CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
+DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE:-false}"
+CUDA_GRAPH_SLUG="$(printf '%s' "${CUDAGRAPH_MODE}" | tr '[:upper:]_' '[:lower:]-')"
+CUDA_GRAPH_PROVENANCE="cg-${CUDA_GRAPH_SLUG}"
+RUN_ID_BASE="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_legacy_0619_replay}"
+RUN_ID="${RUN_ID_BASE}_${CUDA_GRAPH_PROVENANCE}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/legacy-0619-replay}"
 SMOKE="${SMOKE:-true}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -86,7 +92,9 @@ for domain in ${DOMAINS}; do
       echo "osl=${OSL}"
       echo "target_tp=${tp}"
       echo "throughput_gpu_count=4"
-      echo "enforce_eager=true"
+      echo "cudagraph_mode=${CUDAGRAPH_MODE}"
+      echo "enforce_eager=${ENFORCE_EAGER}"
+      echo "disable_custom_all_reduce=${DISABLE_CUSTOM_ALL_REDUCE}"
 
       env \
         CLUSTER="${CLUSTER:-auto}" \
@@ -97,8 +105,8 @@ for domain in ${DOMAINS}; do
         MODEL="${model}" \
         DRAFT_MODEL="${draft_model}" \
         RESULT_ROOT="${RESULT_ROOT}/${RUN_ID}/${domain_label}/${model_key}/bs${batch_size}" \
-        RUN_ID=matrix \
-        JOB_LABEL="0619-${domain_label}-${model_key}-b${batch_size}" \
+        RUN_ID="matrix_${CUDA_GRAPH_PROVENANCE}" \
+        JOB_LABEL="0619-${domain_label}-${model_key}-b${batch_size}-${CUDA_GRAPH_PROVENANCE}" \
         VARIANTS="${VARIANTS}" \
         TEMPERATURES="${TEMPERATURES}" \
         STATIC_K=3 \
@@ -114,11 +122,11 @@ for domain in ${DOMAINS}; do
         KV_CACHE_DTYPE="${kv_cache_dtype}" \
         MAX_MODEL_LEN=40960 \
         MAX_NUM_BATCHED_TOKENS="${max_num_batched_tokens}" \
-        CUDAGRAPH_MODE=NONE \
+        CUDAGRAPH_MODE="${CUDAGRAPH_MODE}" \
         ATTENTION_BACKEND=TRITON_ATTN \
         MOE_BACKEND=triton \
-        ENFORCE_EAGER=true \
-        DISABLE_CUSTOM_ALL_REDUCE=true \
+        ENFORCE_EAGER="${ENFORCE_EAGER}" \
+        DISABLE_CUSTOM_ALL_REDUCE="${DISABLE_CUSTOM_ALL_REDUCE}" \
         THROUGHPUT_GPU_COUNT=4 \
         PROMPT_JSONL="${prompt_jsonl}" \
         PROMPT_OFFSET=0 \
