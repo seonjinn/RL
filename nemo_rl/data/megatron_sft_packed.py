@@ -79,6 +79,9 @@ def _tokenize_megatron_sft_conversation(
     )
     targets = list(tokens)
 
+    if prompt_format == "identity":
+        return tokens, targets
+
     idx = 0
     for turn_idx, turn in enumerate(conversation):
         role = turn["role"].lower()
