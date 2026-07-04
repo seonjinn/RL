@@ -114,6 +114,24 @@ with identical YaRN parameters. AngelSlim-native DFlare is tracked separately
 because its serial baseline-plus-SpecDec runner cannot fit these lengths in the
 five-hour Lyris wall limit.
 
+The BS1 matrix was submitted on July 3, 2026:
+
+| Profile | Job IDs | Result root |
+|---|---|---|
+| 64K | `2271260-2271279` | `long-context/20260703_q8_yarn4_bs1_64k_bs1` |
+| total 128K | `2271280-2271299` | `long-context/20260703_q8_yarn4_bs1_128k_bs1` |
+
+After five minutes, 29 jobs were running, ten were pending under the user
+node-minute limit, one was completing, and none had failed. The first complete
+row is partial and does not yet have its matched baseline:
+
+| Profile | Domain | Temp | Method | BS | tok/s/GPU | Acceptance | Mean accept length | Speedup |
+|---|---|---:|---|---:|---:|---:|---:|---|
+| 64K | Math | 0.0 | Suffix K32 | 1 | 64.59 | 99.78% | 16.93 | waiting baseline |
+
+The raw row is stored at
+`report/20260703_q8_long_context_partial/64k/math/suffix_t0p0/result.json`.
+
 ## Fixed-Length Tier Test
 
 The batch-size 1, 2, 4, 8, 16, 32, and 64 matrix completed for temperature 0

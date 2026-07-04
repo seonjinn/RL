@@ -27,10 +27,10 @@
 **Interfaces:**
 - Produces: `materialize_model_view(source: Path, destination: Path, max_position_embeddings: int, rope_factor: float) -> dict[str, object]`.
 
-- [ ] Add tests that require symlinked checkpoint files, an owned extended `config.json`, and reproducibility metadata.
-- [ ] Run the focused tests and confirm they fail because the module is absent.
-- [ ] Implement atomic view materialization without copying checkpoint weights.
-- [ ] Run the focused tests and full experiment test file.
+- [x] Add tests that require symlinked checkpoint files, an owned extended `config.json`, and reproducibility metadata.
+- [x] Run the focused tests and confirm they fail because the module is absent.
+- [x] Implement atomic view materialization without copying checkpoint weights.
+- [x] Run the focused tests and full experiment test file.
 
 ### Task 2: Long-Context Submission Profiles
 
@@ -43,11 +43,11 @@
 - Consumes: model views from Task 1.
 - Produces: dry-run and live 64K/128K matrix submissions using the existing `submit_matrix.sh` interface.
 
-- [ ] Add dry-run tests for exact 64K and 128K profile arguments and job counts.
-- [ ] Run the focused tests and confirm the new wrapper is missing.
-- [ ] Make the existing Qwen3-8B wrapper accept context, model-view, warmup, and job-label overrides.
-- [ ] Implement the two-profile wrapper with BS1 and five-hour limits.
-- [ ] Run pytest, `bash -n`, and Pyright.
+- [x] Add dry-run tests for exact 64K and 128K profile arguments and job counts.
+- [x] Run the focused tests and confirm the new wrapper is missing.
+- [x] Make the existing Qwen3-8B wrapper accept context, model-view, warmup, and job-label overrides.
+- [x] Implement the two-profile wrapper with BS1 and five-hour limits.
+- [x] Run pytest, `bash -n`, and Pyright.
 
 ### Task 3: Documentation And Cluster Launch
 
@@ -59,8 +59,8 @@
 - Consumes: submitted job manifests and partial JSON rows.
 - Produces: reproducible commands and clearly separated native/YaRN status.
 
-- [ ] Document the profile definitions, model-view rationale, and DFlare wall-time exclusion.
-- [ ] Commit and push the exact files.
-- [ ] Pull the branch on Lyris, materialize views, and run `--test-only` for both profiles.
-- [ ] Submit 64K/128K BS1 jobs and record job IDs and result roots.
-- [ ] Monitor for five minutes, inspect early failures, and collect any completed rows.
+- [x] Document the profile definitions, model-view rationale, and DFlare wall-time exclusion.
+- [x] Commit and push the exact files.
+- [x] Pull the branch on Lyris, materialize views, and run `--test-only` for both profiles.
+- [x] Submit 64K/128K BS1 jobs and record job IDs and result roots.
+- [x] Monitor for five minutes, inspect early failures, and collect any completed rows.
