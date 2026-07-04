@@ -232,7 +232,7 @@ render_command() {
   printf 'export HOME=%q\n' "${WANDB_HOME}"
   printf 'export NRL_IGNORE_VERSION_MISMATCH=1\n'
   printf 'export NEMO_RL_PY_EXECUTABLES_SYSTEM=0\n'
-  printf 'export NEMO_RL_VENV_DIR=%q\n' "${REMOTE_REPO}/venvs"
+  printf 'export NEMO_RL_VENV_DIR=%q\n' '/opt/ray_venvs'
   printf 'export NRL_MEGATRON_CHECKPOINT_DIR=%q\n' "${checkpoint_root}"
   printf 'export NRL_MEGATRON_TOKENIZER_MODEL=%q\n' "${target_model}"
   printf 'export NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=1800\n'

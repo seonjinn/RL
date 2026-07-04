@@ -279,6 +279,7 @@ def test_default_final_run_renders_all_supported_contracts() -> None:
         assert "policy.generation.vllm_cfg.enforce_eager=false" in section
         assert "attention_backend=TRITON_ATTN" in section
         assert "kernel_config.moe_backend=triton" in section
+        assert "export NEMO_RL_VENV_DIR=/opt/ray_venvs" in section
         assert "grpo.max_num_steps=20" in section
         assert "logger.wandb_enabled=true" in section
         assert "policy.generation.max_new_tokens" not in section
