@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1021-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.24.0",
+    "torch_version": "2.11.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "0",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2271270"
+    }
+  },
+  "config": {
+    "tag": "matrix_baseline_t0p0",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b",
+    "draft_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47",
+    "mode": "baseline",
+    "speculative_config": null,
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 1,
+    "tp": 1,
+    "pp": 1,
+    "engine_gpus": 1,
+    "total_gpus": 4,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "auto",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 69632,
+    "max_num_seqs": 1,
+    "max_num_batched_tokens": 65536,
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "disable_custom_all_reduce": true,
+    "attention_backend": "TRITON_ATTN",
+    "moe_backend": "auto",
+    "cudagraph_mode": "NONE",
+    "enforce_eager": true,
+    "isl": 4096,
+    "osl": 65536,
+    "batch_sizes": [
+      1
+    ],
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "seed": 0,
+    "warmup_repeats": 0,
+    "measure_repeats": 1,
+    "prompt_jsonl": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/swebench_verified_prompts_all.jsonl",
+    "prompt_offset": 0,
+    "prompt_count_loaded": 1,
+    "cuda_profiler_range": false
+  },
+  "results": [
+    {
+      "bs": 1,
+      "latency_s_mean": 1761.6795589799876,
+      "latency_s_median": 1761.6795589799876,
+      "output_tokens": 65536,
+      "output_tok_s": 37.200863043415985,
+      "output_tok_s_per_gpu": 9.300215760853996,
+      "spec_decode_metrics": {},
+      "repeats": [
+        {
+          "repeat": 0,
+          "latency_s": 1761.6795589799876,
+          "output_tokens": 65536,
+          "output_tok_s": 37.200863043415985,
+          "spec_decode_metrics": {}
+        }
+      ],
+      "latency_s": 1761.6795589799876,
+      "mean_latency_s": 1761.6795589799876,
+      "prompt_count_used": 1,
+      "num_batches": 1
+    }
+  ]
+}

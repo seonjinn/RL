@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1021-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.24.0",
+    "torch_version": "2.11.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "0",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2271298"
+    }
+  },
+  "config": {
+    "tag": "matrix_dflash_t0p0",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b",
+    "draft_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b-dflash-b16",
+    "mode": "dflash",
+    "speculative_config": {
+      "method": "dflash",
+      "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b-dflash-b16",
+      "num_speculative_tokens": 15,
+      "draft_tensor_parallel_size": 1,
+      "attention_backend": "FLASH_ATTN"
+    },
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 1,
+    "tp": 1,
+    "pp": 1,
+    "engine_gpus": 1,
+    "total_gpus": 4,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "auto",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 131072,
+    "max_num_seqs": 1,
+    "max_num_batched_tokens": 65536,
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "disable_custom_all_reduce": true,
+    "attention_backend": "TRITON_ATTN",
+    "moe_backend": "auto",
+    "cudagraph_mode": "NONE",
+    "enforce_eager": true,
+    "isl": 4096,
+    "osl": 126976,
+    "batch_sizes": [
+      1
+    ],
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "seed": 0,
+    "warmup_repeats": 0,
+    "measure_repeats": 1,
+    "prompt_jsonl": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/swebench_verified_prompts_all.jsonl",
+    "prompt_offset": 0,
+    "prompt_count_loaded": 1,
+    "cuda_profiler_range": false
+  },
+  "results": [
+    {
+      "bs": 1,
+      "latency_s_mean": 3948.870882201998,
+      "latency_s_median": 3948.870882201998,
+      "output_tokens": 126976,
+      "output_tok_s": 32.155014379501495,
+      "output_tok_s_per_gpu": 8.038753594875374,
+      "spec_decode_metrics": {
+        "num_drafts": 27791.0,
+        "num_draft_tokens": 416655.0,
+        "num_accepted_tokens": 99182.0,
+        "num_accepted_tokens_per_pos": [
+          19382.0,
+          13907.0,
+          11321.0,
+          9826.0,
+          9550.0,
+          9368.0,
+          6410.0,
+          5951.0,
+          4712.0,
+          3524.0,
+          2071.0,
+          1332.0,
+          923.0,
+          586.0,
+          319.0
+        ],
+        "active": true,
+        "acceptance_rate": 0.23804346521702607,
+        "mean_acceptance_length": 4.568853225864489,
+        "accepted_tokens_per_draft": 3.5688532258644887,
+        "metrics_available": true,
+        "acceptance_rate_per_pos": [
+          0.6974200280666403,
+          0.5004138030297578,
+          0.40736209564247416,
+          0.3535677017739556,
+          0.34363642905976755,
+          0.3370875463279479,
+          0.23065021049980208,
+          0.21413407218164154,
+          0.1695512935842539,
+          0.12680364146666187,
+          0.0745205282285632,
+          0.047929185707603184,
+          0.03321219099708539,
+          0.02108596308157317,
+          0.011478536216760822
+        ]
+      },
+      "repeats": [
+        {
+          "repeat": 0,
+          "latency_s": 3948.870882201998,
+          "output_tokens": 126976,
+          "output_tok_s": 32.155014379501495,
+          "spec_decode_metrics": {
+            "num_drafts": 27791.0,
+            "num_draft_tokens": 416655.0,
+            "num_accepted_tokens": 99182.0,
+            "num_accepted_tokens_per_pos": [
+              19382.0,
+              13907.0,
+              11321.0,
+              9826.0,
+              9550.0,
+              9368.0,
+              6410.0,
+              5951.0,
+              4712.0,
+              3524.0,
+              2071.0,
+              1332.0,
+              923.0,
+              586.0,
+              319.0
+            ],
+            "active": true,
+            "acceptance_rate": 0.23804346521702607,
+            "mean_acceptance_length": 4.568853225864489,
+            "accepted_tokens_per_draft": 3.5688532258644887,
+            "metrics_available": true,
+            "acceptance_rate_per_pos": [
+              0.6974200280666403,
+              0.5004138030297578,
+              0.40736209564247416,
+              0.3535677017739556,
+              0.34363642905976755,
+              0.3370875463279479,
+              0.23065021049980208,
+              0.21413407218164154,
+              0.1695512935842539,
+              0.12680364146666187,
+              0.0745205282285632,
+              0.047929185707603184,
+              0.03321219099708539,
+              0.02108596308157317,
+              0.011478536216760822
+            ]
+          }
+        }
+      ],
+      "latency_s": 3948.870882201998,
+      "mean_latency_s": 3948.870882201998,
+      "prompt_count_used": 1,
+      "num_batches": 1
+    }
+  ]
+}

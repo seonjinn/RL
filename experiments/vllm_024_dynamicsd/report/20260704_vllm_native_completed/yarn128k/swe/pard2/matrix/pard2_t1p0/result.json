@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1021-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.24.0",
+    "torch_version": "2.11.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "0",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2271297"
+    }
+  },
+  "config": {
+    "tag": "matrix_pard2_t1p0",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b",
+    "draft_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/pard2-qwen3-8b",
+    "mode": "pard2",
+    "speculative_config": {
+      "method": "pard2",
+      "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/pard2-qwen3-8b",
+      "num_speculative_tokens": 15,
+      "draft_tensor_parallel_size": 1,
+      "parallel_drafting": true
+    },
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 1,
+    "tp": 1,
+    "pp": 1,
+    "engine_gpus": 1,
+    "total_gpus": 4,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "auto",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 131072,
+    "max_num_seqs": 1,
+    "max_num_batched_tokens": 65536,
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "disable_custom_all_reduce": true,
+    "attention_backend": "TRITON_ATTN",
+    "moe_backend": "auto",
+    "cudagraph_mode": "NONE",
+    "enforce_eager": true,
+    "isl": 4096,
+    "osl": 126976,
+    "batch_sizes": [
+      1
+    ],
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "seed": 0,
+    "warmup_repeats": 0,
+    "measure_repeats": 1,
+    "prompt_jsonl": "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/swebench_verified_prompts_all.jsonl",
+    "prompt_offset": 0,
+    "prompt_count_loaded": 1,
+    "cuda_profiler_range": false
+  },
+  "results": [
+    {
+      "bs": 1,
+      "latency_s_mean": 14993.193316495977,
+      "latency_s_median": 14993.193316495977,
+      "output_tokens": 126976,
+      "output_tok_s": 8.468909679187359,
+      "output_tok_s_per_gpu": 2.1172274197968397,
+      "spec_decode_metrics": {
+        "num_drafts": 126812.0,
+        "num_draft_tokens": 1902075.0,
+        "num_accepted_tokens": 162.0,
+        "num_accepted_tokens_per_pos": [
+          159.0,
+          3.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "active": true,
+        "acceptance_rate": 8.517014313315721e-05,
+        "mean_acceptance_length": 1.0012774816263446,
+        "accepted_tokens_per_draft": 0.00127748162634451,
+        "metrics_available": true,
+        "acceptance_rate_per_pos": [
+          0.001253824559189982,
+          2.365706715452796e-05,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "repeats": [
+        {
+          "repeat": 0,
+          "latency_s": 14993.193316495977,
+          "output_tokens": 126976,
+          "output_tok_s": 8.468909679187359,
+          "spec_decode_metrics": {
+            "num_drafts": 126812.0,
+            "num_draft_tokens": 1902075.0,
+            "num_accepted_tokens": 162.0,
+            "num_accepted_tokens_per_pos": [
+              159.0,
+              3.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active": true,
+            "acceptance_rate": 8.517014313315721e-05,
+            "mean_acceptance_length": 1.0012774816263446,
+            "accepted_tokens_per_draft": 0.00127748162634451,
+            "metrics_available": true,
+            "acceptance_rate_per_pos": [
+              0.001253824559189982,
+              2.365706715452796e-05,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "latency_s": 14993.193316495977,
+      "mean_latency_s": 14993.193316495977,
+      "prompt_count_used": 1,
+      "num_batches": 1
+    }
+  ]
+}
