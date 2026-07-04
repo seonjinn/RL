@@ -158,7 +158,7 @@ class TestModelForward:
             position_ids=torch.tensor([[0, 1, 2, 3]]),
             attention_mask=None,
             labels_cp_sharded=labels,
-            mtp_loss_mask=loss_mask,
+            loss_mask_cp_sharded=loss_mask,
         )
 
         call_kwargs = mock_model.call_args.kwargs
@@ -287,6 +287,55 @@ class TestForwardWithPostProcessingFn:
         # forward_with_post_processing_fn should return a callable
         assert callable(wrapped_fn)
         assert isinstance(output, torch.Tensor)
+
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    @patch("nemo_rl.models.megatron.train.apply_temperature_scaling")
+    def test_forward_prepacked_loss_plumbing_skips_temperature_scaling(
+        self, mock_temperature_scaling, mock_model_forward
+    ):
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        labels = torch.tensor([[2, 3, 4, 0]])
+        loss_mask = torch.tensor([[1.0, 1.0, 1.0, 0.0]])
+        model_losses = torch.tensor([[2.0, 4.0, 6.0, 100.0]])
+        mock_model_forward.return_value = model_losses
+        processed_mb = ProcessedMicrobatch(
+            data_dict=MagicMock(),
+            input_ids=torch.tensor([[1, 2, 3, 4]]),
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3, 4]]),
+            attention_mask=None,
+            position_ids=torch.tensor([[0, 1, 2, 3]]),
+            packed_seq_params=MagicMock(),
+            cu_seqlens_padded=torch.tensor([0, 4]),
+            labels_cp_sharded=labels,
+            loss_mask_cp_sharded=loss_mask,
+        )
+        post_processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+            cp_normalize=True,
+        )
+
+        output, wrapped_fn = forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            post_processing_fn=post_processor,
+            global_valid_toks=torch.tensor(3.0),
+        )
+
+        assert torch.equal(output, model_losses)
+        assert callable(wrapped_fn)
+        assert torch.equal(
+            mock_model_forward.call_args.kwargs["labels_cp_sharded"], labels
+        )
+        assert torch.equal(
+            mock_model_forward.call_args.kwargs["loss_mask_cp_sharded"], loss_mask
+        )
+        mock_temperature_scaling.assert_not_called()
 
     @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_logprobs_post_processor(self, mock_model_forward):
@@ -870,7 +919,7 @@ class TestLossPostProcessor:
         assert torch.isclose(loss, torch.tensor(1.0))
 
     @patch(
-        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=2
     )
     def test_prepacked_model_loss_uses_target_aligned_mask(self, mock_cp_size):
         from nemo_rl.models.megatron.train import LossPostProcessor
@@ -878,19 +927,23 @@ class TestLossPostProcessor:
         processor = LossPostProcessor(
             loss_fn=MagicMock(),
             cfg={"sequence_packing": {"enabled": True}},
+            num_microbatches=4,
             cp_normalize=True,
         )
         target_aligned_mask = torch.tensor([[1.0, 0.0, 1.0, 0.0]])
         wrapped_fn = processor(
             data_dict=MagicMock(),
             packed_seq_params=MagicMock(),
-            global_valid_toks=torch.tensor(2.0),
+            global_valid_toks=torch.tensor(8.0),
             prepacked_loss_mask=target_aligned_mask,
         )
 
         loss, metrics = wrapped_fn(torch.tensor([[2.0, 100.0, 4.0, 100.0]]))
 
-        assert torch.isclose(loss, torch.tensor(3.0))
+        # Local normalized loss is 6 / 8. Counteracting MCore's cp/mb
+        # schedule scaling multiplies by 4 / 2 before the schedule consumes it.
+        assert torch.isclose(loss, torch.tensor(1.5))
+        assert metrics["loss"] == 0.75
         assert metrics["num_unmasked_tokens"] == 2.0
 
     @patch(
