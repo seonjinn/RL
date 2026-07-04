@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DFlare HTML Results Design</title>
+  <style>
+    :root{--text:#111827;--muted:#6b7280;--line:#d8dee8;--bg:#f7f8fb;--panel:#fff;--blue:#1f5fbf}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:15px;line-height:1.5}
+    main{max-width:1120px;margin:0 auto;padding:24px}
+    .topbar{margin-bottom:18px}
+    .topbar a{display:inline-flex;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px;color:var(--blue);font-weight:700;text-decoration:none}
+    article{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px}
+    h1{font-size:28px;margin:0 0 18px}h2{font-size:20px;margin:28px 0 10px}h3{font-size:16px;margin:20px 0 8px}
+    p,li{max-width:90ch}code{background:#f3f4f6;border-radius:4px;padding:1px 4px}
+    pre{overflow:auto;background:#111827;color:#f9fafb;border-radius:8px;padding:14px}pre code{background:transparent;padding:0}
+    table{width:100%;border-collapse:collapse;margin:12px 0 20px}th,td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}th{background:#eef2f7}
+    @media(max-width:720px){main{padding:12px}article{padding:16px;overflow-x:auto}table{min-width:720px;font-size:13px}}
+  </style>
+</head>
+<body><main>
+  <div class="topbar"><a href="../index.html">Back to report hub</a></div>
+  <article><h1>DFlare HTML Results Design</h1>
+<h2>Goal</h2>
+<p>Add completed DFlare benchmark results to the existing vLLM standalone HTML
+report in a compact, reproducible format. Keep vLLM 0.24 native-method rows
+and AngelSlim-native DFlare rows clearly separated because they use different
+runtimes.</p>
+<h2>Scope</h2>
+<ul>
+<li>Cover Qwen3-8B DFlare results for Math and SWE at temperature 0 and 1.</li>
+<li>Present native 32K results and YaRN 64K/total-128K results in separate
+  context-profile sections.</li>
+<li>Include only jobs with a completed result JSON. Running, pending, failed,
+  timed-out, and result-less jobs do not appear in performance tables.</li>
+<li>Preserve the existing vLLM standalone report as the main entry point.</li>
+<li>Do not add charts until enough matched rows exist to make them meaningful.</li>
+</ul>
+<h2>Data Flow</h2>
+<ol>
+<li>Pull completed result JSON files from the pinned Lyris result roots into a
+   versioned local report-data directory.</li>
+<li>Normalize each completed row to the canonical SpecDec fields: domain,
+   temperature, top-p, ISL, OSL, batch size, method, K, throughput,
+   acceptance rate, mean accepted length, job ID, backend, and source path.</li>
+<li>Match a baseline only when domain, model, temperature, top-p, batch size,
+   ISL, OSL, context-extension configuration, and runtime backend are equal.</li>
+<li>Generate the HTML section from normalized data rather than manually
+   embedding metric values.</li>
+</ol>
+<h2>Report Layout</h2>
+<p>Add a <code>vLLM 0.24 / DFlare</code> section to the existing standalone results page.
+Start with a compact methodology band containing model, runtime, GPU,
+sampling, context profiles, and the SDPA fallback caveat.</p>
+<p>Render one table per context profile:</p>
+<table>
+<thead>
+<tr>
+<th>Domain</th>
+<th style="text-align: right;">Temperature</th>
+<th style="text-align: right;">ISL</th>
+<th style="text-align: right;">OSL</th>
+<th style="text-align: right;">Batch</th>
+<th>Method / K</th>
+<th style="text-align: right;">tok/s/GPU</th>
+<th style="text-align: right;">Speedup</th>
+<th style="text-align: right;">Acceptance</th>
+<th style="text-align: right;">Mean accept length</th>
+<th>Job ID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>The sections are:</p>
+<ul>
+<li>Native 32K: ISL 4,096 and OSL 32,768.</li>
+<li>YaRN 64K: ISL 4,096 and OSL 65,536.</li>
+<li>YaRN total-128K: ISL 4,096 and OSL 126,976, total context 131,072.</li>
+</ul>
+<p>Rows are ordered by context profile, domain, temperature, and method. Existing
+responsive table styling is reused so the report remains readable on narrow
+screens.</p>
+<h2>Comparison Rules</h2>
+<ul>
+<li>Compute throughput speedup only against an exact matched baseline from the
+  same runtime and backend.</li>
+<li>Show <code>waiting matched baseline</code> when an exact baseline is unavailable.</li>
+<li>Never compare AngelSlim-native DFlare throughput directly with a vLLM-native
+  baseline as a formal speedup.</li>
+<li>Show <code>n/a</code> rather than zero for absent metrics.</li>
+<li>Label SDPA fallback results because the missing FlashAttention kernel can
+  reduce end-to-end performance.</li>
+</ul>
+<h2>Generated Artifacts</h2>
+<ul>
+<li>A normalized DFlare CSV or JSON artifact under
+  <code>experiments/vllm_024_dynamicsd/report/</code>.</li>
+<li>Updated dated and <code>latest</code> vLLM standalone HTML pages under
+  <code>public/reports/</code> and their corresponding local <code>docs/</code> copies when the
+  existing builder requires both.</li>
+<li>A reproducible builder or collector change that can be rerun as additional
+  completed jobs arrive.</li>
+</ul>
+<h2>Validation</h2>
+<ul>
+<li>Unit-test completed-only filtering, exact baseline matching, missing-metric
+  rendering, and deterministic row ordering.</li>
+<li>Run the existing report builders and Python compilation checks.</li>
+<li>Parse the generated HTML to verify valid table structure and required
+  headings.</li>
+<li>Preview the page locally at desktop and mobile widths and confirm that
+  headers, numeric values, and job IDs remain legible.</li>
+<li>Commit and push the generated report only after the underlying result data
+  and builder validation pass.</li>
+</ul></article>
+</main></body>
+</html>

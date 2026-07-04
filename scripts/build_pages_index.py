@@ -97,6 +97,10 @@ PINNED_REPORT_FILES = {
 PRIMARY_LINKS = [
     ("vLLM standalone latest", "reports/vllm_standalone_results_latest.html"),
     (
+        "DFlare result-table design",
+        "specs/2026-07-03-dflare-html-results-design.html",
+    ),
+    (
         "vLLM standalone 6/19 all-batch matrix",
         "reports/vllm_standalone_results_20260619.html",
     ),
