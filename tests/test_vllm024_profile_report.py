@@ -611,9 +611,12 @@ def test_speedup_cell_emits_bounded_magnitude_sensitive_color_properties() -> No
     ]
     assert blue_alphas[0] < blue_alphas[1]
     assert red_alphas[0] < red_alphas[1]
-    assert all(0.14 <= value <= 0.82 for value in blue_alphas + red_alphas)
-    assert "--matrix-text:" in mild_speedup
-    assert "--matrix-text:" in strong_speedup
+    assert all(0.12 <= value <= 0.36 for value in blue_alphas + red_alphas)
+    assert "--matrix-text:#17406d" in mild_speedup
+    assert "--matrix-text:#17406d" in strong_speedup
+    assert "--matrix-text:#8f1d16" in mild_slowdown
+    assert "--matrix-text:#8f1d16" in strong_slowdown
+    assert "#ffffff" not in mild_speedup + strong_speedup + mild_slowdown + strong_slowdown
 
 
 def test_speedup_cell_preserves_partial_unmatched_state_and_escapes_title() -> None:
@@ -770,3 +773,39 @@ def test_render_profile_section_rejects_duplicate_native_matrix_cells() -> None:
 
     with pytest.raises(ValueError, match="duplicate native matrix cell"):
         module.render_profile_section(rows)
+
+
+def test_render_profile_section_follows_profile_order() -> None:
+    module = load_module()
+    rows = pd.DataFrame(
+        [
+            baseline_frame_row(source="native.json")
+            | {
+                "throughput_speedup": 1.0,
+                "latency_speedup": 1.0,
+            },
+            baseline_frame_row(source="yarn64.json")
+            | {
+                "osl": 65_536,
+                "context_profile": "YaRN 64K",
+                "position_encoding": "yarn4",
+                "throughput_speedup": 1.0,
+                "latency_speedup": 1.0,
+            },
+            baseline_frame_row(source="yarn128.json")
+            | {
+                "osl": 126_976,
+                "context_profile": "YaRN total-128K",
+                "position_encoding": "yarn4",
+                "throughput_speedup": 1.0,
+                "latency_speedup": 1.0,
+            },
+        ]
+    )
+
+    rendered = module.render_profile_section(rows)
+    positions = [
+        rendered.index(f'data-profile="{profile}"') for profile in module.PROFILE_ORDER
+    ]
+
+    assert positions == sorted(positions)

@@ -451,7 +451,7 @@ def _row_value(row: object, key: str) -> object:
 
 
 def _bounded_intensity(magnitude: float) -> float:
-    return min(0.82, max(0.14, 0.14 + 0.68 * magnitude))
+    return min(0.36, max(0.12, 0.12 + 0.24 * magnitude))
 
 
 def _speedup_cell(row: object | None) -> str:
@@ -486,15 +486,17 @@ def _speedup_cell(row: object | None) -> str:
         state = "slowdown"
         severity = min(1.0, max(0.0, 1.0 - speedup))
         intensity = _bounded_intensity(severity)
-        style = f"--matrix-red:rgba(220,38,38,{intensity:.2f})"
+        style = (
+            f"--matrix-red:rgba(220,38,38,{intensity:.2f});"
+            "--matrix-text:#8f1d16"
+        )
     elif speedup > 1.0:
         state = "speedup"
         gain = min(1.0, max(0.0, math.log2(speedup) / 3.0))
         intensity = _bounded_intensity(gain)
-        text_color = "#ffffff" if intensity >= 0.55 else "#17406d"
         style = (
             f"--matrix-blue:rgba(37,99,235,{intensity:.2f});"
-            f"--matrix-text:{text_color}"
+            "--matrix-text:#17406d"
         )
     else:
         state = "neutral"
