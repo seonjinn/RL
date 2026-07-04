@@ -101,6 +101,9 @@ NEMORL_COMPARISON_SUMMARIES = [
     DOCS / "qwen32_pard_eagerfalse_compare_20260624.csv",
     DOCS / "nemorl_specdec_slowdown_watchlist_20260624.csv",
 ]
+NEMORL_PREJULY_CANONICAL = (
+    DOCS / "lyris_nemorl_perfcfg_specdec_combined_prejuly_20260701.csv"
+)
 NEMORL_JULY_SOURCES = [
     {
         "path": DOCS / "lyris_qwen30_sync_pard_strict_matched_metrics_20260702.csv",
@@ -2648,6 +2651,8 @@ def load_july_nemorl_results(
                     "metric_state": result_state,
                     "baseline_match_state": baseline_match_state,
                     "strict_match_eligible": True,
+                    "evidence_period": "july-current",
+                    "canonical_snapshot": "",
                     "completed_steps": completed_steps,
                     "last_step": last_step,
                     "completed_step_span": span,
@@ -2724,6 +2729,38 @@ def load_july_nemorl_results(
     if not rows.empty:
         rows["cuda_graph_state"] = rows.apply(nemorl_cuda_graph_label, axis=1)
         rows["metric_window"] = rows.apply(nemorl_metric_window, axis=1)
+    return rows
+
+
+def load_nemorl_prejuly_canonical() -> pd.DataFrame:
+    path = NEMORL_PREJULY_CANONICAL
+    if not path.is_file():
+        raise FileNotFoundError(f"required NeMo-RL canonical snapshot is missing: {path}")
+
+    rows = pd.read_csv(path)
+    required_columns = {"job_id", "method_k"}
+    missing_columns = required_columns - set(rows.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"NeMo-RL canonical snapshot is missing columns: {missing}")
+
+    rows["strict_match_eligible"] = False
+    speedup_columns = [
+        "gen_tps_speedup",
+        "e2e_tps_speedup",
+        "generation_time_speedup",
+        "e2e_step_time_speedup",
+    ]
+    for column in speedup_columns:
+        if column not in rows:
+            rows[column] = math.nan
+    has_precomputed_speedup = rows[speedup_columns].notna().any(axis=1)
+    is_baseline = rows["method_k"].astype(str).eq("baseline")
+    rows["baseline_match_state"] = "unmatched_baseline"
+    rows.loc[has_precomputed_speedup, "baseline_match_state"] = "precomputed"
+    rows.loc[is_baseline, "baseline_match_state"] = "baseline"
+    rows["evidence_period"] = "pre-july-canonical"
+    rows["canonical_snapshot"] = str(path.relative_to(ROOT))
     return rows
 
 
@@ -2910,6 +2947,7 @@ def deduplicate_nemorl_rows(rows: pd.DataFrame) -> pd.DataFrame:
         "gen_tps_speedup": math.nan,
         "manifest": "",
         "notes": "",
+        "evidence_period": "",
     }
     for col, default in defaults.items():
         if col not in rows:
@@ -3016,12 +3054,8 @@ def combine_nemorl_rows(live_rows: pd.DataFrame) -> pd.DataFrame:
     parts = [
         part
         for part in [
+            load_nemorl_prejuly_canonical(),
             load_july_nemorl_results(),
-            live_rows,
-            load_nemorl_comparison_summaries(),
-            load_lyris_live_k_sweep_nemorl(),
-            load_lyris_historical_nemorl(),
-            load_oci_historical_nemorl(),
         ]
         if not part.empty
     ]

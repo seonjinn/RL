@@ -9,6 +9,69 @@ from scripts import build_latest_specdec_html_pages as report
 
 
 class NemoRlReportTest(unittest.TestCase):
+    def test_loads_required_prejuly_snapshot_as_precomputed_evidence(self) -> None:
+        rows = report.load_nemorl_prejuly_canonical()
+
+        self.assertEqual(len(rows), 180)
+        self.assertEqual(set(pd.Series(rows["strict_match_eligible"]).tolist()), {False})
+        precomputed = rows[
+            rows["method_k"].astype(str).ne("baseline")
+            & rows[
+                [
+                    "gen_tps_speedup",
+                    "e2e_tps_speedup",
+                    "generation_time_speedup",
+                    "e2e_step_time_speedup",
+                ]
+            ].notna().any(axis=1)
+        ]
+        self.assertFalse(precomputed.empty)
+        self.assertEqual(
+            set(pd.Series(precomputed["baseline_match_state"]).tolist()),
+            {"precomputed"},
+        )
+        self.assertEqual(
+            set(rows["job_id"].astype(str)) & {"2172802", "2196588"},
+            {"2172802", "2196588"},
+        )
+        self.assertEqual(
+            set(pd.Series(rows["canonical_snapshot"]).tolist()),
+            {"docs/lyris_nemorl_perfcfg_specdec_combined_prejuly_20260701.csv"},
+        )
+        enriched = report.fill_nemorl_speedups(rows)
+        enriched["job_id"] = enriched["job_id"].astype(str)
+        enriched = enriched.set_index("job_id")
+        self.assertEqual(enriched.at["2172802", "baseline_match_state"], "precomputed")
+        self.assertEqual(enriched.at["2172802", "gen_tps_speedup"], 1.809753515719269)
+
+    def test_missing_required_prejuly_snapshot_raises(self) -> None:
+        with TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing-prejuly.csv"
+            with mock.patch.object(report, "NEMORL_PREJULY_CANONICAL", missing):
+                with self.assertRaises(FileNotFoundError) as raised:
+                    report.load_nemorl_prejuly_canonical()
+
+        self.assertIn(str(missing), str(raised.exception))
+
+    def test_combines_prejuly_and_july_without_losing_historical_jobs(self) -> None:
+        prejuly = report.load_nemorl_prejuly_canonical()
+        july = report.load_july_nemorl_results()
+        combined = report.combine_nemorl_rows(pd.DataFrame())
+
+        keys = combined[["job_id", "method_k"]].astype(str)
+        self.assertFalse(keys.duplicated().any())
+        self.assertEqual(len(combined), 234)
+        self.assertEqual(len(july), 54)
+        prejuly_keys = set(
+            map(tuple, prejuly[["job_id", "method_k"]].astype(str).to_numpy())
+        )
+        july_keys = set(map(tuple, july[["job_id", "method_k"]].astype(str).to_numpy()))
+        combined_keys = set(map(tuple, keys.to_numpy()))
+        self.assertEqual(len(prejuly_keys & combined_keys), 180)
+        self.assertEqual(len(july_keys & combined_keys), 54)
+        self.assertIn("2172802", set(combined["job_id"].astype(str)))
+        self.assertIn("2196588", set(combined["job_id"].astype(str)))
+
     def test_loads_all_july_sources_with_normalized_provenance(self) -> None:
         rows = report.load_july_nemorl_results()
 
@@ -409,6 +472,40 @@ class NemoRlReportTest(unittest.TestCase):
         self.assertIn("Historical partial source", row["notes"])
         self.assertIn("alternate source groups", row["notes"])
         self.assertIn("docs/historical.csv", row["alternate_manifests"])
+
+    def test_dedup_prefers_completed_july_row_over_completed_canonical_row(self) -> None:
+        rows = pd.DataFrame(
+            [
+                {
+                    "job_id": "shared-job",
+                    "method_k": "eagle3_k5",
+                    "source_group": "Pre-July canonical",
+                    "source_priority": 0,
+                    "completed_steps": 19,
+                    "result_state": "completed",
+                    "manifest": "docs/prejuly.csv",
+                    "evidence_period": "pre-july-canonical",
+                },
+                {
+                    "job_id": "shared-job",
+                    "method_k": "eagle3_k5",
+                    "source_group": "July current",
+                    "source_priority": -10,
+                    "completed_steps": 19,
+                    "result_state": "completed",
+                    "manifest": "docs/july.csv",
+                    "evidence_period": "july-current",
+                },
+            ]
+        )
+
+        selected = report.deduplicate_nemorl_rows(rows)
+
+        self.assertEqual(len(selected), 1)
+        row = selected.iloc[0]
+        self.assertEqual(row["manifest"], "docs/july.csv")
+        self.assertEqual(row["evidence_period"], "july-current")
+        self.assertIn("docs/prejuly.csv", row["alternate_manifests"])
 
     def test_chart_rows_require_a_complete_step20_metric_window(self) -> None:
         rows = pd.DataFrame(
