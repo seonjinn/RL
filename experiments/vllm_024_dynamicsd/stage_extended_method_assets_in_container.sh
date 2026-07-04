@@ -91,6 +91,11 @@ if ! grep -q 'Lightweight package initialization' "${angelslim_source}/angelslim
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_lightweight_imports.patch
 fi
+if ! grep -q 'input-length' "${angelslim_source}/tools/dflash_benchmark.py"; then
+  patch -p1 -d "${angelslim_source}" \
+    < /workspace/experiment/patches/angelslim_fixed_length.patch
+fi
+python3 -m compileall -q "${angelslim_source}/tools/dflash_benchmark.py"
 
 common_site_versioned="${ASSET_ROOT}/python/common-py312-arctic-0.1.1"
 if [[ ! -f "${common_site_versioned}/.complete" ]]; then

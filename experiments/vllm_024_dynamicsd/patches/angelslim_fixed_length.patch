@@ -1,0 +1,58 @@
+--- a/tools/dflash_benchmark.py
++++ b/tools/dflash_benchmark.py
+@@ -241,6 +241,16 @@
+ def cuda_time() -> float:
+     torch.cuda.synchronize()
+     return time.perf_counter()
++
++
++def fit_input_ids(input_ids: torch.Tensor, input_length: int) -> torch.Tensor:
++    if input_length <= 0:
++        raise ValueError("--input-length must be positive")
++    current_length = input_ids.shape[1]
++    if current_length == 0:
++        raise ValueError("tokenizer returned an empty prompt")
++    repeats = (input_length + current_length - 1) // current_length
++    return input_ids.repeat(1, repeats)[:, :input_length]
+ 
+ 
+ @torch.inference_mode()
+@@ -405,6 +415,8 @@
+     )
+     parser.add_argument("--max-samples", type=int, default=None)
+     parser.add_argument("--max-new-tokens", type=int, default=16384)
++    parser.add_argument("--input-length", type=int)
++    parser.add_argument("--ignore-eos", action="store_true")
+     parser.add_argument("--temperature", type=float, default=0.0)
+     parser.add_argument("--output-json", type=Path)
+     args = parser.parse_args()
+@@ -477,6 +489,8 @@
+                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+             )
+             input_ids = tokenizer.encode(input_text, return_tensors="pt").to(target.device)
++            if args.input_length is not None:
++                input_ids = fit_input_ids(input_ids, args.input_length)
+ 
+             response = {}
+             for bs in [1, block_size]:
+@@ -487,7 +501,9 @@
+                     mask_token_id=draft_model.mask_token_id,
+                     max_new_tokens=args.max_new_tokens,
+                     block_size=bs,
+-                    stop_token_ids=[tokenizer.eos_token_id],
++                    stop_token_ids=(
++                        None if args.ignore_eos else [tokenizer.eos_token_id]
++                    ),
+                     sample_fn=sample_fn,
+                     extract_context_feature_fn=extract_context_feature_fn,
+                     temperature=args.temperature,
+@@ -534,7 +550,9 @@
+                 "draft_arch": args.draft_arch,
+                 "dataset": args.dataset,
+                 "max_samples": args.max_samples,
++                "input_length": args.input_length,
+                 "max_new_tokens": args.max_new_tokens,
++                "ignore_eos": args.ignore_eos,
+                 "temperature": args.temperature,
+                 "top_p": 1.0,
+                 "block_size": block_size,

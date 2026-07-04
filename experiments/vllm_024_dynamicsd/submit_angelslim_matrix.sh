@@ -44,14 +44,16 @@ DEPENDENCY="${DEPENDENCY:-}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
+ISL="${ISL:-4096}"
+IGNORE_EOS="${IGNORE_EOS:-true}"
 
 if [[ "${SMOKE}" == "true" ]]; then
   MAX_SAMPLES="${MAX_SAMPLES:-4}"
-  MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-128}"
+  MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
   TIME_LIMIT="${TIME_LIMIT:-01:00:00}"
 else
-  MAX_SAMPLES="${MAX_SAMPLES:-128}"
-  MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-2048}"
+  MAX_SAMPLES="${MAX_SAMPLES:-4}"
+  MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-32768}"
   TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
 fi
 
@@ -66,6 +68,10 @@ render_sbatch() {
   local domain_label="$4"
   local temperature="$5"
   local run_dir="$6"
+  local ignore_eos_arg=""
+  if [[ "${IGNORE_EOS}" == "true" ]]; then
+    ignore_eos_arg="--ignore-eos"
+  fi
   cat <<EOF
 #!/usr/bin/env bash
 #SBATCH --account=${ACCOUNT}
@@ -103,6 +109,8 @@ echo 'dataset=${dataset}'
 echo 'temperature=${temperature}'
 echo 'top_p=1.0'
 echo 'block_size=16'
+echo 'isl=${ISL}'
+echo 'osl=${MAX_NEW_TOKENS}'
 
 srun --ntasks=1 \\
   --container-image='${CONTAINER_IMAGE}' \\
@@ -122,8 +130,10 @@ torchrun --standalone --nproc-per-node=4 '${ANGELSLIM_SOURCE}/tools/dflash_bench
   --block-size '16' \\
   --dataset '${dataset}' \\
   --max-samples '${MAX_SAMPLES}' \\
+  --input-length '${ISL}' \\
   --max-new-tokens '${MAX_NEW_TOKENS}' \\
   --temperature '${temperature}' \\
+  ${ignore_eos_arg} \\
   --output-json '${run_dir}/result.json'" \\
   2>&1 | tee '${run_dir}/benchmark.log'
 EOF
