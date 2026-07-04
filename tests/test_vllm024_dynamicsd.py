@@ -492,17 +492,23 @@ def test_angelslim_compact_transport_patch_stages_cpu_only_results() -> None:
     patch = (
         EXPERIMENT / "patches/angelslim_compact_result_transport.patch"
     ).read_text(encoding="utf-8")
+    import_marker = (
+        "from angelslim_dflare_transport import "
+        "compact_response_map, write_rank_partial"
+    )
     append_marker = "responses.append(compact_response_map(response))"
     partial_marker = "write_rank_partial(args.output_json, _dist_rank(), responses)"
 
     assert "${angelslim_source}/tools/angelslim_dflare_transport.py" in worker
     assert "angelslim_compact_result_transport.patch" in worker
+    assert import_marker in worker
     assert append_marker in worker
     assert partial_marker in worker
-    assert 'if [[ "${has_compact_append}" == "1" && "${has_partial_write}" == "1" ]]; then' in worker
-    assert 'elif [[ "${has_compact_append}" == "0" && "${has_partial_write}" == "0" ]]; then' in worker
+    assert 'state_count=$((has_import + has_compact_append + has_partial_write))' in worker
+    assert 'if [[ "${state_count}" == "3" ]]; then' in worker
+    assert 'elif [[ "${state_count}" == "0" ]]; then' in worker
     assert "partial AngelSlim compact transport patch state" in worker
-    assert "from angelslim_dflare_transport import" in patch
+    assert import_marker in patch
     assert "compact_response_map" in patch
     assert "write_rank_partial" in patch
     assert "responses.append(response)" in patch

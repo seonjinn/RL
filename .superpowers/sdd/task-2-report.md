@@ -280,3 +280,41 @@ FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_s
 ................................                                         [100%]
 32 passed in 2.58s
 ```
+
+## Final Re-Review Follow-Up
+
+Reviewer correction addressed:
+
+- added a third exact marker for the patched import line:
+  `from angelslim_dflare_transport import compact_response_map, write_rank_partial`
+- changed the staging worker to count exact marker states in
+  `tools/dflash_benchmark.py`
+- the worker now:
+  - skips only when all 3 markers exist
+  - applies only when 0 markers exist
+  - exits with the partial-patch error for mixed states with counts 1 or 2
+- strengthened the focused test to assert the import marker and the
+  `state_count` guard structure
+
+Commands:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Outputs:
+
+```text
+....................F...........                                         [100%]
+=================================== FAILURES ===================================
+________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
+E       assert 'from angelslim_dflare_transport import compact_response_map, write_rank_partial' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
+
+=========================== short test summary info ============================
+FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
+1 failed, 31 passed in 3.15s
+
+................................                                         [100%]
+32 passed in 2.29s
+```

@@ -106,19 +106,25 @@ fi
 install -D -m 0644 \
   /workspace/experiment/angelslim_dflare_transport.py \
   "${angelslim_source}/tools/angelslim_dflare_transport.py"
+import_marker='from angelslim_dflare_transport import compact_response_map, write_rank_partial'
 append_marker='responses.append(compact_response_map(response))'
 partial_marker='write_rank_partial(args.output_json, _dist_rank(), responses)'
+has_import=0
 has_compact_append=0
 has_partial_write=0
+if grep -Fq "${import_marker}" "${angelslim_source}/tools/dflash_benchmark.py"; then
+  has_import=1
+fi
 if grep -Fq "${append_marker}" "${angelslim_source}/tools/dflash_benchmark.py"; then
   has_compact_append=1
 fi
 if grep -Fq "${partial_marker}" "${angelslim_source}/tools/dflash_benchmark.py"; then
   has_partial_write=1
 fi
-if [[ "${has_compact_append}" == "1" && "${has_partial_write}" == "1" ]]; then
+state_count=$((has_import + has_compact_append + has_partial_write))
+if [[ "${state_count}" == "3" ]]; then
   :
-elif [[ "${has_compact_append}" == "0" && "${has_partial_write}" == "0" ]]; then
+elif [[ "${state_count}" == "0" ]]; then
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_compact_result_transport.patch
 else
