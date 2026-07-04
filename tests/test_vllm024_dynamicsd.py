@@ -495,12 +495,17 @@ def test_angelslim_compact_transport_patch_stages_cpu_only_results() -> None:
 
     assert "${angelslim_source}/tools/angelslim_dflare_transport.py" in worker
     assert "angelslim_compact_result_transport.patch" in worker
+    assert "compact_response_map' \"${angelslim_source}/tools/dflash_benchmark.py\"" in worker
+    assert "write_rank_partial' \"${angelslim_source}/tools/dflash_benchmark.py\"" in worker
     assert "from angelslim_dflare_transport import" in patch
     assert "compact_response_map" in patch
     assert "write_rank_partial" in patch
     assert "responses.append(response)" in patch
     assert "responses.append(compact_response_map(response))" in patch
     assert "write_rank_partial(args.output_json, _dist_rank(), responses)" in patch
+    assert patch.index("write_rank_partial(args.output_json, _dist_rank(), responses)") < (
+        patch.index("if _dist_size() > 1:")
+    )
 
 
 def test_angelslim_matrix_keeps_native_results_separate() -> None:

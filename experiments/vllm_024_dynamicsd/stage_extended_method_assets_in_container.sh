@@ -106,7 +106,8 @@ fi
 install -D -m 0644 \
   /workspace/experiment/angelslim_dflare_transport.py \
   "${angelslim_source}/tools/angelslim_dflare_transport.py"
-if ! grep -q 'compact_response_map' "${angelslim_source}/tools/dflash_benchmark.py"; then
+if ! grep -q 'compact_response_map' "${angelslim_source}/tools/dflash_benchmark.py" \
+  || ! grep -q 'write_rank_partial' "${angelslim_source}/tools/dflash_benchmark.py"; then
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_compact_result_transport.patch
 fi

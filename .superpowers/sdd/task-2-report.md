@@ -209,3 +209,36 @@ Notes:
 - The owned changes are limited to the three requested Task 2 files.
 - Existing untracked report artifacts under
   `experiments/vllm_024_dynamicsd/report/` were left untouched.
+
+## Review Follow-Up
+
+Reviewer items addressed:
+
+- tightened the staging idempotency guard so it skips only when both
+  `compact_response_map` and `write_rank_partial` are already present in
+  `tools/dflash_benchmark.py`
+- strengthened the focused test so it asserts the two guard markers and checks
+  that the partial-write hunk appears before `_dist_gather` in the patch text
+
+Commands:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Outputs:
+
+```text
+....................F...........                                         [100%]
+=================================== FAILURES ===================================
+________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
+E       assert 'write_rank_partial\' "${angelslim_source}/tools/dflash_benchmark.py"' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
+
+=========================== short test summary info ============================
+FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
+1 failed, 31 passed in 2.63s
+
+................................                                         [100%]
+32 passed in 2.47s
+```
