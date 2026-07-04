@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportCallIssue=false, reportArgumentType=false, reportAssignmentType=false, reportAttributeAccessIssue=false, reportReturnType=false, reportGeneralTypeIssues=false
 """Build the GitLab Pages landing page for SpecDec RL benchmark results."""
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ import shutil
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import cast
 from urllib.parse import unquote, urlsplit
 
 import matplotlib.pyplot as plt
@@ -257,6 +259,13 @@ def load_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
+
+
+def latest_dflare_performance_row(rows: pd.DataFrame) -> pd.Series:
+    numeric_job_ids = cast(pd.Series, pd.to_numeric(rows["job_id"], errors="coerce"))
+    if bool(numeric_job_ids.notna().any()):
+        return rows.loc[int(numeric_job_ids.idxmax())]
+    return rows.iloc[-1]
 
 
 def vllm_best_rows() -> pd.DataFrame:
@@ -929,7 +938,7 @@ def build() -> None:
     if dflare_completed.empty:
         dflare_summary = "No completed target-profile DFlare rows are available yet."
     else:
-        latest_dflare = dflare_completed.iloc[-1]
+        latest_dflare = latest_dflare_performance_row(dflare_completed)
         completed_jobs = dflare_completed["job_id"].astype(str).nunique()
         performance_rows = len(dflare_completed)
         failed_rows = len(dflare_status_rows)

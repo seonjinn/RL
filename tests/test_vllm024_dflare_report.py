@@ -304,8 +304,10 @@ def test_render_groups_context_profiles_and_required_columns(tmp_path: Path) -> 
     assert "2271721" in rendered
     assert "2271728" in rendered
     assert "Baseline" in rendered
+    assert "DFlare K=16" in rendered
     assert "1.00x" in rendered
     assert "waiting matched baseline" in rendered
+    assert "n/a%" not in rendered
 
 
 def test_render_does_not_show_incomplete_rows(tmp_path: Path) -> None:

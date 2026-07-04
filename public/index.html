@@ -72,7 +72,7 @@
 <body>
 <main id="overview">
   <h1>SpecDec RL Benchmark Dashboard</h1>
-  <p>Updated 2026-07-04 09:31:21 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
+  <p>Updated 2026-07-04 09:44:04 PDT. This Pages entry point mirrors the latest local vLLM standalone and NeMo-RL benchmark artifacts for Qwen3 speculative decoding.</p>
 
   <div class="grid">
     <div class="card"><div class="label">vLLM scope</div><div class="metric">Math + SWE</div><p>Batch sweeps and temp 0/1 comparisons with ISL/OSL shown in the result tables.</p></div>
@@ -128,7 +128,7 @@
     <h2>DFlare and AngelSlim Status</h2>
     <div class="note">
       <span class="pill ok">COMPLETED</span>
-      <p>8 completed target-profile DFlare job(s) produced 12 performance row(s). 12 failure/status row(s) remain separate, including 3 TIMEOUT row(s). Latest performance row: Native 32K SWE temp=1.0, 10.96 tok/s/GPU, 43.65% acceptance, mean accepted length 7.55, job 2272937.</p>
+      <p>8 completed target-profile DFlare job(s) produced 12 performance row(s). 16 failure/status row(s) remain separate, including 3 TIMEOUT row(s). Latest performance row: YaRN total-128K Math temp=1.0, 10.06 tok/s/GPU, 49.14% acceptance, mean accepted length 8.37, job 2272941.</p>
       <p><a href="reports/vllm_standalone_results_latest.html#vllm024-profile">Open the vLLM-native section</a>, <a href="reports/vllm_standalone_results_latest.html#vllm024-dflare">open the completed DFlare table</a>, or <a href="reports/vllm_standalone_results_latest.html#vllm024-dflare-status">open the failure/status table</a>. DFlare uses AngelSlim's standalone runtime and is kept separate from vLLM-native speedups.</p>
       <p>DFlare public checkpoints staged here include <code>AngelSlim/Qwen3-4b-dflare</code>, <code>AngelSlim/Qwen3-8b-dflare</code>, and <code>AngelSlim/Gpt-oss-20b-dflare</code>.</p>
       <p>Models requested in staging job: <code>AngelSlim/Qwen3-a3B_eagle3 AngelSlim/Qwen3-32B_eagle3 AngelSlim/Qwen3-8B_eagle3 AngelSlim/Qwen3-14B_eagle3 AngelSlim/Qwen3-4B_eagle3 AngelSlim/Qwen3-4b-dflare AngelSlim/Qwen3-8b-dflare AngelSlim/Gpt-oss-20b-dflare</code></p>

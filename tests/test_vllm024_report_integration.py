@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
+
+import pandas as pd
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -23,10 +27,59 @@ def parse_html(path: Path) -> str:
     return text
 
 
-def test_task5_latest_vllm_html_contains_native_and_status_sections() -> None:
-    latest.main()
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
-    html_text = parse_html(ROOT / "docs/vllm_standalone_results_latest.html")
+
+def test_task5_latest_builder_can_write_to_temp_outputs_without_checkout_side_effects(
+    tmp_path: Path,
+) -> None:
+    production_latest = ROOT / "docs/vllm_standalone_results_latest.html"
+    production_historical = ROOT / "docs/vllm_standalone_results_20260621.html"
+    production_added = ROOT / "docs/vllm_standalone_added_results_latest.csv"
+    production_public_index = ROOT / "public/index.html"
+    latest_before = sha256(production_latest)
+    historical_before = sha256(production_historical)
+    added_before = sha256(production_added)
+    public_index_before = sha256(production_public_index)
+
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    temp_added = tmp_path / "docs/vllm_standalone_added_results_latest.csv"
+    temp_completed = tmp_path / "report/dflare_completed_latest.csv"
+    temp_public_data = tmp_path / "public/data"
+
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=temp_added,
+        completed_csv_out=temp_completed,
+        public_data_dir=temp_public_data,
+    )
+
+    assert temp_html.exists()
+    assert temp_added.exists()
+    assert temp_completed.exists()
+    assert (temp_public_data / "vllm024_profiles_latest.csv").exists()
+    assert (temp_public_data / "dflare_completed_latest.csv").exists()
+    assert (temp_public_data / "dflare_job_status_latest.csv").exists()
+    assert sha256(production_latest) == latest_before
+    assert sha256(production_historical) == historical_before
+    assert sha256(production_added) == added_before
+    assert sha256(production_public_index) == public_index_before
+
+
+def test_task5_latest_vllm_html_contains_native_and_status_sections(tmp_path: Path) -> None:
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    temp_added = tmp_path / "docs/vllm_standalone_added_results_latest.csv"
+    temp_completed = tmp_path / "report/dflare_completed_latest.csv"
+    temp_public_data = tmp_path / "public/data"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=temp_added,
+        completed_csv_out=temp_completed,
+        public_data_dir=temp_public_data,
+    )
+
+    html_text = parse_html(temp_html)
 
     assert "vLLM 0.24 / Native Profile Results" in html_text
     assert "vLLM 0.24 / DFlare Completed Results" in html_text
@@ -35,24 +88,136 @@ def test_task5_latest_vllm_html_contains_native_and_status_sections() -> None:
     assert "2272938" in html_text
     assert "2272941" in html_text
     assert "2272942" in html_text
+    assert "2274775" in html_text
+    assert "2274776" in html_text
+    assert "2274777" in html_text
+    assert "2274778" in html_text
     assert "slurm_wall_time_5h" in html_text
+    assert "retry_compact_transport_8h_backfill" in html_text
     assert "gather_object_cuda_oom_after_generation" in html_text
     assert "retry_of" in html_text
     assert "vllm024_profiles_latest.csv" in html_text
     assert "dflare_job_status_latest.csv" in html_text
-    assert (ROOT / "public/data/vllm024_profiles_latest.csv").exists()
-    assert (ROOT / "public/data/dflare_completed_latest.csv").exists()
-    assert (ROOT / "public/data/dflare_job_status_latest.csv").exists()
+    assert (temp_public_data / "vllm024_profiles_latest.csv").exists()
+    assert (temp_public_data / "dflare_completed_latest.csv").exists()
+    assert (temp_public_data / "dflare_job_status_latest.csv").exists()
 
 
-def test_task5_index_publishes_new_artifacts_and_counts() -> None:
-    latest.main()
+def test_task5_index_publishes_new_artifacts_and_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_docs = tmp_path / "docs"
+    temp_public = tmp_path / "public"
+    temp_reports = temp_public / "reports"
+    temp_data = temp_public / "data"
+    temp_archive = temp_public / "archive"
+    temp_figures = temp_public / "figures"
+    temp_docs.mkdir(parents=True)
+    temp_reports.mkdir(parents=True)
+    temp_data.mkdir(parents=True)
+    temp_archive.mkdir(parents=True)
+    temp_figures.mkdir(parents=True)
+    latest_html = temp_docs / "vllm_standalone_results_latest.html"
+    added_csv = temp_docs / "vllm_standalone_added_results_latest.csv"
+    latest.build_latest_vllm_outputs(
+        output_html=latest_html,
+        added_csv_out=added_csv,
+        completed_csv_out=temp_data / "dflare_completed_latest.csv",
+        public_data_dir=temp_data,
+    )
+    (temp_docs / "vllm_standalone_results_20260619.html").write_text(
+        "<!doctype html><title>6/19</title>",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(index, "DOCS", temp_docs)
+    monkeypatch.setattr(index, "PUBLIC", temp_public)
+    monkeypatch.setattr(index, "REPORTS", temp_reports)
+    monkeypatch.setattr(index, "DATA", temp_data)
+    monkeypatch.setattr(index, "ARCHIVE", temp_archive)
+    monkeypatch.setattr(index, "FIGURES", temp_figures)
     index.build()
 
-    html_text = parse_html(ROOT / "public/index.html")
+    html_text = parse_html(temp_public / "index.html")
 
     assert "8 completed target-profile DFlare job(s)" in html_text
     assert "12 performance row(s)" in html_text
+    assert "16 failure/status row(s)" in html_text
+    assert "job 2272941." in html_text
     assert 'href="data/vllm024_profiles_latest.csv"' in html_text
     assert 'href="data/dflare_completed_latest.csv"' in html_text
     assert 'href="data/dflare_job_status_latest.csv"' in html_text
+
+
+def test_task5_index_chooses_max_numeric_job_id_for_latest_dflare_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_docs = tmp_path / "docs"
+    temp_public = tmp_path / "public"
+    temp_reports = temp_public / "reports"
+    temp_data = temp_public / "data"
+    temp_archive = temp_public / "archive"
+    temp_figures = temp_public / "figures"
+    temp_docs.mkdir(parents=True)
+    temp_reports.mkdir(parents=True)
+    temp_data.mkdir(parents=True)
+    temp_archive.mkdir(parents=True)
+    temp_figures.mkdir(parents=True)
+    (temp_docs / "vllm_standalone_results_latest.html").write_text(
+        "<!doctype html><title>latest</title>",
+        encoding="utf-8",
+    )
+    (temp_docs / "vllm_standalone_results_20260619.html").write_text(
+        "<!doctype html><title>6/19</title>",
+        encoding="utf-8",
+    )
+    completed = pd.DataFrame(
+        [
+            {
+                "status": "complete",
+                "context_profile": "Native 32K",
+                "domain": "SWE",
+                "temperature": 1.0,
+                "tok_s_gpu": 1.0,
+                "acceptance_rate": 0.1,
+                "mean_accept_len": 1.0,
+                "job_id": "2272941",
+            },
+            {
+                "status": "complete",
+                "context_profile": "Native 32K",
+                "domain": "Math",
+                "temperature": 0.0,
+                "tok_s_gpu": 2.0,
+                "acceptance_rate": 0.2,
+                "mean_accept_len": 2.0,
+                "job_id": "2272937",
+            },
+        ]
+    )
+    completed_path = tmp_path / "report/dflare_completed_latest.csv"
+    completed_path.parent.mkdir(parents=True)
+    completed.to_csv(completed_path, index=False)
+    status = pd.DataFrame(
+        [
+            {"job_id": "2274775", "state": "RUNNING"},
+        ]
+    )
+    status_path = tmp_path / "report/dflare_job_status_latest.csv"
+    status.to_csv(status_path, index=False)
+
+    monkeypatch.setattr(index, "DOCS", temp_docs)
+    monkeypatch.setattr(index, "PUBLIC", temp_public)
+    monkeypatch.setattr(index, "REPORTS", temp_reports)
+    monkeypatch.setattr(index, "DATA", temp_data)
+    monkeypatch.setattr(index, "ARCHIVE", temp_archive)
+    monkeypatch.setattr(index, "FIGURES", temp_figures)
+    monkeypatch.setattr(index, "DFLARE_COMPLETED", completed_path)
+    monkeypatch.setattr(index, "DFLARE_STATUS", status_path)
+    index.build()
+
+    html_text = parse_html(temp_public / "index.html")
+    assert "job 2272941." in html_text
+    assert "job 2272937." not in html_text

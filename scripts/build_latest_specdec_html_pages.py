@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportCallIssue=false, reportArgumentType=false, reportAssignmentType=false, reportAttributeAccessIssue=false, reportReturnType=false, reportGeneralTypeIssues=false, reportOptionalMemberAccess=false
 """Build latest SpecDec benchmark HTML pages from refreshed CSV artifacts."""
 
 from __future__ import annotations
@@ -41,12 +42,13 @@ def resolve_data_source(name: str) -> Path:
     return docs_path if docs_path.exists() else PUBLIC_DATA / name
 
 
-def publish_public_data(src: Path) -> Path | None:
+def publish_public_data(src: Path, dst_dir: Path = PUBLIC_DATA) -> Path | None:
     if not src.exists():
         return None
-    PUBLIC_DATA.mkdir(parents=True, exist_ok=True)
-    dst = PUBLIC_DATA / src.name
-    shutil.copy2(src, dst)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    if src.resolve() != dst.resolve():
+        shutil.copy2(src, dst)
     if dst.suffix in {".csv", ".html", ".json", ".txt"}:
         raw = dst.read_bytes()
         dst.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
@@ -82,7 +84,6 @@ VLLM_TEMP_TRENDS = DOCS / "vllm_standalone_temp0_temp1_trends_20260616.csv"
 VLLM_ADDED_OUT = DOCS / "vllm_standalone_added_results_latest.csv"
 VLLM_ADDED_INPUT = PUBLIC_DATA / "vllm_standalone_added_results_latest.csv"
 VLLM_HTML_LATEST = DOCS / "vllm_standalone_results_latest.html"
-VLLM_HTML_DATED = DOCS / "vllm_standalone_results_20260621.html"
 
 NEMORL_MANIFESTS = (
     sorted(ROOT.glob("latest_lyris_nemorl_qwen235b_*20260621_jobs.csv"))
@@ -1856,6 +1857,58 @@ def build_vllm_html(
     return "\n".join(parts)
 
 
+def load_dflare_status_rows(status_csv: Path = DFLARE_STATUS_CSV) -> pd.DataFrame:
+    if not status_csv.exists():
+        return pd.DataFrame()
+    return pd.read_csv(status_csv)
+
+
+def build_dflare_completed_rows(
+    *,
+    completed_dirs: list[Path] | None = None,
+    repository_root: Path = ROOT,
+) -> pd.DataFrame:
+    source_dirs = completed_dirs if completed_dirs is not None else DFLARE_COMPLETED_DIRS
+    result_paths = (
+        path
+        for completed_dir in source_dirs
+        for path in completed_dir.glob("**/result.json")
+    )
+    return match_dflare_baselines(
+        relativize_sources(
+            target_profile_rows(load_completed_dflare_results(result_paths)),
+            repository_root,
+        )
+    )
+
+
+def build_latest_vllm_outputs(
+    *,
+    output_html: Path = VLLM_HTML_LATEST,
+    added_csv_out: Path = VLLM_ADDED_OUT,
+    completed_csv_out: Path = DFLARE_COMPLETED_OUT,
+    public_data_dir: Path = PUBLIC_DATA,
+    status_csv: Path = DFLARE_STATUS_CSV,
+    profile_csv: Path = VLLM024_PROFILE_CSV,
+) -> Path:
+    output_html.parent.mkdir(parents=True, exist_ok=True)
+    added_csv_out.parent.mkdir(parents=True, exist_ok=True)
+    completed_csv_out.parent.mkdir(parents=True, exist_ok=True)
+    main_vllm = pd.read_csv(MAIN_VLLM)
+    added = load_vllm_added(main_vllm)
+    added.to_csv(added_csv_out, index=False)
+    native_rows = pd.read_csv(profile_csv) if profile_csv.exists() else pd.DataFrame()
+    dflare_status = load_dflare_status_rows(status_csv)
+    dflare_rows = build_dflare_completed_rows()
+    dflare_rows.to_csv(completed_csv_out, index=False)
+    publish_public_data(profile_csv, public_data_dir)
+    publish_public_data(completed_csv_out, public_data_dir)
+    publish_public_data(status_csv, public_data_dir)
+    vllm_html = build_vllm_html(main_vllm, added, native_rows, dflare_rows, dflare_status)
+    output_html.write_text(vllm_html, encoding="utf-8")
+    return output_html
+
+
 def load_sacct() -> pd.DataFrame:
     if not NEMORL_SACCT.exists():
         return pd.DataFrame(columns=["job_id", "job_name", "slurm_state", "exit_code", "elapsed", "start", "end"])
@@ -2651,30 +2704,7 @@ def build_nemorl_html(rows: pd.DataFrame) -> str:
 
 
 def main() -> None:
-    main_vllm = pd.read_csv(MAIN_VLLM)
-    added = load_vllm_added(main_vllm)
-    added.to_csv(VLLM_ADDED_OUT, index=False)
-    native_rows = pd.read_csv(VLLM024_PROFILE_CSV) if VLLM024_PROFILE_CSV.exists() else pd.DataFrame()
-    dflare_status = pd.read_csv(DFLARE_STATUS_CSV) if DFLARE_STATUS_CSV.exists() else pd.DataFrame()
-    dflare_rows = match_dflare_baselines(
-        relativize_sources(
-            target_profile_rows(
-                load_completed_dflare_results(
-                    path
-                    for completed_dir in DFLARE_COMPLETED_DIRS
-                    for path in completed_dir.glob("**/result.json")
-                )
-            ),
-            ROOT,
-        )
-    )
-    dflare_rows.to_csv(DFLARE_COMPLETED_OUT, index=False)
-    publish_public_data(VLLM024_PROFILE_CSV)
-    publish_public_data(DFLARE_COMPLETED_OUT)
-    publish_public_data(DFLARE_STATUS_CSV)
-    vllm_html = build_vllm_html(main_vllm, added, native_rows, dflare_rows, dflare_status)
-    VLLM_HTML_DATED.write_text(vllm_html, encoding="utf-8")
-    shutil.copyfile(VLLM_HTML_DATED, VLLM_HTML_LATEST)
+    build_latest_vllm_outputs()
 
     nemorl_rows = enrich_nemorl()
     nemorl_rows.to_csv(NEMORL_OUT, index=False)

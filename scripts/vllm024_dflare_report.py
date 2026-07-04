@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterable
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -246,10 +246,11 @@ def match_dflare_baselines(rows: pd.DataFrame) -> pd.DataFrame:
                 validate="many_to_one",
             )
             computed_speedup = spec_rows["tok_s_gpu"] / spec_rows["baseline_tok_s_gpu"]
-            matched.loc[original_index, "speedup"] = pd.to_numeric(
-                computed_speedup,
-                errors="coerce",
-            ).to_numpy(dtype=float)
+            numeric_speedup = cast(
+                pd.Series,
+                pd.to_numeric(computed_speedup, errors="coerce"),
+            )
+            matched.loc[original_index, "speedup"] = list(numeric_speedup.to_numpy())
     matched["speedup_label"] = matched["speedup"].map(
         lambda value: f"{value:.2f}x" if pd.notna(value) else "waiting matched baseline"
     )
@@ -281,10 +282,29 @@ def relativize_sources(rows: pd.DataFrame, root: Path) -> pd.DataFrame:
 
 def _fmt_number(value: object, digits: int = 2) -> str:
     try:
-        number = float(value)
+        number = float(cast(Any, value))
     except (TypeError, ValueError):
         return "n/a"
     return f"{number:.{digits}f}" if math.isfinite(number) else "n/a"
+
+
+def _fmt_percent(value: object) -> str:
+    try:
+        number = float(cast(Any, value))
+    except (TypeError, ValueError):
+        return "n/a"
+    return f"{number * 100:.2f}%" if math.isfinite(number) else "n/a"
+
+
+def _method_label(value: object) -> str:
+    text = str(value)
+    if text == "baseline":
+        return "Baseline"
+    if text.startswith("dflare_k"):
+        suffix = text.removeprefix("dflare_k")
+        if suffix.isdigit():
+            return f"DFlare K={suffix}"
+    return text
 
 
 def _profile_table(rows: pd.DataFrame, profile: str) -> str:
@@ -303,10 +323,10 @@ def _profile_table(rows: pd.DataFrame, profile: str) -> str:
             f'<span class="num">{int(row.isl):,}</span>',
             f'<span class="num">{int(row.osl):,}</span>',
             f'<span class="num">{int(row.batch_size)}</span>',
-            escape(str(row.method)),
+            escape(_method_label(row.method)),
             f'<span class="num">{_fmt_number(row.tok_s_gpu)}</span>',
             escape(str(row.speedup_label)),
-            f'<span class="num">{_fmt_number(float(row.acceptance_rate) * 100)}%</span>',
+            f'<span class="num">{_fmt_percent(row.acceptance_rate)}</span>',
             f'<span class="num">{_fmt_number(row.mean_accept_len)}</span>',
             escape(str(row.job_id or "n/a")),
         ]
