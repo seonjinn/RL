@@ -32,3 +32,18 @@ comparable with the vLLM table. A separate fixed ISL4096/OSL32768 run follows.
 
 Raw results are stored in `20260703_q8_extended_canary/` and
 `20260703_angelslim_canary/`.
+
+## AngelSlim Fixed-Length Canary
+
+The corrected canary repeats/truncates each prompt to ISL 4096, ignores EOS,
+and generates exactly 256 tokens. These rows are still Transformer-native
+SDPA results, not vLLM results.
+
+| Method | Decode speedup | Baseline tok/s | SpecDec tok/s | Acceptance | Mean accept length |
+|---|---:|---:|---:|---:|---:|
+| DFlash | 2.08x | 2.90 | 6.04 | 20.23% | 4.03 |
+| DFlare | 3.13x | 2.90 | 9.08 | 33.02% | 5.95 |
+
+The fixed 4K input reduced acceptance for both methods, but DFlare retained a
+larger advantage over DFlash. Raw results are in
+`20260703_angelslim_fixed_canary/`.

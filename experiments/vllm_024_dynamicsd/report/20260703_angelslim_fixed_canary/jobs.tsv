@@ -1,0 +1,3 @@
+job_id	method	domain	temperature	run_dir
+2270810	dflash	Math	0.0	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/angelslim-native/20260703_angelslim_fixed_canary/math/dflash_t0p0
+2270811	dflare	Math	0.0	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/angelslim-native/20260703_angelslim_fixed_canary/math/dflare_t0p0

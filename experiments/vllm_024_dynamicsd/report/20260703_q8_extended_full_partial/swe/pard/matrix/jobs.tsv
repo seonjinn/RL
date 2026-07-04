@@ -1,0 +1,3 @@
+job_id	variant	temperature	run_dir
+2270789	pard	0.0	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/extended-methods/20260703_q8_extended_full_isl4k_osl32k/swe/pard/matrix/pard_t0p0
+2270790	pard	1.0	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/extended-methods/20260703_q8_extended_full_isl4k_osl32k/swe/pard/matrix/pard_t1p0
