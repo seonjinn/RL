@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DFlare Result Integration and Reliability Design</title>
+  <style>
+    :root{--text:#111827;--muted:#6b7280;--line:#d8dee8;--bg:#f7f8fb;--panel:#fff;--blue:#1f5fbf}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;font-size:15px;line-height:1.5}
+    main{max-width:1120px;margin:0 auto;padding:24px}
+    .topbar{margin-bottom:18px}
+    .topbar a{display:inline-flex;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 10px;color:var(--blue);font-weight:700;text-decoration:none}
+    article{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px}
+    h1{font-size:28px;margin:0 0 18px}h2{font-size:20px;margin:28px 0 10px}h3{font-size:16px;margin:20px 0 8px}
+    p,li{max-width:90ch}code{background:#f3f4f6;border-radius:4px;padding:1px 4px}
+    pre{overflow:auto;background:#111827;color:#f9fafb;border-radius:8px;padding:14px}pre code{background:transparent;padding:0}
+    table{width:100%;border-collapse:collapse;margin:12px 0 20px}th,td{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}th{background:#eef2f7}
+    @media(max-width:720px){main{padding:12px}article{padding:16px;overflow-x:auto}table{min-width:720px;font-size:13px}}
+  </style>
+</head>
+<body><main>
+  <div class="topbar"><a href="../index.html">Back to report hub</a></div>
+  <article><h1>DFlare Result Integration and Reliability Design</h1>
+<h2>Goal</h2>
+<p>Publish every completed July 3-4 vLLM 0.24 long-context result and make the
+AngelSlim DFlare runner preserve usable measurements when distributed result
+collection or the SLURM wall-time fails.</p>
+<h2>Scope</h2>
+<ul>
+<li>Normalize the 20 Native 32K, 20 YaRN 64K, and 20 YaRN total-128K
+  vLLM-native result files.</li>
+<li>Add the three newly completed DFlare results to the existing five-row
+  completed table.</li>
+<li>Track timeout, OOM, and incomplete DFlare jobs separately from performance
+  rows.</li>
+<li>Fix the DFlare rank-0 OOM caused by gathering CUDA-backed Python objects.</li>
+<li>Save rank-local compact metrics before distributed collection so completed
+  shards survive a later timeout or gather failure.</li>
+<li>Restage the patch and rerun the missing DFlare profiles.</li>
+</ul>
+<h2>Result Model</h2>
+<p>The vLLM-native table uses one row per batch size and matches a baseline by:</p>
+<p><code>runtime, model, domain, temperature, top_p, batch_size, ISL, OSL, context profile, position encoding, CUDA graph mode, and setup</code>.</p>
+<p>The report shows throughput, throughput speedup, latency, latency speedup,
+acceptance rate, mean accepted length, method K, job/source path, and completion
+state. No speedup is computed across AngelSlim and vLLM-native runtimes.</p>
+<p>AngelSlim DFlare remains a separate completed-results section because its
+serial Transformers runner and PyTorch SDPA fallback are not comparable to the
+vLLM-native engine.</p>
+<h2>DFlare Collection Fix</h2>
+<p>The current runner gathers response objects that contain CUDA <code>output_ids</code>.
+<code>torch.distributed.gather_object()</code> unpickles those tensors on rank 0 and can
+initialize or allocate storage on every source CUDA device. At 128K context,
+that allocation fails after generation has already completed.</p>
+<p>Before collection, each response is reduced to a CPU-only record containing:</p>
+<ul>
+<li>output token count</li>
+<li>time per output token</li>
+<li>acceptance-length list</li>
+<li>block size and run mode</li>
+</ul>
+<p>No generated token tensor is required after local decoding. Each rank writes
+an atomic <code>&lt;output&gt;.rank&lt;N&gt;.partial.json</code> file before entering the collective.
+Rank 0 gathers only these compact records and writes the existing final JSON
+schema, preserving compatibility with the report parser.</p>
+<h2>Long-Running Jobs</h2>
+<p>The six-hour process-group timeout remains necessary but does not override the
+five-hour <code>gb200</code> partition wall-time. Rank-local partial files distinguish a
+slow shard from a failed collective and preserve completed shards. Final
+long-context retries use the patched runner; profiles that cannot fit five
+hours use the eight-hour <code>gb200-backfill</code> partition and retain partial output
+if preempted.</p>
+<p>FlashAttention availability is recorded in every row. Results produced by the
+current PyTorch SDPA fallback remain valid but are labeled as such. A separate
+staging smoke determines whether FlashAttention 2 can be installed in the
+ARM64 image before it is used for reportable comparisons.</p>
+<h2>Error Handling</h2>
+<ul>
+<li>Atomic JSON writes use a temporary sibling followed by rename.</li>
+<li>Final results include only complete matched rows.</li>
+<li>Rank-local partial results are labeled partial and never used for speedup.</li>
+<li>TIMEOUT, OOM, process-group timeout, and missing-result states are retained
+  in a status table with job IDs and root causes.</li>
+<li>Duplicate retries are de-duplicated by setup key, preferring the latest
+  complete result.</li>
+</ul>
+<h2>Verification</h2>
+<ul>
+<li>Unit tests prove CUDA-like response payloads are converted to CPU-only
+  compact records before gather.</li>
+<li>Unit tests cover rank partial JSON and final aggregation.</li>
+<li>Result-parser tests cover all three context profiles and exact baseline
+  matching.</li>
+<li>The generated HTML must parse successfully and contain all expected job IDs.</li>
+<li>Remote smoke jobs must remain error-free for five minutes before production
+  retries are accepted.</li>
+</ul></article>
+</main></body>
+</html>
