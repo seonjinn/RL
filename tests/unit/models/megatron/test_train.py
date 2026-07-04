@@ -165,6 +165,27 @@ class TestModelForward:
         assert torch.equal(call_kwargs["labels"], labels)
         assert torch.equal(call_kwargs["loss_mask"], loss_mask)
 
+    def test_model_forward_rejects_prepacked_labels_with_fused_logprobs(self):
+        from nemo_rl.models.megatron.train import model_forward
+
+        mock_model = MagicMock()
+        mock_data_dict = MagicMock()
+        mock_data_dict.get_multimodal_dict.return_value = {}
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            model_forward(
+                model=mock_model,
+                data_dict=mock_data_dict,
+                input_ids_cp_sharded=torch.tensor([[1, 2, 3, 4]]),
+                position_ids=torch.tensor([[0, 1, 2, 3]]),
+                attention_mask=None,
+                labels_cp_sharded=torch.tensor([[2, 3, 4, 0]]),
+                loss_mask_cp_sharded=torch.tensor([[1.0, 1.0, 1.0, 0.0]]),
+                use_fused_linear_logprobs=True,
+            )
+
+        mock_model.assert_not_called()
+
     def test_model_forward_clears_position_ids_for_multimodal(self):
         """Test model_forward sets position_ids to None for multimodal data."""
         from nemo_rl.models.megatron.train import model_forward
