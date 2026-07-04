@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,12 +34,248 @@ def real_input_paths() -> list[Path]:
     return paths
 
 
+def make_runtime(
+    *,
+    job_id: str | None = "1234567",
+    vllm_version: str = "0.24.0",
+    torch_version: str = "2.11.0+cu130",
+    cuda_version: str = "13.0",
+    platform_name: str = "Linux-6.17.0-aarch64",
+) -> dict[str, object]:
+    environment: dict[str, object] = {
+        "VLLM_USE_V2_MODEL_RUNNER": "0",
+        "VLLM_ATTENTION_BACKEND": None,
+        "CUDA_VISIBLE_DEVICES": None,
+    }
+    if job_id is not None:
+        environment["SLURM_JOB_ID"] = job_id
+    return {
+        "python": "3.12.3",
+        "platform": platform_name,
+        "vllm_version": vllm_version,
+        "torch_version": torch_version,
+        "cuda_version": cuda_version,
+        "gpu_count": 4,
+        "gpu_names": ["NVIDIA GB200"] * 4,
+        "environment": environment,
+    }
+
+
+def make_config(
+    *,
+    profile: str = "native32k",
+    domain: str = "math",
+    method: str = "baseline",
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    disable_custom_all_reduce: bool = True,
+    prompt_offset: int = 0,
+    seed: int = 0,
+    measure_repeats: int = 1,
+    warmup_repeats: int = 1,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    if profile == "native32k":
+        model = (
+            "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+            "models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218"
+        )
+        osl = 32_768
+        batch_sizes: list[int] = [1, 2, 4]
+        max_model_len = 40_960
+        max_num_seqs = 32
+        max_num_batched_tokens = 131_072
+        prompt_count_loaded = 32
+    elif profile == "yarn64k":
+        model = "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b"
+        osl = 65_536
+        batch_sizes = [1]
+        max_model_len = 69_632
+        max_num_seqs = 1
+        max_num_batched_tokens = 131_072
+        prompt_count_loaded = 1
+        warmup_repeats = 0
+        temperature = 1.0
+    elif profile == "yarn128k":
+        model = "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen3-8b"
+        osl = 126_976
+        batch_sizes = [1]
+        max_model_len = 131_072
+        max_num_seqs = 1
+        max_num_batched_tokens = 65_536
+        prompt_count_loaded = 1
+        warmup_repeats = 0
+        temperature = 1.0
+    else:
+        raise AssertionError(f"unsupported profile {profile}")
+
+    prompt_jsonl = (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/datasets/"
+        "math_500_data_prompts_qmath_20260617.jsonl"
+        if domain == "math"
+        else "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/"
+        "swebench_verified_prompts_all.jsonl"
+    )
+
+    config: dict[str, object] = {
+        "attention_backend": "TRITON_ATTN",
+        "batch_sizes": batch_sizes,
+        "cuda_profiler_range": False,
+        "cudagraph_mode": "NONE",
+        "disable_custom_all_reduce": disable_custom_all_reduce,
+        "draft_model": "/drafts/default",
+        "dtype": "bfloat16",
+        "enable_chunked_prefill": True,
+        "enable_prefix_caching": True,
+        "enforce_eager": True,
+        "engine_gpus": 1,
+        "gpu_memory_utilization": 0.9,
+        "isl": 4096,
+        "kv_cache_dtype": "auto",
+        "max_model_len": max_model_len,
+        "max_num_batched_tokens": max_num_batched_tokens,
+        "max_num_seqs": max_num_seqs,
+        "measure_repeats": measure_repeats,
+        "mode": method,
+        "model": model,
+        "moe_backend": "auto",
+        "osl": osl,
+        "pipeline_parallel_size": 1,
+        "pp": 1,
+        "prompt_count_loaded": prompt_count_loaded,
+        "prompt_jsonl": prompt_jsonl,
+        "prompt_offset": prompt_offset,
+        "seed": seed,
+        "speculative_config": None,
+        "tag": f"matrix_{method}_t{int(temperature)}p{int(top_p)}",
+        "temperature": temperature,
+        "tensor_parallel_size": 1,
+        "top_p": top_p,
+        "total_gpus": 4,
+        "tp": 1,
+        "warmup_repeats": warmup_repeats,
+    }
+    if method != "baseline":
+        k = {"dflash": 15, "pard": 12, "pard2": 15, "suffix": 32}.get(method)
+        speculative: dict[str, object] = {
+            "method": "draft_model" if method == "pard" else method,
+            "num_speculative_tokens": k,
+        }
+        if method in {"dflash", "pard", "pard2"}:
+            speculative["model"] = f"/drafts/{method}"
+            speculative["draft_tensor_parallel_size"] = 1
+        if method in {"pard", "pard2"}:
+            speculative["parallel_drafting"] = True
+        if method == "suffix":
+            speculative["suffix_decoding_max_tree_depth"] = 32
+        config["draft_model"] = f"/drafts/{method}"
+        config["speculative_config"] = speculative
+    if extra:
+        config.update(extra)
+    return config
+
+
+def make_result(
+    batch_size: int,
+    *,
+    tok_s_gpu: float,
+    latency_s: float,
+    acceptance_rate: float | None = None,
+    mean_accept_len: float | None = None,
+) -> dict[str, object]:
+    spec_decode_metrics: dict[str, object] = {}
+    if acceptance_rate is not None:
+        spec_decode_metrics["acceptance_rate"] = acceptance_rate
+    if mean_accept_len is not None:
+        spec_decode_metrics["mean_acceptance_length"] = mean_accept_len
+    return {
+        "bs": batch_size,
+        "latency_s_mean": latency_s,
+        "latency_s_median": latency_s,
+        "mean_latency_s": latency_s,
+        "latency_s": latency_s,
+        "output_tokens": 32_768,
+        "output_tok_s": tok_s_gpu * 4,
+        "output_tok_s_per_gpu": tok_s_gpu,
+        "prompt_count_used": batch_size,
+        "num_batches": 1,
+        "repeats": [
+            {
+                "repeat": 0,
+                "latency_s": latency_s,
+                "output_tokens": 32_768,
+                "output_tok_s": tok_s_gpu * 4,
+                "spec_decode_metrics": spec_decode_metrics,
+            }
+        ],
+        "spec_decode_metrics": spec_decode_metrics,
+    }
+
+
+def write_payload(
+    path: Path,
+    *,
+    status: str = "complete",
+    runtime: object | None = None,
+    config: dict[str, object] | None = None,
+    results: list[dict[str, object]] | None = None,
+) -> Path:
+    payload = {
+        "schema_version": 1,
+        "status": status,
+        "runtime": runtime if runtime is not None else make_runtime(),
+        "config": config if config is not None else make_config(),
+        "results": results if results is not None else [make_result(1, tok_s_gpu=10.0, latency_s=100.0)],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def baseline_frame_row(
+    *,
+    runtime_family: str = "vllm_native",
+    domain: str = "Math",
+    source: str = "baseline.json",
+    method: str = "baseline",
+    k: float = math.nan,
+) -> dict[str, object]:
+    return {
+        "runtime_family": runtime_family,
+        "runtime": "vLLM 0.24.0",
+        "runtime_provenance": "runtime-sig",
+        "domain": domain,
+        "model": "Qwen3-8B",
+        "model_checkpoint": "/models/qwen3-8b@snapshot",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "batch_size": 4,
+        "isl": 4096,
+        "osl": 32768,
+        "context_profile": "Native 32K",
+        "position_encoding": "native",
+        "cuda_graph": "NONE",
+        "setup_signature": "setup-sig",
+        "attention_backend": "TRITON_ATTN",
+        "method": method,
+        "k": k,
+        "tok_s_gpu": 40.0,
+        "latency_s": 100.0,
+        "acceptance_rate": math.nan,
+        "mean_accept_len": math.nan,
+        "job_id": "1234567",
+        "source_status": "complete",
+        "source": source,
+    }
+
+
 def test_load_profile_results_normalizes_real_inputs() -> None:
     module = load_module()
 
     rows = module.load_profile_results(real_input_paths())
 
     assert len(rows) == 154
+    assert rows["runtime_family"].value_counts().to_dict() == {"vllm_native": 154}
     assert rows["source_status"].value_counts().to_dict() == {
         "complete": 136,
         "partial": 18,
@@ -61,8 +300,13 @@ def test_load_profile_results_normalizes_real_inputs() -> None:
         & rows["batch_size"].eq(32)
     ].iloc[0]
     assert baseline["runtime"] == "vLLM 0.24.0"
+    assert "cuda_version" in str(baseline["runtime_provenance"])
+    assert "torch_version" in str(baseline["runtime_provenance"])
     assert baseline["domain"] == "Math"
     assert baseline["model"] == "Qwen3-8B"
+    assert str(baseline["model_checkpoint"]).endswith(
+        "snapshots/b968826d9c46dd6066d109eabc6255188de91218"
+    )
     assert baseline["temperature"] == 0.0
     assert baseline["top_p"] == 1.0
     assert baseline["isl"] == 4096
@@ -72,41 +316,71 @@ def test_load_profile_results_normalizes_real_inputs() -> None:
     assert baseline["cuda_graph"] == "NONE"
     assert baseline["source_status"] == "complete"
     assert baseline["method"] == "baseline"
+    assert "disable_custom_all_reduce" in str(baseline["setup_signature"])
+    assert "prompt_offset" in str(baseline["setup_signature"])
+    assert "measure_repeats" in str(baseline["setup_signature"])
+    assert "warmup_repeats" in str(baseline["setup_signature"])
     assert pd.isna(baseline["k"])
-    assert math.isclose(baseline["tok_s_gpu"], 164.68264711913437)
+    assert math.isclose(float(baseline["tok_s_gpu"]), 164.68264711913437)
     assert math.isnan(float(baseline["acceptance_rate"]))
     assert math.isnan(float(baseline["mean_accept_len"]))
 
-    partial = rows.loc[
-        rows["source"].astype(str).str.endswith(
-            "native32k/math/pard2/matrix/pard2_t0p0/result.json"
-        )
-        & rows["batch_size"].eq(8)
-    ].iloc[0]
-    assert partial["runtime"] == "vLLM 0.24.0"
-    assert partial["domain"] == "Math"
-    assert partial["context_profile"] == "Native 32K"
-    assert partial["source_status"] == "partial"
-    assert partial["method"] == "pard2"
-    assert partial["k"] == 15
-    assert math.isclose(partial["tok_s_gpu"], 36.822565954623336)
-    assert math.isclose(partial["acceptance_rate"], 0.0010346207983057633)
-    assert math.isclose(partial["mean_accept_len"], 1.0155193119745864)
+
+def test_load_profile_results_filters_non_vllm_native_runtime_and_derives_profiles_and_job_id(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    native32k = write_payload(
+        tmp_path / "native/job-1234567/result.json",
+        config=make_config(profile="native32k", domain="math", method="baseline"),
+        results=[make_result(1, tok_s_gpu=10.0, latency_s=100.0)],
+    )
+    yarn64k = write_payload(
+        tmp_path / "yarn64k/job-1234568/result.json",
+        runtime=make_runtime(job_id="1234568"),
+        config=make_config(profile="yarn64k", domain="math", method="dflash"),
+        results=[make_result(1, tok_s_gpu=12.0, latency_s=80.0, acceptance_rate=0.2, mean_accept_len=4.0)],
+    )
+    yarn128k = write_payload(
+        tmp_path / "yarn128k/job-12345678901/result.json",
+        runtime=make_runtime(job_id=None),
+        config=make_config(profile="yarn128k", domain="swe", method="suffix"),
+        results=[make_result(1, tok_s_gpu=8.0, latency_s=120.0, acceptance_rate=0.8, mean_accept_len=12.0)],
+    )
+    angelslim = write_payload(
+        tmp_path / "angelslim/job-1234569/result.json",
+        runtime="AngelSlim",
+        config=make_config(profile="native32k", domain="math", method="baseline"),
+        results=[make_result(1, tok_s_gpu=99.0, latency_s=1.0)],
+    )
+
+    rows = module.load_profile_results([native32k, yarn64k, yarn128k, angelslim])
+
+    assert len(rows) == 3
+    assert rows["runtime_family"].value_counts().to_dict() == {"vllm_native": 3}
+    assert rows["context_profile"].tolist() == [
+        "Native 32K",
+        "YaRN total-128K",
+        "YaRN 64K",
+    ]
+    assert rows["job_id"].tolist() == ["1234567", "12345678901", "1234568"]
 
 
-def test_match_profile_baselines_matches_real_native_rows() -> None:
+def test_match_profile_baselines_matches_real_native_rows_without_row_multiplication() -> None:
     module = load_module()
 
-    rows = module.match_profile_baselines(module.load_profile_results(real_input_paths()))
+    loaded = module.load_profile_results(real_input_paths())
+    rows = module.match_profile_baselines(loaded)
 
+    assert len(rows) == len(loaded)
     baseline = rows.loc[
         rows["source"].astype(str).str.endswith(
             "native32k/math/baseline/matrix/baseline_t0p0/result.json"
         )
         & rows["batch_size"].eq(4)
     ].iloc[0]
-    assert math.isclose(baseline["throughput_speedup"], 1.0)
-    assert math.isclose(baseline["latency_speedup"], 1.0)
+    assert math.isclose(float(baseline["throughput_speedup"]), 1.0)
+    assert math.isclose(float(baseline["latency_speedup"]), 1.0)
     assert baseline["throughput_speedup_label"] == "1.00x"
     assert baseline["latency_speedup_label"] == "1.00x"
 
@@ -118,121 +392,162 @@ def test_match_profile_baselines_matches_real_native_rows() -> None:
     ].iloc[0]
     assert dflash["source_status"] == "complete"
     assert dflash["method"] == "dflash"
-    assert math.isclose(dflash["baseline_tok_s_gpu"], 37.279732126789526)
-    assert math.isclose(dflash["baseline_latency_s"], 878.976272912987)
-    assert math.isclose(dflash["throughput_speedup"], 1.486798745603985)
-    assert math.isclose(dflash["latency_speedup"], 1.486798745603985)
-    assert dflash["throughput_speedup_label"] == "1.49x"
-    assert dflash["latency_speedup_label"] == "1.49x"
-
-    partial = rows.loc[
-        rows["source"].astype(str).str.endswith(
-            "native32k/math/pard2/matrix/pard2_t0p0/result.json"
-        )
-        & rows["batch_size"].eq(8)
-    ].iloc[0]
-    assert partial["source_status"] == "partial"
-    assert math.isclose(partial["baseline_tok_s_gpu"], 74.10213105299202)
-    assert math.isclose(partial["baseline_latency_s"], 884.4010161210317)
-    assert math.isclose(partial["throughput_speedup"], 0.49691642374347816)
-    assert math.isclose(partial["latency_speedup"], 0.49691642374347816)
+    assert math.isclose(float(dflash["baseline_tok_s_gpu"]), 37.279732126789526)
+    assert math.isclose(float(dflash["baseline_latency_s"]), 878.976272912987)
+    assert math.isclose(float(dflash["throughput_speedup"]), 1.486798745603985)
+    assert math.isclose(float(dflash["latency_speedup"]), 1.486798745603985)
 
 
-def test_match_profile_baselines_requires_full_exact_key() -> None:
+def test_match_profile_baselines_requires_exact_runtime_and_setup_signature(
+    tmp_path: Path,
+) -> None:
     module = load_module()
+    baseline = write_payload(
+        tmp_path / "baseline/job-2222222/result.json",
+        config=make_config(
+            profile="native32k",
+            method="baseline",
+            disable_custom_all_reduce=True,
+            prompt_offset=0,
+        ),
+        results=[make_result(4, tok_s_gpu=40.0, latency_s=100.0)],
+    )
+    setup_mismatch = write_payload(
+        tmp_path / "setup/job-2222223/result.json",
+        config=make_config(
+            profile="native32k",
+            method="pard2",
+            disable_custom_all_reduce=False,
+            prompt_offset=0,
+        ),
+        results=[make_result(4, tok_s_gpu=20.0, latency_s=200.0, acceptance_rate=0.01, mean_accept_len=1.1)],
+    )
+    runtime_mismatch = write_payload(
+        tmp_path / "runtime/job-2222224/result.json",
+        runtime=make_runtime(torch_version="9.9.9"),
+        config=make_config(
+            profile="native32k",
+            method="dflash",
+            disable_custom_all_reduce=True,
+            prompt_offset=0,
+        ),
+        results=[make_result(4, tok_s_gpu=30.0, latency_s=120.0, acceptance_rate=0.2, mean_accept_len=4.2)],
+    )
+    prompt_mismatch = write_payload(
+        tmp_path / "prompt/job-2222225/result.json",
+        config=make_config(
+            profile="native32k",
+            method="suffix",
+            disable_custom_all_reduce=True,
+            prompt_offset=8,
+        ),
+        results=[make_result(4, tok_s_gpu=80.0, latency_s=50.0, acceptance_rate=0.9, mean_accept_len=16.0)],
+    )
 
+    rows = module.match_profile_baselines(
+        module.load_profile_results([baseline, setup_mismatch, runtime_mismatch, prompt_mismatch])
+    )
+
+    nonbaseline = rows.loc[rows["method"].ne("baseline")].copy()
+    assert nonbaseline["throughput_speedup_label"].tolist() == [
+        "waiting matched baseline",
+        "waiting matched baseline",
+        "waiting matched baseline",
+    ]
+    assert nonbaseline["latency_speedup_label"].tolist() == [
+        "waiting matched baseline",
+        "waiting matched baseline",
+        "waiting matched baseline",
+    ]
+
+
+def test_match_profile_baselines_prefers_complete_duplicate_baseline_without_row_multiplication() -> None:
+    module = load_module()
     rows = pd.DataFrame(
         [
-            {
-                "source_status": "complete",
-                "runtime": "vLLM 0.24.0",
-                "domain": "Math",
-                "model": "Qwen3-8B",
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "batch_size": 4,
-                "isl": 4096,
-                "osl": 32768,
-                "context_profile": "Native 32K",
-                "position_encoding": "native",
-                "cuda_graph": "NONE",
-                "setup": "triton-tp1-pp1",
-                "attention_backend": "TRITON_ATTN",
-                "method": "baseline",
-                "k": math.nan,
-                "tok_s_gpu": 40.0,
-                "latency_s": 100.0,
-                "acceptance_rate": math.nan,
-                "mean_accept_len": math.nan,
-                "job_id": "2270001",
-                "source": "baseline.json",
-            },
-            {
-                "source_status": "complete",
-                "runtime": "vLLM 0.24.0",
-                "domain": "Math",
-                "model": "Qwen3-8B",
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "batch_size": 4,
-                "isl": 4096,
-                "osl": 32768,
-                "context_profile": "Native 32K",
-                "position_encoding": "native",
-                "cuda_graph": "NONE",
-                "setup": "flashinfer-tp1-pp1",
-                "attention_backend": "TRITON_ATTN",
-                "method": "pard2",
-                "k": 15,
-                "tok_s_gpu": 20.0,
-                "latency_s": 200.0,
-                "acceptance_rate": 0.01,
-                "mean_accept_len": 1.1,
-                "job_id": "2270002",
-                "source": "pard2.json",
+            baseline_frame_row(source="partial-baseline.json") | {"source_status": "partial", "tok_s_gpu": 20.0, "latency_s": 200.0},
+            baseline_frame_row(source="complete-baseline.json"),
+            baseline_frame_row(method="pard2", k=15.0, source="spec.json")
+            | {
+                "tok_s_gpu": 10.0,
+                "latency_s": 400.0,
+                "acceptance_rate": 0.1,
+                "mean_accept_len": 1.2,
             },
         ]
     )
 
     matched = module.match_profile_baselines(rows)
-    spec = matched.loc[matched["method"].eq("pard2")].iloc[0]
+    spec = matched.loc[matched["source"].eq("spec.json")].iloc[0]
 
-    assert math.isnan(float(spec["baseline_tok_s_gpu"]))
-    assert math.isnan(float(spec["baseline_latency_s"]))
-    assert math.isnan(float(spec["throughput_speedup"]))
-    assert math.isnan(float(spec["latency_speedup"]))
-    assert spec["throughput_speedup_label"] == "waiting matched baseline"
-    assert spec["latency_speedup_label"] == "waiting matched baseline"
+    assert len(matched) == len(rows)
+    assert math.isclose(float(spec["baseline_tok_s_gpu"]), 40.0)
+    assert math.isclose(float(spec["baseline_latency_s"]), 100.0)
+    assert math.isclose(float(spec["throughput_speedup"]), 0.25)
+    assert math.isclose(float(spec["latency_speedup"]), 0.25)
 
 
-def test_render_profile_section_marks_complete_and_partial_sources() -> None:
+def test_match_profile_baselines_rejects_ambiguous_duplicate_exact_keys() -> None:
     module = load_module()
+    rows = pd.DataFrame(
+        [
+            baseline_frame_row(source="baseline-a.json"),
+            baseline_frame_row(source="baseline-b.json"),
+            baseline_frame_row(method="dflash", k=15.0, source="spec.json")
+            | {
+                "tok_s_gpu": 20.0,
+                "latency_s": 200.0,
+                "acceptance_rate": 0.2,
+                "mean_accept_len": 4.0,
+            },
+        ]
+    )
 
-    rows = module.match_profile_baselines(module.load_profile_results(real_input_paths()))
+    with pytest.raises(ValueError, match="ambiguous duplicate baseline"):
+        module.match_profile_baselines(rows)
+
+
+def test_render_profile_section_escapes_html_filters_runtime_family_and_handles_missing_k() -> None:
+    module = load_module()
+    rows = pd.DataFrame(
+        [
+            baseline_frame_row(domain="Math <baseline>", source="baseline<&>.json"),
+            baseline_frame_row(
+                domain="Math <tag>",
+                source="spec<&>.json",
+                method="dflash",
+                k=math.nan,
+            )
+            | {
+                "tok_s_gpu": 20.0,
+                "latency_s": 200.0,
+                "acceptance_rate": 0.25,
+                "mean_accept_len": 4.5,
+                "throughput_speedup": 0.5,
+                "latency_speedup": 0.5,
+                "throughput_speedup_label": "0.50x",
+                "latency_speedup_label": "0.50x",
+            },
+            baseline_frame_row(
+                runtime_family="angelslim",
+                domain="AngelSlim <drop>",
+                source="angelslim.json",
+            )
+            | {
+                "throughput_speedup": 99.0,
+                "latency_speedup": 99.0,
+                "throughput_speedup_label": "99.00x",
+                "latency_speedup_label": "99.00x",
+            },
+        ]
+    )
+
     rendered = module.render_profile_section(rows)
 
     assert '<section class="section" id="vllm024-profile">' in rendered
-    assert "vLLM 0.24 / Native Profile Results" in rendered
-    assert "Native 32K" in rendered
-    assert "YaRN 64K" in rendered
-    assert "YaRN total-128K" in rendered
-    for heading in [
-        "Domain",
-        "Temperature",
-        "ISL",
-        "OSL",
-        "Batch",
-        "Method / K",
-        "tok/s/GPU",
-        "Throughput speedup",
-        "Latency speedup",
-        "Acceptance",
-        "Mean accept length",
-        "Source",
-    ]:
-        assert heading in rendered
-    assert "Persisted batch results from interrupted sources are shown as partial." in rendered
-    assert 'class="source-status complete"' in rendered
-    assert 'class="source-status partial"' in rendered
-    assert "pard2_t0p0/result.json" in rendered
-    assert "baseline_t0p0/result.json" in rendered
+    assert "Math &lt;tag&gt;" in rendered
+    assert "Math &lt;baseline&gt;" in rendered
+    assert "spec&lt;&amp;&gt;.json" in rendered
+    assert "baseline&lt;&amp;&gt;.json" in rendered
+    assert "DFlash K=n/a" in rendered
+    assert "AngelSlim &lt;drop&gt;" not in rendered

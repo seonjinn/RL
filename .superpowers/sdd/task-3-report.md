@@ -2,74 +2,30 @@
 
 ## Scope
 
-- Created `scripts/vllm024_profile_report.py`
-- Created `tests/test_vllm024_profile_report.py`
+- Modified `scripts/vllm024_profile_report.py`
+- Modified `tests/test_vllm024_profile_report.py`
 
-## Requirements Source
+## Review-Fix Summary
 
-Command:
+Implemented the Task 3 review findings in the owned files only:
 
-```bash
-sed -n '1,240p' .superpowers/sdd/task-3-brief.md
-```
-
-Output:
-
-```text
-### Task 3: Normalize vLLM-Native Profile Results
-
-**Files:**
-- Create: `scripts/vllm024_profile_report.py`
-- Create: `tests/test_vllm024_profile_report.py`
-
-**Interfaces:**
-- Produces: `load_profile_results(paths: Iterable[Path]) -> pd.DataFrame`
-- Produces: `match_profile_baselines(rows: pd.DataFrame) -> pd.DataFrame`
-- Produces: `render_profile_section(rows: pd.DataFrame) -> str`
-
-- [ ] **Step 1: Write failing parser tests**
-
-Cover baseline and speculative JSON fixtures for Native 32K, YaRN 64K, and
-YaRN total-128K. Verify one row per batch size, exact setup matching,
-throughput speedup, latency speedup, acceptance, mean accepted length, K, and
-unmatched-baseline behavior.
-
-- [ ] **Step 2: Run the focused parser test and confirm failure**
-
-Run: `python3 -m pytest -q tests/test_vllm024_profile_report.py`
-
-Expected: import failure because the profile module does not exist.
-
-- [ ] **Step 3: Implement normalization and matching**
-
-Normalize `config` and each `results` item into canonical columns. Derive the
-profile from ISL/OSL and position encoding, derive method/K from
-`speculative_config`, and join against exact baseline keys.
-
-- [ ] **Step 4: Implement compact profile HTML**
-
-Render separate Native 32K, YaRN 64K, and total-128K tables with methodology,
-throughput, speedup, latency speedup, acceptance, mean length, and source.
-
-- [ ] **Step 5: Run the focused parser tests**
-
-Run: `python3 -m pytest -q tests/test_vllm024_profile_report.py`
-
-Expected: all profile tests pass.
-```
+- exact baseline matching now preserves `runtime_family`, full runtime
+  provenance, exact target checkpoint path, and a normalized
+  `setup_signature` built from non-speculative config
+- baseline matching now prefers `complete` over `partial`, rejects remaining
+  ambiguous duplicate exact keys, and merges with `validate="many_to_one"`
+- loading, matching, and rendering are explicitly limited to
+  `runtime_family == "vllm_native"` and ignore AngelSlim payloads
+- synthetic coverage now exercises 64K/128K profiles, setup omission
+  detection, runtime provenance mismatches, duplicate baselines, AngelSlim
+  exclusion, variable-length job IDs, and HTML escaping
+- malformed or missing `K` now renders as `n/a`
+- pyright is clean for both owned files
 
 ## Red Step
 
-Added focused tests first in `tests/test_vllm024_profile_report.py` to lock:
-
-- real-input normalization over the 60 checked-in vLLM-native JSON files
-- one row per persisted batch result, including timeout-interrupted partial
-  sources
-- exact baseline matching on runtime/model/domain/temperature/top-p/batch/ISL/
-  OSL/profile/position encoding/CUDA graph/setup
-- unmatched-baseline behavior when setup diverges
-- compact HTML rendering with visually distinct `complete` and `partial`
-  source badges
+Expanded the focused test file first to encode the review requirements before
+changing the implementation.
 
 Command:
 
@@ -80,33 +36,54 @@ python3 -m pytest -q tests/test_vllm024_profile_report.py
 Output:
 
 ```text
-FFFF                                                                     [100%]
-=================================== FAILURES ===================================
-E       AssertionError: profile report module is not implemented
-4 failed in 3.06s
+FFFFFF.                                                                  [100%]
+6 failed, 1 passed in 0.98s
 ```
+
+The failures were the expected contract gaps:
+
+- missing `runtime_family`, `runtime_provenance`, `model_checkpoint`, and
+  `setup_signature`
+- AngelSlim rows were still loaded
+- exact matching was too weak and allowed mismatched setup/runtime rows to
+  bind to baselines
+- duplicate baselines were not deduplicated or rejected
+- render still attempted `int(row.k)` and crashed on missing `K`
 
 ## Implementation
 
-Implemented `scripts/vllm024_profile_report.py` with three public entry points:
+Reworked `scripts/vllm024_profile_report.py` around the review findings:
 
-- `load_profile_results(paths)` flattens each JSON payload into one row per
-  persisted batch result, preserving partial rows from interrupted files
-- `match_profile_baselines(rows)` joins only against exact vLLM-native
-  baseline rows and computes throughput and latency speedups
-- `render_profile_section(rows)` renders separate Native 32K, YaRN 64K, and
-  YaRN total-128K tables with inline source-status badges
+### Loading
 
-Key normalization decisions:
+- detect `runtime_family` from the payload runtime object
+- ignore non-vLLM-native payloads during `load_profile_results`
+- normalize one row per persisted batch result
+- preserve:
+  - `runtime_family`
+  - `runtime` display label
+  - `runtime_provenance` as normalized runtime JSON excluding job-local env
+    noise (`SLURM_JOB_ID`, `CUDA_VISIBLE_DEVICES`)
+  - `model_checkpoint` as the exact target checkpoint path
+  - `setup_signature` as normalized config JSON excluding only
+    speculative-method-specific knobs:
+    `draft_model`, `mode`, `speculative_config`, `tag`
 
-- source file status is normalized to `complete` or `partial`
-- method is derived from `config["mode"]`
-- `k` is derived from `config["speculative_config"]["num_speculative_tokens"]`
-- position encoding is derived from the model path (`native` vs `yarn4`)
-- profile is derived from ISL/OSL plus position encoding
-- baseline matching excludes AngelSlim by using only vLLM-native baseline rows
-  and the exact join key:
-  `runtime, model, domain, temperature, top_p, batch_size, isl, osl, context_profile, position_encoding, cuda_graph, setup`
+### Matching
+
+- exact baseline key now uses:
+  `runtime_family, runtime_provenance, model_checkpoint, domain, temperature, top_p, batch_size, isl, osl, context_profile, position_encoding, cuda_graph, setup_signature`
+- baseline lookup deterministically prefers `complete` over `partial`
+- any remaining duplicate exact baseline keys raise:
+  `ValueError("ambiguous duplicate baseline exact keys")`
+- merge now uses `validate="many_to_one"` to block row multiplication
+
+### Rendering
+
+- render filters to `runtime_family == "vllm_native"`
+- missing or malformed `K` renders as `n/a`
+- source paths and text cells are HTML-escaped
+- AngelSlim rows are excluded even if they are passed in a mixed DataFrame
 
 ## Green Step
 
@@ -119,34 +96,40 @@ python3 -m pytest -q tests/test_vllm024_profile_report.py
 Output:
 
 ```text
-....                                                                     [100%]
-4 passed in 0.57s
+.......                                                                  [100%]
+7 passed in 0.54s
 ```
 
 ## Additional Verification
 
-Compile check:
+Pyright:
 
 ```bash
-python3 -m py_compile scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py
+pyright scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py
 ```
 
-Exit status: `0`
+Output:
 
-Real-input smoke check:
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+Real-input smoke check on the 60 intentionally untracked Task 4 JSON files:
 
 ```bash
 python3 - <<'PY'
 from pathlib import Path
 from scripts.vllm024_profile_report import load_profile_results, match_profile_baselines
 root = Path('experiments/vllm_024_dynamicsd/report/20260704_vllm_native_completed')
-rows = match_profile_baselines(load_profile_results(sorted(root.rglob('*.json'))))
-print('rows', len(rows))
-print('source_status', rows['source_status'].value_counts().to_dict())
-print('profiles', rows['context_profile'].value_counts().to_dict())
-print('methods', rows['method'].value_counts().to_dict())
+loaded = load_profile_results(sorted(root.rglob('*.json')))
+rows = match_profile_baselines(loaded)
+print('loaded_rows', len(loaded))
+print('matched_rows', len(rows))
+print('runtime_family', loaded['runtime_family'].value_counts().to_dict())
+print('source_status', loaded['source_status'].value_counts().to_dict())
+print('profiles', loaded['context_profile'].value_counts().to_dict())
+print('methods', loaded['method'].value_counts().to_dict())
 print('unmatched_nonbaseline', int(rows.loc[rows['method'].ne('baseline') & rows['throughput_speedup'].isna()].shape[0]))
-print('partial_rows', int(rows.loc[rows['source_status'].eq('partial')].shape[0]))
 print('partial_matched', int(rows.loc[rows['source_status'].eq('partial') & rows['throughput_speedup'].notna()].shape[0]))
 PY
 ```
@@ -154,12 +137,13 @@ PY
 Output:
 
 ```text
-rows 154
+loaded_rows 154
+matched_rows 154
+runtime_family {'vllm_native': 154}
 source_status {'complete': 136, 'partial': 18}
 profiles {'Native 32K': 114, 'YaRN total-128K': 20, 'YaRN 64K': 20}
 methods {'baseline': 32, 'dflash': 32, 'pard': 32, 'suffix': 32, 'pard2': 26}
 unmatched_nonbaseline 0
-partial_rows 18
 partial_matched 18
 ```
 
@@ -168,7 +152,7 @@ partial_matched 18
 Commands:
 
 ```bash
-git diff --check -- scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py
+git diff --check -- scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py .superpowers/sdd/task-3-report.md
 git status --short -- scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py .superpowers/sdd/task-3-report.md
 ```
 
@@ -179,16 +163,15 @@ git diff --check:
 [no output]
 
 git status --short:
-?? scripts/vllm024_profile_report.py
-?? tests/test_vllm024_profile_report.py
-?? .superpowers/sdd/task-3-report.md
+ M scripts/vllm024_profile_report.py
+ M tests/test_vllm024_profile_report.py
+ M .superpowers/sdd/task-3-report.md
 ```
 
 Notes:
 
-- Changes stay within the owned script, owned test file, and the requested
-  task report.
-- Raw report inputs under
+- The 60 raw JSON files under
   `experiments/vllm_024_dynamicsd/report/20260704_vllm_native_completed/`
-  were read but not modified.
-- Builder integration is intentionally left for later tasks.
+  were read for verification only and were not staged or modified.
+- The task remains scoped to the owned report module, owned tests, and the
+  requested task report.
