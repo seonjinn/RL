@@ -96,6 +96,24 @@ Jobs `2270108-2270323` were submitted on July 3, 2026. Three jobs hit a Lyris
 resubmitted as `2270324-2270326`; no benchmark-code failure was observed during
 the initial five-minute monitoring window.
 
+## Qwen3-8B Long-Context Extension
+
+The long-context follow-up keeps native OSL=32768 results separate from YaRN
+context-extension results. Its two new matched profiles are:
+
+| Profile | ISL | OSL | Total | Position encoding | Initial scope |
+|---|---:|---:|---:|---|---|
+| 64K | 4,096 | 65,536 | 69,632 | YaRN factor 4 | BS1 |
+| total 128K | 4,096 | 126,976 | 131,072 | YaRN factor 4 | BS1 |
+
+Both profiles cover Math/SWE, temperature 0/1, baseline, Suffix K32, PARD
+K12, PARD-2 K15, and DFlash K15. A speedup is reportable only after the exact
+domain, temperature, context profile, and batch-size baseline row completes.
+The target and every drafter use symlink-backed views of the pinned snapshots
+with identical YaRN parameters. AngelSlim-native DFlare is tracked separately
+because its serial baseline-plus-SpecDec runner cannot fit these lengths in the
+five-hour Lyris wall limit.
+
 ## Fixed-Length Tier Test
 
 The batch-size 1, 2, 4, 8, 16, 32, and 64 matrix completed for temperature 0

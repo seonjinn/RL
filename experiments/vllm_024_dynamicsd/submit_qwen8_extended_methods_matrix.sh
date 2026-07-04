@@ -20,6 +20,11 @@ SMOKE="${SMOKE:-true}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
+ISL="${ISL:-4096}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-40960}"
+WARMUP_REPEATS="${WARMUP_REPEATS:-1}"
+MEASURE_REPEATS="${MEASURE_REPEATS:-1}"
+JOB_LABEL_PREFIX="${JOB_LABEL_PREFIX:-q8}"
 
 if [[ "${SMOKE}" == "true" ]]; then
   BATCH_SIZES="${BATCH_SIZES:-4}"
@@ -90,7 +95,7 @@ for domain in ${DOMAINS}; do
 
     echo "domain=${domain}"
     echo "method=${method}"
-    echo "isl=4096"
+    echo "isl=${ISL}"
     echo "osl=${OSL}"
     echo "batch_sizes=${BATCH_SIZES}"
 
@@ -104,7 +109,7 @@ for domain in ${DOMAINS}; do
       DRAFT_MODEL="${draft_model}" \
       RESULT_ROOT="${RESULT_ROOT}/${RUN_ID}/${domain_label}/${method}" \
       RUN_ID=matrix \
-      JOB_LABEL="q8-${domain_label}-${method}" \
+      JOB_LABEL="${JOB_LABEL_PREFIX}-${domain_label}-${method}" \
       VARIANTS="${method}" \
       TEMPERATURES="${TEMPERATURES}" \
       STATIC_K="${static_k}" \
@@ -112,14 +117,14 @@ for domain in ${DOMAINS}; do
       DRAFT_ATTENTION_BACKEND="${draft_attention_backend}" \
       TP=1 \
       PP=1 \
-      ISL=4096 \
+      ISL="${ISL}" \
       OSL="${OSL}" \
       BATCH_SIZES="${BATCH_SIZES}" \
       TOP_P=1.0 \
       SMOKE=false \
       GPU_MEMORY_UTILIZATION=0.90 \
       KV_CACHE_DTYPE=auto \
-      MAX_MODEL_LEN=40960 \
+      MAX_MODEL_LEN="${MAX_MODEL_LEN}" \
       MAX_NUM_BATCHED_TOKENS="${max_num_batched_tokens}" \
       CUDAGRAPH_MODE=NONE \
       ATTENTION_BACKEND=TRITON_ATTN \
@@ -128,8 +133,8 @@ for domain in ${DOMAINS}; do
       THROUGHPUT_GPU_COUNT=4 \
       PROMPT_JSONL="${prompt_jsonl}" \
       PROMPT_OFFSET=0 \
-      WARMUP_REPEATS=1 \
-      MEASURE_REPEATS=1 \
+      WARMUP_REPEATS="${WARMUP_REPEATS}" \
+      MEASURE_REPEATS="${MEASURE_REPEATS}" \
       SUFFIX_MAX_CACHED_REQUESTS=10000 \
       SUFFIX_MAX_SPEC_FACTOR=1.0 \
       SUFFIX_MIN_TOKEN_PROB=0.1 \

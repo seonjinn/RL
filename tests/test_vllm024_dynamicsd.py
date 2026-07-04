@@ -51,6 +51,17 @@ def load_dataset_materializer_module() -> ModuleType:
     return module
 
 
+def load_long_context_materializer_module() -> ModuleType:
+    path = EXPERIMENT / "materialize_long_context_model_views.py"
+    spec = importlib.util.spec_from_file_location(
+        "vllm024_long_context_materializer", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_dry(script_name: str, **env_overrides: str) -> str:
     env = {
         "PATH": "/usr/bin:/bin",
@@ -338,6 +349,104 @@ def test_extended_qwen8_matrix_preserves_legacy_methodology() -> None:
     assert "--gres" not in output
 
 
+def test_long_context_model_view_owns_only_config_and_metadata(
+    tmp_path: Path,
+) -> None:
+    materializer = load_long_context_materializer_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3ForCausalLM"],
+                "max_position_embeddings": 40960,
+                "rope_scaling": None,
+                "rope_theta": 1_000_000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source / "model.safetensors").write_bytes(b"weights")
+    (source / "tokenizer.json").write_text("{}", encoding="utf-8")
+    destination = tmp_path / "views" / "qwen3-8b"
+
+    metadata = materializer.materialize_model_view(
+        source=source,
+        destination=destination,
+        max_position_embeddings=131072,
+        rope_factor=4.0,
+    )
+
+    config = json.loads((destination / "config.json").read_text(encoding="utf-8"))
+    assert config["architectures"] == ["Qwen3ForCausalLM"]
+    assert config["max_position_embeddings"] == 131072
+    assert config["rope_parameters"] == {
+        "rope_type": "yarn",
+        "factor": 4.0,
+        "original_max_position_embeddings": 32768,
+        "rope_theta": 1_000_000,
+    }
+    assert "rope_scaling" not in config
+    assert not (destination / "config.json").is_symlink()
+    assert (destination / "model.safetensors").is_symlink()
+    assert (destination / "model.safetensors").resolve() == (
+        source / "model.safetensors"
+    ).resolve()
+    assert (destination / "tokenizer.json").is_symlink()
+    assert metadata["source"] == str(source.resolve())
+    assert metadata["max_position_embeddings"] == 131072
+    assert json.loads(
+        (destination / ".long_context_view.json").read_text(encoding="utf-8")
+    ) == metadata
+
+
+def test_long_context_model_view_rejects_unsafe_overwrite(tmp_path: Path) -> None:
+    materializer = load_long_context_materializer_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "config.json").write_text("{}", encoding="utf-8")
+    destination = tmp_path / "view"
+    destination.mkdir()
+    (destination / "unrelated.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="refusing to replace"):
+        materializer.materialize_model_view(
+            source=source,
+            destination=destination,
+            max_position_embeddings=131072,
+            rope_factor=4.0,
+        )
+
+    assert (destination / "unrelated.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_qwen8_long_context_matrix_renders_supported_profiles() -> None:
+    output = run_dry(
+        "submit_qwen8_long_context_matrix.sh",
+        CLUSTER="lyris",
+        PROFILES="64k 128k",
+        DOMAINS="Math SWE",
+        TEMPERATURES="0.0 1.0",
+    )
+
+    assert output.count("[DRY-RUN] variant=") == 40
+    assert "context_profile=64k isl=4096 osl=65536 total=69632" in output
+    assert "context_profile=128k isl=4096 osl=126976 total=131072" in output
+    assert "long-context-models/yarn4/qwen3-8b" in output
+    assert "long-context-models/yarn4/pard-qwen3-0.6b" in output
+    assert "long-context-models/yarn4/pard2-qwen3-8b" in output
+    assert "long-context-models/yarn4/qwen3-8b-dflash-b16" in output
+    assert "--osl '65536'" in output
+    assert "--max-model-len '69632'" in output
+    assert "--osl '126976'" in output
+    assert "--max-model-len '131072'" in output
+    assert output.count("--batch-sizes 1") == 40
+    assert output.count("--warmup-repeats '0'") == 40
+    assert output.count("--measure-repeats '1'") == 40
+    assert "--segment=1" in output
+    assert "--gres" not in output
+
+
 def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     output = run_dry("stage_extended_method_assets.sh", CLUSTER="lyris")
     worker = (
@@ -585,6 +694,7 @@ def test_scripts_do_not_depend_on_home_storage() -> None:
         "submit_nemorl_perfcfg_sync_matrix.sh",
         "submit_legacy_0619_replay_matrix.sh",
         "submit_qwen8_extended_methods_matrix.sh",
+        "submit_qwen8_long_context_matrix.sh",
         "submit_angelslim_matrix.sh",
         "submit_sync_rollout.sh",
     ):

@@ -270,6 +270,44 @@ CLUSTER=lyris TEST_ONLY=true ./submit_angelslim_matrix.sh
 CLUSTER=lyris ./submit_angelslim_matrix.sh
 ```
 
+### Long-Context Profiles
+
+`submit_qwen8_long_context_matrix.sh` extends the Qwen3-8B matrix with two
+YaRN factor-4 profiles. The 128K label is the supported total sequence length,
+not a 128K output added after the 4K input:
+
+| Profile | ISL | OSL | Total sequence | Initial batch size |
+|---|---:|---:|---:|---:|
+| 64K | 4,096 | 65,536 | 69,632 | 1 |
+| total 128K | 4,096 | 126,976 | 131,072 | 1 |
+
+The wrapper creates symlink-backed model views under
+`${LUSTRE_ROOT}/vllm024-dynamicsd/long-context-models/yarn4`. Only
+`config.json` and provenance metadata are new files; weights remain in the
+pinned Hugging Face snapshots. Target and draft checkpoints all receive the
+same YaRN parameters so baseline and SpecDec use matched position encoding.
+
+Run scheduling validation before submission:
+
+```bash
+CLUSTER=lyris TEST_ONLY=true \
+  ./submit_qwen8_long_context_matrix.sh
+
+CLUSTER=lyris \
+  ./submit_qwen8_long_context_matrix.sh
+```
+
+Each profile starts with BS1, zero benchmark-level warmup repeats, and one
+measured exact-length generation. To add BS2 after the initial jobs establish
+wall-time and KV-cache headroom, set `BATCH_SIZES_64K=2` or
+`BATCH_SIZES_128K=2`. Every batch size is submitted as a separate job group so
+a timeout cannot discard another batch-size result.
+
+The AngelSlim DFlare reference runner is excluded from the first 64K/128K
+launch. It executes an autoregressive baseline and SpecDec serially; the
+measured decode rate cannot complete that pair within Lyris's five-hour wall
+limit. DFlash remains covered by the native vLLM 0.24 matrix.
+
 ## NSys Profiling
 
 Use NSys after the smoke confirms that the image has an `nsys` binary:
