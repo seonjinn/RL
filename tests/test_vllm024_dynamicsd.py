@@ -579,6 +579,25 @@ def test_angelslim_long_context_dflare_renders_parallel_spec_jobs() -> None:
     assert "--gres" not in output
 
 
+def test_angelslim_long_context_dflare_supports_exact_baseline_jobs() -> None:
+    output = run_dry(
+        "submit_angelslim_long_context_dflare.sh",
+        CLUSTER="lyris",
+        PROFILES="64k",
+        DOMAINS="Math SWE",
+        TEMPERATURES="0.0 1.0",
+        RUN_MODE="baseline",
+        PARTITION="gb200-backfill",
+        TIME_LIMIT="08:00:00",
+    )
+
+    assert output.count("[DRY-RUN] native_method=dflare") == 4
+    assert output.count("--run-mode 'baseline'") == 4
+    assert output.count("#SBATCH --partition=gb200-backfill") == 4
+    assert output.count("#SBATCH --time=08:00:00") == 4
+    assert "_qwen8_dflare_baseline" in output
+
+
 def test_nsys_dry_run_profiles_one_steady_state_measurement() -> None:
     output = run_dry(
         "submit_nsys.sh",
