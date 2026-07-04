@@ -1,0 +1,136 @@
+--- a/tools/dflash_benchmark.py
++++ b/tools/dflash_benchmark.py
+@@ -419,6 +419,12 @@
+     parser.add_argument("--ignore-eos", action="store_true")
+     parser.add_argument("--temperature", type=float, default=0.0)
+     parser.add_argument("--output-json", type=Path)
++    parser.add_argument(
++        "--run-mode",
++        choices=["both", "baseline", "spec"],
++        default="both",
++        help="Run both decode paths or only one path for parallel long-context jobs.",
++    )
+     args = parser.parse_args()
+ 
+     random.seed(0)
+@@ -493,7 +499,12 @@
+                 input_ids = fit_input_ids(input_ids, args.input_length)
+ 
+             response = {}
+-            for bs in [1, block_size]:
++            requested_block_sizes = {
++                "both": [1, block_size],
++                "baseline": [1],
++                "spec": [block_size],
++            }[args.run_mode]
++            for bs in requested_block_sizes:
+                 response[bs] = dflash_generate(
+                     model=draft_model,
+                     target=target,
+@@ -509,7 +520,9 @@
+                     temperature=args.temperature,
+                 )
+ 
+-            spec_response = response[block_size]
++            spec_response = (
++                response[block_size] if block_size in response else response[1]
++            )
+             generated_ids = spec_response.output_ids[0, spec_response.num_input_tokens :]
+             output_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+             messages.append({"role": "assistant", "content": output_text})
+@@ -524,22 +537,58 @@
+     if not responses:
+         return
+ 
+-    t1 = np.mean([r[1].time_per_output_token for r in responses])
+-    tb = np.mean([r[block_size].time_per_output_token for r in responses])
+-    print(f"[draft_arch={args.draft_arch}] Decoding speedup: {t1 / tb:.2f}")
+-
+-    tau = np.mean([np.mean(r[block_size].acceptance_lengths) for r in responses])
+-    print(f"[draft_arch={args.draft_arch}] Average Acceptance length: {tau:.2f}")
+-
+-    acceptance_lengths = list(chain(*[r[block_size].acceptance_lengths for r in responses]))
+-    histogram = [
+-        acceptance_lengths.count(b) / len(acceptance_lengths) for b in range(block_size + 1)
+-    ]
+-    print(
+-        f"[draft_arch={args.draft_arch}] Acceptance length histogram: "
+-        f"{[f'{x * 100:.1f}%' for x in histogram]}"
++    t1 = (
++        float(np.mean([r[1].time_per_output_token for r in responses]))
++        if args.run_mode in ("both", "baseline")
++        else None
+     )
++    tb = (
++        float(np.mean([r[block_size].time_per_output_token for r in responses]))
++        if args.run_mode in ("both", "spec")
++        else None
++    )
++    if t1 is not None:
++        print(f"[draft_arch={args.draft_arch}] Baseline decode tok/s: {1.0 / t1:.2f}")
++    if tb is not None:
++        print(f"[draft_arch={args.draft_arch}] Spec decode tok/s: {1.0 / tb:.2f}")
++    if t1 is not None and tb is not None:
++        print(f"[draft_arch={args.draft_arch}] Decoding speedup: {t1 / tb:.2f}")
++
++    tau = None
++    histogram = []
++    if tb is not None:
++        tau = float(
++            np.mean([np.mean(r[block_size].acceptance_lengths) for r in responses])
++        )
++        print(f"[draft_arch={args.draft_arch}] Average Acceptance length: {tau:.2f}")
++        acceptance_lengths = list(
++            chain(*[r[block_size].acceptance_lengths for r in responses])
++        )
++        histogram = [
++            acceptance_lengths.count(b) / len(acceptance_lengths)
++            for b in range(block_size + 1)
++        ]
++        print(
++            f"[draft_arch={args.draft_arch}] Acceptance length histogram: "
++            f"{[f'{x * 100:.1f}%' for x in histogram]}"
++        )
+     if args.output_json is not None:
++        results = {"samples": len(responses)}
++        if t1 is not None:
++            results.update(
++                baseline_decode_time_per_token_s=t1,
++                baseline_decode_tok_s=1.0 / t1,
++            )
++        if tb is not None and tau is not None:
++            results.update(
++                spec_decode_time_per_token_s=tb,
++                spec_decode_tok_s=1.0 / tb,
++                mean_acceptance_length=tau,
++                acceptance_rate=(tau - 1.0) / (block_size - 1),
++                acceptance_length_histogram=[float(value) for value in histogram],
++            )
++        if t1 is not None and tb is not None:
++            results["decode_throughput_speedup"] = t1 / tb
+         payload = {
+             "schema_version": 1,
+             "backend": "angelslim_transformers_native",
+@@ -557,20 +606,9 @@
+                 "top_p": 1.0,
+                 "block_size": block_size,
+                 "world_size": _dist_size(),
++                "run_mode": args.run_mode,
+             },
+-            "results": {
+-                "samples": len(responses),
+-                "baseline_decode_time_per_token_s": float(t1),
+-                "spec_decode_time_per_token_s": float(tb),
+-                "baseline_decode_tok_s": float(1.0 / t1),
+-                "spec_decode_tok_s": float(1.0 / tb),
+-                "decode_throughput_speedup": float(t1 / tb),
+-                "mean_acceptance_length": float(tau),
+-                "acceptance_rate": float(
+-                    (tau - 1.0) / (block_size - 1) if block_size > 1 else 0.0
+-                ),
+-                "acceptance_length_histogram": [float(value) for value in histogram],
+-            },
++            "results": results,
+         }
+         args.output_json.parent.mkdir(parents=True, exist_ok=True)
+         temporary = args.output_json.with_suffix(args.output_json.suffix + ".partial")

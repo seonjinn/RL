@@ -95,6 +95,10 @@ if ! grep -q 'input-length' "${angelslim_source}/tools/dflash_benchmark.py"; the
   patch -p1 -d "${angelslim_source}" \
     < /workspace/experiment/patches/angelslim_fixed_length.patch
 fi
+if ! grep -q 'run-mode' "${angelslim_source}/tools/dflash_benchmark.py"; then
+  patch -p1 -d "${angelslim_source}" \
+    < /workspace/experiment/patches/angelslim_split_run_modes.patch
+fi
 python3 -m compileall -q "${angelslim_source}/tools/dflash_benchmark.py"
 
 common_site_versioned="${ASSET_ROOT}/python/common-py312-arctic-0.1.1"

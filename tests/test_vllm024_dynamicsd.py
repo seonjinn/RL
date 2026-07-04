@@ -463,6 +463,7 @@ def test_extended_assets_stage_dry_run_is_pinned_and_lustre_only() -> None:
     assert "vllm024_pard2_target_features.patch" in worker
     assert "angelslim_lightweight_imports.patch" in worker
     assert "angelslim_fixed_length.patch" in worker
+    assert "angelslim_split_run_modes.patch" in worker
     assert "datasets==4.4.1" in worker
     assert "stage_extended_method_assets_in_container.sh" in output
     assert "git clone" not in worker
@@ -489,6 +490,45 @@ def test_angelslim_matrix_keeps_native_results_separate() -> None:
     assert "--ignore-eos" in output
     assert "backend=angelslim_transformers_native" in output
     assert "angelslim_runtime" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
+
+
+def test_angelslim_matrix_supports_spec_only_execution() -> None:
+    output = run_dry(
+        "submit_angelslim_matrix.sh",
+        CLUSTER="lyris",
+        METHODS="dflare",
+        DOMAINS="Math",
+        TEMPERATURES="0.0",
+        RUN_MODE="spec",
+    )
+
+    assert output.count("[DRY-RUN] native_method=") == 1
+    assert "run_mode=spec" in output
+    assert "--run-mode 'spec'" in output
+    assert "q8-math-dflare-spec-t0p0" in output
+    assert "dflare_spec_t0p0" in output
+
+
+def test_angelslim_long_context_dflare_renders_parallel_spec_jobs() -> None:
+    output = run_dry(
+        "submit_angelslim_long_context_dflare.sh",
+        CLUSTER="lyris",
+        PROFILES="64k 128k",
+        DOMAINS="Math SWE",
+        TEMPERATURES="0.0 1.0",
+    )
+
+    assert output.count("[DRY-RUN] native_method=dflare") == 8
+    assert "context_profile=64k isl=4096 osl=65536 total=69632" in output
+    assert "context_profile=128k isl=4096 osl=126976 total=131072" in output
+    assert "long-context-models/yarn4/qwen3-8b" in output
+    assert "long-context-models/yarn4/qwen3-8b-dflare" in output
+    assert output.count("--run-mode 'spec'") == 8
+    assert output.count("--max-new-tokens '65536'") == 4
+    assert output.count("--max-new-tokens '126976'") == 4
+    assert output.count("#SBATCH --partition=gb200") == 8
     assert "--segment=1" in output
     assert "--gres" not in output
 
@@ -696,6 +736,7 @@ def test_scripts_do_not_depend_on_home_storage() -> None:
         "submit_qwen8_extended_methods_matrix.sh",
         "submit_qwen8_long_context_matrix.sh",
         "submit_angelslim_matrix.sh",
+        "submit_angelslim_long_context_dflare.sh",
         "submit_sync_rollout.sh",
     ):
         text = (EXPERIMENT / script_name).read_text(encoding="utf-8")

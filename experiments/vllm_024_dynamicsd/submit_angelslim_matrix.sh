@@ -46,6 +46,15 @@ TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
 ISL="${ISL:-4096}"
 IGNORE_EOS="${IGNORE_EOS:-true}"
+RUN_MODE="${RUN_MODE:-both}"
+
+case "${RUN_MODE}" in
+  both|baseline|spec) ;;
+  *)
+    echo "RUN_MODE must be both, baseline, or spec: ${RUN_MODE}" >&2
+    exit 2
+    ;;
+esac
 
 if [[ "${SMOKE}" == "true" ]]; then
   MAX_SAMPLES="${MAX_SAMPLES:-4}"
@@ -83,7 +92,7 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=coreai_dlalgo_llm-angelslim.q8-${domain_label}-${method}-t$(normalize_temperature "${temperature}")
+#SBATCH --job-name=coreai_dlalgo_llm-angelslim.q8-${domain_label}-${method}-${RUN_MODE}-t$(normalize_temperature "${temperature}")
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
@@ -111,6 +120,7 @@ echo 'top_p=1.0'
 echo 'block_size=16'
 echo 'isl=${ISL}'
 echo 'osl=${MAX_NEW_TOKENS}'
+echo 'run_mode=${RUN_MODE}'
 
 srun --ntasks=1 \\
   --container-image='${CONTAINER_IMAGE}' \\
@@ -133,6 +143,7 @@ torchrun --standalone --nproc-per-node=4 '${ANGELSLIM_SOURCE}/tools/dflash_bench
   --input-length '${ISL}' \\
   --max-new-tokens '${MAX_NEW_TOKENS}' \\
   --temperature '${temperature}' \\
+  --run-mode '${RUN_MODE}' \\
   ${ignore_eos_arg} \\
   --output-json '${run_dir}/result.json'" \\
   2>&1 | tee '${run_dir}/benchmark.log'
@@ -146,7 +157,7 @@ fi
 MANIFEST="${RESULT_ROOT}/${RUN_ID}/jobs.tsv"
 if [[ "${DRY_RUN}" != "true" ]]; then
   mkdir -p "$(dirname "${MANIFEST}")"
-  printf 'job_id\tmethod\tdomain\ttemperature\trun_dir\n' >"${MANIFEST}"
+  printf 'job_id\tmethod\tdomain\ttemperature\trun_mode\trun_dir\n' >"${MANIFEST}"
 fi
 
 for domain in ${DOMAINS}; do
@@ -175,9 +186,9 @@ for domain in ${DOMAINS}; do
         ;;
     esac
     for temperature in ${TEMPERATURES}; do
-      run_dir="${RESULT_ROOT}/${RUN_ID}/${domain_label}/${method}_t$(normalize_temperature "${temperature}")"
+      run_dir="${RESULT_ROOT}/${RUN_ID}/${domain_label}/${method}_${RUN_MODE}_t$(normalize_temperature "${temperature}")"
       if [[ "${DRY_RUN}" == "true" ]]; then
-        echo "[DRY-RUN] native_method=${method} domain=${domain} temperature=${temperature}"
+        echo "[DRY-RUN] native_method=${method} domain=${domain} temperature=${temperature} run_mode=${RUN_MODE}"
         render_sbatch "${method}" "${draft_model}" "${dataset}" "${domain_label}" "${temperature}" "${run_dir}"
         continue
       fi
@@ -191,11 +202,11 @@ for domain in ${DOMAINS}; do
       fi
       if [[ "${TEST_ONLY}" == "true" ]]; then
         sbatch --test-only "${sbatch_args[@]}" "${sbatch_file}"
-        printf 'test-only\t%s\t%s\t%s\t%s\n' "${method}" "${domain}" "${temperature}" "${run_dir}" >>"${MANIFEST}"
+        printf 'test-only\t%s\t%s\t%s\t%s\t%s\n' "${method}" "${domain}" "${temperature}" "${RUN_MODE}" "${run_dir}" >>"${MANIFEST}"
         continue
       fi
       job_id="$(sbatch --parsable "${sbatch_args[@]}" "${sbatch_file}")"
-      printf '%s\t%s\t%s\t%s\t%s\n' "${job_id}" "${method}" "${domain}" "${temperature}" "${run_dir}" | tee -a "${MANIFEST}"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${job_id}" "${method}" "${domain}" "${temperature}" "${RUN_MODE}" "${run_dir}" | tee -a "${MANIFEST}"
     done
   done
 done

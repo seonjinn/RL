@@ -308,6 +308,25 @@ launch. It executes an autoregressive baseline and SpecDec serially; the
 measured decode rate cannot complete that pair within Lyris's five-hour wall
 limit. DFlash remains covered by the native vLLM 0.24 matrix.
 
+For long-context DFlare itself, the staged AngelSlim runner supports
+`RUN_MODE=both|baseline|spec`. The long-context wrapper submits only the DFlare
+path so 64K and total-128K measurements run in parallel instead of waiting for
+an autoregressive Transformers baseline in the same job:
+
+```bash
+CLUSTER=lyris TEST_ONLY=true \
+  ./submit_angelslim_long_context_dflare.sh
+
+CLUSTER=lyris \
+  ./submit_angelslim_long_context_dflare.sh
+```
+
+This creates eight jobs: Math/SWE, temperature 0/1, and the 64K/total-128K
+profiles. The results provide AngelSlim-native DFlare throughput, acceptance,
+and mean accepted length. Do not label a ratio against the vLLM baseline as an
+apples-to-apples speedup because the runtime and attention backend differ. The
+32K `RUN_MODE=both` jobs remain the matched AngelSlim baseline comparison.
+
 ## NSys Profiling
 
 Use NSys after the smoke confirms that the image has an `nsys` binary:
