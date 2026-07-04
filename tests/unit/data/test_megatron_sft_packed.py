@@ -203,7 +203,7 @@ def _sequence_packing_args(max_seq_length=4):
     return {
         "algorithm": "modified_first_fit_decreasing",
         "input_key": "input_ids",
-        "input_lengths_key": "length",
+        "input_lengths_key": "input_lengths",
         "max_tokens_per_microbatch": max_seq_length,
         "sequence_length_pad_multiple": max_seq_length,
     }
@@ -262,7 +262,7 @@ def test_fast_prepacked_sharding_rejects_partial_rows(monkeypatch):
         [_packed_datum(idx) for idx in range(8)],
         megatron_sft_context_parallel_size=1,
     )
-    batch["length"][0] = 3
+    batch["input_lengths"][0] = 3
     monkeypatch.setenv("NRL_FAST_PREPACKED_SHARDING", "1")
 
     with pytest.raises(ValueError, match="every packed row"):
