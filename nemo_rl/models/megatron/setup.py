@@ -1002,9 +1002,8 @@ def _create_megatron_config(
     reuse_grad_buf_for_mxfp8_param_ag = (
         fp8_param_enabled and fp8_cfg.get("fp8_recipe") == "mxfp8"
     )
-    overlap_param_gather = config["megatron_cfg"]["distributed_data_parallel_config"][
-        "overlap_param_gather"
-    ]
+    ddp_config = config["megatron_cfg"]["distributed_data_parallel_config"]
+    overlap_param_gather = ddp_config["overlap_param_gather"]
     optimizer_kwargs = {
         **config["megatron_cfg"]["optimizer"],
         "overlap_param_gather": overlap_param_gather,
@@ -1038,22 +1037,22 @@ def _create_megatron_config(
         optimizer=OptimizerConfig(**optimizer_kwargs),
         ddp=DistributedDataParallelConfig(
             check_for_nan_in_grad=True,
-            grad_reduce_in_fp32=config["megatron_cfg"][
-                "distributed_data_parallel_config"
-            ]["grad_reduce_in_fp32"],
-            overlap_grad_reduce=config["megatron_cfg"][
-                "distributed_data_parallel_config"
-            ]["overlap_grad_reduce"],
+            grad_reduce_in_fp32=ddp_config["grad_reduce_in_fp32"],
+            overlap_grad_reduce=ddp_config["overlap_grad_reduce"],
             overlap_param_gather=overlap_param_gather,
+            bucket_size=ddp_config.get("bucket_size"),
+            pad_buckets_for_high_nccl_busbw=ddp_config.get(
+                "pad_buckets_for_high_nccl_busbw", False
+            ),
             # we need to set average_in_collective=False with calculate_per_token_loss=T
             # otherwise, mcore throws an assertion error.
             average_in_collective=False,  # Required with calculate_per_token_loss=True
             use_distributed_optimizer=config["megatron_cfg"]["optimizer"][
                 "use_distributed_optimizer"
             ],
-            data_parallel_sharding_strategy=config["megatron_cfg"][
-                "distributed_data_parallel_config"
-            ]["data_parallel_sharding_strategy"],
+            data_parallel_sharding_strategy=ddp_config[
+                "data_parallel_sharding_strategy"
+            ],
             reuse_grad_buf_for_mxfp8_param_ag=reuse_grad_buf_for_mxfp8_param_ag,
             fp8_param_gather=fp8_param_enabled,
         ),

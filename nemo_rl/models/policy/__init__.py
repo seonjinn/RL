@@ -211,6 +211,8 @@ class MegatronDDPConfig(TypedDict):
     overlap_param_gather: bool
     use_custom_fsdp: bool
     data_parallel_sharding_strategy: str
+    bucket_size: NotRequired[int | None]
+    pad_buckets_for_high_nccl_busbw: NotRequired[bool]
 
 
 class Fp8Config(TypedDict):
