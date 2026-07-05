@@ -994,9 +994,7 @@ class TestLossPostProcessor:
 
         local_metrics = {"loss": [0.75], "num_unmasked_tokens": [2.0]}
 
-        stripped = strip_context_parallel_local_loss_metric(
-            local_metrics, enabled=True
-        )
+        stripped = strip_context_parallel_local_loss_metric(local_metrics, enabled=True)
 
         assert "loss" not in stripped
         assert stripped["num_unmasked_tokens"] == [2.0]
@@ -1418,7 +1416,9 @@ class TestAggregateTrainingStatistics:
 
         assert torch.equal(global_loss.cpu(), torch.tensor([0.5, 0.3]))
         assert mb_metrics["num_unmasked_tokens"] == [3.0, 5.0]
-        assert all(isinstance(value, float) for value in mb_metrics["num_unmasked_tokens"])
+        assert all(
+            isinstance(value, float) for value in mb_metrics["num_unmasked_tokens"]
+        )
 
     @patch("torch.distributed.all_reduce")
     def test_aggregates_metrics_across_microbatches(self, mock_all_reduce):
