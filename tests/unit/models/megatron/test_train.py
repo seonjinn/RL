@@ -964,8 +964,14 @@ class TestLossPostProcessor:
         # Local normalized loss is 6 / 8. Counteracting MCore's cp/mb
         # schedule scaling multiplies by 4 / 2 before the schedule consumes it.
         assert torch.isclose(loss, torch.tensor(1.5))
-        assert metrics["loss"] == 0.75
-        assert metrics["num_unmasked_tokens"] == 2.0
+        assert isinstance(metrics["loss"], torch.Tensor)
+        assert isinstance(metrics["num_unmasked_tokens"], torch.Tensor)
+        assert metrics["loss"].device == loss.device
+        assert metrics["num_unmasked_tokens"].device == loss.device
+        assert not metrics["loss"].requires_grad
+        assert not metrics["num_unmasked_tokens"].requires_grad
+        assert torch.isclose(metrics["loss"], torch.tensor(0.75))
+        assert torch.equal(metrics["num_unmasked_tokens"], torch.tensor(2.0))
 
     def test_prepacked_direct_loss_requires_dp_cp_reduction(self):
         from nemo_rl.models.megatron.train import (
@@ -1391,6 +1397,28 @@ class TestTopkLogitsPostProcessor:
 
 class TestAggregateTrainingStatistics:
     """Tests for aggregate_training_statistics function."""
+
+    @patch("torch.distributed.all_reduce")
+    def test_stacks_device_losses_and_materializes_metrics_once(self, mock_all_reduce):
+        """Tensor metrics stay on device until the final reporting boundary."""
+        from nemo_rl.models.megatron.train import aggregate_training_statistics
+
+        loss_0 = torch.tensor(0.5)
+        loss_1 = torch.tensor(0.3)
+        all_mb_metrics = [
+            {"num_unmasked_tokens": torch.tensor(3.0)},
+            {"num_unmasked_tokens": torch.tensor(5.0)},
+        ]
+
+        mb_metrics, global_loss = aggregate_training_statistics(
+            all_mb_metrics=all_mb_metrics,
+            losses=[loss_0, loss_1],
+            data_parallel_group=MagicMock(),
+        )
+
+        assert torch.equal(global_loss.cpu(), torch.tensor([0.5, 0.3]))
+        assert mb_metrics["num_unmasked_tokens"] == [3.0, 5.0]
+        assert all(isinstance(value, float) for value in mb_metrics["num_unmasked_tokens"])
 
     @patch("torch.distributed.all_reduce")
     def test_aggregates_metrics_across_microbatches(self, mock_all_reduce):
