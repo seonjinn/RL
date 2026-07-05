@@ -871,12 +871,12 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.use_te_rng_tracker = config["megatron_cfg"]["te_rng_tracker"]
     if "cuda_graph_impl" in config["megatron_cfg"]:
         model_cfg.cuda_graph_impl = config["megatron_cfg"]["cuda_graph_impl"]
-        if model_cfg.cuda_graph_impl != "none":
-            model_cfg.use_te_rng_tracker = True
         if "inference_cuda_graph_scope" in config["megatron_cfg"]:
             model_cfg.inference_cuda_graph_scope = InferenceCudaGraphScope[
                 config["megatron_cfg"]["inference_cuda_graph_scope"]
             ]
+    if model_cfg.cuda_graph_impl != "none":
+        model_cfg.use_te_rng_tracker = True
 
     # Use the graph-safe TE RNG tracker for either training graphs or inference graphs.
     if "generation" in config and config["generation"] is not None:

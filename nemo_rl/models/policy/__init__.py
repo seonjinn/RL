@@ -303,6 +303,8 @@ class MegatronConfig(TypedDict):
     # CUDA-graph implementation.
     # Options: 'none', 'local', 'transformer_engine', 'full_iteration'.
     cuda_graph_impl: NotRequired[str]
+    # Use Transformer Engine's graph-safe RNG tracker. CUDA graphs force this on.
+    te_rng_tracker: NotRequired[bool]
     # When True, each expert sees a fixed number of tokens for cuda-graph capture.
     # Required when cuda_graph_impl= 'local' with transformer_impl != 'inference_optimized'.
     moe_pad_experts_for_cuda_graph_inference: NotRequired[bool]
