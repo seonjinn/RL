@@ -964,9 +964,7 @@ class TestLossPostProcessor:
         # Local normalized loss is 6 / 8. Counteracting MCore's cp/mb
         # schedule scaling multiplies by 4 / 2 before the schedule consumes it.
         assert torch.isclose(loss, torch.tensor(1.5))
-        # The direct path must not expose a CP-local loss metric. The worker
-        # aggregates its scalar loss across the DP+CP group instead.
-        assert "loss" not in metrics
+        assert metrics["loss"] == 0.75
         assert metrics["num_unmasked_tokens"] == 2.0
 
     def test_prepacked_direct_loss_requires_dp_cp_reduction(self):
@@ -982,6 +980,20 @@ class TestLossPostProcessor:
         assert not should_reduce_loss_across_context_parallel(
             {"megatron_cfg": {"prepacked_sft_loss_mode": "logits"}}, packed_batch
         )
+
+    def test_strip_context_parallel_local_loss_metric(self):
+        from nemo_rl.models.megatron.train import (
+            strip_context_parallel_local_loss_metric,
+        )
+
+        local_metrics = {"loss": [0.75], "num_unmasked_tokens": [2.0]}
+
+        stripped = strip_context_parallel_local_loss_metric(
+            local_metrics, enabled=True
+        )
+
+        assert "loss" not in stripped
+        assert stripped["num_unmasked_tokens"] == [2.0]
 
     @patch(
         "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
