@@ -23,7 +23,6 @@ from nemo_rl.distributed.virtual_cluster import (
     TOPO_RANK_UNKNOWN,
     ResourceInsufficientError,
     _sort_bundle_indices_by_topology,
-    model_parallel_groups_straddling_domains,
     select_segment_nodes,
 )
 
@@ -324,6 +323,35 @@ class TestSelectSegmentNodes:
         assert set(selected) | set(remaining) == set(topo.keys())
         assert len(set(selected) & set(remaining)) == 0  # no overlap
 
+    def test_unknown_domain_nodes_excluded_from_selection(self):
+        # Regression: nodes with no NVLink-domain info (UNKNOWN, topo_rank -1)
+        # must never be selected. They sort first (rank -1), so a naive selection
+        # would pick them and emit a {"unknown": 0.001} placement-group constraint
+        # that ray.sub never registers as a resource -> unschedulable bundle.
+        # This happens on heterogeneous / partial-probe clusters (e.g. a GPU-less
+        # or unprobed head node).
+        topo = _make_topology(
+            {
+                NVLINK_DOMAIN_UNKNOWN: [TOPO_RANK_UNKNOWN, TOPO_RANK_UNKNOWN],
+                "domain_A": [0, 1],
+                "domain_B": [2, 3],
+            }
+        )
+        selected, remaining = select_segment_nodes(topo, segment_size=2, num_nodes=4)
+        selected_domains = {topo[n][0] for n in selected}
+        assert NVLINK_DOMAIN_UNKNOWN not in selected_domains
+        assert selected_domains == {"domain_A", "domain_B"}
+        # The unknown nodes (e.g. a GPU-less head) fall through to remaining.
+        assert {topo[n][0] for n in remaining} == {NVLINK_DOMAIN_UNKNOWN}
+        assert set(selected) | set(remaining) == set(topo.keys())
+
+    def test_unknown_domain_only_raises_instead_of_unschedulable_pg(self):
+        # If every node is UNKNOWN there is no real domain to pin to, so we must
+        # raise rather than emit an unschedulable {"unknown": ...} constraint.
+        topo = _make_topology({NVLINK_DOMAIN_UNKNOWN: [TOPO_RANK_UNKNOWN] * 4})
+        with pytest.raises(ResourceInsufficientError, match="Cannot form"):
+            select_segment_nodes(topo, segment_size=2, num_nodes=4)
+
 
 # ---------------------------------------------------------------------------
 # 5. The 40-node / 5-domain scenario: training + inference placement
@@ -462,59 +490,3 @@ class TestSegmentTrimming:
             bundle_data, segment_size=8, gpus_per_node=8
         )
         assert len(result) == 64
-
-
-# ---------------------------------------------------------------------------
-# 7. model_parallel_groups_straddling_domains: per-group NVLink straddle check
-# ---------------------------------------------------------------------------
-
-
-class TestModelParallelGroupsStraddling:
-    @pytest.mark.parametrize(
-        ("ordered_bundle_indices", "domain_per_bundle", "group_size", "expected"),
-        [
-            # Each group stays within a single domain -> no straddle.
-            ([0, 1, 2, 3], ("dom_A", "dom_A", "dom_B", "dom_B"), 2, []),
-            # Group 1 ([2, 3]) spans two domains; reported with sorted names.
-            (
-                [0, 1, 2, 3],
-                ("dom_A", "dom_A", "dom_A", "dom_B"),
-                2,
-                [(1, ["dom_A", "dom_B"])],
-            ),
-            # All-unknown domains are filtered out -> nothing straddles.
-            ([0, 1, 2, 3], (NVLINK_DOMAIN_UNKNOWN,) * 4, 2, []),
-            # No topology info (None map) -> nothing straddles.
-            ([0, 1, 2, 3], None, 2, []),
-            # Non-positive group size is a no-op.
-            ([0, 1], ("dom_A", "dom_B"), 0, []),
-            # 5 bundles, group_size=2 -> 2 full groups; trailing index 4 dropped.
-            (
-                [0, 1, 2, 3, 4],
-                ("dom_A", "dom_B", "dom_A", "dom_B", "dom_A"),
-                2,
-                [(0, ["dom_A", "dom_B"]), (1, ["dom_A", "dom_B"])],
-            ),
-            # Out-of-range index (5) is skipped rather than raising; the lone
-            # in-range bundle keeps the group within a single domain.
-            ([0, 5], ("dom_A", "dom_B"), 2, []),
-        ],
-        ids=[
-            "each_group_within_one_domain",
-            "straddling_group_sorted_domains",
-            "all_unknown_domains_filtered",
-            "none_domain_map",
-            "nonpositive_group_size",
-            "trailing_partial_group_ignored",
-            "out_of_range_index_skipped",
-        ],
-    )
-    def test_straddle_detection(
-        self, ordered_bundle_indices, domain_per_bundle, group_size, expected
-    ):
-        assert (
-            model_parallel_groups_straddling_domains(
-                ordered_bundle_indices, domain_per_bundle, group_size
-            )
-            == expected
-        )

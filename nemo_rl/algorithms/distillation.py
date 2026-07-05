@@ -306,7 +306,6 @@ def setup(
     # ==========================
     print("\n▶ Setting up compute cluster...", flush=True)
     colocated_inference = generation_config["colocated"]["enabled"]
-    segment_size = cluster_config.get("segment_size")
     enable_nemo_gym = bool(env_configs) and _should_use_nemo_gym(master_config)
     nemo_gym_actor: Optional[EnvironmentInterface] = None
     if enable_nemo_gym:
@@ -315,6 +314,7 @@ def setup(
     else:
         nemo_gym_num_nodes = 0
         ray_cur_node_id = None
+    segment_size = cluster_config.get("segment_size")
 
     if colocated_inference:
         num_nodes = cluster_config["num_nodes"]
@@ -855,6 +855,14 @@ def distillation_train(
 
                 print("▶ Preparing for teacher logprob inference...", flush=True)
                 with timer.time("teacher_logprob_inference_prep"):
+                    if not colocated_inference:
+                        # The non-colocated refit path doesn't offload the student
+                        # optimizer (offload_before_refit only runs in the
+                        # colocated/Megatron path), so it's still on the train GPUs
+                        # from the previous training step. Offload it so the teacher
+                        # fits for top-k inference; prepare_for_training() below
+                        # reloads it.
+                        student_policy.offload_before_refit()
                     teacher_policy.prepare_for_lp_inference()
 
                 print("▶ Computing teacher logprobs...", flush=True)
