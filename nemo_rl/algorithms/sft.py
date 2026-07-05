@@ -73,6 +73,10 @@ def _build_sft_collate_fn(policy_config: PolicyConfig):
         if megatron_cfg.get("enabled", False)
         else None
     )
+    return partial(
+        rl_collate_fn,
+        megatron_sft_context_parallel_size=context_parallel_size,
+    )
 
 
 def _iter_timed_batches(dataloader, timer: Timer):
@@ -93,10 +97,6 @@ def _add_e2e_step_timing(timing_metrics: dict[str, float]) -> None:
     timing_metrics["e2e_step_time"] = timing_metrics.get(
         "total_step_time", 0.0
     ) + timing_metrics.get("data_fetch", 0.0)
-    return partial(
-        rl_collate_fn,
-        megatron_sft_context_parallel_size=context_parallel_size,
-    )
 
 
 def _maybe_reorder_megatron_sft_dp_stride(

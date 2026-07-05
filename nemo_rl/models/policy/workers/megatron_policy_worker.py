@@ -80,6 +80,7 @@ from nemo_rl.models.megatron.train import (
     aggregate_training_statistics,
     megatron_forward_backward,
     should_reduce_loss_across_context_parallel,
+    strip_context_parallel_local_loss_metric,
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import (
@@ -787,15 +788,19 @@ class MegatronPolicyWorkerImpl(
             self.scheduler.step(increment=gbs)
 
         # Aggregate metrics across all microbatches
+        reduce_loss_across_cp = should_reduce_loss_across_context_parallel(
+            self.cfg, batch
+        )
         loss_reduction_group = parallel_state.get_data_parallel_group(
-            with_context_parallel=should_reduce_loss_across_context_parallel(
-                self.cfg, batch
-            )
+            with_context_parallel=reduce_loss_across_cp
         )
         mb_metrics, global_loss = aggregate_training_statistics(
             all_mb_metrics=all_mb_metrics,
             losses=losses,
             data_parallel_group=loss_reduction_group,
+        )
+        mb_metrics = strip_context_parallel_local_loss_metric(
+            mb_metrics, enabled=reduce_loss_across_cp
         )
 
         metrics = {

@@ -485,6 +485,7 @@ class LossPostProcessor:
                 ).clamp(min=1)
                 loss = (model_losses.float() * mask).sum() / normalizer
                 metrics: Dict[str, Any] = {
+                    "loss": loss.detach().item(),
                     "num_unmasked_tokens": mask.sum().item(),
                 }
                 if "sample_mask" in data_dict:
@@ -694,6 +695,15 @@ def should_reduce_loss_across_context_parallel(
         cfg["megatron_cfg"].get("prepacked_sft_loss_mode") == "labels"
         and "packed_cu_seqlens" in data
     )
+
+
+def strip_context_parallel_local_loss_metric(
+    metrics: Dict[str, List[Any]], enabled: bool
+) -> Dict[str, List[Any]]:
+    """Drop the CP-local loss after it has contributed to global loss reduction."""
+    if enabled:
+        metrics.pop("loss", None)
+    return metrics
 
 
 class TopkLogitsPostProcessor:
