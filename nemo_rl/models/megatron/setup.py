@@ -867,6 +867,8 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
     # These overrides need to be applied before the workers spawn.
     if "transformer_impl" in config["megatron_cfg"]:
         model_cfg.transformer_impl = config["megatron_cfg"]["transformer_impl"]
+    if "te_rng_tracker" in config["megatron_cfg"]:
+        model_cfg.use_te_rng_tracker = config["megatron_cfg"]["te_rng_tracker"]
     if "cuda_graph_impl" in config["megatron_cfg"]:
         model_cfg.cuda_graph_impl = config["megatron_cfg"]["cuda_graph_impl"]
         if model_cfg.cuda_graph_impl != "none":

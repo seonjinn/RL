@@ -1039,6 +1039,28 @@ class TestApplyPerformanceConfig:
 
         assert model_cfg.cross_entropy_loss_fusion is True
 
+    def test_te_rng_tracker_applies_without_cuda_graphs(self):
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg = MagicMock()
+        model_cfg.gated_linear_unit = True
+        model_cfg.use_te_rng_tracker = False
+        config = {
+            "megatron_cfg": {
+                "activation_checkpointing": False,
+                "apply_rope_fusion": False,
+                "bias_activation_fusion": False,
+                "gradient_accumulation_fusion": False,
+                "use_fused_weighted_squared_relu": False,
+                "cuda_graph_impl": "none",
+                "te_rng_tracker": True,
+            }
+        }
+
+        _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.use_te_rng_tracker is True
+
     def test_activation_func_required_when_not_gated(self):
         """Test that activation_func is required when not using gated_linear_unit."""
         from nemo_rl.models.megatron.setup import _apply_performance_config
