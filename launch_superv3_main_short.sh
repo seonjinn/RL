@@ -168,8 +168,8 @@ if [[ -n "${SBATCH_COMMENT:-}" ]]; then
   SBATCH_ARGS+=(--comment="${SBATCH_COMMENT}")
 fi
 
-if [[ -n "${SLURM_NODELIST:-}" ]]; then
-  SBATCH_ARGS+=(--nodelist="${SLURM_NODELIST}")
+if [[ -n "${SUBMIT_NODELIST:-}" ]]; then
+  SBATCH_ARGS+=(--nodelist="${SUBMIT_NODELIST}")
 fi
 
 if [[ -n "${DEPENDENCY:-}" ]]; then
