@@ -935,6 +935,27 @@ class TestApplyPerformanceConfig:
         assert model_cfg.recompute_method == "uniform"
         assert model_cfg.recompute_num_layers == 1
 
+    def test_cross_entropy_loss_fusion_override(self):
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg = MagicMock()
+        model_cfg.gated_linear_unit = True
+        model_cfg.cross_entropy_loss_fusion = False
+        config = {
+            "megatron_cfg": {
+                "activation_checkpointing": False,
+                "apply_rope_fusion": False,
+                "bias_activation_fusion": False,
+                "gradient_accumulation_fusion": False,
+                "use_fused_weighted_squared_relu": False,
+                "cross_entropy_loss_fusion": True,
+            }
+        }
+
+        _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.cross_entropy_loss_fusion is True
+
     def test_activation_func_required_when_not_gated(self):
         """Test that activation_func is required when not using gated_linear_unit."""
         from nemo_rl.models.megatron.setup import _apply_performance_config

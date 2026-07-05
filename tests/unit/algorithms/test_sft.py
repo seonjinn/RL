@@ -22,10 +22,13 @@ from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.sft import (
     MasterConfig,
     SFTConfig,
+    _add_e2e_step_timing,
     _build_sft_collate_fn,
     _initial_sft_save_state,
+    _iter_timed_batches,
     sft_train,
 )
+from nemo_rl.utils.timer import Timer
 
 
 @pytest.fixture
@@ -120,6 +123,24 @@ def test_sft_collate_validates_policy_context_parallel_size():
 
     assert collate_fn.func.__name__ == "rl_collate_fn"
     assert collate_fn.keywords == {"megatron_sft_context_parallel_size": 16}
+
+
+def test_iter_timed_batches_records_each_data_fetch():
+    timer = Timer()
+
+    assert list(_iter_timed_batches(["first", "second"], timer)) == [
+        "first",
+        "second",
+    ]
+    assert len(timer.get_elapsed("data_fetch")) == 2
+
+
+def test_add_e2e_step_timing_includes_data_fetch():
+    timing_metrics = {"total_step_time": 5.0, "data_fetch": 2.0}
+
+    _add_e2e_step_timing(timing_metrics)
+
+    assert timing_metrics["e2e_step_time"] == 7.0
 
 
 def test_exit_on_max_steps(mock_components):
