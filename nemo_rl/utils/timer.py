@@ -139,6 +139,12 @@ class Timer:
 
         return self._timers[label]
 
+    def record_elapsed(self, label: str, elapsed: float) -> None:
+        """Record an elapsed duration measured outside this timer."""
+        if elapsed < 0:
+            raise ValueError(f"Elapsed time must be non-negative, got {elapsed}")
+        self._timers.setdefault(label, []).append(elapsed)
+
     def get_latest_elapsed(self, label: str) -> float:
         """Get the most recent elapsed time measurement for a specific label.
 

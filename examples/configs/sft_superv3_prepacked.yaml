@@ -144,11 +144,8 @@ policy:
     attention_backend: "flash"          # matches --attention-backend flash
     # Packed SFT strict baseline keeps CUDA graphs disabled on both systems.
     cuda_graph_impl: "none"
-    cuda_graph_scope: []
     # Fused weighted squared ReLU activation kernel for MoE
     use_fused_weighted_squared_relu: True  # matches --use-fused-weighted-squared-relu
-    # High-priority CUDA streams for expert-parallel communication
-    high_priority_stream_groups: []
     use_gloo_process_groups: false
     # TE RNG tracker required for correct CUDA graph operation (matches --te-rng-tracker in MLM)
     te_rng_tracker: true

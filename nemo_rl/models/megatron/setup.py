@@ -833,6 +833,10 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
     model_cfg.use_fused_weighted_squared_relu = config["megatron_cfg"][
         "use_fused_weighted_squared_relu"
     ]
+    if "cross_entropy_loss_fusion" in config["megatron_cfg"]:
+        model_cfg.cross_entropy_loss_fusion = config["megatron_cfg"][
+            "cross_entropy_loss_fusion"
+        ]
     # Optional explicit attention backend override for environments where
     # TE auto backend probing is unstable.
     attention_backend = config["megatron_cfg"].get("attention_backend")

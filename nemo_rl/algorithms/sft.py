@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import time
 import warnings
 from dataclasses import dataclass, fields
 from functools import partial
@@ -72,6 +73,26 @@ def _build_sft_collate_fn(policy_config: PolicyConfig):
         if megatron_cfg.get("enabled", False)
         else None
     )
+
+
+def _iter_timed_batches(dataloader, timer: Timer):
+    """Yield batches while measuring the blocking dataloader fetch."""
+    iterator = iter(dataloader)
+    while True:
+        start = time.perf_counter()
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            return
+        timer.record_elapsed("data_fetch", time.perf_counter() - start)
+        yield batch
+
+
+def _add_e2e_step_timing(timing_metrics: dict[str, float]) -> None:
+    """Add a step boundary comparable to Megatron-LM's iteration timer."""
+    timing_metrics["e2e_step_time"] = timing_metrics.get(
+        "total_step_time", 0.0
+    ) + timing_metrics.get("data_fetch", 0.0)
     return partial(
         rl_collate_fn,
         megatron_sft_context_parallel_size=context_parallel_size,
@@ -485,7 +506,7 @@ def sft_train(
     ):
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
 
-        for batch in train_dataloader:
+        for batch in _iter_timed_batches(train_dataloader, timer):
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(train_dataloader), master_config.sft.max_num_steps)} {'=' * 25}"
             )
@@ -664,6 +685,7 @@ def sft_train(
                         checkpointer.finalize_checkpoint(checkpoint_path)
 
             timing_metrics = timer.get_timing_metrics(reduction_op="sum")
+            _add_e2e_step_timing(timing_metrics)
 
             print("\n📊 Training Results:")
             print(f"  • Loss: {float(metrics['loss']):.4f}")
@@ -687,22 +709,24 @@ def sft_train(
             # Display total time first, separately
             total_time = timing_metrics.get("total_step_time", 0)
             print(f"  • Total step time: {total_time:.2f}s")
+            e2e_time = timing_metrics.get("e2e_step_time", total_time)
+            print(f"  • E2E step time including data fetch: {e2e_time:.2f}s")
 
             # Display all other timing metrics (if any)
             for k, v in sorted(
                 timing_metrics.items(), key=lambda item: item[1], reverse=True
             ):
-                if k != "total_step_time":
-                    percent = (v / total_time * 100) if total_time > 0 else 0
+                if k not in {"total_step_time", "e2e_step_time"}:
+                    percent = (v / e2e_time * 100) if e2e_time > 0 else 0
                     print(f"  • {k}: {v:.2f}s ({percent:.1f}%)")
 
             total_num_gpus = (
                 master_config.cluster["num_nodes"]
                 * master_config.cluster["gpus_per_node"]
             )
-            if total_time > 0:
+            if e2e_time > 0:
                 timing_metrics["valid_tokens_per_sec_per_gpu"] = (
-                    metrics.get("global_valid_toks", 0) / total_time / total_num_gpus
+                    metrics.get("global_valid_toks", 0) / e2e_time / total_num_gpus
                 )
             else:
                 timing_metrics["valid_tokens_per_sec_per_gpu"] = 0.0
