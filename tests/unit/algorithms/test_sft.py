@@ -26,6 +26,7 @@ from nemo_rl.algorithms.sft import (
     _build_sft_collate_fn,
     _initial_sft_save_state,
     _iter_timed_batches,
+    _measure_loop_interval,
     sft_train,
 )
 from nemo_rl.utils.timer import Timer
@@ -141,6 +142,14 @@ def test_add_e2e_step_timing_includes_data_fetch():
     _add_e2e_step_timing(timing_metrics)
 
     assert timing_metrics["e2e_step_time"] == 7.0
+
+
+def test_measure_loop_interval_uses_consecutive_boundaries():
+    current_boundary, interval = _measure_loop_interval(11.5, 18.0)
+
+    assert current_boundary == 18.0
+    assert interval == 6.5
+    assert _measure_loop_interval(None, 11.5) == (11.5, None)
 
 
 def test_exit_on_max_steps(mock_components):
