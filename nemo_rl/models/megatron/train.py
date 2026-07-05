@@ -485,7 +485,6 @@ class LossPostProcessor:
                 ).clamp(min=1)
                 loss = (model_losses.float() * mask).sum() / normalizer
                 metrics: Dict[str, Any] = {
-                    "loss": loss.detach().item(),
                     "num_unmasked_tokens": mask.sum().item(),
                 }
                 if "sample_mask" in data_dict:
@@ -685,6 +684,16 @@ class LogprobsPostProcessor:
             }
 
         return processor_fn_inner
+
+
+def should_reduce_loss_across_context_parallel(
+    cfg: PolicyConfig, data: BatchedDataDict[Any]
+) -> bool:
+    """Return whether scalar loss reporting must include the CP dimension."""
+    return (
+        cfg["megatron_cfg"].get("prepacked_sft_loss_mode") == "labels"
+        and "packed_cu_seqlens" in data
+    )
 
 
 class TopkLogitsPostProcessor:

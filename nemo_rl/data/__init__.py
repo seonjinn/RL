@@ -69,7 +69,6 @@ class DataConfig(TypedDict):
     custom_dataloader: NotRequired[str]
     # Match Megatron-LM SFT's strided sampler order before NeMo-RL's DP sharding.
     megatron_sft_dp_stride_order: NotRequired[bool]
-    megatron_sft_dp_stride_order_in_collate: NotRequired[bool]
     # dataset configs
     train: ResponseDatasetConfig | PreferenceDatasetConfig | list[ResponseDatasetConfig]
     validation: NotRequired[

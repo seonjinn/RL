@@ -9,8 +9,7 @@
 #   - MTP with 2 layers (mtp_loss_scaling_factor=0.3 comes from model config)
 #   - 512 experts, topk=22 (from model config)
 #   - moe_shared_expert_overlap=False
-#   - Selective recompute on MoE modules not supported in NeMo RL;
-#     set activation_checkpointing=false and rely on memory optimizations
+#   - Selective recompute on MoE modules enabled to match standalone M-LM
 sft:
   max_num_epochs: 10000
   max_num_steps: 15625  # TRAIN_SAMPLES(1000000) / GBS(64) = 15625
@@ -113,7 +112,7 @@ policy:
       NCCL_DEBUG: "WARN"
       TORCHINDUCTOR_WORKER_START: "fork"
     empty_unused_memory_level: 0 #1
-    activation_checkpointing: false  # ignored when recompute_granularity is set
+    activation_checkpointing: true
     # Selective recompute on MoE modules — matches MLM's
     # --recompute-granularity selective --recompute-modules moe
     recompute_granularity: "selective"

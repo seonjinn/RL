@@ -14,6 +14,7 @@
 import os
 import warnings
 from dataclasses import dataclass, fields
+from functools import partial
 from typing import Any, Optional
 
 import numpy as np
@@ -60,6 +61,20 @@ class SFTSaveState:
 def _initial_sft_save_state() -> SFTSaveState:
     return SFTSaveState(
         epoch=0, step=0, total_steps=0, consumed_samples=0, total_valid_tokens=0
+    )
+
+
+def _build_sft_collate_fn(policy_config: PolicyConfig):
+    """Bind the policy CP size so packed-row mismatches fail during collation."""
+    megatron_cfg = policy_config.get("megatron_cfg", {})
+    context_parallel_size = (
+        int(megatron_cfg.get("context_parallel_size", 1))
+        if megatron_cfg.get("enabled", False)
+        else None
+    )
+    return partial(
+        rl_collate_fn,
+        megatron_sft_context_parallel_size=context_parallel_size,
     )
 
 
@@ -187,11 +202,12 @@ def setup(
     # ==========================
     #           Data
     # ==========================
+    sft_collate_fn = _build_sft_collate_fn(policy_config)
     train_dataloader = StatefulDataLoader(
         train_dataset,
         batch_size=policy_config["train_global_batch_size"],
         shuffle=data_config["shuffle"],
-        collate_fn=rl_collate_fn,
+        collate_fn=sft_collate_fn,
         drop_last=True,
         num_workers=data_config["num_workers"],
     )
@@ -204,7 +220,7 @@ def setup(
             val_dataset,
             batch_size=sft_config.val_global_batch_size,
             shuffle=False,
-            collate_fn=rl_collate_fn,
+            collate_fn=sft_collate_fn,
             drop_last=False,
             num_workers=data_config["num_workers"],
         )
