@@ -211,8 +211,21 @@ def setup_distributed() -> None:
     configure_dynamo_cache()
     # Ensure clean slate before import
     destroy_parallel_state()
-    # Pin the communicator to the correct GPU explicitly.
     local_rank = int(os.environ["LOCAL_RANK"])
+    if os.environ.get("NRL_MEGATRON_LAZY_NCCL_INIT") == "1":
+        rank = int(os.environ["RANK"])
+        device_count = torch.cuda.device_count()
+        expected_local_rank = rank % device_count if device_count else None
+        if expected_local_rank != local_rank:
+            raise RuntimeError(
+                "Lazy NCCL device mapping mismatch: "
+                f"RANK={rank}, LOCAL_RANK={local_rank}, device_count={device_count}, "
+                f"expected LOCAL_RANK={expected_local_rank}."
+            )
+        torch.distributed.init_process_group("nccl")
+        return
+
+    # Pin the communicator to the correct GPU explicitly.
     torch.distributed.init_process_group(
         "nccl", device_id=torch.device(f"cuda:{local_rank}")
     )

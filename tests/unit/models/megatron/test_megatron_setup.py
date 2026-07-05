@@ -33,6 +33,89 @@ import torch
 
 
 @pytest.mark.mcore
+class TestSetupDistributed:
+    """Tests for NCCL process-group initialization modes."""
+
+    @patch("nemo_rl.models.megatron.setup.destroy_parallel_state")
+    @patch("nemo_rl.models.megatron.setup.configure_dynamo_cache")
+    @patch("nemo_rl.models.megatron.setup.torch.distributed.init_process_group")
+    def test_uses_device_id_by_default(
+        self,
+        init_process_group: MagicMock,
+        _configure_dynamo_cache: MagicMock,
+        _destroy_parallel_state: MagicMock,
+    ) -> None:
+        from nemo_rl.models.megatron.setup import setup_distributed
+
+        with patch.dict(
+            os.environ,
+            {"LOCAL_RANK": "3"},
+            clear=False,
+        ):
+            os.environ.pop("NRL_MEGATRON_LAZY_NCCL_INIT", None)
+            setup_distributed()
+
+        init_process_group.assert_called_once_with(
+            "nccl", device_id=torch.device("cuda:3")
+        )
+
+    @patch("nemo_rl.models.megatron.setup.destroy_parallel_state")
+    @patch("nemo_rl.models.megatron.setup.configure_dynamo_cache")
+    @patch("nemo_rl.models.megatron.setup.torch.cuda.device_count", return_value=8)
+    @patch("nemo_rl.models.megatron.setup.torch.distributed.init_process_group")
+    def test_omits_device_id_when_lazy_init_is_enabled(
+        self,
+        init_process_group: MagicMock,
+        _device_count: MagicMock,
+        _configure_dynamo_cache: MagicMock,
+        _destroy_parallel_state: MagicMock,
+    ) -> None:
+        from nemo_rl.models.megatron.setup import setup_distributed
+
+        with patch.dict(
+            os.environ,
+            {
+                "LOCAL_RANK": "3",
+                "RANK": "11",
+                "NRL_MEGATRON_LAZY_NCCL_INIT": "1",
+            },
+            clear=False,
+        ):
+            setup_distributed()
+
+        init_process_group.assert_called_once_with("nccl")
+
+    @patch("nemo_rl.models.megatron.setup.destroy_parallel_state")
+    @patch("nemo_rl.models.megatron.setup.configure_dynamo_cache")
+    @patch("nemo_rl.models.megatron.setup.torch.cuda.device_count", return_value=8)
+    @patch("nemo_rl.models.megatron.setup.torch.distributed.init_process_group")
+    def test_rejects_lazy_init_when_rank_maps_to_another_gpu(
+        self,
+        init_process_group: MagicMock,
+        _device_count: MagicMock,
+        _configure_dynamo_cache: MagicMock,
+        _destroy_parallel_state: MagicMock,
+    ) -> None:
+        from nemo_rl.models.megatron.setup import setup_distributed
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LOCAL_RANK": "3",
+                    "RANK": "4",
+                    "NRL_MEGATRON_LAZY_NCCL_INIT": "1",
+                },
+                clear=False,
+            ),
+            pytest.raises(RuntimeError, match="Lazy NCCL device mapping mismatch"),
+        ):
+            setup_distributed()
+
+        init_process_group.assert_not_called()
+
+
+@pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""
 
@@ -1879,7 +1962,9 @@ class TestCreateMegatronConfig:
 
         with (
             patch("nemo_rl.models.megatron.setup.ConfigContainer"),
-            patch("nemo_rl.models.megatron.setup.DistributedDataParallelConfig") as mock_ddp,
+            patch(
+                "nemo_rl.models.megatron.setup.DistributedDataParallelConfig"
+            ) as mock_ddp,
             patch("nemo_rl.models.megatron.setup.LoggerConfig"),
             patch("nemo_rl.models.megatron.setup.OptimizerConfig"),
             patch("nemo_rl.models.megatron.setup.SchedulerConfig"),
