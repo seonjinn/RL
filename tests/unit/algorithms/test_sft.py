@@ -22,6 +22,7 @@ from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.sft import (
     MasterConfig,
     SFTConfig,
+    _build_sft_collate_fn,
     _initial_sft_save_state,
     sft_train,
 )
@@ -36,7 +37,6 @@ def mock_components():
         "grad_norm": torch.tensor(1.0),
         "all_mb_metrics": {"global_valid_toks": [10]},
     }
-
     # Create a proper message log structure with token_ids
     mock_batch = {
         "message_log": [[{"token_ids": torch.tensor([1, 2, 3]), "role": "assistant"}]],
@@ -105,6 +105,20 @@ def mock_components():
         "checkpointer": checkpointer,
         "master_config": master_config,
     }
+
+
+def test_sft_collate_validates_policy_context_parallel_size():
+    collate_fn = _build_sft_collate_fn(
+        {
+            "megatron_cfg": {
+                "enabled": True,
+                "context_parallel_size": 16,
+            }
+        }
+    )
+
+    assert collate_fn.func.__name__ == "rl_collate_fn"
+    assert collate_fn.keywords == {"megatron_sft_context_parallel_size": 16}
 
 
 def test_exit_on_max_steps(mock_components):
