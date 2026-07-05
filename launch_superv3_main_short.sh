@@ -92,7 +92,7 @@ export UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-/mnt/nemo_cache/venvs/dr
 UV_HTTP_TIMEOUT=600 \
 HF_HOME=/mnt/nemo_cache/hf_home \
 HF_MODULES_CACHE=/mnt/nemo_cache/hf_modules \
-NEMO_RL_VENV_DIR=/mnt/nemo_cache/venvs/${NAME} \
+NEMO_RL_VENV_DIR=${NRL_WORKER_VENV_DIR:-/tmp/nemo_rl_venvs-${NAME}} \
 NRL_MEGATRON_CHECKPOINT_DIR=/mnt/nemo_cache/nemo_rl \
 PYTHONPATH=${PYTHONPATH_PREFIX} \
 VLLM_PRECOMPILED_WHEEL_LOCATION=https://github.com/vllm-project/vllm/releases/download/v0.11.2/vllm-0.11.2+cu129-cp38-abi3-manylinux1_x86_64.whl \
@@ -168,6 +168,10 @@ fi
 
 if [[ -n "${DEPENDENCY:-}" ]]; then
   SBATCH_ARGS+=(--dependency="${DEPENDENCY}")
+fi
+
+if [[ "${SBATCH_TEST_ONLY:-0}" == "1" ]]; then
+  SBATCH_ARGS+=(--test-only)
 fi
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
