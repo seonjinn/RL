@@ -13,6 +13,7 @@ class TestCreateMegatronConfig(unittest.TestCase):
             "megatron_cfg": {
                 "train_iters": 20,
                 "optimizer": {"use_distributed_optimizer": True},
+                "scheduler": {},
                 "distributed_data_parallel_config": {
                     "grad_reduce_in_fp32": True,
                     "overlap_grad_reduce": True,
