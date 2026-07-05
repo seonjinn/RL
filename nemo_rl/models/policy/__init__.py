@@ -333,6 +333,7 @@ class MegatronConfig(TypedDict):
     # <65K to >100K tokens). Supported for SFT, DPO, and GRPO. Not compatible with
     # context parallelism, sequence packing, or top-k/top-p training-time filtering.
     use_fused_linear_logprobs: NotRequired[bool]
+    prepacked_sft_loss_mode: NotRequired[Literal["labels", "logits"]]
     # Number of tokens per chunk when computing fused linear logprobs.
     # Smaller values reduce peak memory further but may decrease throughput.
     fused_linear_logprobs_chunk_size: NotRequired[int]

@@ -99,6 +99,15 @@ def _add_e2e_step_timing(timing_metrics: dict[str, float]) -> None:
     ) + timing_metrics.get("data_fetch", 0.0)
 
 
+def _measure_loop_interval(
+    previous_boundary: float | None, current_boundary: float
+) -> tuple[float, float | None]:
+    """Measure consecutive batch-arrival boundaries for matched E2E timing."""
+    if previous_boundary is None:
+        return current_boundary, None
+    return current_boundary, current_boundary - previous_boundary
+
+
 def _maybe_reorder_megatron_sft_dp_stride(
     batch: BatchedDataDict[Any],
     dp_size: int,
@@ -470,6 +479,7 @@ def sft_train(
     current_step = sft_save_state.step
     total_steps = sft_save_state.total_steps
     total_valid_tokens = sft_save_state.total_valid_tokens
+    previous_loop_boundary: float | None = None
 
     sft_config = master_config.sft
     # Validation configuration
@@ -507,6 +517,9 @@ def sft_train(
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
 
         for batch in _iter_timed_batches(train_dataloader, timer):
+            previous_loop_boundary, loop_interval_time = _measure_loop_interval(
+                previous_loop_boundary, time.perf_counter()
+            )
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(train_dataloader), master_config.sft.max_num_steps)} {'=' * 25}"
             )
@@ -686,6 +699,8 @@ def sft_train(
 
             timing_metrics = timer.get_timing_metrics(reduction_op="sum")
             _add_e2e_step_timing(timing_metrics)
+            if loop_interval_time is not None:
+                timing_metrics["loop_interval_time"] = loop_interval_time
 
             print("\n📊 Training Results:")
             print(f"  • Loss: {float(metrics['loss']):.4f}")
@@ -711,12 +726,19 @@ def sft_train(
             print(f"  • Total step time: {total_time:.2f}s")
             e2e_time = timing_metrics.get("e2e_step_time", total_time)
             print(f"  • E2E step time including data fetch: {e2e_time:.2f}s")
+            matched_e2e_time = timing_metrics.get("loop_interval_time", e2e_time)
+            if loop_interval_time is not None:
+                print(f"  • Matched loop interval time: {matched_e2e_time:.2f}s")
 
             # Display all other timing metrics (if any)
             for k, v in sorted(
                 timing_metrics.items(), key=lambda item: item[1], reverse=True
             ):
-                if k not in {"total_step_time", "e2e_step_time"}:
+                if k not in {
+                    "total_step_time",
+                    "e2e_step_time",
+                    "loop_interval_time",
+                }:
                     percent = (v / e2e_time * 100) if e2e_time > 0 else 0
                     print(f"  • {k}: {v:.2f}s ({percent:.1f}%)")
 
@@ -724,9 +746,11 @@ def sft_train(
                 master_config.cluster["num_nodes"]
                 * master_config.cluster["gpus_per_node"]
             )
-            if e2e_time > 0:
+            if matched_e2e_time > 0:
                 timing_metrics["valid_tokens_per_sec_per_gpu"] = (
-                    metrics.get("global_valid_toks", 0) / e2e_time / total_num_gpus
+                    metrics.get("global_valid_toks", 0)
+                    / matched_e2e_time
+                    / total_num_gpus
                 )
             else:
                 timing_metrics["valid_tokens_per_sec_per_gpu"] = 0.0

@@ -137,6 +137,7 @@ policy:
     bias_activation_fusion: False
     defer_fp32_logits: False
     use_fused_linear_logprobs: false
+    prepacked_sft_loss_mode: "labels"
     gradient_accumulation_fusion: true
     nrl_minimal_loss_metrics: true
     moe_per_layer_logging: False
