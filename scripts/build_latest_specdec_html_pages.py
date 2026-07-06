@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import json
 import math
 import re
 import shutil
@@ -28,9 +29,16 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 PUBLIC_DATA = ROOT / "public/data"
 DFLARE_RESULT_ROOT = ROOT / "experiments/vllm_024_dynamicsd/report"
+SYNC_RL_EXPERIMENT_ROOT = ROOT / "experiments/vllm_024_dynamicsd"
 DFLARE_COMPLETED_OUT = DFLARE_RESULT_ROOT / "dflare_completed_latest.csv"
 DFLARE_STATUS_CSV = DFLARE_RESULT_ROOT / "dflare_job_status_latest.csv"
 VLLM024_PROFILE_CSV = DFLARE_RESULT_ROOT / "vllm024_profiles_latest.csv"
+SPEEDBENCH_STAGE_SCRIPT = SYNC_RL_EXPERIMENT_ROOT / "stage_speedbench.sh"
+SYNC_RL_MODEL_MATRIX = SYNC_RL_EXPERIMENT_ROOT / "model_method_matrix.json"
+SYNC_RL_SUMMARY_FILES = {
+    "DAPO-Math-17k": DFLARE_RESULT_ROOT / "results/dapo_sync_full/summary.csv",
+    "OpenMathInstruct-2": DFLARE_RESULT_ROOT / "results/openmath_sync_full/summary.csv",
+}
 DFLARE_COMPLETED_DIRS = [
     DFLARE_RESULT_ROOT / "20260703_dflare_completed",
     DFLARE_RESULT_ROOT / "20260704_dflare_completed",
@@ -1775,6 +1783,254 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
     return "<table><thead><tr>" + head + "</tr></thead><tbody>" + "\n".join(body) + "</tbody></table>"
 
 
+def shell_assignment(path: Path, name: str) -> str:
+    match = re.search(
+        rf"^{re.escape(name)}=\"([^\"]+)\"",
+        path.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    return match.group(1) if match else "unknown"
+
+
+def _method_variant_label(method: str, variant: str) -> str:
+    labels = {
+        ("baseline", "baseline"): "Baseline",
+        ("eagle3", "static"): "Eagle-3 static",
+        ("eagle3", "dynamic"): "DynamicSD",
+        ("mtp_static", "mtp_static"): "native MTP static",
+        ("mtp_dynamic", "mtp_dynamic"): "native MTP dynamic",
+    }
+    return labels.get((method, variant), variant.replace("_", " "))
+
+
+def _profile_summary(profile: dict[str, object]) -> str:
+    key = str(profile.get("key", "")).upper()
+    policy = str(profile.get("context_policy", ""))
+    if policy == "native_32k":
+        label = f"{key} native"
+    elif policy == "yarn4_64k":
+        label = f"{key} YaRN-4"
+    else:
+        label = key
+    max_new_tokens = profile.get("max_new_tokens")
+    return f"{label} (OSL {max_new_tokens})" if max_new_tokens else label
+
+
+def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not SYNC_RL_MODEL_MATRIX.exists():
+        return pd.DataFrame(), pd.DataFrame()
+    matrix = json.loads(SYNC_RL_MODEL_MATRIX.read_text(encoding="utf-8"))
+    qwen_rows: list[dict[str, str]] = []
+    nemotron_rows: list[dict[str, str]] = []
+    for model in matrix.get("models", []):
+        methods = model.get("methods", {})
+        supported: list[str] = []
+        integration: list[str] = []
+        unsupported: list[str] = []
+        for method in matrix.get("method_order", []):
+            meta = methods.get(method)
+            if not isinstance(meta, dict):
+                continue
+            status = meta.get("status")
+            variants = meta.get("variants") or []
+            if status == "supported":
+                if variants:
+                    supported.extend(
+                        _method_variant_label(str(method), str(variant))
+                        for variant in variants
+                    )
+                else:
+                    supported.append(str(method))
+            elif status == "integration":
+                integration.append(str(method).upper().replace("_", "-"))
+            elif status == "unsupported":
+                unsupported.append(str(method).upper().replace("_", "-"))
+        row = {
+            "model": str(model.get("label", "")),
+            "profiles": ", ".join(
+                _profile_summary(profile)
+                for profile in model.get("profiles", [])
+                if isinstance(profile, dict)
+            ),
+            "supported": ", ".join(supported),
+            "integration": ", ".join(integration) if integration else "none",
+            "unsupported": ", ".join(unsupported) if unsupported else "none",
+        }
+        launcher = model.get("launcher")
+        if launcher == "swe_sync_rollout":
+            qwen_rows.append(row)
+        elif launcher == "nemotron_sync_rl_mtp":
+            row["profiles"] = "official/overlay SPEED-Bench only"
+            nemotron_rows.append(row)
+    return pd.DataFrame(qwen_rows), pd.DataFrame(nemotron_rows)
+
+
+def load_completed_qwen32_math_dynamic_rows() -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for dataset, path in SYNC_RL_SUMMARY_FILES.items():
+        if not path.exists():
+            continue
+        summary = pd.read_csv(path)
+        dynamic = summary[summary["variant"] == "dynamic"]
+        if dynamic.empty:
+            continue
+        row = dynamic.iloc[0]
+        rows.append(
+            {
+                "result_scope": "Qwen3-32B Math DynamicSD",
+                "dataset": dataset,
+                "sampling": (
+                    f"temp {float(row['temperature']):.1f} / top_p {float(row['top_p']):.1f}"
+                ),
+                "tok_s_gpu": float(row["output_tok_s_per_gpu"]),
+                "speedup_vs_baseline": float(row["throughput_speedup_vs_baseline"]),
+                "speedup_vs_static": float(row["throughput_speedup_vs_static"]),
+                "time_reduction_vs_baseline_pct": float(
+                    row["rollout_time_reduction_vs_baseline_pct"]
+                ),
+                "acceptance_rate": float(row["acceptance_rate"]),
+                "source": str(path.relative_to(ROOT)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def count_speedbench_result_artifacts() -> dict[str, int]:
+    counts = {"official": 0, "overlay": 0}
+    for path in sorted(DFLARE_RESULT_ROOT.glob("**/result.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("status") != "complete":
+            continue
+        cohort = payload.get("config", {}).get("cohort")
+        if cohort in counts:
+            counts[cohort] += 1
+    return counts
+
+
+def render_sync_speedbench_status_section() -> str:
+    speedbench_dataset_revision = shell_assignment(
+        SPEEDBENCH_STAGE_SCRIPT,
+        "SPEED_DATASET_REVISION",
+    )
+    modelopt_revision = shell_assignment(SPEEDBENCH_STAGE_SCRIPT, "MODELOPT_REVISION")
+    qwen_support, nemotron_support = load_sync_speedbench_support()
+    completed = load_completed_qwen32_math_dynamic_rows()
+    speedbench_counts = count_speedbench_result_artifacts()
+    cohort_rows = pd.DataFrame(
+        [
+            {
+                "cohort": "Official SPEED-Bench",
+                "protocol": "official-modelopt",
+                "sampling": "captured from instrumented official config",
+                "revisions": (
+                    f"SPEED-Bench {speedbench_dataset_revision}; "
+                    f"ModelOpt {modelopt_revision}"
+                ),
+                "local_status": (
+                    f"{speedbench_counts['official']} completed local result.json artifact(s)"
+                ),
+            },
+            {
+                "cohort": "Sync-RL overlay",
+                "protocol": "sync-rl-overlay-user",
+                "sampling": "temperature 1.0 / top_p 1.0",
+                "revisions": (
+                    f"SPEED-Bench {speedbench_dataset_revision}; "
+                    f"ModelOpt {modelopt_revision}"
+                ),
+                "local_status": (
+                    f"{speedbench_counts['overlay']} completed local result.json artifact(s)"
+                ),
+            },
+        ]
+    )
+    parts = [
+        (
+            "<section class=\"section\"><h2>Sync-RL SWE and SPEED-Bench Status</h2>"
+            "<p class=\"note\">This Task 6 snapshot is local-only and keeps completed "
+            "evidence separate from launch support. Official SPEED-Bench and Sync-RL "
+            "overlay remain separate cohorts, and pending remote jobs are not scored "
+            "or summarized here.</p>"
+        ),
+        "<div class=\"table-wrap\">",
+        table(
+            cohort_rows,
+            [
+                ("cohort", "Cohort", "text"),
+                ("protocol", "Protocol", "text"),
+                ("sampling", "Sampling", "text"),
+                ("revisions", "Pinned revisions", "text"),
+                ("local_status", "Local status", "text"),
+            ],
+        ),
+        "</div>",
+    ]
+    if speedbench_counts["official"] == 0 and speedbench_counts["overlay"] == 0:
+        parts.append(
+            "<p class=\"note\">No completed SPEED-Bench official or overlay "
+            "result.json artifacts are present in this checkout.</p>"
+        )
+    parts.extend(
+        [
+            "<h3>Completed local Qwen3-32B Math DynamicSD results</h3>",
+            "<p class=\"note\">These completed rows are legacy Math Sync-RL summaries "
+            "with temp 1.0 / top_p 0.9. They are intentionally reported separately "
+            "from the pending SWE 32K/64K and SPEED-Bench cohorts.</p>",
+            "<div class=\"table-wrap\">",
+            table(
+                completed,
+                [
+                    ("result_scope", "Result scope", "text"),
+                    ("dataset", "Dataset", "text"),
+                    ("sampling", "Sampling", "text"),
+                    ("tok_s_gpu", "tok/s/GPU", "num"),
+                    ("speedup_vs_baseline", "Speedup vs baseline", "x"),
+                    ("speedup_vs_static", "Speedup vs static", "x"),
+                    (
+                        "time_reduction_vs_baseline_pct",
+                        "Time reduction vs baseline",
+                        "pct",
+                    ),
+                    ("acceptance_rate", "Acceptance", "pct"),
+                    ("source", "Source", "source"),
+                ],
+            ),
+            "</div>",
+            "<h3>Qwen SWE Sync-RL support</h3>",
+            "<div class=\"table-wrap\">",
+            table(
+                qwen_support,
+                [
+                    ("model", "Model", "text"),
+                    ("profiles", "Profiles", "text"),
+                    ("supported", "Supported", "text"),
+                    ("integration", "Integration only", "text"),
+                    ("unsupported", "Unsupported", "text"),
+                ],
+            ),
+            "</div>",
+            "<h3>Nemotron SPEED-Bench support</h3>",
+            "<div class=\"table-wrap\">",
+            table(
+                nemotron_support,
+                [
+                    ("model", "Model", "text"),
+                    ("profiles", "Profiles", "text"),
+                    ("supported", "Supported", "text"),
+                    ("integration", "Integration only", "text"),
+                    ("unsupported", "Unsupported", "text"),
+                ],
+            ),
+            "</div>",
+            "</section>",
+        ]
+    )
+    return "".join(parts)
+
+
 def build_vllm_html(
     main: pd.DataFrame,
     added: pd.DataFrame,
@@ -1838,6 +2094,7 @@ def build_vllm_html(
         f"<div class=\"card\"><b>{len(added_summary)}</b><span>added summary groups</span></div>",
         "</div>",
         "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
+        render_sync_speedbench_status_section(),
         related_vllm_reports_section(),
         "<section class=\"section\"><h2>Key Findings</h2><p>" + esc(key_finding) + "</p><p class=\"note\">Speedups are computed only when a matched baseline exists with the same domain, model, temperature, batch size, ISL and OSL.</p></section>",
         render_profile_section(native_rows),

@@ -1,5 +1,41 @@
 # vLLM 0.24 DynamicSD Results
 
+This file now leads with the current Task 6 local status. Use only the next
+sections for current SWE and SPEED-Bench claims. Later sections preserve older
+standalone, NeMo-RL smoke, replay, and long-context notes for traceability.
+
+## Task 6 Status Snapshot
+
+Official SPEED-Bench and the Sync-RL overlay remain separate cohorts. The
+overlay defaults to NeMo-RL-matched `temperature=1.0` and `top_p=1.0`; the
+official cohort keeps the upstream instrumented ModelOpt protocol and its own
+resolved sampling config. Pending remote jobs are not summarized here.
+
+### Current Completed Local Results
+
+The only completed Task 6-adjacent local result claims in this checkout are the
+existing Qwen3-32B Math Sync-RL DynamicSD summaries below. They are legacy Math
+rows sampled at `temperature=1.0`, `top_p=0.9`, and must not be reused as SWE
+or SPEED-Bench placeholders.
+
+| Result scope | Dataset | tok/s/GPU | Speedup vs baseline | Speedup vs static | Time reduction vs baseline | Acceptance | Source |
+|---|---|---:|---:|---:|---:|---:|---|
+| Qwen3-32B Math DynamicSD | DAPO-Math-17k | 3,674.68 | 1.509x | 1.130x | 33.77% | 45.65% | `results/dapo_sync_full/summary.csv` |
+| Qwen3-32B Math DynamicSD | OpenMathInstruct-2 | 3,463.05 | 1.553x | 1.108x | 35.55% | 46.59% | `results/openmath_sync_full/summary.csv` |
+
+### Pending Or Launch-Support-Only Cohorts
+
+- SWE Sync-RL 32K/64K matrices: supported only for Qwen baseline, Eagle-3
+  static, and DynamicSD. PARD is integration-only; PARD-2, DFlash, and DFlare
+  are unsupported for these Qwen rows in this experiment.
+- Nemotron SPEED-Bench matrices: native baseline, `mtp_static`, and
+  `mtp_dynamic` are supported only for Nemotron Super and Ultra.
+- SPEED-Bench official and overlay results: no completed local `result.json`
+  artifacts are stored in this checkout, so Task 6 documentation remains at
+  protocol and support-matrix status only.
+
+## Historical Standalone Notes
+
 Results were collected on Lyris GB200 with Qwen3-32B target TP=2 and the
 RedHatAI Qwen3-32B Eagle-3 drafter at draft TP=1. All compared variants use
 vLLM 0.24.0, `enforce_eager=False`, PIECEWISE CUDA graphs, prefix caching,

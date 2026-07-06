@@ -2,9 +2,9 @@
 
 ## Objective
 
-Validate vLLM 0.24 DynamicSD on GB200 and determine whether adaptive K improves
-Qwen3-32B Eagle-3 generation throughput across batch size at temperature 0 and
-temperature 1.
+Validate vLLM 0.24 DynamicSD on GB200, extend the long-tail Sync-RL coverage to
+Qwen SWE 32K/64K request-plan profiles, and document SPEED-Bench official and
+overlay cohorts without merging their protocols or inventing pending results.
 
 ## Validation Gates
 
@@ -18,6 +18,12 @@ temperature 1.
 7. Profile one regressed and one improved batch size with NSys.
 8. Compare only rows matched on model, TP/PP, ISL/OSL, sampling, graph mode,
    prefix caching, chunked prefill, and token budget.
+9. Keep SPEED-Bench official and Sync-RL overlay rows in separate cohorts with
+   explicit provenance matching and separate sampling defaults.
+10. Report current completed local evidence accurately: Qwen3-32B Math
+    DynamicSD summaries are complete, while pending SWE 32K/64K and
+    SPEED-Bench rows stay unclaimed until their own `result.json` artifacts
+    exist locally.
 
 ## Primary Metrics
 
@@ -33,3 +39,6 @@ temperature 1.
 - A performance claim requires three measured repeats and token-complete output.
 - A root-cause claim requires an NSys trace with initialization and graph capture
   excluded from the measurement window.
+- Task 6 documentation is complete only when it distinguishes supported,
+  integration-only, unsupported, pending, and completed rows without mixing
+  official SPEED-Bench protocol with the NeMo-RL-matched overlay cohort.

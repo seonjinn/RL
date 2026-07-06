@@ -136,6 +136,42 @@ def test_task5_latest_vllm_html_contains_native_and_status_sections(tmp_path: Pa
     assert (temp_public_data / "dflare_job_status_latest.csv").exists()
 
 
+def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
+    tmp_path: Path,
+) -> None:
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    temp_added = tmp_path / "docs/vllm_standalone_added_results_latest.csv"
+    temp_completed = tmp_path / "report/dflare_completed_latest.csv"
+    temp_public_data = tmp_path / "public/data"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=temp_added,
+        completed_csv_out=temp_completed,
+        public_data_dir=temp_public_data,
+    )
+
+    html_text = parse_html(temp_html)
+
+    assert "Sync-RL SWE and SPEED-Bench Status" in html_text
+    assert "Official SPEED-Bench" in html_text
+    assert "Sync-RL overlay" in html_text
+    assert "official-modelopt" in html_text
+    assert "sync-rl-overlay-user" in html_text
+    assert "temperature 1.0 / top_p 1.0" in html_text
+    assert "Qwen3-32B Math DynamicSD" in html_text
+    assert "DAPO-Math-17k" in html_text
+    assert "OpenMathInstruct-2" in html_text
+    assert "1.51x" in html_text
+    assert "1.55x" in html_text
+    assert "No completed SPEED-Bench official or overlay result.json artifacts are present in this checkout." in html_text
+    assert "Qwen3-32B" in html_text
+    assert "Qwen3-235B-A22B" in html_text
+    assert "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in html_text
+    assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in html_text
+    assert ">32K<" in html_text or " 32K " in html_text
+    assert ">64K<" in html_text or " 64K " in html_text
+
+
 def test_task5_index_publishes_new_artifacts_and_counts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

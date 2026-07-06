@@ -162,6 +162,52 @@ verifier work, policy training, and weight synchronization. A 256-request
 global batch is queued through one engine capped at 64 active sequences; use a
 multi-replica NeMo-RL run to validate the final rollout-step reduction.
 
+### Qwen SWE 32K/64K Sync-RL Matrix
+
+`submit_swe_sync_rollout_matrix.sh` expands the long-tail Sync-RL request-plan
+profiles from `model_method_matrix.json` and emits supported, integration-only,
+and unsupported cells without guessing missing compatibility:
+
+| Model | 32K profile | 64K profile | Supported methods | Integration only | Unsupported |
+|---|---|---|---|---|---|
+| Qwen3-30B-A3B | native, OSL 32768 | YaRN-4, OSL 65536 | baseline, Eagle-3 static, DynamicSD | PARD | PARD-2, DFlash, DFlare |
+| Qwen3-32B | native, OSL 32768 | YaRN-4, OSL 65536 | baseline, Eagle-3 static, DynamicSD | PARD | PARD-2, DFlash, DFlare |
+| Qwen3-235B-A22B | native, OSL 32768 | YaRN-4, OSL 65536 | baseline, Eagle-3 static, DynamicSD | PARD | PARD-2, DFlash, DFlare |
+
+Run only the local manifest and scheduler checks here; remote submission,
+monitoring, and artifact pull are handled elsewhere:
+
+```bash
+CLUSTER=lyris TEST_ONLY=true ./submit_swe_sync_rollout_matrix.sh
+```
+
+Current completed local evidence for this area remains the earlier Qwen3-32B
+Math Sync-RL DynamicSD summaries in `report/results/dapo_sync_full/summary.csv`
+and `report/results/openmath_sync_full/summary.csv`, both sampled at
+temperature 1.0 and top-p 0.9. Do not reuse those values as SWE 32K/64K
+placeholders; every SWE row stays pending until its own `result.json` lands.
+
+### SPEED-Bench Official vs Overlay
+
+`stage_speedbench.sh` pins both upstream inputs:
+
+- SPEED-Bench dataset revision:
+  `487aa718444e816458d1a0a52bfce7a454285cf4`
+- NVIDIA Model Optimizer revision:
+  `43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446`
+
+The two SPEED-Bench cohorts are intentionally separate:
+
+| Cohort | Protocol | Sampling | Comparison rule |
+|---|---|---|---|
+| Official SPEED-Bench | instrumented upstream ModelOpt `run.py` | keep the official resolved config; no overlay default override | compare only to baselines with matching official provenance |
+| Sync-RL overlay | manifest-backed prepared parquet plus barriered AsyncLLM overlay | default to NeMo-RL-matched `temperature=1.0`, `top_p=1.0` | compare only within the overlay cohort and exact matched provenance |
+
+`summarize_speedbench_sync_rollout.py` rejects official/overlay baseline
+matching across cohorts. No completed official or overlay SPEED-Bench
+`result.json` artifacts are stored in this checkout yet, so Task 6
+documentation stays at launch-support status only.
+
 ### NeMo-RL Performance Recipe Shapes
 
 `submit_nemorl_perfcfg_sync_matrix.sh` maps the synchronous NeMo-RL

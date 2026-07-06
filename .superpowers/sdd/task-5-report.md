@@ -419,11 +419,17 @@ Actual pinned source staging/compile probe:
 ```bash
 python3 - <<'PY'
 import hashlib
+import importlib.util
 import pathlib
 import tempfile
 import urllib.request
 
-from experiments.vllm_024_dynamicsd import benchmark_speedbench_sync_rollout as bench
+root = pathlib.Path.cwd()
+path = root / "experiments" / "vllm_024_dynamicsd" / "benchmark_speedbench_sync_rollout.py"
+spec = importlib.util.spec_from_file_location("task5_speedbench_sync", path)
+assert spec is not None and spec.loader is not None
+bench = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bench)
 
 url = (
     "https://raw.githubusercontent.com/NVIDIA/Model-Optimizer/"
