@@ -611,6 +611,10 @@ def sft_train(
                     metrics.update(
                         {f"moe/{k}": v for k, v in train_results["moe_metrics"].items()}
                     )
+                if "mtp_metrics" in train_results:
+                    metrics.update(
+                        {f"mtp/{k}": v for k, v in train_results["mtp_metrics"].items()}
+                    )
                 metrics.update(train_results["all_mb_metrics"])
                 for k, v in metrics.items():
                     if k in {"lr", "wd", "global_valid_seqs", "global_valid_toks"}:

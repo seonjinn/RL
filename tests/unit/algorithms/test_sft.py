@@ -32,6 +32,13 @@ from nemo_rl.algorithms.sft import (
 from nemo_rl.utils.timer import Timer
 
 
+def _logged_train_metrics(logger):
+    for call in logger.log_metrics.call_args_list:
+        if call.kwargs.get("prefix") == "train":
+            return call.args[0]
+    raise AssertionError("No train metrics payload was logged")
+
+
 @pytest.fixture
 def mock_components():
     # Create mock components
@@ -150,6 +157,46 @@ def test_measure_loop_interval_uses_consecutive_boundaries():
     assert current_boundary == 18.0
     assert interval == 6.5
     assert _measure_loop_interval(None, 11.5) == (11.5, None)
+
+
+def test_sft_logs_mtp_metrics_with_prefix(mock_components):
+    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_epochs = 1
+    mock_components["policy"].train.return_value = {
+        "loss": torch.tensor(0.5),
+        "grad_norm": torch.tensor(1.0),
+        "moe_metrics": {"router_aux_loss": [0.25]},
+        "mtp_metrics": {
+            "mtp_1_loss": 0.11,
+            "mtp_2_loss": 0.22,
+            "mtp_1_acceptance_rate": 88.0,
+            "mtp_2_acceptance_rate": 77.0,
+        },
+        "all_mb_metrics": {"global_valid_toks": [10]},
+    }
+
+    sft_train(
+        mock_components["policy"],
+        mock_components["train_dataloader"],
+        None,
+        mock_components["tokenizer"],
+        mock_components["loss_fn"],
+        mock_components["master_config"],
+        mock_components["logger"],
+        mock_components["checkpointer"],
+        _initial_sft_save_state(),
+    )
+
+    metrics = _logged_train_metrics(mock_components["logger"])
+
+    assert metrics["loss"] == 0.5
+    assert metrics["grad_norm"] == 1.0
+    assert metrics["moe/router_aux_loss"] == 0.25
+    assert metrics["mtp/mtp_1_loss"] == 0.11
+    assert metrics["mtp/mtp_2_loss"] == 0.22
+    assert metrics["mtp/mtp_1_acceptance_rate"] == 88.0
+    assert metrics["mtp/mtp_2_acceptance_rate"] == 77.0
+    assert metrics["global_valid_toks"] == 10
 
 
 def test_exit_on_max_steps(mock_components):
