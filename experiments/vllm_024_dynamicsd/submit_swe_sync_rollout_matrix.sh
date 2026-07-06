@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MATRIX_FILE="${SCRIPT_DIR}/model_method_matrix.json"
+MATRIX_FILE="${MATRIX_FILE:-${SCRIPT_DIR}/model_method_matrix.json}"
 LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 MODELS="${MODELS:-qwen32}"
@@ -22,6 +22,7 @@ REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
 
 MANIFEST_ROOT="${RESULT_ROOT}/${RUN_ID_BASE}"
 MANIFEST="${MANIFEST_ROOT}/jobs.tsv"
+TEMP_MANIFEST_ROOT=""
 
 render_command() {
   printf "%q " "$@"
@@ -35,6 +36,89 @@ variant_requested() {
 record_manifest_row() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" >>"${MANIFEST}"
+}
+
+cleanup_temp_manifest() {
+  if [[ -n "${TEMP_MANIFEST_ROOT}" ]]; then
+    if [[ -f "${MANIFEST}" ]]; then
+      cat "${MANIFEST}"
+    fi
+    rm -rf "${TEMP_MANIFEST_ROOT}"
+  fi
+}
+
+clear_qwen_matrix_state() {
+  unset \
+    model_source \
+    draft_model_source \
+    target_tp \
+    benchmark_nodes \
+    distributed_backend \
+    gpu_memory_utilization \
+    request_plan_host \
+    request_plan_container \
+    profile_context_policy \
+    max_model_len \
+    max_new_tokens \
+    max_position_embeddings \
+    rope_factor \
+    target_view_name \
+    draft_view_name \
+    method_baseline_status \
+    method_baseline_reason_code \
+    method_baseline_reason \
+    method_baseline_variants \
+    method_eagle3_status \
+    method_eagle3_reason_code \
+    method_eagle3_reason \
+    method_eagle3_variants \
+    method_pard_status \
+    method_pard_reason_code \
+    method_pard_reason \
+    method_pard_variants \
+    method_pard2_status \
+    method_pard2_reason_code \
+    method_pard2_reason \
+    method_pard2_variants \
+    method_dflash_status \
+    method_dflash_reason_code \
+    method_dflash_reason \
+    method_dflash_variants \
+    method_dflare_status \
+    method_dflare_reason_code \
+    method_dflare_reason \
+    method_dflare_variants \
+    method_mtp_static_status \
+    method_mtp_static_reason_code \
+    method_mtp_static_reason \
+    method_mtp_static_variants \
+    method_mtp_dynamic_status \
+    method_mtp_dynamic_reason_code \
+    method_mtp_dynamic_reason \
+    method_mtp_dynamic_variants
+}
+
+load_qwen_matrix_state() {
+  local model_key="$1"
+  local profile_key="$2"
+  local loader_output=""
+
+  clear_qwen_matrix_state
+  if ! loader_output="$(load_qwen_matrix_entry "${model_key}" "${profile_key}")"; then
+    clear_qwen_matrix_state
+    printf 'Failed to load SWE matrix entry for model=%s profile=%s\n' "${model_key}" "${profile_key}" >&2
+    return 1
+  fi
+  if [[ -z "${loader_output}" ]]; then
+    clear_qwen_matrix_state
+    printf 'Empty SWE matrix entry for model=%s profile=%s\n' "${model_key}" "${profile_key}" >&2
+    return 1
+  fi
+  if ! eval "${loader_output}"; then
+    clear_qwen_matrix_state
+    printf 'Failed to evaluate SWE matrix entry for model=%s profile=%s\n' "${model_key}" "${profile_key}" >&2
+    return 1
+  fi
 }
 
 materialize_long_context_views() {
@@ -136,11 +220,13 @@ if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" && "${REQUIRE_GIT_PULL}
   git -C "${SCRIPT_DIR}" pull --ff-only
 fi
 
-if ! mkdir -p "${MANIFEST_ROOT}" 2>/dev/null; then
-  if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
-    MANIFEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vllm024-swe-matrix.XXXXXX")"
-    MANIFEST="${MANIFEST_ROOT}/jobs.tsv"
-  else
+if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
+  TEMP_MANIFEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vllm024-swe-matrix.XXXXXX")"
+  MANIFEST_ROOT="${TEMP_MANIFEST_ROOT}"
+  MANIFEST="${MANIFEST_ROOT}/jobs.tsv"
+  trap cleanup_temp_manifest EXIT
+else
+  if ! mkdir -p "${MANIFEST_ROOT}" 2>/dev/null; then
     mkdir -p "${MANIFEST_ROOT}"
   fi
 fi
@@ -148,7 +234,7 @@ printf 'status\tmodel_key\tprofile_key\tmethod\tvariant\ttemperature\trun_dir\tr
 
 for model_key in ${MODELS}; do
   for profile in ${REQUEST_PROFILES}; do
-    eval "$(load_qwen_matrix_entry "${model_key}" "${profile}")"
+    load_qwen_matrix_state "${model_key}" "${profile}"
 
     supported_variants=()
     for method in pard pard2 dflash dflare mtp_static mtp_dynamic; do

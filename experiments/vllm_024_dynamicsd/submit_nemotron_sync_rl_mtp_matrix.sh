@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MATRIX_FILE="${SCRIPT_DIR}/model_method_matrix.json"
+MATRIX_FILE="${MATRIX_FILE:-${SCRIPT_DIR}/model_method_matrix.json}"
 LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.0-aarch64-ubuntu2404.sqsh}"
@@ -18,6 +18,48 @@ TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
 
 MANIFEST="${RESULT_ROOT}/jobs.tsv"
+TEMP_MANIFEST_ROOT=""
+NUM_PROMPTS_OVERRIDE_SET=false
+SAMPLES_PER_PROMPT_OVERRIDE_SET=false
+ROLLOUT_BATCHES_OVERRIDE_SET=false
+MAX_PROMPT_TOKENS_OVERRIDE_SET=false
+MAX_NEW_TOKENS_OVERRIDE_SET=false
+ENGINE_MAX_NUM_SEQS_OVERRIDE_SET=false
+TIME_LIMIT_OVERRIDE_SET=false
+MAX_MODEL_LEN_OVERRIDE_SET=false
+
+if [[ ${NUM_PROMPTS+x} ]]; then
+  NUM_PROMPTS_OVERRIDE_SET=true
+  NUM_PROMPTS_OVERRIDE="${NUM_PROMPTS}"
+fi
+if [[ ${SAMPLES_PER_PROMPT+x} ]]; then
+  SAMPLES_PER_PROMPT_OVERRIDE_SET=true
+  SAMPLES_PER_PROMPT_OVERRIDE="${SAMPLES_PER_PROMPT}"
+fi
+if [[ ${ROLLOUT_BATCHES+x} ]]; then
+  ROLLOUT_BATCHES_OVERRIDE_SET=true
+  ROLLOUT_BATCHES_OVERRIDE="${ROLLOUT_BATCHES}"
+fi
+if [[ ${MAX_PROMPT_TOKENS+x} ]]; then
+  MAX_PROMPT_TOKENS_OVERRIDE_SET=true
+  MAX_PROMPT_TOKENS_OVERRIDE="${MAX_PROMPT_TOKENS}"
+fi
+if [[ ${MAX_NEW_TOKENS+x} ]]; then
+  MAX_NEW_TOKENS_OVERRIDE_SET=true
+  MAX_NEW_TOKENS_OVERRIDE="${MAX_NEW_TOKENS}"
+fi
+if [[ ${ENGINE_MAX_NUM_SEQS+x} ]]; then
+  ENGINE_MAX_NUM_SEQS_OVERRIDE_SET=true
+  ENGINE_MAX_NUM_SEQS_OVERRIDE="${ENGINE_MAX_NUM_SEQS}"
+fi
+if [[ ${TIME_LIMIT+x} ]]; then
+  TIME_LIMIT_OVERRIDE_SET=true
+  TIME_LIMIT_OVERRIDE="${TIME_LIMIT}"
+fi
+if [[ ${MAX_MODEL_LEN+x} ]]; then
+  MAX_MODEL_LEN_OVERRIDE_SET=true
+  MAX_MODEL_LEN_OVERRIDE="${MAX_MODEL_LEN}"
+fi
 
 variant_requested() {
   [[ " ${VARIANTS} " == *" $1 "* ]]
@@ -26,6 +68,103 @@ variant_requested() {
 record_manifest_row() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" >>"${MANIFEST}"
+}
+
+cleanup_temp_manifest() {
+  if [[ -n "${TEMP_MANIFEST_ROOT}" ]]; then
+    if [[ -f "${MANIFEST}" ]]; then
+      cat "${MANIFEST}"
+    fi
+    rm -rf "${TEMP_MANIFEST_ROOT}"
+  fi
+}
+
+clear_nemotron_matrix_state() {
+  unset \
+    model_path \
+    target_tp \
+    nodes \
+    segment \
+    distributed_executor_backend \
+    enable_expert_parallel \
+    mamba_ssm_cache_dtype \
+    enable_stochastic_rounding \
+    mamba_philox_rounds \
+    model_loader_threads \
+    disable_fuse_allreduce_rms \
+    gpu_memory_utilization \
+    static_k \
+    dynamic_schedule \
+    profile_key \
+    context_policy \
+    smoke_num_prompts \
+    smoke_samples_per_prompt \
+    smoke_rollout_batches \
+    smoke_max_prompt_tokens \
+    smoke_max_new_tokens \
+    smoke_engine_max_num_seqs \
+    smoke_time_limit \
+    full_num_prompts \
+    full_samples_per_prompt \
+    full_rollout_batches \
+    full_max_prompt_tokens \
+    full_max_new_tokens \
+    full_engine_max_num_seqs \
+    full_time_limit \
+    method_baseline_status \
+    method_baseline_reason_code \
+    method_baseline_reason \
+    method_baseline_variants \
+    method_eagle3_status \
+    method_eagle3_reason_code \
+    method_eagle3_reason \
+    method_eagle3_variants \
+    method_pard_status \
+    method_pard_reason_code \
+    method_pard_reason \
+    method_pard_variants \
+    method_pard2_status \
+    method_pard2_reason_code \
+    method_pard2_reason \
+    method_pard2_variants \
+    method_dflash_status \
+    method_dflash_reason_code \
+    method_dflash_reason \
+    method_dflash_variants \
+    method_dflare_status \
+    method_dflare_reason_code \
+    method_dflare_reason \
+    method_dflare_variants \
+    method_mtp_static_status \
+    method_mtp_static_reason_code \
+    method_mtp_static_reason \
+    method_mtp_static_variants \
+    method_mtp_dynamic_status \
+    method_mtp_dynamic_reason_code \
+    method_mtp_dynamic_reason \
+    method_mtp_dynamic_variants
+}
+
+load_nemotron_matrix_state() {
+  local model_key="$1"
+  local loader_output=""
+
+  clear_nemotron_matrix_state
+  if ! loader_output="$(load_nemotron_matrix_entry "${model_key}")"; then
+    clear_nemotron_matrix_state
+    printf 'Failed to load Nemotron matrix entry for model=%s\n' "${model_key}" >&2
+    return 1
+  fi
+  if [[ -z "${loader_output}" ]]; then
+    clear_nemotron_matrix_state
+    printf 'Empty Nemotron matrix entry for model=%s\n' "${model_key}" >&2
+    return 1
+  fi
+  if ! eval "${loader_output}"; then
+    clear_nemotron_matrix_state
+    printf 'Failed to evaluate Nemotron matrix entry for model=%s\n' "${model_key}" >&2
+    return 1
+  fi
 }
 
 load_nemotron_matrix_entry() {
@@ -73,45 +212,70 @@ for method in matrix["method_order"]:
 PY
 }
 
-if [[ "${SMOKE}" == "true" ]]; then
-  NUM_PROMPTS="${NUM_PROMPTS:-4}"
-  SAMPLES_PER_PROMPT="${SAMPLES_PER_PROMPT:-4}"
-  ROLLOUT_BATCHES="${ROLLOUT_BATCHES:-2}"
-  MAX_PROMPT_TOKENS="${MAX_PROMPT_TOKENS:-1024}"
-  MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-128}"
-  ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS:-16}"
-  TIME_LIMIT="${TIME_LIMIT:-02:00:00}"
-else
-  NUM_PROMPTS="${NUM_PROMPTS:-16}"
-  SAMPLES_PER_PROMPT="${SAMPLES_PER_PROMPT:-16}"
-  ROLLOUT_BATCHES="${ROLLOUT_BATCHES:-3}"
-  MAX_PROMPT_TOKENS="${MAX_PROMPT_TOKENS:-4096}"
-  MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-16384}"
-  ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS:-64}"
-  TIME_LIMIT="${TIME_LIMIT:-08:00:00}"
-  if [[ -z "${PROMPT_JSONL}" ]]; then
-    echo "SMOKE=false requires PROMPT_JSONL from a pinned RL math dataset" >&2
-    exit 2
-  fi
-fi
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-$((MAX_PROMPT_TOKENS + MAX_NEW_TOKENS + 256))}"
-
 if [[ "${DRY_RUN}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
   git -C "${SCRIPT_DIR}" pull --ff-only
 fi
 
-if ! mkdir -p "${RESULT_ROOT}" 2>/dev/null; then
-  if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
-    RESULT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vllm024-nemotron-matrix.XXXXXX")"
-    MANIFEST="${RESULT_ROOT}/jobs.tsv"
-  else
+if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
+  TEMP_MANIFEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vllm024-nemotron-matrix.XXXXXX")"
+  MANIFEST="${TEMP_MANIFEST_ROOT}/jobs.tsv"
+  trap cleanup_temp_manifest EXIT
+else
+  if ! mkdir -p "${RESULT_ROOT}" 2>/dev/null; then
     mkdir -p "${RESULT_ROOT}"
   fi
 fi
 printf 'status\tmodel_key\tprofile_key\tmethod\tvariant\trun_dir\treason_code\treason\n' >"${MANIFEST}"
 
 for model_key in ${MODELS}; do
-  eval "$(load_nemotron_matrix_entry "${model_key}")"
+  load_nemotron_matrix_state "${model_key}"
+
+  if [[ "${SMOKE}" == "true" ]]; then
+    NUM_PROMPTS="${smoke_num_prompts}"
+    SAMPLES_PER_PROMPT="${smoke_samples_per_prompt}"
+    ROLLOUT_BATCHES="${smoke_rollout_batches}"
+    MAX_PROMPT_TOKENS="${smoke_max_prompt_tokens}"
+    MAX_NEW_TOKENS="${smoke_max_new_tokens}"
+    ENGINE_MAX_NUM_SEQS="${smoke_engine_max_num_seqs}"
+    TIME_LIMIT="${smoke_time_limit}"
+  else
+    NUM_PROMPTS="${full_num_prompts}"
+    SAMPLES_PER_PROMPT="${full_samples_per_prompt}"
+    ROLLOUT_BATCHES="${full_rollout_batches}"
+    MAX_PROMPT_TOKENS="${full_max_prompt_tokens}"
+    MAX_NEW_TOKENS="${full_max_new_tokens}"
+    ENGINE_MAX_NUM_SEQS="${full_engine_max_num_seqs}"
+    TIME_LIMIT="${full_time_limit}"
+    if [[ -z "${PROMPT_JSONL}" ]]; then
+      echo "SMOKE=false requires PROMPT_JSONL from a pinned RL math dataset" >&2
+      exit 2
+    fi
+  fi
+  if [[ "${NUM_PROMPTS_OVERRIDE_SET}" == "true" ]]; then
+    NUM_PROMPTS="${NUM_PROMPTS_OVERRIDE}"
+  fi
+  if [[ "${SAMPLES_PER_PROMPT_OVERRIDE_SET}" == "true" ]]; then
+    SAMPLES_PER_PROMPT="${SAMPLES_PER_PROMPT_OVERRIDE}"
+  fi
+  if [[ "${ROLLOUT_BATCHES_OVERRIDE_SET}" == "true" ]]; then
+    ROLLOUT_BATCHES="${ROLLOUT_BATCHES_OVERRIDE}"
+  fi
+  if [[ "${MAX_PROMPT_TOKENS_OVERRIDE_SET}" == "true" ]]; then
+    MAX_PROMPT_TOKENS="${MAX_PROMPT_TOKENS_OVERRIDE}"
+  fi
+  if [[ "${MAX_NEW_TOKENS_OVERRIDE_SET}" == "true" ]]; then
+    MAX_NEW_TOKENS="${MAX_NEW_TOKENS_OVERRIDE}"
+  fi
+  if [[ "${ENGINE_MAX_NUM_SEQS_OVERRIDE_SET}" == "true" ]]; then
+    ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS_OVERRIDE}"
+  fi
+  if [[ "${TIME_LIMIT_OVERRIDE_SET}" == "true" ]]; then
+    TIME_LIMIT="${TIME_LIMIT_OVERRIDE}"
+  fi
+  MAX_MODEL_LEN="$((MAX_PROMPT_TOKENS + MAX_NEW_TOKENS + 256))"
+  if [[ "${MAX_MODEL_LEN_OVERRIDE_SET}" == "true" ]]; then
+    MAX_MODEL_LEN="${MAX_MODEL_LEN_OVERRIDE}"
+  fi
 
   for method in eagle3 pard pard2 dflash dflare; do
     reason_code_var="method_${method}_reason_code"
@@ -146,7 +310,7 @@ for model_key in ${MODELS}; do
       "${profile_key}" \
       "${method_key}" \
       "${variant}" \
-      "${RESULT_ROOT}/${variant}" \
+      "${RESULT_ROOT}/${model_key}/${variant}" \
       "-" \
       "-"
   done

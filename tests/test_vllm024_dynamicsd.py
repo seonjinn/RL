@@ -6,6 +6,7 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Any
 from types import ModuleType
 
 import pytest
@@ -89,10 +90,36 @@ def run_dry(script_name: str, **env_overrides: str) -> str:
     return completed.stdout
 
 
-def load_model_method_matrix() -> dict[str, object]:
+def load_model_method_matrix() -> dict[str, Any]:
     return json.loads(
         (EXPERIMENT / "model_method_matrix.json").read_text(encoding="utf-8")
     )
+
+
+def get_matrix_model(matrix: dict[str, Any], model_key: str) -> dict[str, Any]:
+    return next(item for item in matrix["models"] if item["key"] == model_key)
+
+
+def get_matrix_profile(model: dict[str, Any], profile_key: str) -> dict[str, Any]:
+    return next(item for item in model["profiles"] if item["key"] == profile_key)
+
+
+def extract_manifest_rows(output: str) -> list[str]:
+    return [
+        line
+        for line in output.splitlines()
+        if line.startswith(("SUPPORTED\t", "UNSUPPORTED\t", "INTEGRATION\t"))
+    ]
+
+
+def extract_sync_variants(output: str, marker: str = "[DRY-RUN]") -> list[str]:
+    prefix = f"{marker} sync_variant="
+    return [line.split("=", 1)[1] for line in output.splitlines() if line.startswith(prefix)]
+
+
+def extract_manifest_path(output: str) -> Path:
+    line = next(line for line in output.splitlines() if line.startswith("manifest="))
+    return Path(line.split("=", 1)[1])
 
 
 def extract_run_benchmark_script(output: str, variant: str) -> str:
@@ -1402,9 +1429,9 @@ def test_model_method_matrix_has_unique_large_model_profile_keys() -> None:
                 total += 1
 
     assert len(seen) == total
-    qwen235 = next(item for item in matrix["models"] if item["key"] == "qwen235b")
-    profile64 = next(item for item in qwen235["profiles"] if item["key"] == "64k")
-    ultra = next(item for item in matrix["models"] if item["key"] == "ultra")
+    qwen235 = get_matrix_model(matrix, "qwen235b")
+    profile64 = get_matrix_profile(qwen235, "64k")
+    ultra = get_matrix_model(matrix, "ultra")
 
     assert qwen235["topology"]["target_tp"] == 8
     assert profile64["context_policy"] == "yarn4_64k"
@@ -1417,7 +1444,7 @@ def test_model_method_matrix_has_unique_large_model_profile_keys() -> None:
 
 def test_large_model_matrix_rejects_qwen8_only_dflash() -> None:
     matrix = load_model_method_matrix()
-    qwen32 = next(item for item in matrix["models"] if item["key"] == "qwen32")
+    qwen32 = get_matrix_model(matrix, "qwen32")
 
     assert qwen32["methods"]["dflash"]["status"] == "unsupported"
     assert qwen32["methods"]["dflash"]["reason_code"] == "qwen3_8b_public_asset_only"
@@ -1425,10 +1452,10 @@ def test_large_model_matrix_rejects_qwen8_only_dflash() -> None:
 
 def test_large_model_matrix_marks_pard_and_pard2_per_approved_compatibility() -> None:
     matrix = load_model_method_matrix()
-    qwen30 = next(item for item in matrix["models"] if item["key"] == "qwen30ba3b")
-    qwen32 = next(item for item in matrix["models"] if item["key"] == "qwen32")
-    qwen235 = next(item for item in matrix["models"] if item["key"] == "qwen235b")
-    ultra = next(item for item in matrix["models"] if item["key"] == "ultra")
+    qwen30 = get_matrix_model(matrix, "qwen30ba3b")
+    qwen32 = get_matrix_model(matrix, "qwen32")
+    qwen235 = get_matrix_model(matrix, "qwen235b")
+    ultra = get_matrix_model(matrix, "ultra")
 
     assert qwen30["methods"]["pard"]["status"] == "integration"
     assert qwen30["methods"]["pard"]["reason_code"] == "runner_support_missing"
@@ -1587,14 +1614,14 @@ def test_swe_sync_rollout_dry_run_does_not_call_sbatch_or_mutate_dirs(
     assert str(view_root / "qwen32-target") in completed.stdout
     assert str(view_root / "qwen32-eagle3-draft") in completed.stdout
     assert "run_benchmark.sh" in completed.stdout
-    manifest = result_root / "plan-mode" / "jobs.tsv"
-    manifest_lines = manifest.read_text(encoding="utf-8").splitlines()
+    manifest = extract_manifest_path(completed.stdout)
+    manifest_lines = extract_manifest_rows(completed.stdout)
 
     assert not sbatch_log.exists()
     assert not view_root.exists()
-    assert manifest_lines[0] == (
-        "status\tmodel_key\tprofile_key\tmethod\tvariant\ttemperature\trun_dir\treason_code\treason"
-    )
+    assert not result_root.exists()
+    assert not manifest.exists()
+    assert manifest.parent != result_root / "plan-mode"
     assert any(
         line.startswith("SUPPORTED\tqwen32\t64k\tbaseline\tbaseline\t0.0\t")
         for line in manifest_lines
@@ -1679,11 +1706,77 @@ def test_swe_sync_rollout_test_only_invokes_sbatch_and_cleans_temp_artifacts(
     assert not script_paths[0].exists()
     assert not script_paths[0].parent.exists()
     assert not view_root.exists()
-    manifest = result_root / "test-only" / "jobs.tsv"
-    assert manifest.exists()
-    assert "INTEGRATION\tqwen32\t64k\tpard\t-\t0.0" in manifest.read_text(
-        encoding="utf-8"
+    manifest = extract_manifest_path(completed.stdout)
+    assert not result_root.exists()
+    assert not manifest.exists()
+    assert "INTEGRATION\tqwen32\t64k\tpard\t-\t0.0" in completed.stdout
+
+
+def test_swe_sync_rollout_exits_on_unknown_model_without_reusing_state() -> None:
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "lyris",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "qwen32 doesnotexist",
+            "REQUEST_PROFILES": "32k",
+            "TEMPERATURES": "0.0",
+            "VARIANTS": "baseline",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
     )
+
+    assert completed.returncode != 0
+    assert "doesnotexist" in completed.stderr
+    assert extract_sync_variants(completed.stdout) == ["baseline"]
+    assert "swe_sync_model=doesnotexist" not in completed.stdout
+    assert "/doesnotexist/" not in completed.stdout
+
+
+def test_swe_sync_rollout_exits_on_unknown_profile_without_reusing_state() -> None:
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "lyris",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "qwen32",
+            "REQUEST_PROFILES": "32k missing",
+            "TEMPERATURES": "0.0",
+            "VARIANTS": "baseline",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "missing" in completed.stderr
+    assert extract_sync_variants(completed.stdout) == ["baseline"]
+    assert "request_profile=missing" not in completed.stdout
+    assert "/missing/" not in completed.stdout
+
+
+def test_swe_sync_rollout_submits_exact_supported_variants_only() -> None:
+    output = run_dry(
+        "submit_swe_sync_rollout_matrix.sh",
+        CLUSTER="lyris",
+        MODELS="qwen32",
+        REQUEST_PROFILES="32k",
+        TEMPERATURES="0.0",
+        VARIANTS="baseline static dynamic",
+    )
+
+    assert extract_sync_variants(output) == ["baseline", "static", "dynamic"]
+    assert "[DRY-RUN] sync_variant=pard" not in output
+    assert "[DRY-RUN] sync_variant=pard2" not in output
 
 
 def test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral() -> None:
@@ -1745,15 +1838,16 @@ def test_nemotron_sync_rl_wrapper_records_unsupported_matrix_rows(
         RUN_ID="sync-bf16-matrix",
         RESULT_ROOT=str(result_root),
     )
-    manifest = result_root / "jobs.tsv"
-    manifest_lines = manifest.read_text(encoding="utf-8").splitlines()
+    manifest = extract_manifest_path(output)
+    manifest_lines = extract_manifest_rows(output)
 
     assert output.count("[DRY-RUN] sync_variant=") == 3
-    assert manifest_lines[0] == (
-        "status\tmodel_key\tprofile_key\tmethod\tvariant\trun_dir\treason_code\treason"
-    )
+    assert not result_root.exists()
+    assert not manifest.exists()
     assert any(
-        line.startswith("SUPPORTED\tultra\tsync_rl_math\tmtp_static\tmtp_static\t")
+        line.startswith(
+            f"SUPPORTED\tultra\tsync_rl_math\tmtp_static\tmtp_static\t{result_root / 'ultra' / 'mtp_static'}\t"
+        )
         for line in manifest_lines
     )
     assert any(
@@ -1768,6 +1862,122 @@ def test_nemotron_sync_rl_wrapper_records_unsupported_matrix_rows(
         )
         for line in manifest_lines
     )
+    assert any(
+        line.startswith(
+            f"SUPPORTED\tultra\tsync_rl_math\tbaseline\tbaseline\t{result_root / 'ultra' / 'baseline'}\t"
+        )
+        for line in manifest_lines
+    )
+
+
+def test_nemotron_sync_rl_wrapper_exits_on_unknown_model_without_reusing_state() -> None:
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_nemotron_sync_rl_mtp_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "ptyche",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "ultra bogus",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "bogus" in completed.stderr
+    assert extract_sync_variants(completed.stdout) == [
+        "baseline",
+        "mtp_static",
+        "mtp_dynamic",
+    ]
+    assert "/bogus/" not in completed.stdout
+
+
+def test_nemotron_sync_rl_wrapper_uses_matrix_defaults_and_allows_env_overrides(
+    tmp_path: Path,
+) -> None:
+    wrapper_dir = tmp_path / "wrapper"
+    wrapper_dir.mkdir()
+    matrix = load_model_method_matrix()
+    ultra = get_matrix_model(matrix, "ultra")
+    ultra_profile = get_matrix_profile(ultra, "sync_rl_math")
+    ultra_profile["smoke"]["num_prompts"] = 7
+    ultra_profile["smoke"]["samples_per_prompt"] = 5
+    ultra_profile["smoke"]["rollout_batches"] = 6
+    ultra_profile["smoke"]["max_prompt_tokens"] = 1111
+    ultra_profile["smoke"]["max_new_tokens"] = 222
+    ultra_profile["smoke"]["engine_max_num_seqs"] = 17
+    ultra_profile["smoke"]["time_limit"] = "03:03:03"
+    ultra_profile["full"]["num_prompts"] = 23
+    ultra_profile["full"]["samples_per_prompt"] = 19
+    ultra_profile["full"]["rollout_batches"] = 4
+    ultra_profile["full"]["max_prompt_tokens"] = 3333
+    ultra_profile["full"]["max_new_tokens"] = 4444
+    ultra_profile["full"]["engine_max_num_seqs"] = 71
+    ultra_profile["full"]["time_limit"] = "09:09:09"
+    (wrapper_dir / "model_method_matrix.json").write_text(
+        json.dumps(matrix), encoding="utf-8"
+    )
+    for name in (
+        "submit_nemotron_sync_rl_mtp_matrix.sh",
+        "submit_sync_rollout.sh",
+    ):
+        (wrapper_dir / name).write_text(
+            (EXPERIMENT / name).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        (wrapper_dir / name).chmod(0o755)
+
+    smoke = subprocess.run(
+        ["bash", str(wrapper_dir / "submit_nemotron_sync_rl_mtp_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "ptyche",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "ultra",
+            "RESULT_ROOT": str(tmp_path / "smoke-root"),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    full = subprocess.run(
+        ["bash", str(wrapper_dir / "submit_nemotron_sync_rl_mtp_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "ptyche",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "ultra",
+            "SMOKE": "false",
+            "PROMPT_JSONL": "/tmp/prompts.jsonl",
+            "RESULT_ROOT": str(tmp_path / "full-root"),
+            "NUM_PROMPTS": "99",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "args+=(--num-prompts 7)" in smoke.stdout
+    assert "args+=(--samples-per-prompt 5)" in smoke.stdout
+    assert "args+=(--rollout-batches 6)" in smoke.stdout
+    assert "args+=(--max-prompt-tokens 1111)" in smoke.stdout
+    assert "args+=(--max-new-tokens 222)" in smoke.stdout
+    assert "args+=(--engine-max-num-seqs 17)" in smoke.stdout
+    assert "#SBATCH --time=03:03:03" in smoke.stdout
+    assert "args+=(--num-prompts 99)" in full.stdout
+    assert "args+=(--samples-per-prompt 19)" in full.stdout
+    assert "args+=(--rollout-batches 4)" in full.stdout
+    assert "args+=(--max-prompt-tokens 3333)" in full.stdout
+    assert "args+=(--max-new-tokens 4444)" in full.stdout
+    assert "args+=(--engine-max-num-seqs 71)" in full.stdout
+    assert "#SBATCH --time=09:09:09" in full.stdout
 
 
 def test_nemorl_perfcfg_dry_run_preserves_per_engine_recipe_shapes() -> None:

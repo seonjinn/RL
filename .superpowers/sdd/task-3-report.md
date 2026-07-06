@@ -226,3 +226,219 @@ Planned command:
 git add experiments/vllm_024_dynamicsd/model_method_matrix.json experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh tests/test_vllm024_dynamicsd.py .superpowers/sdd/task-3-report.md
 git commit -s -m "feat: define supported SpecDec model matrix"
 ```
+
+## Task 3 Review Fixes (2026-07-06)
+
+### RED
+
+Focused regression command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'unknown_model_without_reusing_state or unknown_profile_without_reusing_state or exact_supported_variants_only or dry_run_does_not_call_sbatch_or_mutate_dirs or test_only_invokes_sbatch_and_cleans_temp_artifacts or records_unsupported_matrix_rows or uses_matrix_defaults_and_allows_env_overrides'
+```
+
+RED result before wrapper fixes:
+
+```text
+7 failed, 1 passed, 77 deselected in 7.59s
+```
+
+Observed failures:
+
+- SWE wrapper returned exit code `0` after `MODELS='qwen32 doesnotexist'`
+- SWE wrapper returned exit code `0` after `REQUEST_PROFILES='32k missing'`
+- SWE and Nemotron wrappers persisted `RESULT_ROOT` during `DRY_RUN` / `TEST_ONLY`
+- Nemotron wrapper ignored matrix `smoke` / `full` values
+- Nemotron manifest supported rows did not guarantee `RESULT_ROOT/model_key/variant`
+
+### Implementation
+
+Review fixes applied:
+
+- wrapped both matrix loaders in explicit state-clear / capture / status-check / `eval` helpers so unknown model/profile failures exit nonzero without reusing prior state
+- moved `DRY_RUN` / `TEST_ONLY` manifest handling to temporary roots with `trap` cleanup and stdout manifest emission
+- fixed Nemotron supported `run_dir` rows to `RESULT_ROOT/model_key/variant`
+- consumed Nemotron `smoke` / `full` defaults from the matrix and reapplied explicit environment overrides after loading defaults
+- tightened Python test helper typing for Pyright
+- replaced the vacuous PARD assertion with an exact submitted variant set and explicit `sync_variant=pard` / `sync_variant=pard2` absence checks
+
+### GREEN
+
+Focused regression command after fixes:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'unknown_model_without_reusing_state or unknown_profile_without_reusing_state or exact_supported_variants_only or dry_run_does_not_call_sbatch_or_mutate_dirs or test_only_invokes_sbatch_and_cleans_temp_artifacts or records_unsupported_matrix_rows or uses_matrix_defaults_and_allows_env_overrides'
+```
+
+Output:
+
+```text
+8 passed, 77 deselected in 4.22s
+```
+
+### Full Test Pass
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+85 passed in 12.46s
+```
+
+### Shell Validation
+
+Syntax checks:
+
+```bash
+bash -n experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+bash -n experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh
+```
+
+Result:
+
+```text
+both commands exited 0
+```
+
+Targeted Pyright:
+
+```bash
+pyright tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+SWE dry-run proof:
+
+```bash
+tmpdir=$(mktemp -d)
+result_root="$tmpdir/swe-dry-result"
+view_root="$tmpdir/swe-dry-view"
+DRY_RUN=true CLUSTER=lyris REQUIRE_GIT_PULL=false MODELS=qwen32 REQUEST_PROFILES=64k \
+TEMPERATURES=0.0 VARIANTS=baseline RUN_ID=manual-dry \
+LONG_CONTEXT_VIEW_ROOT="$view_root" RESULT_ROOT="$result_root" \
+bash experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+```
+
+Observed stdout excerpt:
+
+```text
+[DRY-RUN] sync_variant=baseline
+manifest=/.../vllm024-swe-matrix.4XI1ZF/jobs.tsv
+INTEGRATION	qwen32	64k	pard	-	0.0	-	runner_support_missing	...
+UNSUPPORTED	qwen32	64k	pard2	-	0.0	-	exact_target_checkpoint_missing	...
+UNSUPPORTED	qwen32	64k	dflash	-	0.0	-	qwen3_8b_public_asset_only	...
+SUPPORTED	qwen32	64k	baseline	baseline	0.0	.../swe-dry-result/manual-dry/qwen32/64k/t0p0/matrix/baseline	-	-
+result_root_exists=no
+view_root_exists=no
+manifest_exists=no
+```
+
+SWE test-only proof:
+
+```bash
+PATH="$stub_bin:/usr/bin:/bin" SBATCH_LOG="$sbatch_log" CLUSTER=lyris DRY_RUN=false \
+TEST_ONLY=true REQUIRE_GIT_PULL=false MODELS=qwen32 REQUEST_PROFILES=64k \
+TEMPERATURES=0.0 VARIANTS=baseline RUN_ID=manual-test \
+LONG_CONTEXT_VIEW_ROOT="$view_root" RESULT_ROOT="$result_root" \
+bash experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+```
+
+Observed stdout / scheduler excerpt:
+
+```text
+[TEST-ONLY] python3 ... materialize_long_context_model_views.py ...
+[TEST-ONLY] sync_variant=baseline
+manifest=/.../vllm024-swe-matrix.YhfanO/jobs.tsv
+INTEGRATION	qwen32	64k	pard	-	0.0	-	runner_support_missing	...
+SUPPORTED	qwen32	64k	baseline	baseline	0.0	.../swe-test-result/manual-test/qwen32/64k/t0p0/matrix/baseline	-	-
+arg=--test-only
+arg=/.../vllm024-sync-test-only.4e0NR8/baseline/submit.sbatch
+result_root_exists=no
+view_root_exists=no
+manifest_exists=no
+```
+
+Nemotron dry-run proof:
+
+```bash
+tmpdir=$(mktemp -d)
+result_root="$tmpdir/nemo-dry-result"
+DRY_RUN=true CLUSTER=ptyche REQUIRE_GIT_PULL=false MODELS=ultra RUN_ID=manual-dry \
+RESULT_ROOT="$result_root" \
+bash experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh
+```
+
+Observed stdout excerpt:
+
+```text
+[DRY-RUN] sync_variant=baseline
+[DRY-RUN] sync_variant=mtp_static
+[DRY-RUN] sync_variant=mtp_dynamic
+manifest=/.../vllm024-nemotron-matrix.wSJc4S/jobs.tsv
+UNSUPPORTED	ultra	sync_rl_math	eagle3	-	-	nemotron_baseline_native_mtp_only	...
+UNSUPPORTED	ultra	sync_rl_math	pard	-	-	nemotron_baseline_native_mtp_only	...
+SUPPORTED	ultra	sync_rl_math	baseline	baseline	.../nemo-dry-result/ultra/baseline	-	-
+SUPPORTED	ultra	sync_rl_math	mtp_static	mtp_static	.../nemo-dry-result/ultra/mtp_static	-	-
+SUPPORTED	ultra	sync_rl_math	mtp_dynamic	mtp_dynamic	.../nemo-dry-result/ultra/mtp_dynamic	-	-
+result_root_exists=no
+manifest_exists=no
+```
+
+Nemotron test-only proof:
+
+```bash
+PATH="$stub_bin:/usr/bin:/bin" SBATCH_LOG="$sbatch_log" CLUSTER=ptyche DRY_RUN=false \
+TEST_ONLY=true REQUIRE_GIT_PULL=false MODELS=ultra RUN_ID=manual-test \
+RESULT_ROOT="$result_root" \
+bash experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh
+```
+
+Observed stdout / scheduler excerpt:
+
+```text
+[TEST-ONLY] sync_variant=baseline
+[TEST-ONLY] sync_variant=mtp_static
+[TEST-ONLY] sync_variant=mtp_dynamic
+manifest=/.../vllm024-nemotron-matrix.dfcATb/jobs.tsv
+UNSUPPORTED	ultra	sync_rl_math	pard	-	-	nemotron_baseline_native_mtp_only	...
+SUPPORTED	ultra	sync_rl_math	baseline	baseline	.../nemo-test-result/ultra/baseline	-	-
+SUPPORTED	ultra	sync_rl_math	mtp_static	mtp_static	.../nemo-test-result/ultra/mtp_static	-	-
+SUPPORTED	ultra	sync_rl_math	mtp_dynamic	mtp_dynamic	.../nemo-test-result/ultra/mtp_dynamic	-	-
+arg=--test-only
+arg=/.../vllm024-sync-test-only.OXGB8j/baseline/submit.sbatch
+arg=/.../vllm024-sync-test-only.OXGB8j/mtp_static/submit.sbatch
+arg=/.../vllm024-sync-test-only.OXGB8j/mtp_dynamic/submit.sbatch
+result_root_exists=no
+manifest_exists=no
+```
+
+### Self-Review
+
+Command:
+
+```bash
+git diff --check -- experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh tests/test_vllm024_dynamicsd.py .superpowers/sdd/task-3-report.md
+```
+
+Result:
+
+```text
+no output
+```
+
+Manual review notes:
+
+- loader helpers now clear state before load, after failed load, and after failed `eval`
+- temp manifest cleanup prints unsupported/integration rows before removing the temp root
+- Nemotron runtime defaults now come from the matrix, with explicit environment overrides reapplied afterward
+- supported variant emission matches the approved compatibility facts; no `sync_variant=pard` or `sync_variant=pard2` launch rows remain
