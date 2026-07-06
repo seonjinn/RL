@@ -1209,6 +1209,29 @@ def test_sync_rollout_exact_output_work_emits_counts_and_rejects_underfill() -> 
         sync_rollout.exact_output_work([forced], [[1, 2, 3]])
 
 
+def test_sync_rollout_exact_output_work_treats_equal_min_max_as_forced() -> None:
+    sync_rollout = load_sync_rollout_module()
+    request = sync_rollout.RolloutRequest(
+        prompt_id="prompt-0",
+        prompt_sha256="prompt-hash",
+        source_prompt_sha256=None,
+        sample_index=0,
+        seed=7,
+        prompt_token_ids=[1, 2, 3],
+        max_tokens=4,
+        min_tokens=4,
+        ignore_eos=False,
+    )
+
+    assert sync_rollout.exact_output_work([request], [[1, 2, 3, 4]]) == {
+        "planned_output_tokens": [4],
+        "actual_output_tokens": [4],
+        "forced_output_mask": [True],
+    }
+    with pytest.raises(ValueError, match="forced output length mismatch"):
+        sync_rollout.exact_output_work([request], [[1, 2, 3]])
+
+
 def test_sync_rollout_generated_runner_executes_with_hostile_paths(
     tmp_path: Path,
 ) -> None:
@@ -1460,29 +1483,31 @@ def test_sync_rollout_accepts_variant_placeholders_and_shell_escapes_new_args() 
     assert "--resolved-request-plan-output '/tmp/o'hara" not in output
 
 
-@pytest.mark.parametrize(
-    ("dry_run", "test_only", "marker"),
-    (
-        ("true", "false", "[DRY-RUN]"),
-        ("false", "true", "[TEST-ONLY]"),
-    ),
-)
-def test_swe_sync_rollout_plan_modes_do_not_materialize_yarn_or_run_dirs(
+def test_swe_sync_rollout_dry_run_does_not_call_sbatch_or_mutate_dirs(
     tmp_path: Path,
-    dry_run: str,
-    test_only: str,
-    marker: str,
 ) -> None:
     view_root = tmp_path / "views"
     result_root = tmp_path / "results"
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = stub_bin / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'called\\n' >>\"${SBATCH_LOG:?}\"\n"
+        "exit 64\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
     completed = subprocess.run(
         ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
         cwd=ROOT,
         env={
-            "PATH": "/usr/bin:/bin",
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "SBATCH_LOG": str(sbatch_log),
             "CLUSTER": "lyris",
-            "DRY_RUN": dry_run,
-            "TEST_ONLY": test_only,
+            "DRY_RUN": "true",
+            "TEST_ONLY": "false",
             "REQUIRE_GIT_PULL": "false",
             "MODELS": "qwen32",
             "REQUEST_PROFILES": "64k",
@@ -1497,11 +1522,80 @@ def test_swe_sync_rollout_plan_modes_do_not_materialize_yarn_or_run_dirs(
         text=True,
     )
 
-    assert marker in completed.stdout
+    assert "[DRY-RUN]" in completed.stdout
     assert "materialize_long_context_model_views.py" in completed.stdout
     assert str(view_root / "qwen32-target") in completed.stdout
     assert str(view_root / "qwen32-eagle3-draft") in completed.stdout
     assert "run_benchmark.sh" in completed.stdout
+    assert not sbatch_log.exists()
+    assert not view_root.exists()
+    assert not result_root.exists()
+
+
+def test_swe_sync_rollout_test_only_invokes_sbatch_and_cleans_temp_artifacts(
+    tmp_path: Path,
+) -> None:
+    view_root = tmp_path / "views"
+    result_root = tmp_path / "results"
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = stub_bin / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "saw_test_only=false\n"
+        "script_path=\n"
+        "for arg in \"$@\"; do\n"
+        "  printf 'arg=%s\\n' \"$arg\" >>\"${SBATCH_LOG:?}\"\n"
+        "  if [[ \"$arg\" == '--test-only' ]]; then saw_test_only=true; fi\n"
+        "  script_path=\"$arg\"\n"
+        "done\n"
+        "if [[ \"${saw_test_only}\" != true ]]; then exit 64; fi\n"
+        "test -f \"${script_path}\"\n"
+        "test -f \"$(dirname \"${script_path}\")/run_benchmark.sh\"\n"
+        "test -x \"$(dirname \"${script_path}\")/run_benchmark.sh\"\n"
+        "grep -q 'run_benchmark.sh' \"${script_path}\"\n"
+        "printf 'script=%s\\n' \"${script_path}\" >>\"${SBATCH_LOG}\"\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "SBATCH_LOG": str(sbatch_log),
+            "CLUSTER": "lyris",
+            "DRY_RUN": "false",
+            "TEST_ONLY": "true",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "qwen32",
+            "REQUEST_PROFILES": "64k",
+            "TEMPERATURES": "0.0",
+            "VARIANTS": "baseline",
+            "RUN_ID": "test-only",
+            "LONG_CONTEXT_VIEW_ROOT": str(view_root),
+            "RESULT_ROOT": str(result_root),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    log_lines = sbatch_log.read_text(encoding="utf-8").splitlines()
+    script_paths = [
+        Path(line.split("=", 1)[1])
+        for line in log_lines
+        if line.startswith("script=")
+    ]
+
+    assert "[TEST-ONLY] python3" in completed.stdout
+    assert "[TEST-ONLY] sync_variant=baseline" in completed.stdout
+    assert "arg=--test-only" in log_lines
+    assert len(script_paths) == 1
+    assert not script_paths[0].exists()
+    assert not script_paths[0].parent.exists()
     assert not view_root.exists()
     assert not result_root.exists()
 

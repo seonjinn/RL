@@ -373,11 +373,14 @@ def exact_output_work(
 ) -> dict[str, list[int] | list[bool]]:
     planned = [request.max_tokens for request in requests]
     actual = [len(token_ids) for token_ids in output_token_ids]
-    forced = [request.ignore_eos for request in requests]
-    for index, (request, actual_tokens) in enumerate(
-        zip(requests, actual, strict=True)
+    forced = [
+        request.ignore_eos or request.min_tokens == request.max_tokens
+        for request in requests
+    ]
+    for index, (request, actual_tokens, is_forced) in enumerate(
+        zip(requests, actual, forced, strict=True)
     ):
-        if request.ignore_eos and actual_tokens != request.max_tokens:
+        if is_forced and actual_tokens != request.max_tokens:
             raise ValueError(
                 f"forced output length mismatch at request {index}: "
                 f"prompt_id={request.prompt_id} sample_index={request.sample_index} "

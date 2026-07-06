@@ -433,16 +433,23 @@ render_planned_variant() {
   echo "# END submit.sbatch ${variant}"
 }
 
-PLAN_ONLY=false
-if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
-  PLAN_ONLY=true
-fi
+TEST_ONLY_ROOT=""
+cleanup_test_only_root() {
+  if [[ -n "${TEST_ONLY_ROOT}" ]]; then
+    rm -rf "${TEST_ONLY_ROOT}"
+  fi
+}
 
-if [[ "${PLAN_ONLY}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
+if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
   git -C "${SCRIPT_DIR}" pull --ff-only
 fi
 
-if [[ "${PLAN_ONLY}" != "true" ]]; then
+if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" == "true" ]]; then
+  TEST_ONLY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vllm024-sync-test-only.XXXXXX")"
+  trap cleanup_test_only_root EXIT
+fi
+
+if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" ]]; then
   if [[ ! -s "${CONTAINER_IMAGE}" && -z "${DEPENDENCY}" ]]; then
     echo "Missing image and no dependency supplied: ${CONTAINER_IMAGE}" >&2
     exit 3
@@ -462,12 +469,28 @@ for variant in ${VARIANTS}; do
   run_dir="${MATRIX_ROOT}/${variant}"
   sbatch_file="${run_dir}/submit.sbatch"
   run_script="${run_dir}/run_benchmark.sh"
+  sbatch_args=()
+  if [[ -n "${DEPENDENCY}" ]]; then
+    sbatch_args+=("--dependency=${DEPENDENCY}")
+  fi
   if [[ "${DRY_RUN}" == "true" ]]; then
     render_planned_variant "[DRY-RUN]" "${variant}" "${run_dir}"
     continue
   fi
   if [[ "${TEST_ONLY}" == "true" ]]; then
-    render_planned_variant "[TEST-ONLY]" "${variant}" "${run_dir}"
+    echo "[TEST-ONLY] sync_variant=${variant}"
+    test_run_dir="${TEST_ONLY_ROOT}/${variant}"
+    test_sbatch_file="${test_run_dir}/submit.sbatch"
+    test_run_script="${test_run_dir}/run_benchmark.sh"
+    mkdir -p "${test_run_dir}"
+    render_run_benchmark "${variant}" "${test_run_dir}" >"${test_run_script}"
+    chmod 755 "${test_run_script}"
+    render_sbatch "${variant}" "${test_run_dir}" >"${test_sbatch_file}"
+    if ((${#sbatch_args[@]})); then
+      sbatch --test-only "${sbatch_args[@]}" "${test_sbatch_file}"
+    else
+      sbatch --test-only "${test_sbatch_file}"
+    fi
     continue
   fi
 
@@ -475,15 +498,15 @@ for variant in ${VARIANTS}; do
   render_run_benchmark "${variant}" "${run_dir}" >"${run_script}"
   chmod 755 "${run_script}"
   render_sbatch "${variant}" "${run_dir}" >"${sbatch_file}"
-  sbatch_args=()
-  if [[ -n "${DEPENDENCY}" ]]; then
-    sbatch_args+=("--dependency=${DEPENDENCY}")
+  if ((${#sbatch_args[@]})); then
+    job_id="$(sbatch --parsable "${sbatch_args[@]}" "${sbatch_file}")"
+  else
+    job_id="$(sbatch --parsable "${sbatch_file}")"
   fi
-  job_id="$(sbatch --parsable "${sbatch_args[@]}" "${sbatch_file}")"
   printf '%s\t%s\t%s\n' "${job_id}" "${variant}" "${run_dir}" | tee -a "${MANIFEST}"
 done
 
-if [[ "${PLAN_ONLY}" != "true" ]]; then
+if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" ]]; then
   echo "manifest=${MANIFEST}"
   echo "matrix_root=${MATRIX_ROOT}"
 fi

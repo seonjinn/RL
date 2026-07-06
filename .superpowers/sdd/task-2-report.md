@@ -479,3 +479,104 @@ Output:
 - Replaced the nested `bash -lc` benchmark argument construction with a per-variant executable `run_benchmark.sh`; all rendered benchmark argument values are emitted once through `printf %q` into a real Bash array.
 - `DRY_RUN` and `TEST_ONLY` now render planned run scripts and sbatch files without creating run directories, manifests, or YaRN model views.
 - Summary validation now uses `forced_output_mask`: forced entries must match planned lengths, forced planned counts are compared across variants, unforced underfill is allowed, and output token hashes remain a separate signal.
+
+## Task 2 Warning Fixes
+
+### RED
+
+Added focused failing tests before implementation for:
+
+- `TEST_ONLY` invoking `sbatch --test-only` through a stub `sbatch`, while cleaning temporary rendered runner/sbatch artifacts and leaving no durable run directory, manifest, or YaRN view
+- `DRY_RUN` remaining render-only and not calling `sbatch`
+- forced exact-work predicate treating `min_tokens == max_tokens` as forced even when `ignore_eos=false`
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'equal_min_max_as_forced or dry_run_does_not_call_sbatch or test_only_invokes_sbatch'
+```
+
+Output:
+
+```text
+F.F                                                                      [100%]
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_exact_output_work_treats_equal_min_max_as_forced
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_test_only_invokes_sbatch_and_cleans_temp_artifacts
+2 failed, 1 passed, 73 deselected in 1.26s
+```
+
+### GREEN
+
+Focused warning tests:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'equal_min_max_as_forced or dry_run_does_not_call_sbatch or test_only_invokes_sbatch'
+```
+
+Output:
+
+```text
+...                                                                      [100%]
+3 passed, 73 deselected in 1.01s
+```
+
+Full Task 2 test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+........................................................................ [ 94%]
+....                                                                     [100%]
+76 passed in 7.47s
+```
+
+Full suite with script import path:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Output:
+
+```text
+............................................ [ 28%]
+........................................................................ [ 75%]
+......................................                                   [100%]
+154 passed, 28 subtests passed in 18.71s
+```
+
+Shell syntax validation:
+
+```bash
+bash -n experiments/vllm_024_dynamicsd/submit_sync_rollout.sh experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+```
+
+Output:
+
+```text
+[no output]
+```
+
+Exit status: `0`
+
+Targeted Pyright:
+
+```bash
+pyright experiments/vllm_024_dynamicsd/benchmark_sync_rollout.py experiments/vllm_024_dynamicsd/summarize_sync_rollout.py tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+### Self-review Notes
+
+- `TEST_ONLY` now creates a trap-cleaned temporary render root, writes executable per-variant `run_benchmark.sh` and `submit.sbatch` there, invokes `sbatch --test-only`, and skips durable `MATRIX_ROOT`/manifest creation.
+- `DRY_RUN` remains render-only and the regression test uses a failing stub `sbatch` to prove it is not called.
+- Forced output validation now uses `ignore_eos or min_tokens == max_tokens`.
