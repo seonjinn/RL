@@ -327,6 +327,221 @@ Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
 `scripts/` to `PYTHONPATH`. The repository-wide suite passes with
 `PYTHONPATH=scripts`.
 
+## Final Two Task 5 Fixes
+
+### Scope
+
+- Corrected the pinned ModelOpt `examples/specdec_bench/run.py` source SHA256
+  to `1b82c76f4beba534a3b6b1545122adb9a1e81da8a7ba50c4d49a4284fc26f356`
+  for commit `43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446`.
+- Fetched the actual pinned source from:
+  `https://raw.githubusercontent.com/NVIDIA/Model-Optimizer/43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446/examples/specdec_bench/run.py`
+  and verified it before staging instrumentation.
+- Removed source-hash monkeypatch coverage from the staging path and exercised
+  the real pinned source in the test/probe.
+- Computed and pinned deterministic instrumentation identity:
+  `patch_sha256=dd6d436d3b05459cf00ea49a98e1ea00fd6a9a62f56124db7a080252c189913b`,
+  `patched_source_sha256=75eb4a928127333d2b305b32584d7c282b57af193c2e08036d661b07d55c779c`.
+- Official result adaptation now authenticates the instrumentation sidecar
+  before emitting any complete official row. It rejects missing/tampered
+  schema version, ModelOpt commit, source hash, patch hash, patched-source
+  hash, and sidecar names.
+- Official instrumentation identity fields are included in strict summarizer
+  baseline match keys so official rows with different authenticated
+  instrumentation cannot be speedup baselines for each other.
+
+### RED
+
+Focused RED command before implementation:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py \
+  -k 'speedbench_sync and (modelopt_instrumentation or instrumentation_identity or official_parses or summary_matches_official or summary_extracts_official)'
+```
+
+Result:
+
+```text
+14 failed, 135 deselected in 1.27s
+```
+
+Expected failures included:
+
+- Staging rejected the corrected pinned source hash because the code still
+  expected the old hash.
+- Tampered and missing official instrumentation identity sidecars did not
+  raise.
+- Official adapted results lacked flattened instrumentation identity fields.
+- The strict summarizer did not reject official baseline/result rows with
+  different instrumentation identity.
+
+### GREEN
+
+Focused final-review subset:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py \
+  -k 'speedbench_sync and (modelopt_instrumentation or instrumentation_identity or official_parses or summary_matches_official or summary_extracts_official)'
+```
+
+Result:
+
+```text
+14 passed, 135 deselected in 0.68s
+```
+
+Task 5 focused suite:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+52 passed, 97 deselected in 8.48s
+```
+
+Experiment test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+149 passed in 21.39s
+```
+
+Actual pinned source staging/compile probe:
+
+```bash
+python3 - <<'PY'
+import hashlib
+import pathlib
+import tempfile
+import urllib.request
+
+from experiments.vllm_024_dynamicsd import benchmark_speedbench_sync_rollout as bench
+
+url = (
+    "https://raw.githubusercontent.com/NVIDIA/Model-Optimizer/"
+    f"{bench.MODELOPT_PINNED_COMMIT}/examples/specdec_bench/run.py"
+)
+source = urllib.request.urlopen(url, timeout=30).read().decode()
+assert hashlib.sha256(source.encode()).hexdigest() == bench.MODELOPT_RUN_PY_SHA256
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    src = root / "src" / "examples" / "specdec_bench"
+    src.mkdir(parents=True)
+    (src / "run.py").write_text(source)
+    staged = root / "staged"
+    metadata = bench.stage_instrumented_modelopt_source(
+        modelopt_source_root=root / "src",
+        staged_source_root=staged,
+    )
+    patched = staged / "examples" / "specdec_bench" / "run.py"
+    compile(patched.read_text(), str(patched), "exec")
+    assert metadata["patch_sha256"] == bench.MODELOPT_INSTRUMENTATION_PATCH_SHA256
+    assert metadata["patched_source_sha256"] == bench.MODELOPT_PATCHED_RUN_PY_SHA256
+print("actual source staging compile probe passed")
+PY
+```
+
+Result:
+
+```text
+actual source staging compile probe passed
+```
+
+Targeted Pyright:
+
+```bash
+pyright \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py \
+  tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+Shell syntax:
+
+```bash
+bash -n \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: exit 0.
+
+Python compile check:
+
+```bash
+python3 -m compileall -q \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py
+```
+
+Result: exit 0.
+
+Whitespace check:
+
+```bash
+git diff --check
+```
+
+Result: exit 0.
+
+Dry-run launchers:
+
+```bash
+DRY_RUN=true CLUSTER=lyris RUN_ID=task5-final-two-cal-smoke \
+  K_VALUES='1 3' CONCURRENCIES='1 8 32 64' \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh
+
+DRY_RUN=true CLUSTER=ptyche MODELS='ultra super' \
+  RUN_ID=task5-final-two-nemotron-smoke \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: both exit 0.
+
+Repository-wide suite with script imports:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Result:
+
+```text
+227 passed, 28 subtests passed in 31.09s
+```
+
+Plain repository-wide command:
+
+```bash
+python3 -m pytest -q
+```
+
+Result:
+
+```text
+1 error during collection:
+ModuleNotFoundError: No module named 'vllm024_dflare_report'
+```
+
+Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
+`vllm024_dflare_report` as a top-level module; plain pytest does not add
+`scripts/` to `PYTHONPATH`. The repository-wide suite passes with
+`PYTHONPATH=scripts`.
+
 ## Final Instrumentation Fixes RED/GREEN
 
 ### Scope

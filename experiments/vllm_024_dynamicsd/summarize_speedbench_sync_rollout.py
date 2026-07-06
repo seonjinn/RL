@@ -10,6 +10,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+OFFICIAL_INSTRUMENTATION_FIELDS = (
+    "official_instrumentation_schema_version",
+    "official_instrumentation_modelopt_commit",
+    "official_instrumentation_source_sha256",
+    "official_instrumentation_patch_sha256",
+    "official_instrumentation_patched_source_sha256",
+)
+
 MATCHED_BASELINE_FIELDS = (
     "cohort",
     "runtime_image_sha256",
@@ -46,6 +54,7 @@ MATCHED_BASELINE_FIELDS = (
     "enable_mamba_cache_stochastic_rounding",
     "mamba_cache_philox_rounds",
     "moe_backend",
+    *OFFICIAL_INSTRUMENTATION_FIELDS,
 )
 
 REQUIRED_PROVENANCE_FIELDS = (
@@ -108,6 +117,11 @@ def validate_required_provenance(row: dict[str, Any]) -> None:
         value = row.get(field)
         if value is None or value == "unknown" or value == "":
             raise ValueError(f"{field} is required and must not be unknown")
+    if row.get("cohort") == "official":
+        for field in OFFICIAL_INSTRUMENTATION_FIELDS:
+            value = row.get(field)
+            if value is None or value == "unknown" or value == "":
+                raise ValueError(f"{field} is required and must not be unknown")
 
 
 def compare_rows(
@@ -154,6 +168,9 @@ def row_from_result(path: Path) -> dict[str, Any] | None:
     if not summary:
         return None
     metrics = summary.get("spec_decode_metrics", {})
+    instrumentation = config.get("official_instrumentation")
+    if not isinstance(instrumentation, dict):
+        instrumentation = {}
     return {
         "cohort": config.get("cohort"),
         "variant": config.get("mode"),
@@ -194,6 +211,26 @@ def row_from_result(path: Path) -> dict[str, Any] | None:
         ),
         "mamba_cache_philox_rounds": config.get("mamba_cache_philox_rounds"),
         "moe_backend": config.get("moe_backend"),
+        "official_instrumentation_schema_version": config.get(
+            "official_instrumentation_schema_version",
+            instrumentation.get("schema_version"),
+        ),
+        "official_instrumentation_modelopt_commit": config.get(
+            "official_instrumentation_modelopt_commit",
+            instrumentation.get("modelopt_commit"),
+        ),
+        "official_instrumentation_source_sha256": config.get(
+            "official_instrumentation_source_sha256",
+            instrumentation.get("source_sha256"),
+        ),
+        "official_instrumentation_patch_sha256": config.get(
+            "official_instrumentation_patch_sha256",
+            instrumentation.get("patch_sha256"),
+        ),
+        "official_instrumentation_patched_source_sha256": config.get(
+            "official_instrumentation_patched_source_sha256",
+            instrumentation.get("patched_source_sha256"),
+        ),
         "total_rollout_time_s": summary.get("total_rollout_time_s"),
         "output_tok_s_per_gpu": summary.get("output_tok_s_per_gpu"),
         "total_output_tokens": summary.get("total_output_tokens"),

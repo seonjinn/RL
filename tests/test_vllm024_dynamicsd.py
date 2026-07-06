@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 import types
+import urllib.request
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = ROOT / "experiments/vllm_024_dynamicsd"
+PINNED_MODELOPT_COMMIT = "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
+PINNED_MODELOPT_RUN_PY_SHA256 = (
+    "1b82c76f4beba534a3b6b1545122adb9a1e81da8a7ba50c4d49a4284fc26f356"
+)
+PINNED_MODELOPT_PATCH_SHA256 = (
+    "dd6d436d3b05459cf00ea49a98e1ea00fd6a9a62f56124db7a080252c189913b"
+)
+PINNED_MODELOPT_PATCHED_RUN_PY_SHA256 = (
+    "75eb4a928127333d2b305b32584d7c282b57af193c2e08036d661b07d55c779c"
+)
 
 
 def load_benchmark_module() -> ModuleType:
@@ -251,7 +262,7 @@ def fake_speedbench_sync_summary_row(
     prepared_manifest_hash: str = "prepared-sha",
     request_plan_hash: str = "request-plan-sha",
 ) -> dict[str, Any]:
-    return {
+    row = {
         "cohort": cohort,
         "variant": variant,
         "runtime_image_sha256": runtime_image_sha256,
@@ -293,6 +304,19 @@ def fake_speedbench_sync_summary_row(
         "total_rollout_time_s": 10.0,
         "total_output_tokens": 1000,
     }
+    if cohort == "official":
+        row.update(
+            {
+                "official_instrumentation_schema_version": 1,
+                "official_instrumentation_modelopt_commit": PINNED_MODELOPT_COMMIT,
+                "official_instrumentation_source_sha256": PINNED_MODELOPT_RUN_PY_SHA256,
+                "official_instrumentation_patch_sha256": PINNED_MODELOPT_PATCH_SHA256,
+                "official_instrumentation_patched_source_sha256": (
+                    PINNED_MODELOPT_PATCHED_RUN_PY_SHA256
+                ),
+            }
+        )
+    return row
 
 
 def test_dynamic_schedule_and_speculative_configs() -> None:
@@ -2767,12 +2791,10 @@ def write_task5_modelopt_sidecars(
         json.dumps(
             {
                 "schema_version": 1,
-                "modelopt_commit": "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446",
-                "source_sha256": (
-                    "aafd29a4e7220e3e6748d332266c17005aa589d3f164b22392a924c5ccc6ae30"
-                ),
-                "patch_sha256": "f" * 64,
-                "patched_source_sha256": "e" * 64,
+                "modelopt_commit": PINNED_MODELOPT_COMMIT,
+                "source_sha256": PINNED_MODELOPT_RUN_PY_SHA256,
+                "patch_sha256": PINNED_MODELOPT_PATCH_SHA256,
+                "patched_source_sha256": PINNED_MODELOPT_PATCHED_RUN_PY_SHA256,
                 "timing_sidecar": TASK5_TIMING_SIDECAR,
                 "resolved_config_sidecar": TASK5_RESOLVED_CONFIG_SIDECAR,
             }
@@ -3099,6 +3121,15 @@ def pinned_like_modelopt_run_py_stub() -> str:
     ).lstrip()
 
 
+def fetch_pinned_modelopt_run_py_source() -> str:
+    url = (
+        "https://raw.githubusercontent.com/NVIDIA/Model-Optimizer/"
+        f"{PINNED_MODELOPT_COMMIT}/examples/specdec_bench/run.py"
+    )
+    with urllib.request.urlopen(url, timeout=30) as response:
+        return response.read().decode("utf-8")
+
+
 def test_speedbench_sync_modelopt_serializer_handles_dataclass_and_config_object() -> None:
     runner = load_speedbench_sync_module()
 
@@ -3128,19 +3159,13 @@ def test_speedbench_sync_modelopt_serializer_handles_dataclass_and_config_object
 
 def test_speedbench_sync_modelopt_instrumentation_stages_copy_and_fails_closed(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = load_speedbench_sync_module()
     modelopt_root = tmp_path / "modelopt"
     run_py = modelopt_root / "examples/specdec_bench/run.py"
     run_py.parent.mkdir(parents=True)
-    source = pinned_like_modelopt_run_py_stub()
+    source = fetch_pinned_modelopt_run_py_source()
     run_py.write_text(source, encoding="utf-8")
-    monkeypatch.setattr(
-        runner,
-        "MODELOPT_RUN_PY_SHA256",
-        runner.sha256_text(source),
-    )
 
     metadata = runner.stage_instrumented_modelopt_source(
         modelopt_root,
@@ -3148,16 +3173,23 @@ def test_speedbench_sync_modelopt_instrumentation_stages_copy_and_fails_closed(
         save_dir=tmp_path / "official.modelopt",
     )
 
-    assert run_py.read_text(encoding="utf-8") == source
-    patched = (tmp_path / "staged-modelopt/examples/specdec_bench/run.py").read_text(
-        encoding="utf-8"
+    assert runner.MODELOPT_RUN_PY_SHA256 == PINNED_MODELOPT_RUN_PY_SHA256
+    assert runner.MODELOPT_INSTRUMENTATION_PATCH_SHA256 == PINNED_MODELOPT_PATCH_SHA256
+    assert (
+        runner.MODELOPT_PATCHED_RUN_PY_SHA256
+        == PINNED_MODELOPT_PATCHED_RUN_PY_SHA256
     )
+    assert runner.sha256_text(source) == PINNED_MODELOPT_RUN_PY_SHA256
+    assert run_py.read_text(encoding="utf-8") == source
+    staged_run_py = tmp_path / "staged-modelopt/examples/specdec_bench/run.py"
+    patched = staged_run_py.read_text(encoding="utf-8")
+    compile(patched, str(staged_run_py), "exec")
     assert "_task5_write_timing_total_tokens_sidecar" in patched
     assert "_task5_write_resolved_vllm_config_sidecar" in patched
-    assert metadata["source_sha256"] == runner.sha256_text(source)
-    assert metadata["patch_sha256"] == runner.sha256_text(
-        runner.MODELOPT_INSTRUMENTATION_PATCH
-    )
+    assert metadata["modelopt_commit"] == PINNED_MODELOPT_COMMIT
+    assert metadata["source_sha256"] == PINNED_MODELOPT_RUN_PY_SHA256
+    assert metadata["patch_sha256"] == PINNED_MODELOPT_PATCH_SHA256
+    assert metadata["patched_source_sha256"] == PINNED_MODELOPT_PATCHED_RUN_PY_SHA256
     instrumentation = json.loads(
         (tmp_path / "official.modelopt" / TASK5_INSTRUMENTATION_SIDECAR).read_text(
             encoding="utf-8"
@@ -3165,21 +3197,97 @@ def test_speedbench_sync_modelopt_instrumentation_stages_copy_and_fails_closed(
     )
     assert instrumentation == metadata
 
-    broken_root = tmp_path / "broken-modelopt"
-    broken_run_py = broken_root / "examples/specdec_bench/run.py"
-    broken_run_py.parent.mkdir(parents=True)
     broken_source = source.replace("runner.clear_metrics()", "runner.reset()")
-    broken_run_py.write_text(broken_source, encoding="utf-8")
-    monkeypatch.setattr(
-        runner,
-        "MODELOPT_RUN_PY_SHA256",
-        runner.sha256_text(broken_source),
-    )
     with pytest.raises(ValueError, match="anchor"):
-        runner.stage_instrumented_modelopt_source(
-            broken_root,
-            tmp_path / "broken-staged",
-            save_dir=tmp_path / "broken.modelopt",
+        runner._instrument_modelopt_run_py_source(broken_source)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    (
+        ("schema_version", 2),
+        ("modelopt_commit", "bad-commit"),
+        ("source_sha256", "0" * 64),
+        ("patch_sha256", "1" * 64),
+        ("patched_source_sha256", "2" * 64),
+    ),
+)
+def test_speedbench_sync_official_rejects_tampered_instrumentation_identity(
+    tmp_path: Path,
+    field: str,
+    bad_value: object,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+    sidecar_path = save_dir / TASK5_INSTRUMENTATION_SIDECAR
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar[field] = bad_value
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/models/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=dataset_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "schema_version",
+        "modelopt_commit",
+        "source_sha256",
+        "patch_sha256",
+        "patched_source_sha256",
+    ),
+)
+def test_speedbench_sync_official_rejects_missing_instrumentation_identity(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+    sidecar_path = save_dir / TASK5_INSTRUMENTATION_SIDECAR
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    del sidecar[field]
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/models/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=dataset_path,
         )
 
 
@@ -3315,7 +3423,14 @@ def test_speedbench_sync_official_parses_pinned_modelopt_output_files(
     assert payload["config"]["mamba_cache_philox_rounds"] == 0
     assert payload["config"]["moe_backend"] == "auto"
     assert payload["config"]["official_vllm_config"]["model_config"]["dtype"] == "bfloat16"
-    assert payload["config"]["official_instrumentation"]["patch_sha256"] == "f" * 64
+    assert (
+        payload["config"]["official_instrumentation"]["patch_sha256"]
+        == PINNED_MODELOPT_PATCH_SHA256
+    )
+    assert (
+        payload["config"]["official_instrumentation_patch_sha256"]
+        == PINNED_MODELOPT_PATCH_SHA256
+    )
     assert "upstream-unrecorded" not in json.dumps(payload["config"], sort_keys=True)
     assert payload["summary"]["output_tok_s_per_gpu"] == 120.0
     assert payload["summary"]["output_tok_s"] == 960.0
@@ -3550,7 +3665,6 @@ def test_speedbench_sync_official_rejects_missing_static_draft_config(
 
 def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_result(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = load_speedbench_sync_module()
     prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
@@ -3567,20 +3681,22 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
     run_py.parent.mkdir(parents=True)
     source = pinned_like_modelopt_run_py_stub()
     run_py.write_text(source, encoding="utf-8")
-    monkeypatch.setattr(
-        runner,
-        "MODELOPT_RUN_PY_SHA256",
-        runner.sha256_text(source),
+    save_dir = tmp_path / "official_result.modelopt"
+    write_pinned_modelopt_speedbench_output(
+        save_dir,
+        dataset_path=prepared_dataset_path,
+        turn_total_tokens=[10, 20, 30],
+        mean_output_tokens=20.0,
+        output_tps=120.0,
+        output_tps_per_gpu=15.0,
     )
-
-    payload = runner.run_official_speedbench(
+    command = runner.build_official_speedbench_command(
         model="/models/qwen32",
         tokenizer="/models/qwen32",
         draft_model="/models/draft",
         modelopt_root=modelopt_root,
-        dataset_config="throughput_1k",
-        prepared_dataset_path=prepared_dataset_path,
-        output=tmp_path / "official_result.json",
+        dataset_path=prepared_dataset_path,
+        save_dir=save_dir,
         variant="static",
         tensor_parallel_size=2,
         active_concurrency=16,
@@ -3588,25 +3704,39 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
         max_new_tokens=4096,
         static_k=5,
         temperature=0.0,
+    )
+    payload = runner.adapt_official_speedbench_output(
+        save_dir=save_dir,
+        output=tmp_path / "official_result.json",
+        model="/models/qwen32",
+        draft_model="/models/draft",
+        variant="static",
+        dataset_config="throughput_1k",
+        tensor_parallel_size=2,
+        active_concurrency=16,
+        max_model_len=40960,
+        max_new_tokens=4096,
+        static_k=5,
+        temperature=0.0,
         runtime_image_sha256="runtime-sha",
-        model_config_hash="model-sha",
+        model_config_hash_value="model-sha",
         prepared_manifest_hash="manifest-sha",
+        prepared_dataset_path=prepared_dataset_path,
     )
-    configuration = json.loads(
-        (tmp_path / "official_result.modelopt" / "configuration.json").read_text()
-    )
-    instrumentation = json.loads(
-        (tmp_path / "official_result.modelopt" / TASK5_INSTRUMENTATION_SIDECAR).read_text()
-    )
+    configuration = json.loads((save_dir / "configuration.json").read_text())
+    instrumentation = json.loads((save_dir / TASK5_INSTRUMENTATION_SIDECAR).read_text())
 
+    assert command[0:2] == [
+        "python3",
+        str(run_py),
+    ]
     assert configuration["dataset"] == "speed"
     assert configuration["dataset_path"] == str(prepared_dataset_path)
     assert configuration["model_dir"] == "/models/qwen32"
     assert configuration["draft_model_dir"] == "/models/draft"
-    assert configuration["save_dir"] == str(tmp_path / "official_result.modelopt")
-    assert instrumentation["source_sha256"] == runner.sha256_text(source)
-    assert str(run_py) not in instrumentation["staged_run_py"]
-    assert "benchmark.py" not in instrumentation["staged_run_py"]
+    assert configuration["save_dir"] == str(save_dir)
+    assert instrumentation["source_sha256"] == PINNED_MODELOPT_RUN_PY_SHA256
+    assert "benchmark.py" not in command[1]
     assert payload["config"]["cohort"] == "official"
     assert payload["config"]["official_runner"] == "ModelOpt examples/specdec_bench/run.py"
     assert payload["config"]["upstream_turn_loop_preserved"] is True
@@ -4067,6 +4197,81 @@ def test_speedbench_sync_summary_matches_performance_and_work_fields() -> None:
     }.items():
         with pytest.raises(ValueError, match=field):
             summary.compare_rows(baseline, {**candidate, field: value})
+
+
+def test_speedbench_sync_summary_matches_official_instrumentation_identity() -> None:
+    summary = load_speedbench_sync_summary_module()
+    baseline = fake_speedbench_sync_summary_row(cohort="official")
+    candidate = fake_speedbench_sync_summary_row(cohort="official", variant="static")
+
+    for field, value in {
+        "official_instrumentation_schema_version": 2,
+        "official_instrumentation_modelopt_commit": "bad-commit",
+        "official_instrumentation_source_sha256": "0" * 64,
+        "official_instrumentation_patch_sha256": "1" * 64,
+        "official_instrumentation_patched_source_sha256": "2" * 64,
+    }.items():
+        with pytest.raises(ValueError, match=field):
+            summary.compare_rows(baseline, {**candidate, field: value})
+
+
+def test_speedbench_sync_summary_extracts_official_instrumentation_from_result_json(
+    tmp_path: Path,
+) -> None:
+    summary = load_speedbench_sync_summary_module()
+    baseline = fake_speedbench_sync_summary_row(cohort="official")
+    candidate = fake_speedbench_sync_summary_row(cohort="official", variant="static")
+    candidate["official_instrumentation_patch_sha256"] = "1" * 64
+
+    for row in (baseline, candidate):
+        result_dir = tmp_path / str(row["variant"])
+        result_dir.mkdir()
+        instrumentation = {
+            "schema_version": row["official_instrumentation_schema_version"],
+            "modelopt_commit": row["official_instrumentation_modelopt_commit"],
+            "source_sha256": row["official_instrumentation_source_sha256"],
+            "patch_sha256": row["official_instrumentation_patch_sha256"],
+            "patched_source_sha256": row[
+                "official_instrumentation_patched_source_sha256"
+            ],
+        }
+        config = {
+            key: value
+            for key, value in row.items()
+            if key
+            not in {
+                "variant",
+                "output_tok_s_per_gpu",
+                "total_rollout_time_s",
+                "total_output_tokens",
+                "official_instrumentation_schema_version",
+                "official_instrumentation_modelopt_commit",
+                "official_instrumentation_source_sha256",
+                "official_instrumentation_patch_sha256",
+                "official_instrumentation_patched_source_sha256",
+            }
+        }
+        config["mode"] = row["variant"]
+        config["official_instrumentation"] = instrumentation
+        (result_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "config": config,
+                    "summary": {
+                        "total_rollout_time_s": row["total_rollout_time_s"],
+                        "output_tok_s_per_gpu": row["output_tok_s_per_gpu"],
+                        "total_output_tokens": row["total_output_tokens"],
+                        "spec_decode_metrics": {},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    rows = {row["variant"]: row for row in summary.load_rows(tmp_path)}
+    with pytest.raises(ValueError, match="official_instrumentation_patch_sha256"):
+        summary.compare_rows(rows["baseline"], rows["static"])
 
 
 @pytest.mark.parametrize(

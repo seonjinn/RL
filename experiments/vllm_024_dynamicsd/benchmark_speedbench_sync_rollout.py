@@ -40,7 +40,13 @@ ACCEPTANCE_LIMITATION = (
 
 MODELOPT_PINNED_COMMIT = "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
 MODELOPT_RUN_PY_SHA256 = (
-    "aafd29a4e7220e3e6748d332266c17005aa589d3f164b22392a924c5ccc6ae30"
+    "1b82c76f4beba534a3b6b1545122adb9a1e81da8a7ba50c4d49a4284fc26f356"
+)
+MODELOPT_INSTRUMENTATION_PATCH_SHA256 = (
+    "dd6d436d3b05459cf00ea49a98e1ea00fd6a9a62f56124db7a080252c189913b"
+)
+MODELOPT_PATCHED_RUN_PY_SHA256 = (
+    "75eb4a928127333d2b305b32584d7c282b57af193c2e08036d661b07d55c779c"
 )
 MODELOPT_TIMING_SIDECAR = "task5_timing_total_tokens.json"
 MODELOPT_RESOLVED_CONFIG_SIDECAR = "task5_resolved_vllm_config.json"
@@ -367,7 +373,19 @@ def stage_instrumented_modelopt_source(
             "ModelOpt run.py source hash mismatch: "
             f"{source_hash} != {MODELOPT_RUN_PY_SHA256}"
         )
+    patch_hash = sha256_text(MODELOPT_INSTRUMENTATION_PATCH)
+    if patch_hash != MODELOPT_INSTRUMENTATION_PATCH_SHA256:
+        raise ValueError(
+            "ModelOpt Task5 instrumentation patch hash mismatch: "
+            f"{patch_hash} != {MODELOPT_INSTRUMENTATION_PATCH_SHA256}"
+        )
     patched_source = _instrument_modelopt_run_py_source(source)
+    patched_hash = sha256_text(patched_source)
+    if patched_hash != MODELOPT_PATCHED_RUN_PY_SHA256:
+        raise ValueError(
+            "ModelOpt instrumented run.py source hash mismatch: "
+            f"{patched_hash} != {MODELOPT_PATCHED_RUN_PY_SHA256}"
+        )
     if staged_root.exists():
         shutil.rmtree(staged_root)
     shutil.copytree(modelopt_root, staged_root, symlinks=True)
@@ -379,8 +397,8 @@ def stage_instrumented_modelopt_source(
         "source_run_py": str(source_run_py),
         "staged_run_py": str(staged_run_py),
         "source_sha256": source_hash,
-        "patch_sha256": sha256_text(MODELOPT_INSTRUMENTATION_PATCH),
-        "patched_source_sha256": sha256_text(patched_source),
+        "patch_sha256": patch_hash,
+        "patched_source_sha256": patched_hash,
         "timing_sidecar": MODELOPT_TIMING_SIDECAR,
         "resolved_config_sidecar": MODELOPT_RESOLVED_CONFIG_SIDECAR,
     }
@@ -1266,6 +1284,32 @@ def _timing_total_tokens_from_sidecar(sidecar: Mapping[str, Any]) -> list[int]:
     return total_tokens
 
 
+def _validate_modelopt_instrumentation_sidecar(
+    instrumentation: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    expected: dict[str, Any] = {
+        "schema_version": 1,
+        "modelopt_commit": MODELOPT_PINNED_COMMIT,
+        "source_sha256": MODELOPT_RUN_PY_SHA256,
+        "patch_sha256": MODELOPT_INSTRUMENTATION_PATCH_SHA256,
+        "patched_source_sha256": MODELOPT_PATCHED_RUN_PY_SHA256,
+        "timing_sidecar": MODELOPT_TIMING_SIDECAR,
+        "resolved_config_sidecar": MODELOPT_RESOLVED_CONFIG_SIDECAR,
+    }
+    for field_name, expected_value in expected.items():
+        value = instrumentation.get(field_name)
+        if value is None or value == "" or value == "unknown":
+            raise ValueError(
+                f"{MODELOPT_INSTRUMENTATION_SIDECAR} missing {field_name}"
+            )
+        if value != expected_value:
+            raise ValueError(
+                f"{MODELOPT_INSTRUMENTATION_SIDECAR} {field_name} mismatch: "
+                f"{value} != {expected_value}"
+            )
+    return instrumentation
+
+
 def _cudagraph_mode(compilation_config: Any) -> str:
     if not isinstance(compilation_config, Mapping):
         raise ValueError("official compilation_config must be an object")
@@ -1289,7 +1333,9 @@ def parse_modelopt_official_outputs(
         save_dir,
         MODELOPT_RESOLVED_CONFIG_SIDECAR,
     )
-    instrumentation = _load_modelopt_sidecar(save_dir, MODELOPT_INSTRUMENTATION_SIDECAR)
+    instrumentation = _validate_modelopt_instrumentation_sidecar(
+        _load_modelopt_sidecar(save_dir, MODELOPT_INSTRUMENTATION_SIDECAR)
+    )
 
     output_tps = _positive_float(timing, "Output TPS", file_name="timing.json")
     output_tps_per_gpu = _positive_float(
@@ -1657,6 +1703,7 @@ def adapt_official_speedbench_output(
         prepared_manifest_hash,
         "prepared_manifest_hash",
     )
+    instrumentation = configuration_values["instrumentation"]
     payload = {
         "schema_version": 1,
         "status": "complete",
@@ -1716,7 +1763,18 @@ def adapt_official_speedbench_output(
             "official_serving_config": configuration_values["serving_config"],
             "official_engine_args": configuration_values["engine_args"],
             "official_vllm_config": configuration_values["vllm_config"],
-            "official_instrumentation": configuration_values["instrumentation"],
+            "official_instrumentation": instrumentation,
+            "official_instrumentation_schema_version": instrumentation[
+                "schema_version"
+            ],
+            "official_instrumentation_modelopt_commit": instrumentation[
+                "modelopt_commit"
+            ],
+            "official_instrumentation_source_sha256": instrumentation["source_sha256"],
+            "official_instrumentation_patch_sha256": instrumentation["patch_sha256"],
+            "official_instrumentation_patched_source_sha256": instrumentation[
+                "patched_source_sha256"
+            ],
         },
         "official_output": {
             "save_dir": str(save_dir),
