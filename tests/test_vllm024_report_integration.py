@@ -161,6 +161,8 @@ def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
     assert "Qwen3-32B Math DynamicSD" in html_text
     assert "DAPO-Math-17k" in html_text
     assert "OpenMathInstruct-2" in html_text
+    assert "45.65%" in html_text
+    assert "46.59%" in html_text
     assert "1.51x" in html_text
     assert "1.55x" in html_text
     assert "No completed SPEED-Bench official or overlay result.json artifacts are present in this checkout." in html_text
@@ -170,6 +172,17 @@ def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
     assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in html_text
     assert ">32K<" in html_text or " 32K " in html_text
     assert ">64K<" in html_text or " 64K " in html_text
+
+
+def test_task6_task5_probe_report_uses_repo_root_safe_module_loading() -> None:
+    report_text = (ROOT / ".superpowers/sdd/task-5-report.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'import sys' in report_text
+    assert 'sys.path.insert(0, str(path.parent))' in report_text
+    assert "sys.modules[spec.name] = bench" in report_text
+    assert 'save_dir = root / "save"' in report_text
 
 
 def test_task5_index_publishes_new_artifacts_and_counts(

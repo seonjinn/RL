@@ -421,14 +421,17 @@ python3 - <<'PY'
 import hashlib
 import importlib.util
 import pathlib
+import sys
 import tempfile
 import urllib.request
 
 root = pathlib.Path.cwd()
 path = root / "experiments" / "vllm_024_dynamicsd" / "benchmark_speedbench_sync_rollout.py"
+sys.path.insert(0, str(path.parent))
 spec = importlib.util.spec_from_file_location("task5_speedbench_sync", path)
 assert spec is not None and spec.loader is not None
 bench = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = bench
 spec.loader.exec_module(bench)
 
 url = (
@@ -443,9 +446,11 @@ with tempfile.TemporaryDirectory() as tmp:
     src.mkdir(parents=True)
     (src / "run.py").write_text(source)
     staged = root / "staged"
+    save_dir = root / "save"
     metadata = bench.stage_instrumented_modelopt_source(
-        modelopt_source_root=root / "src",
-        staged_source_root=staged,
+        modelopt_root=root / "src",
+        staged_root=staged,
+        save_dir=save_dir,
     )
     patched = staged / "examples" / "specdec_bench" / "run.py"
     compile(patched.read_text(), str(patched), "exec")

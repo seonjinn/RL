@@ -1338,7 +1338,9 @@ def fmt_x(value: object) -> str:
 
 
 def fmt_pct(value: object) -> str:
-    return fmt(value, 1, "%")
+    if pd.isna(value):
+        return "n/a"
+    return fmt(float(value) * 100.0, 2, "%")
 
 
 def model_name(value: object) -> str:
