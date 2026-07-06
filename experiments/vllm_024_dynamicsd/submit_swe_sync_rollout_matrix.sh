@@ -43,15 +43,19 @@ materialize_long_context_views() {
     --model-view
     "${draft_view_name}=${draft_source}"
   )
-  if [[ "${DRY_RUN}" == "true" ]]; then
-    printf "[DRY-RUN] "
+  if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      printf "[DRY-RUN] "
+    else
+      printf "[TEST-ONLY] "
+    fi
     render_command "${command[@]}"
     return
   fi
   "${command[@]}"
 }
 
-if [[ "${DRY_RUN}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
+if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
   git -C "${SCRIPT_DIR}" pull --ff-only
 fi
 

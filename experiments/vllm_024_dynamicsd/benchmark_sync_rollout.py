@@ -370,9 +370,10 @@ def bucket_statistics(
 def exact_output_work(
     requests: list[RolloutRequest],
     output_token_ids: list[list[int]],
-) -> dict[str, list[int]]:
+) -> dict[str, list[int] | list[bool]]:
     planned = [request.max_tokens for request in requests]
     actual = [len(token_ids) for token_ids in output_token_ids]
+    forced = [request.ignore_eos for request in requests]
     for index, (request, actual_tokens) in enumerate(
         zip(requests, actual, strict=True)
     ):
@@ -385,6 +386,7 @@ def exact_output_work(
     return {
         "planned_output_tokens": planned,
         "actual_output_tokens": actual,
+        "forced_output_mask": forced,
     }
 
 
@@ -790,6 +792,7 @@ def main() -> None:
             "output_token_hashes": [token_hash(token_ids) for token_ids in output_token_ids],
             "planned_output_tokens": output_work["planned_output_tokens"],
             "actual_output_tokens": output_work["actual_output_tokens"],
+            "forced_output_mask": output_work["forced_output_mask"],
             "requests": [
                 request_provenance(request) for request in rollout_requests
             ],

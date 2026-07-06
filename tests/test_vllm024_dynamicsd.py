@@ -89,6 +89,14 @@ def run_dry(script_name: str, **env_overrides: str) -> str:
     return completed.stdout
 
 
+def extract_run_benchmark_script(output: str, variant: str) -> str:
+    start = f"# BEGIN run_benchmark.sh {variant}\n"
+    end = f"# END run_benchmark.sh {variant}\n"
+    assert start in output
+    assert end in output
+    return output.split(start, 1)[1].split(end, 1)[0]
+
+
 def test_dynamic_schedule_and_speculative_configs() -> None:
     benchmark = load_benchmark_module()
     schedule = benchmark.parse_dynamic_schedule(
@@ -1195,9 +1203,73 @@ def test_sync_rollout_exact_output_work_emits_counts_and_rejects_underfill() -> 
     assert sync_rollout.exact_output_work([forced, flexible], [[1, 2, 3, 4], [9]]) == {
         "planned_output_tokens": [4, 4],
         "actual_output_tokens": [4, 1],
+        "forced_output_mask": [True, False],
     }
     with pytest.raises(ValueError, match="forced output length mismatch"):
         sync_rollout.exact_output_work([forced], [[1, 2, 3]])
+
+
+def test_sync_rollout_generated_runner_executes_with_hostile_paths(
+    tmp_path: Path,
+) -> None:
+    pwned = tmp_path / "pwned"
+    hostile = f"{tmp_path}/odd ' \" $DOLLAR $(touch {pwned}) path"
+    output = run_dry(
+        "submit_sync_rollout.sh",
+        CLUSTER="lyris",
+        VARIANTS="baseline",
+        MODEL=f"{hostile}/target",
+        DRAFT_MODEL=f"{hostile}/draft",
+        REQUEST_PLAN=f"{hostile}/host-plan.json",
+        REQUEST_PLAN_IN_CONTAINER=f"{hostile}/container-plan.json",
+        RESOLVED_REQUEST_PLAN_OUTPUT=f"{hostile}/resolved.json",
+        RESPONSE_OUTPUT=f"{hostile}/responses.jsonl",
+        RUNTIME_IMAGE_SHA256="runtime-sha-hostile",
+    )
+    script = extract_run_benchmark_script(output, "baseline")
+    run_script = tmp_path / "run_benchmark.sh"
+    run_script.write_text(script, encoding="utf-8")
+    run_script.chmod(0o755)
+    argv_path = tmp_path / "argv.txt"
+    stub_python = tmp_path / "python-stub"
+    stub_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        ": >\"${STUB_ARGV_OUT:?}\"\n"
+        "for arg in \"$@\"; do printf '%s\\n' \"$arg\" >>\"${STUB_ARGV_OUT}\"; done\n",
+        encoding="utf-8",
+    )
+    stub_python.chmod(0o755)
+
+    subprocess.run(
+        [str(run_script)],
+        cwd=tmp_path,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "BENCHMARK_PYTHON": str(stub_python),
+            "CHECK_VLLM_VERSION": "false",
+            "STUB_ARGV_OUT": str(argv_path),
+            "DOLLAR": "expanded-if-unsafe",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    argv = argv_path.read_text(encoding="utf-8").splitlines()
+
+    def value_after(flag: str) -> str:
+        return argv[argv.index(flag) + 1]
+
+    assert argv[0] == "/workspace/experiment/benchmark_sync_rollout.py"
+    assert value_after("--model") == f"{hostile}/target"
+    assert value_after("--draft-model") == f"{hostile}/draft"
+    assert value_after("--request-plan") == f"{hostile}/container-plan.json"
+    assert value_after("--resolved-request-plan-output") == f"{hostile}/resolved.json"
+    assert value_after("--response-output") == f"{hostile}/responses.jsonl"
+    assert value_after("--runtime-image-sha256") == "runtime-sha-hostile"
+    assert "$DOLLAR" in value_after("--model")
+    assert "$(touch " in value_after("--model")
+    assert not pwned.exists()
 
 
 def test_sync_rollout_dry_run_models_barriered_rl_sampling() -> None:
@@ -1241,15 +1313,15 @@ def test_sync_rollout_dry_run_supports_native_mtp_tp8() -> None:
     assert output.count("[DRY-RUN] sync_variant=") == 3
     assert "#SBATCH --nodes=2" in output
     assert "#SBATCH --segment=2" in output
-    assert "--mode 'mtp_static'" in output
-    assert "--mode 'mtp_dynamic'" in output
-    assert "BENCH_DRAFT_MODEL=''" in output
+    assert "args+=(--mode mtp_static)" in output
+    assert "args+=(--mode mtp_dynamic)" in output
+    assert "args+=(--draft-model '')" in output
     assert "Qwen3-32B-speculator.eagle3" not in output
-    assert "--distributed-executor-backend 'ray'" in output
-    assert "--enable-expert-parallel" in output
-    assert "--kv-cache-dtype 'fp8'" in output
-    assert "--mamba-ssm-cache-dtype 'float16'" in output
-    assert "--mamba-backend 'flashinfer'" in output
+    assert "args+=(--distributed-executor-backend ray)" in output
+    assert "args+=(--enable-expert-parallel)" in output
+    assert "args+=(--kv-cache-dtype fp8)" in output
+    assert "args+=(--mamba-ssm-cache-dtype float16)" in output
+    assert "args+=(--mamba-backend flashinfer)" in output
 
 
 def test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs() -> None:
@@ -1268,18 +1340,18 @@ def test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs() -> 
     assert "request_profile=32k" in output
     assert "request_plan_hash=" in output
     assert output.count("[DRY-RUN] sync_variant=") == 2
-    assert "BENCH_REQUEST_PLAN=/workspace/experiment/profiles/swe_sync_32k.json" in output
-    assert 'bench_extra_args+=(--response-output \\"${BENCH_RESPONSE_OUTPUT}\\")' in output
+    assert "args+=(--request-plan /workspace/experiment/profiles/swe_sync_32k.json)" in output
+    assert "args+=(--response-output " in output
     assert "responses.jsonl" in output
     assert "--runtime-image-sha256" in output
-    assert "--max-model-len '36864'" in output
-    assert "--num-prompts 16" in output
-    assert "--samples-per-prompt 1" in output
+    assert "args+=(--max-model-len 36864)" in output
+    assert "args+=(--num-prompts 16)" in output
+    assert "args+=(--samples-per-prompt 1)" in output
     assert "requests_per_rollout_batch=16" in output
-    assert "--max-prompt-tokens 4096" in output
-    assert "--max-new-tokens 32768" in output
-    assert "--temperature 0.0" in output
-    assert "--top-p 0.95" in output
+    assert "args+=(--max-prompt-tokens 4096)" in output
+    assert "args+=(--max-new-tokens 32768)" in output
+    assert "args+=(--temperature 0.0)" in output
+    assert "args+=(--top-p 0.95)" in output
     assert "swebench_verified_prompts_all.jsonl" in output
     assert "long-context-models/yarn4" not in output
     assert "materialize_long_context_model_views.py" not in output
@@ -1306,10 +1378,10 @@ def test_swe_sync_rollout_64k_uses_matched_yarn_target_and_draft_views() -> None
     assert "--model-view qwen32-eagle3-draft=" in output
     assert "long-context-models/yarn4/qwen32-target" in output
     assert "long-context-models/yarn4/qwen32-eagle3-draft" in output
-    assert "BENCH_MODEL=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen32-target" in output
-    assert "BENCH_DRAFT_MODEL=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen32-eagle3-draft" in output
-    assert "--max-model-len '69632'" in output
-    assert "--max-new-tokens 65536" in output
+    assert "args+=(--model /lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen32-target)" in output
+    assert "args+=(--draft-model /lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen32-eagle3-draft)" in output
+    assert "args+=(--max-model-len 69632)" in output
+    assert "args+=(--max-new-tokens 65536)" in output
 
 
 def test_swe_sync_rollout_non_smoke_defaults_to_primary_four_samples() -> None:
@@ -1382,10 +1454,56 @@ def test_sync_rollout_accepts_variant_placeholders_and_shell_escapes_new_args() 
 
     assert "/tmp/o\\'hara/baseline/responses.jsonl" in output
     assert "/tmp/o\\'hara/dynamic/responses.jsonl" in output
-    assert "BENCH_RESPONSE_OUTPUT=/tmp/o\\'hara/baseline/responses.jsonl" in output
-    assert "BENCH_RESOLVED_REQUEST_PLAN_OUTPUT=/tmp/o\\'hara/dynamic/plan.json" in output
+    assert "args+=(--response-output /tmp/o\\'hara/baseline/responses.jsonl)" in output
+    assert "args+=(--resolved-request-plan-output /tmp/o\\'hara/dynamic/plan.json)" in output
     assert "--response-output '/tmp/o'hara" not in output
     assert "--resolved-request-plan-output '/tmp/o'hara" not in output
+
+
+@pytest.mark.parametrize(
+    ("dry_run", "test_only", "marker"),
+    (
+        ("true", "false", "[DRY-RUN]"),
+        ("false", "true", "[TEST-ONLY]"),
+    ),
+)
+def test_swe_sync_rollout_plan_modes_do_not_materialize_yarn_or_run_dirs(
+    tmp_path: Path,
+    dry_run: str,
+    test_only: str,
+    marker: str,
+) -> None:
+    view_root = tmp_path / "views"
+    result_root = tmp_path / "results"
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CLUSTER": "lyris",
+            "DRY_RUN": dry_run,
+            "TEST_ONLY": test_only,
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "qwen32",
+            "REQUEST_PROFILES": "64k",
+            "TEMPERATURES": "0.0",
+            "VARIANTS": "baseline",
+            "RUN_ID": "plan-mode",
+            "LONG_CONTEXT_VIEW_ROOT": str(view_root),
+            "RESULT_ROOT": str(result_root),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert marker in completed.stdout
+    assert "materialize_long_context_model_views.py" in completed.stdout
+    assert str(view_root / "qwen32-target") in completed.stdout
+    assert str(view_root / "qwen32-eagle3-draft") in completed.stdout
+    assert "run_benchmark.sh" in completed.stdout
+    assert not view_root.exists()
+    assert not result_root.exists()
 
 
 def test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral() -> None:
@@ -1423,16 +1541,16 @@ def test_nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16() -> None:
     assert "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in output
     assert "#SBATCH --nodes=2" in output
     assert "#SBATCH --segment=2" in output
-    assert "--tensor-parallel-size '8'" in output
+    assert "args+=(--tensor-parallel-size 8)" in output
     assert "#SBATCH --nodes=1" in output
     assert "#SBATCH --segment=1" in output
-    assert "--tensor-parallel-size '2'" in output
-    assert "--temperature 1.0" in output
-    assert "--top-p 0.95" in output
-    assert "--samples-per-prompt 4" in output
-    assert "--rollout-batches 2" in output
-    assert "--mode 'mtp_static'" in output
-    assert "--mode 'mtp_dynamic'" in output
+    assert "args+=(--tensor-parallel-size 2)" in output
+    assert "args+=(--temperature 1.0)" in output
+    assert "args+=(--top-p 0.95)" in output
+    assert "args+=(--samples-per-prompt 4)" in output
+    assert "args+=(--rollout-batches 2)" in output
+    assert "args+=(--mode mtp_static)" in output
+    assert "args+=(--mode mtp_dynamic)" in output
     assert "--gres" not in output
 
 
@@ -1455,11 +1573,11 @@ def test_nemorl_perfcfg_dry_run_preserves_per_engine_recipe_shapes() -> None:
     assert "target_tp=8" in output
     assert "#SBATCH --nodes=2" in output
     assert "#SBATCH --segment=2" in output
-    assert "--distributed-executor-backend 'ray'" in output
-    assert "--max-model-len '8192'" in output
-    assert "--max-new-tokens 8192" in output
-    assert "--samples-per-prompt 32" in output
-    assert "--top-p 1.0" in output
+    assert "args+=(--distributed-executor-backend ray)" in output
+    assert "args+=(--max-model-len 8192)" in output
+    assert "args+=(--max-new-tokens 8192)" in output
+    assert "args+=(--samples-per-prompt 32)" in output
+    assert "args+=(--top-p 1.0)" in output
     assert "moe_backend=triton" in output
     assert "--max-num-batched-tokens" not in output
     assert "--gres" not in output
@@ -1551,6 +1669,58 @@ def test_legacy_0619_replay_rejects_eager_with_non_none_cuda_graph_mode() -> Non
         in completed.stderr
     )
     assert completed.stdout == ""
+
+
+def write_sync_summary_result(
+    matrix_root: Path,
+    variant: str,
+    *,
+    planned: list[int] | None = None,
+    actual: list[int] | None = None,
+    forced: list[bool] | None = None,
+    output_hashes: list[str] | None = None,
+    request_plan_hash: str = "plan-sha",
+    total_output_tokens: int = 10000,
+) -> None:
+    strict_config = {
+        "runtime_image_sha256": "image-sha",
+        "model_config_hash": "model-sha",
+        "prompt_set_hash": "prompt-sha",
+        "request_plan_hash": request_plan_hash,
+        "cudagraph_mode": "PIECEWISE",
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "temperature": 1.0,
+        "top_p": 0.95,
+    }
+    result_dir = matrix_root / variant
+    result_dir.mkdir()
+    rollout_batches = []
+    if planned is not None and actual is not None and forced is not None:
+        rollout_batches.append(
+            {
+                "planned_output_tokens": planned,
+                "actual_output_tokens": actual,
+                "forced_output_mask": forced,
+                "output_token_hashes": output_hashes or [],
+            }
+        )
+    (result_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "config": {"mode": variant, **strict_config},
+                "rollout_batches": rollout_batches,
+                "summary": {
+                    "total_rollout_time_s": 100.0,
+                    "output_tok_s_per_gpu": 100.0,
+                    "total_output_tokens": total_output_tokens,
+                    "spec_decode_metrics": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(
@@ -1733,6 +1903,66 @@ def test_sync_rollout_summary_allows_different_hashes_with_equal_exact_work(
     assert by_variant["dynamic"]["exact_output_hash_match_vs_baseline"] is False
 
 
+def test_sync_rollout_summary_allows_unforced_underfill_with_matching_forced_work(
+    tmp_path: Path,
+) -> None:
+    summary_module = load_sync_summary_module()
+    forced_mask = [True, False, True]
+    for variant, hashes, unforced_actual in (
+        ("baseline", ["a", "b", "c"], 1),
+        ("static", ["d", "e", "f"], 2),
+        ("dynamic", ["g", "h", "i"], 3),
+    ):
+        write_sync_summary_result(
+            tmp_path,
+            variant,
+            planned=[4, 4, 8],
+            actual=[4, unforced_actual, 8],
+            forced=forced_mask,
+            output_hashes=hashes,
+            total_output_tokens=12 + unforced_actual,
+        )
+
+    rows = summary_module.build_summary(tmp_path)
+    by_variant = {row["variant"]: row for row in rows}
+
+    assert by_variant["dynamic"]["exact_output_work_match_vs_baseline"] is True
+    assert by_variant["dynamic"]["exact_output_hash_match_vs_baseline"] is False
+
+
+def test_sync_rollout_summary_rejects_forced_planned_work_mismatch(
+    tmp_path: Path,
+) -> None:
+    summary_module = load_sync_summary_module()
+    write_sync_summary_result(
+        tmp_path,
+        "baseline",
+        planned=[4, 4, 8],
+        actual=[4, 1, 8],
+        forced=[True, False, True],
+        output_hashes=["same-a", "same-b", "same-c"],
+    )
+    write_sync_summary_result(
+        tmp_path,
+        "static",
+        planned=[4, 4, 8],
+        actual=[4, 2, 8],
+        forced=[True, False, True],
+        output_hashes=["same-a", "same-b", "same-c"],
+    )
+    write_sync_summary_result(
+        tmp_path,
+        "dynamic",
+        planned=[4, 4, 7],
+        actual=[4, 1, 7],
+        forced=[True, False, True],
+        output_hashes=["same-a", "same-b", "same-c"],
+    )
+
+    with pytest.raises(ValueError, match="exact forced output work mismatch"):
+        summary_module.build_summary(tmp_path)
+
+
 def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
     tmp_path: Path,
 ) -> None:
@@ -1763,6 +1993,7 @@ def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
                         {
                             "planned_output_tokens": [4, 4],
                             "actual_output_tokens": actual_tokens,
+                            "forced_output_mask": [True, True],
                             "output_token_hashes": ["same-a", "same-b"],
                         }
                     ],

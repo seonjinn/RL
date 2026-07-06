@@ -132,75 +132,23 @@ fi
 MATRIX_ROOT="${RESULT_ROOT}/${RUN_ID}"
 MANIFEST="${MATRIX_ROOT}/jobs.tsv"
 
-render_sbatch() {
+emit_arg_pair() {
+  local flag="$1"
+  local value="$2"
+  printf 'args+=(%s %s)\n' "$(shell_quote "${flag}")" "$(shell_quote "${value}")"
+}
+
+emit_arg_flag() {
+  local flag="$1"
+  printf 'args+=(%s)\n' "$(shell_quote "${flag}")"
+}
+
+render_run_benchmark() {
   local variant="$1"
   local run_dir="$2"
-  local prompt_arg=""
-  local attention_arg=""
-  local moe_arg=""
-  local distributed_arg=""
-  local timeout_arg=""
-  local expert_parallel_arg=""
-  local model_loader_arg=""
-  local compilation_arg=""
-  local mamba_ssm_arg=""
-  local mamba_backend_arg=""
-  local mamba_rounding_arg=""
-  local mamba_philox_arg=""
-  local batched_tokens_arg=""
   local request_plan_value=""
   local resolved_request_plan_output_value=""
   local response_output_value=""
-  local bench_model_q=""
-  local bench_draft_model_q=""
-  local bench_request_plan_q=""
-  local bench_resolved_request_plan_output_q=""
-  local bench_response_output_q=""
-  local request_plan_host_q=""
-  local recipe_arg=""
-  local global_prompts_arg=""
-  local global_replicas_arg=""
-  local runner_prefix=""
-  local container_pythonpath=""
-  if [[ -n "${PROMPT_JSONL}" ]]; then
-    prompt_arg="--prompt-jsonl '${PROMPT_JSONL}' --prompt-offset '${PROMPT_OFFSET}'"
-  fi
-  if [[ -n "${ATTENTION_BACKEND}" ]]; then
-    attention_arg="--attention-backend '${ATTENTION_BACKEND}'"
-  fi
-  if [[ -n "${MOE_BACKEND}" ]]; then
-    moe_arg="--moe-backend '${MOE_BACKEND}'"
-  fi
-  if [[ -n "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
-    distributed_arg="--distributed-executor-backend '${DISTRIBUTED_EXECUTOR_BACKEND}'"
-  fi
-  if [[ -n "${DIST_TIMEOUT_SECONDS}" ]]; then
-    timeout_arg="--distributed-timeout-seconds '${DIST_TIMEOUT_SECONDS}'"
-  fi
-  if [[ "${ENABLE_EXPERT_PARALLEL}" == "true" ]]; then
-    expert_parallel_arg="--enable-expert-parallel"
-  fi
-  if (( MODEL_LOADER_NUM_THREADS > 0 )); then
-    model_loader_arg="--model-loader-num-threads '${MODEL_LOADER_NUM_THREADS}'"
-  fi
-  if [[ "${DISABLE_FUSE_ALLREDUCE_RMS}" == "true" ]]; then
-    compilation_arg="--disable-fuse-allreduce-rms"
-  fi
-  if [[ -n "${MAMBA_SSM_CACHE_DTYPE}" ]]; then
-    mamba_ssm_arg="--mamba-ssm-cache-dtype '${MAMBA_SSM_CACHE_DTYPE}'"
-  fi
-  if [[ -n "${MAMBA_BACKEND}" ]]; then
-    mamba_backend_arg="--mamba-backend '${MAMBA_BACKEND}'"
-  fi
-  if [[ "${ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING}" == "true" ]]; then
-    mamba_rounding_arg="--enable-mamba-cache-stochastic-rounding"
-  fi
-  if [[ -n "${MAMBA_CACHE_PHILOX_ROUNDS}" ]]; then
-    mamba_philox_arg="--mamba-cache-philox-rounds '${MAMBA_CACHE_PHILOX_ROUNDS}'"
-  fi
-  if [[ "${MAX_NUM_BATCHED_TOKENS}" != "recipe" && "${MAX_NUM_BATCHED_TOKENS}" != "default" ]]; then
-    batched_tokens_arg="--max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}'"
-  fi
   if [[ -n "${REQUEST_PLAN}" ]]; then
     request_plan_value="${REQUEST_PLAN_IN_CONTAINER:-${REQUEST_PLAN}}"
   fi
@@ -218,25 +166,166 @@ render_sbatch() {
       response_output_value="$(variant_path "${RESPONSE_OUTPUT}" "${variant}")"
     fi
   fi
-  bench_model_q="$(shell_quote "${MODEL}")"
-  bench_draft_model_q="$(shell_quote "${DRAFT_MODEL}")"
-  bench_request_plan_q="$(shell_quote "${request_plan_value}")"
-  bench_resolved_request_plan_output_q="$(shell_quote "${resolved_request_plan_output_value}")"
-  bench_response_output_q="$(shell_quote "${response_output_value}")"
-  request_plan_host_q="$(shell_quote "${REQUEST_PLAN}")"
+
+  cat <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+benchmark_python="\${BENCHMARK_PYTHON:-python3}"
+benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_sync_rollout.py}"
+runtime_image_sha256=$(shell_quote "${RUNTIME_IMAGE_SHA256}")
+if [[ -z "\${runtime_image_sha256}" ]]; then
+  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required}"
+fi
+
+runner_prefix=()
+EOF
+  if (( NODES > 1 )); then
+    printf 'runner_prefix+=(%s)\n' "$(shell_quote "/workspace/experiment/run_multinode_ray.sh")"
+  fi
+  cat <<'EOF'
+
+if [[ "${CHECK_VLLM_VERSION:-true}" == "true" ]]; then
+  "${benchmark_python}" -c 'import vllm; assert vllm.__version__ == "0.24.0", vllm.__version__'
+fi
+
+args=()
+EOF
+  emit_arg_pair "--model" "${MODEL}"
+  emit_arg_pair "--draft-model" "${DRAFT_MODEL}"
+  if [[ -n "${request_plan_value}" ]]; then
+    emit_arg_pair "--request-plan" "${request_plan_value}"
+  fi
+  if [[ -n "${resolved_request_plan_output_value}" ]]; then
+    emit_arg_pair "--resolved-request-plan-output" "${resolved_request_plan_output_value}"
+  fi
+  if [[ -n "${response_output_value}" ]]; then
+    emit_arg_pair "--response-output" "${response_output_value}"
+  fi
+  emit_arg_pair "--mode" "${variant}"
+  emit_arg_pair "--static-k" "${STATIC_K}"
+  emit_arg_pair "--dynamic-schedule" "${DYNAMIC_SCHEDULE}"
+  emit_arg_pair "--tensor-parallel-size" "${TP}"
+  emit_arg_pair "--pipeline-parallel-size" "${PP}"
+  emit_arg_pair "--dtype" "bfloat16"
+  emit_arg_pair "--kv-cache-dtype" "${KV_CACHE_DTYPE}"
+  emit_arg_pair "--gpu-memory-utilization" "${GPU_MEMORY_UTILIZATION}"
+  emit_arg_pair "--max-model-len" "${MAX_MODEL_LEN}"
+  if [[ "${MAX_NUM_BATCHED_TOKENS}" != "recipe" && "${MAX_NUM_BATCHED_TOKENS}" != "default" ]]; then
+    emit_arg_pair "--max-num-batched-tokens" "${MAX_NUM_BATCHED_TOKENS}"
+  fi
+  emit_arg_pair "--engine-max-num-seqs" "${ENGINE_MAX_NUM_SEQS}"
+  emit_arg_pair "--cudagraph-mode" "${CUDAGRAPH_MODE}"
+  emit_arg_pair "--num-prompts" "${NUM_PROMPTS}"
+  emit_arg_pair "--samples-per-prompt" "${SAMPLES_PER_PROMPT}"
+  emit_arg_pair "--rollout-batches" "${ROLLOUT_BATCHES}"
+  emit_arg_pair "--max-prompt-tokens" "${MAX_PROMPT_TOKENS}"
+  emit_arg_pair "--max-new-tokens" "${MAX_NEW_TOKENS}"
+  emit_arg_pair "--temperature" "${TEMPERATURE}"
+  emit_arg_pair "--top-p" "${TOP_P}"
+  emit_arg_pair "--seed" "${SEED}"
+  printf 'args+=(%s "${runtime_image_sha256}")\n' "$(shell_quote "--runtime-image-sha256")"
+  if [[ -n "${PROMPT_JSONL}" ]]; then
+    emit_arg_pair "--prompt-jsonl" "${PROMPT_JSONL}"
+    emit_arg_pair "--prompt-offset" "${PROMPT_OFFSET}"
+  fi
+  if [[ -n "${ATTENTION_BACKEND}" ]]; then
+    emit_arg_pair "--attention-backend" "${ATTENTION_BACKEND}"
+  fi
+  if [[ -n "${MOE_BACKEND}" ]]; then
+    emit_arg_pair "--moe-backend" "${MOE_BACKEND}"
+  fi
+  if [[ -n "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
+    emit_arg_pair "--distributed-executor-backend" "${DISTRIBUTED_EXECUTOR_BACKEND}"
+  fi
+  if [[ -n "${DIST_TIMEOUT_SECONDS}" ]]; then
+    emit_arg_pair "--distributed-timeout-seconds" "${DIST_TIMEOUT_SECONDS}"
+  fi
+  if [[ "${ENABLE_EXPERT_PARALLEL}" == "true" ]]; then
+    emit_arg_flag "--enable-expert-parallel"
+  fi
+  if (( MODEL_LOADER_NUM_THREADS > 0 )); then
+    emit_arg_pair "--model-loader-num-threads" "${MODEL_LOADER_NUM_THREADS}"
+  fi
+  if [[ "${DISABLE_FUSE_ALLREDUCE_RMS}" == "true" ]]; then
+    emit_arg_flag "--disable-fuse-allreduce-rms"
+  fi
+  if [[ -n "${MAMBA_SSM_CACHE_DTYPE}" ]]; then
+    emit_arg_pair "--mamba-ssm-cache-dtype" "${MAMBA_SSM_CACHE_DTYPE}"
+  fi
+  if [[ -n "${MAMBA_BACKEND}" ]]; then
+    emit_arg_pair "--mamba-backend" "${MAMBA_BACKEND}"
+  fi
+  if [[ "${ENABLE_MAMBA_CACHE_STOCHASTIC_ROUNDING}" == "true" ]]; then
+    emit_arg_flag "--enable-mamba-cache-stochastic-rounding"
+  fi
+  if [[ -n "${MAMBA_CACHE_PHILOX_ROUNDS}" ]]; then
+    emit_arg_pair "--mamba-cache-philox-rounds" "${MAMBA_CACHE_PHILOX_ROUNDS}"
+  fi
   if [[ -n "${SOURCE_RECIPE}" ]]; then
-    recipe_arg="--source-recipe '${SOURCE_RECIPE}'"
+    emit_arg_pair "--source-recipe" "${SOURCE_RECIPE}"
   fi
   if [[ -n "${GLOBAL_NUM_PROMPTS}" ]]; then
-    global_prompts_arg="--global-num-prompts '${GLOBAL_NUM_PROMPTS}'"
+    emit_arg_pair "--global-num-prompts" "${GLOBAL_NUM_PROMPTS}"
   fi
   if [[ -n "${GLOBAL_GENERATION_REPLICAS}" ]]; then
-    global_replicas_arg="--global-generation-replicas '${GLOBAL_GENERATION_REPLICAS}'"
+    emit_arg_pair "--global-generation-replicas" "${GLOBAL_GENERATION_REPLICAS}"
   fi
+  emit_arg_pair "--output" "${run_dir}/result.json"
+  emit_arg_pair "--tag" "${RUN_ID}_${variant}"
+  cat <<'EOF'
+
+if ((${#runner_prefix[@]})); then
+  "${runner_prefix[@]}" "${benchmark_python}" "${benchmark_script}" "${args[@]}"
+else
+  "${benchmark_python}" "${benchmark_script}" "${args[@]}"
+fi
+EOF
+}
+
+render_sbatch() {
+  local variant="$1"
+  local run_dir="$2"
+  local container_pythonpath=""
+  local container_image_q=""
+  local container_image_sha_q=""
+  local model_q=""
+  local draft_model_q=""
+  local prompt_jsonl_q=""
+  local request_plan_host_q=""
+  local ray_site_q=""
+  local ray_sync_dir_q=""
+  local runtime_image_q=""
+  local hf_home_q=""
+  local hub_cache_q=""
+  local datasets_cache_q=""
+  local container_pythonpath_q=""
+  local container_mounts_q=""
+  local run_script_q=""
+  local benchmark_log_q=""
+  local request_plan_line_q=""
+  local source_recipe_line_q=""
   if (( NODES > 1 )); then
-    runner_prefix="/workspace/experiment/run_multinode_ray.sh"
     container_pythonpath="${RAY_SITE}"
   fi
+  container_image_q="$(shell_quote "${CONTAINER_IMAGE}")"
+  container_image_sha_q="$(shell_quote "${CONTAINER_IMAGE}.sha256")"
+  model_q="$(shell_quote "${MODEL}")"
+  draft_model_q="$(shell_quote "${DRAFT_MODEL}")"
+  prompt_jsonl_q="$(shell_quote "${PROMPT_JSONL}")"
+  request_plan_host_q="$(shell_quote "${REQUEST_PLAN}")"
+  ray_site_q="$(shell_quote "${RAY_SITE}/ray")"
+  ray_sync_dir_q="$(shell_quote "${run_dir}/ray-sync")"
+  runtime_image_q="$(shell_quote "${RUNTIME_IMAGE_SHA256}")"
+  hf_home_q="$(shell_quote "${HF_HOME}")"
+  hub_cache_q="$(shell_quote "${HF_HOME}/hub")"
+  datasets_cache_q="$(shell_quote "${HF_HOME}/datasets")"
+  container_pythonpath_q="$(shell_quote "${container_pythonpath}")"
+  container_mounts_q="$(shell_quote "/lustre:/lustre,${SCRIPT_DIR}:/workspace/experiment")"
+  run_script_q="$(shell_quote "${run_dir}/run_benchmark.sh")"
+  benchmark_log_q="$(shell_quote "${run_dir}/benchmark.log")"
+  request_plan_line_q="$(shell_quote "request_plan=${REQUEST_PLAN}")"
+  source_recipe_line_q="$(shell_quote "source_recipe=${SOURCE_RECIPE}")"
   cat <<EOF
 #!/usr/bin/env bash
 #SBATCH --account=${ACCOUNT}
@@ -253,37 +342,32 @@ render_sbatch() {
 
 set -euo pipefail
 
-test -s '${CONTAINER_IMAGE}'
-test -d '${MODEL}'
+test -s ${container_image_q}
+test -d ${model_q}
 if [[ '${variant}' == 'static' || '${variant}' == 'dynamic' ]]; then
-  test -d '${DRAFT_MODEL}'
+  test -d ${draft_model_q}
 fi
-if [[ -n '${PROMPT_JSONL}' ]]; then
-  test -s '${PROMPT_JSONL}'
+if [[ -n ${prompt_jsonl_q} ]]; then
+  test -s ${prompt_jsonl_q}
 fi
 if [[ -n ${request_plan_host_q} ]]; then
   test -s ${request_plan_host_q}
 fi
 if (( ${NODES} > 1 )); then
-  test -d '${RAY_SITE}/ray'
+  test -d ${ray_site_q}
 fi
 
-runtime_image_sha256="\$(if [[ -n '${RUNTIME_IMAGE_SHA256}' ]]; then printf '%s\n' '${RUNTIME_IMAGE_SHA256}'; elif [[ -s '${CONTAINER_IMAGE}.sha256' ]]; then awk '{print \$1; exit}' '${CONTAINER_IMAGE}.sha256'; else sha256sum '${CONTAINER_IMAGE}' | awk '{print \$1; exit}'; fi)"
-
-export BENCH_MODEL=${bench_model_q}
-export BENCH_DRAFT_MODEL=${bench_draft_model_q}
-export BENCH_REQUEST_PLAN=${bench_request_plan_q}
-export BENCH_RESOLVED_REQUEST_PLAN_OUTPUT=${bench_resolved_request_plan_output_q}
-export BENCH_RESPONSE_OUTPUT=${bench_response_output_q}
+runtime_image_sha256="\$(if [[ -n ${runtime_image_q} ]]; then printf '%s\n' ${runtime_image_q}; elif [[ -s ${container_image_sha_q} ]]; then awk '{print \$1; exit}' ${container_image_sha_q}; else sha256sum ${container_image_q} | awk '{print \$1; exit}'; fi)"
+export BENCH_RUNTIME_IMAGE_SHA256="\${runtime_image_sha256}"
 
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 export CUDA_MODULE_LOADING=LAZY
 export PYTHONUNBUFFERED=1
-export HF_HOME='${HF_HOME}'
-export HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub'
-export HF_DATASETS_CACHE='${HF_HOME}/datasets'
-export PYTHONPATH='${container_pythonpath}'
+export HF_HOME=${hf_home_q}
+export HUGGINGFACE_HUB_CACHE=${hub_cache_q}
+export HF_DATASETS_CACHE=${datasets_cache_q}
+export PYTHONPATH=${container_pythonpath_q}
 export NODE_LOCAL_CACHE_ROOT="/tmp/sna/vllm024_sync_\${SLURM_JOB_ID}_${variant}"
 export XDG_CACHE_HOME="\${NODE_LOCAL_CACHE_ROOT}/xdg"
 export VLLM_CACHE_ROOT="\${NODE_LOCAL_CACHE_ROOT}/vllm"
@@ -303,8 +387,8 @@ echo 'num_prompts=${NUM_PROMPTS}'
 echo 'samples_per_prompt=${SAMPLES_PER_PROMPT}'
 echo 'requests_per_rollout_batch=$((NUM_PROMPTS * SAMPLES_PER_PROMPT))'
 echo 'engine_max_num_seqs=${ENGINE_MAX_NUM_SEQS}'
-echo 'request_plan=${REQUEST_PLAN}'
-echo 'source_recipe=${SOURCE_RECIPE}'
+printf '%s\n' ${request_plan_line_q}
+printf '%s\n' ${source_recipe_line_q}
 echo 'moe_backend=${MOE_BACKEND:-auto}'
 echo 'nodes=${NODES}'
 echo 'target_tp=${TP}'
@@ -319,83 +403,47 @@ if (( ${NODES} > 1 )); then
   export HEAD_NODE="\$(scontrol show hostnames "\${SLURM_JOB_NODELIST}" | head -n 1)"
   export HEAD_IP="\$(srun --nodes=1 --ntasks=1 --nodelist="\${HEAD_NODE}" hostname -I | awk '{print \$1}')"
   export RAY_PORT="\$((20000 + SLURM_JOB_ID % 10000))"
-  export RAY_SYNC_DIR='${run_dir}/ray-sync'
+  export RAY_SYNC_DIR=${ray_sync_dir_q}
   export GPUS_PER_NODE=4
   rm -rf "\${RAY_SYNC_DIR}"
 fi
 
 srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
-  --container-image='${CONTAINER_IMAGE}' \\
-  --container-mounts='/lustre:/lustre,${SCRIPT_DIR}:/workspace/experiment' \\
+  --container-image=${container_image_q} \\
+  --container-mounts=${container_mounts_q} \\
   --no-container-mount-home \\
   --container-remap-root \\
   --mpi=pmix \\
-bash -lc "set -euo pipefail
-export VLLM_USE_V2_MODEL_RUNNER=0
-export VLLM_DISABLE_USAGE_STATS=1
-bench_extra_args=()
-bench_extra_args+=(--model \"\${BENCH_MODEL}\")
-bench_extra_args+=(--draft-model \"\${BENCH_DRAFT_MODEL}\")
-if [[ -n \"\${BENCH_REQUEST_PLAN}\" ]]; then
-  bench_extra_args+=(--request-plan \"\${BENCH_REQUEST_PLAN}\")
-fi
-if [[ -n \"\${BENCH_RESOLVED_REQUEST_PLAN_OUTPUT}\" ]]; then
-  bench_extra_args+=(--resolved-request-plan-output \"\${BENCH_RESOLVED_REQUEST_PLAN_OUTPUT}\")
-fi
-if [[ -n \"\${BENCH_RESPONSE_OUTPUT}\" ]]; then
-  bench_extra_args+=(--response-output \"\${BENCH_RESPONSE_OUTPUT}\")
-fi
-python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
-${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
-  \"\${bench_extra_args[@]}\" \\
-  --mode '${variant}' \\
-  --static-k '${STATIC_K}' \\
-  --dynamic-schedule '${DYNAMIC_SCHEDULE}' \\
-  --tensor-parallel-size '${TP}' \\
-  --pipeline-parallel-size '${PP}' \\
-  --dtype bfloat16 \\
-  --kv-cache-dtype '${KV_CACHE_DTYPE}' \\
-  --gpu-memory-utilization '${GPU_MEMORY_UTILIZATION}' \\
-  --max-model-len '${MAX_MODEL_LEN}' \\
-  ${batched_tokens_arg} \\
-  --engine-max-num-seqs ${ENGINE_MAX_NUM_SEQS} \\
-  --cudagraph-mode '${CUDAGRAPH_MODE}' \\
-  --num-prompts ${NUM_PROMPTS} \\
-  --samples-per-prompt ${SAMPLES_PER_PROMPT} \\
-  --rollout-batches ${ROLLOUT_BATCHES} \\
-  --max-prompt-tokens ${MAX_PROMPT_TOKENS} \\
-  --max-new-tokens ${MAX_NEW_TOKENS} \\
-  --temperature ${TEMPERATURE} \\
-  --top-p ${TOP_P} \\
-  --seed ${SEED} \\
-  --runtime-image-sha256 \"\${runtime_image_sha256}\" \\
-  ${prompt_arg} \\
-  ${attention_arg} \\
-  ${moe_arg} \\
-  ${distributed_arg} \\
-  ${timeout_arg} \\
-  ${expert_parallel_arg} \\
-  ${model_loader_arg} \\
-  ${compilation_arg} \\
-  ${mamba_ssm_arg} \\
-  ${mamba_backend_arg} \\
-  ${mamba_rounding_arg} \\
-  ${mamba_philox_arg} \\
-  ${recipe_arg} \\
-  ${global_prompts_arg} \\
-  ${global_replicas_arg} \\
-  --output '${run_dir}/result.json' \\
-  --tag '${RUN_ID}_${variant}'" \\
-  2>&1 | tee '${run_dir}/benchmark.log'
+${run_script_q} \\
+  2>&1 | tee ${benchmark_log_q}
 EOF
 }
 
-if [[ "${DRY_RUN}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
+render_planned_variant() {
+  local marker="$1"
+  local variant="$2"
+  local run_dir="$3"
+  echo "${marker} sync_variant=${variant}"
+  echo "${marker} planned_run_script=${run_dir}/run_benchmark.sh"
+  echo "# BEGIN run_benchmark.sh ${variant}"
+  render_run_benchmark "${variant}" "${run_dir}"
+  echo "# END run_benchmark.sh ${variant}"
+  echo "# BEGIN submit.sbatch ${variant}"
+  render_sbatch "${variant}" "${run_dir}"
+  echo "# END submit.sbatch ${variant}"
+}
+
+PLAN_ONLY=false
+if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
+  PLAN_ONLY=true
+fi
+
+if [[ "${PLAN_ONLY}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
   git -C "${SCRIPT_DIR}" pull --ff-only
 fi
 
-if [[ "${DRY_RUN}" != "true" ]]; then
-  if [[ "${TEST_ONLY}" != "true" && ! -s "${CONTAINER_IMAGE}" && -z "${DEPENDENCY}" ]]; then
+if [[ "${PLAN_ONLY}" != "true" ]]; then
+  if [[ ! -s "${CONTAINER_IMAGE}" && -z "${DEPENDENCY}" ]]; then
     echo "Missing image and no dependency supplied: ${CONTAINER_IMAGE}" >&2
     exit 3
   fi
@@ -413,28 +461,29 @@ for variant in ${VARIANTS}; do
   esac
   run_dir="${MATRIX_ROOT}/${variant}"
   sbatch_file="${run_dir}/submit.sbatch"
+  run_script="${run_dir}/run_benchmark.sh"
   if [[ "${DRY_RUN}" == "true" ]]; then
-    echo "[DRY-RUN] sync_variant=${variant}"
-    render_sbatch "${variant}" "${run_dir}"
+    render_planned_variant "[DRY-RUN]" "${variant}" "${run_dir}"
+    continue
+  fi
+  if [[ "${TEST_ONLY}" == "true" ]]; then
+    render_planned_variant "[TEST-ONLY]" "${variant}" "${run_dir}"
     continue
   fi
 
   mkdir -p "${run_dir}"
+  render_run_benchmark "${variant}" "${run_dir}" >"${run_script}"
+  chmod 755 "${run_script}"
   render_sbatch "${variant}" "${run_dir}" >"${sbatch_file}"
   sbatch_args=()
   if [[ -n "${DEPENDENCY}" ]]; then
     sbatch_args+=("--dependency=${DEPENDENCY}")
   fi
-  if [[ "${TEST_ONLY}" == "true" ]]; then
-    sbatch --test-only "${sbatch_args[@]}" "${sbatch_file}"
-    printf 'test-only\t%s\t%s\n' "${variant}" "${run_dir}" >>"${MANIFEST}"
-    continue
-  fi
   job_id="$(sbatch --parsable "${sbatch_args[@]}" "${sbatch_file}")"
   printf '%s\t%s\t%s\n' "${job_id}" "${variant}" "${run_dir}" | tee -a "${MANIFEST}"
 done
 
-if [[ "${DRY_RUN}" != "true" ]]; then
+if [[ "${PLAN_ONLY}" != "true" ]]; then
   echo "manifest=${MANIFEST}"
   echo "matrix_root=${MATRIX_ROOT}"
 fi

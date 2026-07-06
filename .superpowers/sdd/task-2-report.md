@@ -373,3 +373,109 @@ Output:
 ```text
 0 errors, 0 warnings, 0 informations
 ```
+
+## Task 2 Follow-up Review Fixes
+
+### RED
+
+Added focused failing tests before implementation for:
+
+- executable per-variant `run_benchmark.sh` generation and execution with a stub Python benchmark path
+- hostile model/draft/request/output paths containing apostrophe, double quote, spaces, dollar sign, and literal command substitution without evaluation
+- non-mutating `DRY_RUN` and `TEST_ONLY` planning that skips YaRN materialization while still rendering planned view and runner paths
+- forced-request mask emission, forced-only exactness, forced planned-count comparison, and unforced normal-EOS underfill allowance
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'exact_output_work or generated_runner or plan_modes or unforced_underfill or forced_planned_work_mismatch or identical_hashes_with_underlength_work'
+```
+
+Output:
+
+```text
+FFFFFF.                                                                  [100%]
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_exact_output_work_emits_counts_and_rejects_underfill
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_generated_runner_executes_with_hostile_paths
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_plan_modes_do_not_materialize_yarn_or_run_dirs[true-false-[DRY-RUN]]
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_plan_modes_do_not_materialize_yarn_or_run_dirs[false-true-[TEST-ONLY]]
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_summary_allows_unforced_underfill_with_matching_forced_work
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_summary_rejects_forced_planned_work_mismatch
+6 failed, 1 passed, 68 deselected in 0.72s
+```
+
+### GREEN
+
+Focused reviewer tests:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'exact_output_work or generated_runner or plan_modes or unforced_underfill or forced_planned_work_mismatch or identical_hashes_with_underlength_work'
+```
+
+Output:
+
+```text
+.......                                                                  [100%]
+7 passed, 68 deselected in 1.21s
+```
+
+Full Task 2 test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+........................................................................ [ 96%]
+...                                                                      [100%]
+75 passed in 7.61s
+```
+
+Full suite with script import path:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Output:
+
+```text
+............................................ [ 28%]
+........................................................................ [ 75%]
+.....................................                                    [100%]
+153 passed, 28 subtests passed in 14.00s
+```
+
+Shell syntax validation:
+
+```bash
+bash -n experiments/vllm_024_dynamicsd/submit_sync_rollout.sh experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+```
+
+Output:
+
+```text
+[no output]
+```
+
+Exit status: `0`
+
+Targeted Pyright:
+
+```bash
+pyright experiments/vllm_024_dynamicsd/benchmark_sync_rollout.py experiments/vllm_024_dynamicsd/summarize_sync_rollout.py tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+### Self-review Notes
+
+- Replaced the nested `bash -lc` benchmark argument construction with a per-variant executable `run_benchmark.sh`; all rendered benchmark argument values are emitted once through `printf %q` into a real Bash array.
+- `DRY_RUN` and `TEST_ONLY` now render planned run scripts and sbatch files without creating run directories, manifests, or YaRN model views.
+- Summary validation now uses `forced_output_mask`: forced entries must match planned lengths, forced planned counts are compared across variants, unforced underfill is allowed, and output token hashes remain a separate signal.
