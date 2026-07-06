@@ -326,3 +326,178 @@ Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
 `vllm024_dflare_report` as a top-level module; plain pytest does not add
 `scripts/` to `PYTHONPATH`. The repository-wide suite passes with
 `PYTHONPATH=scripts`.
+
+## Second Review RED/GREEN
+
+Second review items fixed:
+- Official rows now parse pinned ModelOpt `timing.json`,
+  `acceptance_rate.json`, `specbench_results.json`, and `configuration.json`,
+  including list-wrapped metric schemas, and fail closed on missing, zero, or
+  invalid metric/config fields.
+- Official runs resolve the Task 4 prepared manifest/checksum-backed Parquet
+  path and pass that exact path through `--dataset_path`.
+- Official dynamic and MTP dynamic modes are rejected because the pinned
+  ModelOpt CLI has no schedule support.
+- Official provenance now comes from `configuration.json` for recorded fields;
+  upstream-unrecorded dtype/compiler/runtime knobs are marked as
+  `upstream-unrecorded` instead of synthesized.
+- Ultra sbatch now exports the Task 3 Ray environment (`HEAD_NODE`, `HEAD_IP`,
+  `RAY_PORT`, `RAY_SYNC_DIR`, `GPUS_PER_NODE`) and cleans the sync dir before
+  the single coordinated `run_multinode_ray.sh` launch.
+- Both launchers derive `BENCH_RUNTIME_IMAGE_SHA256` in sbatch from an explicit
+  value, image `.sha256` sidecar, or `sha256sum`, and never pass
+  `unknown`/placeholder values.
+- Default SPEED-Bench prepared root now matches Task 4 exactly:
+  `${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/speedbench-487aa718-43fee0cd`.
+- Summary match/provenance fields now include the expanded performance and work
+  fields from the review.
+- Parquet reader failures now preserve the original exception cause with no
+  binary JSONL fallback.
+
+### RED
+
+Focused second-review command before implementation:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+8 failed, 18 passed, 97 deselected in 7.09s
+```
+
+Representative expected failures:
+- Missing `resolve_prepared_dataset_path`
+- Official adapter still expected synthetic `metrics.json`
+- Parquet read fallback hid the real Parquet error cause
+- Summary did not compare expanded performance/work fields
+- Launchers did not use Task 4 prepared paths or sbatch-side runtime digest
+- Ultra launcher did not export the Task 3 Ray coordination environment
+- Official command did not pass an actual Parquet `--dataset_path`
+- Official dynamic/MTP dynamic rejection was missing
+
+Additional fail-closed config RED checks added during final review:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k official_rejects_missing_configuration_fields
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k official_rejects_missing_static_draft_config
+```
+
+Both initially failed with `Failed: DID NOT RAISE <class 'ValueError'>`,
+confirming official adaptation was still falling back to synthetic config
+values for missing upstream fields.
+
+### GREEN
+
+Focused Task 5 second-review command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+28 passed, 97 deselected in 3.26s
+```
+
+Experiment test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+125 passed in 15.96s
+```
+
+Shell syntax:
+
+```bash
+bash -n \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: exit 0.
+
+Dry-run launchers:
+
+```bash
+DRY_RUN=true CLUSTER=lyris RUN_ID=task5-second-review-cal-smoke \
+  K_VALUES='1 3' CONCURRENCIES='1 8 32 64' \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh
+
+DRY_RUN=true CLUSTER=ptyche MODELS='ultra super' \
+  RUN_ID=task5-second-review-nemotron-smoke \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: both exit 0.
+
+Targeted Pyright:
+
+```bash
+pyright \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py \
+  tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+Python compile check:
+
+```bash
+python3 -m compileall -q \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py
+```
+
+Result: exit 0.
+
+Whitespace check:
+
+```bash
+git diff --check
+```
+
+Result: exit 0.
+
+Repository-wide suite:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Result:
+
+```text
+203 passed, 28 subtests passed in 22.60s
+```
+
+Plain repository-wide command:
+
+```bash
+python3 -m pytest -q
+```
+
+Result:
+
+```text
+1 error during collection:
+ModuleNotFoundError: No module named 'vllm024_dflare_report'
+```
+
+Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
+`vllm024_dflare_report` as a top-level module; plain pytest does not add
+`scripts/` to `PYTHONPATH`. The repository-wide suite passes with
+`PYTHONPATH=scripts`.

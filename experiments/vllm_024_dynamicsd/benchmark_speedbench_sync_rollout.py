@@ -263,13 +263,30 @@ def read_prepared_speedbench_rows(path: Path) -> list[dict[str, Any]]:
             dict(row)
             for row in pd.read_parquet(path).to_dict(orient="records")
         ]
-    except Exception:
-        rows: list[dict[str, Any]] = []
-        with path.open(encoding="utf-8") as stream:
-            for line in stream:
-                if line.strip():
-                    rows.append(json.loads(line))
-        return rows
+    except Exception as exc:
+        raise ValueError(f"failed to read prepared parquet: {path}") from exc
+
+
+def resolve_prepared_dataset_path(
+    *,
+    prepared_root: Path,
+    prepared_manifest: Path,
+    prepared_checksums: Path,
+    dataset_config: str,
+) -> Path:
+    manifest = json.loads(prepared_manifest.read_text(encoding="utf-8"))
+    entry = _manifest_config_entry(manifest, dataset_config)
+    relative_path = str(entry["relative_path"])
+    parquet_path = prepared_root / relative_path
+    actual_hash = sha256_file(parquet_path)
+    if actual_hash != entry.get("sha256"):
+        raise ValueError(f"prepared parquet hash mismatch for {relative_path}")
+    _verify_checksum_file(
+        prepared_checksums,
+        relative_path=relative_path,
+        expected_sha256=actual_hash,
+    )
+    return parquet_path
 
 
 def build_overlay_from_prepared_parquet(
@@ -283,18 +300,13 @@ def build_overlay_from_prepared_parquet(
 ) -> OverlaySelection:
     from speedbench_dataset import build_records
 
-    manifest = json.loads(prepared_manifest.read_text(encoding="utf-8"))
-    entry = _manifest_config_entry(manifest, dataset_config)
-    relative_path = str(entry["relative_path"])
-    parquet_path = prepared_root / relative_path
-    actual_hash = sha256_file(parquet_path)
-    if actual_hash != entry.get("sha256"):
-        raise ValueError(f"prepared parquet hash mismatch for {relative_path}")
-    _verify_checksum_file(
-        prepared_checksums,
-        relative_path=relative_path,
-        expected_sha256=actual_hash,
+    parquet_path = resolve_prepared_dataset_path(
+        prepared_root=prepared_root,
+        prepared_manifest=prepared_manifest,
+        prepared_checksums=prepared_checksums,
+        dataset_config=dataset_config,
     )
+    actual_hash = sha256_file(parquet_path)
     records = build_records(
         read_prepared_speedbench_rows(parquet_path),
         dataset_config=dataset_config,
@@ -727,7 +739,7 @@ def build_official_speedbench_command(
     model: str,
     tokenizer: str,
     modelopt_root: Path,
-    dataset_config: str,
+    dataset_path: Path,
     save_dir: Path,
     variant: str,
     tensor_parallel_size: int,
@@ -738,12 +750,15 @@ def build_official_speedbench_command(
     static_k: int = 0,
     temperature: float = 0.0,
 ) -> list[str]:
+    if variant in ("dynamic", "mtp_dynamic"):
+        raise ValueError(
+            "pinned ModelOpt run.py does not support scheduled dynamic "
+            f"speculation for official mode={variant}"
+        )
     algorithm = {
         "baseline": "NONE",
         "static": "EAGLE3",
-        "dynamic": "EAGLE3",
         "mtp_static": "MTP",
-        "mtp_dynamic": "MTP",
     }[variant]
     draft_length = 0 if variant == "baseline" else static_k
     command = [
@@ -754,7 +769,7 @@ def build_official_speedbench_command(
         "--dataset",
         "speed",
         "--dataset_path",
-        dataset_config,
+        str(dataset_path),
         "--engine",
         "VLLM",
         "--speculative_algorithm",
@@ -802,6 +817,201 @@ def _required_provenance_value(value: str | None, field_name: str) -> str:
     return value
 
 
+def _load_modelopt_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ValueError(f"missing required ModelOpt output file: {path.name}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        if len(payload) != 1 or not isinstance(payload[0], dict):
+            raise ValueError(f"{path.name} must contain one result object")
+        return dict(payload[0])
+    if isinstance(payload, dict):
+        return dict(payload)
+    raise ValueError(f"{path.name} must contain a JSON object")
+
+
+def _positive_float(mapping: Mapping[str, Any], key: str, *, file_name: str) -> float:
+    try:
+        value = float(mapping[key])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"{file_name} missing numeric {key}") from exc
+    if value <= 0.0:
+        raise ValueError(f"{file_name} {key} must be positive")
+    return value
+
+
+def _stats_mean(mapping: Mapping[str, Any], key: str, *, file_name: str) -> float:
+    value = mapping.get(key)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{file_name} missing statistics object {key}")
+    return _positive_float(value, "mean", file_name=f"{file_name}:{key}")
+
+
+def _required_string(mapping: Mapping[str, Any], key: str, *, file_name: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{file_name} missing string {key}")
+    return value
+
+
+def _required_int(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    file_name: str,
+    minimum: int,
+) -> int:
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{file_name} missing integer {key}")
+    if value < minimum:
+        raise ValueError(f"{file_name} {key} must be >= {minimum}")
+    return value
+
+
+def _required_float(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    file_name: str,
+    minimum: float,
+) -> float:
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{file_name} missing numeric {key}")
+    number = float(value)
+    if number < minimum:
+        raise ValueError(f"{file_name} {key} must be >= {minimum}")
+    return number
+
+
+def parse_modelopt_official_outputs(
+    save_dir: Path,
+    *,
+    expected_dataset_path: Path,
+) -> dict[str, Any]:
+    timing = _load_modelopt_json_object(save_dir / "timing.json")
+    acceptance = _load_modelopt_json_object(save_dir / "acceptance_rate.json")
+    specbench = _load_modelopt_json_object(save_dir / "specbench_results.json")
+    configuration = _load_modelopt_json_object(save_dir / "configuration.json")
+
+    output_tps = _positive_float(timing, "Output TPS", file_name="timing.json")
+    output_tps_per_gpu = _positive_float(
+        timing,
+        "Output TPS/gpu",
+        file_name="timing.json",
+    )
+    mean_output_tokens = _stats_mean(
+        timing,
+        "Number of Output Tokens",
+        file_name="timing.json",
+    )
+    request_al = specbench.get("Request_AL")
+    if not isinstance(request_al, Mapping) or not request_al:
+        raise ValueError("specbench_results.json missing Request_AL")
+    request_count = len(request_al)
+    total_output_tokens = int(round(mean_output_tokens * request_count))
+    if total_output_tokens <= 0:
+        raise ValueError("timing.json computed total output tokens must be positive")
+    configured_dataset_path = _required_string(
+        configuration,
+        "dataset_path",
+        file_name="configuration.json",
+    )
+    if str(configured_dataset_path) != str(expected_dataset_path):
+        raise ValueError(
+            "configuration.json dataset_path mismatch: "
+            f"{configured_dataset_path} != {expected_dataset_path}"
+        )
+    dataset = _required_string(configuration, "dataset", file_name="configuration.json")
+    if dataset != "speed":
+        raise ValueError("configuration.json dataset must be speed")
+    engine = _required_string(configuration, "engine", file_name="configuration.json")
+    if engine != "VLLM":
+        raise ValueError("configuration.json engine must be VLLM")
+    config_values = {
+        "dataset_path": configured_dataset_path,
+        "dataset": dataset,
+        "engine": engine,
+        "speculative_algorithm": _required_string(
+            configuration,
+            "speculative_algorithm",
+            file_name="configuration.json",
+        ),
+        "model_dir": _required_string(
+            configuration,
+            "model_dir",
+            file_name="configuration.json",
+        ),
+        "temperature": _required_float(
+            configuration,
+            "temperature",
+            file_name="configuration.json",
+            minimum=0.0,
+        ),
+        "max_seq_len": _required_int(
+            configuration,
+            "max_seq_len",
+            file_name="configuration.json",
+            minimum=1,
+        ),
+        "output_length": _required_int(
+            configuration,
+            "output_length",
+            file_name="configuration.json",
+            minimum=1,
+        ),
+        "draft_length": _required_int(
+            configuration,
+            "draft_length",
+            file_name="configuration.json",
+            minimum=0,
+        ),
+        "tp_size": _required_int(
+            configuration,
+            "tp_size",
+            file_name="configuration.json",
+            minimum=1,
+        ),
+        "concurrency": _required_int(
+            configuration,
+            "concurrency",
+            file_name="configuration.json",
+            minimum=1,
+        ),
+        "save_dir": _required_string(
+            configuration,
+            "save_dir",
+            file_name="configuration.json",
+        ),
+    }
+    average_al = _positive_float(
+        specbench,
+        "Average_AL",
+        file_name="specbench_results.json",
+    )
+    acceptance_average_al = _positive_float(
+        acceptance,
+        "Average_AL",
+        file_name="acceptance_rate.json",
+    )
+    if abs(acceptance_average_al - average_al) > 1e-9:
+        raise ValueError("acceptance_rate.json and specbench_results.json Average_AL mismatch")
+    return {
+        "timing": timing,
+        "acceptance": acceptance,
+        "specbench": specbench,
+        "configuration": configuration,
+        "configuration_values": config_values,
+        "output_tps": output_tps,
+        "output_tps_per_gpu": output_tps_per_gpu,
+        "total_output_tokens": total_output_tokens,
+        "total_rollout_time_s": round(total_output_tokens / output_tps, 6),
+        "average_al": average_al,
+        "request_count": request_count,
+    }
+
+
 def adapt_official_speedbench_output(
     *,
     save_dir: Path,
@@ -819,14 +1029,55 @@ def adapt_official_speedbench_output(
     runtime_image_sha256: str,
     model_config_hash_value: str | None,
     prepared_manifest_hash: str | None,
+    prepared_dataset_path: Path,
 ) -> dict[str, Any]:
-    metrics_path = save_dir / "metrics.json"
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
-    total_time_s = float(metrics.get("total_time_s", metrics.get("time_s", 0.0)))
-    total_output_tokens = int(metrics.get("total_output_tokens", metrics.get("output_tokens", 0)))
+    official = parse_modelopt_official_outputs(
+        save_dir,
+        expected_dataset_path=prepared_dataset_path,
+    )
+    configuration = official["configuration"]
+    configuration_values = official["configuration_values"]
+    expected_algorithm = {
+        "baseline": "NONE",
+        "static": "EAGLE3",
+        "mtp_static": "MTP",
+    }.get(variant)
+    if expected_algorithm is None:
+        raise ValueError(
+            "pinned ModelOpt run.py does not support scheduled dynamic "
+            f"speculation for official mode={variant}"
+        )
+    if configuration_values["speculative_algorithm"] != expected_algorithm:
+        raise ValueError(
+            "configuration.json speculative_algorithm mismatch: "
+            f"{configuration_values['speculative_algorithm']} != {expected_algorithm}"
+        )
+    if variant == "baseline":
+        configured_draft_model = configuration.get("draft_model_dir")
+        official_draft_model = (
+            configured_draft_model
+            if isinstance(configured_draft_model, str) and configured_draft_model.strip()
+            else "none"
+        )
+    else:
+        official_draft_model = _required_string(
+            configuration,
+            "draft_model_dir",
+            file_name="configuration.json",
+        )
+        if int(configuration_values["draft_length"]) < 1:
+            raise ValueError("configuration.json draft_length must be >= 1")
     runtime_sha = _require_runtime_sha(runtime_image_sha256)
     model_hash = _required_provenance_value(
-        model_config_hash_value,
+        str(
+            (
+                configuration.get("checkpoint", {})
+                if isinstance(configuration.get("checkpoint"), Mapping)
+                else {}
+            ).get("index_sha256")
+            or model_config_hash_value
+            or ""
+        ),
         "model_config_hash",
     )
     manifest_hash = _required_provenance_value(
@@ -843,37 +1094,61 @@ def adapt_official_speedbench_output(
             "upstream_turn_loop_preserved": True,
             "mode": variant,
             "method": method_for_mode(variant),
-            "model": model,
-            "draft_model": draft_model or "none",
+            "model": str(configuration_values["model_dir"]),
+            "draft_model": str(official_draft_model),
             "dataset_config": dataset_config,
-            "active_concurrency": active_concurrency,
-            "tensor_parallel_size": tensor_parallel_size,
+            "dataset_path": str(configuration_values["dataset_path"]),
+            "active_concurrency": int(configuration_values["concurrency"]),
+            "tensor_parallel_size": int(configuration_values["tp_size"]),
             "pipeline_parallel_size": 1,
-            "dtype": "bfloat16",
-            "kv_cache_dtype": "auto",
-            "max_model_len": max_model_len,
-            "max_new_tokens": max_new_tokens,
-            "static_k": static_k,
-            "temperature": temperature,
-            "top_p": 1.0,
+            "dtype": "upstream-unrecorded",
+            "kv_cache_dtype": "upstream-unrecorded",
+            "max_model_len": int(configuration_values["max_seq_len"]),
+            "max_new_tokens": int(configuration_values["output_length"]),
+            "static_k": int(configuration_values["draft_length"]),
+            "temperature": float(configuration_values["temperature"]),
+            "top_p": "upstream-unrecorded",
             "runtime_image_sha256": runtime_sha,
             "model_config_hash": model_hash,
             "prepared_manifest_hash": manifest_hash,
             "request_plan_hash": "official-upstream-modelopt",
-            "prompt_set_hash": f"official-upstream:{dataset_config}",
-            "cudagraph_mode": "official-upstream",
-            "compilation_config": {"source": "official-upstream-modelopt"},
-            "sampling": {"temperature": temperature, "top_p": 1.0},
+            "prompt_set_hash": f"official-upstream:{configuration_values['dataset_path']}",
+            "cudagraph_mode": "upstream-unrecorded",
+            "compilation_config": "upstream-unrecorded",
+            "sampling": {
+                "temperature": float(configuration_values["temperature"]),
+                "top_p": "upstream-unrecorded",
+            },
+            "max_num_batched_tokens": "upstream-unrecorded",
+            "gpu_memory_utilization": "upstream-unrecorded",
+            "samples_per_prompt": 1,
+            "rollout_batches": 1,
+            "distributed_executor_backend": "upstream-unrecorded",
+            "distributed_timeout_seconds": "upstream-unrecorded",
+            "enable_expert_parallel": "upstream-unrecorded",
+            "model_loader_extra_config": "upstream-unrecorded",
+            "mamba_ssm_cache_dtype": "upstream-unrecorded",
+            "mamba_backend": "upstream-unrecorded",
+            "enable_mamba_cache_stochastic_rounding": "upstream-unrecorded",
+            "mamba_cache_philox_rounds": "upstream-unrecorded",
+            "moe_backend": "upstream-unrecorded",
+            "official_configuration": configuration,
         },
         "official_output": {
             "save_dir": str(save_dir),
-            "metrics": metrics,
+            "timing": official["timing"],
+            "acceptance_rate": official["acceptance"],
+            "specbench_results": official["specbench"],
         },
         "summary": {
-            "total_rollout_time_s": total_time_s,
-            "total_output_tokens": total_output_tokens,
-            "output_tok_s_per_gpu": float(metrics.get("output_tok_s_per_gpu", 0.0)),
-            "spec_decode_metrics": {},
+            "total_rollout_time_s": official["total_rollout_time_s"],
+            "total_output_tokens": official["total_output_tokens"],
+            "output_tok_s": official["output_tps"],
+            "output_tok_s_per_gpu": official["output_tps_per_gpu"],
+            "spec_decode_metrics": {
+                "mean_acceptance_length": official["average_al"],
+                "acceptance_rate": official["average_al"],
+            },
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -887,6 +1162,7 @@ def run_official_speedbench(
     tokenizer: str,
     modelopt_root: Path,
     dataset_config: str,
+    prepared_dataset_path: Path,
     output: Path,
     variant: str,
     tensor_parallel_size: int,
@@ -905,7 +1181,7 @@ def run_official_speedbench(
         model=model,
         tokenizer=tokenizer,
         modelopt_root=modelopt_root,
-        dataset_config=dataset_config,
+        dataset_path=prepared_dataset_path,
         save_dir=save_dir,
         variant=variant,
         tensor_parallel_size=tensor_parallel_size,
@@ -933,6 +1209,7 @@ def run_official_speedbench(
         runtime_image_sha256=runtime_image_sha256,
         model_config_hash_value=model_config_hash,
         prepared_manifest_hash=prepared_manifest_hash,
+        prepared_dataset_path=prepared_dataset_path,
     )
 
 
@@ -1224,12 +1501,17 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             "max_model_len": args.max_model_len,
             "max_new_tokens": max_new_tokens,
             "max_num_seqs": args.active_concurrency,
-            "max_num_batched_tokens": args.max_num_batched_tokens,
+            "max_num_batched_tokens": args.max_num_batched_tokens
+            if args.max_num_batched_tokens is not None
+            else "auto",
             "enable_expert_parallel": args.enable_expert_parallel,
             "distributed_executor_backend": args.distributed_executor_backend or "auto",
-            "distributed_timeout_seconds": args.distributed_timeout_seconds,
+            "distributed_timeout_seconds": args.distributed_timeout_seconds
+            if args.distributed_timeout_seconds is not None
+            else "auto",
             "model_loader_extra_config": engine_kwargs.get(
-                "model_loader_extra_config"
+                "model_loader_extra_config",
+                "auto",
             ),
             "attention_backend": args.attention_backend or "auto",
             "moe_backend": args.moe_backend or "auto",
@@ -1240,7 +1522,9 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             "enable_mamba_cache_stochastic_rounding": (
                 args.enable_mamba_cache_stochastic_rounding
             ),
-            "mamba_cache_philox_rounds": args.mamba_cache_philox_rounds,
+            "mamba_cache_philox_rounds": args.mamba_cache_philox_rounds
+            if args.mamba_cache_philox_rounds is not None
+            else "auto",
             "runtime_image_sha256": runtime_sha,
             "model_config_hash": model_config_hash(args.model),
             "temperature": args.temperature,
@@ -1267,17 +1551,23 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run_official(args: argparse.Namespace) -> int:
+    if args.prepared_manifest is None:
+        raise ValueError("--prepared-manifest is required for official cohort")
+    if args.prepared_checksums is None:
+        raise ValueError("--prepared-checksums is required for official cohort")
     tokenizer = args.tokenizer or args.model
-    prepared_manifest_hash = (
-        sha256_file(args.prepared_manifest)
-        if args.prepared_manifest is not None
-        else "official-upstream-manifest"
+    prepared_dataset_path = resolve_prepared_dataset_path(
+        prepared_root=args.prepared_root,
+        prepared_manifest=args.prepared_manifest,
+        prepared_checksums=args.prepared_checksums,
+        dataset_config=args.dataset_config,
     )
+    prepared_manifest_hash = sha256_file(args.prepared_manifest)
     command = build_official_speedbench_command(
         model=args.model,
         tokenizer=tokenizer,
         modelopt_root=args.modelopt_root,
-        dataset_config=args.dataset_config,
+        dataset_path=prepared_dataset_path,
         save_dir=args.output.with_suffix(".modelopt"),
         variant=args.mode,
         tensor_parallel_size=args.tensor_parallel_size,
@@ -1296,6 +1586,7 @@ def run_official(args: argparse.Namespace) -> int:
         tokenizer=tokenizer,
         modelopt_root=args.modelopt_root,
         dataset_config=args.dataset_config,
+        prepared_dataset_path=prepared_dataset_path,
         output=args.output,
         variant=args.mode,
         tensor_parallel_size=args.tensor_parallel_size,

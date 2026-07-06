@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import textwrap
+import types
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -237,6 +238,21 @@ def fake_speedbench_sync_summary_row(
         "temperature": 0.0,
         "top_p": 1.0,
         "sampling": {"temperature": 0.0, "top_p": 1.0},
+        "max_model_len": 36864,
+        "max_new_tokens": 32768,
+        "samples_per_prompt": 1,
+        "rollout_batches": 3,
+        "max_num_batched_tokens": 32768,
+        "gpu_memory_utilization": 0.9,
+        "distributed_executor_backend": "auto",
+        "distributed_timeout_seconds": 3600,
+        "enable_expert_parallel": False,
+        "model_loader_extra_config": "none",
+        "mamba_ssm_cache_dtype": "auto",
+        "mamba_backend": "auto",
+        "enable_mamba_cache_stochastic_rounding": False,
+        "mamba_cache_philox_rounds": "none",
+        "moe_backend": "auto",
         "output_tok_s_per_gpu": 100.0,
         "total_rollout_time_s": 10.0,
         "total_output_tokens": 1000,
@@ -2593,10 +2609,302 @@ def write_prepared_speedbench_fixture(tmp_path: Path) -> tuple[Path, Path, Path]
     return prepared_root, manifest_path, checksums_path
 
 
+def install_jsonl_parquet_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeFrame:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self._rows = rows
+
+        def to_dict(self, *, orient: str) -> list[dict[str, Any]]:
+            assert orient == "records"
+            return self._rows
+
+    def read_parquet(path: Path) -> FakeFrame:
+        rows = [
+            json.loads(line)
+            for line in Path(path).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return FakeFrame(rows)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pandas",
+        types.SimpleNamespace(read_parquet=read_parquet),
+    )
+
+
+def write_pinned_modelopt_speedbench_output(
+    save_dir: Path,
+    *,
+    dataset_path: Path,
+    output_tps: float = 960.0,
+    output_tps_per_gpu: float = 120.0,
+    request_count: int = 2,
+    mean_output_tokens: float = 50.0,
+) -> None:
+    save_dir.mkdir(parents=True, exist_ok=True)
+    specbench = {
+        "Request_AL": {
+            f"speed-{index:03d}": 1.25 + (index * 0.25)
+            for index in range(request_count)
+        },
+        "Category_AL": {"low_entropy": 1.25, "mixed": 1.5},
+        "Average_AL": 1.375,
+        "Acceptance_Length_Histogram": {"1": 1, "2": 1},
+        "Conditional_Acceptance_Rate": {"1": 1.0, "2": 0.5},
+        "Joint_Acceptance_Rate": {"1": 1.0, "2": 0.5},
+    }
+    (save_dir / "timing.json").write_text(
+        json.dumps(
+            [
+                {
+                    "Output TPS": output_tps,
+                    "Output TPS/gpu": output_tps_per_gpu,
+                    "E2E Request Time": {
+                        "min": "0.5000",
+                        "max": "0.7500",
+                        "mean": "0.6250",
+                        "std": "0.1250",
+                        "quantiles": {"0.25": "0.5625", "0.5": "0.6250", "0.75": "0.6875"},
+                    },
+                    "TTFT Time": {
+                        "min": "0.1000",
+                        "max": "0.2000",
+                        "mean": "0.1500",
+                        "std": "0.0500",
+                        "quantiles": {"0.25": "0.1250", "0.5": "0.1500", "0.75": "0.1750"},
+                    },
+                    "Request Generation Step Time": {
+                        "min": "0.0100",
+                        "max": "0.0300",
+                        "mean": "0.0200",
+                        "std": "0.0100",
+                        "quantiles": {"0.25": "0.0150", "0.5": "0.0200", "0.75": "0.0250"},
+                    },
+                    "Number of Output Tokens": {
+                        "min": f"{mean_output_tokens:.4f}",
+                        "max": f"{mean_output_tokens:.4f}",
+                        "mean": f"{mean_output_tokens:.4f}",
+                        "std": "0.0000",
+                        "quantiles": {
+                            "0.25": f"{mean_output_tokens:.4f}",
+                            "0.5": f"{mean_output_tokens:.4f}",
+                            "0.75": f"{mean_output_tokens:.4f}",
+                        },
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (save_dir / "acceptance_rate.json").write_text(
+        json.dumps([specbench]),
+        encoding="utf-8",
+    )
+    (save_dir / "specbench_results.json").write_text(
+        json.dumps([specbench]),
+        encoding="utf-8",
+    )
+    (save_dir / "configuration.json").write_text(
+        json.dumps(
+            {
+                "dataset": "speed",
+                "dataset_path": str(dataset_path),
+                "engine": "VLLM",
+                "speculative_algorithm": "EAGLE3",
+                "model_dir": "/models/qwen32",
+                "draft_model_dir": "/models/draft",
+                "temperature": 0.0,
+                "max_seq_len": 40960,
+                "output_length": int(mean_output_tokens),
+                "draft_length": 5,
+                "tp_size": 8,
+                "concurrency": 16,
+                "trust_remote_code": True,
+                "save_dir": str(save_dir),
+                "engine_version": "0.24.0",
+                "modelopt_sha": "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446",
+                "specdec_bench_sha": "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446",
+                "checkpoint": {
+                    "path": "/models/qwen32",
+                    "index_sha256": "model-config-sha",
+                },
+                "serving_config": {"max_model_len": 40960},
+                "argv": ["run.py", "--dataset_path", str(dataset_path)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_speedbench_sync_official_parses_pinned_modelopt_output_files(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
+        tmp_path
+    )
+    dataset_path = runner.resolve_prepared_dataset_path(
+        prepared_root=prepared_root,
+        prepared_manifest=manifest_path,
+        prepared_checksums=checksums_path,
+        dataset_config="throughput_1k",
+    )
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+
+    payload = runner.adapt_official_speedbench_output(
+        save_dir=save_dir,
+        output=tmp_path / "official_result.json",
+        model="synthetic-model",
+        draft_model="synthetic-draft",
+        variant="static",
+        dataset_config="throughput_1k",
+        tensor_parallel_size=2,
+        active_concurrency=1,
+        max_model_len=1,
+        max_new_tokens=1,
+        static_k=1,
+        temperature=0.7,
+        runtime_image_sha256="runtime-sha",
+        model_config_hash_value="model-sha",
+        prepared_manifest_hash=runner.sha256_file(manifest_path),
+        prepared_dataset_path=dataset_path,
+    )
+
+    assert payload["config"]["model"] == "/models/qwen32"
+    assert payload["config"]["draft_model"] == "/models/draft"
+    assert payload["config"]["dataset_path"] == str(dataset_path)
+    assert payload["config"]["dataset_config"] == "throughput_1k"
+    assert payload["config"]["tensor_parallel_size"] == 8
+    assert payload["config"]["active_concurrency"] == 16
+    assert payload["config"]["max_model_len"] == 40960
+    assert payload["config"]["max_new_tokens"] == 50
+    assert payload["config"]["method"] == "eagle3"
+    assert payload["config"]["dtype"] == "upstream-unrecorded"
+    assert payload["config"]["cudagraph_mode"] == "upstream-unrecorded"
+    assert payload["config"]["compilation_config"] == "upstream-unrecorded"
+    assert payload["summary"]["output_tok_s_per_gpu"] == 120.0
+    assert payload["summary"]["output_tok_s"] == 960.0
+    assert payload["summary"]["total_output_tokens"] == 100
+    assert payload["summary"]["total_rollout_time_s"] == round(100 / 960.0, 6)
+    assert payload["summary"]["spec_decode_metrics"]["mean_acceptance_length"] == 1.375
+
+
+def test_speedbench_sync_official_rejects_missing_or_zero_pinned_metrics(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(
+        save_dir,
+        dataset_path=tmp_path / "throughput_1k" / "test.parquet",
+        output_tps=0.0,
+    )
+
+    with pytest.raises(ValueError, match="Output TPS"):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/models/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=tmp_path / "throughput_1k" / "test.parquet",
+        )
+    assert not (tmp_path / "official_result.json").exists()
+
+
+def test_speedbench_sync_official_rejects_missing_configuration_fields(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+    configuration_path = save_dir / "configuration.json"
+    configuration = json.loads(configuration_path.read_text(encoding="utf-8"))
+    del configuration["tp_size"]
+    configuration_path.write_text(json.dumps(configuration), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="configuration.json missing integer tp_size"):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/models/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=dataset_path,
+        )
+    assert not (tmp_path / "official_result.json").exists()
+
+
+def test_speedbench_sync_official_rejects_missing_static_draft_config(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+    configuration_path = save_dir / "configuration.json"
+    configuration = json.loads(configuration_path.read_text(encoding="utf-8"))
+    del configuration["draft_model_dir"]
+    configuration_path.write_text(json.dumps(configuration), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="configuration.json missing string draft_model_dir"):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/synthetic/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=dataset_path,
+        )
+    assert not (tmp_path / "official_result.json").exists()
+
+
 def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_result(
     tmp_path: Path,
 ) -> None:
     runner = load_speedbench_sync_module()
+    prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
+        tmp_path
+    )
+    prepared_dataset_path = runner.resolve_prepared_dataset_path(
+        prepared_root=prepared_root,
+        prepared_manifest=manifest_path,
+        prepared_checksums=checksums_path,
+        dataset_config="throughput_1k",
+    )
     modelopt_root = tmp_path / "modelopt"
     run_py = modelopt_root / "examples/specdec_bench/run.py"
     run_py.parent.mkdir(parents=True)
@@ -2628,20 +2936,15 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
             save_dir = Path(args.save_dir)
             save_dir.mkdir(parents=True, exist_ok=True)
             (save_dir / "argv.json").write_text(json.dumps(sys.argv), encoding="utf-8")
-            (save_dir / "metrics.json").write_text(
-                json.dumps(
-                    {
-                        "total_time_s": 12.5,
-                        "total_output_tokens": 2500,
-                        "output_tok_s_per_gpu": 100.0,
-                        "turns_processed": 72,
-                    }
-                ),
-                encoding="utf-8",
-            )
             """
         ),
         encoding="utf-8",
+    )
+    write_pinned_modelopt_speedbench_output(
+        tmp_path / "official_result.modelopt",
+        dataset_path=prepared_dataset_path,
+        output_tps=800.0,
+        output_tps_per_gpu=100.0,
     )
 
     payload = runner.run_official_speedbench(
@@ -2650,6 +2953,7 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
         draft_model="/models/draft",
         modelopt_root=modelopt_root,
         dataset_config="throughput_1k",
+        prepared_dataset_path=prepared_dataset_path,
         output=tmp_path / "official_result.json",
         variant="static",
         tensor_parallel_size=2,
@@ -2667,7 +2971,7 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
     assert argv[0] == str(run_py)
     assert "benchmark.py" not in " ".join(argv)
     assert argv[argv.index("--dataset") + 1] == "speed"
-    assert argv[argv.index("--dataset_path") + 1] == "throughput_1k"
+    assert argv[argv.index("--dataset_path") + 1] == str(prepared_dataset_path)
     assert argv[argv.index("--model_dir") + 1] == "/models/qwen32"
     assert argv[argv.index("--draft_model_dir") + 1] == "/models/draft"
     assert argv[argv.index("--save_dir") + 1] == str(tmp_path / "official_result.modelopt")
@@ -2680,9 +2984,11 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
 
 def test_speedbench_sync_overlay_builds_from_manifest_checked_prepared_parquet(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = load_speedbench_dataset_module()
     runner = load_speedbench_sync_module()
+    install_jsonl_parquet_reader(monkeypatch)
     prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
         tmp_path
     )
@@ -2727,10 +3033,25 @@ def test_speedbench_sync_overlay_builds_from_manifest_checked_prepared_parquet(
     assert all(len(prompt.prompt_token_ids) == 2 for prompt in overlay.prompts)
 
 
-def test_speedbench_sync_overlay_keeps_48_unique_prompts_for_all_concurrency_tiers(
+def test_speedbench_sync_prepared_parquet_read_errors_preserve_original_cause(
     tmp_path: Path,
 ) -> None:
     runner = load_speedbench_sync_module()
+    bad_parquet = tmp_path / "bad.parquet"
+    bad_parquet.write_bytes(b"\x00not-a-parquet-file")
+
+    with pytest.raises(ValueError, match="failed to read prepared parquet") as exc_info:
+        runner.read_prepared_speedbench_rows(bad_parquet)
+
+    assert exc_info.value.__cause__ is not None
+
+
+def test_speedbench_sync_overlay_keeps_48_unique_prompts_for_all_concurrency_tiers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = load_speedbench_sync_module()
+    install_jsonl_parquet_reader(monkeypatch)
     prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
         tmp_path
     )
@@ -3060,6 +3381,21 @@ def test_speedbench_sync_summary_rejects_missing_provenance_and_missing_baseline
                     "method": "eagle3",
                     "prompt_set_hash": "prompt-sha",
                     "sampling": {"temperature": 0.0, "top_p": 1.0},
+                    "max_model_len": 36864,
+                    "max_new_tokens": 32768,
+                    "samples_per_prompt": 1,
+                    "rollout_batches": 3,
+                    "max_num_batched_tokens": 32768,
+                    "gpu_memory_utilization": 0.9,
+                    "distributed_executor_backend": "auto",
+                    "distributed_timeout_seconds": 3600,
+                    "enable_expert_parallel": False,
+                    "model_loader_extra_config": "none",
+                    "mamba_ssm_cache_dtype": "auto",
+                    "mamba_backend": "auto",
+                    "enable_mamba_cache_stochastic_rounding": False,
+                    "mamba_cache_philox_rounds": "none",
+                    "moe_backend": "auto",
                 },
                 "summary": {
                     "total_rollout_time_s": 1.0,
@@ -3074,6 +3410,30 @@ def test_speedbench_sync_summary_rejects_missing_provenance_and_missing_baseline
 
     with pytest.raises(ValueError, match="missing complete baseline"):
         summary.build_summary(tmp_path)
+
+
+def test_speedbench_sync_summary_matches_performance_and_work_fields() -> None:
+    summary = load_speedbench_sync_summary_module()
+    baseline = fake_speedbench_sync_summary_row(cohort="overlay")
+    candidate = fake_speedbench_sync_summary_row(cohort="overlay", variant="dynamic")
+
+    for field, value in {
+        "max_model_len": 69632,
+        "max_new_tokens": 65536,
+        "samples_per_prompt": 2,
+        "rollout_batches": 4,
+        "max_num_batched_tokens": 65536,
+        "gpu_memory_utilization": 0.95,
+        "distributed_executor_backend": "ray",
+        "enable_expert_parallel": True,
+        "mamba_ssm_cache_dtype": "float16",
+        "mamba_backend": "flashinfer",
+        "enable_mamba_cache_stochastic_rounding": True,
+        "mamba_cache_philox_rounds": 5,
+        "moe_backend": "flashinfer_trtllm",
+    }.items():
+        with pytest.raises(ValueError, match=field):
+            summary.compare_rows(baseline, {**candidate, field: value})
 
 
 def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl() -> None:
@@ -3095,9 +3455,16 @@ def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl()
     assert "--prepared-root" in output
     assert "--prepared-manifest" in output
     assert "--prepared-checksums" in output
+    assert "speedbench/speedbench-487aa718-43fee0cd/prepared/speed" in output
+    assert "speedbench/speedbench-487aa718-43fee0cd/prepared_manifest.json" in output
+    assert "speedbench/speedbench-487aa718-43fee0cd/resolved_parquet.sha256" in output
     assert "--prepared-jsonl" not in output
     assert "overlay_prompts.jsonl" not in output
     assert "BENCH_RUNTIME_IMAGE_SHA256:-unknown" not in output
+    assert ".sqsh.sha256" in output
+    assert "sha256sum" in output
+    assert 'export BENCH_RUNTIME_IMAGE_SHA256="${runtime_image_sha256}"' in output
+    assert 'BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required' in output
     assert "--request-plan-exact-work" in output
     assert "--active-concurrency 64" in output
     assert "#SBATCH --segment=1" in output
@@ -3126,6 +3493,18 @@ def test_speedbench_sync_nemotron_ultra_uses_single_coordinated_ray_contract() -
     assert "args+=(--mamba-cache-philox-rounds 5)" in output
     assert "args+=(--model-loader-num-threads 96)" in output
     assert "args+=(--disable-fuse-allreduce-rms)" in output
+    assert "speedbench/speedbench-487aa718-43fee0cd/prepared/speed" in output
+    assert "speedbench/speedbench-487aa718-43fee0cd/prepared_manifest.json" in output
+    assert "speedbench/speedbench-487aa718-43fee0cd/resolved_parquet.sha256" in output
+    assert ".sqsh.sha256" in output
+    assert "sha256sum" in output
+    assert 'export BENCH_RUNTIME_IMAGE_SHA256="${runtime_image_sha256}"' in output
+    assert 'export HEAD_NODE="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"' in output
+    assert 'export HEAD_IP="$(srun --nodes=1 --ntasks=1 --nodelist="${HEAD_NODE}" hostname -I | awk \'{print $1}\')"' in output
+    assert 'export RAY_PORT="$((20000 + SLURM_JOB_ID % 10000))"' in output
+    assert "export RAY_SYNC_DIR=" in output
+    assert "export GPUS_PER_NODE=4" in output
+    assert 'rm -rf "${RAY_SYNC_DIR}"' in output
     assert "#SBATCH --nodes=2" in output
     assert "#SBATCH --segment=2" in output
     assert "method=mtp" in output
@@ -3323,7 +3702,7 @@ def test_speedbench_sync_official_command_delegates_without_local_prompt_rewrite
         model="/models/qwen32",
         tokenizer="/models/qwen32",
         modelopt_root=Path("/opt/modelopt"),
-        dataset_config="throughput_1k",
+        dataset_path=Path("/data/speedbench/throughput_1k/test.parquet"),
         save_dir=Path("/results/official"),
         variant="baseline",
         tensor_parallel_size=2,
@@ -3338,12 +3717,61 @@ def test_speedbench_sync_official_command_delegates_without_local_prompt_rewrite
     ]
     assert "--dataset" in command
     assert command[command.index("--dataset") + 1] == "speed"
-    assert command[command.index("--dataset_path") + 1] == "throughput_1k"
+    assert command[command.index("--dataset_path") + 1] == "/data/speedbench/throughput_1k/test.parquet"
     assert command[command.index("--model_dir") + 1] == "/models/qwen32"
     assert command[command.index("--save_dir") + 1] == "/results/official"
     assert "--prompt-jsonl" not in command
     assert "--turns" not in command
     assert "--sync-overlay" not in command
+
+
+def test_speedbench_sync_official_requires_manifest_dataset_path_and_rejects_dynamic(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
+        tmp_path
+    )
+
+    dataset_path = runner.resolve_prepared_dataset_path(
+        prepared_root=prepared_root,
+        prepared_manifest=manifest_path,
+        prepared_checksums=checksums_path,
+        dataset_config="throughput_1k",
+    )
+    command = runner.build_official_speedbench_command(
+        model="/models/qwen32",
+        tokenizer="/models/qwen32",
+        modelopt_root=Path("/opt/modelopt"),
+        dataset_path=dataset_path,
+        save_dir=Path("/results/official"),
+        variant="static",
+        tensor_parallel_size=2,
+        active_concurrency=16,
+        max_model_len=40960,
+        max_new_tokens=4096,
+        draft_model="/models/draft",
+        static_k=5,
+    )
+
+    assert dataset_path == prepared_root / "throughput_1k" / "test.parquet"
+    assert command[command.index("--dataset_path") + 1] == str(dataset_path)
+    for unsupported in ("dynamic", "mtp_dynamic"):
+        with pytest.raises(ValueError, match="does not support scheduled"):
+            runner.build_official_speedbench_command(
+                model="/models/qwen32",
+                tokenizer="/models/qwen32",
+                modelopt_root=Path("/opt/modelopt"),
+                dataset_path=dataset_path,
+                save_dir=Path("/results/official"),
+                variant=unsupported,
+                tensor_parallel_size=2,
+                active_concurrency=16,
+                max_model_len=40960,
+                max_new_tokens=4096,
+                draft_model="/models/draft",
+                static_k=5,
+            )
 
 
 def test_speedbench_sync_summary_never_merges_official_and_overlay() -> None:

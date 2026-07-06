@@ -37,9 +37,10 @@ RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-p
 MODELS="${MODELS:-ultra super}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_nemotron_speedbench_sync_mtp}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/nemotron-speedbench-sync/${RUN_ID}}"
-PREPARED_ROOT="${PREPARED_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared/speed}"
-PREPARED_MANIFEST="${PREPARED_MANIFEST:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared_manifest.json}"
-PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/checksums.sha256}"
+PREPARED_RUN_ROOT="${PREPARED_RUN_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/speedbench-487aa718-43fee0cd}"
+PREPARED_ROOT="${PREPARED_ROOT:-${PREPARED_RUN_ROOT}/prepared/speed}"
+PREPARED_MANIFEST="${PREPARED_MANIFEST:-${PREPARED_RUN_ROOT}/prepared_manifest.json}"
+PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${PREPARED_RUN_ROOT}/resolved_parquet.sha256}"
 DATASET_CONFIG="${DATASET_CONFIG:-throughput_1k}"
 REQUEST_PLAN="${REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
 REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-/workspace/experiment/profiles/swe_sync_32k.json}"
@@ -179,11 +180,7 @@ set -euo pipefail
 
 benchmark_python="\${BENCHMARK_PYTHON:-python3}"
 benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_speedbench_sync_rollout.py}"
-runtime_image_sha256=$(shell_quote "${RUNTIME_IMAGE_SHA256}")
-if [[ -z "\${runtime_image_sha256}" ]]; then
-  : "\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required when RUNTIME_IMAGE_SHA256 is empty}"
-  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256}"
-fi
+runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required}"
 
 runner_prefix=()
 EOF
@@ -261,12 +258,20 @@ render_sbatch() {
   local run_dir="$3"
   local method="baseline"
   local container_pythonpath=""
+  local container_image_q
+  local container_image_sha_q
+  local runtime_image_q
+  local ray_sync_dir_q
   if [[ "${variant}" == "mtp_static" || "${variant}" == "mtp_dynamic" ]]; then
     method="mtp"
   fi
   if (( nodes > 1 )); then
     container_pythonpath="${RAY_SITE}"
   fi
+  container_image_q="$(shell_quote "${CONTAINER_IMAGE}")"
+  container_image_sha_q="$(shell_quote "${CONTAINER_IMAGE}.sha256")"
+  runtime_image_q="$(shell_quote "${RUNTIME_IMAGE_SHA256}")"
+  ray_sync_dir_q="$(shell_quote "${run_dir}/ray-sync")"
   local container_mounts="/lustre:/lustre,${SCRIPT_DIR}:/workspace/experiment"
   cat <<EOF
 #!/usr/bin/env bash
@@ -283,6 +288,8 @@ render_sbatch() {
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
+runtime_image_sha256="\$(if [[ -n ${runtime_image_q} ]]; then printf '%s\n' ${runtime_image_q}; elif [[ -s ${container_image_sha_q} ]]; then awk '{print \$1; exit}' ${container_image_sha_q}; else sha256sum ${container_image_q} | awk '{print \$1; exit}'; fi)"
+export BENCH_RUNTIME_IMAGE_SHA256="\${runtime_image_sha256}"
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 export HF_HOME=$(shell_quote "${HF_HOME}")
@@ -296,8 +303,16 @@ echo 'target_tp=${target_tp}'
 if [[ '${variant}' == 'mtp_dynamic' ]]; then
   echo 'num_speculative_tokens_per_batch_size=${dynamic_schedule}'
 fi
+if (( ${nodes} > 1 )); then
+  export HEAD_NODE="\$(scontrol show hostnames "\${SLURM_JOB_NODELIST}" | head -n 1)"
+  export HEAD_IP="\$(srun --nodes=1 --ntasks=1 --nodelist="\${HEAD_NODE}" hostname -I | awk '{print \$1}')"
+  export RAY_PORT="\$((20000 + SLURM_JOB_ID % 10000))"
+  export RAY_SYNC_DIR=${ray_sync_dir_q}
+  export GPUS_PER_NODE=4
+  rm -rf "\${RAY_SYNC_DIR}"
+fi
 srun --nodes=${nodes} --ntasks=${nodes} --ntasks-per-node=1 \\
-  --container-image=$(shell_quote "${CONTAINER_IMAGE}") \\
+  --container-image=${container_image_q} \\
   --container-mounts=$(shell_quote "${container_mounts}") \\
   --no-container-mount-home \\
   --container-remap-root \\

@@ -36,9 +36,10 @@ MODEL="${MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf212
 DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench-k-calibration}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_speedbench_k_calibration}"
-PREPARED_ROOT="${PREPARED_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared/speed}"
-PREPARED_MANIFEST="${PREPARED_MANIFEST:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared_manifest.json}"
-PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/checksums.sha256}"
+PREPARED_RUN_ROOT="${PREPARED_RUN_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/speedbench-487aa718-43fee0cd}"
+PREPARED_ROOT="${PREPARED_ROOT:-${PREPARED_RUN_ROOT}/prepared/speed}"
+PREPARED_MANIFEST="${PREPARED_MANIFEST:-${PREPARED_RUN_ROOT}/prepared_manifest.json}"
+PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${PREPARED_RUN_ROOT}/resolved_parquet.sha256}"
 DATASET_CONFIG="${DATASET_CONFIG:-throughput_1k}"
 REQUEST_PLAN="${REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
 REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-/workspace/experiment/profiles/swe_sync_32k.json}"
@@ -90,11 +91,7 @@ set -euo pipefail
 
 benchmark_python="\${BENCHMARK_PYTHON:-python3}"
 benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_speedbench_sync_rollout.py}"
-runtime_image_sha256=$(shell_quote "${RUNTIME_IMAGE_SHA256}")
-if [[ -z "\${runtime_image_sha256}" ]]; then
-  : "\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required when RUNTIME_IMAGE_SHA256 is empty}"
-  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256}"
-fi
+runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required}"
 
 args=()
 EOF
@@ -135,6 +132,12 @@ render_sbatch() {
   local method="$2"
   local concurrency="$3"
   local run_dir="$4"
+  local container_image_q
+  local container_image_sha_q
+  local runtime_image_q
+  container_image_q="$(shell_quote "${CONTAINER_IMAGE}")"
+  container_image_sha_q="$(shell_quote "${CONTAINER_IMAGE}.sha256")"
+  runtime_image_q="$(shell_quote "${RUNTIME_IMAGE_SHA256}")"
   local container_mounts="/lustre:/lustre,${SCRIPT_DIR}:/workspace/experiment"
   cat <<EOF
 #!/usr/bin/env bash
@@ -151,6 +154,8 @@ render_sbatch() {
 #SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
+runtime_image_sha256="\$(if [[ -n ${runtime_image_q} ]]; then printf '%s\n' ${runtime_image_q}; elif [[ -s ${container_image_sha_q} ]]; then awk '{print \$1; exit}' ${container_image_sha_q}; else sha256sum ${container_image_q} | awk '{print \$1; exit}'; fi)"
+export BENCH_RUNTIME_IMAGE_SHA256="\${runtime_image_sha256}"
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
 export HF_HOME=$(shell_quote "${HF_HOME}")
@@ -160,7 +165,7 @@ echo 'variant=${variant}'
 echo 'active_concurrency=${concurrency}'
 echo 'cudagraph_mode=${CUDAGRAPH_MODE}'
 srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
-  --container-image=$(shell_quote "${CONTAINER_IMAGE}") \\
+  --container-image=${container_image_q} \\
   --container-mounts=$(shell_quote "${container_mounts}") \\
   --no-container-mount-home \\
   --container-remap-root \\
