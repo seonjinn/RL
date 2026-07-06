@@ -56,6 +56,14 @@ def _require_bool(field_name: str, value: object) -> bool:
     return value
 
 
+def _require_non_empty_string(field_name: str, value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    if not value:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value
+
+
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized_payload = _require_json_object("request plan", payload)
     buckets_payload = _require_json_array("buckets", normalized_payload["buckets"])
@@ -88,7 +96,7 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "max_model_len": _require_int(
             "max_model_len", normalized_payload["max_model_len"]
         ),
-        "name": normalized_payload["name"],
+        "name": _require_non_empty_string("name", normalized_payload["name"]),
     }
 
 

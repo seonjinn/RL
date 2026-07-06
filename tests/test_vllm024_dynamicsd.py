@@ -871,6 +871,33 @@ def test_load_request_plan_rejects_invalid_json_types(
         core.load_request_plan(invalid_path)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected_exception", "match"),
+    (
+        (123, TypeError, "name must be a string"),
+        ([], TypeError, "name must be a string"),
+        ({}, TypeError, "name must be a string"),
+        ("", ValueError, "name must be a non-empty string"),
+    ),
+)
+def test_load_request_plan_rejects_invalid_name_values(
+    tmp_path: Path,
+    value: object,
+    expected_exception: type[Exception],
+    match: str,
+) -> None:
+    core = load_sync_rollout_core_module()
+    payload = json.loads(
+        (EXPERIMENT / "profiles/swe_sync_32k.json").read_text(encoding="utf-8")
+    )
+    payload["name"] = value
+    invalid_path = tmp_path / "invalid_name_request_plan.json"
+    invalid_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(expected_exception, match=match):
+        core.load_request_plan(invalid_path)
+
+
 def test_load_request_plan_reads_expected_swe_sync_64k_profile() -> None:
     core = load_sync_rollout_core_module()
     plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_64k.json")

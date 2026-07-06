@@ -233,3 +233,72 @@ Full output summary:
   bucket order once before loading.
 - The JSON-type regression tests cover the exact reviewed failure modes:
   string booleans and fractional integers.
+
+## Name Validation Follow-Up
+
+### Follow-Up Scope
+
+Addressed the remaining warning that `RequestPlan.name` was not strictly
+validated at runtime.
+
+### Follow-Up RED
+
+Added a failing regression for invalid `name` values in
+`tests/test_vllm024_dynamicsd.py`.
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k invalid_name_values
+```
+
+Output summary:
+
+- `4` tests failed
+- failures matched the missing runtime checks for numeric, list, object, and
+  empty-string `name` values
+
+Representative output:
+
+```text
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_name_values[123-TypeError-name must be a string]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_name_values[value1-TypeError-name must be a string]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_name_values[value2-TypeError-name must be a string]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_name_values[-ValueError-name must be a non-empty string]
+4 failed, 51 deselected in 0.17s
+```
+
+### Follow-Up Implementation
+
+Made the minimal production change in
+`experiments/vllm_024_dynamicsd/sync_rollout_core.py`:
+
+- added `_require_non_empty_string()`
+- validated `name` through the canonical payload path so loading and hashing
+  share the same rule
+
+### Follow-Up GREEN
+
+Focused command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k invalid_name_values
+```
+
+Focused output summary:
+
+```text
+4 passed, 51 deselected in 0.05s
+```
+
+Full command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Full output summary:
+
+```text
+55 passed in 5.01s
+```
