@@ -1338,6 +1338,10 @@ def fmt_x(value: object) -> str:
 
 
 def fmt_pct(value: object) -> str:
+    return fmt(value, 2, "%")
+
+
+def fmt_ratio_pct(value: object) -> str:
     if pd.isna(value):
         return "n/a"
     return fmt(float(value) * 100.0, 2, "%")
@@ -1760,7 +1764,7 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
         cells = []
         for key, _, kind in columns:
             value = row.get(key, "")
-            cls = "num" if kind in {"num", "x", "pct", "int", "temp"} else text_classes.get(key, "")
+            cls = "num" if kind in {"num", "x", "pct", "ratio_pct", "int", "temp"} else text_classes.get(key, "")
             if key == "slurm_state":
                 cls = str(value).strip()
             if kind == "num":
@@ -1771,6 +1775,8 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
                 text = fmt_x(value)
             elif kind == "pct":
                 text = fmt_pct(value)
+            elif kind == "ratio_pct":
+                text = fmt_ratio_pct(value)
             elif kind == "temp":
                 text = "n/a" if pd.isna(value) else f"{float(value):.1f}"
             elif kind == "link":
@@ -1996,7 +2002,7 @@ def render_sync_speedbench_status_section() -> str:
                         "Time reduction vs baseline",
                         "pct",
                     ),
-                    ("acceptance_rate", "Acceptance", "pct"),
+                    ("acceptance_rate", "Acceptance", "ratio_pct"),
                     ("source", "Source", "source"),
                 ],
             ),
