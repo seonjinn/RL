@@ -1338,6 +1338,10 @@ def fmt_x(value: object) -> str:
 
 
 def fmt_pct(value: object) -> str:
+    return fmt(value, 1, "%")
+
+
+def fmt_pct_2dp(value: object) -> str:
     return fmt(value, 2, "%")
 
 
@@ -1764,7 +1768,7 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
         cells = []
         for key, _, kind in columns:
             value = row.get(key, "")
-            cls = "num" if kind in {"num", "x", "pct", "ratio_pct", "int", "temp"} else text_classes.get(key, "")
+            cls = "num" if kind in {"num", "x", "pct", "pct_2dp", "ratio_pct", "int", "temp"} else text_classes.get(key, "")
             if key == "slurm_state":
                 cls = str(value).strip()
             if kind == "num":
@@ -1775,6 +1779,8 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
                 text = fmt_x(value)
             elif kind == "pct":
                 text = fmt_pct(value)
+            elif kind == "pct_2dp":
+                text = fmt_pct_2dp(value)
             elif kind == "ratio_pct":
                 text = fmt_ratio_pct(value)
             elif kind == "temp":
@@ -2000,7 +2006,7 @@ def render_sync_speedbench_status_section() -> str:
                     (
                         "time_reduction_vs_baseline_pct",
                         "Time reduction vs baseline",
-                        "pct",
+                        "pct_2dp",
                     ),
                     ("acceptance_rate", "Acceptance", "ratio_pct"),
                     ("source", "Source", "source"),

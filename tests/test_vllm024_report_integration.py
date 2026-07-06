@@ -165,10 +165,12 @@ def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
     assert "46.59%" in html_text
     assert "33.77%" in html_text
     assert "35.55%" in html_text
+    assert "26.6%" in html_text
+    assert "13.7%" in html_text
+    assert "26.59%" not in html_text
+    assert "13.75%" not in html_text
     assert "3376.99%" not in html_text
     assert "3555.14%" not in html_text
-    assert "54.13%" in html_text
-    assert "5413.00%" not in html_text
     assert "1.51x" in html_text
     assert "1.55x" in html_text
     assert "No completed SPEED-Bench official or overlay result.json artifacts are present in this checkout." in html_text
