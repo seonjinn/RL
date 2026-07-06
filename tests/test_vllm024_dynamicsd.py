@@ -959,6 +959,161 @@ def test_sync_rollout_renders_chat_template_before_tokenizing() -> None:
     assert sync_rollout.tokenize_prompt(FakeTokenizer(), "solve it", 2) == [20, 30]
 
 
+def test_tokenize_prompt_rejects_truncation_when_disabled() -> None:
+    sync_rollout = load_sync_rollout_module()
+
+    class FakeTokenizer:
+        def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+            assert text == "x"
+            assert add_special_tokens is True
+            return list(range(32))
+
+    with pytest.raises(ValueError, match="prompt exceeds max_prompt_tokens"):
+        sync_rollout.tokenize_prompt(
+            FakeTokenizer(),
+            "x",
+            16,
+            allow_truncation=False,
+        )
+
+
+def test_sync_rollout_request_plan_controls_sampling_and_provenance() -> None:
+    sync_rollout = load_sync_rollout_module()
+    core = load_sync_rollout_core_module()
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
+    prompt_records = [
+        sync_rollout.PromptRecord(
+            prompt_id=f"prompt-{index}",
+            token_ids=[index + 1],
+            prompt_sha256=f"hash-{index}",
+        )
+        for index in range(4)
+    ]
+
+    requests = sync_rollout.prepare_rollout_requests(
+        prompt_records,
+        request_plan=plan,
+        samples_per_prompt=2,
+        seed_start=100,
+        rollout_batch_index=0,
+        max_model_len=plan.max_model_len,
+    )
+
+    assert [request.prompt_id for request in requests] == [
+        "prompt-0",
+        "prompt-0",
+        "prompt-1",
+        "prompt-1",
+        "prompt-2",
+        "prompt-2",
+        "prompt-3",
+        "prompt-3",
+    ]
+    assert [request.seed for request in requests] == list(range(100, 108))
+    assert [request.max_tokens for request in requests] == [
+        4096,
+        4096,
+        4096,
+        4096,
+        8192,
+        8192,
+        16384,
+        16384,
+    ]
+    assert all(request.ignore_eos for request in requests)
+
+    class FakeSamplingParams:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    params = sync_rollout.build_sampling_params(
+        FakeSamplingParams,
+        requests,
+        temperature=1.0,
+        top_p=0.95,
+    )
+
+    assert [param.kwargs["max_tokens"] for param in params] == [
+        request.max_tokens for request in requests
+    ]
+    assert [param.kwargs["min_tokens"] for param in params] == [
+        request.min_tokens for request in requests
+    ]
+    assert [param.kwargs["ignore_eos"] for param in params] == [
+        request.ignore_eos for request in requests
+    ]
+    assert [param.kwargs["seed"] for param in params] == list(range(100, 108))
+
+
+def test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance(
+    tmp_path: Path,
+) -> None:
+    sync_rollout = load_sync_rollout_module()
+    request = sync_rollout.RolloutRequest(
+        prompt_id="prompt-0",
+        prompt_sha256="prompt-hash",
+        sample_index=0,
+        seed=7,
+        prompt_token_ids=[1, 2, 3],
+        max_tokens=4096,
+        min_tokens=4096,
+        ignore_eos=True,
+    )
+
+    class FakeCandidate:
+        token_ids = [10, 11, 12]
+        text = "patched answer"
+        finish_reason = "length"
+
+    class FakeOutput:
+        outputs = [FakeCandidate()]
+
+    responses_path = tmp_path / "responses.jsonl"
+    sync_rollout.write_response_jsonl(
+        responses_path,
+        batch_index=0,
+        requests=[request],
+        outputs=[FakeOutput()],
+        append=False,
+    )
+
+    rows = [
+        json.loads(line)
+        for line in responses_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [
+        {
+            "batch_index": 0,
+            "prompt_id": "prompt-0",
+            "prompt_sha256": "prompt-hash",
+            "sample_index": 0,
+            "seed": 7,
+            "max_tokens": 4096,
+            "min_tokens": 4096,
+            "ignore_eos": True,
+            "finish_reason": "length",
+            "output_tokens": 3,
+            "output_token_hash": sync_rollout.token_hash([10, 11, 12]),
+            "text": "patched answer",
+        }
+    ]
+    assert sync_rollout.bucket_statistics([request], [[10, 11, 12]]) == [
+        {
+            "max_tokens": 4096,
+            "request_count": 1,
+            "output_tokens": 3,
+            "completion_length": {
+                "min": 3,
+                "mean": 3.0,
+                "p50": 3,
+                "p90": 3,
+                "p99": 3,
+                "max": 3,
+            },
+        }
+    ]
+
+
 def test_sync_rollout_dry_run_models_barriered_rl_sampling() -> None:
     output = run_dry(
         "submit_sync_rollout.sh",
@@ -1009,6 +1164,57 @@ def test_sync_rollout_dry_run_supports_native_mtp_tp8() -> None:
     assert "--kv-cache-dtype 'fp8'" in output
     assert "--mamba-ssm-cache-dtype 'float16'" in output
     assert "--mamba-backend 'flashinfer'" in output
+
+
+def test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs() -> None:
+    output = run_dry(
+        "submit_swe_sync_rollout_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="true",
+        MODELS="qwen32",
+        REQUEST_PROFILES="32k",
+        TEMPERATURES="0.0",
+        VARIANTS="baseline dynamic",
+        RUN_ID="swe-test",
+    )
+
+    assert "swe_sync_model=qwen32" in output
+    assert "request_profile=32k" in output
+    assert "request_plan_hash=" in output
+    assert output.count("[DRY-RUN] sync_variant=") == 2
+    assert "--request-plan '/workspace/experiment/profiles/swe_sync_32k.json'" in output
+    assert "--response-output '" in output
+    assert "responses.jsonl" in output
+    assert "--runtime-image-sha256" in output
+    assert "--max-model-len '36864'" in output
+    assert "--max-prompt-tokens 4096" in output
+    assert "--max-new-tokens 32768" in output
+    assert "--temperature 0.0" in output
+    assert "--top-p 0.95" in output
+    assert "swebench_verified_prompts_all.jsonl" in output
+    assert "pinned RL math dataset" not in output
+
+
+def test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral() -> None:
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "DRY_RUN": "true",
+        "CLUSTER": "lyris",
+        "SMOKE": "false",
+        "PROMPT_JSONL": "",
+    }
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_sync_rollout.sh")],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "SMOKE=false requires PROMPT_JSONL" in completed.stderr
+    assert "math dataset" not in completed.stderr
 
 
 def test_nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16() -> None:
@@ -1240,6 +1446,93 @@ def test_sync_rollout_summary_supports_native_mtp_variants(tmp_path: Path) -> No
     assert by_variant["mtp_dynamic"]["throughput_speedup_vs_static"] == 1.142857
 
 
+def test_sync_rollout_summary_rejects_mismatched_request_plan_hash(
+    tmp_path: Path,
+) -> None:
+    summary_module = load_sync_summary_module()
+    strict_config = {
+        "runtime_image_sha256": "image-sha",
+        "model_config_hash": "model-sha",
+        "prompt_set_hash": "prompt-sha",
+        "request_plan_hash": "plan-sha",
+        "cudagraph_mode": "PIECEWISE",
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "temperature": 1.0,
+        "top_p": 0.95,
+    }
+    for variant in ("baseline", "static", "dynamic"):
+        result_dir = tmp_path / variant
+        result_dir.mkdir()
+        config = {"mode": variant, **strict_config}
+        if variant == "dynamic":
+            config["request_plan_hash"] = "other-plan"
+        (result_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "config": config,
+                    "summary": {
+                        "total_rollout_time_s": 100.0,
+                        "output_tok_s_per_gpu": 100.0,
+                        "total_output_tokens": 10000,
+                        "spec_decode_metrics": {},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match="request_plan_hash"):
+        summary_module.build_summary(tmp_path)
+
+
+def test_sync_rollout_summary_rejects_mismatched_exact_output_work(
+    tmp_path: Path,
+) -> None:
+    summary_module = load_sync_summary_module()
+    strict_config = {
+        "runtime_image_sha256": "image-sha",
+        "model_config_hash": "model-sha",
+        "prompt_set_hash": "prompt-sha",
+        "request_plan_hash": "plan-sha",
+        "cudagraph_mode": "PIECEWISE",
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "temperature": 0.0,
+        "top_p": 1.0,
+    }
+    output_hashes = {
+        "baseline": ["a", "b"],
+        "static": ["a", "b"],
+        "dynamic": ["a", "different"],
+    }
+    for variant in ("baseline", "static", "dynamic"):
+        result_dir = tmp_path / variant
+        result_dir.mkdir()
+        (result_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "config": {"mode": variant, **strict_config},
+                    "rollout_batches": [
+                        {"output_token_hashes": output_hashes[variant]}
+                    ],
+                    "summary": {
+                        "total_rollout_time_s": 100.0,
+                        "output_tok_s_per_gpu": 100.0,
+                        "total_output_tokens": 10000,
+                        "spec_decode_metrics": {},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match="exact output work mismatch"):
+        summary_module.build_summary(tmp_path)
+
+
 def test_scripts_do_not_depend_on_home_storage() -> None:
     for script_name in (
         "stage_image.sh",
@@ -1255,6 +1548,7 @@ def test_scripts_do_not_depend_on_home_storage() -> None:
         "submit_angelslim_matrix.sh",
         "submit_angelslim_long_context_dflare.sh",
         "submit_sync_rollout.sh",
+        "submit_swe_sync_rollout_matrix.sh",
     ):
         text = (EXPERIMENT / script_name).read_text(encoding="utf-8")
         assert "/home/" not in text

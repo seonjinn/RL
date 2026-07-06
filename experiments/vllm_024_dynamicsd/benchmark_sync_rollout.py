@@ -10,7 +10,7 @@ import json
 import statistics
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from benchmark import (
     DEFAULT_DYNAMIC_SCHEDULE,
@@ -23,6 +23,7 @@ from benchmark import (
     sum_spec_decode_counters,
     write_json_atomic,
 )
+from sync_rollout_core import RequestPlan, load_request_plan, resolve_request_plan
 
 
 BUILTIN_PROMPTS = (
@@ -43,6 +44,23 @@ BUILTIN_PROMPTS = (
     "Show that every integer squared is congruent to 0 or 1 modulo 4.",
     "Find the equation of the circle through (0,0), (4,0), and (0,6).",
 )
+
+
+class PromptRecord(NamedTuple):
+    prompt_id: str
+    token_ids: list[int]
+    prompt_sha256: str
+
+
+class RolloutRequest(NamedTuple):
+    prompt_id: str
+    prompt_sha256: str
+    sample_index: int
+    seed: int
+    prompt_token_ids: list[int]
+    max_tokens: int
+    min_tokens: int
+    ignore_eos: bool
 
 
 def expand_prompt_samples(
@@ -84,7 +102,13 @@ def length_statistics(lengths: list[int]) -> dict[str, float | int]:
     }
 
 
-def tokenize_prompt(tokenizer: Any, text: str, max_prompt_tokens: int) -> list[int]:
+def tokenize_prompt(
+    tokenizer: Any,
+    text: str,
+    max_prompt_tokens: int,
+    *,
+    allow_truncation: bool = True,
+) -> list[int]:
     messages = [{"role": "user", "content": text}]
     if hasattr(tokenizer, "apply_chat_template"):
         rendered = tokenizer.apply_chat_template(
@@ -99,10 +123,29 @@ def tokenize_prompt(tokenizer: Any, text: str, max_prompt_tokens: int) -> list[i
     if any(not isinstance(token_id, int) for token_id in result):
         raise TypeError("tokenizer returned non-integer prompt token IDs")
     if len(result) > max_prompt_tokens:
+        if not allow_truncation:
+            raise ValueError(
+                f"prompt exceeds max_prompt_tokens: "
+                f"prompt={len(result)} max={max_prompt_tokens}"
+            )
         result = result[-max_prompt_tokens:]
     if not result:
         raise ValueError("tokenized prompt is empty")
     return result
+
+
+def text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def prompt_row_id(row: dict[str, Any], fallback: str) -> str:
+    for key in ("id", "prompt_id", "source_id"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, int):
+            return str(value)
+    return fallback
 
 
 def load_prompt_batches(
@@ -113,29 +156,54 @@ def load_prompt_batches(
     num_prompts: int,
     rollout_batches: int,
     max_prompt_tokens: int,
-) -> list[list[list[int]]]:
+) -> list[list[PromptRecord]]:
     required = num_prompts * rollout_batches
-    texts: list[str] = []
+    prompt_rows: list[tuple[str, str, str]] = []
     if prompt_jsonl is not None:
         with prompt_jsonl.open(encoding="utf-8") as stream:
             for line_number, line in enumerate(stream):
                 if line_number < prompt_offset or not line.strip():
                     continue
-                texts.append(extract_prompt_text(json.loads(line)))
-                if len(texts) == required:
+                row = json.loads(line)
+                text = extract_prompt_text(row)
+                prompt_rows.append(
+                    (
+                        prompt_row_id(row, f"jsonl-{line_number}"),
+                        str(row.get("prompt_sha256") or text_hash(text)),
+                        text,
+                    )
+                )
+                if len(prompt_rows) == required:
                     break
-        if len(texts) != required:
+        if len(prompt_rows) != required:
             raise ValueError(
-                f"loaded {len(texts)} prompts from {prompt_jsonl}, need {required}"
+                f"loaded {len(prompt_rows)} prompts from {prompt_jsonl}, need {required}"
             )
     else:
-        texts = [
-            f"{BUILTIN_PROMPTS[index % len(BUILTIN_PROMPTS)]}\nPrompt id: {index}."
+        prompt_rows = [
+            (
+                f"builtin-{index}",
+                text_hash(
+                    f"{BUILTIN_PROMPTS[index % len(BUILTIN_PROMPTS)]}\n"
+                    f"Prompt id: {index}."
+                ),
+                f"{BUILTIN_PROMPTS[index % len(BUILTIN_PROMPTS)]}\nPrompt id: {index}.",
+            )
             for index in range(required)
         ]
 
     tokenized = [
-        tokenize_prompt(tokenizer, text, max_prompt_tokens) for text in texts
+        PromptRecord(
+            prompt_id=prompt_id,
+            prompt_sha256=prompt_sha256,
+            token_ids=tokenize_prompt(
+                tokenizer,
+                text,
+                max_prompt_tokens,
+                allow_truncation=False,
+            ),
+        )
+        for prompt_id, prompt_sha256, text in prompt_rows
     ]
     return [
         tokenized[start : start + num_prompts]
@@ -151,6 +219,181 @@ def token_hash(token_ids: list[int]) -> str:
 def prompt_batch_hash(prompt_token_ids: list[list[int]]) -> str:
     payload = json.dumps(prompt_token_ids, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def prompt_set_hash(prompt_batch_hashes: list[str]) -> str:
+    payload = json.dumps(prompt_batch_hashes, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def model_config_hash(model: str) -> str | None:
+    return file_sha256(Path(model) / "config.json")
+
+
+def prompt_tokens(batch: list[PromptRecord]) -> list[list[int]]:
+    return [record.token_ids for record in batch]
+
+
+def prepare_rollout_requests(
+    prompt_records: list[PromptRecord],
+    *,
+    request_plan: RequestPlan,
+    samples_per_prompt: int,
+    seed_start: int,
+    rollout_batch_index: int,
+    max_model_len: int,
+) -> list[RolloutRequest]:
+    by_prompt_id = {record.prompt_id: record for record in prompt_records}
+    resolved = resolve_request_plan(
+        request_plan,
+        prompt_ids=[record.prompt_id for record in prompt_records],
+        samples_per_prompt=samples_per_prompt,
+        seed_start=seed_start,
+        prompt_token_lengths=[len(record.token_ids) for record in prompt_records],
+        rollout_batch_index=rollout_batch_index,
+        max_model_len=max_model_len,
+    )
+    return [
+        RolloutRequest(
+            prompt_id=request.prompt_id,
+            prompt_sha256=by_prompt_id[request.prompt_id].prompt_sha256,
+            sample_index=request.sample_index,
+            seed=request.seed,
+            prompt_token_ids=list(by_prompt_id[request.prompt_id].token_ids),
+            max_tokens=request.max_tokens,
+            min_tokens=request.min_tokens,
+            ignore_eos=request.ignore_eos,
+        )
+        for request in resolved
+    ]
+
+
+def expand_rollout_requests(
+    prompt_records: list[PromptRecord],
+    *,
+    samples_per_prompt: int,
+    seed_start: int,
+    max_tokens: int,
+) -> list[RolloutRequest]:
+    requests: list[RolloutRequest] = []
+    seed = seed_start
+    for record in prompt_records:
+        for sample_index in range(samples_per_prompt):
+            requests.append(
+                RolloutRequest(
+                    prompt_id=record.prompt_id,
+                    prompt_sha256=record.prompt_sha256,
+                    sample_index=sample_index,
+                    seed=seed,
+                    prompt_token_ids=list(record.token_ids),
+                    max_tokens=max_tokens,
+                    min_tokens=0,
+                    ignore_eos=False,
+                )
+            )
+            seed += 1
+    return requests
+
+
+def build_sampling_params(
+    sampling_params_cls: Any,
+    requests: list[RolloutRequest],
+    *,
+    temperature: float,
+    top_p: float,
+) -> list[Any]:
+    return [
+        sampling_params_cls(
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=request.max_tokens,
+            min_tokens=request.min_tokens,
+            ignore_eos=request.ignore_eos,
+            seed=request.seed,
+            logprobs=0,
+        )
+        for request in requests
+    ]
+
+
+def request_provenance(request: RolloutRequest) -> dict[str, Any]:
+    return {
+        "prompt_id": request.prompt_id,
+        "prompt_sha256": request.prompt_sha256,
+        "sample_index": request.sample_index,
+        "seed": request.seed,
+        "prompt_tokens": len(request.prompt_token_ids),
+        "max_tokens": request.max_tokens,
+        "min_tokens": request.min_tokens,
+        "ignore_eos": request.ignore_eos,
+    }
+
+
+def bucket_statistics(
+    requests: list[RolloutRequest],
+    output_token_ids: list[list[int]],
+) -> list[dict[str, Any]]:
+    lengths_by_cap: dict[int, list[int]] = {}
+    for request, token_ids in zip(requests, output_token_ids, strict=True):
+        lengths_by_cap.setdefault(request.max_tokens, []).append(len(token_ids))
+    return [
+        {
+            "max_tokens": max_tokens,
+            "request_count": len(lengths),
+            "output_tokens": sum(lengths),
+            "completion_length": length_statistics(lengths),
+        }
+        for max_tokens, lengths in sorted(lengths_by_cap.items())
+    ]
+
+
+def first_candidate(output: Any) -> Any:
+    return output.outputs[0]
+
+
+def candidate_token_ids(output: Any) -> list[int]:
+    return list(first_candidate(output).token_ids)
+
+
+def write_response_jsonl(
+    path: Path,
+    *,
+    batch_index: int,
+    requests: list[RolloutRequest],
+    outputs: list[Any],
+    append: bool,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if append else "w"
+    with path.open(mode, encoding="utf-8") as stream:
+        for request, output in zip(requests, outputs, strict=True):
+            candidate = first_candidate(output)
+            token_ids = candidate_token_ids(output)
+            row = {
+                "batch_index": batch_index,
+                "prompt_id": request.prompt_id,
+                "prompt_sha256": request.prompt_sha256,
+                "sample_index": request.sample_index,
+                "seed": request.seed,
+                "max_tokens": request.max_tokens,
+                "min_tokens": request.min_tokens,
+                "ignore_eos": request.ignore_eos,
+                "finish_reason": str(candidate.finish_reason),
+                "output_tokens": len(token_ids),
+                "output_token_hash": token_hash(token_ids),
+                "text": str(getattr(candidate, "text", "")),
+            }
+            stream.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -197,6 +440,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-max-tokens", type=int, default=32)
     parser.add_argument("--prompt-jsonl", type=Path)
     parser.add_argument("--prompt-offset", type=int, default=0)
+    parser.add_argument("--request-plan", type=Path)
+    parser.add_argument("--resolved-request-plan-output", type=Path)
+    parser.add_argument("--response-output", type=Path)
+    parser.add_argument("--runtime-image-sha256", default="")
     parser.add_argument("--source-recipe", default="")
     parser.add_argument("--global-num-prompts", type=int)
     parser.add_argument("--global-generation-replicas", type=int)
@@ -209,6 +456,12 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.num_prompts <= 0 or args.rollout_batches <= 0:
         raise ValueError("num_prompts and rollout_batches must be positive")
+    request_plan = load_request_plan(args.request_plan) if args.request_plan else None
+    if request_plan is not None and args.max_model_len != request_plan.max_model_len:
+        raise ValueError(
+            f"--max-model-len must match request plan max_model_len: "
+            f"got {args.max_model_len}, expected {request_plan.max_model_len}"
+        )
     request_count = args.num_prompts * args.samples_per_prompt
     dynamic_schedule = parse_dynamic_schedule(args.dynamic_schedule)
     speculative_config = build_speculative_config(
@@ -281,12 +534,16 @@ def main() -> None:
         rollout_batches=args.rollout_batches,
         max_prompt_tokens=args.max_prompt_tokens,
     )
+    prompt_batch_hashes = [
+        prompt_batch_hash(prompt_tokens(batch)) for batch in prompt_batches
+    ]
 
     warmup_prompt_ids = [
         tokenize_prompt(
             tokenizer,
             f"Warm up the rollout engine with request shape {index}.",
             args.max_prompt_tokens,
+            allow_truncation=False,
         )
         for index in range(args.num_prompts)
     ]
@@ -313,6 +570,35 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     total_gpus = args.tensor_parallel_size * args.pipeline_parallel_size
+    resolved_plan_output = args.resolved_request_plan_output
+    if resolved_plan_output is None and request_plan is not None:
+        resolved_plan_output = args.output.parent / "resolved_request_plan.json"
+    resolved_plan_payload: dict[str, Any] | None = None
+    if request_plan is not None:
+        resolved_plan_payload = {
+            "schema_version": 1,
+            "request_plan": {
+                "name": request_plan.name,
+                "path": str(args.request_plan),
+                "plan_hash": request_plan.plan_hash,
+                "max_model_len": request_plan.max_model_len,
+                "buckets": [
+                    {
+                        "max_tokens": bucket.max_tokens,
+                        "min_tokens": bucket.min_tokens,
+                        "weight": bucket.weight,
+                        "ignore_eos": bucket.ignore_eos,
+                    }
+                    for bucket in request_plan.buckets
+                ],
+            },
+            "rollout_batches": [],
+        }
+
+    def flush_resolved_plan() -> None:
+        if resolved_plan_output is not None and resolved_plan_payload is not None:
+            write_json_atomic(resolved_plan_output, resolved_plan_payload)
+
     payload: dict[str, Any] = {
         "schema_version": 1,
         "status": "running",
@@ -322,6 +608,8 @@ def main() -> None:
             "scenario": "synchronous_rl_rollout",
             "sync_barrier": "LLM.generate_return",
             "model": args.model,
+            "model_config_hash": model_config_hash(args.model),
+            "runtime_image_sha256": args.runtime_image_sha256 or None,
             "draft_model": args.draft_model,
             "mode": args.mode,
             "speculative_config": speculative_config,
@@ -361,6 +649,13 @@ def main() -> None:
             "rollout_batches": args.rollout_batches,
             "max_prompt_tokens": args.max_prompt_tokens,
             "max_new_tokens": args.max_new_tokens,
+            "request_plan": str(args.request_plan) if args.request_plan else None,
+            "request_plan_name": request_plan.name if request_plan else None,
+            "request_plan_hash": request_plan.plan_hash if request_plan else None,
+            "resolved_request_plan_output": (
+                str(resolved_plan_output) if resolved_plan_output else None
+            ),
+            "response_output": str(args.response_output) if args.response_output else None,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "logprobs": 0,
@@ -371,9 +666,8 @@ def main() -> None:
             "source_recipe": args.source_recipe or None,
             "global_num_prompts": args.global_num_prompts,
             "global_generation_replicas": args.global_generation_replicas,
-            "prompt_batch_hashes": [
-                prompt_batch_hash(batch) for batch in prompt_batches
-            ],
+            "prompt_batch_hashes": prompt_batch_hashes,
+            "prompt_set_hash": prompt_set_hash(prompt_batch_hashes),
         },
         "rollout_batches": rows,
         "summary": {},
@@ -383,22 +677,42 @@ def main() -> None:
         write_json_atomic(args.output, payload)
 
     for batch_index, prompt_token_ids in enumerate(prompt_batches):
-        requests = expand_prompt_samples(
-            prompt_token_ids,
-            samples_per_prompt=args.samples_per_prompt,
-            seed_start=args.seed + batch_index * request_count,
-        )
-        prompts = [{"prompt_token_ids": ids} for ids, _ in requests]
-        sampling_params = [
-            SamplingParams(
+        if request_plan is None:
+            rollout_requests = expand_rollout_requests(
+                prompt_token_ids,
+                samples_per_prompt=args.samples_per_prompt,
+                seed_start=args.seed + batch_index * request_count,
                 max_tokens=args.max_new_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                seed=seed,
-                logprobs=0,
             )
-            for _, seed in requests
+        else:
+            rollout_requests = prepare_rollout_requests(
+                prompt_token_ids,
+                request_plan=request_plan,
+                samples_per_prompt=args.samples_per_prompt,
+                seed_start=args.seed,
+                rollout_batch_index=batch_index,
+                max_model_len=args.max_model_len,
+            )
+        prompts = [
+            {"prompt_token_ids": request.prompt_token_ids}
+            for request in rollout_requests
         ]
+        sampling_params = build_sampling_params(
+            SamplingParams,
+            rollout_requests,
+            temperature=args.temperature,
+            top_p=args.top_p,
+        )
+        if resolved_plan_payload is not None:
+            resolved_plan_payload["rollout_batches"].append(
+                {
+                    "batch_index": batch_index,
+                    "requests": [
+                        request_provenance(request) for request in rollout_requests
+                    ],
+                }
+            )
+            flush_resolved_plan()
         before = read_spec_decode_counters(llm)
         started = time.perf_counter()
         outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
@@ -411,12 +725,20 @@ def main() -> None:
                 f"SpecDec counters are unavailable or inactive for mode={args.mode}, "
                 f"rollout_batch={batch_index}"
             )
-        output_token_ids = [list(output.outputs[0].token_ids) for output in outputs]
+        output_token_ids = [candidate_token_ids(output) for output in outputs]
+        if args.response_output is not None:
+            write_response_jsonl(
+                args.response_output,
+                batch_index=batch_index,
+                requests=rollout_requests,
+                outputs=outputs,
+                append=batch_index > 0,
+            )
         lengths = [len(token_ids) for token_ids in output_token_ids]
         output_tokens = sum(lengths)
         finish_reasons: dict[str, int] = {}
         for output in outputs:
-            reason = str(output.outputs[0].finish_reason)
+            reason = str(first_candidate(output).finish_reason)
             finish_reasons[reason] = finish_reasons.get(reason, 0) + 1
         row = {
             "batch_index": batch_index,
@@ -427,8 +749,15 @@ def main() -> None:
             "output_tok_s_per_gpu": output_tokens / rollout_time_s / total_gpus,
             "requests_per_s": request_count / rollout_time_s,
             "completion_length": length_statistics(lengths),
+            "bucket_statistics": bucket_statistics(
+                rollout_requests,
+                output_token_ids,
+            ),
             "finish_reasons": finish_reasons,
             "output_token_hashes": [token_hash(token_ids) for token_ids in output_token_ids],
+            "requests": [
+                request_provenance(request) for request in rollout_requests
+            ],
             "spec_decode_metrics": metrics,
         }
         rows.append(row)

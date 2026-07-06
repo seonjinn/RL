@@ -11,6 +11,10 @@ from typing import Any
 
 
 MATCHED_CONFIG_FIELDS = (
+    "runtime_image_sha256",
+    "model_config_hash",
+    "prompt_set_hash",
+    "request_plan_hash",
     "model",
     "tensor_parallel_size",
     "pipeline_parallel_size",
@@ -89,6 +93,21 @@ def output_hashes(payload: dict[str, Any]) -> list[str]:
     ]
 
 
+def validate_exact_output_work(results: dict[str, dict[str, Any]]) -> None:
+    baseline = results.get("baseline")
+    if baseline is None:
+        return
+    baseline_hashes = output_hashes(baseline)
+    if not baseline_hashes:
+        return
+    for variant, payload in results.items():
+        hashes = output_hashes(payload)
+        if hashes != baseline_hashes:
+            raise ValueError(
+                f"exact output work mismatch for {variant} vs baseline"
+            )
+
+
 def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
     results = load_results(matrix_root)
     if "baseline" not in results:
@@ -114,6 +133,7 @@ def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
         )
     static_variant, dynamic_variant = selected_family
     validate_matched_configs(results)
+    validate_exact_output_work(results)
     baseline = results.get("baseline")
     static = results.get(static_variant)
     baseline_summary = baseline.get("summary", {}) if baseline else {}

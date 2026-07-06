@@ -1,128 +1,146 @@
-# Task 2 Report: Patch and Stage the AngelSlim Runner
+# Task 2 Report: SWE Barrier and Accuracy Runner
 
 ## Scope
 
-- Created `experiments/vllm_024_dynamicsd/patches/angelslim_compact_result_transport.patch`
-- Modified `experiments/vllm_024_dynamicsd/stage_extended_method_assets_in_container.sh`
-- Modified `tests/test_vllm024_dynamicsd.py`
+Modified:
+
+- `experiments/vllm_024_dynamicsd/benchmark_sync_rollout.py`
+- `experiments/vllm_024_dynamicsd/submit_sync_rollout.sh`
+- `experiments/vllm_024_dynamicsd/summarize_sync_rollout.py`
+- `tests/test_vllm024_dynamicsd.py`
+
+Created:
+
+- `experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh`
 
 ## Requirements Source
 
 Command:
 
 ```bash
-sed -n '1,260p' /Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd/.superpowers/sdd/task-2-brief.md
+sed -n '1,260p' .superpowers/sdd/task-2-brief.md
 ```
 
-Output:
+Key requirements read before edits:
 
-```text
-### Task 2: Patch and Stage the AngelSlim Runner
+- add focused failing tests first
+- reject prompt truncation for accuracy runs
+- use Task 1 `RequestPlan` and `ResolvedRequest`
+- apply per-request `max_tokens`, `min_tokens`, `ignore_eos`, and seed values
+- produce per-request provenance, `resolved_request_plan.json`, optional response JSONL, and per-bucket statistics
+- add strict summary matching on runtime image, model view hash, prompt hash, request-plan hash, graph mode, topology, sampling, and exact output work
+- create `submit_swe_sync_rollout_matrix.sh`
+- validate with focused/full tests and launcher syntax checks
+- commit only Task 2 files with `-s`
 
-**Files:**
-- Create: `experiments/vllm_024_dynamicsd/patches/angelslim_compact_result_transport.patch`
-- Modify: `experiments/vllm_024_dynamicsd/stage_extended_method_assets_in_container.sh`
-- Modify: `tests/test_vllm024_dynamicsd.py`
+## RED
 
-**Interfaces:**
-- Consumes: Task 1 transport module.
-- Produces: patched `tools/dflash_benchmark.py` that gathers only compact CPU records and writes rank partial files before `_dist_gather`.
+Test-only patch added focused tests for:
 
-- [ ] **Step 1: Add failing staging assertions**
-
-Assert the staging script copies `angelslim_dflare_transport.py`, applies
-`angelslim_compact_result_transport.patch`, and that the patch replaces
-`responses.append(response)` with compact records plus a pre-gather partial
-write.
-
-- [ ] **Step 2: Run the focused staging tests and confirm failure**
-
-Run: `python3 -m pytest -q tests/test_vllm024_dynamicsd.py`
-
-Expected: assertions fail because the new transport and patch are not staged.
-
-- [ ] **Step 3: Add the minimal AngelSlim patch**
-
-Import the staged transport module, compact each response after local text
-decoding, write a rank partial JSON immediately after the local loop, gather
-compact records, and keep the existing final result JSON fields unchanged.
-
-- [ ] **Step 4: Validate patch application**
-
-Run `patch --dry-run` against the pinned AngelSlim commit
-`6a97dab2f17c0a3c031065329f092c4f61108a6f`, then run the focused pytest file.
-
-Expected: dry-run and tests pass.
-```
-
-## Red Step
-
-Added failing assertions to `tests/test_vllm024_dynamicsd.py` first:
-
-- the extended-assets staging worker must mention
-  `angelslim_compact_result_transport.patch`
-- the staging worker must copy `angelslim_dflare_transport.py` into
-  `${angelslim_source}/tools/`
-- the new patch file must replace `responses.append(response)` with
-  `responses.append(compact_response_map(response))`
-- the patch must write `write_rank_partial(args.output_json, _dist_rank(), responses)`
-  before `_dist_gather`
+- `tokenize_prompt(..., allow_truncation=False)` rejecting long prompts
+- request-plan-controlled per-request sampling params and provenance
+- response JSONL persistence and bucket stats
+- SWE wrapper launcher rendering request plans and response outputs
+- domain-neutral `SMOKE=false` prompt validation
+- strict request-plan summary match
+- exact output-work summary match
 
 Command:
 
 ```bash
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'truncation or response_output or swe_sync or request_plan_controls or bucket_stats or request_plan_hash or exact_output_work or domain_neutral'
 ```
 
 Output:
 
 ```text
-....F.F.........................
-=================================== FAILURES ===================================
-_________ test_extended_assets_stage_dry_run_is_pinned_and_lustre_only _________
-E       assert 'angelslim_compact_result_transport.patch' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
-
-________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
-E       FileNotFoundError: [Errno 2] No such file or directory:
-E       '/Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd/experiments/vllm_024_dynamicsd/patches/angelslim_compact_result_transport.patch'
-
-=========================== short test summary info ============================
-FAILED tests/test_vllm024_dynamicsd.py::test_extended_assets_stage_dry_run_is_pinned_and_lustre_only
-FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
-2 failed, 30 passed in 2.62s
+..FFFFFFF                                                                [100%]
+FAILED tests/test_vllm024_dynamicsd.py::test_tokenize_prompt_rejects_truncation_when_disabled
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_request_plan_controls_sampling_and_provenance
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_summary_rejects_mismatched_request_plan_hash
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_summary_rejects_mismatched_exact_output_work
+7 failed, 2 passed, 53 deselected in 0.28s
 ```
+
+The failures were expected: missing new keyword/API types, missing SWE launcher, old math-specific validation text, and missing summary checks.
 
 ## Implementation
 
-Created a minimal AngelSlim patch that targets the already-patched benchmark
-state produced by:
+`benchmark_sync_rollout.py`:
 
-- `angelslim_benchmark_json.patch`
-- `angelslim_fixed_length.patch`
-- `angelslim_split_run_modes.patch`
-- `angelslim_distributed_timeout.patch`
+- added `PromptRecord` and `RolloutRequest`
+- made prompt truncation explicit with `allow_truncation`
+- changed actual prompt loading and warmup tokenization to reject truncation
+- loaded optional `--request-plan`
+- validated `--max-model-len` against the plan
+- used `resolve_request_plan()` to build measured rollout requests
+- built `SamplingParams` per request with plan `max_tokens`, `min_tokens`, `ignore_eos`, and seed
+- recorded `model_config_hash`, `runtime_image_sha256`, `prompt_set_hash`, `request_plan_hash`, request provenance, and per-bucket stats
+- wrote `resolved_request_plan.json` for plan runs
+- wrote optional response JSONL with prompt/sample/seed/cap provenance and output token hash
 
-The new patch:
+`submit_sync_rollout.sh`:
 
-- imports `compact_response_map` and `write_rank_partial` from the staged
-  transport helper
-- converts each response map to CPU-only compact records after text decoding
-- writes a rank-partial JSON immediately after the local loop when
-  `--output-json` is set
-- preserves the existing final result JSON payload fields by leaving the
-  post-gather metrics and payload construction unchanged
+- added `REQUEST_PLAN`, `REQUEST_PLAN_IN_CONTAINER`, `RESOLVED_REQUEST_PLAN_OUTPUT`, `RESPONSE_OUTPUT`, and `RUNTIME_IMAGE_SHA256`
+- translated project-local request plans to `/workspace/experiment/...` for container execution
+- validated request-plan files before submission
+- passed runtime image hash and plan/response args into the benchmark
+- replaced the math-specific `SMOKE=false` prompt error with domain-neutral prompt-set wording
 
-Updated the staging worker to:
+`submit_swe_sync_rollout_matrix.sh`:
 
-- install `/workspace/experiment/angelslim_dflare_transport.py` into
-  `${angelslim_source}/tools/angelslim_dflare_transport.py`
-- apply `angelslim_compact_result_transport.patch` once when the transport
-  hook is not already present
-- compile both the helper and `tools/dflash_benchmark.py`
+- added a SWE-specific wrapper around `submit_sync_rollout.sh`
+- supports `qwen30ba3b`, `qwen32`, and `qwen235b`
+- supports `REQUEST_PROFILES=32k 64k`
+- uses SWE-Bench verified prompts by default
+- sets request-plan, max-model-len, max-new-token cap, response JSONL, and resolved-plan output per variant
 
-## Green Step
+`summarize_sync_rollout.py`:
 
-Command:
+- added strict match keys for runtime image SHA, model config hash, prompt set hash, and request-plan hash
+- rejects summaries when output-token hashes differ from baseline when hashes are present
+
+## Debugging Note
+
+The first GREEN attempt failed during import on Python 3.14 because the test helper loads `benchmark_sync_rollout.py` with `importlib.util.module_from_spec()` without inserting it into `sys.modules`; dataclasses with future string annotations inspect `sys.modules` during class processing.
+
+Fix:
+
+- changed the two tiny record classes from `@dataclass` to `NamedTuple`
+- preserved the same attribute and keyword-construction API used by tests
+
+Focused rerun after that fix:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'truncation or response_output or swe_sync or request_plan_controls or bucket_stats or request_plan_hash or exact_output_work or domain_neutral'
+```
+
+Output:
+
+```text
+.........                                                                [100%]
+9 passed, 53 deselected in 0.23s
+```
+
+## Verification
+
+Exact focused selector from the brief:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'truncation or response_output or swe_sync'
+```
+
+Output:
+
+```text
+...                                                                      [100%]
+3 passed, 59 deselected in 0.19s
+```
+
+Focused/full Task 2 test file:
 
 ```bash
 python3 -m pytest -q tests/test_vllm024_dynamicsd.py
@@ -131,190 +149,91 @@ python3 -m pytest -q tests/test_vllm024_dynamicsd.py
 Output:
 
 ```text
-................................                                         [100%]
-32 passed in 9.05s
+..............................................................           [100%]
+62 passed in 6.29s
 ```
 
-## Patch Dry-Run Validation
-
-Verified that `/tmp/AngelSlim-dflare-analysis` is at the pinned commit:
-
-Command:
+Launcher syntax validation:
 
 ```bash
-git -C /tmp/AngelSlim-dflare-analysis rev-parse HEAD
+bash -n experiments/vllm_024_dynamicsd/submit_sync_rollout.sh experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
 ```
 
 Output:
 
 ```text
-6a97dab2f17c0a3c031065329f092c4f61108a6f
+[no output]
 ```
 
-Validated the new patch by replaying the existing benchmark patch stack on a
-fresh temporary copy of the pinned source and then running `patch --dry-run`
-for the new transport patch.
+Exit status: `0`
 
-Command:
+Repository-wide test attempt without extra path:
 
 ```bash
-tmpdir=/tmp/angelslim-task2-verify
-rm -rf "$tmpdir"
-cp -R /tmp/AngelSlim-dflare-analysis "$tmpdir"
-patch -p1 -d "$tmpdir" < experiments/vllm_024_dynamicsd/patches/angelslim_benchmark_json.patch
-patch -p1 -d "$tmpdir" < experiments/vllm_024_dynamicsd/patches/angelslim_fixed_length.patch
-patch -p1 -d "$tmpdir" < experiments/vllm_024_dynamicsd/patches/angelslim_split_run_modes.patch
-patch -p1 -d "$tmpdir" < experiments/vllm_024_dynamicsd/patches/angelslim_distributed_timeout.patch
-patch --dry-run -p1 -d "$tmpdir" < experiments/vllm_024_dynamicsd/patches/angelslim_compact_result_transport.patch
+python3 -m pytest -q
 ```
 
 Output:
 
 ```text
-patching file 'tools/dflash_benchmark.py'
-patching file 'tools/dflash_benchmark.py'
-patching file 'tools/dflash_benchmark.py'
-patching file 'tools/dflash_benchmark.py'
-patching file 'tools/dflash_benchmark.py'
+ERROR tests/test_build_latest_specdec_html_pages.py
+ModuleNotFoundError: No module named 'vllm024_dflare_report'
+1 error in 6.40s
+```
+
+Root cause checked:
+
+- `scripts/build_latest_specdec_html_pages.py` imports `vllm024_dflare_report` as a top-level module
+- the file exists at `scripts/vllm024_dflare_report.py`
+- plain repo pytest does not put `scripts/` on `PYTHONPATH`
+
+Repository-wide test with expected script import path:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Output:
+
+```text
+............................................ [ 31%]
+........................................................................ [ 82%]
+........................                                                 [100%]
+140 passed, 28 subtests passed in 16.94s
+```
+
+Whitespace check:
+
+```bash
+git diff --check
+```
+
+Output:
+
+```text
+[no output]
 ```
 
 Exit status: `0`
 
 ## Self-Review
 
-Commands:
+Checklist:
 
-```bash
-git diff --check -- experiments/vllm_024_dynamicsd/patches/angelslim_compact_result_transport.patch experiments/vllm_024_dynamicsd/stage_extended_method_assets_in_container.sh tests/test_vllm024_dynamicsd.py
-git status --short
-```
+- Task 2 files only: yes
+- unrelated changes preserved: yes
+- tests written before implementation: yes, RED recorded
+- request plan uses Task 1 interfaces: yes, via `load_request_plan()` and `resolve_request_plan()`
+- no prompt truncation for loaded benchmark prompts: yes
+- per-request caps and seeds: yes
+- resolved plan output: yes
+- optional response JSONL: yes
+- per-bucket stats: yes
+- strict summary provenance keys: yes
+- exact output work checked when output hashes are present: yes
+- launcher syntax checked: yes
+- full pytest caveat documented: yes
 
-Outputs:
+Concern:
 
-```text
-git diff --check:
-[no output]
-
-git status --short:
- M experiments/vllm_024_dynamicsd/stage_extended_method_assets_in_container.sh
- M tests/test_vllm024_dynamicsd.py
-?? experiments/vllm_024_dynamicsd/patches/angelslim_compact_result_transport.patch
-?? experiments/vllm_024_dynamicsd/report/20260704_dflare_completed/
-?? experiments/vllm_024_dynamicsd/report/20260704_vllm_native_completed/
-?? experiments/vllm_024_dynamicsd/report/dflare_job_status_latest.csv
-```
-
-Notes:
-
-- The owned changes are limited to the three requested Task 2 files.
-- Existing untracked report artifacts under
-  `experiments/vllm_024_dynamicsd/report/` were left untouched.
-
-## Review Follow-Up
-
-Reviewer items addressed:
-
-- tightened the staging idempotency guard so it skips only when both
-  `compact_response_map` and `write_rank_partial` are already present in
-  `tools/dflash_benchmark.py`
-- strengthened the focused test so it asserts the two guard markers and checks
-  that the partial-write hunk appears before `_dist_gather` in the patch text
-
-Commands:
-
-```bash
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
-```
-
-Outputs:
-
-```text
-....................F...........                                         [100%]
-=================================== FAILURES ===================================
-________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
-E       assert 'write_rank_partial\' "${angelslim_source}/tools/dflash_benchmark.py"' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
-
-=========================== short test summary info ============================
-FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
-1 failed, 31 passed in 2.63s
-
-................................                                         [100%]
-32 passed in 2.47s
-```
-
-## Re-Review Follow-Up
-
-Reviewer correction addressed:
-
-- replaced the loose function-name idempotency guard with exact behavioral
-  postconditions in `tools/dflash_benchmark.py`
-- the staging worker now:
-  - skips only when both
-    `responses.append(compact_response_map(response))` and
-    `write_rank_partial(args.output_json, _dist_rank(), responses)` exist
-  - applies the patch only when neither marker exists
-  - exits with a partial-patch error when exactly one marker exists
-- strengthened the focused test to assert those exact marker strings, the
-  three-state branch structure, and the partial-state rejection message
-
-Commands:
-
-```bash
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
-```
-
-Outputs:
-
-```text
-....................F...........                                         [100%]
-=================================== FAILURES ===================================
-________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
-E       assert 'responses.append(compact_response_map(response))' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
-
-=========================== short test summary info ============================
-FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
-1 failed, 31 passed in 2.40s
-
-................................                                         [100%]
-32 passed in 2.58s
-```
-
-## Final Re-Review Follow-Up
-
-Reviewer correction addressed:
-
-- added a third exact marker for the patched import line:
-  `from angelslim_dflare_transport import compact_response_map, write_rank_partial`
-- changed the staging worker to count exact marker states in
-  `tools/dflash_benchmark.py`
-- the worker now:
-  - skips only when all 3 markers exist
-  - applies only when 0 markers exist
-  - exits with the partial-patch error for mixed states with counts 1 or 2
-- strengthened the focused test to assert the import marker and the
-  `state_count` guard structure
-
-Commands:
-
-```bash
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
-python3 -m pytest -q tests/test_vllm024_dynamicsd.py
-```
-
-Outputs:
-
-```text
-....................F...........                                         [100%]
-=================================== FAILURES ===================================
-________ test_angelslim_compact_transport_patch_stages_cpu_only_results ________
-E       assert 'from angelslim_dflare_transport import compact_response_map, write_rank_partial' in '#!/usr/bin/env bash\nset -euo pipefail\n...'
-
-=========================== short test summary info ============================
-FAILED tests/test_vllm024_dynamicsd.py::test_angelslim_compact_transport_patch_stages_cpu_only_results
-1 failed, 31 passed in 3.15s
-
-................................                                         [100%]
-32 passed in 2.29s
-```
+- Plain `python3 -m pytest -q` still needs the existing `PYTHONPATH=scripts` setup for unrelated report tests; with that path, the full suite passes.

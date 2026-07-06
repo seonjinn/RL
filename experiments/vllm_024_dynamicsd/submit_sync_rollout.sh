@@ -61,6 +61,11 @@ MAMBA_CACHE_PHILOX_ROUNDS="${MAMBA_CACHE_PHILOX_ROUNDS:-}"
 RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-py312}"
 PROMPT_JSONL="${PROMPT_JSONL:-}"
 PROMPT_OFFSET="${PROMPT_OFFSET:-0}"
+REQUEST_PLAN="${REQUEST_PLAN:-}"
+REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-}"
+RESOLVED_REQUEST_PLAN_OUTPUT="${RESOLVED_REQUEST_PLAN_OUTPUT:-}"
+RESPONSE_OUTPUT="${RESPONSE_OUTPUT:-}"
+RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256:-}"
 SOURCE_RECIPE="${SOURCE_RECIPE:-}"
 GLOBAL_NUM_PROMPTS="${GLOBAL_NUM_PROMPTS:-}"
 GLOBAL_GENERATION_REPLICAS="${GLOBAL_GENERATION_REPLICAS:-}"
@@ -88,8 +93,11 @@ else
 fi
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-$((MAX_PROMPT_TOKENS + MAX_NEW_TOKENS + 256))}"
 if [[ "${SMOKE}" != "true" && -z "${PROMPT_JSONL}" ]]; then
-  echo "SMOKE=false requires PROMPT_JSONL from a pinned RL math dataset" >&2
+  echo "SMOKE=false requires PROMPT_JSONL from a pinned prompt set" >&2
   exit 2
+fi
+if [[ -n "${REQUEST_PLAN}" && -z "${REQUEST_PLAN_IN_CONTAINER}" && "${REQUEST_PLAN}" == "${SCRIPT_DIR}/"* ]]; then
+  REQUEST_PLAN_IN_CONTAINER="/workspace/experiment/${REQUEST_PLAN#${SCRIPT_DIR}/}"
 fi
 MATRIX_ROOT="${RESULT_ROOT}/${RUN_ID}"
 MANIFEST="${MATRIX_ROOT}/jobs.tsv"
@@ -110,6 +118,9 @@ render_sbatch() {
   local mamba_rounding_arg=""
   local mamba_philox_arg=""
   local batched_tokens_arg=""
+  local request_plan_arg=""
+  local resolved_request_plan_arg=""
+  local response_output_arg=""
   local recipe_arg=""
   local global_prompts_arg=""
   local global_replicas_arg=""
@@ -154,6 +165,23 @@ render_sbatch() {
   if [[ "${MAX_NUM_BATCHED_TOKENS}" != "recipe" && "${MAX_NUM_BATCHED_TOKENS}" != "default" ]]; then
     batched_tokens_arg="--max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}'"
   fi
+  if [[ -n "${REQUEST_PLAN}" ]]; then
+    request_plan_arg="--request-plan '${REQUEST_PLAN_IN_CONTAINER:-${REQUEST_PLAN}}'"
+  fi
+  if [[ -n "${RESOLVED_REQUEST_PLAN_OUTPUT}" ]]; then
+    if [[ "${RESOLVED_REQUEST_PLAN_OUTPUT}" == "auto" ]]; then
+      resolved_request_plan_arg="--resolved-request-plan-output '${run_dir}/resolved_request_plan.json'"
+    else
+      resolved_request_plan_arg="--resolved-request-plan-output '${RESOLVED_REQUEST_PLAN_OUTPUT}'"
+    fi
+  fi
+  if [[ -n "${RESPONSE_OUTPUT}" ]]; then
+    if [[ "${RESPONSE_OUTPUT}" == "auto" ]]; then
+      response_output_arg="--response-output '${run_dir}/responses.jsonl'"
+    else
+      response_output_arg="--response-output '${RESPONSE_OUTPUT}'"
+    fi
+  fi
   if [[ -n "${SOURCE_RECIPE}" ]]; then
     recipe_arg="--source-recipe '${SOURCE_RECIPE}'"
   fi
@@ -191,9 +219,14 @@ fi
 if [[ -n '${PROMPT_JSONL}' ]]; then
   test -s '${PROMPT_JSONL}'
 fi
+if [[ -n '${REQUEST_PLAN}' ]]; then
+  test -s '${REQUEST_PLAN}'
+fi
 if (( ${NODES} > 1 )); then
   test -d '${RAY_SITE}/ray'
 fi
+
+runtime_image_sha256="\$(if [[ -n '${RUNTIME_IMAGE_SHA256}' ]]; then printf '%s\n' '${RUNTIME_IMAGE_SHA256}'; elif [[ -s '${CONTAINER_IMAGE}.sha256' ]]; then awk '{print \$1; exit}' '${CONTAINER_IMAGE}.sha256'; else sha256sum '${CONTAINER_IMAGE}' | awk '{print \$1; exit}'; fi)"
 
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
@@ -222,6 +255,7 @@ echo 'num_prompts=${NUM_PROMPTS}'
 echo 'samples_per_prompt=${SAMPLES_PER_PROMPT}'
 echo 'requests_per_rollout_batch=$((NUM_PROMPTS * SAMPLES_PER_PROMPT))'
 echo 'engine_max_num_seqs=${ENGINE_MAX_NUM_SEQS}'
+echo 'request_plan=${REQUEST_PLAN}'
 echo 'source_recipe=${SOURCE_RECIPE}'
 echo 'moe_backend=${MOE_BACKEND:-auto}'
 echo 'nodes=${NODES}'
@@ -275,7 +309,11 @@ ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --temperature ${TEMPERATURE} \\
   --top-p ${TOP_P} \\
   --seed ${SEED} \\
+  --runtime-image-sha256 '\${runtime_image_sha256}' \\
   ${prompt_arg} \\
+  ${request_plan_arg} \\
+  ${resolved_request_plan_arg} \\
+  ${response_output_arg} \\
   ${attention_arg} \\
   ${moe_arg} \\
   ${distributed_arg} \\
