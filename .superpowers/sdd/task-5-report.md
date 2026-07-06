@@ -501,3 +501,160 @@ Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
 `vllm024_dflare_report` as a top-level module; plain pytest does not add
 `scripts/` to `PYTHONPATH`. The repository-wide suite passes with
 `PYTHONPATH=scripts`.
+
+## Third Review RED/GREEN
+
+Third review items fixed:
+- Generated Task 5 run scripts now resolve `runtime_image_sha256` at execution
+  from explicit value, `BENCH_RUNTIME_IMAGE_SHA256`, `.sha256` sidecar, or
+  `sha256sum`, then append `args+=(--runtime-image-sha256
+  "${runtime_image_sha256}")` directly. The placeholder is no longer routed
+  through `emit_arg_pair`.
+- Official timing totals now come from per-turn `Timing.total_tokens` values
+  and are checked against the timing statistics mean.
+- Official config/provenance now reads fields from
+  `configuration.serving_config` and resolved `serving_config.vllm_config`;
+  match fields reject missing data instead of emitting `upstream-unrecorded`.
+- Official `Average_AL` is reported only as mean accepted length. Scalar
+  `acceptance_rate` is `null` with an explicit unavailable reason unless a
+  valid numerator/denominator metric is added upstream.
+- Task 5 Sync-RL/DynamicSD overlay launcher defaults now use
+  `temperature=1.0` and `top_p=1.0`; official SPEED-Bench remains labeled as
+  `official-modelopt`.
+
+### RED
+
+Focused third-review command before implementation:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+9 failed, 27 passed, 97 deselected in 6.00s
+```
+
+Representative expected failures:
+- Official config still emitted `dtype=upstream-unrecorded`
+- Official total tokens used `mean * request_count` instead of raw per-turn
+  timing totals
+- Missing serving/vLLM config match fields did not reject
+- `Average_AL > 1` was copied into scalar `acceptance_rate`
+- Generated run scripts required `BENCH_RUNTIME_IMAGE_SHA256` and did not
+  resolve explicit/sidecar digests themselves
+- Task 5 overlay dry-runs still emitted `--temperature 0.0`
+
+### GREEN
+
+Focused Task 5 third-review command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+36 passed, 97 deselected in 7.24s
+```
+
+Experiment test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+133 passed in 23.01s
+```
+
+Shell syntax:
+
+```bash
+bash -n \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: exit 0.
+
+Dry-run launchers:
+
+```bash
+DRY_RUN=true CLUSTER=lyris RUN_ID=task5-third-review-cal-smoke \
+  K_VALUES='1 3' CONCURRENCIES='1 8 32 64' \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh
+
+DRY_RUN=true CLUSTER=ptyche MODELS='ultra super' \
+  RUN_ID=task5-third-review-nemotron-smoke \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: both exit 0.
+
+Targeted Pyright:
+
+```bash
+pyright \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py \
+  tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+Python compile check:
+
+```bash
+python3 -m compileall -q \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py
+```
+
+Result: exit 0.
+
+Whitespace check:
+
+```bash
+git diff --check
+```
+
+Result: exit 0.
+
+Repository-wide suite:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Result:
+
+```text
+211 passed, 28 subtests passed in 27.56s
+```
+
+Plain repository-wide command:
+
+```bash
+python3 -m pytest -q
+```
+
+Result:
+
+```text
+1 error during collection:
+ModuleNotFoundError: No module named 'vllm024_dflare_report'
+```
+
+Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
+`vllm024_dflare_report` as a top-level module; plain pytest does not add
+`scripts/` to `PYTHONPATH`. The repository-wide suite passes with
+`PYTHONPATH=scripts`.

@@ -167,6 +167,40 @@ def extract_run_benchmark_script(output: str, variant: str) -> str:
     return output.split(start, 1)[1].split(end, 1)[0]
 
 
+def execute_generated_run_script(script: str, tmp_path: Path) -> list[str]:
+    run_script = tmp_path / "run_benchmark.sh"
+    run_script.write_text(script, encoding="utf-8")
+    run_script.chmod(0o755)
+    argv_path = tmp_path / "argv.txt"
+    stub_python = tmp_path / "python-stub"
+    stub_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        ": >\"${STUB_ARGV_OUT:?}\"\n"
+        "for arg in \"$@\"; do printf '%s\\n' \"$arg\" >>\"${STUB_ARGV_OUT}\"; done\n",
+        encoding="utf-8",
+    )
+    stub_python.chmod(0o755)
+
+    subprocess.run(
+        [str(run_script)],
+        cwd=tmp_path,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "BENCHMARK_PYTHON": str(stub_python),
+            "STUB_ARGV_OUT": str(argv_path),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return argv_path.read_text(encoding="utf-8").splitlines()
+
+
+def assert_arg_value(argv: list[str], flag: str, expected: str) -> None:
+    assert argv[argv.index(flag) + 1] == expected
+
+
 def fake_speedbench_row(
     category: str,
     idx: int,
@@ -237,6 +271,7 @@ def fake_speedbench_sync_summary_row(
         "prompt_set_hash": "prompt-sha",
         "temperature": 0.0,
         "top_p": 1.0,
+        "sampling_protocol": "sync-rl-overlay-user",
         "sampling": {"temperature": 0.0, "top_p": 1.0},
         "max_model_len": 36864,
         "max_new_tokens": 32768,
@@ -2641,18 +2676,66 @@ def write_pinned_modelopt_speedbench_output(
     output_tps_per_gpu: float = 120.0,
     request_count: int = 2,
     mean_output_tokens: float = 50.0,
+    turn_total_tokens: list[int] | None = None,
+    average_al: float = 1.375,
 ) -> None:
     save_dir.mkdir(parents=True, exist_ok=True)
+    raw_total_tokens = turn_total_tokens or [int(mean_output_tokens)] * request_count
     specbench = {
         "Request_AL": {
-            f"speed-{index:03d}": 1.25 + (index * 0.25)
+            f"speed-{index:03d}": average_al
             for index in range(request_count)
         },
-        "Category_AL": {"low_entropy": 1.25, "mixed": 1.5},
-        "Average_AL": 1.375,
+        "Category_AL": {"low_entropy": average_al, "mixed": average_al},
+        "Average_AL": average_al,
         "Acceptance_Length_Histogram": {"1": 1, "2": 1},
         "Conditional_Acceptance_Rate": {"1": 1.0, "2": 0.5},
         "Joint_Acceptance_Rate": {"1": 1.0, "2": 0.5},
+    }
+    serving_config = {
+        "model": "/models/qwen32",
+        "tokenizer": "/models/qwen32",
+        "trust_remote_code": True,
+        "tensor_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "dtype": "bfloat16",
+        "kv_cache_dtype": "auto",
+        "max_model_len": 40960,
+        "max_num_batched_tokens": 65536,
+        "gpu_memory_utilization": 0.91,
+        "distributed_executor_backend": "mp",
+        "distributed_timeout_seconds": 1800,
+        "enable_expert_parallel": False,
+        "model_loader_extra_config": {"load_format": "safetensors"},
+        "mamba_ssm_cache_dtype": "auto",
+        "mamba_backend": "auto",
+        "enable_mamba_cache_stochastic_rounding": False,
+        "mamba_cache_philox_rounds": 0,
+        "moe_backend": "auto",
+        "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE"},
+        "vllm_config": {
+            "model_config": {
+                "dtype": "bfloat16",
+                "max_model_len": 40960,
+            },
+            "cache_config": {
+                "cache_dtype": "auto",
+                "gpu_memory_utilization": 0.91,
+            },
+            "parallel_config": {
+                "tensor_parallel_size": 8,
+                "pipeline_parallel_size": 1,
+                "distributed_executor_backend": "mp",
+                "enable_expert_parallel": False,
+            },
+            "scheduler_config": {
+                "max_num_batched_tokens": 65536,
+            },
+            "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE"},
+            "load_config": {
+                "model_loader_extra_config": {"load_format": "safetensors"},
+            },
+        },
     }
     (save_dir / "timing.json").write_text(
         json.dumps(
@@ -2660,6 +2743,7 @@ def write_pinned_modelopt_speedbench_output(
                 {
                     "Output TPS": output_tps,
                     "Output TPS/gpu": output_tps_per_gpu,
+                    "Timing.total_tokens": raw_total_tokens,
                     "E2E Request Time": {
                         "min": "0.5000",
                         "max": "0.7500",
@@ -2729,7 +2813,7 @@ def write_pinned_modelopt_speedbench_output(
                     "path": "/models/qwen32",
                     "index_sha256": "model-config-sha",
                 },
-                "serving_config": {"max_model_len": 40960},
+                "serving_config": serving_config,
                 "argv": ["run.py", "--dataset_path", str(dataset_path)],
             }
         ),
@@ -2781,14 +2865,154 @@ def test_speedbench_sync_official_parses_pinned_modelopt_output_files(
     assert payload["config"]["max_model_len"] == 40960
     assert payload["config"]["max_new_tokens"] == 50
     assert payload["config"]["method"] == "eagle3"
-    assert payload["config"]["dtype"] == "upstream-unrecorded"
-    assert payload["config"]["cudagraph_mode"] == "upstream-unrecorded"
-    assert payload["config"]["compilation_config"] == "upstream-unrecorded"
+    assert payload["config"]["dtype"] == "bfloat16"
+    assert payload["config"]["kv_cache_dtype"] == "auto"
+    assert payload["config"]["top_p"] == 1.0
+    assert payload["config"]["sampling_protocol"] == "official-modelopt"
+    assert payload["config"]["cudagraph_mode"] == "FULL_AND_PIECEWISE"
+    assert payload["config"]["compilation_config"] == {
+        "cudagraph_mode": "FULL_AND_PIECEWISE"
+    }
+    assert payload["config"]["max_num_batched_tokens"] == 65536
+    assert payload["config"]["gpu_memory_utilization"] == 0.91
+    assert payload["config"]["distributed_executor_backend"] == "mp"
+    assert payload["config"]["distributed_timeout_seconds"] == 1800
+    assert payload["config"]["enable_expert_parallel"] is False
+    assert payload["config"]["model_loader_extra_config"] == {
+        "load_format": "safetensors"
+    }
+    assert payload["config"]["mamba_ssm_cache_dtype"] == "auto"
+    assert payload["config"]["mamba_backend"] == "auto"
+    assert payload["config"]["enable_mamba_cache_stochastic_rounding"] is False
+    assert payload["config"]["mamba_cache_philox_rounds"] == 0
+    assert payload["config"]["moe_backend"] == "auto"
+    assert payload["config"]["official_vllm_config"]["model_config"]["dtype"] == "bfloat16"
+    assert "upstream-unrecorded" not in json.dumps(payload["config"], sort_keys=True)
     assert payload["summary"]["output_tok_s_per_gpu"] == 120.0
     assert payload["summary"]["output_tok_s"] == 960.0
     assert payload["summary"]["total_output_tokens"] == 100
     assert payload["summary"]["total_rollout_time_s"] == round(100 / 960.0, 6)
     assert payload["summary"]["spec_decode_metrics"]["mean_acceptance_length"] == 1.375
+    assert payload["summary"]["spec_decode_metrics"]["acceptance_rate"] is None
+    assert (
+        payload["summary"]["spec_decode_metrics"]["acceptance_rate_unavailable_reason"]
+        == "ModelOpt SpecBench Average_AL is mean accepted length, not a scalar acceptance rate"
+    )
+    assert payload["summary"]["spec_decode_metrics"]["conditional_acceptance_rate"] == {
+        "1": 1.0,
+        "2": 0.5,
+    }
+
+
+def test_speedbench_sync_official_sums_per_turn_timing_tokens(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(
+        save_dir,
+        dataset_path=dataset_path,
+        request_count=2,
+        mean_output_tokens=20.0,
+        turn_total_tokens=[10, 20, 30],
+        output_tps=120.0,
+        output_tps_per_gpu=15.0,
+    )
+
+    payload = runner.adapt_official_speedbench_output(
+        save_dir=save_dir,
+        output=tmp_path / "official_result.json",
+        model="/models/qwen32",
+        draft_model="/models/draft",
+        variant="static",
+        dataset_config="throughput_1k",
+        tensor_parallel_size=8,
+        active_concurrency=16,
+        max_model_len=40960,
+        max_new_tokens=50,
+        static_k=5,
+        temperature=0.0,
+        runtime_image_sha256="runtime-sha",
+        model_config_hash_value="model-sha",
+        prepared_manifest_hash="manifest-sha",
+        prepared_dataset_path=dataset_path,
+    )
+
+    assert payload["summary"]["total_output_tokens"] == 60
+    assert payload["summary"]["total_rollout_time_s"] == 0.5
+    assert payload["official_output"]["timing"]["Timing.total_tokens"] == [10, 20, 30]
+
+
+def test_speedbench_sync_official_rejects_missing_serving_config_match_fields(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+    configuration_path = save_dir / "configuration.json"
+    configuration = json.loads(configuration_path.read_text(encoding="utf-8"))
+    configuration["serving_config"].pop("dtype")
+    configuration["serving_config"]["vllm_config"]["model_config"].pop("dtype")
+    configuration_path.write_text(json.dumps(configuration), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="official dtype"):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/models/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=dataset_path,
+        )
+
+
+def test_speedbench_sync_official_does_not_report_average_al_as_acceptance_rate(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(
+        save_dir,
+        dataset_path=dataset_path,
+        average_al=2.25,
+    )
+
+    payload = runner.adapt_official_speedbench_output(
+        save_dir=save_dir,
+        output=tmp_path / "official_result.json",
+        model="/models/qwen32",
+        draft_model="/models/draft",
+        variant="static",
+        dataset_config="throughput_1k",
+        tensor_parallel_size=8,
+        active_concurrency=16,
+        max_model_len=40960,
+        max_new_tokens=50,
+        static_k=5,
+        temperature=0.0,
+        runtime_image_sha256="runtime-sha",
+        model_config_hash_value="model-sha",
+        prepared_manifest_hash="manifest-sha",
+        prepared_dataset_path=dataset_path,
+    )
+
+    metrics = payload["summary"]["spec_decode_metrics"]
+    assert metrics["mean_acceptance_length"] == 2.25
+    assert metrics["acceptance_rate"] is None
+    assert metrics["joint_acceptance_rate"] == {"1": 1.0, "2": 0.5}
 
 
 def test_speedbench_sync_official_rejects_missing_or_zero_pinned_metrics(
@@ -3380,6 +3604,7 @@ def test_speedbench_sync_summary_rejects_missing_provenance_and_missing_baseline
                     "compilation_config": {"cudagraph_mode": "PIECEWISE"},
                     "method": "eagle3",
                     "prompt_set_hash": "prompt-sha",
+                    "sampling_protocol": "sync-rl-overlay-user",
                     "sampling": {"temperature": 0.0, "top_p": 1.0},
                     "max_model_len": 36864,
                     "max_new_tokens": 32768,
@@ -3436,6 +3661,136 @@ def test_speedbench_sync_summary_matches_performance_and_work_fields() -> None:
             summary.compare_rows(baseline, {**candidate, field: value})
 
 
+@pytest.mark.parametrize(
+    ("script_name", "label", "extra_env"),
+    (
+        (
+            "submit_speedbench_k_calibration.sh",
+            "baseline-c1-k0",
+            {
+                "CLUSTER": "lyris",
+                "RUN_ID": "runtime-digest-cal",
+                "CONCURRENCIES": "1",
+                "K_VALUES": "1",
+            },
+        ),
+        (
+            "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+            "super-baseline",
+            {
+                "CLUSTER": "ptyche",
+                "MODELS": "super",
+                "VARIANTS": "baseline",
+                "RUN_ID": "runtime-digest-nemotron",
+            },
+        ),
+    ),
+)
+def test_speedbench_sync_generated_run_script_passes_exact_supplied_runtime_digest(
+    tmp_path: Path,
+    script_name: str,
+    label: str,
+    extra_env: dict[str, str],
+) -> None:
+    output = run_dry(
+        script_name,
+        RUNTIME_IMAGE_SHA256="explicit-runtime-digest",
+        **extra_env,
+    )
+    script = extract_run_benchmark_script(output, label)
+
+    argv = execute_generated_run_script(script, tmp_path)
+
+    assert_arg_value(argv, "--runtime-image-sha256", "explicit-runtime-digest")
+    assert "${runtime_image_sha256}" not in argv
+    assert 'args+=(--runtime-image-sha256 "${runtime_image_sha256}")' in script
+
+
+@pytest.mark.parametrize(
+    ("script_name", "label", "extra_env"),
+    (
+        (
+            "submit_speedbench_k_calibration.sh",
+            "baseline-c1-k0",
+            {
+                "CLUSTER": "lyris",
+                "RUN_ID": "runtime-sidecar-cal",
+                "CONCURRENCIES": "1",
+                "K_VALUES": "1",
+            },
+        ),
+        (
+            "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+            "super-baseline",
+            {
+                "CLUSTER": "ptyche",
+                "MODELS": "super",
+                "VARIANTS": "baseline",
+                "RUN_ID": "runtime-sidecar-nemotron",
+            },
+        ),
+    ),
+)
+def test_speedbench_sync_generated_run_script_reads_sidecar_runtime_digest(
+    tmp_path: Path,
+    script_name: str,
+    label: str,
+    extra_env: dict[str, str],
+) -> None:
+    container_image = tmp_path / "vllm.sqsh"
+    container_image.write_text("container image bytes\n", encoding="utf-8")
+    (tmp_path / "vllm.sqsh.sha256").write_text(
+        "sidecar-runtime-digest  vllm.sqsh\n",
+        encoding="utf-8",
+    )
+    output = run_dry(
+        script_name,
+        CONTAINER_IMAGE=str(container_image),
+        **extra_env,
+    )
+    script = extract_run_benchmark_script(output, label)
+
+    argv = execute_generated_run_script(script, tmp_path)
+
+    assert_arg_value(argv, "--runtime-image-sha256", "sidecar-runtime-digest")
+    assert "${runtime_image_sha256}" not in argv
+
+
+def test_speedbench_sync_overlay_launchers_default_to_user_sampling_decision() -> None:
+    calibration_output = run_dry(
+        "submit_speedbench_k_calibration.sh",
+        CLUSTER="lyris",
+        RUN_ID="sampling-default-cal",
+        CONCURRENCIES="1",
+        K_VALUES="1",
+    )
+    nemotron_output = run_dry(
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        MODELS="super",
+        VARIANTS="baseline",
+        RUN_ID="sampling-default-nemotron",
+    )
+    launcher_text = (
+        EXPERIMENT / "submit_speedbench_k_calibration.sh"
+    ).read_text(encoding="utf-8") + (
+        EXPERIMENT / "submit_nemotron_speedbench_sync_mtp_matrix.sh"
+    ).read_text(encoding="utf-8")
+
+    for output in (calibration_output, nemotron_output):
+        assert "args+=(--temperature 1.0)" in output
+        assert "args+=(--top-p 1.0)" in output
+        assert "args+=(--temperature 0.0)" not in output
+        assert "args+=(--top-p 0.95)" not in output
+        assert "args+=(--top-p 0.9)" not in output
+
+    assert 'TEMPERATURE="${TEMPERATURE:-1.0}"' in launcher_text
+    assert 'TOP_P="${TOP_P:-1.0}"' in launcher_text
+    assert 'TEMPERATURE="${TEMPERATURE:-0.0}"' not in launcher_text
+    assert 'TOP_P="${TOP_P:-0.95}"' not in launcher_text
+    assert 'TOP_P="${TOP_P:-0.9}"' not in launcher_text
+
+
 def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl() -> None:
     output = run_dry(
         "submit_speedbench_k_calibration.sh",
@@ -3464,7 +3819,8 @@ def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl()
     assert ".sqsh.sha256" in output
     assert "sha256sum" in output
     assert 'export BENCH_RUNTIME_IMAGE_SHA256="${runtime_image_sha256}"' in output
-    assert 'BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required' in output
+    assert 'args+=(--runtime-image-sha256 "${runtime_image_sha256}")' in output
+    assert 'BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required' not in output
     assert "--request-plan-exact-work" in output
     assert "--active-concurrency 64" in output
     assert "#SBATCH --segment=1" in output
@@ -3499,6 +3855,8 @@ def test_speedbench_sync_nemotron_ultra_uses_single_coordinated_ray_contract() -
     assert ".sqsh.sha256" in output
     assert "sha256sum" in output
     assert 'export BENCH_RUNTIME_IMAGE_SHA256="${runtime_image_sha256}"' in output
+    assert 'args+=(--runtime-image-sha256 "${runtime_image_sha256}")' in output
+    assert 'BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required' not in output
     assert 'export HEAD_NODE="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"' in output
     assert 'export HEAD_IP="$(srun --nodes=1 --ntasks=1 --nodelist="${HEAD_NODE}" hostname -I | awk \'{print $1}\')"' in output
     assert 'export RAY_PORT="$((20000 + SLURM_JOB_ID % 10000))"' in output

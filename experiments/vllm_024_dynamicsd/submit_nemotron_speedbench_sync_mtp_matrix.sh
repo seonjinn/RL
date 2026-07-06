@@ -45,7 +45,7 @@ DATASET_CONFIG="${DATASET_CONFIG:-throughput_1k}"
 REQUEST_PLAN="${REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
 REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-/workspace/experiment/profiles/swe_sync_32k.json}"
 VARIANTS="${VARIANTS:-baseline mtp_static mtp_dynamic}"
-TEMPERATURE="${TEMPERATURE:-0.0}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 SEED="${SEED:-1234}"
 SAMPLES_PER_PROMPT="${SAMPLES_PER_PROMPT:-1}"
@@ -174,13 +174,23 @@ render_run_benchmark() {
   local variant="$1"
   local model_key="$2"
   local run_dir="$3"
+  local container_image_q
+  local container_image_sha_q
+  local runtime_image_q
+  container_image_q="$(shell_quote "${CONTAINER_IMAGE}")"
+  container_image_sha_q="$(shell_quote "${CONTAINER_IMAGE}.sha256")"
+  runtime_image_q="$(shell_quote "${RUNTIME_IMAGE_SHA256}")"
   cat <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
 benchmark_python="\${BENCHMARK_PYTHON:-python3}"
 benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_speedbench_sync_rollout.py}"
-runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required}"
+runtime_image_sha256="\$(if [[ -n ${runtime_image_q} ]]; then printf '%s\n' ${runtime_image_q}; elif [[ -n "\${BENCH_RUNTIME_IMAGE_SHA256:-}" ]]; then printf '%s\n' "\${BENCH_RUNTIME_IMAGE_SHA256}"; elif [[ -s ${container_image_sha_q} ]]; then awk '{print \$1; exit}' ${container_image_sha_q}; else sha256sum ${container_image_q} | awk '{print \$1; exit}'; fi)"
+if [[ -z "\${runtime_image_sha256}" || "\${runtime_image_sha256}" == "unknown" ]]; then
+  echo "runtime_image_sha256 must resolve to a real digest" >&2
+  exit 2
+fi
 
 runner_prefix=()
 EOF
@@ -240,7 +250,9 @@ EOF
   if [[ -n "${MOE_BACKEND}" ]]; then
     emit_arg_pair "--moe-backend" "${MOE_BACKEND}"
   fi
-  emit_arg_pair "--runtime-image-sha256" "\${runtime_image_sha256}"
+  cat <<'EOF'
+args+=(--runtime-image-sha256 "${runtime_image_sha256}")
+EOF
   emit_arg_pair "--output" "${run_dir}/result.json"
   cat <<'EOF'
 

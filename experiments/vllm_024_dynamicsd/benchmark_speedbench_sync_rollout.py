@@ -885,6 +885,91 @@ def _required_float(
     return number
 
 
+def _required_mapping(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    file_name: str,
+) -> Mapping[str, Any]:
+    value = mapping.get(key)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{file_name} missing object {key}")
+    return value
+
+
+_MISSING = object()
+
+
+def _lookup_path(mapping: Mapping[str, Any], path: Sequence[str]) -> Any:
+    current: Any = mapping
+    for key in path:
+        if not isinstance(current, Mapping) or key not in current:
+            return _MISSING
+        current = current[key]
+    return current
+
+
+def _required_official_field(
+    serving_config: Mapping[str, Any],
+    field_name: str,
+    paths: Sequence[Sequence[str]],
+) -> Any:
+    for path in paths:
+        value = _lookup_path(serving_config, path)
+        if value is not _MISSING and value is not None:
+            return value
+    path_text = " or ".join(".".join(path) for path in paths)
+    raise ValueError(
+        f"official {field_name} missing from configuration.serving_config "
+        f"({path_text})"
+    )
+
+
+def _official_top_p(configuration: Mapping[str, Any]) -> float:
+    runtime_params = configuration.get("runtime_params")
+    sampling_kwargs: Any = {}
+    if isinstance(runtime_params, Mapping):
+        sampling_kwargs = runtime_params.get("sampling_kwargs", {})
+    if not isinstance(sampling_kwargs, Mapping):
+        raise ValueError("configuration.json runtime_params.sampling_kwargs must be an object")
+    value = sampling_kwargs.get("top_p", 1.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("official top_p missing numeric value")
+    number = float(value)
+    if not 0.0 < number <= 1.0:
+        raise ValueError("official top_p must be in (0, 1]")
+    return number
+
+
+def _timing_total_tokens(timing: Mapping[str, Any]) -> list[int]:
+    raw_values = (
+        timing.get("Timing.total_tokens")
+        or timing.get("total_tokens")
+        or (
+            timing.get("Number of Output Tokens", {}).get("values")
+            if isinstance(timing.get("Number of Output Tokens"), Mapping)
+            else None
+        )
+    )
+    if not isinstance(raw_values, list) or not raw_values:
+        raise ValueError("timing.json missing per-turn Timing.total_tokens")
+    total_tokens: list[int] = []
+    for value in raw_values:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("timing.json Timing.total_tokens must be positive integers")
+        total_tokens.append(value)
+    return total_tokens
+
+
+def _cudagraph_mode(compilation_config: Any) -> str:
+    if not isinstance(compilation_config, Mapping):
+        raise ValueError("official compilation_config must be an object")
+    mode = compilation_config.get("cudagraph_mode")
+    if not isinstance(mode, str) or not mode.strip():
+        raise ValueError("official cudagraph_mode missing from compilation_config")
+    return mode
+
+
 def parse_modelopt_official_outputs(
     save_dir: Path,
     *,
@@ -906,13 +991,16 @@ def parse_modelopt_official_outputs(
         "Number of Output Tokens",
         file_name="timing.json",
     )
+    total_tokens_by_turn = _timing_total_tokens(timing)
     request_al = specbench.get("Request_AL")
     if not isinstance(request_al, Mapping) or not request_al:
         raise ValueError("specbench_results.json missing Request_AL")
     request_count = len(request_al)
-    total_output_tokens = int(round(mean_output_tokens * request_count))
+    total_output_tokens = sum(total_tokens_by_turn)
     if total_output_tokens <= 0:
         raise ValueError("timing.json computed total output tokens must be positive")
+    if abs((sum(total_tokens_by_turn) / len(total_tokens_by_turn)) - mean_output_tokens) > 1e-3:
+        raise ValueError("timing.json Number of Output Tokens mean does not match raw totals")
     configured_dataset_path = _required_string(
         configuration,
         "dataset_path",
@@ -929,10 +1017,27 @@ def parse_modelopt_official_outputs(
     engine = _required_string(configuration, "engine", file_name="configuration.json")
     if engine != "VLLM":
         raise ValueError("configuration.json engine must be VLLM")
+    serving_config = _required_mapping(
+        configuration,
+        "serving_config",
+        file_name="configuration.json",
+    )
+    vllm_config = _required_mapping(
+        serving_config,
+        "vllm_config",
+        file_name="configuration.json:serving_config",
+    )
+    compilation_config = _required_official_field(
+        serving_config,
+        "compilation_config",
+        (("vllm_config", "compilation_config"), ("compilation_config",)),
+    )
     config_values = {
         "dataset_path": configured_dataset_path,
         "dataset": dataset,
         "engine": engine,
+        "serving_config": serving_config,
+        "vllm_config": vllm_config,
         "speculative_algorithm": _required_string(
             configuration,
             "speculative_algorithm",
@@ -960,6 +1065,110 @@ def parse_modelopt_official_outputs(
             "output_length",
             file_name="configuration.json",
             minimum=1,
+        ),
+        "resolved_max_model_len": _required_official_field(
+            serving_config,
+            "max_model_len",
+            (("vllm_config", "model_config", "max_model_len"), ("max_model_len",)),
+        ),
+        "resolved_tensor_parallel_size": _required_official_field(
+            serving_config,
+            "tensor_parallel_size",
+            (
+                ("vllm_config", "parallel_config", "tensor_parallel_size"),
+                ("tensor_parallel_size",),
+            ),
+        ),
+        "resolved_pipeline_parallel_size": _required_official_field(
+            serving_config,
+            "pipeline_parallel_size",
+            (
+                ("vllm_config", "parallel_config", "pipeline_parallel_size"),
+                ("pipeline_parallel_size",),
+            ),
+        ),
+        "dtype": _required_official_field(
+            serving_config,
+            "dtype",
+            (("vllm_config", "model_config", "dtype"), ("dtype",)),
+        ),
+        "kv_cache_dtype": _required_official_field(
+            serving_config,
+            "kv_cache_dtype",
+            (("vllm_config", "cache_config", "cache_dtype"), ("kv_cache_dtype",)),
+        ),
+        "top_p": _official_top_p(configuration),
+        "compilation_config": compilation_config,
+        "cudagraph_mode": _cudagraph_mode(compilation_config),
+        "max_num_batched_tokens": _required_official_field(
+            serving_config,
+            "max_num_batched_tokens",
+            (
+                ("vllm_config", "scheduler_config", "max_num_batched_tokens"),
+                ("max_num_batched_tokens",),
+            ),
+        ),
+        "gpu_memory_utilization": _required_official_field(
+            serving_config,
+            "gpu_memory_utilization",
+            (
+                ("vllm_config", "cache_config", "gpu_memory_utilization"),
+                ("gpu_memory_utilization",),
+            ),
+        ),
+        "distributed_executor_backend": _required_official_field(
+            serving_config,
+            "distributed_executor_backend",
+            (
+                ("vllm_config", "parallel_config", "distributed_executor_backend"),
+                ("distributed_executor_backend",),
+            ),
+        ),
+        "distributed_timeout_seconds": _required_official_field(
+            serving_config,
+            "distributed_timeout_seconds",
+            (("distributed_timeout_seconds",),),
+        ),
+        "enable_expert_parallel": _required_official_field(
+            serving_config,
+            "enable_expert_parallel",
+            (
+                ("vllm_config", "parallel_config", "enable_expert_parallel"),
+                ("enable_expert_parallel",),
+            ),
+        ),
+        "model_loader_extra_config": _required_official_field(
+            serving_config,
+            "model_loader_extra_config",
+            (
+                ("vllm_config", "load_config", "model_loader_extra_config"),
+                ("model_loader_extra_config",),
+            ),
+        ),
+        "mamba_ssm_cache_dtype": _required_official_field(
+            serving_config,
+            "mamba_ssm_cache_dtype",
+            (("mamba_ssm_cache_dtype",),),
+        ),
+        "mamba_backend": _required_official_field(
+            serving_config,
+            "mamba_backend",
+            (("mamba_backend",),),
+        ),
+        "enable_mamba_cache_stochastic_rounding": _required_official_field(
+            serving_config,
+            "enable_mamba_cache_stochastic_rounding",
+            (("enable_mamba_cache_stochastic_rounding",),),
+        ),
+        "mamba_cache_philox_rounds": _required_official_field(
+            serving_config,
+            "mamba_cache_philox_rounds",
+            (("mamba_cache_philox_rounds",),),
+        ),
+        "moe_backend": _required_official_field(
+            serving_config,
+            "moe_backend",
+            (("moe_backend",),),
         ),
         "draft_length": _required_int(
             configuration,
@@ -1006,6 +1215,7 @@ def parse_modelopt_official_outputs(
         "output_tps": output_tps,
         "output_tps_per_gpu": output_tps_per_gpu,
         "total_output_tokens": total_output_tokens,
+        "total_tokens_by_turn": total_tokens_by_turn,
         "total_rollout_time_s": round(total_output_tokens / output_tps, 6),
         "average_al": average_al,
         "request_count": request_count,
@@ -1099,40 +1309,49 @@ def adapt_official_speedbench_output(
             "dataset_config": dataset_config,
             "dataset_path": str(configuration_values["dataset_path"]),
             "active_concurrency": int(configuration_values["concurrency"]),
-            "tensor_parallel_size": int(configuration_values["tp_size"]),
-            "pipeline_parallel_size": 1,
-            "dtype": "upstream-unrecorded",
-            "kv_cache_dtype": "upstream-unrecorded",
-            "max_model_len": int(configuration_values["max_seq_len"]),
+            "tensor_parallel_size": int(configuration_values["resolved_tensor_parallel_size"]),
+            "pipeline_parallel_size": int(configuration_values["resolved_pipeline_parallel_size"]),
+            "dtype": configuration_values["dtype"],
+            "kv_cache_dtype": configuration_values["kv_cache_dtype"],
+            "max_model_len": int(configuration_values["resolved_max_model_len"]),
             "max_new_tokens": int(configuration_values["output_length"]),
             "static_k": int(configuration_values["draft_length"]),
             "temperature": float(configuration_values["temperature"]),
-            "top_p": "upstream-unrecorded",
+            "top_p": float(configuration_values["top_p"]),
+            "sampling_protocol": "official-modelopt",
             "runtime_image_sha256": runtime_sha,
             "model_config_hash": model_hash,
             "prepared_manifest_hash": manifest_hash,
             "request_plan_hash": "official-upstream-modelopt",
             "prompt_set_hash": f"official-upstream:{configuration_values['dataset_path']}",
-            "cudagraph_mode": "upstream-unrecorded",
-            "compilation_config": "upstream-unrecorded",
+            "cudagraph_mode": configuration_values["cudagraph_mode"],
+            "compilation_config": configuration_values["compilation_config"],
             "sampling": {
                 "temperature": float(configuration_values["temperature"]),
-                "top_p": "upstream-unrecorded",
+                "top_p": float(configuration_values["top_p"]),
             },
-            "max_num_batched_tokens": "upstream-unrecorded",
-            "gpu_memory_utilization": "upstream-unrecorded",
+            "max_num_batched_tokens": configuration_values["max_num_batched_tokens"],
+            "gpu_memory_utilization": configuration_values["gpu_memory_utilization"],
             "samples_per_prompt": 1,
             "rollout_batches": 1,
-            "distributed_executor_backend": "upstream-unrecorded",
-            "distributed_timeout_seconds": "upstream-unrecorded",
-            "enable_expert_parallel": "upstream-unrecorded",
-            "model_loader_extra_config": "upstream-unrecorded",
-            "mamba_ssm_cache_dtype": "upstream-unrecorded",
-            "mamba_backend": "upstream-unrecorded",
-            "enable_mamba_cache_stochastic_rounding": "upstream-unrecorded",
-            "mamba_cache_philox_rounds": "upstream-unrecorded",
-            "moe_backend": "upstream-unrecorded",
+            "distributed_executor_backend": configuration_values[
+                "distributed_executor_backend"
+            ],
+            "distributed_timeout_seconds": configuration_values[
+                "distributed_timeout_seconds"
+            ],
+            "enable_expert_parallel": configuration_values["enable_expert_parallel"],
+            "model_loader_extra_config": configuration_values["model_loader_extra_config"],
+            "mamba_ssm_cache_dtype": configuration_values["mamba_ssm_cache_dtype"],
+            "mamba_backend": configuration_values["mamba_backend"],
+            "enable_mamba_cache_stochastic_rounding": configuration_values[
+                "enable_mamba_cache_stochastic_rounding"
+            ],
+            "mamba_cache_philox_rounds": configuration_values["mamba_cache_philox_rounds"],
+            "moe_backend": configuration_values["moe_backend"],
             "official_configuration": configuration,
+            "official_serving_config": configuration_values["serving_config"],
+            "official_vllm_config": configuration_values["vllm_config"],
         },
         "official_output": {
             "save_dir": str(save_dir),
@@ -1147,7 +1366,23 @@ def adapt_official_speedbench_output(
             "output_tok_s_per_gpu": official["output_tps_per_gpu"],
             "spec_decode_metrics": {
                 "mean_acceptance_length": official["average_al"],
-                "acceptance_rate": official["average_al"],
+                "acceptance_rate": None,
+                "acceptance_rate_unavailable_reason": (
+                    "ModelOpt SpecBench Average_AL is mean accepted length, "
+                    "not a scalar acceptance rate"
+                ),
+                "acceptance_length_histogram": official["specbench"].get(
+                    "Acceptance_Length_Histogram",
+                    {},
+                ),
+                "conditional_acceptance_rate": official["specbench"].get(
+                    "Conditional_Acceptance_Rate",
+                    {},
+                ),
+                "joint_acceptance_rate": official["specbench"].get(
+                    "Joint_Acceptance_Rate",
+                    {},
+                ),
             },
         },
     }
@@ -1529,6 +1764,7 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             "model_config_hash": model_config_hash(args.model),
             "temperature": args.temperature,
             "top_p": args.top_p,
+            "sampling_protocol": "sync-rl-overlay-user",
             "sampling": {"temperature": args.temperature, "top_p": args.top_p},
             "seed": args.seed,
         },

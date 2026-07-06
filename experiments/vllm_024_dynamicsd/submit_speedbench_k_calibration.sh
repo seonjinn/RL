@@ -51,7 +51,7 @@ PP="${PP:-1}"
 NODES="${NODES:-1}"
 SEGMENT="${SEGMENT:-${NODES}}"
 TIME_LIMIT="${TIME_LIMIT:-03:00:00}"
-TEMPERATURE="${TEMPERATURE:-0.0}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 SEED="${SEED:-1234}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-36864}"
@@ -85,13 +85,23 @@ render_run_benchmark() {
   local static_k="$2"
   local concurrency="$3"
   local run_dir="$4"
+  local container_image_q
+  local container_image_sha_q
+  local runtime_image_q
+  container_image_q="$(shell_quote "${CONTAINER_IMAGE}")"
+  container_image_sha_q="$(shell_quote "${CONTAINER_IMAGE}.sha256")"
+  runtime_image_q="$(shell_quote "${RUNTIME_IMAGE_SHA256}")"
   cat <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
 benchmark_python="\${BENCHMARK_PYTHON:-python3}"
 benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_speedbench_sync_rollout.py}"
-runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required}"
+runtime_image_sha256="\$(if [[ -n ${runtime_image_q} ]]; then printf '%s\n' ${runtime_image_q}; elif [[ -n "\${BENCH_RUNTIME_IMAGE_SHA256:-}" ]]; then printf '%s\n' "\${BENCH_RUNTIME_IMAGE_SHA256}"; elif [[ -s ${container_image_sha_q} ]]; then awk '{print \$1; exit}' ${container_image_sha_q}; else sha256sum ${container_image_q} | awk '{print \$1; exit}'; fi)"
+if [[ -z "\${runtime_image_sha256}" || "\${runtime_image_sha256}" == "unknown" ]]; then
+  echo "runtime_image_sha256 must resolve to a real digest" >&2
+  exit 2
+fi
 
 args=()
 EOF
@@ -119,7 +129,9 @@ EOF
   emit_arg_pair "--dataset-config" "${DATASET_CONFIG}"
   emit_arg_pair "--request-plan" "${REQUEST_PLAN_IN_CONTAINER}"
   emit_arg_flag "--request-plan-exact-work"
-  emit_arg_pair "--runtime-image-sha256" "\${runtime_image_sha256}"
+  cat <<'EOF'
+args+=(--runtime-image-sha256 "${runtime_image_sha256}")
+EOF
   emit_arg_pair "--output" "${run_dir}/result.json"
   cat <<'EOF'
 
