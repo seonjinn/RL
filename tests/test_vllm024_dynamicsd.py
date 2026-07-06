@@ -2585,6 +2585,8 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
 ) -> None:
     adapter = load_speedbench_dataset_module()
     prepared_root = tmp_path / "prepared"
+    speed_root = prepared_root / "speed"
+    source_root = tmp_path / "sources"
     expected_configs = {
         "qualitative",
         "throughput_1k",
@@ -2594,11 +2596,21 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
         "throughput_32k",
     }
     for config_name in expected_configs:
-        parquet = prepared_root / config_name / "test.parquet"
+        parquet = speed_root / config_name / "test.parquet"
         parquet.parent.mkdir(parents=True, exist_ok=True)
         parquet.write_bytes(f"{config_name}-payload".encode("utf-8"))
+    dataset_license_root = source_root / "speedbench"
+    dataset_license_root.mkdir(parents=True, exist_ok=True)
+    (dataset_license_root / "License.pdf").write_text("dataset license\n", encoding="utf-8")
+    (dataset_license_root / "README.md").write_text("dataset readme\n", encoding="utf-8")
+    modelopt_license = source_root / "modelopt-LICENSE"
+    modelopt_license.write_text("apache license\n", encoding="utf-8")
 
-    manifest = adapter.build_prepared_manifest(prepared_root)
+    manifest = adapter.build_prepared_manifest(
+        speed_root,
+        dataset_license_root=dataset_license_root,
+        modelopt_license_path=modelopt_license,
+    )
     prepared_entries = {
         entry["config_name"]: entry
         for entry in manifest["prepared_configs"]
@@ -2609,6 +2621,48 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
     assert manifest["model_optimizer"]["revision"] == (
         "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
     )
+    assert manifest["dataset"]["license_files"] == [
+        {
+            "relative_path": "License.pdf",
+            "sha256": adapter.sha256_file(dataset_license_root / "License.pdf"),
+        },
+        {
+            "relative_path": "README.md",
+            "sha256": adapter.sha256_file(dataset_license_root / "README.md"),
+        },
+    ]
+    assert manifest["model_optimizer"]["license_files"] == [
+        {
+            "relative_path": "modelopt-LICENSE",
+            "sha256": adapter.sha256_file(modelopt_license),
+        }
+    ]
+    assert manifest["parquet_files"] == [
+        {
+            "relative_path": "qualitative/test.parquet",
+            "sha256": adapter.sha256_file(speed_root / "qualitative" / "test.parquet"),
+        },
+        {
+            "relative_path": "throughput_16k/test.parquet",
+            "sha256": adapter.sha256_file(speed_root / "throughput_16k" / "test.parquet"),
+        },
+        {
+            "relative_path": "throughput_1k/test.parquet",
+            "sha256": adapter.sha256_file(speed_root / "throughput_1k" / "test.parquet"),
+        },
+        {
+            "relative_path": "throughput_2k/test.parquet",
+            "sha256": adapter.sha256_file(speed_root / "throughput_2k" / "test.parquet"),
+        },
+        {
+            "relative_path": "throughput_32k/test.parquet",
+            "sha256": adapter.sha256_file(speed_root / "throughput_32k" / "test.parquet"),
+        },
+        {
+            "relative_path": "throughput_8k/test.parquet",
+            "sha256": adapter.sha256_file(speed_root / "throughput_8k" / "test.parquet"),
+        },
+    ]
     assert set(prepared_entries) == expected_configs
     assert prepared_entries["qualitative"]["nominal_isl"] is None
     assert prepared_entries["throughput_32k"]["nominal_isl"] == 32768
@@ -2617,12 +2671,70 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
         "throughput_1k/test.parquet"
     )
     assert prepared_entries["throughput_1k"]["sha256"] == adapter.sha256_file(
-        prepared_root / "throughput_1k" / "test.parquet"
+        speed_root / "throughput_1k" / "test.parquet"
     )
     assert all(
         not str(entry["relative_path"]).startswith("/")
         for entry in prepared_entries.values()
     )
+    checksums_path = tmp_path / "checksums.sha256"
+    checksum_lines = adapter.write_checksum_file(speed_root, checksums_path)
+    assert checksum_lines == (
+        f"{adapter.sha256_file(speed_root / 'qualitative' / 'test.parquet')}  qualitative/test.parquet",
+        f"{adapter.sha256_file(speed_root / 'throughput_16k' / 'test.parquet')}  throughput_16k/test.parquet",
+        f"{adapter.sha256_file(speed_root / 'throughput_1k' / 'test.parquet')}  throughput_1k/test.parquet",
+        f"{adapter.sha256_file(speed_root / 'throughput_2k' / 'test.parquet')}  throughput_2k/test.parquet",
+        f"{adapter.sha256_file(speed_root / 'throughput_32k' / 'test.parquet')}  throughput_32k/test.parquet",
+        f"{adapter.sha256_file(speed_root / 'throughput_8k' / 'test.parquet')}  throughput_8k/test.parquet",
+    )
+    assert all(not line.split("  ", 1)[1].startswith("/") for line in checksum_lines)
+    assert checksums_path.read_text(encoding="utf-8").splitlines() == list(checksum_lines)
+
+
+def test_speedbench_dataset_manifest_rejects_missing_or_unexpected_parquet_sets(
+    tmp_path: Path,
+) -> None:
+    adapter = load_speedbench_dataset_module()
+    speed_root = tmp_path / "prepared" / "speed"
+    dataset_license_root = tmp_path / "sources" / "speedbench"
+    dataset_license_root.mkdir(parents=True, exist_ok=True)
+    (dataset_license_root / "License.pdf").write_text("dataset license\n", encoding="utf-8")
+    (dataset_license_root / "README.md").write_text("dataset readme\n", encoding="utf-8")
+    modelopt_license = tmp_path / "sources" / "modelopt-LICENSE"
+    modelopt_license.parent.mkdir(parents=True, exist_ok=True)
+    modelopt_license.write_text("apache license\n", encoding="utf-8")
+
+    for config_name in (
+        "qualitative",
+        "throughput_1k",
+        "throughput_2k",
+        "throughput_8k",
+        "throughput_16k",
+    ):
+        parquet = speed_root / config_name / "test.parquet"
+        parquet.parent.mkdir(parents=True, exist_ok=True)
+        parquet.write_text(config_name, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing expected parquet"):
+        adapter.build_prepared_manifest(
+            speed_root,
+            dataset_license_root=dataset_license_root,
+            modelopt_license_path=modelopt_license,
+        )
+
+    extra = speed_root / "throughput_32k" / "test.parquet"
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_text("throughput_32k", encoding="utf-8")
+    stray = speed_root / "unexpected" / "test.parquet"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("stray", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected parquet"):
+        adapter.build_prepared_manifest(
+            speed_root,
+            dataset_license_root=dataset_license_root,
+            modelopt_license_path=modelopt_license,
+        )
 
 
 def test_speedbench_dataset_stage_dry_run_pins_revisions_and_respects_licenses() -> None:
@@ -2640,9 +2752,203 @@ def test_speedbench_dataset_stage_dry_run_pins_revisions_and_respects_licenses()
     assert "License.pdf" in output
     assert "LICENSE" in output
     assert "prepared_manifest.json" in output
+    assert '--prepared-root "$SPEED_PREPARED_ROOT"' in output
     assert "sha256sum" in output
     assert "--segment=1" in output
     assert "--gres" not in output
+
+
+def test_speedbench_stage_dry_run_skips_git_pull_and_leaves_roots_unchanged(
+    tmp_path: Path,
+) -> None:
+    stage_root = tmp_path / "stage-root"
+    stage_root.mkdir()
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    git_log = tmp_path / "git.log"
+    git_stub = stub_bin / "git"
+    git_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'git-called\\n' >>\"${GIT_LOG:?}\"\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    git_stub.chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "stage_speedbench.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "GIT_LOG": str(git_log),
+            "CLUSTER": "lyris",
+            "DRY_RUN": "true",
+            "DATASET_ROOT": str(stage_root),
+            "RUN_ID": "dry-run-review",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "[DRY-RUN]" in completed.stdout
+    assert "manifest=" in completed.stdout
+    assert not git_log.exists()
+    assert not (stage_root / "dry-run-review").exists()
+
+
+def test_speedbench_stage_test_only_uses_temp_render_files_and_cleans_up(
+    tmp_path: Path,
+) -> None:
+    stage_root = tmp_path / "stage-root"
+    container = tmp_path / "container.sqsh"
+    container.write_text("image", encoding="utf-8")
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    git_log = tmp_path / "git.log"
+
+    (stub_bin / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'git-called\\n' >>\"${GIT_LOG:?}\"\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    (stub_bin / "git").chmod(0o755)
+    (stub_bin / "sbatch").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "saw_test_only=false\n"
+        "script_path=\n"
+        "for arg in \"$@\"; do\n"
+        "  printf 'arg=%s\\n' \"$arg\" >>\"${SBATCH_LOG:?}\"\n"
+        "  if [[ \"$arg\" == '--test-only' ]]; then saw_test_only=true; fi\n"
+        "  script_path=\"$arg\"\n"
+        "done\n"
+        "[[ \"$saw_test_only\" == true ]]\n"
+        "test -f \"$script_path\"\n"
+        "grep -q -- '--prepared-root' \"$script_path\"\n"
+        "grep -q -- '/prepared/speed' \"$script_path\"\n"
+        "printf 'script=%s\\n' \"$script_path\" >>\"${SBATCH_LOG}\"\n",
+        encoding="utf-8",
+    )
+    (stub_bin / "sbatch").chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "stage_speedbench.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "CLUSTER": "lyris",
+            "TEST_ONLY": "true",
+            "DATASET_ROOT": str(stage_root),
+            "RUN_ID": "test-only-review",
+            "CONTAINER_IMAGE": str(container),
+            "SBATCH_LOG": str(sbatch_log),
+            "GIT_LOG": str(git_log),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    log_lines = sbatch_log.read_text(encoding="utf-8").splitlines()
+    script_paths = [
+        Path(line.split("=", 1)[1])
+        for line in log_lines
+        if line.startswith("script=")
+    ]
+
+    assert "[TEST-ONLY]" in completed.stdout
+    assert not git_log.exists()
+    assert "arg=--test-only" in log_lines
+    assert len(script_paths) == 1
+    assert not script_paths[0].exists()
+    assert not script_paths[0].parent.exists()
+    assert not (stage_root / "test-only-review").exists()
+
+
+def test_speedbench_stage_rejects_invalid_scheduler_identifiers(
+    tmp_path: Path,
+) -> None:
+    pwned = tmp_path / "pwned"
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "stage_speedbench.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CLUSTER": "lyris",
+            "DRY_RUN": "true",
+            "ACCOUNT": f"coreai$(touch {pwned})",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "invalid scheduler identifier" in completed.stderr
+    assert not pwned.exists()
+
+
+def test_speedbench_stage_generated_runner_executes_with_hostile_paths(
+    tmp_path: Path,
+) -> None:
+    pwned = tmp_path / "pwned"
+    hostile_root = f"{tmp_path}/odd ' \" $DOLLAR $(touch {pwned}) path"
+    hostile_hf = f"{hostile_root}/hf home"
+    container = tmp_path / "container.sqsh"
+    container.write_text("image", encoding="utf-8")
+    output = run_dry(
+        "stage_speedbench.sh",
+        CLUSTER="lyris",
+        REQUIRE_GIT_PULL="false",
+        DATASET_ROOT=hostile_root,
+        HF_HOME=hostile_hf,
+        RUN_ID="hostile-review",
+        CONTAINER_IMAGE=str(container),
+    )
+    script = output[output.index("#!/usr/bin/env bash\n") :]
+    run_script = tmp_path / "submit.sbatch"
+    run_script.write_text(script, encoding="utf-8")
+    run_script.chmod(0o755)
+
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    argv_path = tmp_path / "srun-argv.txt"
+    (stub_bin / "srun").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        ": >\"${SRUN_ARGV_OUT:?}\"\n"
+        "for arg in \"$@\"; do printf '%s\\n' \"$arg\" >>\"${SRUN_ARGV_OUT}\"; done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (stub_bin / "srun").chmod(0o755)
+
+    subprocess.run(
+        [str(run_script)],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "SRUN_ARGV_OUT": str(argv_path),
+            "DOLLAR": "expanded-if-unsafe",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "$DOLLAR" in argv_path.read_text(encoding="utf-8")
+    assert "$(touch " in argv_path.read_text(encoding="utf-8")
+    assert not pwned.exists()
+
+
+def test_speedbench_stage_uses_mktemp_and_no_fixed_tmp_cleanup() -> None:
+    text = (EXPERIMENT / "stage_speedbench.sh").read_text(encoding="utf-8")
+
+    assert "mktemp -d" in text
+    assert "rm -rf /tmp/" not in text
 
 
 def test_scripts_do_not_depend_on_home_storage() -> None:

@@ -76,6 +76,13 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def _require_nonempty_file(path: Path, *, label: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"missing {label}: {path}")
+    if path.stat().st_size <= 0:
+        raise ValueError(f"{label} must be nonempty: {path}")
+
+
 def nominal_isl_for_config(dataset_config: str) -> int | None:
     try:
         return CONFIG_TO_NOMINAL_ISL[dataset_config]
@@ -258,17 +265,65 @@ def select_sync_overlay_rows(
     return tuple(batches)
 
 
-def build_prepared_manifest(prepared_root: Path) -> dict[str, Any]:
+def expected_relative_parquet_paths() -> tuple[str, ...]:
+    return tuple(f"{config_name}/test.parquet" for config_name in EXPECTED_CONFIGS)
+
+
+def discover_prepared_parquet_paths(prepared_root: Path) -> tuple[Path, ...]:
+    discovered = tuple(
+        sorted(
+            (
+                path.relative_to(prepared_root)
+                for path in prepared_root.rglob("*.parquet")
+                if path.is_file()
+            ),
+            key=lambda path: str(path),
+        )
+    )
+    discovered_set = {str(path) for path in discovered}
+    expected_set = set(expected_relative_parquet_paths())
+    missing = sorted(expected_set - discovered_set)
+    unexpected = sorted(discovered_set - expected_set)
+    if missing:
+        raise ValueError(f"missing expected parquet paths: {', '.join(missing)}")
+    if unexpected:
+        raise ValueError(f"unexpected parquet paths: {', '.join(unexpected)}")
+    return discovered
+
+
+def _license_entry(base_path: Path, relative_name: str) -> dict[str, str]:
+    path = base_path / relative_name
+    _require_nonempty_file(path, label=f"license file {relative_name}")
+    return {"relative_path": relative_name, "sha256": sha256_file(path)}
+
+
+def _modelopt_license_entry(path: Path) -> dict[str, str]:
+    _require_nonempty_file(path, label="Model Optimizer license file")
+    return {"relative_path": path.name, "sha256": sha256_file(path)}
+
+
+def build_prepared_manifest(
+    prepared_root: Path,
+    *,
+    dataset_license_root: Path,
+    modelopt_license_path: Path,
+) -> dict[str, Any]:
+    parquet_paths = discover_prepared_parquet_paths(prepared_root)
+    parquet_entries = [
+        {
+            "relative_path": str(relative_path),
+            "sha256": sha256_file(prepared_root / relative_path),
+        }
+        for relative_path in parquet_paths
+    ]
     entries: list[dict[str, Any]] = []
-    for config_name in EXPECTED_CONFIGS:
-        parquet_path = prepared_root / config_name / "test.parquet"
-        if not parquet_path.is_file():
-            raise FileNotFoundError(f"missing prepared parquet: {parquet_path}")
+    for relative_path in parquet_paths:
+        config_name = relative_path.parts[0]
         entries.append(
             {
                 "config_name": config_name,
-                "relative_path": str(parquet_path.relative_to(prepared_root)),
-                "sha256": sha256_file(parquet_path),
+                "relative_path": str(relative_path),
+                "sha256": sha256_file(prepared_root / relative_path),
                 "nominal_isl": nominal_isl_for_config(config_name),
                 "actual_tokenizer_isl": None,
                 "overlay_eligible": config_name.startswith("throughput_"),
@@ -280,21 +335,46 @@ def build_prepared_manifest(prepared_root: Path) -> dict[str, Any]:
             "id": DATASET_ID,
             "revision": DATASET_REVISION,
             "license_name": DATASET_LICENSE_NAME,
-            "license_files": list(DATASET_LICENSE_FILES),
+            "license_files": [
+                _license_entry(dataset_license_root, relative_name)
+                for relative_name in DATASET_LICENSE_FILES
+            ],
         },
         "model_optimizer": {
             "repo": MODELOPT_REPO,
             "repo_url": MODELOPT_REPO_URL,
             "revision": MODELOPT_REVISION,
             "prepare_data_script": MODELOPT_PREPARE_DATA_SCRIPT,
-            "license_file": MODELOPT_LICENSE_FILE,
+            "license_files": [_modelopt_license_entry(modelopt_license_path)],
         },
+        "parquet_files": parquet_entries,
         "prepared_configs": entries,
     }
 
 
-def write_prepared_manifest(prepared_root: Path, output_path: Path) -> dict[str, Any]:
-    manifest = build_prepared_manifest(prepared_root)
+def write_checksum_file(prepared_root: Path, output_path: Path) -> tuple[str, ...]:
+    parquet_paths = discover_prepared_parquet_paths(prepared_root)
+    lines = tuple(
+        f"{sha256_file(prepared_root / relative_path)}  {relative_path}"
+        for relative_path in parquet_paths
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
+def write_prepared_manifest(
+    prepared_root: Path,
+    output_path: Path,
+    *,
+    dataset_license_root: Path,
+    modelopt_license_path: Path,
+) -> dict[str, Any]:
+    manifest = build_prepared_manifest(
+        prepared_root,
+        dataset_license_root=dataset_license_root,
+        modelopt_license_path=modelopt_license_path,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -313,16 +393,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     write_manifest.add_argument("--prepared-root", type=Path, required=True)
     write_manifest.add_argument("--output", type=Path, required=True)
+    write_manifest.add_argument("--checksums", type=Path, required=True)
+    write_manifest.add_argument("--dataset-license-root", type=Path, required=True)
+    write_manifest.add_argument("--modelopt-license", type=Path, required=True)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "write-manifest":
-        manifest = write_prepared_manifest(args.prepared_root, args.output)
+        manifest = write_prepared_manifest(
+            args.prepared_root,
+            args.output,
+            dataset_license_root=args.dataset_license_root,
+            modelopt_license_path=args.modelopt_license,
+        )
+        checksum_lines = write_checksum_file(args.prepared_root, args.checksums)
         print(
             json.dumps(
                 {
+                    "checksums": len(checksum_lines),
                     "prepared_configs": len(manifest["prepared_configs"]),
                     "output": str(args.output),
                 },

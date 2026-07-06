@@ -171,3 +171,115 @@ Result:
 ```text
 signed commit created successfully for the four Task 4 files
 ```
+
+## Task 4 Review Fixes
+
+### Review findings addressed
+
+1. Switched the prepared-data contract to the real upstream layout:
+   `output_dir/speed/<config>/test.parquet`.
+2. Removed nested unescaped shell interpolation from the rendered staging path
+   and passed the inner payload via positional args and arrays.
+3. Made both `DRY_RUN` and `TEST_ONLY` skip `git pull` and leave the intended
+   source/result roots untouched.
+4. Replaced fixed `/tmp` cleanup with unique `mktemp -d` workspaces and trap
+   cleanup.
+5. Verified both dataset and Model Optimizer license files are present and
+   nonempty, hashed them, and recorded their relative names and hashes.
+6. Derived one sorted relative parquet set under the prepared `speed` root and
+   used that exact set for manifest entries and checksum output, rejecting
+   missing or unexpected parity.
+
+### RED
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'speedbench_dataset or speedbench_stage'
+```
+
+Output before the fixes:
+
+```text
+7 failed, 4 passed, 85 deselected in 1.51s
+```
+
+Observed failures:
+
+- manifest builder still assumed `prepared/<config>/test.parquet`
+- manifest builder did not accept license roots or hash license files
+- dry-run still rendered the old manifest root
+- `TEST_ONLY` still called `git pull`
+- scheduler identifiers were not validated
+- fixed `/tmp` cleanup remained in the rendered staging path
+- the rendered sbatch payload still relied on unsafe nested interpolation
+
+### GREEN
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'speedbench_dataset or speedbench_stage'
+```
+
+Output:
+
+```text
+11 passed, 85 deselected in 1.19s
+```
+
+### Review-fix verification
+
+Shell syntax:
+
+```bash
+bash -n experiments/vllm_024_dynamicsd/stage_speedbench.sh
+```
+
+Result:
+
+```text
+exit 0
+```
+
+Targeted Pyright:
+
+```bash
+pyright experiments/vllm_024_dynamicsd/speedbench_dataset.py tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+Full requested test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+96 passed in 14.97s
+```
+
+Diff hygiene:
+
+```bash
+git diff --check -- experiments/vllm_024_dynamicsd/speedbench_dataset.py experiments/vllm_024_dynamicsd/stage_speedbench.sh tests/test_vllm024_dynamicsd.py .superpowers/sdd/task-4-report.md
+```
+
+Result:
+
+```text
+no output
+```
+
+### Remaining concern
+
+The staging path was exercised through rendered-script hostile-value execution
+and `TEST_ONLY`, but not through a real cluster submission with upstream
+network fetches.
