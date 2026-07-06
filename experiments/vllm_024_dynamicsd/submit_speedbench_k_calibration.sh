@@ -36,7 +36,10 @@ MODEL="${MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf212
 DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench-k-calibration}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_speedbench_k_calibration}"
-PREPARED_JSONL="${PREPARED_JSONL:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/overlay_prompts.jsonl}"
+PREPARED_ROOT="${PREPARED_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared/speed}"
+PREPARED_MANIFEST="${PREPARED_MANIFEST:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared_manifest.json}"
+PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/checksums.sha256}"
+DATASET_CONFIG="${DATASET_CONFIG:-throughput_1k}"
 REQUEST_PLAN="${REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
 REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-/workspace/experiment/profiles/swe_sync_32k.json}"
 CONCURRENCIES="${CONCURRENCIES:-1 8 32 64}"
@@ -89,7 +92,8 @@ benchmark_python="\${BENCHMARK_PYTHON:-python3}"
 benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_speedbench_sync_rollout.py}"
 runtime_image_sha256=$(shell_quote "${RUNTIME_IMAGE_SHA256}")
 if [[ -z "\${runtime_image_sha256}" ]]; then
-  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:-unknown}"
+  : "\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required when RUNTIME_IMAGE_SHA256 is empty}"
+  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256}"
 fi
 
 args=()
@@ -112,7 +116,10 @@ EOF
   emit_arg_pair "--top-p" "${TOP_P}"
   emit_arg_pair "--seed" "${SEED}"
   emit_arg_pair "--cudagraph-mode" "${CUDAGRAPH_MODE}"
-  emit_arg_pair "--prepared-jsonl" "${PREPARED_JSONL}"
+  emit_arg_pair "--prepared-root" "${PREPARED_ROOT}"
+  emit_arg_pair "--prepared-manifest" "${PREPARED_MANIFEST}"
+  emit_arg_pair "--prepared-checksums" "${PREPARED_CHECKSUMS}"
+  emit_arg_pair "--dataset-config" "${DATASET_CONFIG}"
   emit_arg_pair "--request-plan" "${REQUEST_PLAN_IN_CONTAINER}"
   emit_arg_flag "--request-plan-exact-work"
   emit_arg_pair "--runtime-image-sha256" "\${runtime_image_sha256}"

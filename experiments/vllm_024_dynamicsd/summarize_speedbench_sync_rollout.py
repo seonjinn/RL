@@ -16,11 +16,44 @@ MATCHED_BASELINE_FIELDS = (
     "model_config_hash",
     "prepared_manifest_hash",
     "request_plan_hash",
+    "prompt_set_hash",
     "model",
+    "draft_model",
     "dataset_config",
     "active_concurrency",
+    "tensor_parallel_size",
+    "pipeline_parallel_size",
+    "dtype",
+    "kv_cache_dtype",
+    "cudagraph_mode",
+    "compilation_config",
     "temperature",
     "top_p",
+    "sampling",
+)
+
+REQUIRED_PROVENANCE_FIELDS = (
+    "cohort",
+    "variant",
+    "runtime_image_sha256",
+    "model_config_hash",
+    "prepared_manifest_hash",
+    "request_plan_hash",
+    "prompt_set_hash",
+    "model",
+    "draft_model",
+    "method",
+    "dataset_config",
+    "active_concurrency",
+    "tensor_parallel_size",
+    "pipeline_parallel_size",
+    "dtype",
+    "kv_cache_dtype",
+    "cudagraph_mode",
+    "compilation_config",
+    "temperature",
+    "top_p",
+    "sampling",
 )
 
 
@@ -32,10 +65,25 @@ def reduction_pct(value: float, baseline: float) -> float | None:
     return round((1.0 - value / baseline) * 100.0, 6) if baseline else None
 
 
+def _canonical_match_value(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return value
+
+
+def validate_required_provenance(row: dict[str, Any]) -> None:
+    for field in REQUIRED_PROVENANCE_FIELDS:
+        value = row.get(field)
+        if value is None or value == "unknown" or value == "":
+            raise ValueError(f"{field} is required and must not be unknown")
+
+
 def compare_rows(
     baseline_row: dict[str, Any],
     candidate_row: dict[str, Any],
 ) -> dict[str, Any]:
+    validate_required_provenance(baseline_row)
+    validate_required_provenance(candidate_row)
     if baseline_row.get("cohort") != candidate_row.get("cohort"):
         raise ValueError(
             "cohort mismatch: "
@@ -45,8 +93,6 @@ def compare_rows(
         field: (baseline_row.get(field), candidate_row.get(field))
         for field in MATCHED_BASELINE_FIELDS
         if baseline_row.get(field) != candidate_row.get(field)
-        and baseline_row.get(field) is not None
-        and candidate_row.get(field) is not None
     }
     if mismatches:
         first = next(iter(mismatches))
@@ -83,14 +129,31 @@ def row_from_result(path: Path) -> dict[str, Any] | None:
         "model_config_hash": config.get("model_config_hash"),
         "prepared_manifest_hash": config.get("prepared_manifest_hash"),
         "request_plan_hash": config.get("request_plan_hash"),
+        "prompt_set_hash": config.get("prompt_set_hash"),
         "model": config.get("model"),
+        "draft_model": config.get("draft_model"),
+        "method": config.get("method"),
         "dataset_config": config.get("dataset_config"),
         "active_concurrency": config.get("active_concurrency"),
+        "tensor_parallel_size": config.get("tensor_parallel_size"),
+        "pipeline_parallel_size": config.get("pipeline_parallel_size"),
+        "dtype": config.get("dtype"),
+        "kv_cache_dtype": config.get("kv_cache_dtype"),
+        "cudagraph_mode": config.get("cudagraph_mode"),
+        "compilation_config": config.get("compilation_config"),
         "temperature": config.get("temperature"),
         "top_p": config.get("top_p"),
+        "sampling": config.get("sampling"),
         "total_rollout_time_s": summary.get("total_rollout_time_s"),
         "output_tok_s_per_gpu": summary.get("output_tok_s_per_gpu"),
         "total_output_tokens": summary.get("total_output_tokens"),
+        "ttft_p50_s": summary.get("ttft_p50_s"),
+        "ttft_p90_s": summary.get("ttft_p90_s"),
+        "ttft_p99_s": summary.get("ttft_p99_s"),
+        "completion_p50_s": summary.get("completion_p50_s"),
+        "completion_p90_s": summary.get("completion_p90_s"),
+        "completion_p99_s": summary.get("completion_p99_s"),
+        "barrier_tail_gap_s": summary.get("barrier_tail_gap_s"),
         "acceptance_rate": metrics.get("acceptance_rate"),
         "mean_acceptance_length": metrics.get("mean_acceptance_length"),
         "result_json": str(path),
@@ -107,11 +170,16 @@ def load_rows(matrix_root: Path) -> list[dict[str, Any]]:
 
 
 def _group_key(row: dict[str, Any]) -> tuple[Any, ...]:
-    return tuple(row.get(field) for field in MATCHED_BASELINE_FIELDS)
+    return tuple(
+        _canonical_match_value(row.get(field))
+        for field in MATCHED_BASELINE_FIELDS
+    )
 
 
 def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
     rows = load_rows(matrix_root)
+    for row in rows:
+        validate_required_provenance(row)
     baselines = {
         _group_key(row): row
         for row in rows
@@ -121,7 +189,10 @@ def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
     for row in rows:
         baseline = baselines.get(_group_key(row))
         if baseline is None:
-            output.append(row)
+            raise ValueError(
+                "missing complete baseline for "
+                f"cohort={row.get('cohort')} variant={row.get('variant')}"
+            )
         else:
             output.append(compare_rows(baseline, row))
     return output

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import textwrap
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -221,6 +222,21 @@ def fake_speedbench_sync_summary_row(
         "model_config_hash": model_config_hash,
         "prepared_manifest_hash": prepared_manifest_hash,
         "request_plan_hash": request_plan_hash,
+        "model": "model",
+        "draft_model": "draft",
+        "dataset_config": "throughput_1k",
+        "active_concurrency": 16,
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "dtype": "bfloat16",
+        "kv_cache_dtype": "auto",
+        "cudagraph_mode": "PIECEWISE",
+        "compilation_config": {"cudagraph_mode": "PIECEWISE"},
+        "method": "baseline" if variant == "baseline" else "eagle3",
+        "prompt_set_hash": "prompt-sha",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "sampling": {"temperature": 0.0, "top_p": 1.0},
         "output_tok_s_per_gpu": 100.0,
         "total_rollout_time_s": 10.0,
         "total_output_tokens": 1000,
@@ -2535,57 +2551,252 @@ def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
         summary_module.build_summary(tmp_path)
 
 
-def test_speedbench_sync_overlay_preserves_prepared_token_ids_without_padding_or_truncation() -> None:
-    runner = load_speedbench_sync_module()
-    row = {
-        "question_id": "speed-001",
-        "category": "mixed",
-        "sub_category": "reasoning",
-        "turns": ["user: keep", "assistant: context", "user: answer"],
-        "source": "nvidia/SPEED-Bench",
-        "src_id": "speed-src-001",
-        "difficulty": "hard",
-        "multiturn": True,
-        "dataset_config": "throughput_1k",
-        "nominal_isl": 1024,
-        "actual_tokenizer_isl": 4,
-        "prompt_token_ids": [101, 202, 303, 404],
-    }
+def write_prepared_speedbench_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    adapter = load_speedbench_dataset_module()
+    prepared_root = tmp_path / "prepared" / "speed"
+    parquet = prepared_root / "throughput_1k" / "test.parquet"
+    parquet.parent.mkdir(parents=True)
+    rows = fake_speedbench_rows()
+    parquet.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    for config_name in (
+        "qualitative",
+        "throughput_2k",
+        "throughput_8k",
+        "throughput_16k",
+        "throughput_32k",
+    ):
+        sibling = prepared_root / config_name / "test.parquet"
+        sibling.parent.mkdir(parents=True)
+        sibling.write_text(
+            json.dumps(fake_speedbench_row("low_entropy", 0)) + "\n",
+            encoding="utf-8",
+        )
+    source_root = tmp_path / "sources"
+    dataset_license_root = source_root / "speedbench"
+    dataset_license_root.mkdir(parents=True)
+    (dataset_license_root / "License.pdf").write_text("license\n", encoding="utf-8")
+    (dataset_license_root / "README.md").write_text("readme\n", encoding="utf-8")
+    modelopt_license = source_root / "modelopt-LICENSE"
+    modelopt_license.write_text("apache\n", encoding="utf-8")
+    manifest_path = tmp_path / "prepared_manifest.json"
+    checksums_path = tmp_path / "checksums.sha256"
+    adapter.write_prepared_manifest(
+        prepared_root,
+        manifest_path,
+        dataset_license_root=dataset_license_root,
+        modelopt_license_path=modelopt_license,
+    )
+    adapter.write_checksum_file(prepared_root, checksums_path)
+    return prepared_root, manifest_path, checksums_path
 
-    prompt = runner.overlay_prompt_from_prepared_row(
-        row,
-        max_prompt_tokens=3,
+
+def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_result(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    modelopt_root = tmp_path / "modelopt"
+    run_py = modelopt_root / "examples/specdec_bench/run.py"
+    run_py.parent.mkdir(parents=True)
+    run_py.write_text(
+        textwrap.dedent(
+            """
+            import argparse
+            import json
+            import sys
+            from pathlib import Path
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--tokenizer", required=True)
+            parser.add_argument("--dataset", required=True)
+            parser.add_argument("--dataset_path", required=True)
+            parser.add_argument("--engine", required=True)
+            parser.add_argument("--speculative_algorithm", required=True)
+            parser.add_argument("--model_dir", required=True)
+            parser.add_argument("--draft_model_dir")
+            parser.add_argument("--temperature", type=float)
+            parser.add_argument("--max_seq_len", type=int)
+            parser.add_argument("--output_length", type=int, required=True)
+            parser.add_argument("--draft_length", type=int, required=True)
+            parser.add_argument("--tp_size", type=int, required=True)
+            parser.add_argument("--concurrency", type=int, required=True)
+            parser.add_argument("--trust_remote_code", action="store_true")
+            parser.add_argument("--save_dir", required=True)
+            args = parser.parse_args()
+            save_dir = Path(args.save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            (save_dir / "argv.json").write_text(json.dumps(sys.argv), encoding="utf-8")
+            (save_dir / "metrics.json").write_text(
+                json.dumps(
+                    {
+                        "total_time_s": 12.5,
+                        "total_output_tokens": 2500,
+                        "output_tok_s_per_gpu": 100.0,
+                        "turns_processed": 72,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            """
+        ),
+        encoding="utf-8",
     )
 
-    assert prompt.prompt_id == "speed-001"
-    assert prompt.prompt_token_ids == [101, 202, 303, 404]
-    assert prompt.prompt_tokens == 4
-    assert prompt.prompt_sha256 == runner.token_hash([101, 202, 303, 404])
-    assert prompt.turn_count == 3
-    assert prompt.multiturn is True
+    payload = runner.run_official_speedbench(
+        model="/models/qwen32",
+        tokenizer="/models/qwen32",
+        draft_model="/models/draft",
+        modelopt_root=modelopt_root,
+        dataset_config="throughput_1k",
+        output=tmp_path / "official_result.json",
+        variant="static",
+        tensor_parallel_size=2,
+        active_concurrency=16,
+        max_model_len=40960,
+        max_new_tokens=4096,
+        static_k=5,
+        temperature=0.0,
+        runtime_image_sha256="runtime-sha",
+        model_config_hash="model-sha",
+        prepared_manifest_hash="manifest-sha",
+    )
+    argv = json.loads((tmp_path / "official_result.modelopt" / "argv.json").read_text())
+
+    assert argv[0] == str(run_py)
+    assert "benchmark.py" not in " ".join(argv)
+    assert argv[argv.index("--dataset") + 1] == "speed"
+    assert argv[argv.index("--dataset_path") + 1] == "throughput_1k"
+    assert argv[argv.index("--model_dir") + 1] == "/models/qwen32"
+    assert argv[argv.index("--draft_model_dir") + 1] == "/models/draft"
+    assert argv[argv.index("--save_dir") + 1] == str(tmp_path / "official_result.modelopt")
+    assert "--trust_remote_code" in argv
+    assert payload["config"]["cohort"] == "official"
+    assert payload["config"]["official_runner"] == "ModelOpt examples/specdec_bench/run.py"
+    assert payload["config"]["upstream_turn_loop_preserved"] is True
+    assert payload["summary"]["output_tok_s_per_gpu"] == 100.0
 
 
-def test_speedbench_sync_overlay_uses_balanced_48_prompts_and_exact_request_plan_gate() -> None:
+def test_speedbench_sync_overlay_builds_from_manifest_checked_prepared_parquet(
+    tmp_path: Path,
+) -> None:
     adapter = load_speedbench_dataset_module()
     runner = load_speedbench_sync_module()
-    core = load_sync_rollout_core_module()
-    records = adapter.build_records(
-        fake_speedbench_rows(),
-        dataset_config="throughput_1k",
+    prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
+        tmp_path
     )
-    prepared_token_ids = {
-        record.question_id: [index + 1, index + 10_000]
-        for index, record in enumerate(records)
-    }
-    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
 
-    prompt_batches = runner.build_overlay_prompt_batches(
-        records,
-        prepared_token_ids_by_question_id=prepared_token_ids,
+    class FakeTokenizer:
+        def apply_chat_template(
+            self,
+            messages: list[dict[str, str]],
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> str:
+            assert tokenize is False
+            assert add_generation_prompt is True
+            return "\n".join(f"{item['role']}:{item['content']}" for item in messages)
+
+        def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+            assert add_special_tokens is False
+            return [len(text), sum(ord(ch) for ch in text) % 100_000]
+
+    overlay = runner.build_overlay_from_prepared_parquet(
+        prepared_root=prepared_root,
+        prepared_manifest=manifest_path,
+        prepared_checksums=checksums_path,
+        dataset_config="throughput_1k",
+        tokenizer=FakeTokenizer(),
         seed=1234,
     )
+
+    assert len(overlay.prompts) == 48
+    assert len({prompt.prompt_id for prompt in overlay.prompts}) == 48
+    assert adapter.count_categories(overlay.prompts) == {
+        "low_entropy": 16,
+        "mixed": 16,
+        "high_entropy": 16,
+    }
+    assert overlay.prepared_manifest_hash == runner.sha256_file(manifest_path)
+    assert overlay.dataset_config == "throughput_1k"
+    assert overlay.prompt_set_hash == runner.prompt_set_hash(
+        [prompt.prompt_sha256 for prompt in overlay.prompts]
+    )
+    assert all(len(prompt.prompt_token_ids) == 2 for prompt in overlay.prompts)
+
+
+def test_speedbench_sync_overlay_keeps_48_unique_prompts_for_all_concurrency_tiers(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
+        tmp_path
+    )
+
+    class FakeTokenizer:
+        def apply_chat_template(
+            self,
+            messages: list[dict[str, str]],
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> str:
+            return "|".join(item["content"] for item in messages)
+
+        def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+            return [len(text)]
+
+    overlay = runner.build_overlay_from_prepared_parquet(
+        prepared_root=prepared_root,
+        prepared_manifest=manifest_path,
+        prepared_checksums=checksums_path,
+        dataset_config="throughput_1k",
+        tokenizer=FakeTokenizer(),
+        seed=1234,
+    )
+
+    for concurrency in (1, 8, 32, 64):
+        batches = runner.expand_overlay_barrier_batches(
+            overlay.prompts,
+            active_concurrency=concurrency,
+            rollout_batches=3,
+        )
+        assert len({prompt.prompt_id for prompt in overlay.prompts}) == 48
+        assert [len(batch) for batch in batches] == [max(16, concurrency)] * 3
+        assert {
+            prompt.prompt_id
+            for batch in batches
+            for prompt in batch
+        } == {prompt.prompt_id for prompt in overlay.prompts}
+
+
+def test_speedbench_sync_overlay_uses_aliases_for_repeated_prompt_exact_work() -> None:
+    runner = load_speedbench_sync_module()
+    core = load_sync_rollout_core_module()
+    prompts = [
+        runner.OverlayPrompt(
+            prompt_id=f"p{i}",
+            prompt_token_ids=[i],
+            prompt_sha256=f"h{i}",
+            source_prompt_sha256=f"s{i}",
+            category="mixed",
+            dataset_config="throughput_1k",
+            turn_count=1,
+            multiturn=False,
+        )
+        for i in range(48)
+    ]
+    batch = runner.expand_overlay_barrier_batches(
+        tuple(prompts),
+        active_concurrency=32,
+        rollout_batches=3,
+    )[0]
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
+
     requests = runner.prepare_overlay_requests(
-        prompt_batches[0],
+        batch,
         request_plan=plan,
         samples_per_prompt=1,
         seed_start=7,
@@ -2593,42 +2804,349 @@ def test_speedbench_sync_overlay_uses_balanced_48_prompts_and_exact_request_plan
         max_model_len=plan.max_model_len,
     )
 
-    assert [len(batch) for batch in prompt_batches] == [16, 16, 16]
-    assert [adapter.count_categories(batch) for batch in prompt_batches] == [
-        {"low_entropy": 6, "mixed": 5, "high_entropy": 5},
-        {"low_entropy": 5, "mixed": 6, "high_entropy": 5},
-        {"low_entropy": 5, "mixed": 5, "high_entropy": 6},
-    ]
-    assert len({prompt.prompt_id for batch in prompt_batches for prompt in batch}) == 48
-    assert all(
-        prompt.prompt_token_ids == prepared_token_ids[prompt.prompt_id]
-        for batch in prompt_batches
-        for prompt in batch
-    )
-    assert Counter(request.max_tokens for request in requests) == {
-        4096: 8,
-        8192: 4,
-        16384: 3,
-        32768: 1,
+    assert len(batch) == 32
+    assert len(requests) == 32
+    assert Counter(request.prompt_id for request in requests) == {
+        f"p{i}": 2 for i in range(16)
     }
     assert runner.validate_request_plan_exact_work(
         requests,
-        prompt_batches[0],
+        batch,
         samples_per_prompt=1,
     ) == {
-        "expected_requests": 16,
-        "actual_requests": 16,
+        "expected_requests": 32,
+        "actual_requests": 32,
         "unique_prompts": 16,
     }
-    with pytest.raises(ValueError, match="request-plan exact-work mismatch"):
-        runner.validate_request_plan_exact_work(
-            requests[:-1],
-            prompt_batches[0],
-            samples_per_prompt=1,
-        )
 
 
 def test_speedbench_sync_overlay_async_gather_barrier_records_ttft_and_completion_times() -> None:
+    runner = load_speedbench_sync_module()
+
+    class FakeCandidate:
+        def __init__(self, token_ids: list[int], finish_reason: str = "length") -> None:
+            self.token_ids = token_ids
+            self.text = f"tokens={token_ids}"
+            self.finish_reason = finish_reason
+
+    class FakeOutput:
+        def __init__(self, token_ids: list[int], *, finished: bool) -> None:
+            self.outputs = [FakeCandidate(token_ids)]
+            self.finished = finished
+
+    class FakeEngine:
+        async def generate(
+            self,
+            *,
+            prompt: dict[str, list[int]],
+            sampling_params: object,
+            request_id: str,
+        ) -> Any:
+            if request_id == "r0":
+                await asyncio.sleep(0)
+                yield FakeOutput([11], finished=False)
+                await asyncio.sleep(0)
+                yield FakeOutput([11, 12, 13], finished=True)
+            else:
+                await asyncio.sleep(0)
+                yield FakeOutput([21], finished=False)
+                await asyncio.sleep(0)
+                yield FakeOutput([21, 22], finished=True)
+
+    clock_value = 0.0
+
+    def clock() -> float:
+        nonlocal clock_value
+        clock_value += 0.5
+        return clock_value
+
+    requests = [
+        runner.OverlayRequest(
+            request_id="r0",
+            prompt_id="p0",
+            prompt_sha256="p0-sha",
+            source_prompt_sha256="source-p0-sha",
+            category="low_entropy",
+            sample_index=0,
+            seed=1,
+            prompt_token_ids=[1, 2, 3],
+            max_tokens=3,
+            min_tokens=0,
+            ignore_eos=False,
+        ),
+        runner.OverlayRequest(
+            request_id="r1",
+            prompt_id="p1",
+            prompt_sha256="p1-sha",
+            source_prompt_sha256=None,
+            category="mixed",
+            sample_index=0,
+            seed=2,
+            prompt_token_ids=[4, 5],
+            max_tokens=2,
+            min_tokens=0,
+            ignore_eos=False,
+        ),
+    ]
+
+    row = asyncio.run(
+        runner.run_overlay_batch_async(
+            FakeEngine(),
+            requests,
+            sampling_params_by_request={"r0": object(), "r1": object()},
+            clock=clock,
+        )
+    )
+
+    assert row["sync_barrier"] == "AsyncLLM.gather"
+    assert row["request_count"] == 2
+    assert row["output_token_ids"] == [[11, 12, 13], [21, 22]]
+    assert row["ttft_s"] == [0.5, 1.0]
+    assert row["completion_time_s"] == [1.5, 2.0]
+    assert row["barrier_finished_at_s"] == 3.0
+    assert row["barrier_time_s"] == 2.5
+    assert row["prompt_token_ids"] == [[1, 2, 3], [4, 5]]
+
+
+def test_speedbench_sync_reports_draft_acceptance_and_completion_lengths_separately() -> None:
+    runner = load_speedbench_sync_module()
+
+    draft = runner.draft_position_acceptance_rates(
+        {
+            "num_drafts": 4.0,
+            "num_accepted_tokens_per_pos": [2.0, 4.0, 1.0],
+        }
+    )
+    completion = runner.completion_position_length_windows(
+        output_token_ids=[[1, 2, 3], [4, 5, 6, 7, 8], [9]],
+        window_size=2,
+    )
+
+    assert draft == [
+        {
+            "draft_position": 0,
+            "accepted_tokens": 2.0,
+            "proposal_count": 4.0,
+            "acceptance_rate": 0.5,
+        },
+        {
+            "draft_position": 1,
+            "accepted_tokens": 4.0,
+            "proposal_count": 4.0,
+            "acceptance_rate": 1.0,
+        },
+        {
+            "draft_position": 2,
+            "accepted_tokens": 1.0,
+            "proposal_count": 4.0,
+            "acceptance_rate": 0.25,
+        },
+    ]
+    assert all(row["acceptance_rate"] <= 1.0 for row in draft)
+    assert completion == [
+        {"start_pos": 0, "end_pos": 1, "contributor_count": 5},
+        {"start_pos": 2, "end_pos": 3, "contributor_count": 3},
+        {"start_pos": 4, "end_pos": 4, "contributor_count": 1},
+    ]
+    assert all("acceptance_rate" not in row for row in completion)
+    assert "not output-position acceptance" in runner.ACCEPTANCE_LIMITATION
+
+
+def test_speedbench_sync_non_baseline_requires_active_spec_decode_counters() -> None:
+    runner = load_speedbench_sync_module()
+
+    runner.validate_spec_decode_counter_gate("baseline", {})
+    runner.validate_spec_decode_counter_gate(
+        "static",
+        {"metrics_available": True, "active": True, "num_draft_tokens": 8.0},
+    )
+    with pytest.raises(RuntimeError, match="SpecDec counters are unavailable or inactive"):
+        runner.validate_spec_decode_counter_gate("dynamic", {})
+    with pytest.raises(RuntimeError, match="SpecDec counters are unavailable or inactive"):
+        runner.validate_spec_decode_counter_gate(
+            "mtp_static",
+            {"metrics_available": True, "active": False, "num_draft_tokens": 0.0},
+        )
+
+
+def test_speedbench_sync_latency_summary_reports_tail_quantiles() -> None:
+    runner = load_speedbench_sync_module()
+
+    summary = runner.summarize_overlay_latencies(
+        [
+            {"ttft_s": [0.1, 0.2], "completion_time_s": [1.0, 2.0], "barrier_time_s": 2.0},
+            {"ttft_s": [0.3, 0.4], "completion_time_s": [3.0, 4.0], "barrier_time_s": 10.0},
+        ]
+    )
+
+    assert summary["ttft_p50_s"] == 0.25
+    assert summary["ttft_p90_s"] == 0.37
+    assert summary["ttft_p99_s"] == 0.397
+    assert summary["completion_p50_s"] == 2.5
+    assert summary["completion_p90_s"] == 3.7
+    assert summary["completion_p99_s"] == 3.97
+    assert summary["barrier_tail_gap_s"] == 4.0
+
+
+def test_speedbench_sync_async_engine_kwargs_include_piecewise_compilation_config() -> None:
+    runner = load_speedbench_sync_module()
+    args = runner.build_parser().parse_args(
+        [
+            "--cohort",
+            "overlay",
+            "--model",
+            "/models/qwen",
+            "--mode",
+            "baseline",
+            "--output",
+            "/tmp/out.json",
+            "--prepared-root",
+            "/prepared",
+            "--prepared-manifest",
+            "/manifest.json",
+            "--prepared-checksums",
+            "/checksums.sha256",
+            "--request-plan",
+            "/plan.json",
+            "--runtime-image-sha256",
+            "runtime-sha",
+            "--cudagraph-mode",
+            "PIECEWISE",
+        ]
+    )
+
+    kwargs = runner.build_async_engine_kwargs(args, speculative_config=None)
+
+    assert kwargs["compilation_config"] == {"cudagraph_mode": "PIECEWISE"}
+
+
+def test_speedbench_sync_summary_rejects_missing_provenance_and_missing_baseline(
+    tmp_path: Path,
+) -> None:
+    summary = load_speedbench_sync_summary_module()
+    baseline = fake_speedbench_sync_summary_row(cohort="overlay")
+    candidate = fake_speedbench_sync_summary_row(cohort="overlay", variant="dynamic")
+
+    with pytest.raises(ValueError, match="runtime_image_sha256"):
+        summary.compare_rows({**baseline, "runtime_image_sha256": None}, candidate)
+    with pytest.raises(ValueError, match="runtime_image_sha256"):
+        summary.compare_rows({**baseline, "runtime_image_sha256": "unknown"}, candidate)
+
+    dynamic_dir = tmp_path / "dynamic"
+    dynamic_dir.mkdir()
+    (dynamic_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "config": {
+                    "cohort": "overlay",
+                    "mode": "dynamic",
+                    "runtime_image_sha256": "runtime-sha",
+                    "model_config_hash": "model-sha",
+                    "prepared_manifest_hash": "manifest-sha",
+                    "request_plan_hash": "plan-sha",
+                    "model": "model",
+                    "draft_model": "draft",
+                    "dataset_config": "throughput_1k",
+                    "active_concurrency": 16,
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "tensor_parallel_size": 2,
+                    "pipeline_parallel_size": 1,
+                    "dtype": "bfloat16",
+                    "kv_cache_dtype": "auto",
+                    "cudagraph_mode": "PIECEWISE",
+                    "compilation_config": {"cudagraph_mode": "PIECEWISE"},
+                    "method": "eagle3",
+                    "prompt_set_hash": "prompt-sha",
+                    "sampling": {"temperature": 0.0, "top_p": 1.0},
+                },
+                "summary": {
+                    "total_rollout_time_s": 1.0,
+                    "output_tok_s_per_gpu": 1.0,
+                    "total_output_tokens": 1,
+                    "spec_decode_metrics": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing complete baseline"):
+        summary.build_summary(tmp_path)
+
+
+def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl() -> None:
+    output = run_dry(
+        "submit_speedbench_k_calibration.sh",
+        CLUSTER="lyris",
+        RUN_ID="speedbench-cal-test",
+        NODES="1",
+        CONCURRENCIES="1 8 32 64",
+        K_VALUES="1 3",
+    )
+    positions = [
+        output.index(f"active_concurrency={concurrency}")
+        for concurrency in ("1", "8", "32", "64")
+    ]
+
+    assert positions == sorted(positions)
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 12
+    assert "--prepared-root" in output
+    assert "--prepared-manifest" in output
+    assert "--prepared-checksums" in output
+    assert "--prepared-jsonl" not in output
+    assert "overlay_prompts.jsonl" not in output
+    assert "BENCH_RUNTIME_IMAGE_SHA256:-unknown" not in output
+    assert "--request-plan-exact-work" in output
+    assert "--active-concurrency 64" in output
+    assert "#SBATCH --segment=1" in output
+    assert "--gres" not in output
+    assert "/home/" not in output
+
+
+def test_speedbench_sync_nemotron_ultra_uses_single_coordinated_ray_contract() -> None:
+    output = run_dry(
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        MODELS="ultra",
+        RUN_ID="speedbench-nemotron-test",
+        ACTIVE_CONCURRENCY="64",
+    )
+    manifest_lines = extract_manifest_rows(output)
+
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 3
+    assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
+    assert "/workspace/experiment/run_multinode_ray.sh" in output
+    assert "args+=(--distributed-executor-backend ray)" in output
+    assert "args+=(--enable-expert-parallel)" in output
+    assert "args+=(--mamba-ssm-cache-dtype float16)" in output
+    assert "args+=(--mamba-backend flashinfer)" in output
+    assert "args+=(--enable-mamba-cache-stochastic-rounding)" in output
+    assert "args+=(--mamba-cache-philox-rounds 5)" in output
+    assert "args+=(--model-loader-num-threads 96)" in output
+    assert "args+=(--disable-fuse-allreduce-rms)" in output
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "method=mtp" in output
+    assert "method=eagle3" not in output
+    assert "Qwen3-32B-speculator.eagle3" not in output
+    assert "--gres" not in output
+    assert any(
+        line.startswith(
+            "UNSUPPORTED\tultra\tspeedbench_sync_overlay\teagle3\t-\t-\tnemotron_baseline_native_mtp_only\t"
+        )
+        for line in manifest_lines
+    )
+    assert any(
+        line.startswith(
+            "SUPPORTED\tultra\tspeedbench_sync_overlay\tmtp_dynamic\tmtp_dynamic\t"
+        )
+        for line in manifest_lines
+    )
+
+
+def test_speedbench_sync_overlay_async_gather_barrier_preserves_prompt_tokens() -> None:
     runner = load_speedbench_sync_module()
 
     class FakeCandidate:
@@ -2762,38 +3280,21 @@ def test_speedbench_sync_overlay_warmup_reuses_prompt_shape_without_padding() ->
     assert [request.seed for request in warmup] == [100, 101, 102, 103]
 
 
-def test_speedbench_sync_overlay_acceptance_windows_count_output_position_contributors() -> None:
+def test_speedbench_sync_overlay_completion_windows_are_not_acceptance_rates() -> None:
     runner = load_speedbench_sync_module()
 
-    windows = runner.output_position_acceptance_windows(
+    windows = runner.completion_position_length_windows(
         output_token_ids=[[1, 2, 3], [4, 5, 6, 7, 8], [9]],
-        accepted_tokens_per_pos=[2.0, 1.0, 0.0, 1.0, 1.0],
         window_size=2,
     )
 
     assert windows == [
-        {
-            "start_pos": 0,
-            "end_pos": 1,
-            "contributor_count": 5,
-            "accepted_tokens": 3.0,
-            "acceptance_rate": 0.6,
-        },
-        {
-            "start_pos": 2,
-            "end_pos": 3,
-            "contributor_count": 3,
-            "accepted_tokens": 1.0,
-            "acceptance_rate": 0.333333,
-        },
-        {
-            "start_pos": 4,
-            "end_pos": 4,
-            "contributor_count": 1,
-            "accepted_tokens": 1.0,
-            "acceptance_rate": 1.0,
-        },
+        {"start_pos": 0, "end_pos": 1, "contributor_count": 5},
+        {"start_pos": 2, "end_pos": 3, "contributor_count": 3},
+        {"start_pos": 4, "end_pos": 4, "contributor_count": 1},
     ]
+    assert all("acceptance_rate" not in row for row in windows)
+    assert "not output-position acceptance" in runner.ACCEPTANCE_LIMITATION
 
 
 def test_speedbench_sync_active_concurrency_k_tier_reachability() -> None:
@@ -2820,27 +3321,26 @@ def test_speedbench_sync_official_command_delegates_without_local_prompt_rewrite
 
     command = runner.build_official_speedbench_command(
         model="/models/qwen32",
+        tokenizer="/models/qwen32",
         modelopt_root=Path("/opt/modelopt"),
-        prepared_root=Path("/data/speedbench/prepared"),
         dataset_config="throughput_1k",
-        output_dir=Path("/results/official"),
+        save_dir=Path("/results/official"),
         variant="baseline",
         tensor_parallel_size=2,
+        active_concurrency=16,
         max_model_len=4096,
+        max_new_tokens=1024,
     )
 
     assert command[:2] == [
         "python3",
-        "/opt/modelopt/examples/specdec_bench/benchmark.py",
+        "/opt/modelopt/examples/specdec_bench/run.py",
     ]
     assert "--dataset" in command
     assert command[command.index("--dataset") + 1] == "speed"
-    assert "--config" in command
-    assert command[command.index("--config") + 1] == "throughput_1k"
-    assert "--prepared-root" in command
-    assert command[command.index("--prepared-root") + 1] == "/data/speedbench/prepared"
-    assert "--output-dir" in command
-    assert command[command.index("--output-dir") + 1] == "/results/official"
+    assert command[command.index("--dataset_path") + 1] == "throughput_1k"
+    assert command[command.index("--model_dir") + 1] == "/models/qwen32"
+    assert command[command.index("--save_dir") + 1] == "/results/official"
     assert "--prompt-jsonl" not in command
     assert "--turns" not in command
     assert "--sync-overlay" not in command

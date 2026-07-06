@@ -37,7 +37,10 @@ RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-p
 MODELS="${MODELS:-ultra super}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_nemotron_speedbench_sync_mtp}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/nemotron-speedbench-sync/${RUN_ID}}"
-PREPARED_JSONL="${PREPARED_JSONL:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/overlay_prompts.jsonl}"
+PREPARED_ROOT="${PREPARED_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared/speed}"
+PREPARED_MANIFEST="${PREPARED_MANIFEST:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/prepared_manifest.json}"
+PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/checksums.sha256}"
+DATASET_CONFIG="${DATASET_CONFIG:-throughput_1k}"
 REQUEST_PLAN="${REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
 REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-/workspace/experiment/profiles/swe_sync_32k.json}"
 VARIANTS="${VARIANTS:-baseline mtp_static mtp_dynamic}"
@@ -51,6 +54,8 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-36864}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"
 CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}"
+MAMBA_BACKEND="${MAMBA_BACKEND:-flashinfer}"
+MOE_BACKEND="${MOE_BACKEND:-flashinfer_trtllm}"
 RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256:-}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
@@ -176,8 +181,16 @@ benchmark_python="\${BENCHMARK_PYTHON:-python3}"
 benchmark_script="\${BENCHMARK_SCRIPT:-/workspace/experiment/benchmark_speedbench_sync_rollout.py}"
 runtime_image_sha256=$(shell_quote "${RUNTIME_IMAGE_SHA256}")
 if [[ -z "\${runtime_image_sha256}" ]]; then
-  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256:-unknown}"
+  : "\${BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required when RUNTIME_IMAGE_SHA256 is empty}"
+  runtime_image_sha256="\${BENCH_RUNTIME_IMAGE_SHA256}"
 fi
+
+runner_prefix=()
+EOF
+  if (( nodes > 1 )); then
+    printf 'runner_prefix+=(%s)\n' "$(shell_quote "/workspace/experiment/run_multinode_ray.sh")"
+  fi
+  cat <<'EOF'
 
 args=()
 EOF
@@ -199,14 +212,46 @@ EOF
   emit_arg_pair "--top-p" "${TOP_P}"
   emit_arg_pair "--seed" "${SEED}"
   emit_arg_pair "--cudagraph-mode" "${CUDAGRAPH_MODE}"
-  emit_arg_pair "--prepared-jsonl" "${PREPARED_JSONL}"
+  emit_arg_pair "--prepared-root" "${PREPARED_ROOT}"
+  emit_arg_pair "--prepared-manifest" "${PREPARED_MANIFEST}"
+  emit_arg_pair "--prepared-checksums" "${PREPARED_CHECKSUMS}"
+  emit_arg_pair "--dataset-config" "${DATASET_CONFIG}"
   emit_arg_pair "--request-plan" "${REQUEST_PLAN_IN_CONTAINER}"
   emit_arg_flag "--request-plan-exact-work"
+  if [[ -n "${distributed_executor_backend}" ]]; then
+    emit_arg_pair "--distributed-executor-backend" "${distributed_executor_backend}"
+  fi
+  if [[ "${enable_expert_parallel}" == "true" ]]; then
+    emit_arg_flag "--enable-expert-parallel"
+  fi
+  if [[ -n "${mamba_ssm_cache_dtype}" ]]; then
+    emit_arg_pair "--mamba-ssm-cache-dtype" "${mamba_ssm_cache_dtype}"
+    emit_arg_pair "--mamba-backend" "${MAMBA_BACKEND}"
+  fi
+  if [[ "${enable_stochastic_rounding}" == "true" ]]; then
+    emit_arg_flag "--enable-mamba-cache-stochastic-rounding"
+  fi
+  if [[ -n "${mamba_philox_rounds}" ]]; then
+    emit_arg_pair "--mamba-cache-philox-rounds" "${mamba_philox_rounds}"
+  fi
+  if [[ -n "${model_loader_threads}" ]] && (( model_loader_threads > 0 )); then
+    emit_arg_pair "--model-loader-num-threads" "${model_loader_threads}"
+  fi
+  if [[ "${disable_fuse_allreduce_rms}" == "true" ]]; then
+    emit_arg_flag "--disable-fuse-allreduce-rms"
+  fi
+  if [[ -n "${MOE_BACKEND}" ]]; then
+    emit_arg_pair "--moe-backend" "${MOE_BACKEND}"
+  fi
   emit_arg_pair "--runtime-image-sha256" "\${runtime_image_sha256}"
   emit_arg_pair "--output" "${run_dir}/result.json"
   cat <<'EOF'
 
-"${benchmark_python}" "${benchmark_script}" "${args[@]}"
+if ((${#runner_prefix[@]})); then
+  "${runner_prefix[@]}" "${benchmark_python}" "${benchmark_script}" "${args[@]}"
+else
+  "${benchmark_python}" "${benchmark_script}" "${args[@]}"
+fi
 EOF
 }
 

@@ -8,6 +8,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import platform
 import statistics
 import subprocess
 import time
@@ -25,8 +26,16 @@ from benchmark import (
     sum_spec_decode_counters,
     write_json_atomic,
 )
+from benchmark_sync_rollout import model_config_hash
 from speedbench_dataset import SpeedBenchRecord, select_sync_overlay_rows
 from sync_rollout_core import RequestPlan, load_request_plan, resolve_request_plan
+
+
+ACCEPTANCE_LIMITATION = (
+    "vLLM exposes draft-position acceptance counters. Completion-position "
+    "windows report contributor counts only; they are not output-position "
+    "acceptance without additional instrumentation."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +80,44 @@ class CompletedRequest:
     finish_reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class OverlaySelection:
+    prompts: tuple[OverlayPrompt, ...]
+    dataset_config: str
+    prepared_manifest_hash: str
+    parquet_hash: str
+    prompt_set_hash: str
+
+
 def token_hash(token_ids: Sequence[int]) -> str:
     payload = ",".join(str(token_id) for token_id in token_ids).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prompt_set_hash(prompt_hashes: Sequence[str]) -> str:
+    payload = json.dumps(list(prompt_hashes), separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def collect_runtime_metadata() -> dict[str, Any]:
+    try:
+        return runtime_metadata()
+    except ModuleNotFoundError as exc:
+        if exc.name != "torch":
+            raise
+        return {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "torch_available": False,
+        }
 
 
 def _string_field(row: Mapping[str, Any], field_name: str) -> str:
@@ -143,6 +187,33 @@ def overlay_prompt_from_prepared_row(
     )
 
 
+def _speedbench_messages(turns: Sequence[str]) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for index, turn in enumerate(turns):
+        role = "user" if index % 2 == 0 else "assistant"
+        messages.append({"role": role, "content": str(turn)})
+    if messages and messages[-1]["role"] != "user":
+        messages.append({"role": "user", "content": ""})
+    return messages
+
+
+def tokenize_speedbench_record(tokenizer: Any, record: SpeedBenchRecord) -> list[int]:
+    messages = _speedbench_messages(record.turns)
+    if hasattr(tokenizer, "apply_chat_template"):
+        rendered = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        token_ids = tokenizer.encode(rendered, add_special_tokens=False)
+    else:
+        token_ids = tokenizer.encode("\n".join(record.turns), add_special_tokens=True)
+    result = list(token_ids)
+    if not result or any(type(token_id) is not int for token_id in result):
+        raise ValueError("tokenizer returned invalid SPEED-Bench token IDs")
+    return result
+
+
 def _record_to_overlay_prompt(
     record: SpeedBenchRecord,
     token_ids: Sequence[int],
@@ -152,6 +223,96 @@ def _record_to_overlay_prompt(
             **asdict(record),
             "prompt_token_ids": list(token_ids),
         }
+    )
+
+
+def _manifest_config_entry(
+    manifest: Mapping[str, Any],
+    dataset_config: str,
+) -> dict[str, Any]:
+    for entry in manifest.get("prepared_configs", []):
+        if entry.get("config_name") == dataset_config:
+            return dict(entry)
+    raise ValueError(f"prepared manifest missing config {dataset_config!r}")
+
+
+def _verify_checksum_file(
+    checksums_path: Path,
+    *,
+    relative_path: str,
+    expected_sha256: str,
+) -> None:
+    found = False
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        digest, path_text = line.split("  ", 1)
+        if path_text == relative_path:
+            found = True
+            if digest != expected_sha256:
+                raise ValueError(f"checksum mismatch for {relative_path}")
+    if not found:
+        raise ValueError(f"missing checksum entry for {relative_path}")
+
+
+def read_prepared_speedbench_rows(path: Path) -> list[dict[str, Any]]:
+    try:
+        import pandas as pd  # pyright: ignore[reportMissingImports]
+
+        return [
+            dict(row)
+            for row in pd.read_parquet(path).to_dict(orient="records")
+        ]
+    except Exception:
+        rows: list[dict[str, Any]] = []
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                if line.strip():
+                    rows.append(json.loads(line))
+        return rows
+
+
+def build_overlay_from_prepared_parquet(
+    *,
+    prepared_root: Path,
+    prepared_manifest: Path,
+    prepared_checksums: Path,
+    dataset_config: str,
+    tokenizer: Any,
+    seed: int,
+) -> OverlaySelection:
+    from speedbench_dataset import build_records
+
+    manifest = json.loads(prepared_manifest.read_text(encoding="utf-8"))
+    entry = _manifest_config_entry(manifest, dataset_config)
+    relative_path = str(entry["relative_path"])
+    parquet_path = prepared_root / relative_path
+    actual_hash = sha256_file(parquet_path)
+    if actual_hash != entry.get("sha256"):
+        raise ValueError(f"prepared parquet hash mismatch for {relative_path}")
+    _verify_checksum_file(
+        prepared_checksums,
+        relative_path=relative_path,
+        expected_sha256=actual_hash,
+    )
+    records = build_records(
+        read_prepared_speedbench_rows(parquet_path),
+        dataset_config=dataset_config,
+    )
+    selected_batches = select_sync_overlay_rows(records, seed=seed)
+    prompts = tuple(
+        _record_to_overlay_prompt(record, tokenize_speedbench_record(tokenizer, record))
+        for batch in selected_batches
+        for record in batch
+    )
+    if len(prompts) != 48 or len({prompt.prompt_id for prompt in prompts}) != 48:
+        raise ValueError("SPEED-Bench overlay requires exactly 48 unique prompts")
+    return OverlaySelection(
+        prompts=prompts,
+        dataset_config=dataset_config,
+        prepared_manifest_hash=sha256_file(prepared_manifest),
+        parquet_hash=actual_hash,
+        prompt_set_hash=prompt_set_hash([prompt.prompt_sha256 for prompt in prompts]),
     )
 
 
@@ -174,6 +335,29 @@ def build_overlay_prompt_batches(
     )
 
 
+def expand_overlay_barrier_batches(
+    prompts: Sequence[OverlayPrompt],
+    *,
+    active_concurrency: int,
+    rollout_batches: int,
+) -> tuple[tuple[OverlayPrompt, ...], ...]:
+    if len(prompts) != 48 or len({prompt.prompt_id for prompt in prompts}) != 48:
+        raise ValueError("expected exactly 48 unique SPEED-Bench overlay prompts")
+    if active_concurrency <= 0 or rollout_batches <= 0:
+        raise ValueError("active_concurrency and rollout_batches must be positive")
+    requests_per_batch = max(16, active_concurrency)
+    batches: list[tuple[OverlayPrompt, ...]] = []
+    for batch_index in range(rollout_batches):
+        segment_index = batch_index % 3
+        base = list(prompts[segment_index * 16 : (segment_index + 1) * 16])
+        batch = [
+            base[index % len(base)]
+            for index in range(requests_per_batch)
+        ]
+        batches.append(tuple(batch))
+    return tuple(batches)
+
+
 def _prompt_by_id(prompts: Sequence[OverlayPrompt]) -> dict[str, OverlayPrompt]:
     return {prompt.prompt_id: prompt for prompt in prompts}
 
@@ -187,10 +371,13 @@ def prepare_overlay_requests(
     rollout_batch_index: int,
     max_model_len: int,
 ) -> list[OverlayRequest]:
-    by_prompt = _prompt_by_id(prompts)
+    alias_to_prompt = {
+        f"{index}:{prompt.prompt_id}": prompt
+        for index, prompt in enumerate(prompts)
+    }
     resolved = resolve_request_plan(
         request_plan,
-        prompt_ids=[prompt.prompt_id for prompt in prompts],
+        prompt_ids=list(alias_to_prompt),
         samples_per_prompt=samples_per_prompt,
         seed_start=seed_start,
         prompt_token_lengths=[len(prompt.prompt_token_ids) for prompt in prompts],
@@ -199,14 +386,14 @@ def prepare_overlay_requests(
     )
     requests: list[OverlayRequest] = []
     for item in resolved:
-        prompt = by_prompt[item.prompt_id]
+        prompt = alias_to_prompt[item.prompt_id]
         requests.append(
             OverlayRequest(
                 request_id=(
                     f"speedbench-{rollout_batch_index}-"
                     f"{item.prompt_id}-{item.sample_index}"
                 ),
-                prompt_id=item.prompt_id,
+                prompt_id=prompt.prompt_id,
                 prompt_sha256=prompt.prompt_sha256,
                 source_prompt_sha256=prompt.source_prompt_sha256,
                 category=prompt.category,
@@ -227,25 +414,16 @@ def validate_request_plan_exact_work(
     *,
     samples_per_prompt: int,
 ) -> dict[str, int]:
-    expected_prompt_ids = [prompt.prompt_id for prompt in prompts]
-    expected = {
-        (prompt_id, sample_index)
-        for prompt_id in expected_prompt_ids
-        for sample_index in range(samples_per_prompt)
-    }
-    actual = {
-        (request.prompt_id, request.sample_index)
-        for request in requests
-    }
-    if actual != expected or len(requests) != len(expected):
+    expected_count = len(prompts) * samples_per_prompt
+    if len(requests) != expected_count:
         raise ValueError(
             "request-plan exact-work mismatch: "
-            f"expected={len(expected)} actual={len(requests)}"
+            f"expected={expected_count} actual={len(requests)}"
         )
     return {
-        "expected_requests": len(expected),
+        "expected_requests": expected_count,
         "actual_requests": len(requests),
-        "unique_prompts": len(expected_prompt_ids),
+        "unique_prompts": len({prompt.prompt_id for prompt in prompts}),
     }
 
 
@@ -334,18 +512,37 @@ async def run_overlay_batch_async(
     requests: Sequence[OverlayRequest],
     *,
     sampling_params_by_request: Mapping[str, Any],
+    active_concurrency: int | None = None,
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, Any]:
     batch_started_at_s = clock()
-    completed = await asyncio.gather(
-        *(
-            run_one_request_async(
+    semaphore = (
+        asyncio.Semaphore(active_concurrency)
+        if active_concurrency is not None and active_concurrency > 0
+        else None
+    )
+
+    async def run_limited_request(request: OverlayRequest) -> CompletedRequest:
+        if semaphore is None:
+            return await run_one_request_async(
                 engine,
                 request,
                 sampling_params_by_request[request.request_id],
                 batch_started_at_s=batch_started_at_s,
                 clock=clock,
             )
+        async with semaphore:
+            return await run_one_request_async(
+                engine,
+                request,
+                sampling_params_by_request[request.request_id],
+                batch_started_at_s=batch_started_at_s,
+                clock=clock,
+            )
+
+    completed = await asyncio.gather(
+        *(
+            run_limited_request(request)
             for request in requests
         )
     )
@@ -377,16 +574,43 @@ async def run_overlay_batch_async(
     }
 
 
-def output_position_acceptance_windows(
+def draft_position_acceptance_rates(
+    metrics: Mapping[str, Any],
+) -> list[dict[str, float | int]]:
+    proposal_count = float(metrics.get("num_drafts", 0.0) or 0.0)
+    accepted_by_pos = list(metrics.get("num_accepted_tokens_per_pos", []) or [])
+    rows: list[dict[str, float | int]] = []
+    for position, accepted_value in enumerate(accepted_by_pos):
+        accepted = float(accepted_value)
+        if proposal_count and accepted > proposal_count:
+            raise ValueError(
+                f"draft-position accepted tokens exceed proposal denominator at "
+                f"position {position}: accepted={accepted} proposals={proposal_count}"
+            )
+        rows.append(
+            {
+                "draft_position": position,
+                "accepted_tokens": accepted,
+                "proposal_count": proposal_count,
+                "acceptance_rate": (
+                    round(accepted / proposal_count, 6)
+                    if proposal_count
+                    else 0.0
+                ),
+            }
+        )
+    return rows
+
+
+def completion_position_length_windows(
     *,
     output_token_ids: Sequence[Sequence[int]],
-    accepted_tokens_per_pos: Sequence[float],
     window_size: int,
-) -> list[dict[str, float | int]]:
+) -> list[dict[str, int]]:
     if window_size <= 0:
         raise ValueError("window_size must be positive")
     max_length = max((len(tokens) for tokens in output_token_ids), default=0)
-    windows: list[dict[str, float | int]] = []
+    windows: list[dict[str, int]] = []
     for start in range(0, max_length, window_size):
         end = min(start + window_size, max_length) - 1
         contributor_count = sum(
@@ -395,26 +619,59 @@ def output_position_acceptance_windows(
             for tokens in output_token_ids
             if len(tokens) > position
         )
-        accepted = sum(
-            float(accepted_tokens_per_pos[position])
-            if position < len(accepted_tokens_per_pos)
-            else 0.0
-            for position in range(start, end + 1)
-        )
         windows.append(
             {
                 "start_pos": start,
                 "end_pos": end,
                 "contributor_count": contributor_count,
-                "accepted_tokens": accepted,
-                "acceptance_rate": (
-                    round(accepted / contributor_count, 6)
-                    if contributor_count
-                    else 0.0
-                ),
             }
         )
     return windows
+
+
+def validate_spec_decode_counter_gate(mode: str, metrics: Mapping[str, Any]) -> None:
+    if mode == "baseline":
+        return
+    if not metrics.get("metrics_available") or not metrics.get("active"):
+        raise RuntimeError(
+            f"SpecDec counters are unavailable or inactive for mode={mode}"
+        )
+
+
+def percentile(values: Sequence[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    position = (len(ordered) - 1) * quantile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return round(ordered[lower] * (1.0 - weight) + ordered[upper] * weight, 6)
+
+
+def summarize_overlay_latencies(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    ttft = [
+        float(value)
+        for row in rows
+        for value in list(row.get("ttft_s", []) or [])
+    ]
+    completion = [
+        float(value)
+        for row in rows
+        for value in list(row.get("completion_time_s", []) or [])
+    ]
+    barriers = [float(row.get("barrier_time_s", 0.0) or 0.0) for row in rows]
+    median_barrier = statistics.median(barriers) if barriers else 0.0
+    max_barrier = max(barriers, default=0.0)
+    return {
+        "ttft_p50_s": percentile(ttft, 0.50),
+        "ttft_p90_s": percentile(ttft, 0.90),
+        "ttft_p99_s": percentile(ttft, 0.99),
+        "completion_p50_s": percentile(completion, 0.50),
+        "completion_p90_s": percentile(completion, 0.90),
+        "completion_p99_s": percentile(completion, 0.99),
+        "barrier_tail_gap_s": round(max_barrier - median_barrier, 6),
+    }
 
 
 def _schedule_k_for_concurrency(
@@ -468,44 +725,215 @@ def require_k_tier_reachability(
 def build_official_speedbench_command(
     *,
     model: str,
+    tokenizer: str,
     modelopt_root: Path,
-    prepared_root: Path,
     dataset_config: str,
-    output_dir: Path,
+    save_dir: Path,
     variant: str,
     tensor_parallel_size: int,
+    active_concurrency: int,
     max_model_len: int,
+    max_new_tokens: int,
     draft_model: str = "",
     static_k: int = 0,
-    dynamic_schedule: str = "",
+    temperature: float = 0.0,
 ) -> list[str]:
+    algorithm = {
+        "baseline": "NONE",
+        "static": "EAGLE3",
+        "dynamic": "EAGLE3",
+        "mtp_static": "MTP",
+        "mtp_dynamic": "MTP",
+    }[variant]
+    draft_length = 0 if variant == "baseline" else static_k
     command = [
         "python3",
-        str(modelopt_root / "examples/specdec_bench/benchmark.py"),
+        str(modelopt_root / "examples/specdec_bench/run.py"),
+        "--tokenizer",
+        tokenizer,
         "--dataset",
         "speed",
-        "--config",
+        "--dataset_path",
         dataset_config,
-        "--prepared-root",
-        str(prepared_root),
-        "--model",
+        "--engine",
+        "VLLM",
+        "--speculative_algorithm",
+        algorithm,
+        "--model_dir",
         model,
-        "--output-dir",
-        str(output_dir),
-        "--variant",
-        variant,
-        "--tensor-parallel-size",
-        str(tensor_parallel_size),
-        "--max-model-len",
+        "--temperature",
+        str(temperature),
+        "--max_seq_len",
         str(max_model_len),
+        "--output_length",
+        str(max_new_tokens),
+        "--draft_length",
+        str(draft_length),
+        "--tp_size",
+        str(tensor_parallel_size),
+        "--concurrency",
+        str(active_concurrency),
+        "--trust_remote_code",
+        "--save_dir",
+        str(save_dir),
     ]
     if draft_model:
-        command.extend(["--draft-model", draft_model])
-    if static_k:
-        command.extend(["--num-speculative-tokens", str(static_k)])
-    if dynamic_schedule:
-        command.extend(["--dynamic-schedule", dynamic_schedule])
+        command.extend(["--draft_model_dir", draft_model])
     return command
+
+
+def _require_runtime_sha(value: str) -> str:
+    if not value.strip() or value == "unknown":
+        raise ValueError("runtime_image_sha256 must be set and must not be unknown")
+    return value
+
+
+def method_for_mode(mode: str) -> str:
+    if mode == "baseline":
+        return "baseline"
+    if mode.startswith("mtp_"):
+        return "mtp"
+    return "eagle3"
+
+
+def _required_provenance_value(value: str | None, field_name: str) -> str:
+    if value is None or not value or value == "unknown":
+        raise ValueError(f"{field_name} must be present and must not be unknown")
+    return value
+
+
+def adapt_official_speedbench_output(
+    *,
+    save_dir: Path,
+    output: Path,
+    model: str,
+    draft_model: str,
+    variant: str,
+    dataset_config: str,
+    tensor_parallel_size: int,
+    active_concurrency: int,
+    max_model_len: int,
+    max_new_tokens: int,
+    static_k: int,
+    temperature: float,
+    runtime_image_sha256: str,
+    model_config_hash_value: str | None,
+    prepared_manifest_hash: str | None,
+) -> dict[str, Any]:
+    metrics_path = save_dir / "metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
+    total_time_s = float(metrics.get("total_time_s", metrics.get("time_s", 0.0)))
+    total_output_tokens = int(metrics.get("total_output_tokens", metrics.get("output_tokens", 0)))
+    runtime_sha = _require_runtime_sha(runtime_image_sha256)
+    model_hash = _required_provenance_value(
+        model_config_hash_value,
+        "model_config_hash",
+    )
+    manifest_hash = _required_provenance_value(
+        prepared_manifest_hash,
+        "prepared_manifest_hash",
+    )
+    payload = {
+        "schema_version": 1,
+        "status": "complete",
+        "runtime": collect_runtime_metadata(),
+        "config": {
+            "cohort": "official",
+            "official_runner": "ModelOpt examples/specdec_bench/run.py",
+            "upstream_turn_loop_preserved": True,
+            "mode": variant,
+            "method": method_for_mode(variant),
+            "model": model,
+            "draft_model": draft_model or "none",
+            "dataset_config": dataset_config,
+            "active_concurrency": active_concurrency,
+            "tensor_parallel_size": tensor_parallel_size,
+            "pipeline_parallel_size": 1,
+            "dtype": "bfloat16",
+            "kv_cache_dtype": "auto",
+            "max_model_len": max_model_len,
+            "max_new_tokens": max_new_tokens,
+            "static_k": static_k,
+            "temperature": temperature,
+            "top_p": 1.0,
+            "runtime_image_sha256": runtime_sha,
+            "model_config_hash": model_hash,
+            "prepared_manifest_hash": manifest_hash,
+            "request_plan_hash": "official-upstream-modelopt",
+            "prompt_set_hash": f"official-upstream:{dataset_config}",
+            "cudagraph_mode": "official-upstream",
+            "compilation_config": {"source": "official-upstream-modelopt"},
+            "sampling": {"temperature": temperature, "top_p": 1.0},
+        },
+        "official_output": {
+            "save_dir": str(save_dir),
+            "metrics": metrics,
+        },
+        "summary": {
+            "total_rollout_time_s": total_time_s,
+            "total_output_tokens": total_output_tokens,
+            "output_tok_s_per_gpu": float(metrics.get("output_tok_s_per_gpu", 0.0)),
+            "spec_decode_metrics": {},
+        },
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(output, payload)
+    return payload
+
+
+def run_official_speedbench(
+    *,
+    model: str,
+    tokenizer: str,
+    modelopt_root: Path,
+    dataset_config: str,
+    output: Path,
+    variant: str,
+    tensor_parallel_size: int,
+    active_concurrency: int,
+    max_model_len: int,
+    max_new_tokens: int,
+    static_k: int,
+    temperature: float,
+    runtime_image_sha256: str,
+    model_config_hash: str | None,
+    prepared_manifest_hash: str | None,
+    draft_model: str = "",
+) -> dict[str, Any]:
+    save_dir = output.with_suffix(".modelopt")
+    command = build_official_speedbench_command(
+        model=model,
+        tokenizer=tokenizer,
+        modelopt_root=modelopt_root,
+        dataset_config=dataset_config,
+        save_dir=save_dir,
+        variant=variant,
+        tensor_parallel_size=tensor_parallel_size,
+        active_concurrency=active_concurrency,
+        max_model_len=max_model_len,
+        max_new_tokens=max_new_tokens,
+        draft_model=draft_model,
+        static_k=static_k,
+        temperature=temperature,
+    )
+    subprocess.run(command, check=True)
+    return adapt_official_speedbench_output(
+        save_dir=save_dir,
+        output=output,
+        model=model,
+        draft_model=draft_model,
+        variant=variant,
+        dataset_config=dataset_config,
+        tensor_parallel_size=tensor_parallel_size,
+        active_concurrency=active_concurrency,
+        max_model_len=max_model_len,
+        max_new_tokens=max_new_tokens,
+        static_k=static_k,
+        temperature=temperature,
+        runtime_image_sha256=runtime_image_sha256,
+        model_config_hash_value=model_config_hash,
+        prepared_manifest_hash=prepared_manifest_hash,
+    )
 
 
 def request_provenance(request: OverlayRequest) -> dict[str, Any]:
@@ -567,42 +995,94 @@ def build_sampling_params(
     }
 
 
-def load_overlay_prompt_jsonl(path: Path) -> tuple[OverlayPrompt, ...]:
-    prompts: list[OverlayPrompt] = []
-    with path.open(encoding="utf-8") as stream:
-        for line in stream:
-            if line.strip():
-                prompts.append(overlay_prompt_from_prepared_row(json.loads(line)))
-    return tuple(prompts)
+def build_compilation_config(args: argparse.Namespace) -> dict[str, Any]:
+    compilation_config: dict[str, Any] = {
+        "cudagraph_mode": args.cudagraph_mode,
+    }
+    if args.disable_fuse_allreduce_rms:
+        compilation_config["pass_config"] = {"fuse_allreduce_rms": False}
+    return compilation_config
 
 
-def chunk_prompts(
-    prompts: Sequence[OverlayPrompt],
-    *,
-    batch_size: int,
-    batches: int,
-) -> list[list[OverlayPrompt]]:
-    required = batch_size * batches
-    if len(prompts) < required:
-        raise ValueError(f"need {required} overlay prompts, found {len(prompts)}")
-    return [
-        list(prompts[start : start + batch_size])
-        for start in range(0, required, batch_size)
-    ]
+def build_async_engine_kwargs(
+    args: argparse.Namespace,
+    speculative_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": args.model,
+        "tensor_parallel_size": args.tensor_parallel_size,
+        "pipeline_parallel_size": args.pipeline_parallel_size,
+        "trust_remote_code": True,
+        "dtype": args.dtype,
+        "kv_cache_dtype": args.kv_cache_dtype,
+        "gpu_memory_utilization": args.gpu_memory_utilization,
+        "max_model_len": args.max_model_len,
+        "max_num_seqs": args.active_concurrency,
+        "enable_prefix_caching": True,
+        "enable_chunked_prefill": True,
+        "enable_expert_parallel": args.enable_expert_parallel,
+        "seed": args.seed,
+        "disable_log_stats": False,
+        "compilation_config": build_compilation_config(args),
+    }
+    if speculative_config is not None:
+        kwargs["speculative_config"] = copy.deepcopy(speculative_config)
+    if args.max_num_batched_tokens is not None:
+        kwargs["max_num_batched_tokens"] = args.max_num_batched_tokens
+    if args.distributed_executor_backend:
+        kwargs["distributed_executor_backend"] = args.distributed_executor_backend
+    if args.distributed_timeout_seconds is not None:
+        kwargs["distributed_timeout_seconds"] = args.distributed_timeout_seconds
+    if args.model_loader_num_threads > 0:
+        kwargs["model_loader_extra_config"] = {
+            "enable_multithread_load": True,
+            "num_threads": args.model_loader_num_threads,
+        }
+    if args.attention_backend:
+        kwargs["attention_backend"] = args.attention_backend
+    if args.moe_backend:
+        kwargs["kernel_config"] = {"moe_backend": args.moe_backend}
+    if args.mamba_ssm_cache_dtype:
+        kwargs["mamba_ssm_cache_dtype"] = args.mamba_ssm_cache_dtype
+    if args.mamba_backend:
+        kwargs["mamba_backend"] = args.mamba_backend
+    if args.enable_mamba_cache_stochastic_rounding:
+        kwargs["enable_mamba_cache_stochastic_rounding"] = True
+    if args.mamba_cache_philox_rounds is not None:
+        kwargs["mamba_cache_philox_rounds"] = args.mamba_cache_philox_rounds
+    return kwargs
 
 
 async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
     from vllm import SamplingParams  # pyright: ignore[reportMissingImports]
     from vllm.engine.arg_utils import AsyncEngineArgs  # pyright: ignore[reportMissingImports]
     from vllm.v1.engine.async_llm import AsyncLLM  # pyright: ignore[reportMissingImports]
+    from transformers import AutoTokenizer  # pyright: ignore[reportMissingImports]
 
-    prompts = load_overlay_prompt_jsonl(args.prepared_jsonl)
-    prompt_batches = chunk_prompts(
-        prompts,
-        batch_size=args.active_concurrency,
-        batches=args.rollout_batches,
+    tokenizer_path = args.tokenizer or args.model
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_path,
+        trust_remote_code=True,
+    )
+    overlay = build_overlay_from_prepared_parquet(
+        prepared_root=args.prepared_root,
+        prepared_manifest=args.prepared_manifest,
+        prepared_checksums=args.prepared_checksums,
+        dataset_config=args.dataset_config,
+        tokenizer=tokenizer,
+        seed=args.seed,
+    )
+    prompt_batches = expand_overlay_barrier_batches(
+        overlay.prompts,
+        active_concurrency=args.active_concurrency,
+        rollout_batches=args.rollout_batches,
     )
     request_plan = load_request_plan(args.request_plan)
+    if request_plan.max_model_len != args.max_model_len:
+        raise ValueError(
+            f"--max-model-len must match request plan: got {args.max_model_len}, "
+            f"expected {request_plan.max_model_len}"
+        )
     dynamic_schedule = parse_dynamic_schedule(args.dynamic_schedule)
     speculative_config = build_speculative_config(
         mode=args.mode,
@@ -610,24 +1090,12 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
         static_k=args.static_k,
         dynamic_schedule=dynamic_schedule,
     )
-    engine_args = AsyncEngineArgs(
-        model=args.model,
-        tensor_parallel_size=args.tensor_parallel_size,
-        pipeline_parallel_size=args.pipeline_parallel_size,
-        trust_remote_code=True,
-        dtype=args.dtype,
-        kv_cache_dtype=args.kv_cache_dtype,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_model_len,
-        max_num_seqs=args.active_concurrency,
-        enable_prefix_caching=True,
-        enable_chunked_prefill=True,
-        disable_log_stats=False,
-        speculative_config=copy.deepcopy(speculative_config),
-    )
+    engine_kwargs = build_async_engine_kwargs(args, speculative_config)
+    engine_args = AsyncEngineArgs(**engine_kwargs)
     engine = AsyncLLM.from_engine_args(engine_args)
     rows: list[dict[str, Any]] = []
     total_gpus = args.tensor_parallel_size * args.pipeline_parallel_size
+    max_new_tokens = max(bucket.max_tokens for bucket in request_plan.buckets)
     try:
         warmup_requests = build_prompt_shape_warmup_requests(
             prompt_batches[0],
@@ -645,6 +1113,7 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             engine,
             warmup_requests,
             sampling_params_by_request=warmup_params,
+            active_concurrency=args.active_concurrency,
         )
         for batch_index, prompt_batch in enumerate(prompt_batches):
             requests = prepare_overlay_requests(
@@ -672,9 +1141,20 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
                 engine,
                 requests,
                 sampling_params_by_request=params,
+                active_concurrency=args.active_concurrency,
             )
             metrics = diff_spec_decode_counters(read_spec_decode_counters(engine), before)
+            validate_spec_decode_counter_gate(args.mode, metrics)
             output_lengths = [len(tokens) for tokens in row["output_token_ids"]]
+            exact_work = (
+                validate_request_plan_exact_work(
+                    requests,
+                    prompt_batch,
+                    samples_per_prompt=args.samples_per_prompt,
+                )
+                if args.request_plan_exact_work
+                else None
+            )
             row.update(
                 {
                     "batch_index": batch_index,
@@ -685,13 +1165,17 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     "completion_length": length_statistics(output_lengths),
                     "spec_decode_metrics": metrics,
-                    "acceptance_windows": output_position_acceptance_windows(
-                        output_token_ids=row["output_token_ids"],
-                        accepted_tokens_per_pos=metrics.get(
-                            "num_accepted_tokens_per_pos", []
-                        ),
-                        window_size=args.acceptance_window_size,
+                    "draft_position_acceptance": draft_position_acceptance_rates(
+                        metrics
                     ),
+                    "completion_position_windows": (
+                        completion_position_length_windows(
+                            output_token_ids=row["output_token_ids"],
+                            window_size=args.acceptance_window_size,
+                        )
+                    ),
+                    "acceptance_limitation": ACCEPTANCE_LIMITATION,
+                    "request_plan_exact_work": exact_work,
                 }
             )
             rows.append(row)
@@ -701,31 +1185,68 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             shutdown()
     total_time_s = sum(float(row["barrier_time_s"]) for row in rows)
     total_output_tokens = sum(int(row["output_tokens"]) for row in rows)
+    latency_summary = summarize_overlay_latencies(rows)
+    runtime_sha = _require_runtime_sha(args.runtime_image_sha256)
+    compilation_config = build_compilation_config(args)
     payload = {
         "schema_version": 1,
         "status": "complete",
-        "runtime": runtime_metadata(),
+        "runtime": collect_runtime_metadata(),
         "config": {
             "cohort": "overlay",
             "scenario": "speedbench_sync_overlay",
             "sync_barrier": "AsyncLLM.gather",
             "mode": args.mode,
+            "method": method_for_mode(args.mode),
             "model": args.model,
-            "draft_model": args.draft_model,
+            "draft_model": args.draft_model or "none",
+            "tokenizer": tokenizer_path,
             "speculative_config": speculative_config,
             "request_plan": str(args.request_plan),
             "request_plan_hash": request_plan.plan_hash,
-            "prepared_jsonl": str(args.prepared_jsonl),
+            "prepared_root": str(args.prepared_root),
+            "prepared_manifest": str(args.prepared_manifest),
+            "prepared_checksums": str(args.prepared_checksums),
+            "prepared_manifest_hash": overlay.prepared_manifest_hash,
+            "prepared_parquet_hash": overlay.parquet_hash,
+            "dataset_config": overlay.dataset_config,
+            "prompt_set_hash": overlay.prompt_set_hash,
+            "unique_prompt_count": len({prompt.prompt_id for prompt in overlay.prompts}),
             "active_concurrency": args.active_concurrency,
             "samples_per_prompt": args.samples_per_prompt,
             "rollout_batches": args.rollout_batches,
             "tensor_parallel_size": args.tensor_parallel_size,
             "pipeline_parallel_size": args.pipeline_parallel_size,
-            "runtime_image_sha256": args.runtime_image_sha256 or None,
+            "total_gpus": total_gpus,
+            "dtype": args.dtype,
+            "kv_cache_dtype": args.kv_cache_dtype,
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "max_model_len": args.max_model_len,
+            "max_new_tokens": max_new_tokens,
+            "max_num_seqs": args.active_concurrency,
+            "max_num_batched_tokens": args.max_num_batched_tokens,
+            "enable_expert_parallel": args.enable_expert_parallel,
+            "distributed_executor_backend": args.distributed_executor_backend or "auto",
+            "distributed_timeout_seconds": args.distributed_timeout_seconds,
+            "model_loader_extra_config": engine_kwargs.get(
+                "model_loader_extra_config"
+            ),
+            "attention_backend": args.attention_backend or "auto",
+            "moe_backend": args.moe_backend or "auto",
+            "cudagraph_mode": args.cudagraph_mode,
+            "compilation_config": compilation_config,
+            "mamba_ssm_cache_dtype": args.mamba_ssm_cache_dtype or "auto",
+            "mamba_backend": args.mamba_backend or "auto",
+            "enable_mamba_cache_stochastic_rounding": (
+                args.enable_mamba_cache_stochastic_rounding
+            ),
+            "mamba_cache_philox_rounds": args.mamba_cache_philox_rounds,
+            "runtime_image_sha256": runtime_sha,
+            "model_config_hash": model_config_hash(args.model),
             "temperature": args.temperature,
             "top_p": args.top_p,
+            "sampling": {"temperature": args.temperature, "top_p": args.top_p},
             "seed": args.seed,
-            "cudagraph_mode": args.cudagraph_mode,
         },
         "rollout_batches": rows,
         "summary": {
@@ -738,6 +1259,7 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             "spec_decode_metrics": sum_spec_decode_counters(
                 [row["spec_decode_metrics"] for row in rows]
             ),
+            **latency_summary,
         },
     }
     write_json_atomic(args.output, payload)
@@ -745,29 +1267,56 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run_official(args: argparse.Namespace) -> int:
+    tokenizer = args.tokenizer or args.model
+    prepared_manifest_hash = (
+        sha256_file(args.prepared_manifest)
+        if args.prepared_manifest is not None
+        else "official-upstream-manifest"
+    )
     command = build_official_speedbench_command(
         model=args.model,
+        tokenizer=tokenizer,
         modelopt_root=args.modelopt_root,
-        prepared_root=args.prepared_root,
         dataset_config=args.dataset_config,
-        output_dir=args.output.parent,
+        save_dir=args.output.with_suffix(".modelopt"),
         variant=args.mode,
         tensor_parallel_size=args.tensor_parallel_size,
+        active_concurrency=args.active_concurrency,
         max_model_len=args.max_model_len,
+        max_new_tokens=args.max_new_tokens,
         draft_model=args.draft_model,
         static_k=args.static_k,
-        dynamic_schedule=args.dynamic_schedule if args.mode == "dynamic" else "",
+        temperature=args.temperature,
     )
     if args.print_official_command:
         print(json.dumps(command))
         return 0
-    return subprocess.run(command, check=False).returncode
+    run_official_speedbench(
+        model=args.model,
+        tokenizer=tokenizer,
+        modelopt_root=args.modelopt_root,
+        dataset_config=args.dataset_config,
+        output=args.output,
+        variant=args.mode,
+        tensor_parallel_size=args.tensor_parallel_size,
+        active_concurrency=args.active_concurrency,
+        max_model_len=args.max_model_len,
+        max_new_tokens=args.max_new_tokens,
+        static_k=args.static_k,
+        temperature=args.temperature,
+        runtime_image_sha256=args.runtime_image_sha256,
+        model_config_hash=model_config_hash(args.model),
+        prepared_manifest_hash=prepared_manifest_hash,
+        draft_model=args.draft_model,
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", choices=("official", "overlay"), required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--tokenizer", default="")
     parser.add_argument("--draft-model", default="")
     parser.add_argument(
         "--mode",
@@ -782,6 +1331,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kv-cache-dtype", default="auto")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--max-model-len", type=int, default=4096)
+    parser.add_argument("--max-new-tokens", type=int, default=4096)
+    parser.add_argument("--max-num-batched-tokens", type=int)
+    parser.add_argument("--distributed-executor-backend", default="")
+    parser.add_argument("--distributed-timeout-seconds", type=int)
+    parser.add_argument("--enable-expert-parallel", action="store_true")
+    parser.add_argument("--model-loader-num-threads", type=int, default=0)
+    parser.add_argument("--attention-backend", default="")
+    parser.add_argument("--moe-backend", default="")
+    parser.add_argument("--disable-fuse-allreduce-rms", action="store_true")
+    parser.add_argument("--mamba-ssm-cache-dtype", default="")
+    parser.add_argument("--mamba-backend", default="")
+    parser.add_argument(
+        "--enable-mamba-cache-stochastic-rounding",
+        action="store_true",
+    )
+    parser.add_argument("--mamba-cache-philox-rounds", type=int)
     parser.add_argument("--active-concurrency", type=int, default=16)
     parser.add_argument("--samples-per-prompt", type=int, default=1)
     parser.add_argument("--rollout-batches", type=int, default=3)
@@ -791,13 +1356,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-max-tokens", type=int, default=32)
     parser.add_argument("--acceptance-window-size", type=int, default=16)
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
-    parser.add_argument("--prepared-jsonl", type=Path)
     parser.add_argument("--request-plan", type=Path)
     parser.add_argument("--request-plan-exact-work", action="store_true")
     parser.add_argument("--runtime-image-sha256", default="")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--modelopt-root", type=Path, default=Path("/workspace/modelopt"))
     parser.add_argument("--prepared-root", type=Path, default=Path("/workspace/speedbench/prepared/speed"))
+    parser.add_argument("--prepared-manifest", type=Path)
+    parser.add_argument("--prepared-checksums", type=Path)
     parser.add_argument("--dataset-config", default="throughput_1k")
     parser.add_argument("--print-official-command", action="store_true")
     return parser
@@ -807,8 +1373,10 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.cohort == "official":
         raise SystemExit(run_official(args))
-    if args.prepared_jsonl is None:
-        raise ValueError("--prepared-jsonl is required for overlay cohort")
+    if args.prepared_manifest is None:
+        raise ValueError("--prepared-manifest is required for overlay cohort")
+    if args.prepared_checksums is None:
+        raise ValueError("--prepared-checksums is required for overlay cohort")
     if args.request_plan is None:
         raise ValueError("--request-plan is required for overlay cohort")
     asyncio.run(run_overlay(args))
