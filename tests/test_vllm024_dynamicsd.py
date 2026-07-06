@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from types import ModuleType
 
@@ -766,33 +767,60 @@ def test_resolve_request_plan_is_deterministic_and_exact() -> None:
     assert first == second
     assert sum(request.max_tokens for request in first) == 589824
     assert {request.max_tokens for request in first} == {4096, 8192, 16384, 32768}
-    assert [request.max_tokens for request in first[:8]] == [4096] * 8
-    assert [request.max_tokens for request in first[32:40]] == [8192] * 8
-    assert [request.max_tokens for request in first[48:56]] == [16384] * 8
-    assert [request.max_tokens for request in first[60:64]] == [32768] * 4
+    assert Counter(request.max_tokens for request in first) == {
+        4096: 32,
+        8192: 16,
+        16384: 12,
+        32768: 4,
+    }
+    by_prompt = {request.prompt_id: request.max_tokens for request in first}
+    assert Counter(by_prompt.values()) == {
+        4096: 8,
+        8192: 4,
+        16384: 3,
+        32768: 1,
+    }
 
 
-def test_request_plan_hash_is_stable_for_equivalent_json() -> None:
+def test_resolve_request_plan_uses_rollout_batch_index_for_unique_seed_ranges() -> None:
+    core = load_sync_rollout_core_module()
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
+
+    first = core.resolve_request_plan(
+        plan,
+        prompt_ids=[f"p{i}" for i in range(16)],
+        samples_per_prompt=4,
+        seed_start=7,
+        rollout_batch_index=0,
+    )
+    second = core.resolve_request_plan(
+        plan,
+        prompt_ids=[f"p{i}" for i in range(16)],
+        samples_per_prompt=4,
+        seed_start=7,
+        rollout_batch_index=1,
+    )
+
+    assert [request.max_tokens for request in second] == [
+        request.max_tokens for request in first
+    ]
+    assert [request.seed for request in first] == list(range(7, 71))
+    assert [request.seed for request in second] == list(range(71, 135))
+
+
+def test_request_plan_hash_is_stable_for_equivalent_json(tmp_path: Path) -> None:
     core = load_sync_rollout_core_module()
     path = EXPERIMENT / "profiles/swe_sync_32k.json"
     plan = core.load_request_plan(path)
     payload = json.loads(path.read_text(encoding="utf-8"))
     reordered = {
-        "name": payload["name"],
-        "max_model_len": payload["max_model_len"],
         "buckets": list(reversed(payload["buckets"])),
+        "max_model_len": payload["max_model_len"],
+        "name": payload["name"],
     }
-    equivalent = {
-        "buckets": list(reversed(reordered["buckets"])),
-        "max_model_len": reordered["max_model_len"],
-        "name": reordered["name"],
-    }
-    rewritten = path.parent / "rewritten_swe_sync_32k.json"
-    rewritten.write_text(json.dumps(equivalent, indent=2) + "\n", encoding="utf-8")
-    try:
-        rewritten_plan = core.load_request_plan(rewritten)
-    finally:
-        rewritten.unlink()
+    rewritten = tmp_path / "rewritten_swe_sync_32k.json"
+    rewritten.write_text(json.dumps(reordered, indent=2) + "\n", encoding="utf-8")
+    rewritten_plan = core.load_request_plan(rewritten)
 
     assert rewritten_plan.plan_hash == plan.plan_hash
 
@@ -814,6 +842,50 @@ def test_request_plan_validates_context_overflow() -> None:
             output_cap=32768,
             max_model_len=36864,
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    (
+        ("ignore_eos", "true", "ignore_eos must be a boolean"),
+        ("max_tokens", 4096.5, "max_tokens must be an integer"),
+        ("weight", 8.5, "weight must be an integer"),
+        ("max_model_len", 36864.5, "max_model_len must be an integer"),
+    ),
+)
+def test_load_request_plan_rejects_invalid_json_types(
+    tmp_path: Path, field: str, value: object, match: str
+) -> None:
+    core = load_sync_rollout_core_module()
+    payload = json.loads(
+        (EXPERIMENT / "profiles/swe_sync_32k.json").read_text(encoding="utf-8")
+    )
+    if field == "max_model_len":
+        payload[field] = value
+    else:
+        payload["buckets"][0][field] = value
+    invalid_path = tmp_path / "invalid_request_plan.json"
+    invalid_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(TypeError, match=match):
+        core.load_request_plan(invalid_path)
+
+
+def test_load_request_plan_reads_expected_swe_sync_64k_profile() -> None:
+    core = load_sync_rollout_core_module()
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_64k.json")
+
+    assert [bucket.max_tokens for bucket in plan.buckets] == [4096, 8192, 16384, 65536]
+    assert [bucket.weight for bucket in plan.buckets] == [8, 4, 3, 1]
+
+
+def test_summarize_barrier_tail_uses_max_minus_median() -> None:
+    core = load_sync_rollout_core_module()
+
+    summary = core.summarize_barrier_tail([1.0, 2.0, 10.0])
+
+    assert summary["median_s"] == 2.0
+    assert summary["tail_gap_s"] == 8.0
 
 
 def test_sync_rollout_expands_prompt_samples_with_unique_seeds() -> None:

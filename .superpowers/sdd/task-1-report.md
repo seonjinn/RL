@@ -135,4 +135,101 @@ Review notes:
 
 ## Commit
 
-- Commit hash: `af07475db506cd335a9a12036285178094d374e1`
+- Commit hash: `91fe2362949369298b53e06d1dc365e60d1102fc`
+- Note: this report line is intentionally left outside the signed-off commit so
+  it can record the final hash without changing it again.
+
+## Review Fix Cycle
+
+### Review Scope
+
+Addressed all requested follow-up items:
+
+- consume `rollout_batch_index` so rollout batches do not repeat seed ranges
+- assert the full `8:4:3:1` prompt allocation, not partial slices
+- reject invalid JSON types instead of coercing with `bool()` and `int()`
+- strengthen the hash-stability test to reorder once and use `tmp_path`
+- correct `swe_sync_64k.json` to `4K/8K/16K/64K` with weights `8/4/3/1`
+- change `summarize_barrier_tail().tail_gap_s` to `max - median`
+
+### Review RED
+
+Added the failing regression coverage first in `tests/test_vllm024_dynamicsd.py`.
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k "request_plan or barrier_tail or swe_sync_64k_profile"
+```
+
+Output summary:
+
+- `7` tests failed
+- failures matched the reviewed defects: repeated seed ranges, permissive JSON
+  coercion, incorrect 64k profile values, and `tail_gap_s` using `max - min`
+
+Representative output:
+
+```text
+FAILED tests/test_vllm024_dynamicsd.py::test_resolve_request_plan_uses_rollout_batch_index_for_unique_seed_ranges
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_json_types[ignore_eos-true-ignore_eos must be a boolean]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_json_types[max_tokens-4096.5-max_tokens must be an integer]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_json_types[weight-8.5-weight must be an integer]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_rejects_invalid_json_types[max_model_len-36864.5-max_model_len must be an integer]
+FAILED tests/test_vllm024_dynamicsd.py::test_load_request_plan_reads_expected_swe_sync_64k_profile
+FAILED tests/test_vllm024_dynamicsd.py::test_summarize_barrier_tail_uses_max_minus_median
+7 failed, 3 passed, 41 deselected in 0.19s
+```
+
+### Review Implementation
+
+Made the smallest production changes required by the failing tests:
+
+- derived the first seed as
+  `seed_start + rollout_batch_index * (len(prompt_ids) * samples_per_prompt)`
+- kept the request-plan work allocation unchanged while shifting only seeds
+- introduced strict JSON field validators for integer and boolean fields
+- corrected `swe_sync_64k.json` to `4096/8192/16384/65536`
+- changed `tail_gap_s` to `max_s - median_s`
+
+### Review GREEN
+
+Focused command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k "request_plan or barrier_tail or swe_sync_64k_profile"
+```
+
+Focused output summary:
+
+```text
+10 passed, 41 deselected in 0.05s
+```
+
+Full command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Full output summary:
+
+```text
+51 passed in 2.86s
+```
+
+### Review Files Changed
+
+- `experiments/vllm_024_dynamicsd/sync_rollout_core.py`
+- `experiments/vllm_024_dynamicsd/profiles/swe_sync_64k.json`
+- `tests/test_vllm024_dynamicsd.py`
+- `.superpowers/sdd/task-1-report.md`
+
+### Review Self-Check
+
+- The stronger allocation test now checks both prompt counts (`8/4/3/1`) and
+  expanded request counts (`32/16/12/4`).
+- The reordered-hash test now uses `tmp_path` and actually writes a reversed
+  bucket order once before loading.
+- The JSON-type regression tests cover the exact reviewed failure modes:
+  string booleans and fractional integers.

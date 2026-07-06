@@ -32,15 +32,48 @@ class ResolvedRequest:
     ignore_eos: bool
 
 
+def _require_json_object(field_name: str, value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be an object")
+    return value
+
+
+def _require_json_array(field_name: str, value: object) -> list[object]:
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be an array")
+    return value
+
+
+def _require_int(field_name: str, value: object) -> int:
+    if type(value) is not int:
+        raise TypeError(f"{field_name} must be an integer")
+    return value
+
+
+def _require_bool(field_name: str, value: object) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{field_name} must be a boolean")
+    return value
+
+
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_payload = _require_json_object("request plan", payload)
+    buckets_payload = _require_json_array("buckets", normalized_payload["buckets"])
     buckets = [
         {
-            "ignore_eos": bool(bucket.get("ignore_eos", False)),
-            "max_tokens": int(bucket["max_tokens"]),
-            "min_tokens": int(bucket.get("min_tokens", bucket["max_tokens"])),
-            "weight": int(bucket["weight"]),
+            "ignore_eos": _require_bool(
+                "ignore_eos", bucket_payload.get("ignore_eos", False)
+            ),
+            "max_tokens": _require_int("max_tokens", bucket_payload["max_tokens"]),
+            "min_tokens": _require_int(
+                "min_tokens",
+                bucket_payload.get("min_tokens", bucket_payload["max_tokens"]),
+            ),
+            "weight": _require_int("weight", bucket_payload["weight"]),
         }
-        for bucket in payload["buckets"]
+        for bucket_payload in (
+            _require_json_object("bucket", bucket) for bucket in buckets_payload
+        )
     ]
     buckets.sort(
         key=lambda bucket: (
@@ -52,8 +85,10 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "buckets": buckets,
-        "max_model_len": int(payload["max_model_len"]),
-        "name": str(payload["name"]),
+        "max_model_len": _require_int(
+            "max_model_len", normalized_payload["max_model_len"]
+        ),
+        "name": normalized_payload["name"],
     }
 
 
@@ -151,16 +186,16 @@ def resolve_request_plan(
     rollout_batch_index: int = 0,
     max_model_len: int | None = None,
 ) -> list[ResolvedRequest]:
-    del rollout_batch_index
     if samples_per_prompt <= 0:
         raise ValueError("samples_per_prompt must be positive")
     if not prompt_ids:
         return []
+    total_requests = len(prompt_ids) * samples_per_prompt
     resolved_max_model_len = max_model_len if max_model_len is not None else plan.max_model_len
     lengths_by_prompt = _normalize_prompt_lengths(prompt_ids, prompt_token_lengths)
     prompt_counts = _weighted_prompt_counts(len(prompt_ids), plan.buckets)
     requests: list[ResolvedRequest] = []
-    seed = seed_start
+    seed = seed_start + (rollout_batch_index * total_requests)
     prompt_index = 0
     for bucket, prompt_count in zip(plan.buckets, prompt_counts, strict=True):
         for _ in range(prompt_count):
@@ -203,5 +238,5 @@ def summarize_barrier_tail(barrier_times_s: list[float]) -> dict[str, float]:
         "mean_s": statistics.fmean(ordered),
         "median_s": statistics.median(ordered),
         "max_s": ordered[-1],
-        "tail_gap_s": ordered[-1] - ordered[0],
+        "tail_gap_s": ordered[-1] - statistics.median(ordered),
     }

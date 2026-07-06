@@ -3,20 +3,20 @@
   "max_model_len": 69632,
   "buckets": [
     {
+      "max_tokens": 4096,
+      "min_tokens": 4096,
+      "weight": 8,
+      "ignore_eos": true
+    },
+    {
       "max_tokens": 8192,
       "min_tokens": 8192,
-      "weight": 8,
+      "weight": 4,
       "ignore_eos": true
     },
     {
       "max_tokens": 16384,
       "min_tokens": 16384,
-      "weight": 4,
-      "ignore_eos": true
-    },
-    {
-      "max_tokens": 32768,
-      "min_tokens": 32768,
       "weight": 3,
       "ignore_eos": true
     },
