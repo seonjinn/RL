@@ -1,111 +1,105 @@
-# Task 1 Report: CPU-Only DFlare Result Transport
+# Task 1 Report: Request-Plan Core
 
 ## Scope
 
-- Modified `experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py`
-- Modified `tests/test_angelslim_dflare_transport.py`
+- Created `experiments/vllm_024_dynamicsd/sync_rollout_core.py`
+- Created `experiments/vllm_024_dynamicsd/profiles/swe_sync_32k.json`
+- Created `experiments/vllm_024_dynamicsd/profiles/swe_sync_64k.json`
+- Modified `tests/test_vllm024_dynamicsd.py`
+- Updated `.superpowers/sdd/task-1-report.md`
 
 ## Requirements Source
 
 Command:
 
 ```bash
-sed -n '1,260p' /Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd/.superpowers/sdd/task-1-brief.md
+sed -n '1,120p' /Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd/.superpowers/sdd/task-1-brief.md
 ```
 
-Output:
+Summary:
 
-```text
-### Task 1: CPU-Only DFlare Result Transport
-
-**Files:**
-- Create: `experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py`
-- Create: `tests/test_angelslim_dflare_transport.py`
-
-**Interfaces:**
-- Produces: `compact_response_map(responses: Mapping[int, Any]) -> dict[int, CompactResponse]`
-- Produces: `write_rank_partial(path: Path, rank: int, responses: Sequence[Mapping[int, CompactResponse]]) -> Path`
-- Produces: `CompactResponse(time_per_output_token: float, acceptance_lengths: list[int], num_input_tokens: int, num_output_tokens: int)`
-
-- [ ] **Step 1: Write failing transport tests**
-
-Test that compact records retain scalar timing and acceptance data, derive token counts from a fake CUDA-like tensor shape, contain no `output_ids`, serialize with `json.dumps`, and atomically create `result.json.rank2.partial.json`.
-
-- [ ] **Step 2: Run the focused test and confirm failure**
-
-Run: `python3 -m pytest -q tests/test_angelslim_dflare_transport.py`
-
-Expected: import failure because `angelslim_dflare_transport.py` does not exist.
-
-- [ ] **Step 3: Implement the pure transport module**
-
-Use a frozen dataclass, integer/float normalization, JSON conversion helpers,
-and `Path.replace()` for atomic writes. Do not import torch.
-
-- [ ] **Step 4: Run the focused test**
-
-Run: `python3 -m pytest -q tests/test_angelslim_dflare_transport.py`
-
-Expected: all transport tests pass.
-```
+- Implement `LengthBucket`, `RequestPlan`, `ResolvedRequest`,
+  `load_request_plan()`, `resolve_request_plan()`,
+  `validate_context_window()`, and `summarize_barrier_tail()`.
+- Add the `swe_sync_32k.json` and `swe_sync_64k.json` profiles.
+- Use strict TDD with a focused RED run first, then focused and full GREEN runs.
 
 ## Red Step
 
-Added `tests/test_angelslim_dflare_transport.py` first with a direct import of
-`experiments.vllm_024_dynamicsd.angelslim_dflare_transport` so collection would
-fail until the module existed.
+Added focused request-plan tests first in `tests/test_vllm024_dynamicsd.py` for:
+
+- deterministic 8:4:3:1 allocation across 4k/8k/16k/32k buckets
+- exact planned token budget of `589824`
+- stable plan hashing
+- explicit context-overflow errors
+
+The brief suggested `pytest -q tests/test_vllm024_dynamicsd.py -k request_plan`,
+but the local `pytest` command in this environment is a wrapper that reported
+`Pytest: No tests collected`. I used the real runner directly.
 
 Command:
 
 ```bash
-python3 -m pytest -q tests/test_angelslim_dflare_transport.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k request_plan
 ```
 
-Output:
+Output summary:
+
+- `3` tests failed
+- failure mode was expected: `FileNotFoundError` while loading
+  `experiments/vllm_024_dynamicsd/sync_rollout_core.py`
+
+Representative output:
 
 ```text
-==================================== ERRORS ====================================
-__________ ERROR collecting tests/test_angelslim_dflare_transport.py ___________
-ImportError while importing test module '/Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd/tests/test_angelslim_dflare_transport.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-tests/test_angelslim_dflare_transport.py:9: in <module>
-    from experiments.vllm_024_dynamicsd.angelslim_dflare_transport import (
-E   ModuleNotFoundError: No module named 'experiments.vllm_024_dynamicsd.angelslim_dflare_transport'
-=========================== short test summary info ============================
-ERROR tests/test_angelslim_dflare_transport.py
-!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
-1 error in 0.09s
+FAILED tests/test_vllm024_dynamicsd.py::test_resolve_request_plan_is_deterministic_and_exact
+FAILED tests/test_vllm024_dynamicsd.py::test_request_plan_hash_is_stable_for_equivalent_json
+FAILED tests/test_vllm024_dynamicsd.py::test_request_plan_validates_context_overflow
+3 failed, 41 deselected in 0.04s
 ```
 
 ## Implementation
 
-Added a new pure-Python transport module with:
+Implemented the minimal production code required by the tests:
 
-- frozen `CompactResponse`
-- compact conversion from response objects using scalar normalization
-- output-token derivation from `output_ids.shape`
-- JSON-ready serialization helpers
-- atomic rank-partial write using a sibling temp file and `Path.replace()`
+- frozen dataclasses for `LengthBucket`, `RequestPlan`, and `ResolvedRequest`
+- canonical JSON hashing with normalized bucket ordering and sorted keys
+- deterministic weighted prompt allocation with stable remainder handling
+- exact fixed-length request expansion with per-sample seeds
+- explicit context-window validation
+- two fixed-length SWE request-plan profiles for `32k` and `64k`
+- a minimal `summarize_barrier_tail()` helper for later rollout summaries
 
-No `torch` import was added.
+One integration fix was needed after the first GREEN attempt:
+
+- Python 3.14 dataclasses interacted badly with postponed annotations under the
+  repo's custom import loader, so the new module does not use
+  `from __future__ import annotations`.
 
 ## Green Step
 
-Command:
+Focused command:
 
 ```bash
-python3 -m pytest -q tests/test_angelslim_dflare_transport.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k request_plan
 ```
 
-Output:
+Focused output summary:
 
 ```text
-..                                                                       [100%]
-2 passed in 0.02s
+3 passed, 41 deselected in 0.05s
+```
+
+Full command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Full output summary:
+
+```text
+44 passed in 4.13s
 ```
 
 ## Self-Review
@@ -113,56 +107,32 @@ Output:
 Commands:
 
 ```bash
-git -C /Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd diff -- experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py tests/test_angelslim_dflare_transport.py
-git -C /Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd diff --check -- experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py tests/test_angelslim_dflare_transport.py
-git -C /Users/sna/Nemo-RL_Qwen3_Roadmap/.worktrees/vllm024-dynamicsd status --short
+git diff --check -- tests/test_vllm024_dynamicsd.py experiments/vllm_024_dynamicsd/sync_rollout_core.py experiments/vllm_024_dynamicsd/profiles/swe_sync_32k.json experiments/vllm_024_dynamicsd/profiles/swe_sync_64k.json
+git status --short
 ```
 
-Outputs:
+Output summary:
 
-```text
-git diff: reviewed manually, no extra touched files beyond the owned paths.
+- `git diff --check` produced no output
+- only the Task 1 files plus this report are staged for commit
 
-git diff --check:
-[no output]
+Review notes:
 
-git status --short:
-?? experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py
-?? experiments/vllm_024_dynamicsd/report/20260704_dflare_completed/
-?? experiments/vllm_024_dynamicsd/report/20260704_vllm_native_completed/
-?? experiments/vllm_024_dynamicsd/report/dflare_job_status_latest.csv
-?? tests/test_angelslim_dflare_transport.py
-```
+- The new tests prove the exact 8:4:3:1 prompt split and total planned tokens.
+- The production code is intentionally narrow and does not invent rollout
+  behavior beyond the Task 1 brief.
+- `rollout_batch_index` is accepted for the required interface but is not used
+  yet because the brief does not define batch-dependent behavior.
 
-Notes:
+## Concerns
 
-- The untracked report artifacts were already present and were left untouched.
-- The owned changes are limited to the two requested files.
+- The bare `pytest` command in this environment is not the real pytest runner.
+  Future tasks in this worktree should use `python3 -m pytest` unless that
+  wrapper is fixed.
+- `summarize_barrier_tail()` is present with a minimal shape, but later tasks
+  may need to lock down its exact output schema once the downstream caller is
+  defined.
 
-## Review Follow-Up
+## Commit
 
-Reviewer issue:
-
-- `tests/test_angelslim_dflare_transport.py:69` assigned directly to a frozen
-  dataclass field, which Pyright reports as `reportAttributeAccessIssue`.
-
-Change made:
-
-- Replaced the direct assignment with `setattr(compact[1], "num_output_tokens", 99)`
-  inside the existing `pytest.raises(FrozenInstanceError)` block.
-
-Commands:
-
-```bash
-python3 -m pytest -q tests/test_angelslim_dflare_transport.py
-pyright experiments/vllm_024_dynamicsd/angelslim_dflare_transport.py tests/test_angelslim_dflare_transport.py
-```
-
-Outputs:
-
-```text
-..                                                                       [100%]
-2 passed in 0.05s
-
-0 errors, 0 warnings, 0 informations
-```
+- Commit hash: `af07475db506cd335a9a12036285178094d374e1`

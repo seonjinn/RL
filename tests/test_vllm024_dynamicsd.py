@@ -33,6 +33,15 @@ def load_sync_rollout_module() -> ModuleType:
     return module
 
 
+def load_sync_rollout_core_module() -> ModuleType:
+    path = EXPERIMENT / "sync_rollout_core.py"
+    spec = importlib.util.spec_from_file_location("vllm024_sync_rollout_core", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_sync_summary_module() -> ModuleType:
     path = EXPERIMENT / "summarize_sync_rollout.py"
     spec = importlib.util.spec_from_file_location("vllm024_sync_summary", path)
@@ -735,6 +744,76 @@ def test_nsys_dry_run_profiles_one_steady_state_measurement() -> None:
     assert "--cuda-profiler-range" in output
     assert "--segment=1" in output
     assert "--gres" not in output
+
+
+def test_resolve_request_plan_is_deterministic_and_exact() -> None:
+    core = load_sync_rollout_core_module()
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
+
+    first = core.resolve_request_plan(
+        plan,
+        prompt_ids=[f"p{i}" for i in range(16)],
+        samples_per_prompt=4,
+        seed_start=7,
+    )
+    second = core.resolve_request_plan(
+        plan,
+        prompt_ids=[f"p{i}" for i in range(16)],
+        samples_per_prompt=4,
+        seed_start=7,
+    )
+
+    assert first == second
+    assert sum(request.max_tokens for request in first) == 589824
+    assert {request.max_tokens for request in first} == {4096, 8192, 16384, 32768}
+    assert [request.max_tokens for request in first[:8]] == [4096] * 8
+    assert [request.max_tokens for request in first[32:40]] == [8192] * 8
+    assert [request.max_tokens for request in first[48:56]] == [16384] * 8
+    assert [request.max_tokens for request in first[60:64]] == [32768] * 4
+
+
+def test_request_plan_hash_is_stable_for_equivalent_json() -> None:
+    core = load_sync_rollout_core_module()
+    path = EXPERIMENT / "profiles/swe_sync_32k.json"
+    plan = core.load_request_plan(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    reordered = {
+        "name": payload["name"],
+        "max_model_len": payload["max_model_len"],
+        "buckets": list(reversed(payload["buckets"])),
+    }
+    equivalent = {
+        "buckets": list(reversed(reordered["buckets"])),
+        "max_model_len": reordered["max_model_len"],
+        "name": reordered["name"],
+    }
+    rewritten = path.parent / "rewritten_swe_sync_32k.json"
+    rewritten.write_text(json.dumps(equivalent, indent=2) + "\n", encoding="utf-8")
+    try:
+        rewritten_plan = core.load_request_plan(rewritten)
+    finally:
+        rewritten.unlink()
+
+    assert rewritten_plan.plan_hash == plan.plan_hash
+
+
+def test_request_plan_validates_context_overflow() -> None:
+    core = load_sync_rollout_core_module()
+
+    core.validate_context_window(
+        prompt_tokens=4096,
+        output_cap=32768,
+        max_model_len=36864,
+    )
+    with pytest.raises(
+        ValueError,
+        match="context overflow: prompt=4097 output=32768 max=36864",
+    ):
+        core.validate_context_window(
+            prompt_tokens=4097,
+            output_cap=32768,
+            max_model_len=36864,
+        )
 
 
 def test_sync_rollout_expands_prompt_samples_with_unique_seeds() -> None:
