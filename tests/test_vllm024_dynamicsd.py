@@ -8,6 +8,7 @@ import sys
 import textwrap
 import types
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from types import ModuleType
@@ -2668,6 +2669,118 @@ def install_jsonl_parquet_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+TASK5_TIMING_SIDECAR = "task5_timing_total_tokens.json"
+TASK5_RESOLVED_CONFIG_SIDECAR = "task5_resolved_vllm_config.json"
+TASK5_INSTRUMENTATION_SIDECAR = "task5_instrumentation.json"
+
+
+def pinned_resolved_vllm_config_sidecar() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "serving_config": {
+            "model": "/models/qwen32",
+            "tokenizer": "/models/qwen32",
+            "trust_remote_code": True,
+            "tensor_parallel_size": 8,
+            "pipeline_parallel_size": 1,
+            "max_model_len": 40960,
+            "speculative_config": {
+                "method": "eagle3",
+                "model": "/models/draft",
+                "num_speculative_tokens": 5,
+            },
+        },
+        "engine_args": {
+            "model": "/models/qwen32",
+            "tokenizer": "/models/qwen32",
+            "trust_remote_code": True,
+            "tensor_parallel_size": 8,
+            "pipeline_parallel_size": 1,
+            "max_model_len": 40960,
+            "max_num_seqs": 80,
+            "distributed_timeout_seconds": 1800,
+            "gpu_memory_utilization": 0.91,
+            "model_loader_extra_config": {"load_format": "safetensors"},
+            "speculative_config": {
+                "method": "eagle3",
+                "model": "/models/draft",
+                "num_speculative_tokens": 5,
+            },
+        },
+        "vllm_config": {
+            "model_config": {
+                "dtype": "bfloat16",
+                "max_model_len": 40960,
+            },
+            "cache_config": {
+                "cache_dtype": "auto",
+                "gpu_memory_utilization": 0.91,
+            },
+            "parallel_config": {
+                "tensor_parallel_size": 8,
+                "pipeline_parallel_size": 1,
+                "distributed_executor_backend": "mp",
+                "enable_expert_parallel": False,
+            },
+            "scheduler_config": {
+                "max_num_batched_tokens": 65536,
+            },
+            "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE"},
+            "load_config": {
+                "model_loader_extra_config": {"load_format": "safetensors"},
+            },
+            "mamba_config": {
+                "mamba_ssm_cache_dtype": "auto",
+                "mamba_backend": "auto",
+                "enable_mamba_cache_stochastic_rounding": False,
+                "mamba_cache_philox_rounds": 0,
+            },
+            "kernel_config": {"moe_backend": "auto"},
+        },
+        "sampling_kwargs": {"temperature": 0.0},
+        "sampling_config": {"temperature": 0.0, "top_p": 1.0, "top_k": 0},
+    }
+
+
+def write_task5_modelopt_sidecars(
+    save_dir: Path,
+    *,
+    total_tokens: list[int],
+    resolved_config: dict[str, Any] | None = None,
+) -> None:
+    (save_dir / TASK5_TIMING_SIDECAR).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "Timing.total_tokens",
+                "total_tokens": total_tokens,
+                "turn_count": len(total_tokens),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (save_dir / TASK5_RESOLVED_CONFIG_SIDECAR).write_text(
+        json.dumps(resolved_config or pinned_resolved_vllm_config_sidecar()),
+        encoding="utf-8",
+    )
+    (save_dir / TASK5_INSTRUMENTATION_SIDECAR).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "modelopt_commit": "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446",
+                "source_sha256": (
+                    "aafd29a4e7220e3e6748d332266c17005aa589d3f164b22392a924c5ccc6ae30"
+                ),
+                "patch_sha256": "f" * 64,
+                "patched_source_sha256": "e" * 64,
+                "timing_sidecar": TASK5_TIMING_SIDECAR,
+                "resolved_config_sidecar": TASK5_RESOLVED_CONFIG_SIDECAR,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def write_pinned_modelopt_speedbench_output(
     save_dir: Path,
     *,
@@ -2698,43 +2811,12 @@ def write_pinned_modelopt_speedbench_output(
         "trust_remote_code": True,
         "tensor_parallel_size": 8,
         "pipeline_parallel_size": 1,
-        "dtype": "bfloat16",
-        "kv_cache_dtype": "auto",
         "max_model_len": 40960,
-        "max_num_batched_tokens": 65536,
-        "gpu_memory_utilization": 0.91,
-        "distributed_executor_backend": "mp",
-        "distributed_timeout_seconds": 1800,
-        "enable_expert_parallel": False,
-        "model_loader_extra_config": {"load_format": "safetensors"},
-        "mamba_ssm_cache_dtype": "auto",
-        "mamba_backend": "auto",
-        "enable_mamba_cache_stochastic_rounding": False,
-        "mamba_cache_philox_rounds": 0,
-        "moe_backend": "auto",
-        "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE"},
-        "vllm_config": {
-            "model_config": {
-                "dtype": "bfloat16",
-                "max_model_len": 40960,
-            },
-            "cache_config": {
-                "cache_dtype": "auto",
-                "gpu_memory_utilization": 0.91,
-            },
-            "parallel_config": {
-                "tensor_parallel_size": 8,
-                "pipeline_parallel_size": 1,
-                "distributed_executor_backend": "mp",
-                "enable_expert_parallel": False,
-            },
-            "scheduler_config": {
-                "max_num_batched_tokens": 65536,
-            },
-            "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE"},
-            "load_config": {
-                "model_loader_extra_config": {"load_format": "safetensors"},
-            },
+        "max_num_seqs": 80,
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/models/draft",
+            "num_speculative_tokens": 5,
         },
     }
     (save_dir / "timing.json").write_text(
@@ -2743,7 +2825,6 @@ def write_pinned_modelopt_speedbench_output(
                 {
                     "Output TPS": output_tps,
                     "Output TPS/gpu": output_tps_per_gpu,
-                    "Timing.total_tokens": raw_total_tokens,
                     "E2E Request Time": {
                         "min": "0.5000",
                         "max": "0.7500",
@@ -2819,6 +2900,353 @@ def write_pinned_modelopt_speedbench_output(
         ),
         encoding="utf-8",
     )
+    write_task5_modelopt_sidecars(save_dir, total_tokens=raw_total_tokens)
+
+
+def pinned_like_modelopt_run_py_stub() -> str:
+    return textwrap.dedent(
+        """
+        import argparse
+        import asyncio
+        import json
+        from dataclasses import dataclass
+        from pathlib import Path
+
+        import yaml
+
+
+        @dataclass
+        class EngineArgs:
+            model: str
+            tensor_parallel_size: int
+            max_model_len: int
+            distributed_timeout_seconds: int
+            gpu_memory_utilization: float
+            model_loader_extra_config: dict[str, str]
+
+
+        class ResolvedConfig:
+            def __init__(self) -> None:
+                self.model_config = {"dtype": "bfloat16", "max_model_len": 40960}
+                self.cache_config = {"cache_dtype": "auto", "gpu_memory_utilization": 0.91}
+                self.parallel_config = {
+                    "tensor_parallel_size": 8,
+                    "pipeline_parallel_size": 1,
+                    "distributed_executor_backend": "mp",
+                    "enable_expert_parallel": False,
+                }
+                self.scheduler_config = {"max_num_batched_tokens": 65536}
+                self.compilation_config = {"cudagraph_mode": "FULL_AND_PIECEWISE"}
+                self.load_config = {
+                    "model_loader_extra_config": {"load_format": "safetensors"}
+                }
+                self.mamba_config = {
+                    "mamba_ssm_cache_dtype": "auto",
+                    "mamba_backend": "auto",
+                    "enable_mamba_cache_stochastic_rounding": False,
+                    "mamba_cache_philox_rounds": 0,
+                }
+                self.kernel_config = {"moe_backend": "auto"}
+
+
+        class FakeAsyncLLM:
+            def __init__(self) -> None:
+                self.vllm_config = ResolvedConfig()
+
+
+        class SamplingConfig:
+            temperature = 0.0
+            top_p = 1.0
+            top_k = 0
+
+
+        class Model:
+            def __init__(self) -> None:
+                self.engine_args = EngineArgs(
+                    model="/models/qwen32",
+                    tensor_parallel_size=8,
+                    max_model_len=40960,
+                    distributed_timeout_seconds=1800,
+                    gpu_memory_utilization=0.91,
+                    model_loader_extra_config={"load_format": "safetensors"},
+                )
+                self.model = FakeAsyncLLM()
+                self.sampling_kwargs = {"temperature": 0.0}
+                self.sampling_config = SamplingConfig()
+
+            def get_serving_config(self):
+                return {
+                    "model": "/models/qwen32",
+                    "tokenizer": "/models/qwen32",
+                    "trust_remote_code": True,
+                    "tensor_parallel_size": 8,
+                    "pipeline_parallel_size": 1,
+                    "max_model_len": 40960,
+                    "speculative_config": {
+                        "method": "eagle3",
+                        "model": "/models/draft",
+                        "num_speculative_tokens": 5,
+                    },
+                }
+
+
+        class TimingMetric:
+            name = "timing"
+
+            def __init__(self) -> None:
+                self.total_tokens = [10, 20, 30]
+
+            def update_directory(self, save_dir):
+                del save_dir
+
+
+        class Runner:
+            def clear_metrics(self):
+                pass
+
+
+        def dump_env(args, save_dir, overrides):
+            Path(save_dir).mkdir(parents=True, exist_ok=True)
+            configuration = {
+                "dataset": args.dataset,
+                "dataset_path": args.dataset_path,
+                "engine": args.engine,
+                "speculative_algorithm": args.speculative_algorithm,
+                "model_dir": args.model_dir,
+                "draft_model_dir": args.draft_model_dir,
+                "temperature": args.temperature,
+                "max_seq_len": args.max_seq_len,
+                "output_length": args.output_length,
+                "draft_length": args.draft_length,
+                "tp_size": args.tp_size,
+                "concurrency": args.concurrency,
+                "trust_remote_code": args.trust_remote_code,
+                "save_dir": save_dir,
+                "checkpoint": {"index_sha256": "model-config-sha"},
+                "serving_config": overrides["serving_config"],
+            }
+            (Path(save_dir) / "configuration.json").write_text(
+                json.dumps(configuration),
+                encoding="utf-8",
+            )
+
+
+        def write_metric_outputs(save_dir):
+            specbench = {
+                "Request_AL": {"speed-000": 1.5, "speed-001": 1.5},
+                "Average_AL": 1.5,
+            }
+            timing = {
+                "Output TPS": 120.0,
+                "Output TPS/gpu": 15.0,
+                "Number of Output Tokens": {
+                    "mean": "20.0000",
+                    "min": "10.0000",
+                    "max": "30.0000",
+                    "std": "8.1650",
+                    "quantiles": {"0.5": "20.0000"},
+                },
+            }
+            Path(save_dir, "timing.json").write_text(json.dumps([timing]), encoding="utf-8")
+            Path(save_dir, "acceptance_rate.json").write_text(
+                json.dumps([specbench]),
+                encoding="utf-8",
+            )
+            Path(save_dir, "specbench_results.json").write_text(
+                json.dumps([specbench]),
+                encoding="utf-8",
+            )
+
+
+        def run_simple(args):
+            model = Model()
+            metrics_list = [TimingMetric()]
+            if args.save_dir is not None:
+                for metric in metrics_list:
+                    metric.update_directory(args.save_dir)
+                # Stamp configuration.json BEFORE the run loop so the file lands even
+                # when the run crashes mid-way. Engine init is already done, so the
+                # live serving_config from the model is available.
+                dump_env(args, args.save_dir, overrides={"serving_config": model.get_serving_config()})
+
+            runner = Runner()
+            write_metric_outputs(args.save_dir)
+
+            runner.clear_metrics()
+
+
+        if __name__ == "__main__":
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--tokenizer", required=True)
+            parser.add_argument("--dataset")
+            parser.add_argument("--dataset_path")
+            parser.add_argument("--engine")
+            parser.add_argument("--speculative_algorithm")
+            parser.add_argument("--model_dir", required=True)
+            parser.add_argument("--draft_model_dir")
+            parser.add_argument("--temperature", type=float, default=None)
+            parser.add_argument("--max_seq_len", type=int)
+            parser.add_argument("--output_length", type=int, default=4096)
+            parser.add_argument("--draft_length", type=int, default=3)
+            parser.add_argument("--tp_size", type=int, default=4)
+            parser.add_argument("--concurrency", type=int, default=1)
+            parser.add_argument("--trust_remote_code", action="store_true")
+            parser.add_argument("--save_dir")
+            args = parser.parse_args()
+            args.runtime_params = {}
+            run_simple(args)
+        """
+    ).lstrip()
+
+
+def test_speedbench_sync_modelopt_serializer_handles_dataclass_and_config_object() -> None:
+    runner = load_speedbench_sync_module()
+
+    @dataclass
+    class Inner:
+        value: int
+
+    class ConfigObject:
+        def __init__(self) -> None:
+            self.inner = Inner(7)
+            self.path = Path("/tmp/model")
+            self.values = (1, 2)
+
+    serialized = runner.modelopt_instrumentation_jsonable(
+        {"config": ConfigObject(), "items": {3, 1}}
+    )
+
+    assert serialized == {
+        "config": {
+            "inner": {"value": 7},
+            "path": "/tmp/model",
+            "values": [1, 2],
+        },
+        "items": [1, 3],
+    }
+
+
+def test_speedbench_sync_modelopt_instrumentation_stages_copy_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = load_speedbench_sync_module()
+    modelopt_root = tmp_path / "modelopt"
+    run_py = modelopt_root / "examples/specdec_bench/run.py"
+    run_py.parent.mkdir(parents=True)
+    source = pinned_like_modelopt_run_py_stub()
+    run_py.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(
+        runner,
+        "MODELOPT_RUN_PY_SHA256",
+        runner.sha256_text(source),
+    )
+
+    metadata = runner.stage_instrumented_modelopt_source(
+        modelopt_root,
+        tmp_path / "staged-modelopt",
+        save_dir=tmp_path / "official.modelopt",
+    )
+
+    assert run_py.read_text(encoding="utf-8") == source
+    patched = (tmp_path / "staged-modelopt/examples/specdec_bench/run.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_task5_write_timing_total_tokens_sidecar" in patched
+    assert "_task5_write_resolved_vllm_config_sidecar" in patched
+    assert metadata["source_sha256"] == runner.sha256_text(source)
+    assert metadata["patch_sha256"] == runner.sha256_text(
+        runner.MODELOPT_INSTRUMENTATION_PATCH
+    )
+    instrumentation = json.loads(
+        (tmp_path / "official.modelopt" / TASK5_INSTRUMENTATION_SIDECAR).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert instrumentation == metadata
+
+    broken_root = tmp_path / "broken-modelopt"
+    broken_run_py = broken_root / "examples/specdec_bench/run.py"
+    broken_run_py.parent.mkdir(parents=True)
+    broken_source = source.replace("runner.clear_metrics()", "runner.reset()")
+    broken_run_py.write_text(broken_source, encoding="utf-8")
+    monkeypatch.setattr(
+        runner,
+        "MODELOPT_RUN_PY_SHA256",
+        runner.sha256_text(broken_source),
+    )
+    with pytest.raises(ValueError, match="anchor"):
+        runner.stage_instrumented_modelopt_source(
+            broken_root,
+            tmp_path / "broken-staged",
+            save_dir=tmp_path / "broken.modelopt",
+        )
+
+
+def test_speedbench_sync_official_requires_instrumented_sidecars(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+    dataset_path = tmp_path / "throughput_1k" / "test.parquet"
+    save_dir = tmp_path / "official.modelopt"
+    write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
+    (save_dir / TASK5_TIMING_SIDECAR).unlink()
+
+    with pytest.raises(ValueError, match=TASK5_TIMING_SIDECAR):
+        runner.adapt_official_speedbench_output(
+            save_dir=save_dir,
+            output=tmp_path / "official_result.json",
+            model="/models/qwen32",
+            draft_model="/models/draft",
+            variant="static",
+            dataset_config="throughput_1k",
+            tensor_parallel_size=8,
+            active_concurrency=16,
+            max_model_len=40960,
+            max_new_tokens=50,
+            static_k=5,
+            temperature=0.0,
+            runtime_image_sha256="runtime-sha",
+            model_config_hash_value="model-sha",
+            prepared_manifest_hash="manifest-sha",
+            prepared_dataset_path=dataset_path,
+        )
+
+
+def test_speedbench_sync_parser_resolves_sampling_defaults_by_cohort(
+    tmp_path: Path,
+) -> None:
+    runner = load_speedbench_sync_module()
+
+    overlay = runner.parse_speedbench_args(
+        [
+            "--cohort",
+            "overlay",
+            "--model",
+            "/models/qwen32",
+            "--mode",
+            "baseline",
+            "--output",
+            str(tmp_path / "overlay.json"),
+        ]
+    )
+    official = runner.parse_speedbench_args(
+        [
+            "--cohort",
+            "official",
+            "--model",
+            "/models/qwen32",
+            "--mode",
+            "baseline",
+            "--output",
+            str(tmp_path / "official.json"),
+        ]
+    )
+
+    assert overlay.temperature == 1.0
+    assert overlay.top_p == 1.0
+    assert official.temperature is None
+    assert official.top_p is None
 
 
 def test_speedbench_sync_official_parses_pinned_modelopt_output_files(
@@ -2887,6 +3315,7 @@ def test_speedbench_sync_official_parses_pinned_modelopt_output_files(
     assert payload["config"]["mamba_cache_philox_rounds"] == 0
     assert payload["config"]["moe_backend"] == "auto"
     assert payload["config"]["official_vllm_config"]["model_config"]["dtype"] == "bfloat16"
+    assert payload["config"]["official_instrumentation"]["patch_sha256"] == "f" * 64
     assert "upstream-unrecorded" not in json.dumps(payload["config"], sort_keys=True)
     assert payload["summary"]["output_tok_s_per_gpu"] == 120.0
     assert payload["summary"]["output_tok_s"] == 960.0
@@ -2941,7 +3370,11 @@ def test_speedbench_sync_official_sums_per_turn_timing_tokens(
 
     assert payload["summary"]["total_output_tokens"] == 60
     assert payload["summary"]["total_rollout_time_s"] == 0.5
-    assert payload["official_output"]["timing"]["Timing.total_tokens"] == [10, 20, 30]
+    assert payload["official_output"]["timing_total_tokens"]["total_tokens"] == [
+        10,
+        20,
+        30,
+    ]
 
 
 def test_speedbench_sync_official_rejects_missing_serving_config_match_fields(
@@ -2951,11 +3384,10 @@ def test_speedbench_sync_official_rejects_missing_serving_config_match_fields(
     dataset_path = tmp_path / "throughput_1k" / "test.parquet"
     save_dir = tmp_path / "official.modelopt"
     write_pinned_modelopt_speedbench_output(save_dir, dataset_path=dataset_path)
-    configuration_path = save_dir / "configuration.json"
-    configuration = json.loads(configuration_path.read_text(encoding="utf-8"))
-    configuration["serving_config"].pop("dtype")
-    configuration["serving_config"]["vllm_config"]["model_config"].pop("dtype")
-    configuration_path.write_text(json.dumps(configuration), encoding="utf-8")
+    sidecar_path = save_dir / TASK5_RESOLVED_CONFIG_SIDECAR
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["vllm_config"]["model_config"].pop("dtype")
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
 
     with pytest.raises(ValueError, match="official dtype"):
         runner.adapt_official_speedbench_output(
@@ -3118,6 +3550,7 @@ def test_speedbench_sync_official_rejects_missing_static_draft_config(
 
 def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_result(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = load_speedbench_sync_module()
     prepared_root, manifest_path, checksums_path = write_prepared_speedbench_fixture(
@@ -3132,43 +3565,12 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
     modelopt_root = tmp_path / "modelopt"
     run_py = modelopt_root / "examples/specdec_bench/run.py"
     run_py.parent.mkdir(parents=True)
-    run_py.write_text(
-        textwrap.dedent(
-            """
-            import argparse
-            import json
-            import sys
-            from pathlib import Path
-
-            parser = argparse.ArgumentParser()
-            parser.add_argument("--tokenizer", required=True)
-            parser.add_argument("--dataset", required=True)
-            parser.add_argument("--dataset_path", required=True)
-            parser.add_argument("--engine", required=True)
-            parser.add_argument("--speculative_algorithm", required=True)
-            parser.add_argument("--model_dir", required=True)
-            parser.add_argument("--draft_model_dir")
-            parser.add_argument("--temperature", type=float)
-            parser.add_argument("--max_seq_len", type=int)
-            parser.add_argument("--output_length", type=int, required=True)
-            parser.add_argument("--draft_length", type=int, required=True)
-            parser.add_argument("--tp_size", type=int, required=True)
-            parser.add_argument("--concurrency", type=int, required=True)
-            parser.add_argument("--trust_remote_code", action="store_true")
-            parser.add_argument("--save_dir", required=True)
-            args = parser.parse_args()
-            save_dir = Path(args.save_dir)
-            save_dir.mkdir(parents=True, exist_ok=True)
-            (save_dir / "argv.json").write_text(json.dumps(sys.argv), encoding="utf-8")
-            """
-        ),
-        encoding="utf-8",
-    )
-    write_pinned_modelopt_speedbench_output(
-        tmp_path / "official_result.modelopt",
-        dataset_path=prepared_dataset_path,
-        output_tps=800.0,
-        output_tps_per_gpu=100.0,
+    source = pinned_like_modelopt_run_py_stub()
+    run_py.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(
+        runner,
+        "MODELOPT_RUN_PY_SHA256",
+        runner.sha256_text(source),
     )
 
     payload = runner.run_official_speedbench(
@@ -3190,20 +3592,26 @@ def test_speedbench_sync_official_executes_pinned_modelopt_run_py_and_adapts_res
         model_config_hash="model-sha",
         prepared_manifest_hash="manifest-sha",
     )
-    argv = json.loads((tmp_path / "official_result.modelopt" / "argv.json").read_text())
+    configuration = json.loads(
+        (tmp_path / "official_result.modelopt" / "configuration.json").read_text()
+    )
+    instrumentation = json.loads(
+        (tmp_path / "official_result.modelopt" / TASK5_INSTRUMENTATION_SIDECAR).read_text()
+    )
 
-    assert argv[0] == str(run_py)
-    assert "benchmark.py" not in " ".join(argv)
-    assert argv[argv.index("--dataset") + 1] == "speed"
-    assert argv[argv.index("--dataset_path") + 1] == str(prepared_dataset_path)
-    assert argv[argv.index("--model_dir") + 1] == "/models/qwen32"
-    assert argv[argv.index("--draft_model_dir") + 1] == "/models/draft"
-    assert argv[argv.index("--save_dir") + 1] == str(tmp_path / "official_result.modelopt")
-    assert "--trust_remote_code" in argv
+    assert configuration["dataset"] == "speed"
+    assert configuration["dataset_path"] == str(prepared_dataset_path)
+    assert configuration["model_dir"] == "/models/qwen32"
+    assert configuration["draft_model_dir"] == "/models/draft"
+    assert configuration["save_dir"] == str(tmp_path / "official_result.modelopt")
+    assert instrumentation["source_sha256"] == runner.sha256_text(source)
+    assert str(run_py) not in instrumentation["staged_run_py"]
+    assert "benchmark.py" not in instrumentation["staged_run_py"]
     assert payload["config"]["cohort"] == "official"
     assert payload["config"]["official_runner"] == "ModelOpt examples/specdec_bench/run.py"
     assert payload["config"]["upstream_turn_loop_preserved"] is True
-    assert payload["summary"]["output_tok_s_per_gpu"] == 100.0
+    assert payload["summary"]["output_tok_s_per_gpu"] == 15.0
+    assert payload["summary"]["total_output_tokens"] == 60
 
 
 def test_speedbench_sync_overlay_builds_from_manifest_checked_prepared_parquet(

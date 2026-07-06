@@ -9,12 +9,13 @@ import copy
 import hashlib
 import json
 import platform
+import shutil
 import statistics
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence, cast
 
 from benchmark import (
     DEFAULT_DYNAMIC_SCHEDULE,
@@ -35,6 +36,150 @@ ACCEPTANCE_LIMITATION = (
     "vLLM exposes draft-position acceptance counters. Completion-position "
     "windows report contributor counts only; they are not output-position "
     "acceptance without additional instrumentation."
+)
+
+MODELOPT_PINNED_COMMIT = "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
+MODELOPT_RUN_PY_SHA256 = (
+    "aafd29a4e7220e3e6748d332266c17005aa589d3f164b22392a924c5ccc6ae30"
+)
+MODELOPT_TIMING_SIDECAR = "task5_timing_total_tokens.json"
+MODELOPT_RESOLVED_CONFIG_SIDECAR = "task5_resolved_vllm_config.json"
+MODELOPT_INSTRUMENTATION_SIDECAR = "task5_instrumentation.json"
+
+MODELOPT_INSTRUMENTATION_IMPORT = """import dataclasses
+import json
+from pathlib import Path
+"""
+
+MODELOPT_INSTRUMENTATION_HELPERS = r'''
+
+def _task5_jsonable(value, _seen=None):
+    if _seen is None:
+        _seen = set()
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if not isinstance(value, type) and dataclasses.is_dataclass(value):
+        return _task5_jsonable(dataclasses.asdict(value), _seen)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    object_id = id(value)
+    if object_id in _seen:
+        return "<recursive>"
+    if isinstance(value, dict):
+        _seen.add(object_id)
+        try:
+            return {
+                str(k): _task5_jsonable(v, _seen)
+                for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+            }
+        finally:
+            _seen.remove(object_id)
+    if isinstance(value, (list, tuple)):
+        _seen.add(object_id)
+        try:
+            return [_task5_jsonable(item, _seen) for item in value]
+        finally:
+            _seen.remove(object_id)
+    if isinstance(value, set):
+        _seen.add(object_id)
+        try:
+            return [_task5_jsonable(item, _seen) for item in sorted(value, key=repr)]
+        finally:
+            _seen.remove(object_id)
+    if hasattr(value, "__dict__"):
+        _seen.add(object_id)
+        try:
+            return {
+                str(k): _task5_jsonable(v, _seen)
+                for k, v in sorted(vars(value).items())
+                if not str(k).startswith("_")
+            }
+        finally:
+            _seen.remove(object_id)
+    return repr(value)
+
+
+def _task5_attr_path(value, path):
+    current = value
+    for key in path:
+        if current is None:
+            return None
+        current = getattr(current, key, None)
+    return current
+
+
+def _task5_resolved_vllm_config(model):
+    async_model = getattr(model, "model", None)
+    for path in (
+        ("vllm_config",),
+        ("engine", "vllm_config"),
+        ("llm_engine", "vllm_config"),
+        ("engine_core", "vllm_config"),
+    ):
+        config = _task5_attr_path(async_model, path)
+        if config is not None:
+            return config
+    return None
+
+
+def _task5_sampling_config(model):
+    config = getattr(model, "sampling_config", None)
+    if config is None:
+        return None
+    return {
+        "temperature": getattr(config, "temperature", None),
+        "top_p": getattr(config, "top_p", None),
+        "top_k": getattr(config, "top_k", None),
+    }
+
+
+def _task5_write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def _task5_write_resolved_vllm_config_sidecar(save_dir, model, serving_config):
+    if save_dir is None:
+        return
+    payload = {
+        "schema_version": 1,
+        "serving_config": _task5_jsonable(serving_config),
+        "engine_args": _task5_jsonable(getattr(model, "engine_args", None)),
+        "vllm_config": _task5_jsonable(_task5_resolved_vllm_config(model)),
+        "sampling_kwargs": _task5_jsonable(getattr(model, "sampling_kwargs", None)),
+        "sampling_config": _task5_jsonable(_task5_sampling_config(model)),
+    }
+    _task5_write_json(Path(save_dir) / "task5_resolved_vllm_config.json", payload)
+
+
+def _task5_write_timing_total_tokens_sidecar(save_dir, metrics_list):
+    if save_dir is None:
+        return
+    timing_metric = None
+    for metric in metrics_list:
+        if getattr(metric, "name", None) == "timing" and hasattr(metric, "total_tokens"):
+            timing_metric = metric
+            break
+    if timing_metric is None:
+        raise RuntimeError("Task5 instrumentation could not find Timing metric")
+    total_tokens = list(getattr(timing_metric, "total_tokens"))
+    if not total_tokens or any((not isinstance(value, int)) or value <= 0 for value in total_tokens):
+        raise RuntimeError("Task5 instrumentation saw invalid Timing.total_tokens")
+    _task5_write_json(
+        Path(save_dir) / "task5_timing_total_tokens.json",
+        {
+            "schema_version": 1,
+            "source": "Timing.total_tokens",
+            "total_tokens": total_tokens,
+            "turn_count": len(total_tokens),
+        },
+    )
+'''
+
+MODELOPT_INSTRUMENTATION_PATCH = (
+    MODELOPT_INSTRUMENTATION_IMPORT + MODELOPT_INSTRUMENTATION_HELPERS
 )
 
 
@@ -100,6 +245,148 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def modelopt_instrumentation_jsonable(
+    value: Any,
+    _seen: set[int] | None = None,
+) -> Any:
+    if _seen is None:
+        _seen = set()
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if not isinstance(value, type) and is_dataclass(value):
+        return modelopt_instrumentation_jsonable(asdict(cast(Any, value)), _seen)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    object_id = id(value)
+    if object_id in _seen:
+        return "<recursive>"
+    if isinstance(value, Mapping):
+        _seen.add(object_id)
+        try:
+            return {
+                str(key): modelopt_instrumentation_jsonable(item, _seen)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        finally:
+            _seen.remove(object_id)
+    if isinstance(value, (list, tuple)):
+        _seen.add(object_id)
+        try:
+            return [modelopt_instrumentation_jsonable(item, _seen) for item in value]
+        finally:
+            _seen.remove(object_id)
+    if isinstance(value, set):
+        _seen.add(object_id)
+        try:
+            return [
+                modelopt_instrumentation_jsonable(item, _seen)
+                for item in sorted(value, key=repr)
+            ]
+        finally:
+            _seen.remove(object_id)
+    if hasattr(value, "__dict__"):
+        _seen.add(object_id)
+        try:
+            return {
+                str(key): modelopt_instrumentation_jsonable(item, _seen)
+                for key, item in sorted(vars(value).items())
+                if not str(key).startswith("_")
+            }
+        finally:
+            _seen.remove(object_id)
+    return repr(value)
+
+
+def _replace_anchor_once(text: str, anchor: str, replacement: str) -> str:
+    count = text.count(anchor)
+    if count != 1:
+        raise ValueError(f"ModelOpt instrumentation anchor mismatch: {anchor!r}")
+    return text.replace(anchor, replacement, 1)
+
+
+def _instrument_modelopt_run_py_source(source: str) -> str:
+    source = _replace_anchor_once(
+        source,
+        "import argparse\nimport asyncio\n",
+        "import argparse\nimport asyncio\n" + MODELOPT_INSTRUMENTATION_IMPORT,
+    )
+    source = _replace_anchor_once(
+        source,
+        "import yaml\n",
+        "import yaml\n" + MODELOPT_INSTRUMENTATION_HELPERS,
+    )
+    source = _replace_anchor_once(
+        source,
+        (
+            "        dump_env(args, args.save_dir, "
+            'overrides={"serving_config": model.get_serving_config()})\n'
+        ),
+        (
+            "        task5_serving_config = model.get_serving_config()\n"
+            "        dump_env(args, args.save_dir, "
+            'overrides={"serving_config": task5_serving_config})\n'
+            "        _task5_write_resolved_vllm_config_sidecar(\n"
+            "            args.save_dir,\n"
+            "            model,\n"
+            "            task5_serving_config,\n"
+            "        )\n"
+        ),
+    )
+    source = _replace_anchor_once(
+        source,
+        "    runner.clear_metrics()\n",
+        (
+            "    _task5_write_timing_total_tokens_sidecar(args.save_dir, metrics_list)\n"
+            "    runner.clear_metrics()\n"
+        ),
+    )
+    return source
+
+
+def stage_instrumented_modelopt_source(
+    modelopt_root: Path,
+    staged_root: Path,
+    *,
+    save_dir: Path,
+) -> dict[str, Any]:
+    source_run_py = modelopt_root / "examples/specdec_bench/run.py"
+    if not source_run_py.is_file():
+        raise ValueError(f"missing pinned ModelOpt run.py: {source_run_py}")
+    source = source_run_py.read_text(encoding="utf-8")
+    source_hash = sha256_text(source)
+    if source_hash != MODELOPT_RUN_PY_SHA256:
+        raise ValueError(
+            "ModelOpt run.py source hash mismatch: "
+            f"{source_hash} != {MODELOPT_RUN_PY_SHA256}"
+        )
+    patched_source = _instrument_modelopt_run_py_source(source)
+    if staged_root.exists():
+        shutil.rmtree(staged_root)
+    shutil.copytree(modelopt_root, staged_root, symlinks=True)
+    staged_run_py = staged_root / "examples/specdec_bench/run.py"
+    staged_run_py.write_text(patched_source, encoding="utf-8")
+    metadata = {
+        "schema_version": 1,
+        "modelopt_commit": MODELOPT_PINNED_COMMIT,
+        "source_run_py": str(source_run_py),
+        "staged_run_py": str(staged_run_py),
+        "source_sha256": source_hash,
+        "patch_sha256": sha256_text(MODELOPT_INSTRUMENTATION_PATCH),
+        "patched_source_sha256": sha256_text(patched_source),
+        "timing_sidecar": MODELOPT_TIMING_SIDECAR,
+        "resolved_config_sidecar": MODELOPT_RESOLVED_CONFIG_SIDECAR,
+    }
+    save_dir.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(save_dir / MODELOPT_INSTRUMENTATION_SIDECAR, metadata)
+    return metadata
 
 
 def prompt_set_hash(prompt_hashes: Sequence[str]) -> str:
@@ -748,7 +1035,7 @@ def build_official_speedbench_command(
     max_new_tokens: int,
     draft_model: str = "",
     static_k: int = 0,
-    temperature: float = 0.0,
+    temperature: float | None = None,
 ) -> list[str]:
     if variant in ("dynamic", "mtp_dynamic"):
         raise ValueError(
@@ -776,8 +1063,6 @@ def build_official_speedbench_command(
         algorithm,
         "--model_dir",
         model,
-        "--temperature",
-        str(temperature),
         "--max_seq_len",
         str(max_model_len),
         "--output_length",
@@ -792,6 +1077,8 @@ def build_official_speedbench_command(
         "--save_dir",
         str(save_dir),
     ]
+    if temperature is not None:
+        command.extend(["--temperature", str(temperature)])
     if draft_model:
         command.extend(["--draft_model_dir", draft_model])
     return command
@@ -828,6 +1115,10 @@ def _load_modelopt_json_object(path: Path) -> dict[str, Any]:
     if isinstance(payload, dict):
         return dict(payload)
     raise ValueError(f"{path.name} must contain a JSON object")
+
+
+def _load_modelopt_sidecar(save_dir: Path, filename: str) -> dict[str, Any]:
+    return _load_modelopt_json_object(save_dir / filename)
 
 
 def _positive_float(mapping: Mapping[str, Any], key: str, *, file_name: str) -> float:
@@ -910,53 +1201,67 @@ def _lookup_path(mapping: Mapping[str, Any], path: Sequence[str]) -> Any:
 
 
 def _required_official_field(
-    serving_config: Mapping[str, Any],
+    resolved_config: Mapping[str, Any],
     field_name: str,
     paths: Sequence[Sequence[str]],
 ) -> Any:
     for path in paths:
-        value = _lookup_path(serving_config, path)
+        value = _lookup_path(resolved_config, path)
         if value is not _MISSING and value is not None:
             return value
     path_text = " or ".join(".".join(path) for path in paths)
     raise ValueError(
-        f"official {field_name} missing from configuration.serving_config "
+        f"official {field_name} missing from instrumented resolved config "
         f"({path_text})"
     )
 
 
-def _official_top_p(configuration: Mapping[str, Any]) -> float:
+def _official_sampling_number(
+    configuration: Mapping[str, Any],
+    resolved_config: Mapping[str, Any],
+    field_name: str,
+) -> float:
+    if field_name == "temperature":
+        raw_value = configuration.get("temperature")
+        if raw_value is not None:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                raise ValueError("configuration.json temperature missing numeric value")
+            return float(raw_value)
     runtime_params = configuration.get("runtime_params")
     sampling_kwargs: Any = {}
     if isinstance(runtime_params, Mapping):
         sampling_kwargs = runtime_params.get("sampling_kwargs", {})
     if not isinstance(sampling_kwargs, Mapping):
         raise ValueError("configuration.json runtime_params.sampling_kwargs must be an object")
-    value = sampling_kwargs.get("top_p", 1.0)
+    value = sampling_kwargs.get(field_name)
+    if value is None:
+        value = _lookup_path(resolved_config, ("sampling_config", field_name))
+    if value is _MISSING or value is None:
+        value = _lookup_path(resolved_config, ("sampling_kwargs", field_name))
+    if value is _MISSING or value is None:
+        raise ValueError(f"official {field_name} missing from instrumented sampling config")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("official top_p missing numeric value")
+        raise ValueError(f"official {field_name} missing numeric value")
     number = float(value)
-    if not 0.0 < number <= 1.0:
+    if field_name == "top_p" and not 0.0 < number <= 1.0:
         raise ValueError("official top_p must be in (0, 1]")
+    if field_name == "temperature" and number < 0.0:
+        raise ValueError("official temperature must be >= 0")
     return number
 
 
-def _timing_total_tokens(timing: Mapping[str, Any]) -> list[int]:
-    raw_values = (
-        timing.get("Timing.total_tokens")
-        or timing.get("total_tokens")
-        or (
-            timing.get("Number of Output Tokens", {}).get("values")
-            if isinstance(timing.get("Number of Output Tokens"), Mapping)
-            else None
-        )
-    )
+def _timing_total_tokens_from_sidecar(sidecar: Mapping[str, Any]) -> list[int]:
+    if sidecar.get("source") != "Timing.total_tokens":
+        raise ValueError(f"{MODELOPT_TIMING_SIDECAR} source must be Timing.total_tokens")
+    raw_values = sidecar.get("total_tokens")
     if not isinstance(raw_values, list) or not raw_values:
-        raise ValueError("timing.json missing per-turn Timing.total_tokens")
+        raise ValueError(f"{MODELOPT_TIMING_SIDECAR} missing total_tokens")
     total_tokens: list[int] = []
     for value in raw_values:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise ValueError("timing.json Timing.total_tokens must be positive integers")
+            raise ValueError(
+                f"{MODELOPT_TIMING_SIDECAR} total_tokens must be positive integers"
+            )
         total_tokens.append(value)
     return total_tokens
 
@@ -979,6 +1284,12 @@ def parse_modelopt_official_outputs(
     acceptance = _load_modelopt_json_object(save_dir / "acceptance_rate.json")
     specbench = _load_modelopt_json_object(save_dir / "specbench_results.json")
     configuration = _load_modelopt_json_object(save_dir / "configuration.json")
+    timing_sidecar = _load_modelopt_sidecar(save_dir, MODELOPT_TIMING_SIDECAR)
+    resolved_config_sidecar = _load_modelopt_sidecar(
+        save_dir,
+        MODELOPT_RESOLVED_CONFIG_SIDECAR,
+    )
+    instrumentation = _load_modelopt_sidecar(save_dir, MODELOPT_INSTRUMENTATION_SIDECAR)
 
     output_tps = _positive_float(timing, "Output TPS", file_name="timing.json")
     output_tps_per_gpu = _positive_float(
@@ -991,7 +1302,7 @@ def parse_modelopt_official_outputs(
         "Number of Output Tokens",
         file_name="timing.json",
     )
-    total_tokens_by_turn = _timing_total_tokens(timing)
+    total_tokens_by_turn = _timing_total_tokens_from_sidecar(timing_sidecar)
     request_al = specbench.get("Request_AL")
     if not isinstance(request_al, Mapping) or not request_al:
         raise ValueError("specbench_results.json missing Request_AL")
@@ -1018,26 +1329,45 @@ def parse_modelopt_official_outputs(
     if engine != "VLLM":
         raise ValueError("configuration.json engine must be VLLM")
     serving_config = _required_mapping(
-        configuration,
+        resolved_config_sidecar,
         "serving_config",
-        file_name="configuration.json",
+        file_name=MODELOPT_RESOLVED_CONFIG_SIDECAR,
     )
     vllm_config = _required_mapping(
-        serving_config,
+        resolved_config_sidecar,
         "vllm_config",
-        file_name="configuration.json:serving_config",
+        file_name=MODELOPT_RESOLVED_CONFIG_SIDECAR,
     )
+    engine_args = _required_mapping(
+        resolved_config_sidecar,
+        "engine_args",
+        file_name=MODELOPT_RESOLVED_CONFIG_SIDECAR,
+    )
+    resolved_config = {
+        "serving_config": serving_config,
+        "engine_args": engine_args,
+        "vllm_config": vllm_config,
+        "sampling_config": resolved_config_sidecar.get("sampling_config"),
+        "sampling_kwargs": resolved_config_sidecar.get("sampling_kwargs"),
+    }
     compilation_config = _required_official_field(
-        serving_config,
+        resolved_config,
         "compilation_config",
-        (("vllm_config", "compilation_config"), ("compilation_config",)),
+        (
+            ("vllm_config", "compilation_config"),
+            ("engine_args", "compilation_config"),
+        ),
     )
     config_values = {
         "dataset_path": configured_dataset_path,
         "dataset": dataset,
         "engine": engine,
         "serving_config": serving_config,
+        "engine_args": engine_args,
         "vllm_config": vllm_config,
+        "resolved_config_sidecar": resolved_config_sidecar,
+        "timing_sidecar": timing_sidecar,
+        "instrumentation": instrumentation,
         "speculative_algorithm": _required_string(
             configuration,
             "speculative_algorithm",
@@ -1048,11 +1378,10 @@ def parse_modelopt_official_outputs(
             "model_dir",
             file_name="configuration.json",
         ),
-        "temperature": _required_float(
+        "temperature": _official_sampling_number(
             configuration,
+            resolved_config,
             "temperature",
-            file_name="configuration.json",
-            minimum=0.0,
         ),
         "max_seq_len": _required_int(
             configuration,
@@ -1067,108 +1396,139 @@ def parse_modelopt_official_outputs(
             minimum=1,
         ),
         "resolved_max_model_len": _required_official_field(
-            serving_config,
+            resolved_config,
             "max_model_len",
-            (("vllm_config", "model_config", "max_model_len"), ("max_model_len",)),
+            (
+                ("vllm_config", "model_config", "max_model_len"),
+                ("engine_args", "max_model_len"),
+                ("serving_config", "max_model_len"),
+            ),
         ),
         "resolved_tensor_parallel_size": _required_official_field(
-            serving_config,
+            resolved_config,
             "tensor_parallel_size",
             (
                 ("vllm_config", "parallel_config", "tensor_parallel_size"),
-                ("tensor_parallel_size",),
+                ("engine_args", "tensor_parallel_size"),
+                ("serving_config", "tensor_parallel_size"),
             ),
         ),
         "resolved_pipeline_parallel_size": _required_official_field(
-            serving_config,
+            resolved_config,
             "pipeline_parallel_size",
             (
                 ("vllm_config", "parallel_config", "pipeline_parallel_size"),
-                ("pipeline_parallel_size",),
+                ("engine_args", "pipeline_parallel_size"),
+                ("serving_config", "pipeline_parallel_size"),
             ),
         ),
         "dtype": _required_official_field(
-            serving_config,
+            resolved_config,
             "dtype",
-            (("vllm_config", "model_config", "dtype"), ("dtype",)),
+            (("vllm_config", "model_config", "dtype"), ("engine_args", "dtype")),
         ),
         "kv_cache_dtype": _required_official_field(
-            serving_config,
+            resolved_config,
             "kv_cache_dtype",
-            (("vllm_config", "cache_config", "cache_dtype"), ("kv_cache_dtype",)),
+            (
+                ("vllm_config", "cache_config", "cache_dtype"),
+                ("engine_args", "kv_cache_dtype"),
+            ),
         ),
-        "top_p": _official_top_p(configuration),
+        "top_p": _official_sampling_number(configuration, resolved_config, "top_p"),
         "compilation_config": compilation_config,
         "cudagraph_mode": _cudagraph_mode(compilation_config),
         "max_num_batched_tokens": _required_official_field(
-            serving_config,
+            resolved_config,
             "max_num_batched_tokens",
             (
                 ("vllm_config", "scheduler_config", "max_num_batched_tokens"),
-                ("max_num_batched_tokens",),
+                ("engine_args", "max_num_batched_tokens"),
             ),
         ),
         "gpu_memory_utilization": _required_official_field(
-            serving_config,
+            resolved_config,
             "gpu_memory_utilization",
             (
                 ("vllm_config", "cache_config", "gpu_memory_utilization"),
-                ("gpu_memory_utilization",),
+                ("engine_args", "gpu_memory_utilization"),
             ),
         ),
         "distributed_executor_backend": _required_official_field(
-            serving_config,
+            resolved_config,
             "distributed_executor_backend",
             (
                 ("vllm_config", "parallel_config", "distributed_executor_backend"),
-                ("distributed_executor_backend",),
+                ("engine_args", "distributed_executor_backend"),
             ),
         ),
         "distributed_timeout_seconds": _required_official_field(
-            serving_config,
+            resolved_config,
             "distributed_timeout_seconds",
-            (("distributed_timeout_seconds",),),
+            (
+                ("vllm_config", "parallel_config", "distributed_timeout_seconds"),
+                ("engine_args", "distributed_timeout_seconds"),
+            ),
         ),
         "enable_expert_parallel": _required_official_field(
-            serving_config,
+            resolved_config,
             "enable_expert_parallel",
             (
                 ("vllm_config", "parallel_config", "enable_expert_parallel"),
-                ("enable_expert_parallel",),
+                ("engine_args", "enable_expert_parallel"),
             ),
         ),
         "model_loader_extra_config": _required_official_field(
-            serving_config,
+            resolved_config,
             "model_loader_extra_config",
             (
                 ("vllm_config", "load_config", "model_loader_extra_config"),
-                ("model_loader_extra_config",),
+                ("engine_args", "model_loader_extra_config"),
             ),
         ),
         "mamba_ssm_cache_dtype": _required_official_field(
-            serving_config,
+            resolved_config,
             "mamba_ssm_cache_dtype",
-            (("mamba_ssm_cache_dtype",),),
+            (
+                ("vllm_config", "mamba_config", "mamba_ssm_cache_dtype"),
+                ("engine_args", "mamba_ssm_cache_dtype"),
+            ),
         ),
         "mamba_backend": _required_official_field(
-            serving_config,
+            resolved_config,
             "mamba_backend",
-            (("mamba_backend",),),
+            (
+                ("vllm_config", "mamba_config", "mamba_backend"),
+                ("engine_args", "mamba_backend"),
+            ),
         ),
         "enable_mamba_cache_stochastic_rounding": _required_official_field(
-            serving_config,
+            resolved_config,
             "enable_mamba_cache_stochastic_rounding",
-            (("enable_mamba_cache_stochastic_rounding",),),
+            (
+                (
+                    "vllm_config",
+                    "mamba_config",
+                    "enable_mamba_cache_stochastic_rounding",
+                ),
+                ("engine_args", "enable_mamba_cache_stochastic_rounding"),
+            ),
         ),
         "mamba_cache_philox_rounds": _required_official_field(
-            serving_config,
+            resolved_config,
             "mamba_cache_philox_rounds",
-            (("mamba_cache_philox_rounds",),),
+            (
+                ("vllm_config", "mamba_config", "mamba_cache_philox_rounds"),
+                ("engine_args", "mamba_cache_philox_rounds"),
+            ),
         ),
         "moe_backend": _required_official_field(
-            serving_config,
+            resolved_config,
             "moe_backend",
-            (("moe_backend",),),
+            (
+                ("vllm_config", "kernel_config", "moe_backend"),
+                ("engine_args", "kernel_config", "moe_backend"),
+            ),
         ),
         "draft_length": _required_int(
             configuration,
@@ -1211,6 +1571,9 @@ def parse_modelopt_official_outputs(
         "acceptance": acceptance,
         "specbench": specbench,
         "configuration": configuration,
+        "timing_sidecar": timing_sidecar,
+        "resolved_config_sidecar": resolved_config_sidecar,
+        "instrumentation": instrumentation,
         "configuration_values": config_values,
         "output_tps": output_tps,
         "output_tps_per_gpu": output_tps_per_gpu,
@@ -1235,7 +1598,7 @@ def adapt_official_speedbench_output(
     max_model_len: int,
     max_new_tokens: int,
     static_k: int,
-    temperature: float,
+    temperature: float | None,
     runtime_image_sha256: str,
     model_config_hash_value: str | None,
     prepared_manifest_hash: str | None,
@@ -1351,13 +1714,18 @@ def adapt_official_speedbench_output(
             "moe_backend": configuration_values["moe_backend"],
             "official_configuration": configuration,
             "official_serving_config": configuration_values["serving_config"],
+            "official_engine_args": configuration_values["engine_args"],
             "official_vllm_config": configuration_values["vllm_config"],
+            "official_instrumentation": configuration_values["instrumentation"],
         },
         "official_output": {
             "save_dir": str(save_dir),
             "timing": official["timing"],
             "acceptance_rate": official["acceptance"],
             "specbench_results": official["specbench"],
+            "timing_total_tokens": official["timing_sidecar"],
+            "resolved_vllm_config": official["resolved_config_sidecar"],
+            "instrumentation": official["instrumentation"],
         },
         "summary": {
             "total_rollout_time_s": official["total_rollout_time_s"],
@@ -1405,17 +1773,23 @@ def run_official_speedbench(
     max_model_len: int,
     max_new_tokens: int,
     static_k: int,
-    temperature: float,
+    temperature: float | None,
     runtime_image_sha256: str,
     model_config_hash: str | None,
     prepared_manifest_hash: str | None,
     draft_model: str = "",
 ) -> dict[str, Any]:
     save_dir = output.with_suffix(".modelopt")
+    staged_modelopt_root = Path(str(save_dir) + ".instrumented_source")
+    stage_instrumented_modelopt_source(
+        modelopt_root,
+        staged_modelopt_root,
+        save_dir=save_dir,
+    )
     command = build_official_speedbench_command(
         model=model,
         tokenizer=tokenizer,
-        modelopt_root=modelopt_root,
+        modelopt_root=staged_modelopt_root,
         dataset_path=prepared_dataset_path,
         save_dir=save_dir,
         variant=variant,
@@ -1839,6 +2213,23 @@ def run_official(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_cohort_sampling_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    if args.cohort == "overlay":
+        if args.temperature is None:
+            args.temperature = 1.0
+        if args.top_p is None:
+            args.top_p = 1.0
+    elif args.cohort == "official":
+        pass
+    else:
+        raise ValueError(f"unsupported cohort: {args.cohort}")
+    if args.temperature is not None and args.temperature < 0.0:
+        raise ValueError("--temperature must be >= 0")
+    if args.top_p is not None and not 0.0 < args.top_p <= 1.0:
+        raise ValueError("--top-p must be in (0, 1]")
+    return args
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", choices=("official", "overlay"), required=True)
@@ -1877,8 +2268,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--active-concurrency", type=int, default=16)
     parser.add_argument("--samples-per-prompt", type=int, default=1)
     parser.add_argument("--rollout-batches", type=int, default=3)
-    parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=None)
+    parser.add_argument("--top-p", type=float, default=None)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--warmup-max-tokens", type=int, default=32)
     parser.add_argument("--acceptance-window-size", type=int, default=16)
@@ -1896,8 +2287,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_speedbench_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    return resolve_cohort_sampling_defaults(build_parser().parse_args(argv))
+
+
 def main() -> None:
-    args = build_parser().parse_args()
+    args = parse_speedbench_args()
     if args.cohort == "official":
         raise SystemExit(run_official(args))
     if args.prepared_manifest is None:

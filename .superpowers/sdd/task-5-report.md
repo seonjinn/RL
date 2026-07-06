@@ -327,6 +327,156 @@ Cause: existing `scripts/build_latest_specdec_html_pages.py` imports
 `scripts/` to `PYTHONPATH`. The repository-wide suite passes with
 `PYTHONPATH=scripts`.
 
+## Final Instrumentation Fixes RED/GREEN
+
+### Scope
+
+- Added deterministic staging instrumentation for pinned ModelOpt
+  `examples/specdec_bench/run.py`; the upstream checkout is copied, exact
+  source hash and anchors are verified, and only the staged copy is patched.
+- The instrumentation writes explicit Task 5 sidecars:
+  `task5_timing_total_tokens.json`,
+  `task5_resolved_vllm_config.json`, and `task5_instrumentation.json`.
+- Official adaptation now requires those sidecars, sums real
+  `Timing.total_tokens` captured from the live metric object, and extracts
+  matching/provenance fields from the serialized resolved engine config.
+- Removed impossible fixture assumptions that pinned upstream emits raw
+  `Timing.total_tokens` or a `vllm_config.to_dict()` result in
+  `configuration.json`.
+- CLI parsing now resolves sampling defaults by cohort:
+  overlay defaults to `temperature=1.0`, `top_p=1.0`; official leaves
+  sampling unset unless explicitly supplied so pinned ModelOpt keeps its
+  official protocol.
+
+### RED
+
+Focused Task 5 command after adding tests and before implementation:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+11 failed, 29 passed, 97 deselected in 7.42s
+```
+
+Expected failures covered:
+
+- Missing `modelopt_instrumentation_jsonable`, `sha256_text`,
+  `stage_instrumented_modelopt_source`, and `parse_speedbench_args`
+- Adapter still attempted to read raw `Timing.total_tokens` from
+  `timing.json` instead of requiring `task5_timing_total_tokens.json`
+- Existing official fixture no longer contained fabricated
+  `configuration.serving_config.vllm_config`, so parsing failed before
+  sidecar provenance could be used
+
+### GREEN
+
+Focused Task 5 command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_sync
+```
+
+Result:
+
+```text
+40 passed, 97 deselected in 7.53s
+```
+
+Experiment test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+137 passed in 21.40s
+```
+
+Targeted Pyright:
+
+```bash
+pyright \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py \
+  tests/test_vllm024_dynamicsd.py
+```
+
+Result:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+Shell syntax:
+
+```bash
+bash -n \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: exit 0.
+
+Python compile check:
+
+```bash
+python3 -m compileall -q \
+  experiments/vllm_024_dynamicsd/benchmark_speedbench_sync_rollout.py \
+  experiments/vllm_024_dynamicsd/summarize_speedbench_sync_rollout.py
+```
+
+Result: exit 0.
+
+Dry-run launchers:
+
+```bash
+DRY_RUN=true CLUSTER=lyris RUN_ID=task5-final-instr-cal-smoke \
+  K_VALUES='1 3' CONCURRENCIES='1 8 32 64' \
+  experiments/vllm_024_dynamicsd/submit_speedbench_k_calibration.sh
+
+DRY_RUN=true CLUSTER=ptyche MODELS='ultra super' \
+  RUN_ID=task5-final-instr-nemotron-smoke \
+  experiments/vllm_024_dynamicsd/submit_nemotron_speedbench_sync_mtp_matrix.sh
+```
+
+Result: both exit 0; rendered scripts show direct runtime digest resolution,
+`args+=(--runtime-image-sha256 "${runtime_image_sha256}")`, overlay
+`--temperature 1.0`, `--top-p 1.0`, and Ultra Ray environment setup.
+
+Repository-wide suite:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Result:
+
+```text
+215 passed, 28 subtests passed in 30.02s
+```
+
+Plain repository-wide command:
+
+```bash
+python3 -m pytest -q
+```
+
+Result:
+
+```text
+1 error during collection:
+ModuleNotFoundError: No module named 'vllm024_dflare_report'
+```
+
+Cause remains the existing `scripts/build_latest_specdec_html_pages.py`
+top-level import path issue; the suite passes with `PYTHONPATH=scripts`.
+
 ## Second Review RED/GREEN
 
 Second review items fixed:
