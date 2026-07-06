@@ -67,6 +67,26 @@ def test_get_mtp_metrics_per_layer_loss_and_acceptance(monkeypatch):
 
 
 @pytest.mark.mcore
+def test_get_mtp_metrics_scales_losses_only(monkeypatch):
+    """Losses scale to microbatch-mean semantics while acceptance stays a ratio."""
+    from nemo_rl.models.megatron.common import get_mtp_metrics
+
+    tracker = {
+        "loss_values": torch.tensor([2.0, 4.0]),
+        "correct_values": torch.tensor([1.0, 3.0]),
+        "total_values": torch.tensor([2.0, 6.0]),
+    }
+    _seed_tracker(monkeypatch, tracker)
+
+    metrics = get_mtp_metrics(loss_scale=0.25)
+
+    assert metrics["mtp_1_loss"] == pytest.approx(0.5)
+    assert metrics["mtp_1_acceptance_rate"] == pytest.approx(50.0)
+    assert metrics["mtp_2_loss"] == pytest.approx(1.0)
+    assert metrics["mtp_2_acceptance_rate"] == pytest.approx(50.0)
+
+
+@pytest.mark.mcore
 def test_get_mtp_metrics_defaults_when_only_loss_tracked(monkeypatch):
     """correct/total absent -> acceptance defaults (correct=0, total=1) => 0%."""
     from nemo_rl.models.megatron.common import get_mtp_metrics

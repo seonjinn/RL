@@ -831,7 +831,8 @@ class MegatronPolicyWorkerImpl(
                 metrics["moe_metrics"] = moe_metrics
         # Collect MTP metrics (kept out of train()'s body so cloudpickle does not
         # pull an unpicklable torch ConfigModuleInstance into the worker actor).
-        self._collect_mtp_metrics(metrics)
+        mtp_loss_scale = 1.0 / max(1, total_num_microbatches)
+        self._collect_mtp_metrics(metrics, loss_scale=mtp_loss_scale)
         return metrics
 
     def _compute_moe_grad_scale(self, global_valid_toks):
@@ -1193,7 +1194,7 @@ class MegatronPolicyWorkerImpl(
 
         return refit_param_info_hf
 
-    def _collect_mtp_metrics(self, metrics: dict[str, Any]) -> None:
+    def _collect_mtp_metrics(self, metrics: dict[str, Any], loss_scale: float = 1.0) -> None:
         """Add Multi-Token Prediction metrics to ``metrics`` when MTP is enabled.
 
         get_mtp_metrics is imported lazily (not a module global) so cloudpickle
@@ -1207,7 +1208,7 @@ class MegatronPolicyWorkerImpl(
             # MTP layers live only on the last pipeline stage, so the tracker is
             # populated there alone. Broadcast to all stages so downstream metric
             # aggregation (which reads rank 0's results) sees them when PP > 1.
-            mtp_metrics = get_mtp_metrics()
+            mtp_metrics = get_mtp_metrics(loss_scale=loss_scale)
             mtp_metrics = broadcast_loss_metrics_from_last_stage(mtp_metrics)
             if mtp_metrics:
                 metrics["mtp_metrics"] = mtp_metrics

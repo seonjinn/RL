@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Any, Optional
 
 import torch
@@ -167,10 +168,14 @@ def get_moe_metrics(
     return metrics
 
 
-def get_mtp_metrics() -> dict[str, Any]:
+def get_mtp_metrics(loss_scale: float = 1.0) -> dict[str, Any]:
     """Returns Multi-Token Prediction (MTP) loss and acceptance rate metrics.
 
     This function reduces MTP metrics across ranks and returns a dictionary of metrics.
+
+    Args:
+        loss_scale: Scale factor to apply to each tracked MTP loss. Invalid values
+            fall back to 1.0 so logging remains well-defined.
 
     Returns:
         dict[str, Any]: A flat dict of metrics. Each MTP layer's loss is returned
@@ -182,7 +187,10 @@ def get_mtp_metrics() -> dict[str, Any]:
 
     metrics: dict[str, Any] = {}
     if "loss_values" in tracker:
-        mtp_losses = tracker["loss_values"].float()
+        if not math.isfinite(loss_scale) or loss_scale <= 0:
+            loss_scale = 1.0
+
+        mtp_losses = tracker["loss_values"].float() * loss_scale
         mtp_corrects = tracker.get("correct_values", torch.zeros_like(mtp_losses))
         mtp_totals = tracker.get("total_values", torch.ones_like(mtp_losses))
         mtp_num_layers = mtp_losses.shape[0]
