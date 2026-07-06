@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "method_order": [
+    "baseline",
+    "eagle3",
+    "pard",
+    "pard2",
+    "dflash",
+    "dflare",
+    "mtp_static",
+    "mtp_dynamic"
+  ],
+  "models": [
+    {
+      "key": "qwen30ba3b",
+      "label": "Qwen3-30B-A3B",
+      "launcher": "swe_sync_rollout",
+      "target_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
+      "topology": {
+        "target_tp": 1,
+        "benchmark_nodes": 1,
+        "distributed_executor_backend": "",
+        "gpu_memory_utilization": 0.86
+      },
+      "profiles": [
+        {
+          "key": "32k",
+          "request_plan_host": "__SCRIPT_DIR__/profiles/swe_sync_32k.json",
+          "request_plan_container": "/workspace/experiment/profiles/swe_sync_32k.json",
+          "context_policy": "native_32k",
+          "max_model_len": 36864,
+          "max_new_tokens": 32768
+        },
+        {
+          "key": "64k",
+          "request_plan_host": "__SCRIPT_DIR__/profiles/swe_sync_64k.json",
+          "request_plan_container": "/workspace/experiment/profiles/swe_sync_64k.json",
+          "context_policy": "yarn4_64k",
+          "max_model_len": 69632,
+          "max_new_tokens": 65536,
+          "max_position_embeddings": 131072,
+          "rope_factor": 4.0,
+          "target_view_name": "qwen30ba3b-target",
+          "draft_view_name": "qwen30ba3b-eagle3-draft"
+        }
+      ],
+      "methods": {
+        "baseline": {
+          "status": "supported",
+          "variants": [
+            "baseline"
+          ]
+        },
+        "eagle3": {
+          "status": "supported",
+          "variants": [
+            "static",
+            "dynamic"
+          ],
+          "draft_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf",
+          "draft_tensor_parallel_size": 1
+        },
+        "pard": {
+          "status": "integration",
+          "reason_code": "runner_support_missing",
+          "reason": "PARD is not launched until the sync rollout runner supports large-model parallel drafting."
+        },
+        "pard2": {
+          "status": "unsupported",
+          "reason_code": "exact_target_checkpoint_missing",
+          "reason": "PARD-2 requires an exact target-compatible checkpoint that is not available for Qwen3-30B-A3B."
+        },
+        "dflash": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlash public checkpoints are Qwen3-8B-specific and unsupported for Qwen3-30B-A3B."
+        },
+        "dflare": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlare public assets are Qwen3-8B-specific and unsupported for Qwen3-30B-A3B."
+        },
+        "mtp_static": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Native MTP rows in this experiment are limited to Nemotron Super and Ultra."
+        },
+        "mtp_dynamic": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Dynamic native MTP rows in this experiment are limited to Nemotron Super and Ultra."
+        }
+      }
+    },
+    {
+      "key": "qwen32",
+      "label": "Qwen3-32B",
+      "launcher": "swe_sync_rollout",
+      "target_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137",
+      "topology": {
+        "target_tp": 2,
+        "benchmark_nodes": 1,
+        "distributed_executor_backend": "",
+        "gpu_memory_utilization": 0.9
+      },
+      "profiles": [
+        {
+          "key": "32k",
+          "request_plan_host": "__SCRIPT_DIR__/profiles/swe_sync_32k.json",
+          "request_plan_container": "/workspace/experiment/profiles/swe_sync_32k.json",
+          "context_policy": "native_32k",
+          "max_model_len": 36864,
+          "max_new_tokens": 32768
+        },
+        {
+          "key": "64k",
+          "request_plan_host": "__SCRIPT_DIR__/profiles/swe_sync_64k.json",
+          "request_plan_container": "/workspace/experiment/profiles/swe_sync_64k.json",
+          "context_policy": "yarn4_64k",
+          "max_model_len": 69632,
+          "max_new_tokens": 65536,
+          "max_position_embeddings": 131072,
+          "rope_factor": 4.0,
+          "target_view_name": "qwen32-target",
+          "draft_view_name": "qwen32-eagle3-draft"
+        }
+      ],
+      "methods": {
+        "baseline": {
+          "status": "supported",
+          "variants": [
+            "baseline"
+          ]
+        },
+        "eagle3": {
+          "status": "supported",
+          "variants": [
+            "static",
+            "dynamic"
+          ],
+          "draft_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47",
+          "draft_tensor_parallel_size": 1
+        },
+        "pard": {
+          "status": "integration",
+          "reason_code": "runner_support_missing",
+          "reason": "PARD is not launched until the sync rollout runner supports large-model parallel drafting."
+        },
+        "pard2": {
+          "status": "unsupported",
+          "reason_code": "exact_target_checkpoint_missing",
+          "reason": "PARD-2 requires an exact target-compatible checkpoint that is not available for Qwen3-32B."
+        },
+        "dflash": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlash public checkpoints are Qwen3-8B-specific and unsupported for Qwen3-32B."
+        },
+        "dflare": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlare public assets are Qwen3-8B-specific and unsupported for Qwen3-32B."
+        },
+        "mtp_static": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Native MTP rows in this experiment are limited to Nemotron Super and Ultra."
+        },
+        "mtp_dynamic": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Dynamic native MTP rows in this experiment are limited to Nemotron Super and Ultra."
+        }
+      }
+    },
+    {
+      "key": "qwen235b",
+      "label": "Qwen3-235B-A22B",
+      "launcher": "swe_sync_rollout",
+      "target_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65",
+      "topology": {
+        "target_tp": 8,
+        "benchmark_nodes": 2,
+        "distributed_executor_backend": "ray",
+        "gpu_memory_utilization": 0.94
+      },
+      "profiles": [
+        {
+          "key": "32k",
+          "request_plan_host": "__SCRIPT_DIR__/profiles/swe_sync_32k.json",
+          "request_plan_container": "/workspace/experiment/profiles/swe_sync_32k.json",
+          "context_policy": "native_32k",
+          "max_model_len": 36864,
+          "max_new_tokens": 32768
+        },
+        {
+          "key": "64k",
+          "request_plan_host": "__SCRIPT_DIR__/profiles/swe_sync_64k.json",
+          "request_plan_container": "/workspace/experiment/profiles/swe_sync_64k.json",
+          "context_policy": "yarn4_64k",
+          "max_model_len": 69632,
+          "max_new_tokens": 65536,
+          "max_position_embeddings": 131072,
+          "rope_factor": 4.0,
+          "target_view_name": "qwen235b-target",
+          "draft_view_name": "qwen235b-eagle3-draft"
+        }
+      ],
+      "methods": {
+        "baseline": {
+          "status": "supported",
+          "variants": [
+            "baseline"
+          ]
+        },
+        "eagle3": {
+          "status": "supported",
+          "variants": [
+            "static",
+            "dynamic"
+          ],
+          "draft_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba",
+          "draft_tensor_parallel_size": 1
+        },
+        "pard": {
+          "status": "integration",
+          "reason_code": "runner_support_missing",
+          "reason": "PARD is not launched until the sync rollout runner supports large-model parallel drafting."
+        },
+        "pard2": {
+          "status": "unsupported",
+          "reason_code": "not_validated",
+          "reason": "Exact target-compatible PARD-2 support is not validated for Qwen3-235B-A22B."
+        },
+        "dflash": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlash public checkpoints are Qwen3-8B-specific and unsupported for Qwen3-235B-A22B."
+        },
+        "dflare": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlare public assets are Qwen3-8B-specific and unsupported for Qwen3-235B-A22B."
+        },
+        "mtp_static": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Native MTP rows in this experiment are limited to Nemotron Super and Ultra."
+        },
+        "mtp_dynamic": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Dynamic native MTP rows in this experiment are limited to Nemotron Super and Ultra."
+        }
+      }
+    },
+    {
+      "key": "ultra",
+      "label": "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+      "launcher": "nemotron_sync_rl_mtp",
+      "target_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/snapshots/624ba927cfbef0427354998700de3d51173c8c04",
+      "topology": {
+        "target_tp": 8,
+        "nodes": 2,
+        "segment": 2,
+        "distributed_executor_backend": "ray",
+        "enable_expert_parallel": true,
+        "mamba_ssm_cache_dtype": "float16",
+        "enable_stochastic_rounding": true,
+        "mamba_philox_rounds": 5,
+        "model_loader_threads": 96,
+        "disable_fuse_allreduce_rms": true,
+        "gpu_memory_utilization": 0.9,
+        "static_k": 5,
+        "dynamic_schedule": "1:4:5,5:8:3,9:16:2,17:256:1"
+      },
+      "profiles": [
+        {
+          "key": "sync_rl_math",
+          "context_policy": "builtin_smoke_or_pinned_math_dataset",
+          "smoke": {
+            "num_prompts": 4,
+            "samples_per_prompt": 4,
+            "rollout_batches": 2,
+            "max_prompt_tokens": 1024,
+            "max_new_tokens": 128,
+            "engine_max_num_seqs": 16,
+            "time_limit": "02:00:00"
+          },
+          "full": {
+            "num_prompts": 16,
+            "samples_per_prompt": 16,
+            "rollout_batches": 3,
+            "max_prompt_tokens": 4096,
+            "max_new_tokens": 16384,
+            "engine_max_num_seqs": 64,
+            "time_limit": "08:00:00"
+          }
+        }
+      ],
+      "methods": {
+        "baseline": {
+          "status": "supported",
+          "variants": [
+            "baseline"
+          ]
+        },
+        "eagle3": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Nemotron Super and Ultra launch only baseline, native MTP, and dynamic native MTP rows."
+        },
+        "pard": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Nemotron Super and Ultra launch only baseline, native MTP, and dynamic native MTP rows."
+        },
+        "pard2": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Nemotron Super and Ultra launch only baseline, native MTP, and dynamic native MTP rows."
+        },
+        "dflash": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlash public checkpoints are Qwen3-8B-specific and unsupported for Nemotron Ultra."
+        },
+        "dflare": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlare public assets are Qwen3-8B-specific and unsupported for Nemotron Ultra."
+        },
+        "mtp_static": {
+          "status": "supported",
+          "variants": [
+            "mtp_static"
+          ]
+        },
+        "mtp_dynamic": {
+          "status": "supported",
+          "variants": [
+            "mtp_dynamic"
+          ]
+        }
+      }
+    },
+    {
+      "key": "super",
+      "label": "NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+      "launcher": "nemotron_sync_rl_mtp",
+      "target_checkpoint": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
+      "topology": {
+        "target_tp": 2,
+        "nodes": 1,
+        "segment": 1,
+        "distributed_executor_backend": "",
+        "enable_expert_parallel": false,
+        "mamba_ssm_cache_dtype": "float32",
+        "enable_stochastic_rounding": false,
+        "mamba_philox_rounds": "",
+        "model_loader_threads": 48,
+        "disable_fuse_allreduce_rms": false,
+        "gpu_memory_utilization": 0.9,
+        "static_k": 3,
+        "dynamic_schedule": "1:4:3,5:8:2,9:256:1"
+      },
+      "profiles": [
+        {
+          "key": "sync_rl_math",
+          "context_policy": "builtin_smoke_or_pinned_math_dataset",
+          "smoke": {
+            "num_prompts": 4,
+            "samples_per_prompt": 4,
+            "rollout_batches": 2,
+            "max_prompt_tokens": 1024,
+            "max_new_tokens": 128,
+            "engine_max_num_seqs": 16,
+            "time_limit": "02:00:00"
+          },
+          "full": {
+            "num_prompts": 16,
+            "samples_per_prompt": 16,
+            "rollout_batches": 3,
+            "max_prompt_tokens": 4096,
+            "max_new_tokens": 16384,
+            "engine_max_num_seqs": 64,
+            "time_limit": "08:00:00"
+          }
+        }
+      ],
+      "methods": {
+        "baseline": {
+          "status": "supported",
+          "variants": [
+            "baseline"
+          ]
+        },
+        "eagle3": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Nemotron Super and Ultra launch only baseline, native MTP, and dynamic native MTP rows."
+        },
+        "pard": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Nemotron Super and Ultra launch only baseline, native MTP, and dynamic native MTP rows."
+        },
+        "pard2": {
+          "status": "unsupported",
+          "reason_code": "nemotron_baseline_native_mtp_only",
+          "reason": "Nemotron Super and Ultra launch only baseline, native MTP, and dynamic native MTP rows."
+        },
+        "dflash": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlash public checkpoints are Qwen3-8B-specific and unsupported for Nemotron Super."
+        },
+        "dflare": {
+          "status": "unsupported",
+          "reason_code": "qwen3_8b_public_asset_only",
+          "reason": "DFlare public assets are Qwen3-8B-specific and unsupported for Nemotron Super."
+        },
+        "mtp_static": {
+          "status": "supported",
+          "variants": [
+            "mtp_static"
+          ]
+        },
+        "mtp_dynamic": {
+          "status": "supported",
+          "variants": [
+            "mtp_dynamic"
+          ]
+        }
+      }
+    }
+  ]
+}

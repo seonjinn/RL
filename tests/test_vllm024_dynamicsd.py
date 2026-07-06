@@ -89,6 +89,12 @@ def run_dry(script_name: str, **env_overrides: str) -> str:
     return completed.stdout
 
 
+def load_model_method_matrix() -> dict[str, object]:
+    return json.loads(
+        (EXPERIMENT / "model_method_matrix.json").read_text(encoding="utf-8")
+    )
+
+
 def extract_run_benchmark_script(output: str, variant: str) -> str:
     start = f"# BEGIN run_benchmark.sh {variant}\n"
     end = f"# END run_benchmark.sh {variant}\n"
@@ -1381,6 +1387,60 @@ def test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs() -> 
     assert "pinned RL math dataset" not in output
 
 
+def test_model_method_matrix_has_unique_large_model_profile_keys() -> None:
+    matrix = load_model_method_matrix()
+
+    assert matrix["schema_version"] == 1
+    seen: set[tuple[str, str, str]] = set()
+    total = 0
+    for model in matrix["models"]:
+        for profile in model["profiles"]:
+            for method_key in matrix["method_order"]:
+                key = (model["key"], profile["key"], method_key)
+                assert key not in seen
+                seen.add(key)
+                total += 1
+
+    assert len(seen) == total
+    qwen235 = next(item for item in matrix["models"] if item["key"] == "qwen235b")
+    profile64 = next(item for item in qwen235["profiles"] if item["key"] == "64k")
+    ultra = next(item for item in matrix["models"] if item["key"] == "ultra")
+
+    assert qwen235["topology"]["target_tp"] == 8
+    assert profile64["context_policy"] == "yarn4_64k"
+    assert profile64["rope_factor"] == 4.0
+    assert profile64["max_position_embeddings"] == 131072
+    assert ultra["topology"]["nodes"] == 2
+    assert ultra["topology"]["segment"] == 2
+    assert ultra["topology"]["model_loader_threads"] == 96
+
+
+def test_large_model_matrix_rejects_qwen8_only_dflash() -> None:
+    matrix = load_model_method_matrix()
+    qwen32 = next(item for item in matrix["models"] if item["key"] == "qwen32")
+
+    assert qwen32["methods"]["dflash"]["status"] == "unsupported"
+    assert qwen32["methods"]["dflash"]["reason_code"] == "qwen3_8b_public_asset_only"
+
+
+def test_large_model_matrix_marks_pard_and_pard2_per_approved_compatibility() -> None:
+    matrix = load_model_method_matrix()
+    qwen30 = next(item for item in matrix["models"] if item["key"] == "qwen30ba3b")
+    qwen32 = next(item for item in matrix["models"] if item["key"] == "qwen32")
+    qwen235 = next(item for item in matrix["models"] if item["key"] == "qwen235b")
+    ultra = next(item for item in matrix["models"] if item["key"] == "ultra")
+
+    assert qwen30["methods"]["pard"]["status"] == "integration"
+    assert qwen30["methods"]["pard"]["reason_code"] == "runner_support_missing"
+    assert qwen32["methods"]["pard2"]["status"] == "unsupported"
+    assert qwen32["methods"]["pard2"]["reason_code"] == "exact_target_checkpoint_missing"
+    assert qwen235["methods"]["pard2"]["status"] == "unsupported"
+    assert qwen235["methods"]["pard2"]["reason_code"] == "not_validated"
+    assert ultra["methods"]["eagle3"]["status"] == "unsupported"
+    assert ultra["methods"]["mtp_static"]["status"] == "supported"
+    assert ultra["methods"]["mtp_dynamic"]["status"] == "supported"
+
+
 def test_swe_sync_rollout_64k_uses_matched_yarn_target_and_draft_views() -> None:
     output = run_dry(
         "submit_swe_sync_rollout_matrix.sh",
@@ -1527,9 +1587,31 @@ def test_swe_sync_rollout_dry_run_does_not_call_sbatch_or_mutate_dirs(
     assert str(view_root / "qwen32-target") in completed.stdout
     assert str(view_root / "qwen32-eagle3-draft") in completed.stdout
     assert "run_benchmark.sh" in completed.stdout
+    manifest = result_root / "plan-mode" / "jobs.tsv"
+    manifest_lines = manifest.read_text(encoding="utf-8").splitlines()
+
     assert not sbatch_log.exists()
     assert not view_root.exists()
-    assert not result_root.exists()
+    assert manifest_lines[0] == (
+        "status\tmodel_key\tprofile_key\tmethod\tvariant\ttemperature\trun_dir\treason_code\treason"
+    )
+    assert any(
+        line.startswith("SUPPORTED\tqwen32\t64k\tbaseline\tbaseline\t0.0\t")
+        for line in manifest_lines
+    )
+    assert any("\tINTEGRATION\t" not in line for line in manifest_lines[1:])
+    assert any(
+        line.startswith(
+            "INTEGRATION\tqwen32\t64k\tpard\t-\t0.0\t-\trunner_support_missing\t"
+        )
+        for line in manifest_lines
+    )
+    assert any(
+        line.startswith(
+            "UNSUPPORTED\tqwen32\t64k\tdflash\t-\t0.0\t-\tqwen3_8b_public_asset_only\t"
+        )
+        for line in manifest_lines
+    )
 
 
 def test_swe_sync_rollout_test_only_invokes_sbatch_and_cleans_temp_artifacts(
@@ -1597,7 +1679,11 @@ def test_swe_sync_rollout_test_only_invokes_sbatch_and_cleans_temp_artifacts(
     assert not script_paths[0].exists()
     assert not script_paths[0].parent.exists()
     assert not view_root.exists()
-    assert not result_root.exists()
+    manifest = result_root / "test-only" / "jobs.tsv"
+    assert manifest.exists()
+    assert "INTEGRATION\tqwen32\t64k\tpard\t-\t0.0" in manifest.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral() -> None:
@@ -1646,6 +1732,42 @@ def test_nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16() -> None:
     assert "args+=(--mode mtp_static)" in output
     assert "args+=(--mode mtp_dynamic)" in output
     assert "--gres" not in output
+
+
+def test_nemotron_sync_rl_wrapper_records_unsupported_matrix_rows(
+    tmp_path: Path,
+) -> None:
+    result_root = tmp_path / "nemotron-sync"
+    output = run_dry(
+        "submit_nemotron_sync_rl_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        MODELS="ultra",
+        RUN_ID="sync-bf16-matrix",
+        RESULT_ROOT=str(result_root),
+    )
+    manifest = result_root / "jobs.tsv"
+    manifest_lines = manifest.read_text(encoding="utf-8").splitlines()
+
+    assert output.count("[DRY-RUN] sync_variant=") == 3
+    assert manifest_lines[0] == (
+        "status\tmodel_key\tprofile_key\tmethod\tvariant\trun_dir\treason_code\treason"
+    )
+    assert any(
+        line.startswith("SUPPORTED\tultra\tsync_rl_math\tmtp_static\tmtp_static\t")
+        for line in manifest_lines
+    )
+    assert any(
+        line.startswith(
+            "UNSUPPORTED\tultra\tsync_rl_math\teagle3\t-\t-\tnemotron_baseline_native_mtp_only\t"
+        )
+        for line in manifest_lines
+    )
+    assert any(
+        line.startswith(
+            "UNSUPPORTED\tultra\tsync_rl_math\tdflash\t-\t-\tqwen3_8b_public_asset_only\t"
+        )
+        for line in manifest_lines
+    )
 
 
 def test_nemorl_perfcfg_dry_run_preserves_per_engine_recipe_shapes() -> None:

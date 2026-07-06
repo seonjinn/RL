@@ -1,189 +1,205 @@
-# Task 3 Report: Normalize vLLM-Native Profile Results
+# Task 3 Report: Model and Drafter Matrix
 
 ## Scope
 
-- Modified `scripts/vllm024_profile_report.py`
-- Modified `tests/test_vllm024_profile_report.py`
+Owned files:
 
-## Review-Fix Summary
+- `experiments/vllm_024_dynamicsd/model_method_matrix.json`
+- `experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh`
+- `experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh`
+- `tests/test_vllm024_dynamicsd.py`
 
-Implemented the Task 3 review findings in the owned files only:
+Unrelated changes were left untouched.
 
-- exact baseline matching now preserves `runtime_family`, full runtime
-  provenance, exact target checkpoint path, and a normalized
-  `setup_signature` built from non-speculative config
-- baseline matching now prefers `complete` over `partial`, rejects remaining
-  ambiguous duplicate exact keys, and merges with `validate="many_to_one"`
-- loading, matching, and rendering are explicitly limited to
-  `runtime_family == "vllm_native"` and ignore AngelSlim payloads
-- synthetic coverage now exercises 64K/128K profiles, setup omission
-  detection, runtime provenance mismatches, duplicate baselines, AngelSlim
-  exclusion, variable-length job IDs, and HTML escaping
-- malformed or missing `K` now renders as `n/a`
-- pyright is clean for both owned files
-- top-level `batch_sizes` and `prompt_count_loaded` are excluded from
-  `setup_signature`, so targeted retry payloads can match full-sweep baselines
-  on per-row batch size while nested setup differences still break the match
-- setup normalization exclusions now apply only to the top-level config, so
-  nested fields with the same names are preserved in the normalized signature
-- real-input integration tests now skip cleanly when the 60-file corpus is not
-  present, while synthetic fixtures fully cover the matching behavior
+## Binding Compatibility Facts Applied
 
-## Red Step
+- Qwen3-30B-A3B, Qwen3-32B, and Qwen3-235B-A22B launch only supported
+  baseline and Eagle-3 rows from this matrix.
+- PARD is tracked as `INTEGRATION` for the large Qwen sync-rollout matrix and
+  is not silently launched before the runner supports it.
+- PARD-2 is `UNSUPPORTED` unless an exact target-compatible checkpoint exists;
+  it is unsupported for Qwen3-30B-A3B and Qwen3-32B, and not validated for
+  Qwen3-235B-A22B.
+- DFlash and DFlare public assets are treated as Qwen3-8B-specific and
+  unsupported for the large Qwen and Nemotron rows here.
+- Nemotron Super and Ultra launch only baseline, native MTP, and dynamic
+  native MTP rows.
+- Pinned checkpoints, topologies, and context policies are represented in the
+  JSON matrix and consumed by the wrappers.
 
-Expanded the focused test file first to encode the review requirements before
-changing the implementation.
+## RED
+
+I added focused tests first, then ran them before creating the matrix or
+wrapper manifest behavior.
 
 Command:
 
 ```bash
-python3 -m pytest -q tests/test_vllm024_profile_report.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'model_method_matrix or qwen8_only_dflash or approved_compatibility or dry_run_does_not_call_sbatch_or_mutate_dirs or test_only_invokes_sbatch_and_cleans_temp_artifacts or nemotron_sync_rl_wrapper_records_unsupported_matrix_rows'
 ```
 
 Output:
 
 ```text
-FFFFFF.                                                                  [100%]
-6 failed, 1 passed in 0.98s
+6 failed, 74 deselected in 1.45s
 ```
 
-The failures were the expected contract gaps:
+Expected failures:
 
-- missing `runtime_family`, `runtime_provenance`, `model_checkpoint`, and
-  `setup_signature`
-- AngelSlim rows were still loaded
-- exact matching was too weak and allowed mismatched setup/runtime rows to
-  bind to baselines
-- duplicate baselines were not deduplicated or rejected
-- render still attempted `int(row.k)` and crashed on missing `K`
-- `setup_signature` still included top-level `batch_sizes` and
-  `prompt_count_loaded`, which blocked targeted retry matching
-- recursive key exclusion also erased nested fields that should have remained
-  part of exact setup matching
-- real-input tests were hard-pinned to the local 60-file corpus
+- `model_method_matrix.json` did not exist
+- SWE dry-run/test-only had no wrapper-level `jobs.tsv`
+- Nemotron dry-run had no wrapper-level `jobs.tsv`
 
 ## Implementation
 
-Reworked `scripts/vllm024_profile_report.py` around the review findings:
+### Matrix JSON
 
-### Loading
+Created `model_method_matrix.json` with:
 
-- detect `runtime_family` from the payload runtime object
-- ignore non-vLLM-native payloads during `load_profile_results`
-- normalize one row per persisted batch result
-- preserve:
-  - `runtime_family`
-  - `runtime` display label
-  - `runtime_provenance` as normalized runtime JSON excluding job-local env
-    noise (`SLURM_JOB_ID`, `CUDA_VISIBLE_DEVICES`)
-  - `model_checkpoint` as the exact target checkpoint path
-  - `setup_signature` as normalized config JSON excluding only
-    speculative-method-specific knobs:
-    `draft_model`, `mode`, `speculative_config`, `tag`
+- schema version and stable method order
+- pinned Qwen3-30B-A3B, Qwen3-32B, Qwen3-235B-A22B checkpoints
+- pinned Nemotron Super and Ultra checkpoints
+- pinned topology fields:
+  - Qwen target TP and rollout node counts
+  - Nemotron TP, nodes, segment, distributed backend, Mamba and MoE settings
+- pinned context policies:
+  - Qwen native 32K and YaRN factor-4 64K rollout profiles
+  - Nemotron smoke/full sync-RL math rollout defaults
+- compatibility status for each model/method pair with `supported`,
+  `integration`, or `unsupported`
+- structured `reason_code` plus human-readable reason text
 
-### Matching
+### SWE Wrapper
 
-- exact baseline key now uses:
-  `runtime_family, runtime_provenance, model_checkpoint, domain, temperature, top_p, batch_size, isl, osl, context_profile, position_encoding, cuda_graph, setup_signature`
-- baseline lookup deterministically prefers `complete` over `partial`
-- any remaining duplicate exact baseline keys raise:
-  `ValueError("ambiguous duplicate baseline exact keys")`
-- merge now uses `validate="many_to_one"` to block row multiplication
+Reworked `submit_swe_sync_rollout_matrix.sh` to:
 
-### Rendering
+- load model/profile settings from the matrix
+- emit only supported `baseline`, `static`, and `dynamic` rows
+- keep Qwen large-model PARD as `INTEGRATION` in `jobs.tsv`
+- keep unsupported PARD-2, DFlash, DFlare, and Nemotron-only MTP rows in
+  `jobs.tsv`
+- materialize the matched 64K YaRN target and Eagle-3 draft views from the
+  matrix policy
+- fall back to a local temp manifest root during dry-run/test-only when the
+  default result root is not writable
 
-- render filters to `runtime_family == "vllm_native"`
-- missing or malformed `K` renders as `n/a`
-- source paths and text cells are HTML-escaped
-- AngelSlim rows are excluded even if they are passed in a mixed DataFrame
+### Nemotron Wrapper
 
-### Second Review Adjustments
+Reworked `submit_nemotron_sync_rl_mtp_matrix.sh` to:
 
-- `setup_signature` now excludes `batch_sizes` and `prompt_count_loaded` only
-  at the top-level config, alongside the speculative-only knobs already
-  excluded
-- nested config values are normalized recursively without applying the
-  top-level exclusion list to child dictionaries
-- the synthetic test suite now proves:
-  - targeted retry `[16, 32]` rows match a full-sweep baseline at row batches
-    `16` and `32`
-  - a nested setup difference with the same field names still prevents a match
-  - real-input integration tests skip cleanly when the 60-file corpus is not
-    available locally
+- load pinned Super/Ultra topology and rollout defaults from the matrix
+- emit only supported `baseline`, `mtp_static`, and `mtp_dynamic` rows
+- record unsupported Eagle-3, PARD, PARD-2, DFlash, and DFlare rows in
+  `jobs.tsv`
+- fall back to a local temp manifest root during dry-run/test-only when the
+  default result root is not writable
 
-## Green Step
+## Focused GREEN
 
 Command:
 
 ```bash
-python3 -m pytest -q tests/test_vllm024_profile_report.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'model_method_matrix or qwen8_only_dflash or approved_compatibility or dry_run_does_not_call_sbatch_or_mutate_dirs or test_only_invokes_sbatch_and_cleans_temp_artifacts or nemotron_sync_rl_wrapper_records_unsupported_matrix_rows'
 ```
 
 Output:
 
 ```text
-.......                                                                  [100%]
-7 passed in 0.54s
+6 passed, 74 deselected in 1.68s
 ```
 
-Second review verification:
+## Broader Task Verification
+
+Command:
 
 ```bash
-python3 -m pytest -q tests/test_vllm024_profile_report.py
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'swe_sync_rollout_matrix_renders_request_plan_and_response_outputs or swe_sync_rollout_64k_uses_matched_yarn_target_and_draft_views or swe_sync_rollout_non_smoke_defaults_to_primary_four_samples or swe_sync_rollout_full_contract_override_uses_sixteen_samples or nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16 or model_method_matrix or qwen8_only_dflash or approved_compatibility or dry_run_does_not_call_sbatch_or_mutate_dirs or test_only_invokes_sbatch_and_cleans_temp_artifacts or nemotron_sync_rl_wrapper_records_unsupported_matrix_rows'
 ```
 
 Output:
 
 ```text
-........                                                                 [100%]
-8 passed in 0.69s
+11 passed, 69 deselected in 3.34s
 ```
 
-## Additional Verification
+## Shell Dry-Run Evidence
 
-Pyright:
+### SWE large-model matrix
+
+Command:
 
 ```bash
-pyright scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/task3-swe-proof.XXXXXX")
+RESULT_ROOT="$tmpdir/results" RUN_ID='task3-swe-proof' DRY_RUN=true \
+CLUSTER=lyris REQUIRE_GIT_PULL=false MODELS='qwen32' REQUEST_PROFILES='64k' \
+TEMPERATURES='0.0' VARIANTS='baseline static dynamic' \
+bash experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
 ```
 
-Output:
+Observed manifest excerpt:
 
 ```text
-0 errors, 0 warnings, 0 informations
+status	model_key	profile_key	method	variant	temperature	run_dir	reason_code	reason
+INTEGRATION	qwen32	64k	pard	-	0.0	-	runner_support_missing	...
+UNSUPPORTED	qwen32	64k	pard2	-	0.0	-	exact_target_checkpoint_missing	...
+UNSUPPORTED	qwen32	64k	dflash	-	0.0	-	qwen3_8b_public_asset_only	...
+UNSUPPORTED	qwen32	64k	dflare	-	0.0	-	qwen3_8b_public_asset_only	...
+SUPPORTED	qwen32	64k	baseline	baseline	0.0	.../matrix/baseline	-	-
+SUPPORTED	qwen32	64k	eagle3	static	0.0	.../matrix/static	-	-
+SUPPORTED	qwen32	64k	eagle3	dynamic	0.0	.../matrix/dynamic	-	-
 ```
 
-Real-input smoke check on the 60 intentionally untracked Task 4 JSON files:
+Observed stdout facts:
+
+- `materialize_long_context_model_views.py` is rendered for 64K
+- `qwen32-target` and `qwen32-eagle3-draft` are pinned
+- only supported `sync_variant=` rows are emitted
+- no `sbatch` execution occurs in dry-run
+
+### Nemotron matrix
+
+Command:
 
 ```bash
-python3 - <<'PY'
-from pathlib import Path
-from scripts.vllm024_profile_report import load_profile_results, match_profile_baselines
-root = Path('experiments/vllm_024_dynamicsd/report/20260704_vllm_native_completed')
-loaded = load_profile_results(sorted(root.rglob('*.json')))
-rows = match_profile_baselines(loaded)
-print('loaded_rows', len(loaded))
-print('matched_rows', len(rows))
-print('runtime_family', loaded['runtime_family'].value_counts().to_dict())
-print('source_status', loaded['source_status'].value_counts().to_dict())
-print('profiles', loaded['context_profile'].value_counts().to_dict())
-print('methods', loaded['method'].value_counts().to_dict())
-print('unmatched_nonbaseline', int(rows.loc[rows['method'].ne('baseline') & rows['throughput_speedup'].isna()].shape[0]))
-print('partial_matched', int(rows.loc[rows['source_status'].eq('partial') & rows['throughput_speedup'].notna()].shape[0]))
-PY
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/task3-nemotron-proof.XXXXXX")
+RESULT_ROOT="$tmpdir/results" RUN_ID='task3-nemotron-proof' DRY_RUN=true \
+CLUSTER=ptyche REQUIRE_GIT_PULL=false MODELS='ultra super' \
+bash experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh
+```
+
+Observed manifest excerpt:
+
+```text
+status	model_key	profile_key	method	variant	run_dir	reason_code	reason
+UNSUPPORTED	ultra	sync_rl_math	eagle3	-	-	nemotron_baseline_native_mtp_only	...
+UNSUPPORTED	ultra	sync_rl_math	dflash	-	-	qwen3_8b_public_asset_only	...
+SUPPORTED	ultra	sync_rl_math	baseline	baseline	.../baseline	-	-
+SUPPORTED	ultra	sync_rl_math	mtp_static	mtp_static	.../mtp_static	-	-
+SUPPORTED	ultra	sync_rl_math	mtp_dynamic	mtp_dynamic	.../mtp_dynamic	-	-
+UNSUPPORTED	super	sync_rl_math	eagle3	-	-	nemotron_baseline_native_mtp_only	...
+SUPPORTED	super	sync_rl_math	baseline	baseline	.../baseline	-	-
+SUPPORTED	super	sync_rl_math	mtp_static	mtp_static	.../mtp_static	-	-
+SUPPORTED	super	sync_rl_math	mtp_dynamic	mtp_dynamic	.../mtp_dynamic	-	-
+```
+
+Observed stdout facts:
+
+- Ultra still renders TP8, two-node Ray-backed rows
+- Super still renders TP2 single-node rows
+- only supported `sync_variant=` rows are emitted
+
+## Full Requested Test Run
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
 ```
 
 Output:
 
 ```text
-loaded_rows 154
-matched_rows 154
-runtime_family {'vllm_native': 154}
-source_status {'complete': 136, 'partial': 18}
-profiles {'Native 32K': 114, 'YaRN total-128K': 20, 'YaRN 64K': 20}
-methods {'baseline': 32, 'dflash': 32, 'pard': 32, 'suffix': 32, 'pard2': 26}
-unmatched_nonbaseline 0
-partial_matched 18
+80 passed in 8.39s
 ```
 
 ## Self-Review
@@ -191,26 +207,22 @@ partial_matched 18
 Commands:
 
 ```bash
-git diff --check -- scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py .superpowers/sdd/task-3-report.md
-git status --short -- scripts/vllm024_profile_report.py tests/test_vllm024_profile_report.py .superpowers/sdd/task-3-report.md
+bash -n experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+bash -n experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh
+git diff --check -- experiments/vllm_024_dynamicsd/model_method_matrix.json experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh tests/test_vllm024_dynamicsd.py .superpowers/sdd/task-3-report.md
 ```
 
-Outputs:
+Results:
 
-```text
-git diff --check:
-[no output]
+- both shell syntax checks passed
+- `git diff --check` produced no output
+- restored executable bits on both wrapper scripts after patching
 
-git status --short:
- M scripts/vllm024_profile_report.py
- M tests/test_vllm024_profile_report.py
- M .superpowers/sdd/task-3-report.md
+## Commit
+
+Planned command:
+
+```bash
+git add experiments/vllm_024_dynamicsd/model_method_matrix.json experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh experiments/vllm_024_dynamicsd/submit_nemotron_sync_rl_mtp_matrix.sh tests/test_vllm024_dynamicsd.py .superpowers/sdd/task-3-report.md
+git commit -s -m "feat: define supported SpecDec model matrix"
 ```
-
-Notes:
-
-- The 60 raw JSON files under
-  `experiments/vllm_024_dynamicsd/report/20260704_vllm_native_completed/`
-  were read for verification only and were not staged or modified.
-- The task remains scoped to the owned report module, owned tests, and the
-  requested task report.

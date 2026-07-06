@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MATRIX_FILE="${SCRIPT_DIR}/model_method_matrix.json"
 LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 MODELS="${MODELS:-qwen32}"
@@ -19,9 +20,21 @@ DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
 
+MANIFEST_ROOT="${RESULT_ROOT}/${RUN_ID_BASE}"
+MANIFEST="${MANIFEST_ROOT}/jobs.tsv"
+
 render_command() {
   printf "%q " "$@"
   printf "\n"
+}
+
+variant_requested() {
+  [[ " ${VARIANTS} " == *" $1 "* ]]
+}
+
+record_manifest_row() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" >>"${MANIFEST}"
 }
 
 materialize_long_context_views() {
@@ -29,15 +42,17 @@ materialize_long_context_views() {
   local target_source="$2"
   local draft_view_name="$3"
   local draft_source="$4"
+  local max_position_embeddings="$5"
+  local rope_factor="$6"
   local command=(
     python3
     "${SCRIPT_DIR}/materialize_long_context_model_views.py"
     --view-root
     "${LONG_CONTEXT_VIEW_ROOT}"
     --max-position-embeddings
-    131072
+    "${max_position_embeddings}"
     --rope-factor
-    4.0
+    "${rope_factor}"
     --model-view
     "${target_view_name}=${target_source}"
     --model-view
@@ -55,72 +70,176 @@ materialize_long_context_views() {
   "${command[@]}"
 }
 
+load_qwen_matrix_entry() {
+  local model_key="$1"
+  local profile_key="$2"
+  python3 - "$MATRIX_FILE" "$SCRIPT_DIR" "$model_key" "$profile_key" <<'PY'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+matrix_path = Path(sys.argv[1])
+script_dir = sys.argv[2]
+model_key = sys.argv[3]
+profile_key = sys.argv[4]
+matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+model = next(
+    item
+    for item in matrix["models"]
+    if item["launcher"] == "swe_sync_rollout" and item["key"] == model_key
+)
+profile = next(item for item in model["profiles"] if item["key"] == profile_key)
+
+
+def emit(name: str, value: object) -> None:
+    if isinstance(value, bool):
+        text = "true" if value else "false"
+    elif value is None:
+        text = ""
+    else:
+        text = str(value)
+    print(f"{name}={shlex.quote(text)}")
+
+
+emit("model_source", model["target_checkpoint"])
+emit("draft_model_source", model["methods"]["eagle3"].get("draft_checkpoint", ""))
+emit("target_tp", model["topology"]["target_tp"])
+emit("benchmark_nodes", model["topology"]["benchmark_nodes"])
+emit(
+    "distributed_backend",
+    model["topology"].get("distributed_executor_backend", ""),
+)
+emit("gpu_memory_utilization", model["topology"]["gpu_memory_utilization"])
+emit(
+    "request_plan_host",
+    profile["request_plan_host"].replace("__SCRIPT_DIR__", script_dir),
+)
+emit("request_plan_container", profile["request_plan_container"])
+emit("profile_context_policy", profile["context_policy"])
+emit("max_model_len", profile["max_model_len"])
+emit("max_new_tokens", profile["max_new_tokens"])
+emit("max_position_embeddings", profile.get("max_position_embeddings", ""))
+emit("rope_factor", profile.get("rope_factor", ""))
+emit("target_view_name", profile.get("target_view_name", ""))
+emit("draft_view_name", profile.get("draft_view_name", ""))
+for method in matrix["method_order"]:
+    entry = model["methods"][method]
+    emit(f"method_{method}_status", entry["status"])
+    emit(f"method_{method}_reason_code", entry.get("reason_code", ""))
+    emit(f"method_{method}_reason", entry.get("reason", ""))
+    emit(f"method_{method}_variants", " ".join(entry.get("variants", [])))
+PY
+}
+
 if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" && "${REQUIRE_GIT_PULL}" == "true" ]]; then
   git -C "${SCRIPT_DIR}" pull --ff-only
 fi
 
-for model_key in ${MODELS}; do
-  case "${model_key}" in
-    qwen30ba3b)
-      model_source="${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39"
-      draft_model_source="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
-      target_tp=1
-      gpu_memory_utilization=0.86
-      ;;
-    qwen32)
-      model_source="${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137"
-      draft_model_source="${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47"
-      target_tp=2
-      gpu_memory_utilization=0.90
-      ;;
-    qwen235b)
-      model_source="${HF_HOME}/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65"
-      draft_model_source="${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba"
-      target_tp=8
-      gpu_memory_utilization=0.94
-      ;;
-    *)
-      echo "Unsupported model: ${model_key}" >&2
-      exit 2
-      ;;
-  esac
-
-  benchmark_nodes=$(((target_tp + 3) / 4))
-  distributed_backend=""
-  if (( benchmark_nodes > 1 )); then
-    distributed_backend=ray
+if ! mkdir -p "${MANIFEST_ROOT}" 2>/dev/null; then
+  if [[ "${DRY_RUN}" == "true" || "${TEST_ONLY}" == "true" ]]; then
+    MANIFEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vllm024-swe-matrix.XXXXXX")"
+    MANIFEST="${MANIFEST_ROOT}/jobs.tsv"
+  else
+    mkdir -p "${MANIFEST_ROOT}"
   fi
+fi
+printf 'status\tmodel_key\tprofile_key\tmethod\tvariant\ttemperature\trun_dir\treason_code\treason\n' >"${MANIFEST}"
 
+for model_key in ${MODELS}; do
   for profile in ${REQUEST_PROFILES}; do
-    case "${profile}" in
-      32k)
-        request_plan_host="${SCRIPT_DIR}/profiles/swe_sync_32k.json"
-        request_plan_container="/workspace/experiment/profiles/swe_sync_32k.json"
-        max_model_len=36864
-        max_new_tokens=32768
-        model="${model_source}"
-        draft_model="${draft_model_source}"
-        ;;
-      64k)
-        request_plan_host="${SCRIPT_DIR}/profiles/swe_sync_64k.json"
-        request_plan_container="/workspace/experiment/profiles/swe_sync_64k.json"
-        max_model_len=69632
-        max_new_tokens=65536
-        target_view_name="${model_key}-target"
-        draft_view_name="${model_key}-eagle3-draft"
-        materialize_long_context_views \
-          "${target_view_name}" \
-          "${model_source}" \
-          "${draft_view_name}" \
-          "${draft_model_source}"
-        model="${LONG_CONTEXT_VIEW_ROOT}/${target_view_name}"
-        draft_model="${LONG_CONTEXT_VIEW_ROOT}/${draft_view_name}"
-        ;;
-      *)
-        echo "Unsupported REQUEST_PROFILES entry: ${profile}" >&2
-        exit 2
-        ;;
-    esac
+    eval "$(load_qwen_matrix_entry "${model_key}" "${profile}")"
+
+    supported_variants=()
+    for method in pard pard2 dflash dflare mtp_static mtp_dynamic; do
+      status_var="method_${method}_status"
+      reason_code_var="method_${method}_reason_code"
+      reason_var="method_${method}_reason"
+      status="${!status_var}"
+      reason_code="${!reason_code_var}"
+      reason="${!reason_var}"
+      case "${status}" in
+        integration)
+          for temperature in ${TEMPERATURES}; do
+            record_manifest_row \
+              "INTEGRATION" \
+              "${model_key}" \
+              "${profile}" \
+              "${method}" \
+              "-" \
+              "${temperature}" \
+              "-" \
+              "${reason_code}" \
+              "${reason}"
+          done
+          ;;
+        unsupported)
+          for temperature in ${TEMPERATURES}; do
+            record_manifest_row \
+              "UNSUPPORTED" \
+              "${model_key}" \
+              "${profile}" \
+              "${method}" \
+              "-" \
+              "${temperature}" \
+              "-" \
+              "${reason_code}" \
+              "${reason}"
+          done
+          ;;
+      esac
+    done
+
+    if variant_requested baseline; then
+      supported_variants+=(baseline)
+    fi
+    if [[ "${method_eagle3_status}" == "supported" ]]; then
+      if variant_requested static; then
+        supported_variants+=(static)
+      fi
+      if variant_requested dynamic; then
+        supported_variants+=(dynamic)
+      fi
+    fi
+
+    for temperature in ${TEMPERATURES}; do
+      temperature_slug="$(printf '%s' "${temperature}" | tr '.' 'p')"
+      base_run_root="${RESULT_ROOT}/${RUN_ID_BASE}/${model_key}/${profile}/t${temperature_slug}"
+      for variant in "${supported_variants[@]}"; do
+        method_key="baseline"
+        if [[ "${variant}" == "static" || "${variant}" == "dynamic" ]]; then
+          method_key="eagle3"
+        fi
+        record_manifest_row \
+          "SUPPORTED" \
+          "${model_key}" \
+          "${profile}" \
+          "${method_key}" \
+          "${variant}" \
+          "${temperature}" \
+          "${base_run_root}/matrix/${variant}" \
+          "-" \
+          "-"
+      done
+    done
+
+    if ((${#supported_variants[@]} == 0)); then
+      continue
+    fi
+
+    model="${model_source}"
+    draft_model="${draft_model_source}"
+    if [[ "${profile}" == "64k" ]]; then
+      materialize_long_context_views \
+        "${target_view_name}" \
+        "${model_source}" \
+        "${draft_view_name}" \
+        "${draft_model_source}" \
+        "${max_position_embeddings}" \
+        "${rope_factor}"
+      model="${LONG_CONTEXT_VIEW_ROOT}/${target_view_name}"
+      draft_model="${LONG_CONTEXT_VIEW_ROOT}/${draft_view_name}"
+    fi
 
     request_plan_hash="$(
       PYTHONPATH="${SCRIPT_DIR}" python3 -c \
@@ -148,6 +267,7 @@ for model_key in ${MODELS}; do
       temperature_slug="$(printf '%s' "${temperature}" | tr '.' 'p')"
       echo "swe_sync_model=${model_key}"
       echo "request_profile=${profile}"
+      echo "context_policy=${profile_context_policy}"
       echo "request_plan_hash=${request_plan_hash}"
       echo "temperature=${temperature}"
       echo "target_tp=${target_tp}"
@@ -165,7 +285,7 @@ for model_key in ${MODELS}; do
         RESULT_ROOT="${RESULT_ROOT}/${RUN_ID_BASE}/${model_key}/${profile}/t${temperature_slug}" \
         RUN_ID="matrix" \
         JOB_LABEL="swe-${model_key}-${profile}-t${temperature_slug}" \
-        VARIANTS="${VARIANTS}" \
+        VARIANTS="${supported_variants[*]}" \
         STATIC_K="${STATIC_K:-5}" \
         DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}" \
         TP="${target_tp}" \
@@ -201,3 +321,5 @@ for model_key in ${MODELS}; do
     done
   done
 done
+
+echo "manifest=${MANIFEST}"
