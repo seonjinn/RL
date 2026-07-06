@@ -93,16 +93,45 @@ def output_hashes(payload: dict[str, Any]) -> list[str]:
     ]
 
 
+def output_work_counts(payload: dict[str, Any]) -> tuple[list[int], list[int]] | None:
+    planned: list[int] = []
+    actual: list[int] = []
+    saw_counts = False
+    for batch in payload.get("rollout_batches", []):
+        batch_planned = batch.get("planned_output_tokens")
+        batch_actual = batch.get("actual_output_tokens")
+        if batch_planned is None and batch_actual is None:
+            continue
+        if not isinstance(batch_planned, list) or not isinstance(batch_actual, list):
+            raise ValueError("exact output work counts must be arrays")
+        if len(batch_planned) != len(batch_actual):
+            raise ValueError("exact output work count arrays differ in length")
+        planned.extend(int(value) for value in batch_planned)
+        actual.extend(int(value) for value in batch_actual)
+        saw_counts = True
+    return (planned, actual) if saw_counts else None
+
+
 def validate_exact_output_work(results: dict[str, dict[str, Any]]) -> None:
     baseline = results.get("baseline")
     if baseline is None:
         return
-    baseline_hashes = output_hashes(baseline)
-    if not baseline_hashes:
+    baseline_work = output_work_counts(baseline)
+    if baseline_work is None:
         return
+    baseline_planned, baseline_actual = baseline_work
+    if baseline_planned != baseline_actual:
+        raise ValueError("baseline actual output length does not match planned work")
     for variant, payload in results.items():
-        hashes = output_hashes(payload)
-        if hashes != baseline_hashes:
+        work = output_work_counts(payload)
+        if work is None:
+            raise ValueError(f"missing exact output work counts for {variant}")
+        planned, actual = work
+        if planned != actual:
+            raise ValueError(
+                f"actual output length does not match planned work for {variant}"
+            )
+        if planned != baseline_planned or actual != baseline_actual:
             raise ValueError(
                 f"exact output work mismatch for {variant} vs baseline"
             )
@@ -158,6 +187,8 @@ def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
         baseline_tokens = float(baseline_summary.get("total_output_tokens", 0.0))
         output_tokens = float(summary.get("total_output_tokens", 0.0))
         hashes = output_hashes(payload)
+        work = output_work_counts(payload)
+        baseline_work = output_work_counts(baseline) if baseline else None
         rows.append(
             {
                 "variant": variant,
@@ -185,6 +216,9 @@ def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
                 ),
                 "acceptance_rate": metrics.get("acceptance_rate"),
                 "mean_acceptance_length": metrics.get("mean_acceptance_length"),
+                "exact_output_work_match_vs_baseline": (
+                    work == baseline_work if work and baseline_work else None
+                ),
                 "exact_output_hash_match_vs_baseline": (
                     hashes == baseline_hashes
                     if hashes and baseline_hashes

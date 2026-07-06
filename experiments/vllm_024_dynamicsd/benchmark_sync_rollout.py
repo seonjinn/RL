@@ -50,11 +50,13 @@ class PromptRecord(NamedTuple):
     prompt_id: str
     token_ids: list[int]
     prompt_sha256: str
+    source_prompt_sha256: str | None
 
 
 class RolloutRequest(NamedTuple):
     prompt_id: str
     prompt_sha256: str
+    source_prompt_sha256: str | None
     sample_index: int
     seed: int
     prompt_token_ids: list[int]
@@ -148,6 +150,11 @@ def prompt_row_id(row: dict[str, Any], fallback: str) -> str:
     return fallback
 
 
+def source_prompt_hash(row: dict[str, Any]) -> str | None:
+    value = row.get("prompt_sha256")
+    return value if isinstance(value, str) and value else None
+
+
 def load_prompt_batches(
     tokenizer: Any,
     *,
@@ -158,7 +165,7 @@ def load_prompt_batches(
     max_prompt_tokens: int,
 ) -> list[list[PromptRecord]]:
     required = num_prompts * rollout_batches
-    prompt_rows: list[tuple[str, str, str]] = []
+    prompt_rows: list[tuple[str, str | None, str]] = []
     if prompt_jsonl is not None:
         with prompt_jsonl.open(encoding="utf-8") as stream:
             for line_number, line in enumerate(stream):
@@ -169,7 +176,7 @@ def load_prompt_batches(
                 prompt_rows.append(
                     (
                         prompt_row_id(row, f"jsonl-{line_number}"),
-                        str(row.get("prompt_sha256") or text_hash(text)),
+                        source_prompt_hash(row),
                         text,
                     )
                 )
@@ -183,28 +190,28 @@ def load_prompt_batches(
         prompt_rows = [
             (
                 f"builtin-{index}",
-                text_hash(
-                    f"{BUILTIN_PROMPTS[index % len(BUILTIN_PROMPTS)]}\n"
-                    f"Prompt id: {index}."
-                ),
+                None,
                 f"{BUILTIN_PROMPTS[index % len(BUILTIN_PROMPTS)]}\nPrompt id: {index}.",
             )
             for index in range(required)
         ]
 
-    tokenized = [
-        PromptRecord(
-            prompt_id=prompt_id,
-            prompt_sha256=prompt_sha256,
-            token_ids=tokenize_prompt(
-                tokenizer,
-                text,
-                max_prompt_tokens,
-                allow_truncation=False,
+    tokenized: list[PromptRecord] = []
+    for prompt_id, source_hash, text in prompt_rows:
+        token_ids = tokenize_prompt(
+            tokenizer,
+            text,
+            max_prompt_tokens,
+            allow_truncation=False,
+        )
+        tokenized.append(
+            PromptRecord(
+                prompt_id=prompt_id,
+                prompt_sha256=token_hash(token_ids),
+                source_prompt_sha256=source_hash,
+                token_ids=token_ids,
             ),
         )
-        for prompt_id, prompt_sha256, text in prompt_rows
-    ]
     return [
         tokenized[start : start + num_prompts]
         for start in range(0, required, num_prompts)
@@ -267,6 +274,7 @@ def prepare_rollout_requests(
         RolloutRequest(
             prompt_id=request.prompt_id,
             prompt_sha256=by_prompt_id[request.prompt_id].prompt_sha256,
+            source_prompt_sha256=by_prompt_id[request.prompt_id].source_prompt_sha256,
             sample_index=request.sample_index,
             seed=request.seed,
             prompt_token_ids=list(by_prompt_id[request.prompt_id].token_ids),
@@ -293,6 +301,7 @@ def expand_rollout_requests(
                 RolloutRequest(
                     prompt_id=record.prompt_id,
                     prompt_sha256=record.prompt_sha256,
+                    source_prompt_sha256=record.source_prompt_sha256,
                     sample_index=sample_index,
                     seed=seed,
                     prompt_token_ids=list(record.token_ids),
@@ -330,6 +339,7 @@ def request_provenance(request: RolloutRequest) -> dict[str, Any]:
     return {
         "prompt_id": request.prompt_id,
         "prompt_sha256": request.prompt_sha256,
+        "source_prompt_sha256": request.source_prompt_sha256,
         "sample_index": request.sample_index,
         "seed": request.seed,
         "prompt_tokens": len(request.prompt_token_ids),
@@ -355,6 +365,27 @@ def bucket_statistics(
         }
         for max_tokens, lengths in sorted(lengths_by_cap.items())
     ]
+
+
+def exact_output_work(
+    requests: list[RolloutRequest],
+    output_token_ids: list[list[int]],
+) -> dict[str, list[int]]:
+    planned = [request.max_tokens for request in requests]
+    actual = [len(token_ids) for token_ids in output_token_ids]
+    for index, (request, actual_tokens) in enumerate(
+        zip(requests, actual, strict=True)
+    ):
+        if request.ignore_eos and actual_tokens != request.max_tokens:
+            raise ValueError(
+                f"forced output length mismatch at request {index}: "
+                f"prompt_id={request.prompt_id} sample_index={request.sample_index} "
+                f"planned={request.max_tokens} actual={actual_tokens}"
+            )
+    return {
+        "planned_output_tokens": planned,
+        "actual_output_tokens": actual,
+    }
 
 
 def first_candidate(output: Any) -> Any:
@@ -383,6 +414,7 @@ def write_response_jsonl(
                 "batch_index": batch_index,
                 "prompt_id": request.prompt_id,
                 "prompt_sha256": request.prompt_sha256,
+                "source_prompt_sha256": request.source_prompt_sha256,
                 "sample_index": request.sample_index,
                 "seed": request.seed,
                 "max_tokens": request.max_tokens,
@@ -726,6 +758,7 @@ def main() -> None:
                 f"rollout_batch={batch_index}"
             )
         output_token_ids = [candidate_token_ids(output) for output in outputs]
+        output_work = exact_output_work(rollout_requests, output_token_ids)
         if args.response_output is not None:
             write_response_jsonl(
                 args.response_output,
@@ -755,6 +788,8 @@ def main() -> None:
             ),
             "finish_reasons": finish_reasons,
             "output_token_hashes": [token_hash(token_ids) for token_ids in output_token_ids],
+            "planned_output_tokens": output_work["planned_output_tokens"],
+            "actual_output_tokens": output_work["actual_output_tokens"],
             "requests": [
                 request_provenance(request) for request in rollout_requests
             ],

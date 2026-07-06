@@ -237,3 +237,139 @@ Checklist:
 Concern:
 
 - Plain `python3 -m pytest -q` still needs the existing `PYTHONPATH=scripts` setup for unrelated report tests; with that path, the full suite passes.
+
+## Review Fixes
+
+### Review Requirements
+
+Addressed reviewer/controller findings:
+
+- 64K SWE runs materialize matched YaRN target and Eagle3 drafter views for every Qwen model with `materialize_long_context_model_views.py --max-position-embeddings 131072 --rope-factor 4.0`; 32K remains native.
+- Smoke SWE runs now exercise the request-plan tail with 16 prompt assignments.
+- Non-smoke SWE defaults are now the primary `16 prompts x 4 samples x 3 barriers`; `FULL_CONTRACT=true` or explicit `SAMPLES_PER_PROMPT=16` is required for 16 samples.
+- Prompt provenance now hashes the actual tokenized prompt and preserves any source-provided `prompt_sha256` as `source_prompt_sha256`.
+- Forced exact work emits ordered `planned_output_tokens` and `actual_output_tokens` and validates `ignore_eos=true` requests fill to `max_tokens`.
+- Summary exact-work matching compares planned/actual token counts, not output hashes. Hashes remain a separate reported signal.
+- Explicit `RESPONSE_OUTPUT` and `RESOLVED_REQUEST_PLAN_OUTPUT` paths are rejected for multi-variant runs unless set to `auto` or containing `{variant}`.
+- New launcher arguments use escaped exports plus nested `bench_extra_args` arrays instead of hand-built single-quoted fragments.
+
+### Review RED
+
+Added focused failing tests before implementation:
+
+- tokenized prompt hash vs source prompt hash preservation
+- exact planned/actual token count emission and forced-output underfill rejection
+- 64K YaRN target/draft materialization dry-run behavior
+- smoke tail coverage and non-smoke/full-contract defaults
+- explicit multi-variant output path rejection and `{variant}` expansion
+- shell escaping for new output arguments containing single quotes
+- summary acceptance of different temperature-1 hashes with equal exact work
+- summary rejection of identical hashes with under-length exact work
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'tokenized_prompt or exact_output_work or 64k_uses_matched_yarn or non_smoke_defaults or full_contract or shared_explicit_outputs or shell_escapes or different_hashes or underlength or request_plan_controls or response_jsonl or swe_sync_rollout_matrix'
+```
+
+Output:
+
+```text
+FFFFFFFFFFFF                                                             [100%]
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_request_plan_controls_sampling_and_provenance
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_hashes_actual_tokenized_prompt_and_preserves_source_hash
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_exact_output_work_emits_counts_and_rejects_underfill
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_64k_uses_matched_yarn_target_and_draft_views
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_non_smoke_defaults_to_primary_four_samples
+FAILED tests/test_vllm024_dynamicsd.py::test_swe_sync_rollout_full_contract_override_uses_sixteen_samples
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_rejects_shared_explicit_outputs_for_multi_variant_runs
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_accepts_variant_placeholders_and_shell_escapes_new_args
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_summary_allows_different_hashes_with_equal_exact_work
+FAILED tests/test_vllm024_dynamicsd.py::test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work
+12 failed, 58 deselected in 1.10s
+```
+
+### Review GREEN
+
+Focused review-fix tests:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'tokenized_prompt or exact_output_work or 64k_uses_matched_yarn or non_smoke_defaults or full_contract or shared_explicit_outputs or shell_escapes or different_hashes or underlength or request_plan_controls or response_jsonl or swe_sync_rollout_matrix'
+```
+
+Output:
+
+```text
+............                                                             [100%]
+12 passed, 58 deselected in 0.79s
+```
+
+Full Task 2 test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+......................................................................   [100%]
+70 passed in 4.46s
+```
+
+Shell syntax:
+
+```bash
+bash -n experiments/vllm_024_dynamicsd/submit_sync_rollout.sh experiments/vllm_024_dynamicsd/submit_swe_sync_rollout_matrix.sh
+```
+
+Output:
+
+```text
+[no output]
+```
+
+Exit status: `0`
+
+Full suite with existing script import path:
+
+```bash
+PYTHONPATH=scripts python3 -m pytest -q
+```
+
+Output:
+
+```text
+............................................ [ 29%]
+........................................................................ [ 78%]
+................................                                         [100%]
+148 passed, 28 subtests passed in 13.94s
+```
+
+Pyright, repository-wide:
+
+```bash
+pyright
+```
+
+Output summary:
+
+```text
+1244 errors, 7 warnings, 0 informations
+```
+
+The failures are pre-existing/unrelated and include older experiment scripts plus missing optional dependencies under `remote_worktree_edit`.
+
+Pyright, touched Python files:
+
+```bash
+pyright experiments/vllm_024_dynamicsd/benchmark_sync_rollout.py experiments/vllm_024_dynamicsd/summarize_sync_rollout.py tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+0 errors, 0 warnings, 0 informations
+```

@@ -986,6 +986,7 @@ def test_sync_rollout_request_plan_controls_sampling_and_provenance() -> None:
             prompt_id=f"prompt-{index}",
             token_ids=[index + 1],
             prompt_sha256=f"hash-{index}",
+            source_prompt_sha256=f"source-hash-{index}",
         )
         for index in range(4)
     ]
@@ -1045,6 +1046,56 @@ def test_sync_rollout_request_plan_controls_sampling_and_provenance() -> None:
     assert [param.kwargs["seed"] for param in params] == list(range(100, 108))
 
 
+def test_sync_rollout_hashes_actual_tokenized_prompt_and_preserves_source_hash(
+    tmp_path: Path,
+) -> None:
+    sync_rollout = load_sync_rollout_module()
+    prompt_jsonl = tmp_path / "prompts.jsonl"
+    prompt_jsonl.write_text(
+        json.dumps(
+            {
+                "id": "swe-1",
+                "prompt_sha256": "source-provided-hash",
+                "messages": [{"role": "user", "content": "fix bug"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeTokenizer:
+        def apply_chat_template(
+            self,
+            messages: list[dict[str, str]],
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> str:
+            assert messages == [{"role": "user", "content": "fix bug"}]
+            assert tokenize is False
+            assert add_generation_prompt is True
+            return "rendered prompt with assistant prefix"
+
+        def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+            assert text == "rendered prompt with assistant prefix"
+            assert add_special_tokens is False
+            return [101, 202, 303]
+
+    batches = sync_rollout.load_prompt_batches(
+        FakeTokenizer(),
+        prompt_jsonl=prompt_jsonl,
+        prompt_offset=0,
+        num_prompts=1,
+        rollout_batches=1,
+        max_prompt_tokens=16,
+    )
+
+    record = batches[0][0]
+    assert record.prompt_id == "swe-1"
+    assert record.prompt_sha256 == sync_rollout.token_hash([101, 202, 303])
+    assert record.source_prompt_sha256 == "source-provided-hash"
+
+
 def test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance(
     tmp_path: Path,
 ) -> None:
@@ -1052,6 +1103,7 @@ def test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance(
     request = sync_rollout.RolloutRequest(
         prompt_id="prompt-0",
         prompt_sha256="prompt-hash",
+        source_prompt_sha256="source-prompt-hash",
         sample_index=0,
         seed=7,
         prompt_token_ids=[1, 2, 3],
@@ -1086,6 +1138,7 @@ def test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance(
             "batch_index": 0,
             "prompt_id": "prompt-0",
             "prompt_sha256": "prompt-hash",
+            "source_prompt_sha256": "source-prompt-hash",
             "sample_index": 0,
             "seed": 7,
             "max_tokens": 4096,
@@ -1112,6 +1165,39 @@ def test_sync_rollout_response_jsonl_and_bucket_stats_preserve_provenance(
             },
         }
     ]
+
+
+def test_sync_rollout_exact_output_work_emits_counts_and_rejects_underfill() -> None:
+    sync_rollout = load_sync_rollout_module()
+    forced = sync_rollout.RolloutRequest(
+        prompt_id="prompt-0",
+        prompt_sha256="prompt-hash",
+        source_prompt_sha256=None,
+        sample_index=0,
+        seed=7,
+        prompt_token_ids=[1, 2, 3],
+        max_tokens=4,
+        min_tokens=4,
+        ignore_eos=True,
+    )
+    flexible = sync_rollout.RolloutRequest(
+        prompt_id="prompt-1",
+        prompt_sha256="prompt-hash-1",
+        source_prompt_sha256=None,
+        sample_index=0,
+        seed=8,
+        prompt_token_ids=[4, 5, 6],
+        max_tokens=4,
+        min_tokens=0,
+        ignore_eos=False,
+    )
+
+    assert sync_rollout.exact_output_work([forced, flexible], [[1, 2, 3, 4], [9]]) == {
+        "planned_output_tokens": [4, 4],
+        "actual_output_tokens": [4, 1],
+    }
+    with pytest.raises(ValueError, match="forced output length mismatch"):
+        sync_rollout.exact_output_work([forced], [[1, 2, 3]])
 
 
 def test_sync_rollout_dry_run_models_barriered_rl_sampling() -> None:
@@ -1157,7 +1243,7 @@ def test_sync_rollout_dry_run_supports_native_mtp_tp8() -> None:
     assert "#SBATCH --segment=2" in output
     assert "--mode 'mtp_static'" in output
     assert "--mode 'mtp_dynamic'" in output
-    assert "--draft-model ''" in output
+    assert "BENCH_DRAFT_MODEL=''" in output
     assert "Qwen3-32B-speculator.eagle3" not in output
     assert "--distributed-executor-backend 'ray'" in output
     assert "--enable-expert-parallel" in output
@@ -1182,17 +1268,124 @@ def test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs() -> 
     assert "request_profile=32k" in output
     assert "request_plan_hash=" in output
     assert output.count("[DRY-RUN] sync_variant=") == 2
-    assert "--request-plan '/workspace/experiment/profiles/swe_sync_32k.json'" in output
-    assert "--response-output '" in output
+    assert "BENCH_REQUEST_PLAN=/workspace/experiment/profiles/swe_sync_32k.json" in output
+    assert 'bench_extra_args+=(--response-output \\"${BENCH_RESPONSE_OUTPUT}\\")' in output
     assert "responses.jsonl" in output
     assert "--runtime-image-sha256" in output
     assert "--max-model-len '36864'" in output
+    assert "--num-prompts 16" in output
+    assert "--samples-per-prompt 1" in output
+    assert "requests_per_rollout_batch=16" in output
     assert "--max-prompt-tokens 4096" in output
     assert "--max-new-tokens 32768" in output
     assert "--temperature 0.0" in output
     assert "--top-p 0.95" in output
     assert "swebench_verified_prompts_all.jsonl" in output
+    assert "long-context-models/yarn4" not in output
+    assert "materialize_long_context_model_views.py" not in output
     assert "pinned RL math dataset" not in output
+
+
+def test_swe_sync_rollout_64k_uses_matched_yarn_target_and_draft_views() -> None:
+    output = run_dry(
+        "submit_swe_sync_rollout_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="true",
+        MODELS="qwen32",
+        REQUEST_PROFILES="64k",
+        TEMPERATURES="0.0",
+        VARIANTS="baseline static",
+        RUN_ID="swe64-test",
+    )
+
+    assert "request_profile=64k" in output
+    assert "materialize_long_context_model_views.py" in output
+    assert "--max-position-embeddings 131072" in output
+    assert "--rope-factor 4.0" in output
+    assert "--model-view qwen32-target=" in output
+    assert "--model-view qwen32-eagle3-draft=" in output
+    assert "long-context-models/yarn4/qwen32-target" in output
+    assert "long-context-models/yarn4/qwen32-eagle3-draft" in output
+    assert "BENCH_MODEL=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen32-target" in output
+    assert "BENCH_DRAFT_MODEL=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/long-context-models/yarn4/qwen32-eagle3-draft" in output
+    assert "--max-model-len '69632'" in output
+    assert "--max-new-tokens 65536" in output
+
+
+def test_swe_sync_rollout_non_smoke_defaults_to_primary_four_samples() -> None:
+    output = run_dry(
+        "submit_swe_sync_rollout_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="false",
+        MODELS="qwen32",
+        REQUEST_PROFILES="32k",
+        TEMPERATURES="0.0",
+        VARIANTS="baseline",
+        RUN_ID="swe-full-default",
+    )
+
+    assert "--num-prompts 16" in output
+    assert "--samples-per-prompt 4" in output
+    assert "--rollout-batches 3" in output
+    assert "--samples-per-prompt 16" not in output
+
+
+def test_swe_sync_rollout_full_contract_override_uses_sixteen_samples() -> None:
+    output = run_dry(
+        "submit_swe_sync_rollout_matrix.sh",
+        CLUSTER="lyris",
+        SMOKE="false",
+        FULL_CONTRACT="true",
+        MODELS="qwen32",
+        REQUEST_PROFILES="32k",
+        TEMPERATURES="0.0",
+        VARIANTS="baseline",
+        RUN_ID="swe-full-contract",
+    )
+
+    assert "full_contract=true" in output
+    assert "--num-prompts 16" in output
+    assert "--samples-per-prompt 16" in output
+    assert "--rollout-batches 3" in output
+
+
+def test_sync_rollout_rejects_shared_explicit_outputs_for_multi_variant_runs() -> None:
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "DRY_RUN": "true",
+        "CLUSTER": "lyris",
+        "VARIANTS": "baseline dynamic",
+        "RESPONSE_OUTPUT": "/tmp/shared-responses.jsonl",
+        "RESOLVED_REQUEST_PLAN_OUTPUT": "/tmp/shared-plan.json",
+    }
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_sync_rollout.sh")],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "RESPONSE_OUTPUT must be auto or contain {variant}" in completed.stderr
+
+
+def test_sync_rollout_accepts_variant_placeholders_and_shell_escapes_new_args() -> None:
+    output = run_dry(
+        "submit_sync_rollout.sh",
+        CLUSTER="lyris",
+        VARIANTS="baseline dynamic",
+        RESPONSE_OUTPUT="/tmp/o'hara/{variant}/responses.jsonl",
+        RESOLVED_REQUEST_PLAN_OUTPUT="/tmp/o'hara/{variant}/plan.json",
+    )
+
+    assert "/tmp/o\\'hara/baseline/responses.jsonl" in output
+    assert "/tmp/o\\'hara/dynamic/responses.jsonl" in output
+    assert "BENCH_RESPONSE_OUTPUT=/tmp/o\\'hara/baseline/responses.jsonl" in output
+    assert "BENCH_RESOLVED_REQUEST_PLAN_OUTPUT=/tmp/o\\'hara/dynamic/plan.json" in output
+    assert "--response-output '/tmp/o'hara" not in output
+    assert "--resolved-request-plan-output '/tmp/o'hara" not in output
 
 
 def test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral() -> None:
@@ -1487,7 +1680,60 @@ def test_sync_rollout_summary_rejects_mismatched_request_plan_hash(
         summary_module.build_summary(tmp_path)
 
 
-def test_sync_rollout_summary_rejects_mismatched_exact_output_work(
+def test_sync_rollout_summary_allows_different_hashes_with_equal_exact_work(
+    tmp_path: Path,
+) -> None:
+    summary_module = load_sync_summary_module()
+    strict_config = {
+        "runtime_image_sha256": "image-sha",
+        "model_config_hash": "model-sha",
+        "prompt_set_hash": "prompt-sha",
+        "request_plan_hash": "plan-sha",
+        "cudagraph_mode": "PIECEWISE",
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "temperature": 1.0,
+        "top_p": 0.95,
+    }
+    output_hashes = {
+        "baseline": ["a", "b"],
+        "static": ["c", "d"],
+        "dynamic": ["e", "f"],
+    }
+    for variant in ("baseline", "static", "dynamic"):
+        result_dir = tmp_path / variant
+        result_dir.mkdir()
+        (result_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "config": {"mode": variant, **strict_config},
+                    "rollout_batches": [
+                        {
+                            "planned_output_tokens": [4, 4],
+                            "actual_output_tokens": [4, 4],
+                            "output_token_hashes": output_hashes[variant],
+                        }
+                    ],
+                    "summary": {
+                        "total_rollout_time_s": 100.0,
+                        "output_tok_s_per_gpu": 100.0,
+                        "total_output_tokens": 10000,
+                        "spec_decode_metrics": {},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    rows = summary_module.build_summary(tmp_path)
+    by_variant = {row["variant"]: row for row in rows}
+
+    assert by_variant["dynamic"]["exact_output_work_match_vs_baseline"] is True
+    assert by_variant["dynamic"]["exact_output_hash_match_vs_baseline"] is False
+
+
+def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
     tmp_path: Path,
 ) -> None:
     summary_module = load_sync_summary_module()
@@ -1502,26 +1748,28 @@ def test_sync_rollout_summary_rejects_mismatched_exact_output_work(
         "temperature": 0.0,
         "top_p": 1.0,
     }
-    output_hashes = {
-        "baseline": ["a", "b"],
-        "static": ["a", "b"],
-        "dynamic": ["a", "different"],
-    }
     for variant in ("baseline", "static", "dynamic"):
         result_dir = tmp_path / variant
         result_dir.mkdir()
+        actual_tokens = [4, 4]
+        if variant == "dynamic":
+            actual_tokens = [4, 3]
         (result_dir / "result.json").write_text(
             json.dumps(
                 {
                     "status": "complete",
                     "config": {"mode": variant, **strict_config},
                     "rollout_batches": [
-                        {"output_token_hashes": output_hashes[variant]}
+                        {
+                            "planned_output_tokens": [4, 4],
+                            "actual_output_tokens": actual_tokens,
+                            "output_token_hashes": ["same-a", "same-b"],
+                        }
                     ],
                     "summary": {
                         "total_rollout_time_s": 100.0,
                         "output_tok_s_per_gpu": 100.0,
-                        "total_output_tokens": 10000,
+                        "total_output_tokens": sum(actual_tokens),
                         "spec_decode_metrics": {},
                     },
                 }
@@ -1529,7 +1777,7 @@ def test_sync_rollout_summary_rejects_mismatched_exact_output_work(
             encoding="utf-8",
         )
 
-    with pytest.raises(ValueError, match="exact output work mismatch"):
+    with pytest.raises(ValueError, match="actual output length"):
         summary_module.build_summary(tmp_path)
 
 

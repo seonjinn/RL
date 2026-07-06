@@ -74,6 +74,34 @@ DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
 
+shell_quote() {
+  printf "%q" "$1"
+}
+
+variant_path() {
+  local value="$1"
+  local variant="$2"
+  printf "%s" "${value//\{variant\}/${variant}}"
+}
+
+variant_count=0
+for _variant_for_count in ${VARIANTS}; do
+  variant_count=$((variant_count + 1))
+done
+
+require_variant_specific_path() {
+  local name="$1"
+  local value="$2"
+  if (( variant_count <= 1 )); then
+    return
+  fi
+  if [[ -z "${value}" || "${value}" == "auto" || "${value}" == *"{variant}"* ]]; then
+    return
+  fi
+  echo "${name} must be auto or contain {variant} when multiple variants are requested" >&2
+  exit 2
+}
+
 if [[ "${SMOKE}" == "true" ]]; then
   NUM_PROMPTS="${NUM_PROMPTS:-4}"
   SAMPLES_PER_PROMPT="${SAMPLES_PER_PROMPT:-2}"
@@ -96,6 +124,8 @@ if [[ "${SMOKE}" != "true" && -z "${PROMPT_JSONL}" ]]; then
   echo "SMOKE=false requires PROMPT_JSONL from a pinned prompt set" >&2
   exit 2
 fi
+require_variant_specific_path "RESPONSE_OUTPUT" "${RESPONSE_OUTPUT}"
+require_variant_specific_path "RESOLVED_REQUEST_PLAN_OUTPUT" "${RESOLVED_REQUEST_PLAN_OUTPUT}"
 if [[ -n "${REQUEST_PLAN}" && -z "${REQUEST_PLAN_IN_CONTAINER}" && "${REQUEST_PLAN}" == "${SCRIPT_DIR}/"* ]]; then
   REQUEST_PLAN_IN_CONTAINER="/workspace/experiment/${REQUEST_PLAN#${SCRIPT_DIR}/}"
 fi
@@ -118,9 +148,15 @@ render_sbatch() {
   local mamba_rounding_arg=""
   local mamba_philox_arg=""
   local batched_tokens_arg=""
-  local request_plan_arg=""
-  local resolved_request_plan_arg=""
-  local response_output_arg=""
+  local request_plan_value=""
+  local resolved_request_plan_output_value=""
+  local response_output_value=""
+  local bench_model_q=""
+  local bench_draft_model_q=""
+  local bench_request_plan_q=""
+  local bench_resolved_request_plan_output_q=""
+  local bench_response_output_q=""
+  local request_plan_host_q=""
   local recipe_arg=""
   local global_prompts_arg=""
   local global_replicas_arg=""
@@ -166,22 +202,28 @@ render_sbatch() {
     batched_tokens_arg="--max-num-batched-tokens '${MAX_NUM_BATCHED_TOKENS}'"
   fi
   if [[ -n "${REQUEST_PLAN}" ]]; then
-    request_plan_arg="--request-plan '${REQUEST_PLAN_IN_CONTAINER:-${REQUEST_PLAN}}'"
+    request_plan_value="${REQUEST_PLAN_IN_CONTAINER:-${REQUEST_PLAN}}"
   fi
   if [[ -n "${RESOLVED_REQUEST_PLAN_OUTPUT}" ]]; then
     if [[ "${RESOLVED_REQUEST_PLAN_OUTPUT}" == "auto" ]]; then
-      resolved_request_plan_arg="--resolved-request-plan-output '${run_dir}/resolved_request_plan.json'"
+      resolved_request_plan_output_value="${run_dir}/resolved_request_plan.json"
     else
-      resolved_request_plan_arg="--resolved-request-plan-output '${RESOLVED_REQUEST_PLAN_OUTPUT}'"
+      resolved_request_plan_output_value="$(variant_path "${RESOLVED_REQUEST_PLAN_OUTPUT}" "${variant}")"
     fi
   fi
   if [[ -n "${RESPONSE_OUTPUT}" ]]; then
     if [[ "${RESPONSE_OUTPUT}" == "auto" ]]; then
-      response_output_arg="--response-output '${run_dir}/responses.jsonl'"
+      response_output_value="${run_dir}/responses.jsonl"
     else
-      response_output_arg="--response-output '${RESPONSE_OUTPUT}'"
+      response_output_value="$(variant_path "${RESPONSE_OUTPUT}" "${variant}")"
     fi
   fi
+  bench_model_q="$(shell_quote "${MODEL}")"
+  bench_draft_model_q="$(shell_quote "${DRAFT_MODEL}")"
+  bench_request_plan_q="$(shell_quote "${request_plan_value}")"
+  bench_resolved_request_plan_output_q="$(shell_quote "${resolved_request_plan_output_value}")"
+  bench_response_output_q="$(shell_quote "${response_output_value}")"
+  request_plan_host_q="$(shell_quote "${REQUEST_PLAN}")"
   if [[ -n "${SOURCE_RECIPE}" ]]; then
     recipe_arg="--source-recipe '${SOURCE_RECIPE}'"
   fi
@@ -219,14 +261,20 @@ fi
 if [[ -n '${PROMPT_JSONL}' ]]; then
   test -s '${PROMPT_JSONL}'
 fi
-if [[ -n '${REQUEST_PLAN}' ]]; then
-  test -s '${REQUEST_PLAN}'
+if [[ -n ${request_plan_host_q} ]]; then
+  test -s ${request_plan_host_q}
 fi
 if (( ${NODES} > 1 )); then
   test -d '${RAY_SITE}/ray'
 fi
 
 runtime_image_sha256="\$(if [[ -n '${RUNTIME_IMAGE_SHA256}' ]]; then printf '%s\n' '${RUNTIME_IMAGE_SHA256}'; elif [[ -s '${CONTAINER_IMAGE}.sha256' ]]; then awk '{print \$1; exit}' '${CONTAINER_IMAGE}.sha256'; else sha256sum '${CONTAINER_IMAGE}' | awk '{print \$1; exit}'; fi)"
+
+export BENCH_MODEL=${bench_model_q}
+export BENCH_DRAFT_MODEL=${bench_draft_model_q}
+export BENCH_REQUEST_PLAN=${bench_request_plan_q}
+export BENCH_RESOLVED_REQUEST_PLAN_OUTPUT=${bench_resolved_request_plan_output_q}
+export BENCH_RESPONSE_OUTPUT=${bench_response_output_q}
 
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
@@ -282,13 +330,24 @@ srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
   --no-container-mount-home \\
   --container-remap-root \\
   --mpi=pmix \\
-  bash -lc "set -euo pipefail
+bash -lc "set -euo pipefail
 export VLLM_USE_V2_MODEL_RUNNER=0
 export VLLM_DISABLE_USAGE_STATS=1
+bench_extra_args=()
+bench_extra_args+=(--model \"\${BENCH_MODEL}\")
+bench_extra_args+=(--draft-model \"\${BENCH_DRAFT_MODEL}\")
+if [[ -n \"\${BENCH_REQUEST_PLAN}\" ]]; then
+  bench_extra_args+=(--request-plan \"\${BENCH_REQUEST_PLAN}\")
+fi
+if [[ -n \"\${BENCH_RESOLVED_REQUEST_PLAN_OUTPUT}\" ]]; then
+  bench_extra_args+=(--resolved-request-plan-output \"\${BENCH_RESOLVED_REQUEST_PLAN_OUTPUT}\")
+fi
+if [[ -n \"\${BENCH_RESPONSE_OUTPUT}\" ]]; then
+  bench_extra_args+=(--response-output \"\${BENCH_RESPONSE_OUTPUT}\")
+fi
 python3 -c 'import vllm; assert vllm.__version__ == \"0.24.0\", vllm.__version__'
 ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
-  --model '${MODEL}' \\
-  --draft-model '${DRAFT_MODEL}' \\
+  \"\${bench_extra_args[@]}\" \\
   --mode '${variant}' \\
   --static-k '${STATIC_K}' \\
   --dynamic-schedule '${DYNAMIC_SCHEDULE}' \\
@@ -309,11 +368,8 @@ ${runner_prefix} python3 /workspace/experiment/benchmark_sync_rollout.py \\
   --temperature ${TEMPERATURE} \\
   --top-p ${TOP_P} \\
   --seed ${SEED} \\
-  --runtime-image-sha256 '\${runtime_image_sha256}' \\
+  --runtime-image-sha256 \"\${runtime_image_sha256}\" \\
   ${prompt_arg} \\
-  ${request_plan_arg} \\
-  ${resolved_request_plan_arg} \\
-  ${response_output_arg} \\
   ${attention_arg} \\
   ${moe_arg} \\
   ${distributed_arg} \\
