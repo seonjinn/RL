@@ -73,6 +73,16 @@ def load_long_context_materializer_module() -> ModuleType:
     return module
 
 
+def load_speedbench_dataset_module() -> ModuleType:
+    path = EXPERIMENT / "speedbench_dataset.py"
+    spec = importlib.util.spec_from_file_location("vllm024_speedbench_dataset", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_dry(script_name: str, **env_overrides: str) -> str:
     env = {
         "PATH": "/usr/bin:/bin",
@@ -128,6 +138,46 @@ def extract_run_benchmark_script(output: str, variant: str) -> str:
     assert start in output
     assert end in output
     return output.split(start, 1)[1].split(end, 1)[0]
+
+
+def fake_speedbench_row(
+    category: str,
+    idx: int,
+    *,
+    nominal_isl: int = 1024,
+    actual_tokenizer_isl: int | None = None,
+    turns: tuple[str, ...] | None = None,
+    masked: bool = False,
+) -> dict[str, Any]:
+    row_turns = turns or (f"{category} prompt {idx}",)
+    return {
+        "question_id": f"{category}-{idx:03d}",
+        "category": category,
+        "sub_category": f"{category}-subtype",
+        "turns": list(row_turns),
+        "source": "nvidia/SPEED-Bench",
+        "src_id": f"src-{category}-{idx:03d}",
+        "difficulty": "hard" if category == "high_entropy" else None,
+        "multiturn": len(row_turns) > 1,
+        "nominal_isl": nominal_isl,
+        "actual_tokenizer_isl": actual_tokenizer_isl,
+        "masked": masked,
+    }
+
+
+def fake_speedbench_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for category in ("low_entropy", "mixed", "high_entropy"):
+        for idx in range(24):
+            turns = (f"{category} prompt {idx}",)
+            if category == "mixed" and idx == 0:
+                turns = (
+                    "user: describe the rollout barrier",
+                    "assistant: the barrier waits for the tail request",
+                    "user: keep the multi-turn context intact",
+                )
+            rows.append(fake_speedbench_row(category, idx, turns=turns))
+    return rows
 
 
 def test_dynamic_schedule_and_speculative_configs() -> None:
@@ -2438,10 +2488,168 @@ def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
         summary_module.build_summary(tmp_path)
 
 
+def test_speedbench_dataset_batches_balance_entropy_classes() -> None:
+    adapter = load_speedbench_dataset_module()
+    records = adapter.build_records(
+        fake_speedbench_rows(),
+        dataset_config="throughput_1k",
+    )
+
+    batches = adapter.select_sync_overlay_rows(records, seed=1234)
+
+    assert len(batches) == 3
+    assert [len(batch) for batch in batches] == [16, 16, 16]
+    assert [adapter.count_categories(batch) for batch in batches] == [
+        {"low_entropy": 6, "mixed": 5, "high_entropy": 5},
+        {"low_entropy": 5, "mixed": 6, "high_entropy": 5},
+        {"low_entropy": 5, "mixed": 5, "high_entropy": 6},
+    ]
+    assert len(
+        {
+            record.question_id
+            for batch in batches
+            for record in batch
+        }
+    ) == 48
+    assert {
+        record.category
+        for batch in batches
+        for record in batch
+    } == {"low_entropy", "mixed", "high_entropy"}
+
+
+def test_speedbench_dataset_selection_is_deterministic_for_a_seed() -> None:
+    adapter = load_speedbench_dataset_module()
+    records = adapter.build_records(
+        fake_speedbench_rows(),
+        dataset_config="throughput_1k",
+        actual_tokenizer_isl=1117,
+    )
+
+    selected_once = adapter.select_sync_overlay_rows(records, seed=99)
+    selected_twice = adapter.select_sync_overlay_rows(records, seed=99)
+    selected_other = adapter.select_sync_overlay_rows(records, seed=100)
+
+    def digest(
+        batches: tuple[tuple[Any, ...], ...],
+    ) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            tuple(record.canonical_hash for record in batch)
+            for batch in batches
+        )
+
+    assert digest(selected_once) == digest(selected_twice)
+    assert digest(selected_once) != digest(selected_other)
+    assert {
+        record.actual_tokenizer_isl
+        for batch in selected_once
+        for record in batch
+    } == {1117}
+
+
+def test_speedbench_dataset_preserves_multi_turns_and_rejects_masked_rows() -> None:
+    adapter = load_speedbench_dataset_module()
+
+    records = adapter.build_records(
+        [
+            fake_speedbench_row(
+                "mixed",
+                0,
+                turns=(
+                    "user: first turn",
+                    "assistant: second turn",
+                    "user: final turn",
+                ),
+            )
+        ],
+        dataset_config="qualitative",
+    )
+
+    assert records[0].turns == (
+        "user: first turn",
+        "assistant: second turn",
+        "user: final turn",
+    )
+    assert records[0].multiturn is True
+    assert records[0].nominal_isl is None
+
+    with pytest.raises(ValueError, match="masked row"):
+        adapter.build_records(
+            [fake_speedbench_row("mixed", 1, masked=True)],
+            dataset_config="throughput_1k",
+        )
+
+
+def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
+    tmp_path: Path,
+) -> None:
+    adapter = load_speedbench_dataset_module()
+    prepared_root = tmp_path / "prepared"
+    expected_configs = {
+        "qualitative",
+        "throughput_1k",
+        "throughput_2k",
+        "throughput_8k",
+        "throughput_16k",
+        "throughput_32k",
+    }
+    for config_name in expected_configs:
+        parquet = prepared_root / config_name / "test.parquet"
+        parquet.parent.mkdir(parents=True, exist_ok=True)
+        parquet.write_bytes(f"{config_name}-payload".encode("utf-8"))
+
+    manifest = adapter.build_prepared_manifest(prepared_root)
+    prepared_entries = {
+        entry["config_name"]: entry
+        for entry in manifest["prepared_configs"]
+    }
+
+    assert manifest["dataset"]["id"] == "nvidia/SPEED-Bench"
+    assert manifest["dataset"]["revision"] == "487aa718444e816458d1a0a52bfce7a454285cf4"
+    assert manifest["model_optimizer"]["revision"] == (
+        "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
+    )
+    assert set(prepared_entries) == expected_configs
+    assert prepared_entries["qualitative"]["nominal_isl"] is None
+    assert prepared_entries["throughput_32k"]["nominal_isl"] == 32768
+    assert prepared_entries["throughput_1k"]["actual_tokenizer_isl"] is None
+    assert prepared_entries["throughput_1k"]["relative_path"] == (
+        "throughput_1k/test.parquet"
+    )
+    assert prepared_entries["throughput_1k"]["sha256"] == adapter.sha256_file(
+        prepared_root / "throughput_1k" / "test.parquet"
+    )
+    assert all(
+        not str(entry["relative_path"]).startswith("/")
+        for entry in prepared_entries.values()
+    )
+
+
+def test_speedbench_dataset_stage_dry_run_pins_revisions_and_respects_licenses() -> None:
+    output = run_dry(
+        "stage_speedbench.sh",
+        CLUSTER="lyris",
+        REQUIRE_GIT_PULL="false",
+    )
+
+    assert "nvidia/SPEED-Bench" in output
+    assert "487aa718444e816458d1a0a52bfce7a454285cf4" in output
+    assert "NVIDIA/Model-Optimizer" in output
+    assert "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446" in output
+    assert "examples/specdec_bench/prepare_data.py" in output
+    assert "License.pdf" in output
+    assert "LICENSE" in output
+    assert "prepared_manifest.json" in output
+    assert "sha256sum" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
+
+
 def test_scripts_do_not_depend_on_home_storage() -> None:
     for script_name in (
         "stage_image.sh",
         "stage_math_datasets.sh",
+        "stage_speedbench.sh",
         "stage_extended_method_assets.sh",
         "stage_ray_site.sh",
         "submit_matrix.sh",
