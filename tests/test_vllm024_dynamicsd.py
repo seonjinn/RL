@@ -2868,6 +2868,68 @@ def test_speedbench_stage_test_only_uses_temp_render_files_and_cleans_up(
     assert not (stage_root / "test-only-review").exists()
 
 
+def test_speedbench_stage_test_only_keeps_hostile_newlines_out_of_sbatch_directives(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "newline-marker"
+    hostile_root = (
+        f"{tmp_path}/safe-root\n#SBATCH --comment=owned\n$(touch {marker})"
+    )
+    container = tmp_path / "container.sqsh"
+    container.write_text("image", encoding="utf-8")
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    captured_script = tmp_path / "captured.sbatch"
+    captured_output_arg = tmp_path / "captured-output.txt"
+
+    (stub_bin / "sbatch").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "script_path=${!#}\n"
+        "cp \"$script_path\" \"${CAPTURED_SCRIPT:?}\"\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"$arg\" == --output=* ]]; then\n"
+        "    printf '%s' \"$arg\" >\"${CAPTURED_OUTPUT_ARG:?}\"\n"
+        "  fi\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    (stub_bin / "sbatch").chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "stage_speedbench.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "CLUSTER": "lyris",
+            "TEST_ONLY": "true",
+            "DATASET_ROOT": hostile_root,
+            "RUN_ID": "newline-review",
+            "CONTAINER_IMAGE": str(container),
+            "CAPTURED_SCRIPT": str(captured_script),
+            "CAPTURED_OUTPUT_ARG": str(captured_output_arg),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    script_text = captured_script.read_text(encoding="utf-8")
+    directive_lines = [
+        line for line in script_text.splitlines() if line.startswith("#SBATCH")
+    ]
+
+    assert "[TEST-ONLY]" in completed.stdout
+    assert "#SBATCH --output=" not in script_text
+    assert "#SBATCH --comment=owned" not in directive_lines
+    assert captured_output_arg.read_text(encoding="utf-8").startswith("--output=")
+    assert "\n#SBATCH --comment=owned\n" in captured_output_arg.read_text(
+        encoding="utf-8"
+    )
+    assert not marker.exists()
+
+
 def test_speedbench_stage_rejects_invalid_scheduler_identifiers(
     tmp_path: Path,
 ) -> None:

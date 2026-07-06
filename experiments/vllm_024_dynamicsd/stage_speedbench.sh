@@ -113,7 +113,6 @@ render_sbatch() {
 #SBATCH --segment=1
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --job-name=coreai_dlalgo_llm-speedbench-stage
-#SBATCH --output=${RUN_ROOT}/slurm-%j.out
 
 set -euo pipefail
 EOF
@@ -281,7 +280,7 @@ if [[ "${TEST_ONLY}" == "true" ]]; then
   RENDER_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/speedbench-stage-render.XXXXXX")"
   SBATCH_FILE="${RENDER_ROOT}/submit.sbatch"
   render_sbatch >"${SBATCH_FILE}"
-  sbatch_args=(--test-only)
+  sbatch_args=(--test-only "--output=${RUN_ROOT}/slurm-%j.out")
   if [[ -n "${DEPENDENCY}" ]]; then
     sbatch_args+=("--dependency=${DEPENDENCY}")
   fi
@@ -292,7 +291,7 @@ fi
 
 SBATCH_FILE="${RUN_ROOT}/submit.sbatch"
 render_sbatch >"${SBATCH_FILE}"
-sbatch_args=()
+sbatch_args=("--output=${RUN_ROOT}/slurm-%j.out")
 if [[ -n "${DEPENDENCY}" ]]; then
   sbatch_args+=("--dependency=${DEPENDENCY}")
 fi

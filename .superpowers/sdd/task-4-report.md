@@ -283,3 +283,99 @@ no output
 The staging path was exercised through rendered-script hostile-value execution
 and `TEST_ONLY`, but not through a real cluster submission with upstream
 network fetches.
+
+## Task 4 Critical Newline Fix
+
+### RED
+
+Command:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_stage_test_only_keeps_hostile_newlines_out_of_sbatch_directives
+```
+
+Output before the fix:
+
+```text
+1 failed, 96 deselected in 0.63s
+```
+
+Observed failure:
+
+- hostile `DATASET_ROOT` newlines still landed inside `#SBATCH --output=...`
+  and produced injected directive/script lines in the rendered sbatch file
+
+### Implementation
+
+- removed `RUN_ROOT`-derived `#SBATCH --output=...` text from the rendered
+  sbatch script
+- passed the log path to `sbatch` as an array element
+  `--output=${RUN_ROOT}/slurm-%j.out` in both real and `TEST_ONLY` modes
+- added a newline-hostile `TEST_ONLY` regression that captures the rendered
+  sbatch file and confirms:
+  - no `#SBATCH --output=` directive exists in the script text
+  - no injected `#SBATCH --comment=owned` directive appears
+  - the output path is passed as a single `--output=...` argument
+  - no marker command executes
+
+### GREEN
+
+Focused regression:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k speedbench_stage_test_only_keeps_hostile_newlines_out_of_sbatch_directives
+```
+
+Output:
+
+```text
+1 passed, 96 deselected in 0.27s
+```
+
+Broader SPEED-Bench subset:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py -k 'speedbench_dataset or speedbench_stage'
+```
+
+Output:
+
+```text
+12 passed, 85 deselected in 1.06s
+```
+
+Full requested test file:
+
+```bash
+python3 -m pytest -q tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+97 passed in 12.53s
+```
+
+Shell syntax:
+
+```bash
+bash -n experiments/vllm_024_dynamicsd/stage_speedbench.sh
+```
+
+Result:
+
+```text
+exit 0
+```
+
+Targeted Pyright:
+
+```bash
+pyright experiments/vllm_024_dynamicsd/speedbench_dataset.py tests/test_vllm024_dynamicsd.py
+```
+
+Output:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
