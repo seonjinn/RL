@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import subprocess
@@ -79,6 +80,30 @@ def load_speedbench_dataset_module() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_speedbench_sync_module() -> ModuleType:
+    path = EXPERIMENT / "benchmark_speedbench_sync_rollout.py"
+    assert path.is_file(), f"missing Task 5 SPEED-Bench overlay runner: {path}"
+    sys.path.insert(0, str(EXPERIMENT))
+    spec = importlib.util.spec_from_file_location("vllm024_speedbench_sync", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_speedbench_sync_summary_module() -> ModuleType:
+    path = EXPERIMENT / "summarize_speedbench_sync_rollout.py"
+    assert path.is_file(), f"missing Task 5 SPEED-Bench summary: {path}"
+    spec = importlib.util.spec_from_file_location(
+        "vllm024_speedbench_sync_summary", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
@@ -178,6 +203,28 @@ def fake_speedbench_rows() -> list[dict[str, Any]]:
                 )
             rows.append(fake_speedbench_row(category, idx, turns=turns))
     return rows
+
+
+def fake_speedbench_sync_summary_row(
+    *,
+    cohort: str,
+    variant: str = "baseline",
+    runtime_image_sha256: str = "runtime-sha",
+    model_config_hash: str = "model-sha",
+    prepared_manifest_hash: str = "prepared-sha",
+    request_plan_hash: str = "request-plan-sha",
+) -> dict[str, Any]:
+    return {
+        "cohort": cohort,
+        "variant": variant,
+        "runtime_image_sha256": runtime_image_sha256,
+        "model_config_hash": model_config_hash,
+        "prepared_manifest_hash": prepared_manifest_hash,
+        "request_plan_hash": request_plan_hash,
+        "output_tok_s_per_gpu": 100.0,
+        "total_rollout_time_s": 10.0,
+        "total_output_tokens": 1000,
+    }
 
 
 def test_dynamic_schedule_and_speculative_configs() -> None:
@@ -2486,6 +2533,404 @@ def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
 
     with pytest.raises(ValueError, match="actual output length"):
         summary_module.build_summary(tmp_path)
+
+
+def test_speedbench_sync_overlay_preserves_prepared_token_ids_without_padding_or_truncation() -> None:
+    runner = load_speedbench_sync_module()
+    row = {
+        "question_id": "speed-001",
+        "category": "mixed",
+        "sub_category": "reasoning",
+        "turns": ["user: keep", "assistant: context", "user: answer"],
+        "source": "nvidia/SPEED-Bench",
+        "src_id": "speed-src-001",
+        "difficulty": "hard",
+        "multiturn": True,
+        "dataset_config": "throughput_1k",
+        "nominal_isl": 1024,
+        "actual_tokenizer_isl": 4,
+        "prompt_token_ids": [101, 202, 303, 404],
+    }
+
+    prompt = runner.overlay_prompt_from_prepared_row(
+        row,
+        max_prompt_tokens=3,
+    )
+
+    assert prompt.prompt_id == "speed-001"
+    assert prompt.prompt_token_ids == [101, 202, 303, 404]
+    assert prompt.prompt_tokens == 4
+    assert prompt.prompt_sha256 == runner.token_hash([101, 202, 303, 404])
+    assert prompt.turn_count == 3
+    assert prompt.multiturn is True
+
+
+def test_speedbench_sync_overlay_uses_balanced_48_prompts_and_exact_request_plan_gate() -> None:
+    adapter = load_speedbench_dataset_module()
+    runner = load_speedbench_sync_module()
+    core = load_sync_rollout_core_module()
+    records = adapter.build_records(
+        fake_speedbench_rows(),
+        dataset_config="throughput_1k",
+    )
+    prepared_token_ids = {
+        record.question_id: [index + 1, index + 10_000]
+        for index, record in enumerate(records)
+    }
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
+
+    prompt_batches = runner.build_overlay_prompt_batches(
+        records,
+        prepared_token_ids_by_question_id=prepared_token_ids,
+        seed=1234,
+    )
+    requests = runner.prepare_overlay_requests(
+        prompt_batches[0],
+        request_plan=plan,
+        samples_per_prompt=1,
+        seed_start=7,
+        rollout_batch_index=0,
+        max_model_len=plan.max_model_len,
+    )
+
+    assert [len(batch) for batch in prompt_batches] == [16, 16, 16]
+    assert [adapter.count_categories(batch) for batch in prompt_batches] == [
+        {"low_entropy": 6, "mixed": 5, "high_entropy": 5},
+        {"low_entropy": 5, "mixed": 6, "high_entropy": 5},
+        {"low_entropy": 5, "mixed": 5, "high_entropy": 6},
+    ]
+    assert len({prompt.prompt_id for batch in prompt_batches for prompt in batch}) == 48
+    assert all(
+        prompt.prompt_token_ids == prepared_token_ids[prompt.prompt_id]
+        for batch in prompt_batches
+        for prompt in batch
+    )
+    assert Counter(request.max_tokens for request in requests) == {
+        4096: 8,
+        8192: 4,
+        16384: 3,
+        32768: 1,
+    }
+    assert runner.validate_request_plan_exact_work(
+        requests,
+        prompt_batches[0],
+        samples_per_prompt=1,
+    ) == {
+        "expected_requests": 16,
+        "actual_requests": 16,
+        "unique_prompts": 16,
+    }
+    with pytest.raises(ValueError, match="request-plan exact-work mismatch"):
+        runner.validate_request_plan_exact_work(
+            requests[:-1],
+            prompt_batches[0],
+            samples_per_prompt=1,
+        )
+
+
+def test_speedbench_sync_overlay_async_gather_barrier_records_ttft_and_completion_times() -> None:
+    runner = load_speedbench_sync_module()
+
+    class FakeCandidate:
+        def __init__(self, token_ids: list[int], finish_reason: str = "length") -> None:
+            self.token_ids = token_ids
+            self.text = f"tokens={token_ids}"
+            self.finish_reason = finish_reason
+
+    class FakeOutput:
+        def __init__(self, token_ids: list[int], *, finished: bool) -> None:
+            self.outputs = [FakeCandidate(token_ids)]
+            self.finished = finished
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[int]]] = []
+
+        async def generate(
+            self,
+            *,
+            prompt: dict[str, list[int]],
+            sampling_params: object,
+            request_id: str,
+        ) -> Any:
+            self.calls.append((request_id, list(prompt["prompt_token_ids"])))
+            if request_id == "r0":
+                await asyncio.sleep(0)
+                yield FakeOutput([11], finished=False)
+                await asyncio.sleep(0)
+                yield FakeOutput([11, 12, 13], finished=True)
+            else:
+                await asyncio.sleep(0)
+                yield FakeOutput([21], finished=False)
+                await asyncio.sleep(0)
+                yield FakeOutput([21, 22], finished=True)
+
+    clock_value = 0.0
+
+    def clock() -> float:
+        nonlocal clock_value
+        clock_value += 0.5
+        return clock_value
+
+    requests = [
+        runner.OverlayRequest(
+            request_id="r0",
+            prompt_id="p0",
+            prompt_sha256="p0-sha",
+            source_prompt_sha256="source-p0-sha",
+            category="low_entropy",
+            sample_index=0,
+            seed=1,
+            prompt_token_ids=[1, 2, 3],
+            max_tokens=3,
+            min_tokens=0,
+            ignore_eos=False,
+        ),
+        runner.OverlayRequest(
+            request_id="r1",
+            prompt_id="p1",
+            prompt_sha256="p1-sha",
+            source_prompt_sha256=None,
+            category="mixed",
+            sample_index=0,
+            seed=2,
+            prompt_token_ids=[4, 5],
+            max_tokens=2,
+            min_tokens=0,
+            ignore_eos=False,
+        ),
+    ]
+
+    row = asyncio.run(
+        runner.run_overlay_batch_async(
+            FakeEngine(),
+            requests,
+            sampling_params_by_request={"r0": object(), "r1": object()},
+            clock=clock,
+        )
+    )
+
+    assert row["sync_barrier"] == "AsyncLLM.gather"
+    assert row["request_count"] == 2
+    assert row["output_token_ids"] == [[11, 12, 13], [21, 22]]
+    assert row["ttft_s"] == [0.5, 1.0]
+    assert row["completion_time_s"] == [1.5, 2.0]
+    assert row["barrier_finished_at_s"] == 3.0
+    assert row["barrier_time_s"] == 2.5
+    assert row["prompt_token_ids"] == [[1, 2, 3], [4, 5]]
+
+
+def test_speedbench_sync_overlay_warmup_reuses_prompt_shape_without_padding() -> None:
+    runner = load_speedbench_sync_module()
+    prompts = [
+        runner.OverlayPrompt(
+            prompt_id="p0",
+            prompt_token_ids=[1, 2, 3],
+            prompt_sha256="h0",
+            source_prompt_sha256="s0",
+            category="low_entropy",
+            dataset_config="throughput_1k",
+            turn_count=1,
+            multiturn=False,
+        ),
+        runner.OverlayPrompt(
+            prompt_id="p1",
+            prompt_token_ids=[4, 5],
+            prompt_sha256="h1",
+            source_prompt_sha256="s1",
+            category="mixed",
+            dataset_config="throughput_1k",
+            turn_count=3,
+            multiturn=True,
+        ),
+    ]
+
+    warmup = runner.build_prompt_shape_warmup_requests(
+        prompts,
+        samples_per_prompt=2,
+        seed_start=100,
+        max_tokens=16,
+    )
+
+    assert [request.prompt_token_ids for request in warmup] == [
+        [1, 2, 3],
+        [1, 2, 3],
+        [4, 5],
+        [4, 5],
+    ]
+    assert [request.max_tokens for request in warmup] == [16, 16, 16, 16]
+    assert [request.seed for request in warmup] == [100, 101, 102, 103]
+
+
+def test_speedbench_sync_overlay_acceptance_windows_count_output_position_contributors() -> None:
+    runner = load_speedbench_sync_module()
+
+    windows = runner.output_position_acceptance_windows(
+        output_token_ids=[[1, 2, 3], [4, 5, 6, 7, 8], [9]],
+        accepted_tokens_per_pos=[2.0, 1.0, 0.0, 1.0, 1.0],
+        window_size=2,
+    )
+
+    assert windows == [
+        {
+            "start_pos": 0,
+            "end_pos": 1,
+            "contributor_count": 5,
+            "accepted_tokens": 3.0,
+            "acceptance_rate": 0.6,
+        },
+        {
+            "start_pos": 2,
+            "end_pos": 3,
+            "contributor_count": 3,
+            "accepted_tokens": 1.0,
+            "acceptance_rate": 0.333333,
+        },
+        {
+            "start_pos": 4,
+            "end_pos": 4,
+            "contributor_count": 1,
+            "accepted_tokens": 1.0,
+            "acceptance_rate": 1.0,
+        },
+    ]
+
+
+def test_speedbench_sync_active_concurrency_k_tier_reachability() -> None:
+    runner = load_speedbench_sync_module()
+
+    assert runner.active_concurrency_k_tier_reachability(
+        [1, 8, 32, 64],
+        "1:16:5,17:32:4,33:64:3,65:128:1,129:512:0",
+    ) == [
+        {"concurrency": 1, "k": 5, "reachable": True},
+        {"concurrency": 8, "k": 5, "reachable": True},
+        {"concurrency": 32, "k": 4, "reachable": True},
+        {"concurrency": 64, "k": 3, "reachable": True},
+    ]
+    with pytest.raises(ValueError, match="K-tier not reached"):
+        runner.require_k_tier_reachability(
+            [1, 8],
+            "1:16:5,17:32:4,33:64:3,65:128:1",
+        )
+
+
+def test_speedbench_sync_official_command_delegates_without_local_prompt_rewrites() -> None:
+    runner = load_speedbench_sync_module()
+
+    command = runner.build_official_speedbench_command(
+        model="/models/qwen32",
+        modelopt_root=Path("/opt/modelopt"),
+        prepared_root=Path("/data/speedbench/prepared"),
+        dataset_config="throughput_1k",
+        output_dir=Path("/results/official"),
+        variant="baseline",
+        tensor_parallel_size=2,
+        max_model_len=4096,
+    )
+
+    assert command[:2] == [
+        "python3",
+        "/opt/modelopt/examples/specdec_bench/benchmark.py",
+    ]
+    assert "--dataset" in command
+    assert command[command.index("--dataset") + 1] == "speed"
+    assert "--config" in command
+    assert command[command.index("--config") + 1] == "throughput_1k"
+    assert "--prepared-root" in command
+    assert command[command.index("--prepared-root") + 1] == "/data/speedbench/prepared"
+    assert "--output-dir" in command
+    assert command[command.index("--output-dir") + 1] == "/results/official"
+    assert "--prompt-jsonl" not in command
+    assert "--turns" not in command
+    assert "--sync-overlay" not in command
+
+
+def test_speedbench_sync_summary_never_merges_official_and_overlay() -> None:
+    summary = load_speedbench_sync_summary_module()
+
+    with pytest.raises(ValueError, match="cohort mismatch"):
+        summary.compare_rows(
+            fake_speedbench_sync_summary_row(cohort="official"),
+            fake_speedbench_sync_summary_row(cohort="overlay"),
+        )
+
+
+def test_speedbench_sync_summary_requires_matched_runtime_baselines_within_cohort() -> None:
+    summary = load_speedbench_sync_summary_module()
+
+    with pytest.raises(ValueError, match="runtime_image_sha256"):
+        summary.compare_rows(
+            fake_speedbench_sync_summary_row(cohort="overlay"),
+            fake_speedbench_sync_summary_row(
+                cohort="overlay",
+                variant="dynamic",
+                runtime_image_sha256="other-runtime",
+            ),
+        )
+
+
+def test_speedbench_sync_k_calibration_launcher_starts_with_required_concurrency_tiers() -> None:
+    output = run_dry(
+        "submit_speedbench_k_calibration.sh",
+        CLUSTER="lyris",
+        RUN_ID="speedbench-cal-test",
+        NODES="1",
+        CONCURRENCIES="1 8 32 64",
+        K_VALUES="1 3",
+    )
+    positions = [
+        output.index(f"active_concurrency={concurrency}")
+        for concurrency in ("1", "8", "32", "64")
+    ]
+
+    assert positions == sorted(positions)
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 12
+    assert "cohort=overlay" in output
+    assert "method=baseline" in output
+    assert "method=eagle3" in output
+    assert "benchmark_speedbench_sync_rollout.py" in output
+    assert "--request-plan-exact-work" in output
+    assert "--active-concurrency 64" in output
+    assert "#SBATCH --segment=1" in output
+    assert "--gres" not in output
+    assert "/home/" not in output
+
+
+def test_speedbench_sync_nemotron_launcher_keeps_native_mtp_distinct_from_eagle() -> None:
+    output = run_dry(
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        MODELS="ultra super",
+        RUN_ID="speedbench-nemotron-test",
+    )
+    manifest_lines = extract_manifest_rows(output)
+
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 6
+    assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
+    assert "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in output
+    assert "args+=(--mode mtp_static)" in output
+    assert "args+=(--mode mtp_dynamic)" in output
+    assert "method=mtp" in output
+    assert "method=eagle3" not in output
+    assert "Qwen3-32B-speculator.eagle3" not in output
+    assert "#SBATCH --nodes=2" in output
+    assert "#SBATCH --segment=2" in output
+    assert "#SBATCH --nodes=1" in output
+    assert "#SBATCH --segment=1" in output
+    assert "--gres" not in output
+    assert any(
+        line.startswith(
+            "UNSUPPORTED\tultra\tspeedbench_sync_overlay\teagle3\t-\t-\tnemotron_baseline_native_mtp_only\t"
+        )
+        for line in manifest_lines
+    )
+    assert any(
+        line.startswith(
+            "SUPPORTED\tultra\tspeedbench_sync_overlay\tmtp_dynamic\tmtp_dynamic\t"
+        )
+        for line in manifest_lines
+    )
 
 
 def test_speedbench_dataset_batches_balance_entropy_classes() -> None:
