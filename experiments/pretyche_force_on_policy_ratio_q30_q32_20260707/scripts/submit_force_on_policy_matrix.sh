@@ -12,6 +12,15 @@ EXPECTED_CONTAINER_SHA=bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a40831721
 TEST_ONLY=${TEST_ONLY:-1}
 SMOKE_ONLY=${SMOKE_ONLY:-1}
 RUN_FILTER=${RUN_FILTER:-.*}
+AFTEROK_JOB_ID=${AFTEROK_JOB_ID:-}
+DEPENDENCY_LABEL=none
+dependency_args=()
+
+if [[ -n $AFTEROK_JOB_ID ]]; then
+    [[ $AFTEROK_JOB_ID =~ ^[0-9]+$ ]]
+    DEPENDENCY_LABEL=afterok:$AFTEROK_JOB_ID
+    dependency_args=(--dependency=afterok:$AFTEROK_JOB_ID)
+fi
 
 if [[ $SMOKE_ONLY == 1 ]]; then
     MAX_STEPS=2
@@ -42,7 +51,7 @@ verify_smoke_gate() {
     test -s "$smoke_jobs"
     test "$(awk 'END {print NR - 1}' "$smoke_jobs")" -eq 4
 
-    while IFS=$'\t' read -r run_key job_id model config_name force_value nodes segment steps repo_sha recorded_runner_sha; do
+    while IFS=$'\t' read -r run_key job_id model config_name force_value nodes segment steps repo_sha recorded_runner_sha dependency; do
         if [[ $run_key == run_key ]]; then
             continue
         fi
@@ -76,7 +85,7 @@ if [[ $TEST_ONLY == 0 ]]; then
         printf 'Refusing duplicate submission: %s already contains jobs.\n' "$JOBS_TSV" >&2
         exit 2
     fi
-    printf 'run_key\tjob_id\tmodel\tconfig_name\tforce_on_policy_ratio\tnodes\tsegment\tsteps\trepo_sha\trunner_sha\n' > "$JOBS_TSV"
+    printf 'run_key\tjob_id\tmodel\tconfig_name\tforce_on_policy_ratio\tnodes\tsegment\tsteps\trepo_sha\trunner_sha\tdependency\n' > "$JOBS_TSV"
 fi
 
 submit_case() {
@@ -100,15 +109,17 @@ submit_case() {
         --segment="$segment" \
         --time="$TIME_LIMIT" \
         --comment=metrics \
+        "${dependency_args[@]}" \
         --job-name="coreai_dlalgo_llm-nemorl.force-ratio-${run_key}-${MAX_STEPS}s" \
         --export="ALL,CONFIG_NAME=${config_name},RUN_KEY=${run_key},MODEL=${model},FORCE_ON_POLICY_RATIO=${force_value},MAX_STEPS=${MAX_STEPS},EXPECTED_RUNNER_SHA=${runner_sha}" \
         "$RUNNER" 2>&1)
     printf '%s\t%s\n' "$run_key" "$output"
 
     if [[ $TEST_ONLY == 0 ]]; then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$run_key" "$output" "$model" "$config_name" "$force_value" \
-            "$nodes" "$segment" "$MAX_STEPS" "$EXPECTED_REPO_SHA" "$runner_sha" >> "$JOBS_TSV"
+            "$nodes" "$segment" "$MAX_STEPS" "$EXPECTED_REPO_SHA" "$runner_sha" \
+            "$DEPENDENCY_LABEL" >> "$JOBS_TSV"
     fi
 }
 

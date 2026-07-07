@@ -46,6 +46,8 @@ grep -q 'checkpointing.enabled=false' "$RUNNER"
 grep -q 'logger.wandb_enabled=true' "$RUNNER"
 grep -q 'TEST_ONLY' "$SUBMITTER"
 grep -q 'SMOKE_ONLY' "$SUBMITTER"
+grep -q 'AFTEROK_JOB_ID' "$SUBMITTER"
+grep -q -- '--dependency=afterok:' "$SUBMITTER"
 grep -q 'force_on_policy_ratio enabled' "$SUBMITTER"
 grep -q 'Skipping prev_logprobs (force_on_policy_ratio=True)' "$SUBMITTER"
 

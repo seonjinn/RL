@@ -38,8 +38,13 @@ Run config validation first, then check schedulability and submit smoke jobs:
 ```bash
 sbatch scripts/validate_config_contract.sbatch
 TEST_ONLY=1 SMOKE_ONLY=1 scripts/submit_force_on_policy_matrix.sh
-TEST_ONLY=0 SMOKE_ONLY=1 scripts/submit_force_on_policy_matrix.sh
+TEST_ONLY=0 SMOKE_ONLY=1 AFTEROK_JOB_ID=<validation-job-id> \
+  scripts/submit_force_on_policy_matrix.sh
 ```
+
+`AFTEROK_JOB_ID` is optional. When set, every submitted case records and uses a
+SLURM `afterok` dependency so queued smoke jobs cannot start before validation
+completes successfully.
 
 After all four smoke jobs complete successfully, the submitter independently
 checks the smoke manifest, SLURM state, step-2 marker, fatal signatures, and
