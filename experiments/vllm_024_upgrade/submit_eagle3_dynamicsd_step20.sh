@@ -14,7 +14,15 @@ PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-dynamicsd-aws-dfw}"
 
-REPO_DIR="${REPO_DIR:-$(git rev-parse --show-toplevel)}"
+if [[ -z "${REPO_DIR:-}" ]]; then
+  logical_pwd="$(pwd -L)"
+  repo_prefix="$(git rev-parse --show-prefix)"
+  if [[ -n "${repo_prefix}" ]]; then
+    REPO_DIR="${logical_pwd%/${repo_prefix%/}}"
+  else
+    REPO_DIR="${logical_pwd}"
+  fi
+fi
 AWS_ROOT="${AWS_ROOT:-/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna}"
 CONTAINER="${CONTAINER:-${AWS_ROOT}/containers/nemo_rl_nightly.sqsh}"
 HF_HOME="${HF_HOME:-${AWS_ROOT}/hf_home}"

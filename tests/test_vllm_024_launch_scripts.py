@@ -210,3 +210,10 @@ def test_dynamicsd_launcher_ignores_generated_submodule_dirt() -> None:
     source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
 
     assert source.count("--ignore-submodules=dirty") == 2
+
+
+def test_dynamicsd_launcher_preserves_logical_lustre_checkout_path() -> None:
+    source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
+
+    assert "logical_pwd=\"$(pwd -L)\"" in source
+    assert "repo_prefix=\"$(git rev-parse --show-prefix)\"" in source
