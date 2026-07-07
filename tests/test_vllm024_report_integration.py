@@ -62,6 +62,18 @@ EXPECTED_NEMOTRON_SMOKE_RESULTS = (
         "2326450",
     ),
 )
+EXPECTED_NEMOTRON_SMOKE_MODEL_PATHS = {
+    "super": (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e"
+    ),
+    "ultra": (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
+        "snapshots/624ba927cfbef0427354998700de3d51173c8c04"
+    ),
+}
 
 
 class RecordingHTMLParser(HTMLParser):
@@ -335,6 +347,23 @@ def test_nemotron_legacy_smoke_rejects_each_missing_expected_payload(
         latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
 
 
+def test_nemotron_legacy_smoke_rejects_unexpected_result_payload(
+    nemotron_smoke_root: Path,
+) -> None:
+    relative_path = Path("unexpected/cohort/result.json")
+    result_path = nemotron_smoke_root / relative_path
+    result_path.parent.mkdir(parents=True)
+    shutil.copy2(
+        nemotron_smoke_root / "super/baseline/result.json",
+        result_path,
+    )
+
+    with pytest.raises(ValueError, match="unexpected payloads") as error:
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+    assert relative_path.as_posix() in str(error.value)
+
+
 @pytest.mark.parametrize(
     ("field_path", "bad_value"),
     (
@@ -405,6 +434,108 @@ def test_nemotron_legacy_smoke_rejects_mismatched_payload_identity(
         latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
 
     assert expected_value in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "model_key",
+    ("super", "ultra"),
+)
+@pytest.mark.parametrize(
+    "mutation",
+    ("checkpoint-root", "snapshot-revision"),
+)
+def test_nemotron_legacy_smoke_rejects_wrong_checkpoint_path_or_revision(
+    nemotron_smoke_root: Path,
+    model_key: str,
+    mutation: str,
+) -> None:
+    result_path = nemotron_smoke_root / model_key / "baseline/result.json"
+    expected_model_path = EXPECTED_NEMOTRON_SMOKE_MODEL_PATHS[model_key]
+    if mutation == "checkpoint-root":
+        bad_model_path = expected_model_path.replace(
+            "/users/sna/hf_home/",
+            "/users/other/hf_home/",
+        )
+    else:
+        bad_model_path = str(Path(expected_model_path).parent / ("0" * 40))
+    replace_json_value(result_path, ("config", "model"), bad_model_path)
+
+    with pytest.raises(ValueError, match=r"config\.model") as error:
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+    assert expected_model_path in str(error.value)
+
+
+def test_nemotron_legacy_smoke_rejects_nonempty_runtime_image_sha256(
+    nemotron_smoke_root: Path,
+) -> None:
+    result_path = nemotron_smoke_root / "super/baseline/result.json"
+    replace_json_value(
+        result_path,
+        ("config", "runtime_image_sha256"),
+        "sha256:unexpected",
+    )
+
+    with pytest.raises(ValueError, match="config.runtime_image_sha256"):
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+
+def test_nemotron_legacy_smoke_accepts_empty_runtime_image_sha256(
+    nemotron_smoke_root: Path,
+) -> None:
+    result_path = nemotron_smoke_root / "super/baseline/result.json"
+    replace_json_value(result_path, ("config", "runtime_image_sha256"), "")
+
+    rows = latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+    assert len(rows) == 6
+
+
+def test_pages_report_publishes_and_links_exact_nemotron_smoke_evidence(
+    tmp_path: Path,
+) -> None:
+    public_root = tmp_path / "public"
+    report_path = public_root / "reports/vllm_standalone_results_latest.html"
+    public_data = public_root / "data"
+    latest.build_latest_vllm_outputs(
+        output_html=report_path,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=public_data,
+        nemotron_evidence_href_root="../data/nemotron_mtp_smoke_20260704",
+    )
+
+    html_text = parse_html(report_path)
+    smoke_section = html_text.split(
+        "<h2>Nemotron Native MTP Legacy Smoke</h2>", 1
+    )[1].split("</section>", 1)[0]
+    evidence_hrefs = re.findall(
+        r'href="([^"]*nemotron_mtp_smoke_20260704/[^"]*/result\.json)"',
+        smoke_section,
+    )
+    expected_relative_paths = {
+        Path(model_key) / mode / "result.json"
+        for model_key, mode, _model, _job_id in EXPECTED_NEMOTRON_SMOKE_RESULTS
+    }
+
+    assert len(evidence_hrefs) == 6
+    assert {
+        Path(href).relative_to("../data/nemotron_mtp_smoke_20260704")
+        for href in evidence_hrefs
+    } == expected_relative_paths
+    for href in evidence_hrefs:
+        assert (report_path.parent / href).resolve().is_file()
+
+    evidence_root = public_data / "nemotron_mtp_smoke_20260704"
+    published_paths = {
+        path.relative_to(evidence_root)
+        for path in evidence_root.glob("**/result.json")
+    }
+    assert published_paths == expected_relative_paths
+    for relative_path in expected_relative_paths:
+        assert sha256(evidence_root / relative_path) == sha256(
+            NEMOTRON_SMOKE_ROOT / relative_path
+        )
 
 
 def test_latest_vllm_html_contains_separate_nemotron_native_mtp_legacy_smoke(

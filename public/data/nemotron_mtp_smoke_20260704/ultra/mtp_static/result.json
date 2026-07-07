@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1021-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.24.0",
+    "torch_version": "2.11.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "0",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2326449"
+    }
+  },
+  "config": {
+    "tag": "ultra_mtp_static",
+    "scenario": "synchronous_rl_rollout",
+    "sync_barrier": "LLM.generate_return",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/snapshots/624ba927cfbef0427354998700de3d51173c8c04",
+    "draft_model": "",
+    "mode": "mtp_static",
+    "speculative_config": {
+      "method": "mtp",
+      "num_speculative_tokens": 5
+    },
+    "tensor_parallel_size": 8,
+    "pipeline_parallel_size": 1,
+    "total_gpus": 8,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "fp8",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 1408,
+    "max_num_seqs": 16,
+    "global_requests_per_rollout_batch": 16,
+    "max_num_batched_tokens": 32768,
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "enable_expert_parallel": true,
+    "attention_backend": "auto",
+    "moe_backend": "flashinfer_trtllm",
+    "distributed_executor_backend": "ray",
+    "distributed_timeout_seconds": 3600,
+    "model_loader_extra_config": {
+      "enable_multithread_load": true,
+      "num_threads": 96
+    },
+    "cudagraph_mode": "PIECEWISE",
+    "compilation_config": {
+      "cudagraph_mode": "PIECEWISE",
+      "pass_config": {
+        "fuse_allreduce_rms": false
+      }
+    },
+    "mamba_ssm_cache_dtype": "float16",
+    "mamba_backend": "flashinfer",
+    "enable_mamba_cache_stochastic_rounding": true,
+    "mamba_cache_philox_rounds": 5,
+    "num_prompts": 4,
+    "samples_per_prompt": 4,
+    "requests_per_rollout_batch": 16,
+    "rollout_batches": 2,
+    "max_prompt_tokens": 1024,
+    "max_new_tokens": 128,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "logprobs": 0,
+    "seed": 1234,
+    "warmup_max_tokens": 32,
+    "prompt_jsonl": null,
+    "prompt_offset": 0,
+    "source_recipe": "sync-rl-math-rollout",
+    "global_num_prompts": null,
+    "global_generation_replicas": null,
+    "prompt_batch_hashes": [
+      "a2a93962d8f35b920558ef5d19bb2165c9fbc652e7d6416509d42782456c4037",
+      "1bf3bbb11674e1c37842b6370101f941e2a29eb29346438b224d4b7696e08248"
+    ]
+  },
+  "rollout_batches": [
+    {
+      "batch_index": 0,
+      "request_count": 16,
+      "rollout_time_s": 2.1475383429788053,
+      "output_tokens": 2048,
+      "output_tok_s": 953.65002757495,
+      "output_tok_s_per_gpu": 119.20625344686874,
+      "requests_per_s": 7.4503908404292964,
+      "completion_length": {
+        "min": 128,
+        "mean": 128.0,
+        "p50": 128.0,
+        "p90": 128.0,
+        "p99": 128.0,
+        "max": 128
+      },
+      "finish_reasons": {
+        "length": 16
+      },
+      "output_token_hashes": [
+        "bae72319f9427908bbda391edaa479af2ec0a8f77a591425828eeae6215e2361",
+        "edadb2278a53a4716e9489d79323a0a5b8fba6d458dc1a31b78f5e8878535e29",
+        "6109b21e82c10fa7a704dd23ea1747d9d3802621737711a3a7a5211bbd3088ef",
+        "ae405a447d2a05df9167e1cd0f5b029b014883f7dcba048f6d11941dbe55d35b",
+        "a1c69ff8b27f11a49b028bed81dc810b4e1bc47885aed7c3e753e001a18f20d0",
+        "0b5a9ef0c3986a79f214a89d36e2e5968d2c7e906ab3a0f690469af1fa9de4c7",
+        "9bce4582a5e6460eb2448456daa7a0cd4084c72d5eca5008624658c64871d1f4",
+        "b2185753b3879316c4d0f2633717719c37fad69a04403ee2b090ace4b96ecfb0",
+        "944798d4c0b2e4ef01db7db22435fa7cdcc7cde41175e9e4da02e9e473c3aafb",
+        "a62f93eda7882c8b2bbdcc3cc1e07ef5b7761b05eadeab8010dcee61476e7f03",
+        "09b89b982510a8e4e852255d972b1b9fe046ba852a5d1193757c5d4bbe9d24bd",
+        "d67713aaf1a1d18a9e5cf69a8198d24b66b849e5a5190cc66e76471e44879ca2",
+        "fe9fb779d3611b42b2d203b483dcf7a621359f43e935024e1551ac93eb0135ba",
+        "11a56fa8ad6bd10bf049413a4a9ac664491a9d41191ef88b4092387d155ebfb3",
+        "2781ca934e2e1a20af1c1810761698a7c9e649b51e9e1699e490c4ff69811c85",
+        "25aedb1a62faf95bb707efa0f08a1c8ec57ad965d9ba331ad175b41c09c012fc"
+      ],
+      "spec_decode_metrics": {
+        "num_drafts": 435.0,
+        "num_draft_tokens": 2175.0,
+        "num_accepted_tokens": 1639.0,
+        "num_accepted_tokens_per_pos": [
+          400.0,
+          375.0,
+          322.0,
+          291.0,
+          251.0
+        ],
+        "active": true,
+        "acceptance_rate": 0.7535632183908046,
+        "mean_acceptance_length": 4.767816091954023,
+        "accepted_tokens_per_draft": 3.767816091954023,
+        "metrics_available": true,
+        "acceptance_rate_per_pos": [
+          0.9195402298850575,
+          0.8620689655172413,
+          0.7402298850574712,
+          0.6689655172413793,
+          0.5770114942528736
+        ]
+      }
+    },
+    {
+      "batch_index": 1,
+      "request_count": 16,
+      "rollout_time_s": 1.6140884461347014,
+      "output_tokens": 2048,
+      "output_tok_s": 1268.827619021992,
+      "output_tok_s_per_gpu": 158.603452377749,
+      "requests_per_s": 9.912715773609312,
+      "completion_length": {
+        "min": 128,
+        "mean": 128.0,
+        "p50": 128.0,
+        "p90": 128.0,
+        "p99": 128.0,
+        "max": 128
+      },
+      "finish_reasons": {
+        "length": 16
+      },
+      "output_token_hashes": [
+        "39fb89a8a2c28db41cb60c7b3c04b2874ffee0a6959cc718ac6183947f03bbae",
+        "3525a3ab5afcb7e8c88db4d73bb550b132f317acbec0ac41e15ca9163e057e80",
+        "a82cb245c6b7fec1c51b3418f700df69e90da11a36a378dc50a3e6ab075a44c6",
+        "48a790ea05931a3dab4215766c2dfae6877f584ebdf3b5555a6c56844f2f32db",
+        "246feb3dd8d24e9e195ce0970a1b25f40157e4233efb6fea7087d8e7e4f60949",
+        "f825d3960f76b26cc4a6988c9aa4d4ed6d434854472562400d9e32efd4679e03",
+        "393b3d69a7416b80a4f215275b85d145823f8cf402851f2fe43d3ddd47cbe539",
+        "0b11c636b6334383e96c2d216ace76f478165295987f949ce00ef4abf31ee798",
+        "54ed6a08fa8be89f7fb287edf9889b4343d5b1c068102744e2db7b4c8c35202b",
+        "96a7d147a45e34e2facbad1b46417c567812683023c97cd4a66d3a72d6f39397",
+        "96a7d147a45e34e2facbad1b46417c567812683023c97cd4a66d3a72d6f39397",
+        "24abe6e8104ed7e43f79579e3bd5ee92a4ed84f9d558628622529fdcef665845",
+        "708d85fe74c02644a2b435b9d5db88fef5dbd6fd1098726e0196b28a6d96c5bf",
+        "b89b46468dbaa5a141535ac7abaa1d284afe9511aa80b2436ef0aed22900d267",
+        "2ac75cfacbe69b6eeb2a070f55548219145f3de11c3c03a8654f71d11d86952b",
+        "062cca39144ade66ff18783c22da5cfb8ad0ba9ed83e2d28c8effecb81b2cf5b"
+      ],
+      "spec_decode_metrics": {
+        "num_drafts": 410.0,
+        "num_draft_tokens": 2050.0,
+        "num_accepted_tokens": 1663.0,
+        "num_accepted_tokens_per_pos": [
+          388.0,
+          367.0,
+          331.0,
+          297.0,
+          280.0
+        ],
+        "active": true,
+        "acceptance_rate": 0.811219512195122,
+        "mean_acceptance_length": 5.056097560975609,
+        "accepted_tokens_per_draft": 4.056097560975609,
+        "metrics_available": true,
+        "acceptance_rate_per_pos": [
+          0.9463414634146341,
+          0.8951219512195122,
+          0.8073170731707318,
+          0.724390243902439,
+          0.6829268292682927
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total_rollout_time_s": 3.7616267891135067,
+    "offline_generation_makespan_s": 3.7616267891135067,
+    "mean_rollout_time_s": 1.8808133945567533,
+    "median_rollout_time_s": 1.8808133945567533,
+    "total_output_tokens": 4096,
+    "output_tok_s": 1088.890586342643,
+    "output_tok_s_per_gpu": 136.11132329283038,
+    "requests_per_s": 8.506957705801899,
+    "spec_decode_metrics": {
+      "num_drafts": 845.0,
+      "num_draft_tokens": 4225.0,
+      "num_accepted_tokens": 3302.0,
+      "num_accepted_tokens_per_pos": [
+        788.0,
+        742.0,
+        653.0,
+        588.0,
+        531.0
+      ],
+      "active": true,
+      "acceptance_rate": 0.7815384615384615,
+      "mean_acceptance_length": 4.907692307692308,
+      "accepted_tokens_per_draft": 3.9076923076923076,
+      "metrics_available": true,
+      "acceptance_rate_per_pos": [
+        0.9325443786982248,
+        0.8781065088757396,
+        0.7727810650887574,
+        0.6958579881656805,
+        0.6284023668639053
+      ]
+    }
+  }
+}

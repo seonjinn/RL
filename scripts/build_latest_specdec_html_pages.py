@@ -55,37 +55,49 @@ NEMOTRON_MTP_LEGACY_SMOKE_RESULTS = (
     (
         "super",
         "baseline",
-        "Nemotron-3-Super-120B-A12B-BF16",
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
         "2326451",
     ),
     (
         "super",
         "mtp_static",
-        "Nemotron-3-Super-120B-A12B-BF16",
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
         "2326452",
     ),
     (
         "super",
         "mtp_dynamic",
-        "Nemotron-3-Super-120B-A12B-BF16",
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
         "2326453",
     ),
     (
         "ultra",
         "baseline",
-        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
+        "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
         "2326448",
     ),
     (
         "ultra",
         "mtp_static",
-        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
+        "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
         "2326449",
     ),
     (
         "ultra",
         "mtp_dynamic",
-        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
+        "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
         "2326450",
     ),
 )
@@ -1364,7 +1376,8 @@ def local_result_link_html(value: object, source: object) -> str:
     path = text_value(source)
     if not label or not path:
         return esc(label)
-    return f'<a href="../{esc(path)}"><code>{esc(label)}</code></a>'
+    href = path if path.startswith(("./", "../")) else f"../{path}"
+    return f'<a href="{esc(href)}"><code>{esc(label)}</code></a>'
 
 
 def wandb_link_html(row: pd.Series) -> str:
@@ -1855,7 +1868,10 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
             elif kind == "link":
                 text = wandb_link_html(row) if key == "wandb_url" else link_html(value)
             elif kind == "result_link":
-                text = local_result_link_html(value, row.get("source", ""))
+                text = local_result_link_html(
+                    value,
+                    row.get("result_href", row.get("source", "")),
+                )
             else:
                 text = published_data_html(value) if key in {"source", "source_file", "manifest"} else esc(value)
             title = esc(value) if key in text_classes and text else ""
@@ -2099,13 +2115,20 @@ def _validate_nemotron_smoke_payload(
     for field_path, expected in expected_metadata:
         found, actual = _nemotron_smoke_metadata_value(payload, field_path)
         field_name = ".".join(field_path)
-        if field_name == "config.model" and found:
-            actual = _nemotron_smoke_model_label(actual)
         if not found or actual != expected:
             actual_display = repr(actual) if found else "<missing>"
             mismatches.append(
                 f"{field_name}: expected {expected!r}, got {actual_display}"
             )
+    sha_found, runtime_image_sha256 = _nemotron_smoke_metadata_value(
+        payload,
+        ("config", "runtime_image_sha256"),
+    )
+    if sha_found and runtime_image_sha256 not in (None, ""):
+        mismatches.append(
+            "config.runtime_image_sha256: expected missing or empty, "
+            f"got {runtime_image_sha256!r}"
+        )
     if mismatches:
         raise ValueError(
             f"Nemotron MTP legacy smoke payload {relative_path.as_posix()} "
@@ -2142,16 +2165,28 @@ def load_nemotron_mtp_legacy_smoke_rows(
         (model_key, mode): (model, job_id)
         for model_key, mode, model, job_id in NEMOTRON_MTP_LEGACY_SMOKE_RESULTS
     }
-    missing_paths = [
+    expected_paths = {
         Path(model_key) / mode / "result.json"
         for model_key, mode, _model, _job_id in NEMOTRON_MTP_LEGACY_SMOKE_RESULTS
-        if not (result_root / model_key / mode / "result.json").is_file()
-    ]
-    if missing_paths:
-        missing = ", ".join(path.as_posix() for path in missing_paths)
+    }
+    discovered_paths = {
+        path.relative_to(result_root)
+        for path in result_root.glob("**/result.json")
+        if path.is_file()
+    }
+    missing_paths = sorted(expected_paths - discovered_paths)
+    unexpected_paths = sorted(discovered_paths - expected_paths)
+    if missing_paths or unexpected_paths:
+        details = []
+        if missing_paths:
+            missing = ", ".join(path.as_posix() for path in missing_paths)
+            details.append(f"missing expected payloads: {missing}")
+        if unexpected_paths:
+            unexpected = ", ".join(path.as_posix() for path in unexpected_paths)
+            details.append(f"unexpected payloads: {unexpected}")
         raise ValueError(
-            "Nemotron MTP legacy smoke cohort is incomplete; missing expected "
-            f"payloads: {missing}"
+            "Nemotron MTP legacy smoke cohort must contain exactly the six expected "
+            f"result.json payloads; {'; '.join(details)}"
         )
     for model_key in ("super", "ultra"):
         payloads: dict[str, tuple[dict[str, object], Path]] = {}
@@ -2201,7 +2236,7 @@ def load_nemotron_mtp_legacy_smoke_rows(
                 rollout_display = "1.00x (reference)"
                 validity = (
                     "legacy capability smoke; reference only; one measured realization; "
-                    "runtime_image_sha256 missing"
+                    "runtime_image_sha256 missing/empty"
                 )
             else:
                 throughput_display = f"{throughput_speedup:.2f}x (directional only)"
@@ -2213,7 +2248,7 @@ def load_nemotron_mtp_legacy_smoke_rows(
                 validity = (
                     "legacy capability smoke; directional only"
                     f"{natural_eos}; one measured realization; "
-                    "runtime_image_sha256 missing"
+                    "runtime_image_sha256 missing/empty"
                 )
                 if not work_matches:
                     validity += "; direct rollout-time comparison invalid"
@@ -2242,19 +2277,53 @@ def load_nemotron_mtp_legacy_smoke_rows(
                     "schedule": _nemotron_smoke_schedule(config),
                     "validity": validity,
                     "source": str(path.relative_to(ROOT)),
+                    "result_relative_path": str(path.relative_to(result_root)),
                 }
             )
     return pd.DataFrame(rows)
 
 
-def render_nemotron_mtp_legacy_smoke_section() -> str:
+def publish_nemotron_mtp_legacy_smoke_evidence(
+    *,
+    result_root: Path = NEMOTRON_MTP_LEGACY_SMOKE_ROOT,
+    public_data_dir: Path = PUBLIC_DATA,
+) -> tuple[Path, ...]:
+    load_nemotron_mtp_legacy_smoke_rows(result_root)
+    destination_root = public_data_dir / result_root.name
+    if destination_root.exists():
+        shutil.rmtree(destination_root)
+    published = []
+    for model_key, mode, _model, _job_id in NEMOTRON_MTP_LEGACY_SMOKE_RESULTS:
+        relative_path = Path(model_key) / mode / "result.json"
+        destination = publish_public_data(
+            result_root / relative_path,
+            destination_root / relative_path.parent,
+        )
+        if destination is None:
+            raise ValueError(
+                "Nemotron MTP legacy smoke evidence disappeared after validation: "
+                f"{relative_path.as_posix()}"
+            )
+        published.append(destination)
+    return tuple(published)
+
+
+def render_nemotron_mtp_legacy_smoke_section(
+    evidence_href_root: str | None = None,
+) -> str:
     rows = load_nemotron_mtp_legacy_smoke_rows()
+    if evidence_href_root is not None:
+        href_root = evidence_href_root.rstrip("/")
+        rows["result_href"] = rows["result_relative_path"].map(
+            lambda relative_path: f"{href_root}/{relative_path}"
+        )
     return "".join(
         [
             '<section class="section"><h2>Nemotron Native MTP Legacy Smoke</h2>',
             '<p class="note">Every row is legacy capability smoke from vLLM 0.24.0 '
             "with CUDA Graph PIECEWISE, OSL/max_new_tokens 128, temperature 1.0, "
-            "top_p 0.95, one measured realization, and runtime_image_sha256 missing. "
+            "top_p 0.95, one measured realization, and runtime_image_sha256 "
+            "missing/empty. "
             "Dynamic rows use uncalibrated dynamic schedules.</p>",
             '<p class="note">These rows are excluded from calibrated '
             "DynamicSD/DynamicMTP claims and existing validated matrices. "
@@ -2466,6 +2535,7 @@ def build_vllm_html(
     native_rows: pd.DataFrame,
     dflare_rows: pd.DataFrame,
     dflare_status: pd.DataFrame,
+    nemotron_evidence_href_root: str | None = None,
 ) -> str:
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     added_summary = aggregate_added(added)
@@ -2523,7 +2593,7 @@ def build_vllm_html(
         f"<div class=\"card\"><b>{len(added_summary)}</b><span>added summary groups</span></div>",
         "</div>",
         "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
-        render_nemotron_mtp_legacy_smoke_section(),
+        render_nemotron_mtp_legacy_smoke_section(nemotron_evidence_href_root),
         render_sync_speedbench_status_section(),
         related_vllm_reports_section(),
         "<section class=\"section\"><h2>Key Findings</h2><p>" + esc(key_finding) + "</p><p class=\"note\">Speedups are computed only when a matched baseline exists with the same domain, model, temperature, batch size, ISL and OSL.</p></section>",
@@ -2679,6 +2749,7 @@ def build_latest_vllm_outputs(
     public_data_dir: Path = PUBLIC_DATA,
     status_csv: Path = DFLARE_STATUS_CSV,
     profile_csv: Path = VLLM024_PROFILE_CSV,
+    nemotron_evidence_href_root: str | None = None,
 ) -> Path:
     output_html.parent.mkdir(parents=True, exist_ok=True)
     added_csv_out.parent.mkdir(parents=True, exist_ok=True)
@@ -2694,7 +2765,15 @@ def build_latest_vllm_outputs(
     publish_public_data(completed_csv_out, public_data_dir)
     publish_public_data(status_csv, public_data_dir)
     publish_public_data(PERFCFG_DYNAMIC_REPLAY_CSV, public_data_dir)
-    vllm_html = build_vllm_html(main_vllm, added, native_rows, dflare_rows, dflare_status)
+    publish_nemotron_mtp_legacy_smoke_evidence(public_data_dir=public_data_dir)
+    vllm_html = build_vllm_html(
+        main_vllm,
+        added,
+        native_rows,
+        dflare_rows,
+        dflare_status,
+        nemotron_evidence_href_root,
+    )
     output_html.write_text(vllm_html, encoding="utf-8")
     return output_html
 
