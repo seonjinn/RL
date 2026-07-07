@@ -18,7 +18,7 @@ import sys
 import time
 import warnings
 from copy import deepcopy
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, fields
 from functools import partial
 from numbers import Real
@@ -526,6 +526,40 @@ def _recursive_tensor_payload_bytes(value: Any) -> int:
     return 0
 
 
+def _iter_payload_children(value: Any) -> Iterator[Any]:
+    if isinstance(value, PackedTensor):
+        yield value.tensors
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            yield key
+            yield item
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        yield from value
+
+    try:
+        object_state = object.__getattribute__(value, "__dict__")
+    except AttributeError:
+        object_state = None
+    if isinstance(object_state, dict):
+        yield object_state
+
+    for cls in type(value).__mro__:
+        slots = cls.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if slot in {"__dict__", "__weakref__"}:
+                continue
+            storage_name = slot
+            class_name = cls.__name__.lstrip("_")
+            if slot.startswith("__") and not slot.endswith("__") and class_name:
+                storage_name = f"_{class_name}{slot}"
+            try:
+                yield object.__getattribute__(value, storage_name)
+            except AttributeError:
+                continue
+
+
 def _recursive_deep_payload_bytes(
     value: Any,
     seen: set[int] | None = None,
@@ -548,34 +582,13 @@ def _recursive_deep_payload_bytes(
         if storage_key not in seen_storages:
             seen_storages.add(storage_key)
             retained_storage_bytes = storage_nbytes
-        return sys.getsizeof(value) + retained_storage_bytes
-    total_bytes = sys.getsizeof(value)
-    if isinstance(value, PackedTensor):
-        total_bytes += _recursive_deep_payload_bytes(value.tensors, seen, seen_storages)
-    if isinstance(value, Mapping):
-        total_bytes += sum(
-            _recursive_deep_payload_bytes(key, seen, seen_storages)
-            + _recursive_deep_payload_bytes(item, seen, seen_storages)
-            for key, item in value.items()
-        )
-    elif isinstance(value, (list, tuple, set)):
-        total_bytes += sum(
-            _recursive_deep_payload_bytes(item, seen, seen_storages) for item in value
-        )
-
-    object_state = getattr(value, "__dict__", None)
-    if isinstance(object_state, dict):
-        total_bytes += _recursive_deep_payload_bytes(object_state, seen, seen_storages)
-    for cls in type(value).__mro__:
-        slots = cls.__dict__.get("__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        for slot in slots:
-            if slot in {"__dict__", "__weakref__"} or not hasattr(value, slot):
-                continue
-            total_bytes += _recursive_deep_payload_bytes(
-                getattr(value, slot), seen, seen_storages
-            )
+        total_bytes = sys.getsizeof(value) + retained_storage_bytes
+    else:
+        total_bytes = sys.getsizeof(value)
+    total_bytes += sum(
+        _recursive_deep_payload_bytes(child, seen, seen_storages)
+        for child in _iter_payload_children(value)
+    )
     return total_bytes
 
 
@@ -606,28 +619,8 @@ def _validate_cpu_cache_payload(value: Any, seen: set[int] | None = None) -> Non
                 "Validation CPU cache payload contains a tensor on "
                 f"{value.device.type}; all cached tensors must be on CPU"
             )
-        return
-    if isinstance(value, PackedTensor):
-        _validate_cpu_cache_payload(value.tensors, seen)
-    elif isinstance(value, Mapping):
-        for key, item in value.items():
-            _validate_cpu_cache_payload(key, seen)
-            _validate_cpu_cache_payload(item, seen)
-    elif isinstance(value, (list, tuple, set)):
-        for item in value:
-            _validate_cpu_cache_payload(item, seen)
-
-    object_state = getattr(value, "__dict__", None)
-    if isinstance(object_state, dict):
-        _validate_cpu_cache_payload(object_state, seen)
-    for cls in type(value).__mro__:
-        slots = cls.__dict__.get("__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        for slot in slots:
-            if slot in {"__dict__", "__weakref__"} or not hasattr(value, slot):
-                continue
-            _validate_cpu_cache_payload(getattr(value, slot), seen)
+    for child in _iter_payload_children(value):
+        _validate_cpu_cache_payload(child, seen)
 
 
 def _clone_validation_event_data(

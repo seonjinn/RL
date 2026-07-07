@@ -220,7 +220,7 @@ def test_recursive_payload_bytes_and_capacity_guard_execute_real_helpers() -> No
 def test_deep_payload_counts_userdict_backing_state_and_nested_objects() -> None:
     functions = _load_functions(
         REPO_ROOT / "nemo_rl/algorithms/sft.py",
-        ["_recursive_deep_payload_bytes"],
+        ["_iter_payload_children", "_recursive_deep_payload_bytes"],
         namespace={
             "torch": _FakeTorch,
             "PackedTensor": _FakePackedTensor,
@@ -251,6 +251,60 @@ def test_deep_payload_counts_userdict_backing_state_and_nested_objects() -> None
             vars(payload["nested"][0]),
             payload["nested"][0].blob,
         )
+    )
+
+    assert measured >= lower_bound
+
+
+def test_deep_payload_counts_frozenset_tensor_state_and_private_slots() -> None:
+    functions = _load_functions(
+        REPO_ROOT / "nemo_rl/algorithms/sft.py",
+        ["_iter_payload_children", "_recursive_deep_payload_bytes"],
+        namespace={
+            "torch": _FakeTorch,
+            "PackedTensor": _FakePackedTensor,
+            "Mapping": Mapping,
+            "sys": sys,
+        },
+    )
+
+    class Storage:
+        def nbytes(self) -> int:
+            return 64
+
+        def data_ptr(self) -> int:
+            return 1234
+
+    class StatefulTensor(_FakeTensorType):
+        def __init__(self) -> None:
+            self.device = "cpu"
+            self.metadata = bytearray(1024)
+
+        def untyped_storage(self) -> Storage:
+            return Storage()
+
+    class PrivateSlot:
+        __slots__ = ("__hidden",)
+
+        def __init__(self) -> None:
+            self.__hidden = bytearray(2048)
+
+    tensor = StatefulTensor()
+    private_slot = PrivateSlot()
+    payload = {"frozen": frozenset({private_slot}), "tensor": tensor}
+    measured = functions["_recursive_deep_payload_bytes"](payload)
+    lower_bound = (
+        sum(
+            sys.getsizeof(value)
+            for value in (
+                tensor,
+                vars(tensor),
+                tensor.metadata,
+                private_slot,
+                object.__getattribute__(private_slot, "_PrivateSlot__hidden"),
+            )
+        )
+        + 64
     )
 
     assert measured >= lower_bound
@@ -290,7 +344,7 @@ def test_cache_budget_and_loss_clone_helpers_preserve_off_path() -> None:
 def test_cpu_cache_payload_rejects_reachable_non_cpu_tensor() -> None:
     functions = _load_functions(
         REPO_ROOT / "nemo_rl/algorithms/sft.py",
-        ["_validate_cpu_cache_payload"],
+        ["_iter_payload_children", "_validate_cpu_cache_payload"],
         namespace={
             "torch": _FakeTorch,
             "PackedTensor": _FakePackedTensor,
@@ -309,6 +363,52 @@ def test_cpu_cache_payload_rejects_reachable_non_cpu_tensor() -> None:
         functions["_validate_cpu_cache_payload"](
             {"nested": [_FakePackedTensor([DeviceTensor("meta")])]}
         )
+
+    class TensorWithState(DeviceTensor):
+        def __init__(self) -> None:
+            super().__init__("cpu")
+            self.attached = DeviceTensor("meta")
+
+    class PrivateSlot:
+        __slots__ = ("__hidden",)
+
+        def __init__(self) -> None:
+            self.__hidden = DeviceTensor("meta")
+
+    for payload in (
+        TensorWithState(),
+        frozenset({DeviceTensor("meta")}),
+        PrivateSlot(),
+    ):
+        with pytest.raises(ValueError, match="CPU cache.*meta"):
+            functions["_validate_cpu_cache_payload"](payload)
+
+
+def test_payload_child_iterator_bypasses_custom_slot_accessor() -> None:
+    functions = _load_functions(
+        REPO_ROOT / "nemo_rl/algorithms/sft.py",
+        ["_iter_payload_children"],
+        namespace={"PackedTensor": _FakePackedTensor, "Mapping": Mapping},
+    )
+
+    class CountingSlot:
+        __slots__ = ("value", "reads")
+
+        def __init__(self) -> None:
+            object.__setattr__(self, "value", bytearray(32))
+            object.__setattr__(self, "reads", 0)
+
+        def __getattribute__(self, name: str) -> object:
+            if name == "value":
+                reads = object.__getattribute__(self, "reads")
+                object.__setattr__(self, "reads", reads + 1)
+            return object.__getattribute__(self, name)
+
+    payload = CountingSlot()
+    children = list(functions["_iter_payload_children"](payload))
+
+    assert payload.reads == 0
+    assert any(isinstance(child, bytearray) for child in children)
 
 
 def test_event_contract_validation_and_submission_order() -> None:
