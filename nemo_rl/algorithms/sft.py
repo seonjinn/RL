@@ -16,6 +16,7 @@ import time
 import warnings
 from dataclasses import dataclass, fields
 from functools import partial
+from numbers import Real
 from typing import Any, Optional
 
 import numpy as np
@@ -104,9 +105,17 @@ def _add_e2e_step_timing(timing_metrics: dict[str, float]) -> None:
 
 
 def _optional_float(value: Any) -> float | None:
-    """Return a scalar metric value, omitting non-scalar values from comparisons."""
-    if isinstance(value, (int, float)):
+    """Convert CPU scalar metrics to float without synchronizing CUDA tensors."""
+    if isinstance(value, Real) and not isinstance(value, bool):
         return float(value)
+    if (
+        isinstance(value, torch.Tensor)
+        and value.ndim == 0
+        and value.device.type == "cpu"
+    ):
+        scalar = value.item()
+        if isinstance(scalar, Real) and not isinstance(scalar, bool):
+            return float(scalar)
     return None
 
 
@@ -362,7 +371,7 @@ def validate(
             "val_dataloader is None, so sft.val_period must be <= 0"
         )
         print("  ⚠️ No validation dataloader provided, skipping validation")
-        return {}, {}
+        return {}, {}, False
 
     timer = Timer()
 
@@ -436,7 +445,8 @@ def validate(
             if val_batches > 0 and batch_idx >= val_batches - 1:
                 break
 
-        if sum_num_valid_tokens > 0:
+        validation_loss_available = bool(sum_num_valid_tokens > 0)
+        if validation_loss_available:
             val_metrics["val_loss"] /= sum_num_valid_tokens
         else:
             warnings.warn(
@@ -451,7 +461,7 @@ def validate(
     timing_metrics = timer.get_timing_metrics(reduction_op="sum")
     validation_time = timing_metrics.get("total_validation_time", 0)
 
-    if sum_num_valid_tokens > 0:
+    if validation_loss_available:
         # Print summary of validation results
         print("\n📊 Validation Results:")
         print(f"    • Validation loss: {val_metrics['val_loss']:.4f}")
@@ -464,7 +474,7 @@ def validate(
     # Make sure to reset the timer after validation
     timer.reset()
 
-    return val_metrics, timing_metrics
+    return val_metrics, timing_metrics, validation_loss_available
 
 
 def sft_train(
@@ -511,7 +521,7 @@ def sft_train(
     # Run validation at the start if configured
     if val_at_start and total_steps == 0:
         print("\n🔍 Running initial validation...")
-        val_metrics, validation_timings = validate(
+        val_metrics, validation_timings, _ = validate(
             policy,
             val_dataloader,
             tokenizer,
@@ -542,6 +552,7 @@ def sft_train(
             )
             maybe_gpu_profile_step(policy, total_steps + 1)
             val_metrics, validation_timings = None, None
+            validation_loss_available = False
 
             with timer.time("total_step_time"):
                 # Prepare batch and generate responses
@@ -603,7 +614,11 @@ def sft_train(
                 if (val_period > 0 and (total_steps + 1) % val_period == 0) or (
                     val_at_end and is_last_step
                 ):
-                    val_metrics, validation_timings = validate(
+                    (
+                        val_metrics,
+                        validation_timings,
+                        validation_loss_available,
+                    ) = validate(
                         policy,
                         val_dataloader,
                         tokenizer,
@@ -788,14 +803,14 @@ def sft_train(
                             if validation_timings is not None
                             else None,
                         ),
-                        main_lm_loss=metrics.get("loss"),
+                        main_lm_loss=_optional_float(metrics.get("loss")),
                         validation_loss=(
-                            val_metrics.get("val_loss")
-                            if val_metrics is not None
+                            _optional_float(val_metrics.get("val_loss"))
+                            if val_metrics is not None and validation_loss_available
                             else None
                         ),
-                        grad_norm=metrics.get("grad_norm"),
-                        learning_rate=metrics.get("lr"),
+                        grad_norm=_optional_float(metrics.get("grad_norm")),
+                        learning_rate=_optional_float(metrics.get("lr")),
                     )
                 )
                 logger.log_metrics(

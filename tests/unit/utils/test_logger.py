@@ -1511,6 +1511,32 @@ class TestLogger:
         logger = Logger(cfg)
 
         assert len(logger.loggers) == 0
+        assert logger.comparison_metrics_enabled is False
+        mock_tb_logger.assert_not_called()
+        mock_wandb_logger.assert_not_called()
+
+    @patch("nemo_rl.utils.logger.WandbLogger")
+    @patch("nemo_rl.utils.logger.TensorboardLogger")
+    def test_init_rejects_comparison_metrics_without_wandb(
+        self, mock_tb_logger, mock_wandb_logger, temp_dir
+    ):
+        cfg = {
+            "wandb_enabled": False,
+            "comparison_metrics_enabled": True,
+            "tensorboard_enabled": True,
+            "mlflow_enabled": False,
+            "swanlab_enabled": False,
+            "monitor_gpus": False,
+            "tensorboard": {"log_dir": "test_logs"},
+            "log_dir": temp_dir,
+        }
+
+        with pytest.raises(
+            ValueError,
+            match="comparison_metrics_enabled requires wandb_enabled",
+        ):
+            Logger(cfg)
+
         mock_tb_logger.assert_not_called()
         mock_wandb_logger.assert_not_called()
 

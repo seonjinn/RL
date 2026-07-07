@@ -956,9 +956,12 @@ class Logger(LoggerInterface):
         self.loggers: list[LoggerInterface] = []
         self.wandb_logger = None
         self.swanlab_logger = None
-        self.comparison_metrics_enabled: bool = cfg.get(
-            "comparison_metrics_enabled", False
-        )
+        self.comparison_metrics_enabled = bool(cfg.get("comparison_metrics_enabled"))
+        if self.comparison_metrics_enabled and not cfg["wandb_enabled"]:
+            raise ValueError(
+                "comparison_metrics_enabled requires wandb_enabled because "
+                "custom comparison axes are W&B-specific"
+            )
 
         self.base_log_dir = cfg["log_dir"]
         os.makedirs(self.base_log_dir, exist_ok=True)

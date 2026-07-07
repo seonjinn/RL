@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -29,9 +29,11 @@ from nemo_rl.algorithms.sft import (
     _initial_sft_save_state,
     _iter_timed_batches,
     _measure_loop_interval,
+    _optional_float,
     sft_train,
+    validate,
 )
-from nemo_rl.utils.sft_comparison_metrics import SFTComparisonObservation
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.utils.timer import Timer
 
 
@@ -154,6 +156,53 @@ def test_measure_loop_interval_uses_consecutive_boundaries():
     assert current_boundary == 18.0
     assert interval == 6.5
     assert _measure_loop_interval(None, 11.5) == (11.5, None)
+
+
+def test_optional_float_converts_scalar_tensor_and_omits_non_scalar() -> None:
+    assert _optional_float(torch.tensor(2.5)) == 2.5
+    assert _optional_float(torch.tensor([2.5])) is None
+
+
+def test_optional_float_omits_cuda_tensor_without_synchronizing() -> None:
+    cuda_tensor = MagicMock(spec=torch.Tensor)
+    cuda_tensor.ndim = 0
+    cuda_tensor.device = torch.device("cuda")
+
+    assert _optional_float(cuda_tensor) is None
+    cuda_tensor.item.assert_not_called()
+
+
+def test_validate_preserves_synthetic_zero_and_marks_loss_unavailable(
+    mock_components,
+):
+    val_batch = BatchedDataDict(
+        {
+            "packed_cu_seqlens": torch.tensor([[0, 1]]),
+            "sample_mask": torch.zeros(1),
+            "token_mask": torch.zeros((1, 1)),
+        }
+    )
+    policy = mock_components["policy"]
+    policy.train.return_value = {
+        "loss": torch.tensor(0.0),
+        "all_mb_metrics": {},
+    }
+
+    with pytest.warns(UserWarning, match="No validation metrics were collected"):
+        val_metrics, _, validation_loss_available = validate(
+            policy,
+            [val_batch],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            step=1,
+            master_config=mock_components["master_config"],
+            val_batches=1,
+            val_batch_size=1,
+            val_mbs=1,
+        )
+
+    assert val_metrics == {"val_loss": 0.0}
+    assert validation_loss_available is False
 
 
 def test_exit_on_max_steps(mock_components):
@@ -304,19 +353,57 @@ def test_training_with_negative_val_period(mock_components):
     assert mock_components["policy"].train.call_count == 3
 
 
-def test_training_logs_one_comparison_payload_with_custom_axis(mock_components):
-    """SFT emits one normalized comparison payload after validation completes."""
+@pytest.mark.parametrize(
+    (
+        "validation_timing",
+        "has_valid_tokens",
+        "expected_validation_time",
+        "expected_validation_loss",
+    ),
+    [
+        pytest.param(
+            torch.tensor(126.99),
+            True,
+            pytest.approx(126.99),
+            0.6,
+            id="scalar-tensors",
+        ),
+        pytest.param(
+            torch.tensor(126.99),
+            False,
+            pytest.approx(126.99),
+            None,
+            id="synthetic-zero-loss",
+        ),
+    ],
+)
+def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
+    mock_components,
+    validation_timing,
+    has_valid_tokens,
+    expected_validation_time,
+    expected_validation_loss,
+):
+    """SFT normalizes one payload without changing native metric calls."""
 
     class FixedTimer:
+        def __init__(self) -> None:
+            self.labels: set[str] = set()
+
         @contextmanager
-        def time(self, _name: str) -> Generator[None, None, None]:
+        def time(self, name: str) -> Generator[None, None, None]:
+            self.labels.add(name)
             yield
 
-        def record_elapsed(self, _name: str, _elapsed: float) -> None:
-            return None
+        def record_elapsed(self, name: str, _elapsed: float) -> None:
+            self.labels.add(name)
 
-        def get_timing_metrics(self, reduction_op: str) -> dict[str, float]:
+        def get_timing_metrics(
+            self, reduction_op: str
+        ) -> dict[str, float | torch.Tensor]:
             assert reduction_op == "sum"
+            if "total_validation_time" in self.labels:
+                return {"total_validation_time": validation_timing}
             return {
                 "policy_training": 55.28,
                 "total_step_time": 60.0,
@@ -329,29 +416,34 @@ def test_training_logs_one_comparison_payload_with_custom_axis(mock_components):
     mock_components["master_config"].sft.max_num_steps = 1
     mock_components["master_config"].sft.max_num_epochs = 1
     mock_components["master_config"].sft.val_period = 1
-    mock_components["policy"].train.return_value["all_mb_metrics"]["lr"] = [4.2e-7]
+    policy = mock_components["policy"]
+    train_result = policy.train.return_value
+    train_result["all_mb_metrics"]["lr"] = [4.2e-7]
+    validation_result = {
+        "loss": torch.tensor(0.6),
+        "all_mb_metrics": {"loss": [0.6]} if has_valid_tokens else {},
+    }
+    policy.train.side_effect = [train_result, validation_result]
     logger = mock_components["logger"]
     logger.comparison_metrics_enabled = True
-    comparison_payload = {"comparison/step": 1, "context/is_validation_step": 1}
+    val_batch = BatchedDataDict(
+        {
+            "packed_cu_seqlens": torch.tensor([[0, 1]]),
+            "sample_mask": torch.ones(1),
+            "token_mask": torch.ones((1, 1)),
+        }
+    )
 
-    with (
-        patch("nemo_rl.algorithms.sft.Timer", FixedTimer),
-        patch(
-            "nemo_rl.algorithms.sft.validate",
-            return_value=(
-                {"val_loss": 0.6},
-                {"total_validation_time": 126.99},
-            ),
-        ),
-        patch(
-            "nemo_rl.algorithms.sft.build_sft_comparison_metrics",
-            return_value=comparison_payload,
-        ) as build_metrics,
-    ):
+    warning_context = (
+        nullcontext()
+        if has_valid_tokens
+        else pytest.warns(UserWarning, match="No validation metrics were collected")
+    )
+    with warning_context, patch("nemo_rl.algorithms.sft.Timer", FixedTimer):
         sft_train(
-            mock_components["policy"],
+            policy,
             mock_components["train_dataloader"],
-            mock_components["val_dataloader"],
+            [val_batch],
             mock_components["tokenizer"],
             mock_components["loss_fn"],
             mock_components["master_config"],
@@ -360,28 +452,59 @@ def test_training_logs_one_comparison_payload_with_custom_axis(mock_components):
             _initial_sft_save_state(),
         )
 
-    logger.define_metric.assert_has_calls(
-        [
-            call("comparison/step"),
-            call("performance/*", step_metric="comparison/step"),
-            call("accuracy/*", step_metric="comparison/step"),
-            call("context/*", step_metric="comparison/step"),
-        ]
-    )
-    build_metrics.assert_called_once_with(
-        SFTComparisonObservation(
-            step=1,
-            train_step_time_s=55.28,
-            e2e_step_time_s=62.0,
-            validation_time_s=126.99,
-            main_lm_loss=0.5,
-            validation_loss=0.6,
-            grad_norm=1.0,
-            learning_rate=4.2e-7,
-        )
-    )
-    logger.log_metrics.assert_any_call(
-        comparison_payload,
+    assert logger.define_metric.call_args_list == [
+        call("comparison/step"),
+        call("performance/*", step_metric="comparison/step"),
+        call("accuracy/*", step_metric="comparison/step"),
+        call("context/*", step_metric="comparison/step"),
+    ]
+
+    log_calls = logger.log_metrics.call_args_list
+    assert len(log_calls) == 5
+    native_validation_timings = log_calls[0].args[0]
+    assert native_validation_timings["total_validation_time"] is validation_timing
+    assert log_calls[0].args[1] == 1
+    assert log_calls[0].kwargs == {"prefix": "timing/validation"}
+    native_validation_metrics = log_calls[1].args[0]
+    if has_valid_tokens:
+        assert native_validation_metrics["val_loss"].item() == pytest.approx(0.6)
+    else:
+        assert native_validation_metrics == {"val_loss": 0.0}
+    assert log_calls[1].args[1] == 1
+    assert log_calls[1].kwargs == {"prefix": "validation"}
+    assert log_calls[2].args == (
+        {
+            "loss": 0.5,
+            "grad_norm": 1.0,
+            "global_valid_toks": 10.0,
+            "lr": 4.2e-7,
+        },
         1,
-        step_metric="comparison/step",
     )
+    assert log_calls[2].kwargs == {"prefix": "train"}
+    assert log_calls[3].args[1] == 1
+    assert log_calls[3].kwargs == {"prefix": "timing/train"}
+
+    expected_comparison_payload = {
+        "comparison/step": 1,
+        "performance/train_step_time_s": 55.28,
+        "performance/e2e_step_time_s": 62.0,
+        "accuracy/main_lm_loss": 0.5,
+        "accuracy/grad_norm": 1.0,
+        "accuracy/learning_rate": 4.2e-7,
+        "context/is_validation_step": 1,
+    }
+    if expected_validation_time is not None:
+        expected_comparison_payload["performance/validation_time_s"] = (
+            expected_validation_time
+        )
+    if expected_validation_loss is not None:
+        expected_comparison_payload["accuracy/validation_loss"] = (
+            expected_validation_loss
+        )
+
+    comparison_payload = log_calls[4].args[0]
+    assert comparison_payload == expected_comparison_payload
+    assert all(isinstance(value, (float, int)) for value in comparison_payload.values())
+    assert log_calls[4].args[1] == 1
+    assert log_calls[4].kwargs == {"step_metric": "comparison/step"}

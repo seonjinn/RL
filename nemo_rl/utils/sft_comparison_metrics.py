@@ -44,8 +44,14 @@ def build_sft_comparison_metrics(
         The normalized comparison payload. Unavailable optional values are omitted.
 
     Raises:
+        TypeError: If a value is not a Python int or float.
         ValueError: If an emitted scalar is NaN or infinite.
     """
+    if not isinstance(observation.step, int) or isinstance(observation.step, bool):
+        raise TypeError(
+            f"step must be a Python int, got {type(observation.step).__name__}"
+        )
+
     metrics: dict[str, float | int] = {"comparison/step": observation.step}
     field_names = {
         "performance/train_step_time_s": "train_step_time_s",
@@ -61,9 +67,15 @@ def build_sft_comparison_metrics(
         value = getattr(observation, field_name)
         if value is None:
             continue
-        if not math.isfinite(value):
-            raise ValueError(f"{field_name} must be finite, got {value!r}")
-        metrics[metric_name] = value
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(
+                f"{field_name} must be a Python int or float, "
+                f"got {type(value).__name__}"
+            )
+        float_value = float(value)
+        if not math.isfinite(float_value):
+            raise ValueError(f"{field_name} must be finite, got {float_value!r}")
+        metrics[metric_name] = float_value
 
     metrics["context/is_validation_step"] = int(
         observation.validation_time_s is not None

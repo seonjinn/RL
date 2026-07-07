@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import math
+from decimal import Decimal
+from typing import Any, cast
 
 import pytest
 
@@ -67,4 +69,14 @@ def test_rejects_non_finite_metric_values(value: float) -> None:
     observation = SFTComparisonObservation(step=1, main_lm_loss=value)
 
     with pytest.raises(ValueError, match="main_lm_loss"):
+        build_sft_comparison_metrics(observation)
+
+
+def test_rejects_non_python_numeric_values() -> None:
+    observation = SFTComparisonObservation(
+        step=1,
+        main_lm_loss=cast(Any, Decimal("2.5")),
+    )
+
+    with pytest.raises(TypeError, match="main_lm_loss"):
         build_sft_comparison_metrics(observation)

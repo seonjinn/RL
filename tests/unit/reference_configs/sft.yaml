@@ -254,6 +254,7 @@ data:
 logger:
   log_dir: "logs"  # Base directory for all logs
   wandb_enabled: true # Make sure you do a ``wandb login [Your API key]'' before running
+  comparison_metrics_enabled: false  # Emit normalized SFT metrics on a shared W&B axis
   tensorboard_enabled: true
   mlflow_enabled: false
   swanlab_enabled: false # Disable SwanLab logging
