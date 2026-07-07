@@ -587,6 +587,31 @@ def test_eval_mode_fast_path_preserves_required_mxfp8_param_sync(monkeypatch):
     assert model.hook_enabled is False
 
 
+def test_worker_default_omits_backend_train_timing(monkeypatch):
+    worker, _, _, _, _ = _build_eval_fast_path_worker(monkeypatch, enabled=True)
+
+    results = worker.train(
+        SimpleNamespace(size=1), object(), eval_mode=False, gbs=1, mbs=1
+    )
+
+    assert "backend_train_time_s" not in results
+
+
+def test_worker_reports_backend_train_timing_when_requested(monkeypatch):
+    worker, _, _, _, _ = _build_eval_fast_path_worker(monkeypatch, enabled=True)
+
+    results = worker.train(
+        SimpleNamespace(size=1),
+        object(),
+        eval_mode=False,
+        gbs=1,
+        mbs=1,
+        collect_train_timing=True,
+    )
+
+    assert results["backend_train_time_s"] >= 0
+
+
 @pytest.mark.parametrize(
     ("megatron_enabled", "eval_mode", "use_timer", "expected_timing_request"),
     [
@@ -648,6 +673,47 @@ def test_policy_only_requests_worker_eval_timing_for_timed_megatron_evaluation(
         assert results["evaluation_timings"] == {"forward_s": 0.2}
     else:
         assert "evaluation_timings" not in results
+
+
+def test_policy_aggregates_max_worker_backend_train_timing():
+    policy = object.__new__(Policy)
+    policy.cfg = {
+        "train_global_batch_size": 1,
+        "train_micro_batch_size": 1,
+        "megatron_cfg": {"enabled": True},
+    }
+    policy.flops_tracker = None
+    policy._shard_for_train = lambda data, batch_size: [data]
+    policy.worker_group = MagicMock()
+    policy.worker_group.run_all_workers_sharded_data.return_value = [object()]
+    policy.worker_group.get_all_worker_results.return_value = [
+        {
+            "global_loss": torch.tensor(1.0),
+            "grad_norm": torch.tensor([0.0]),
+            "all_mb_metrics": {},
+            "backend_train_time_s": 0.1,
+        },
+        {
+            "global_loss": torch.tensor(1.0),
+            "grad_norm": torch.tensor([0.0]),
+            "all_mb_metrics": {},
+            "backend_train_time_s": 0.2,
+        },
+    ]
+
+    results = policy.train(
+        SimpleNamespace(),
+        object(),
+        gbs=1,
+        mbs=1,
+        collect_train_timing=True,
+    )
+
+    common_kwargs = policy.worker_group.run_all_workers_sharded_data.call_args.kwargs[
+        "common_kwargs"
+    ]
+    assert common_kwargs["collect_train_timing"] is True
+    assert results["backend_train_time_s"] == pytest.approx(0.2)
 
 
 def create_megatron_test_config(

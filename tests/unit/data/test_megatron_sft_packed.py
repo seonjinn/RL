@@ -33,6 +33,7 @@ def _packed_datum(idx, context_parallel_size=1):
         "packed_cu_seqlens": torch.tensor([0, 4], dtype=torch.int32),
         "packed_max_seqlen": 4,
         "packed_context_parallel_size": context_parallel_size,
+        "processed_token_count": idx % 4 + 1,
         "length": 4,
         "loss_multiplier": 1.0,
         "idx": idx,
@@ -74,6 +75,7 @@ def test_megatron_sft_packed_matches_megatron_truncation_shift():
     assert torch.equal(processed["packed_cu_seqlens"], torch.tensor([0, 4]))
     assert processed["packed_max_seqlen"] == 4
     assert processed["packed_context_parallel_size"] == 1
+    assert processed["processed_token_count"] == 4
 
 
 def test_megatron_sft_packed_global_shift_keeps_cp_padding_bridge():
@@ -114,6 +116,7 @@ def test_megatron_sft_packed_global_shift_keeps_cp_padding_bridge():
     assert torch.equal(processed["packed_cu_seqlens"], torch.tensor([0, 4, 8]))
     assert processed["packed_max_seqlen"] == 4
     assert processed["packed_context_parallel_size"] == 2
+    assert processed["processed_token_count"] == 6
 
 
 def test_megatron_sft_packed_cp8_segments_are_partitionable():
@@ -145,6 +148,7 @@ def test_megatron_sft_packed_cp8_segments_are_partitionable():
     assert torch.all(adjacent_diffs % 16 == 0)
     assert processed["input_ids"].shape == (32,)
     assert processed["target_ids"].shape == (32,)
+    assert processed["processed_token_count"] == 6
 
 
 def test_identity_accepts_tool_and_consecutive_assistant_turns():
@@ -191,6 +195,9 @@ def test_collate_dp_stride_then_contiguous_sharding_matches_megatron_order():
     )
 
     assert batch["idx"] == [0, 4, 1, 5, 2, 6, 3, 7]
+    assert torch.equal(
+        batch["processed_token_counts"], torch.tensor([1, 1, 2, 2, 3, 3, 4, 4])
+    )
     shards = batch.shard_by_batch_size(4, batch_size=8)
     assert [shard["idx"] for shard in shards] == [
         [0, 4],

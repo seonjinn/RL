@@ -51,12 +51,13 @@ from nemo_rl.utils.timer import Timer
                 {
                     "input_ids": torch.empty((2, 8), device="meta"),
                     "input_lengths": torch.tensor([5, 7], device="cpu"),
+                    "processed_token_counts": torch.tensor([3, 4], device="cpu"),
                     "packed_cu_seqlens": torch.tensor(
                         [[0, 2, 5], [0, 3, 7]], device="cpu"
                     ),
                 }
             ),
-            12,
+            7,
             id="packed",
         ),
         pytest.param(
@@ -71,7 +72,7 @@ from nemo_rl.utils.timer import Timer
         ),
     ],
 )
-def test_get_processed_token_count_sums_cpu_input_lengths(
+def test_get_processed_token_count_prefers_packed_provenance_then_input_lengths(
     train_data: BatchedDataDict, expected_processed_tokens: int
 ) -> None:
     assert train_data["input_lengths"].device.type == "cpu"
@@ -158,6 +159,32 @@ def mock_components():
         "checkpointer": checkpointer,
         "master_config": master_config,
     }
+
+
+def test_training_without_comparison_metrics_skips_comparison_work(
+    mock_components,
+) -> None:
+    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_epochs = 1
+
+    with patch("nemo_rl.algorithms.sft._get_processed_token_count") as token_count:
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    token_count.assert_not_called()
+    assert (
+        mock_components["policy"].train.call_args.kwargs["collect_train_timing"]
+        is False
+    )
 
 
 def _validation_config(execution_mode: str, **overrides: object) -> MasterConfig:
@@ -524,9 +551,9 @@ def test_validation_per_batch_keeps_legacy_policy_calls() -> None:
     _run_validation(policy, batches, "per_batch")
 
     assert policy.train.call_count == 4
-    for batch, call in zip(batches, policy.train.call_args_list):
-        assert call.args[0] is batch
-        assert call.kwargs == {"eval_mode": True, "gbs": 64, "mbs": 1}
+    for batch, train_call in zip(batches, policy.train.call_args_list):
+        assert train_call.args[0] is batch
+        assert train_call.kwargs == {"eval_mode": True, "gbs": 64, "mbs": 1}
 
 
 def test_sft_collate_validates_policy_context_parallel_size():
@@ -858,7 +885,7 @@ def test_training_with_negative_val_period(mock_components):
             torch.tensor(126.99),
             True,
             pytest.approx(126.99),
-            0.6,
+            pytest.approx(0.6),
             id="scalar-tensors",
         ),
         pytest.param(
@@ -912,6 +939,7 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
     policy = mock_components["policy"]
     train_result = policy.train.return_value
     train_result["all_mb_metrics"]["lr"] = [4.2e-7]
+    train_result["backend_train_time_s"] = 50.0
     validation_result = {
         "loss": torch.tensor(0.6),
         "all_mb_metrics": {"loss": [0.6]} if has_valid_tokens else {},
@@ -982,12 +1010,14 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
     expected_comparison_payload = {
         "comparison/step": 1,
         "performance/train_step_time_s": 55.28,
+        "performance/throughput_denominator_time_s": 50.0,
         "performance/e2e_step_time_s": 62.0,
         "accuracy/main_lm_loss": 0.5,
         "accuracy/grad_norm": 1.0,
         "accuracy/learning_rate": 4.2e-7,
-        "throughput/processed_tokens_per_second": pytest.approx(3 / 55.28),
-        "throughput/processed_tokens_per_second_per_gpu": pytest.approx(3 / 55.28 / 2),
+        "throughput/processed_tokens_per_second": pytest.approx(3 / 50.0),
+        "throughput/processed_tokens_per_second_per_gpu": pytest.approx(3 / 50.0 / 2),
+        "throughput/valid_tokens_per_second_per_gpu": pytest.approx(10 / 50.0 / 2),
         "context/processed_tokens": 3,
         "context/num_gpus": 2,
         "context/is_validation_step": 1,
@@ -1009,3 +1039,4 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
         "step_metric": "comparison/step",
         "step_finished": True,
     }
+    assert policy.train.call_args_list[0].kwargs["collect_train_timing"] is True

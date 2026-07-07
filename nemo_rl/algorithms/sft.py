@@ -130,8 +130,13 @@ def _optional_float(value: Any) -> float | None:
 
 
 def _get_processed_token_count(train_data: BatchedDataDict[Any]) -> int:
-    """Return the global token count from the CPU input lengths."""
-    return int(train_data["input_lengths"].sum().item())
+    """Return the global real-token count from CPU batch metadata."""
+    token_counts = (
+        train_data["processed_token_counts"]
+        if "processed_token_counts" in train_data
+        else train_data["input_lengths"]
+    )
+    return int(token_counts.sum().item())
 
 
 def _measure_loop_interval(
@@ -1033,6 +1038,7 @@ def sft_train(
             maybe_gpu_profile_step(policy, total_steps + 1)
             val_metrics, validation_timings = None, None
             validation_loss_available = False
+            processed_tokens: int | None = None
 
             with timer.time("total_step_time"):
                 # Prepare batch and generate responses
@@ -1070,7 +1076,8 @@ def sft_train(
                             cat_and_padded.get_multimodal_dict(as_tensors=False)
                         )
 
-                    processed_tokens = _get_processed_token_count(train_data)
+                    if logger.comparison_metrics_enabled:
+                        processed_tokens = _get_processed_token_count(train_data)
                     dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
                     train_data = _maybe_reorder_megatron_sft_dp_stride(
                         train_data,
@@ -1084,6 +1091,7 @@ def sft_train(
                         train_data,
                         loss_fn,
                         timer=timer,
+                        collect_train_timing=logger.comparison_metrics_enabled,
                     )
 
                 is_last_step = total_steps + 1 >= master_config.sft.max_num_steps or (
@@ -1272,11 +1280,15 @@ def sft_train(
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(timing_metrics, total_steps + 1, prefix="timing/train")
             if logger.comparison_metrics_enabled:
+                assert processed_tokens is not None
                 comparison_metrics = build_sft_comparison_metrics(
                     SFTComparisonObservation(
                         step=total_steps + 1,
                         train_step_time_s=_optional_float(
                             timing_metrics.get("policy_training")
+                        ),
+                        throughput_denominator_time_s=_optional_float(
+                            train_results.get("backend_train_time_s")
                         ),
                         e2e_step_time_s=_optional_float(
                             timing_metrics.get("e2e_step_time")
@@ -1295,6 +1307,7 @@ def sft_train(
                         grad_norm=_optional_float(metrics.get("grad_norm")),
                         learning_rate=_optional_float(metrics.get("lr")),
                         processed_tokens=processed_tokens,
+                        valid_tokens=int(metrics.get("global_valid_toks", 0)),
                         num_gpus=total_num_gpus,
                     )
                 )

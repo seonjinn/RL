@@ -24,6 +24,7 @@ class SFTComparisonObservation:
 
     step: int
     train_step_time_s: float | None = None
+    throughput_denominator_time_s: float | None = None
     e2e_step_time_s: float | None = None
     validation_time_s: float | None = None
     main_lm_loss: float | None = None
@@ -31,6 +32,7 @@ class SFTComparisonObservation:
     grad_norm: float | None = None
     learning_rate: float | None = None
     processed_tokens: int | None = None
+    valid_tokens: int | None = None
     num_gpus: int | None = None
 
 
@@ -48,9 +50,9 @@ def build_sft_comparison_metrics(
     Raises:
         TypeError: If a value is not a Python int or float.
         ValueError: If an emitted scalar is NaN or infinite, throughput inputs
-            are not provided as a pair, processed_tokens is negative, num_gpus
-            is non-positive, or train_step_time_s is non-positive when
-            throughput is emitted.
+            are not provided as a complete group, token counts are negative,
+            num_gpus is non-positive, or throughput_denominator_time_s is
+            non-positive when throughput is emitted.
     """
     if not isinstance(observation.step, int) or isinstance(observation.step, bool):
         raise TypeError(
@@ -60,6 +62,7 @@ def build_sft_comparison_metrics(
     metrics: dict[str, float | int] = {"comparison/step": observation.step}
     field_names = {
         "performance/train_step_time_s": "train_step_time_s",
+        "performance/throughput_denominator_time_s": ("throughput_denominator_time_s"),
         "performance/e2e_step_time_s": "e2e_step_time_s",
         "performance/validation_time_s": "validation_time_s",
         "accuracy/main_lm_loss": "main_lm_loss",
@@ -82,8 +85,25 @@ def build_sft_comparison_metrics(
             raise ValueError(f"{field_name} must be finite, got {float_value!r}")
         metrics[metric_name] = float_value
 
-    if (observation.processed_tokens is None) != (observation.num_gpus is None):
-        raise ValueError("processed_tokens and num_gpus must be provided together")
+    throughput_inputs = (
+        observation.throughput_denominator_time_s,
+        observation.processed_tokens,
+        observation.num_gpus,
+    )
+    if any(value is not None for value in throughput_inputs) and not all(
+        value is not None for value in throughput_inputs
+    ):
+        raise ValueError(
+            "throughput_denominator_time_s, processed_tokens, and num_gpus "
+            "must be provided together"
+        )
+    if observation.valid_tokens is not None and not all(
+        value is not None for value in throughput_inputs
+    ):
+        raise ValueError(
+            "throughput_denominator_time_s, processed_tokens, and num_gpus "
+            "must be provided when valid_tokens is provided"
+        )
 
     if observation.processed_tokens is not None:
         if type(observation.processed_tokens) is not int:
@@ -102,19 +122,36 @@ def build_sft_comparison_metrics(
             )
         if observation.num_gpus <= 0:
             raise ValueError(f"num_gpus must be positive, got {observation.num_gpus}")
-        if observation.train_step_time_s is None or observation.train_step_time_s <= 0:
+        if (
+            observation.throughput_denominator_time_s is None
+            or observation.throughput_denominator_time_s <= 0
+        ):
             raise ValueError(
-                "train_step_time_s must be positive when throughput is emitted"
+                "throughput_denominator_time_s must be positive when throughput "
+                "is emitted"
             )
 
-        train_step_time_s = float(observation.train_step_time_s)
-        processed_tokens_per_second = observation.processed_tokens / train_step_time_s
+        denominator_time_s = float(observation.throughput_denominator_time_s)
+        processed_tokens_per_second = observation.processed_tokens / denominator_time_s
         metrics["throughput/processed_tokens_per_second"] = processed_tokens_per_second
         metrics["throughput/processed_tokens_per_second_per_gpu"] = (
             processed_tokens_per_second / observation.num_gpus
         )
         metrics["context/processed_tokens"] = observation.processed_tokens
         metrics["context/num_gpus"] = observation.num_gpus
+        if observation.valid_tokens is not None:
+            if type(observation.valid_tokens) is not int:
+                raise TypeError(
+                    "valid_tokens must be a Python int, "
+                    f"got {type(observation.valid_tokens).__name__}"
+                )
+            if observation.valid_tokens < 0:
+                raise ValueError(
+                    f"valid_tokens must be non-negative, got {observation.valid_tokens}"
+                )
+            metrics["throughput/valid_tokens_per_second_per_gpu"] = (
+                observation.valid_tokens / denominator_time_s / observation.num_gpus
+            )
 
     metrics["context/is_validation_step"] = int(
         observation.validation_time_s is not None

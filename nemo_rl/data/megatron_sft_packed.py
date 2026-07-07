@@ -159,6 +159,7 @@ def megatron_sft_packed_preprocessor(
     pack_targets: list[int] = []
     pack_positions: list[int] = []
     cu_seqlens = [0]
+    processed_token_count = 0
 
     def _extend_with_padding(pad_len: int) -> None:
         if pad_len <= 0:
@@ -177,6 +178,8 @@ def megatron_sft_packed_preprocessor(
             add_generation_prompt,
         )
 
+        remaining_input_capacity = max(pack_length - len(pack_tokens), 0)
+        processed_token_count += min(len(tokens), remaining_input_capacity)
         pack_tokens.extend(tokens)
         pack_targets.extend(targets)
         pack_positions.extend(range(len(tokens)))
@@ -238,6 +241,7 @@ def megatron_sft_packed_preprocessor(
         "packed_cu_seqlens": cu_seqlens_tensor,
         "packed_max_seqlen": max_seqlen,
         "packed_context_parallel_size": int(context_parallel_size),
+        "processed_token_count": processed_token_count,
         "length": pack_length,
         "extra_env_info": None,
         "loss_multiplier": 1.0,

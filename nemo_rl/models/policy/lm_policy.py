@@ -708,6 +708,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         mbs: Optional[int] = None,
         timer: Optional[Timer] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
+        collect_train_timing: bool = False,
     ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
@@ -751,6 +752,8 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 and megatron_cfg["enabled"]
             ):
                 worker_train_kwargs["collect_eval_timing"] = True
+            if collect_train_timing:
+                worker_train_kwargs["collect_train_timing"] = True
             futures = self.worker_group.run_all_workers_sharded_data(
                 "train",
                 data=sharded_data,
@@ -785,6 +788,10 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 )
                 for name in results[0]["evaluation_timings"]
             }
+        if "backend_train_time_s" in results[0]:
+            aggregated_results["backend_train_time_s"] = max(
+                float(result["backend_train_time_s"]) for result in results
+            )
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops

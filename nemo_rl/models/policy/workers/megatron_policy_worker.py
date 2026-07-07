@@ -540,6 +540,7 @@ class MegatronPolicyWorkerImpl(
         mbs: Optional[int] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
         collect_eval_timing: bool = False,
+        collect_train_timing: bool = False,
     ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
@@ -630,6 +631,9 @@ class MegatronPolicyWorkerImpl(
                 time.perf_counter() - state_transition_start
             )
 
+        backend_train_start = (
+            time.perf_counter() if collect_train_timing and not eval_mode else None
+        )
         with ctx:
             all_mb_metrics = []
             losses = []
@@ -876,6 +880,11 @@ class MegatronPolicyWorkerImpl(
             # passing increment=gbs cancels that scaling and one tick == one
             # train() call regardless of batch size.
             self.scheduler.step(increment=gbs)
+        backend_train_time_s = (
+            time.perf_counter() - backend_train_start
+            if backend_train_start is not None
+            else None
+        )
 
         metric_reduction_start = (
             time.perf_counter() if evaluation_timings is not None else None
@@ -926,6 +935,8 @@ class MegatronPolicyWorkerImpl(
         self._collect_mtp_metrics(metrics)
         if evaluation_timings is not None:
             metrics["evaluation_timings"] = evaluation_timings
+        if backend_train_time_s is not None:
+            metrics["backend_train_time_s"] = backend_train_time_s
         return metrics
 
     def _compute_moe_grad_scale(self, global_valid_toks):

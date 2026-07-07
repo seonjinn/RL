@@ -72,6 +72,7 @@ def rl_collate_fn(
             "position_ids",
             "packed_cu_seqlens",
             "packed_max_seqlen",
+            "processed_token_count",
             "length",
             "loss_multiplier",
             "idx",
@@ -171,6 +172,10 @@ def rl_collate_fn(
             ),
             input_lengths=torch.tensor(
                 [datum_spec["length"] for datum_spec in data_batch], dtype=torch.int64
+            ),
+            processed_token_counts=torch.tensor(
+                [datum_spec["processed_token_count"] for datum_spec in data_batch],
+                dtype=torch.int64,
             ),
             sample_mask=torch.tensor(
                 [datum_spec["loss_multiplier"] for datum_spec in data_batch],
