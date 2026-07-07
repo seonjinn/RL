@@ -91,8 +91,8 @@ EXPECTED_NEMOTRON_K_SWEEP_RESULTS = (
     ("super", "k3", 3, "2335028"),
     ("super", "k5", 5, "2335033"),
     ("ultra", "baseline", 0, "2335029"),
-    ("ultra", "k1", 1, "2335051"),
-    ("ultra", "k3", 3, "2335053"),
+    ("ultra", "k1", 1, "2335295"),
+    ("ultra", "k3", 3, "2335297"),
     ("ultra", "k5", 5, "2335030"),
 )
 EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS = (
@@ -805,6 +805,40 @@ def test_nemotron_k_sweep_rejects_mismatched_shared_metadata(
 
 
 @pytest.mark.parametrize(
+    ("relative_path", "field_path", "bad_value"),
+    (
+        (
+            "super/k3/result.json",
+            ("config", "enable_mamba_cache_stochastic_rounding"),
+            True,
+        ),
+        (
+            "ultra/k3/result.json",
+            ("config", "enable_mamba_cache_stochastic_rounding"),
+            False,
+        ),
+        (
+            "ultra/k3/result.json",
+            ("config", "mamba_cache_philox_rounds"),
+            4,
+        ),
+    ),
+    ids=("super-rounding", "ultra-rounding", "ultra-philox-rounds"),
+)
+def test_nemotron_k_sweep_rejects_model_specific_mamba_cache_mismatch(
+    nemotron_k_sweep_root: Path,
+    relative_path: str,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / relative_path
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
     ("field_path", "bad_value"),
     (
         (("config", "temperature"), 1),
@@ -1465,6 +1499,14 @@ def test_nemotron_k_sweep_rows_derive_metrics_and_gate_rollout_speedup(
     assert ultra_rows.loc["k5", "throughput_speedup"] == pytest.approx(
         1.9729748161942076
     )
+    assert ultra_rows.loc["k1", "throughput_speedup"] == pytest.approx(
+        1.3471281687409997
+    )
+    assert ultra_rows.loc["k3", "throughput_speedup"] == pytest.approx(
+        1.8754073247286647
+    )
+    assert bool(ultra_rows.loc["k3", "time_speedup_valid"])
+    assert not bool(ultra_rows.loc["k5", "time_speedup_valid"])
     assert bool(ultra_rows.loc["k3", "selected_by_policy"])
     assert not bool(ultra_rows.loc["k5", "selected_by_policy"])
 
@@ -1495,7 +1537,8 @@ def test_latest_vllm_html_contains_validated_nemotron_native_mtp_k_sweep(
     assert "Ultra TP8 / 2 nodes" in section
     assert "Super best K5 at 1.686x" in section
     assert "Ultra absolute best K5 at 1.973x" in section
-    assert "K3 is within 2% of best" in section
+    assert "matched-work K3 reaches 1.875x" in section
+    assert "Mamba cache stochastic rounding with 5 Philox rounds" in section
     assert "smallest-K-within-2% policy" in section
     assert 'aria-label="Nemotron Native MTP OSL 4K throughput speedup by fixed K' in section
     assert 'text-anchor="middle"' in section
@@ -1529,10 +1572,10 @@ def test_latest_vllm_html_contains_validated_nemotron_native_mtp_k_sweep(
     super_k5 = next(row for row in table_rows if "2335033" in row)
     assert "1.686x" in super_k5
     assert "1.688x" in super_k5
-    ultra_k3 = next(row for row in table_rows if "2335053" in row)
-    assert "1.952x" in ultra_k3
-    assert "n/a (output-token ratio outside 1%)" in ultra_k3
-    assert "selected by smallest-K-within-2% policy" in ultra_k3
+    ultra_k3 = next(row for row in table_rows if "2335297" in row)
+    assert "1.875x" in ultra_k3
+    assert "1.884x" in ultra_k3
+    assert "selected by matched-work smallest-K-within-2% policy" in ultra_k3
 
 
 def test_nemotron_k_sweep_chart_uses_shared_explicit_model_series_colors() -> None:
@@ -1868,9 +1911,12 @@ def test_nemotron_osl16k_full_reconciles_summary_csv_with_raw_batches(
     )
     assert pd.isna(indexed.loc[("super", "k3"), "rollout_time_speedup"])
     assert pd.isna(indexed.loc[("super", "k5"), "rollout_time_speedup"])
+    assert not bool(indexed.loc[("super", "k3"), "selected_by_policy"])
+    assert not bool(indexed.loc[("super", "k5"), "selected_by_policy"])
     assert indexed.loc[("ultra", "k5"), "throughput_speedup"] == pytest.approx(
         2.114279153339312
     )
+    assert bool(indexed.loc[("ultra", "k5"), "selected_by_policy"])
     assert indexed.loc[("ultra", "k5"), "rollout_time_speedup"] == pytest.approx(
         2.098458292569296
     )

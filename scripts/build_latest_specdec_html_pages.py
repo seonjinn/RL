@@ -152,6 +152,8 @@ NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES = {
             "d0571d9d675cd617819590be521daf3c423e25c47ef15051a1e732da2afe5d24"
         ),
         "distributed_executor_backend": "mp",
+        "enable_mamba_cache_stochastic_rounding": False,
+        "mamba_cache_philox_rounds": None,
     },
     "ultra": {
         "model_config_hash": (
@@ -164,6 +166,8 @@ NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES = {
             "09a782c09cd3f0f1446b790e463e81f5eeb3ada2e7f3ce5f43b962efd542ac7d"
         ),
         "distributed_executor_backend": "ray",
+        "enable_mamba_cache_stochastic_rounding": True,
+        "mamba_cache_philox_rounds": 5,
     },
 }
 NEMOTRON_MTP_K_SWEEP_RESULTS = (
@@ -229,7 +233,7 @@ NEMOTRON_MTP_K_SWEEP_RESULTS = (
         "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
         "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
         "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
-        "2335051",
+        "2335295",
         8,
         2,
     ),
@@ -240,7 +244,7 @@ NEMOTRON_MTP_K_SWEEP_RESULTS = (
         "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
         "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
         "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
-        "2335053",
+        "2335297",
         8,
         2,
     ),
@@ -2817,6 +2821,14 @@ def _validate_nemotron_mtp_k_sweep_payload(
                 ("config", "model_view_marker_hash"),
                 model_identity["model_view_marker_hash"],
             ),
+            (
+                ("config", "enable_mamba_cache_stochastic_rounding"),
+                model_identity["enable_mamba_cache_stochastic_rounding"],
+            ),
+            (
+                ("config", "mamba_cache_philox_rounds"),
+                model_identity["mamba_cache_philox_rounds"],
+            ),
         ]
     )
     if expected_mode == "baseline":
@@ -3830,12 +3842,15 @@ def _load_nemotron_mtp_fixed_k_rows(
             (frame["model_key"] == model_key) & (frame["method_key"] != "baseline")
         ]
         best_index = candidates["throughput_speedup"].idxmax()
-        best_speedup = float(frame.loc[best_index, "throughput_speedup"])
-        eligible = candidates[
-            candidates["throughput_speedup"] >= best_speedup * 0.98
+        comparable = candidates[candidates["time_speedup_valid"]]
+        frame.loc[best_index, "absolute_best"] = True
+        if comparable.empty:
+            continue
+        policy_best_speedup = float(comparable["throughput_speedup"].max())
+        eligible = comparable[
+            comparable["throughput_speedup"] >= policy_best_speedup * 0.98
         ].sort_values("k")
         selected_index = eligible.index[0]
-        frame.loc[best_index, "absolute_best"] = True
         frame.loc[selected_index, "selected_by_policy"] = True
 
     def validity(row: pd.Series) -> str:
@@ -3843,7 +3858,9 @@ def _load_nemotron_mtp_fixed_k_rows(
         if row["method_key"] == "baseline":
             parts.append("reference")
         elif bool(row["selected_by_policy"]):
-            parts.append("selected by smallest-K-within-2% policy")
+            parts.append(
+                "selected by matched-work smallest-K-within-2% policy"
+            )
         if bool(row["time_speedup_valid"]):
             parts.append("rollout-time speedup comparable within 1% output work")
         else:
@@ -3994,7 +4011,9 @@ def render_nemotron_mtp_k_sweep_section(
             "jobs completed on vLLM 0.24.0 with CUDA Graph PIECEWISE, temperature "
             "1.0 / top_p 1.0, max_new_tokens 4096, runtime image SHA "
             f"<code>{NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256}</code>, Super TP2 / "
-            "1 node, and Ultra TP8 / 2 nodes.</p>",
+            "1 node, and Ultra TP8 / 2 nodes. The Ultra cohort consistently uses "
+            "Mamba cache stochastic rounding with 5 Philox rounds; Super keeps it "
+            "disabled.</p>",
             '<p class="note">Methodology: OpenMath natural-EOS Sync-RL-style '
             "rollout, so output work can differ. Each job uses 8 prompts, 4 samples "
             "per prompt, and 3 rollout barriers. Rollout-time speedup is shown only "
@@ -4004,9 +4023,10 @@ def render_nemotron_mtp_k_sweep_section(
             f"Super best K{int(super_best['k'])} at "
             f"{float(super_best['throughput_speedup']):.3f}x; Ultra absolute best "
             f"K{int(ultra_best['k'])} at "
-            f"{float(ultra_best['throughput_speedup']):.3f}x, while "
-            f"K{int(ultra_selected['k'])} is within 2% of best and is selected by "
-            "the smallest-K-within-2% policy.</p>",
+            f"{float(ultra_best['throughput_speedup']):.3f}x, while matched-work "
+            f"K{int(ultra_selected['k'])} reaches "
+            f"{float(ultra_selected['throughput_speedup']):.3f}x and is selected "
+            "by the matched-work smallest-K-within-2% policy.</p>",
             f'<div class="chart-card k-sweep-chart">{chart}</div>',
             '<div class="table-wrap">',
             table(
