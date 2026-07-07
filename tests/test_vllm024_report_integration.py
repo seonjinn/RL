@@ -24,6 +24,11 @@ NEMOTRON_SMOKE_ROOT = (
     ROOT
     / "experiments/vllm_024_dynamicsd/report/results/nemotron_mtp_smoke_20260704"
 )
+NEMOTRON_K_SWEEP_ROOT = (
+    ROOT
+    / "experiments/vllm_024_dynamicsd/report/results/"
+    "nemotron_mtp_k_sweep_osl4k_20260706"
+)
 EXPECTED_NEMOTRON_SMOKE_RESULTS = (
     (
         "super",
@@ -74,6 +79,16 @@ EXPECTED_NEMOTRON_SMOKE_MODEL_PATHS = {
         "snapshots/624ba927cfbef0427354998700de3d51173c8c04"
     ),
 }
+EXPECTED_NEMOTRON_K_SWEEP_RESULTS = (
+    ("super", "baseline", 0, "2335027"),
+    ("super", "k1", 1, "2335049"),
+    ("super", "k3", 3, "2335028"),
+    ("super", "k5", 5, "2335033"),
+    ("ultra", "baseline", 0, "2335029"),
+    ("ultra", "k1", 1, "2335051"),
+    ("ultra", "k3", 3, "2335053"),
+    ("ultra", "k5", 5, "2335030"),
+)
 
 
 class RecordingHTMLParser(HTMLParser):
@@ -97,6 +112,17 @@ def nemotron_smoke_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     monkeypatch.setattr(latest, "ROOT", tmp_path)
     result_root = tmp_path / NEMOTRON_SMOKE_ROOT.name
     shutil.copytree(NEMOTRON_SMOKE_ROOT, result_root)
+    return result_root
+
+
+@pytest.fixture
+def nemotron_k_sweep_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    monkeypatch.setattr(latest, "ROOT", tmp_path)
+    result_root = tmp_path / NEMOTRON_K_SWEEP_ROOT.name
+    shutil.copytree(NEMOTRON_K_SWEEP_ROOT, result_root)
     return result_root
 
 
@@ -623,6 +649,397 @@ def test_latest_vllm_html_contains_separate_nemotron_native_mtp_legacy_smoke(
     assert "1.66x (directional only)" in ultra_static
     assert "4096/4096 = 1.0000x" in ultra_dynamic
     assert "1.53x (directional only)" in ultra_dynamic
+
+
+@pytest.mark.parametrize(
+    ("model_key", "method_key", "_k", "_job_id"),
+    EXPECTED_NEMOTRON_K_SWEEP_RESULTS,
+    ids=lambda value: str(value),
+)
+def test_nemotron_k_sweep_rejects_each_missing_expected_payload(
+    nemotron_k_sweep_root: Path,
+    model_key: str,
+    method_key: str,
+    _k: int,
+    _job_id: str,
+) -> None:
+    relative_path = Path(model_key) / method_key / "result.json"
+    (nemotron_k_sweep_root / relative_path).unlink()
+
+    with pytest.raises(ValueError, match=re.escape(relative_path.as_posix())):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_unexpected_result_payload(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    relative_path = Path("super/k7/result.json")
+    result_path = nemotron_k_sweep_root / relative_path
+    result_path.parent.mkdir(parents=True)
+    shutil.copy2(
+        nemotron_k_sweep_root / "super/k5/result.json",
+        result_path,
+    )
+
+    with pytest.raises(ValueError, match="unexpected payloads") as error:
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+    assert relative_path.as_posix() in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    (
+        (("status",), "running"),
+        (("runtime", "vllm_version"), "0.23.0"),
+        (("config", "runtime_image_sha256"), "wrong-image-sha"),
+        (("config", "cudagraph_mode"), "FULL"),
+        (("config", "compilation_config", "cudagraph_mode"), "FULL"),
+        (("config", "temperature"), 0.0),
+        (("config", "top_p"), 0.95),
+        (("config", "max_new_tokens"), 2048),
+        (("config", "num_prompts"), 4),
+        (("config", "samples_per_prompt"), 2),
+        (("config", "rollout_batches"), 2),
+        (("config", "scenario"), "offline_generation"),
+        (("config", "sync_barrier"), "none"),
+        (("config", "source_recipe"), "other"),
+    ),
+    ids=(
+        "status",
+        "vllm-version",
+        "runtime-image",
+        "cudagraph-mode",
+        "compiled-cudagraph-mode",
+        "temperature",
+        "top-p",
+        "max-new-tokens",
+        "num-prompts",
+        "samples-per-prompt",
+        "rollout-barriers",
+        "scenario",
+        "sync-barrier",
+        "source-recipe",
+    ),
+)
+def test_nemotron_k_sweep_rejects_mismatched_shared_metadata(
+    nemotron_k_sweep_root: Path,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("model_key", "method_key", "_k", "expected_job_id"),
+    EXPECTED_NEMOTRON_K_SWEEP_RESULTS,
+    ids=lambda value: str(value),
+)
+def test_nemotron_k_sweep_rejects_wrong_job_id_for_every_payload(
+    nemotron_k_sweep_root: Path,
+    model_key: str,
+    method_key: str,
+    _k: int,
+    expected_job_id: str,
+) -> None:
+    result_path = nemotron_k_sweep_root / model_key / method_key / "result.json"
+    replace_json_value(
+        result_path,
+        ("runtime", "environment", "SLURM_JOB_ID"),
+        "9999999",
+    )
+
+    with pytest.raises(ValueError, match="runtime.environment.SLURM_JOB_ID") as error:
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+    assert expected_job_id in str(error.value)
+
+
+@pytest.mark.parametrize("model_key", ("super", "ultra"))
+def test_nemotron_k_sweep_rejects_wrong_checkpoint_revision(
+    nemotron_k_sweep_root: Path,
+    model_key: str,
+) -> None:
+    result_path = nemotron_k_sweep_root / model_key / "baseline/result.json"
+    expected_model_path = EXPECTED_NEMOTRON_SMOKE_MODEL_PATHS[model_key]
+    replace_json_value(
+        result_path,
+        ("config", "model"),
+        str(Path(expected_model_path).parent / ("0" * 40)),
+    )
+
+    with pytest.raises(ValueError, match=r"config\.model") as error:
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+    assert expected_model_path in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("model_key", "field_path", "bad_value"),
+    (
+        ("super", ("config", "topology", "tensor_parallel_size"), 4),
+        ("super", ("config", "topology", "nodes"), 2),
+        ("ultra", ("config", "topology", "tensor_parallel_size"), 4),
+        ("ultra", ("config", "topology", "nodes"), 1),
+    ),
+    ids=("super-tp", "super-nodes", "ultra-tp", "ultra-nodes"),
+)
+def test_nemotron_k_sweep_rejects_wrong_topology(
+    nemotron_k_sweep_root: Path,
+    model_key: str,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / model_key / "baseline/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "field_path", "bad_value"),
+    (
+        ("super/baseline/result.json", ("config", "speculative_config"), {}),
+        ("super/k1/result.json", ("config", "mode"), "mtp_dynamic"),
+        (
+            "super/k3/result.json",
+            ("config", "speculative_config", "num_speculative_tokens"),
+            1,
+        ),
+    ),
+    ids=("baseline-spec-config", "fixed-k-mode", "fixed-k-value"),
+)
+def test_nemotron_k_sweep_rejects_wrong_fixed_k_method_configuration(
+    nemotron_k_sweep_root: Path,
+    relative_path: str,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / relative_path
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_wrong_rollout_barrier_count(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"].pop()
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="rollout_batches"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_non_natural_eos_request(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][0]["requests"][0]["ignore_eos"] = True
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ignore_eos"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_summary_csv_row_or_metric_mismatch(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    summary_path = nemotron_k_sweep_root / "summary.csv"
+    summary = pd.read_csv(summary_path)
+    summary.loc[summary["job_id"] == 2335033, "output_tok_s_per_gpu"] = 1.0
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match="output_tok_s_per_gpu"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_unexpected_summary_csv_row(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    summary_path = nemotron_k_sweep_root / "summary.csv"
+    summary = pd.read_csv(summary_path)
+    summary = pd.concat([summary, summary.iloc[[0]]], ignore_index=True)
+    summary.loc[len(summary) - 1, "result_path"] = "super/k7/result.json"
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match="summary.csv"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rows_derive_metrics_and_gate_rollout_speedup(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    rows = latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+    assert len(rows) == 8
+    assert rows["job_id"].tolist() == [
+        job_id for _model, _method, _k, job_id in EXPECTED_NEMOTRON_K_SWEEP_RESULTS
+    ]
+    for model_key in ("super", "ultra"):
+        model_rows = rows[rows["model_key"] == model_key].set_index("method_key")
+        baseline = json.loads(
+            (nemotron_k_sweep_root / model_key / "baseline/result.json").read_text(
+                encoding="utf-8"
+            )
+        )["summary"]
+        for method_key in ("baseline", "k1", "k3", "k5"):
+            summary = json.loads(
+                (nemotron_k_sweep_root / model_key / method_key / "result.json").read_text(
+                    encoding="utf-8"
+                )
+            )["summary"]
+            row = model_rows.loc[method_key]
+            output_ratio = summary["total_output_tokens"] / baseline["total_output_tokens"]
+            assert row["output_tok_s_gpu"] == pytest.approx(
+                summary["output_tok_s_per_gpu"]
+            )
+            assert row["throughput_speedup"] == pytest.approx(
+                summary["output_tok_s_per_gpu"] / baseline["output_tok_s_per_gpu"]
+            )
+            assert row["output_token_ratio"] == pytest.approx(output_ratio)
+            if abs(output_ratio - 1.0) <= 0.01:
+                assert row["rollout_time_speedup"] == pytest.approx(
+                    baseline["total_rollout_time_s"] / summary["total_rollout_time_s"]
+                )
+            else:
+                assert pd.isna(row["rollout_time_speedup"])
+
+    super_rows = rows[rows["model_key"] == "super"].set_index("method_key")
+    ultra_rows = rows[rows["model_key"] == "ultra"].set_index("method_key")
+    assert super_rows.loc["k5", "throughput_speedup"] == pytest.approx(
+        1.6863337864738492
+    )
+    assert ultra_rows.loc["k5", "throughput_speedup"] == pytest.approx(
+        1.9729748161942076
+    )
+    assert bool(ultra_rows.loc["k3", "selected_by_policy"])
+    assert not bool(ultra_rows.loc["k5", "selected_by_policy"])
+
+
+def test_latest_vllm_html_contains_validated_nemotron_native_mtp_k_sweep(
+    tmp_path: Path,
+) -> None:
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=tmp_path / "public/data",
+    )
+
+    html_text = parse_html(temp_html)
+    heading = "Nemotron Native MTP OSL 4K K Sweep"
+    assert html_text.count(heading) == 1
+    section = html_text.split(f"<h2>{heading}</h2>", 1)[1].split("</section>", 1)[0]
+    legacy_section = html_text.split(
+        "<h2>Nemotron Native MTP Legacy Smoke</h2>", 1
+    )[1].split("</section>", 1)[0]
+
+    assert heading not in legacy_section
+    assert "validated fixed-K evidence, not DynamicMTP" in section
+    assert "OpenMath natural-EOS Sync-RL-style rollout, so output work can differ" in section
+    assert "Super TP2 / 1 node" in section
+    assert "Ultra TP8 / 2 nodes" in section
+    assert "Super best K5 at 1.686x" in section
+    assert "Ultra absolute best K5 at 1.973x" in section
+    assert "K3 is within 2% of best" in section
+    assert "smallest-K-within-2% policy" in section
+    assert 'aria-label="Nemotron Native MTP OSL 4K throughput speedup by fixed K' in section
+    assert 'text-anchor="middle"' in section
+    assert "1.0x baseline" in section
+    assert ">1.69x</text>" in section
+    chart = section.split("<svg", 1)[1].split("</svg>", 1)[0]
+    assert ">0</text>" not in chart
+    assert ">Super<" in section
+    assert ">Ultra<" in section
+
+    for header in (
+        "Model",
+        "Method",
+        "Job ID",
+        "tok/s/GPU",
+        "Throughput speedup",
+        "Rollout-time speedup",
+        "Output ratio",
+        "Acceptance rate",
+        "Mean acceptance length",
+        "Validity",
+    ):
+        assert f"<th>{header}</th>" in section
+
+    table_body = section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    table_rows = re.findall(r"<tr>.*?</tr>", table_body, flags=re.DOTALL)
+    assert len(table_rows) == 8
+    for _model, _method, _k, job_id in EXPECTED_NEMOTRON_K_SWEEP_RESULTS:
+        assert section.count(job_id) == 1
+
+    super_k5 = next(row for row in table_rows if "2335033" in row)
+    assert "1.686x" in super_k5
+    assert "1.688x" in super_k5
+    ultra_k3 = next(row for row in table_rows if "2335053" in row)
+    assert "1.952x" in ultra_k3
+    assert "n/a (output-token ratio outside 1%)" in ultra_k3
+    assert "selected by smallest-K-within-2% policy" in ultra_k3
+
+
+def test_pages_report_publishes_and_links_exact_nemotron_k_sweep_evidence(
+    tmp_path: Path,
+) -> None:
+    public_root = tmp_path / "public"
+    report_path = public_root / "reports/vllm_standalone_results_latest.html"
+    public_data = public_root / "data"
+    latest.build_latest_vllm_outputs(
+        output_html=report_path,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=public_data,
+        nemotron_evidence_href_root="../data/nemotron_mtp_smoke_20260704",
+        nemotron_k_sweep_evidence_href_root=(
+            "../data/nemotron_mtp_k_sweep_osl4k_20260706"
+        ),
+    )
+
+    html_text = parse_html(report_path)
+    section = html_text.split(
+        "<h2>Nemotron Native MTP OSL 4K K Sweep</h2>", 1
+    )[1].split("</section>", 1)[0]
+    href_root = "../data/nemotron_mtp_k_sweep_osl4k_20260706"
+    evidence_hrefs = re.findall(
+        rf'href="({re.escape(href_root)}/[^"]*/result\.json)"',
+        section,
+    )
+    expected_relative_paths = {
+        Path(model_key) / method_key / "result.json"
+        for model_key, method_key, _k, _job_id in EXPECTED_NEMOTRON_K_SWEEP_RESULTS
+    }
+
+    assert len(evidence_hrefs) == 8
+    assert {
+        Path(href).relative_to(href_root) for href in evidence_hrefs
+    } == expected_relative_paths
+    for href in evidence_hrefs:
+        assert (report_path.parent / href).resolve().is_file()
+
+    evidence_root = public_data / "nemotron_mtp_k_sweep_osl4k_20260706"
+    published_paths = {
+        path.relative_to(evidence_root)
+        for path in evidence_root.glob("**/result.json")
+    }
+    assert published_paths == expected_relative_paths
+    for relative_path in expected_relative_paths:
+        assert sha256(evidence_root / relative_path) == sha256(
+            NEMOTRON_K_SWEEP_ROOT / relative_path
+        )
 
 
 def test_final_review_design_and_plan_have_exactly_one_trailing_newline() -> None:
