@@ -32,6 +32,12 @@ srun \
     --container-workdir="$REPO" \
     bash -lc "
         set -euo pipefail
+        cleanup_unit_results() {
+            rm -rf \
+              '$REPO/tests/unit/unit_results.json' \
+              '$REPO/tests/unit/unit_results'
+        }
+        trap cleanup_unit_results EXIT
         test \"\$(git rev-parse HEAD)\" = '$EXPECTED_REPO_SHA'
         NRL_FORCE_REBUILD_VENVS=false \\
         UV_CACHE_DIR='$BASE/uv_cache' \\

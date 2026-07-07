@@ -46,6 +46,10 @@ TEST_ONLY=0 SMOKE_ONLY=1 AFTEROK_JOB_ID=<validation-job-id> \
 SLURM `afterok` dependency so queued smoke jobs cannot start before validation
 completes successfully.
 
+The validation job starts from a clean source checkout and removes only the
+`tests/unit/unit_results*` artifacts that the selected pytest tests create, so
+the immutable-source guard remains clean for the benchmark jobs.
+
 After all four smoke jobs complete successfully, the submitter independently
 checks the smoke manifest, SLURM state, step-2 marker, fatal signatures, and
 force-on-policy skip markers before allowing performance submission:
