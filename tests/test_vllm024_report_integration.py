@@ -735,6 +735,72 @@ def test_nemotron_k_sweep_rejects_mismatched_shared_metadata(
 
 
 @pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    (
+        (("config", "model_config_hash"), "0" * 64),
+        (("config", "model_checkpoint_hash"), "0" * 64),
+        (("config", "model_view_marker_hash"), "0" * 64),
+        (("config", "drafter_config_hash"), "0" * 64),
+        (("config", "drafter_checkpoint_hash"), "0" * 64),
+        (("config", "drafter_view_marker_hash"), "0" * 64),
+        (("config", "prompt_set_hash"), "0" * 64),
+        (("config", "prompt_batch_hashes"), ["0" * 64] * 3),
+        (("config", "pipeline_parallel_size"), 2),
+        (("config", "total_gpus"), 4),
+        (("config", "distributed_executor_backend"), "ray"),
+        (("config", "topology", "pipeline_parallel_size"), 2),
+        (("config", "topology", "distributed_executor_backend"), "ray"),
+        (("config", "context_profile"), "unverified"),
+        (("config", "rope_config_hash"), "0" * 64),
+    ),
+    ids=(
+        "model-config-hash",
+        "model-checkpoint-hash",
+        "model-view-marker-hash",
+        "drafter-config-hash",
+        "drafter-checkpoint-hash",
+        "drafter-view-marker-hash",
+        "prompt-set-hash",
+        "prompt-batch-hashes",
+        "pipeline-parallel-size",
+        "total-gpus",
+        "executor-backend",
+        "topology-pipeline-parallel-size",
+        "topology-executor-backend",
+        "context-profile",
+        "rope-config-hash",
+    ),
+)
+def test_nemotron_k_sweep_rejects_wrong_cohort_identity(
+    nemotron_k_sweep_root: Path,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/k1/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    "hash_field",
+    ("prompt_sha256", "source_prompt_sha256"),
+)
+def test_nemotron_k_sweep_rejects_request_prompt_hash_mismatch(
+    nemotron_k_sweep_root: Path,
+    hash_field: str,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/k1/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][0]["requests"][0][hash_field] = "0" * 64
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=hash_field):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
     ("model_key", "method_key", "_k", "expected_job_id"),
     EXPECTED_NEMOTRON_K_SWEEP_RESULTS,
     ids=lambda value: str(value),
@@ -863,6 +929,136 @@ def test_nemotron_k_sweep_rejects_summary_csv_row_or_metric_mismatch(
         latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
 
 
+def test_nemotron_k_sweep_rejects_fractional_csv_integer_counter(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    summary_path = nemotron_k_sweep_root / "summary.csv"
+    summary = pd.read_csv(summary_path)
+    summary["total_output_tokens"] = summary["total_output_tokens"].astype(float)
+    row = summary["result_path"] == "super/baseline/result.json"
+    summary.loc[row, "total_output_tokens"] += 1e-8
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match="total_output_tokens"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_fractional_spec_summary_counter(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/k3/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["summary"]["spec_decode_metrics"]["num_drafts"] += 1e-8
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"spec_decode_metrics\.num_drafts"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_validates_required_csv_columns_before_result_path(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    summary_path = nemotron_k_sweep_root / "summary.csv"
+    summary = pd.read_csv(summary_path).drop(columns="result_path")
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match="missing columns: result_path"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    ("total_output_tokens", "total_rollout_time_s", "output_tok_s_per_gpu"),
+)
+def test_nemotron_k_sweep_rejects_summary_and_csv_aggregate_not_in_raw_batches(
+    nemotron_k_sweep_root: Path,
+    metric: str,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["summary"][metric] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    summary_path = nemotron_k_sweep_root / "summary.csv"
+    summary = pd.read_csv(summary_path)
+    row = summary["result_path"] == "super/baseline/result.json"
+    summary.loc[row, metric] = payload["summary"][metric]
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match=rf"summary\.{metric}"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_batch_output_tokens_not_backed_by_requests(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][0]["output_tokens"] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="actual_output_tokens"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_raw_rollout_time_summary_mismatch(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    batch = payload["rollout_batches"][0]
+    batch["rollout_time_s"] += 1.0
+    batch["output_tok_s"] = batch["output_tokens"] / batch["rollout_time_s"]
+    batch["output_tok_s_per_gpu"] = batch["output_tok_s"] / 2
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"summary\.total_rollout_time_s"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("metric", "csv_metric"),
+    (
+        ("num_drafts", None),
+        ("num_draft_tokens", None),
+        ("num_accepted_tokens", None),
+        ("num_accepted_tokens_per_pos", None),
+        ("acceptance_rate", "acceptance_rate"),
+        ("mean_acceptance_length", "mean_accept_len"),
+        ("accepted_tokens_per_draft", None),
+        ("acceptance_rate_per_pos", None),
+    ),
+)
+def test_nemotron_k_sweep_rejects_spec_summary_not_derived_from_batches(
+    nemotron_k_sweep_root: Path,
+    metric: str,
+    csv_metric: str | None,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/k3/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    current = payload["summary"]["spec_decode_metrics"][metric]
+    if isinstance(current, list):
+        payload["summary"]["spec_decode_metrics"][metric][0] += 1
+    else:
+        payload["summary"]["spec_decode_metrics"][metric] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    if csv_metric is not None:
+        summary_path = nemotron_k_sweep_root / "summary.csv"
+        summary = pd.read_csv(summary_path)
+        row = summary["result_path"] == "super/k3/result.json"
+        summary.loc[row, csv_metric] = payload["summary"]["spec_decode_metrics"][
+            metric
+        ]
+        summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"summary\.spec_decode_metrics\.{metric}",
+    ):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
 def test_nemotron_k_sweep_rejects_unexpected_summary_csv_row(
     nemotron_k_sweep_root: Path,
 ) -> None:
@@ -876,6 +1072,28 @@ def test_nemotron_k_sweep_rejects_unexpected_summary_csv_row(
         latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
 
 
+@pytest.mark.parametrize(
+    ("output_tokens", "baseline_tokens", "expected"),
+    (
+        (99, 100, True),
+        (101, 100, True),
+        (98, 100, False),
+        (102, 100, False),
+        (99 * 10**30, 100 * 10**30, True),
+        (101 * 10**30 + 1, 100 * 10**30, False),
+    ),
+)
+def test_output_work_validity_uses_inclusive_exact_integer_bounds(
+    output_tokens: int,
+    baseline_tokens: int,
+    expected: bool,
+) -> None:
+    assert (
+        latest._output_work_within_one_percent(output_tokens, baseline_tokens)
+        is expected
+    )
+
+
 def test_nemotron_k_sweep_rows_derive_metrics_and_gate_rollout_speedup(
     nemotron_k_sweep_root: Path,
 ) -> None:
@@ -887,32 +1105,67 @@ def test_nemotron_k_sweep_rows_derive_metrics_and_gate_rollout_speedup(
     ]
     for model_key in ("super", "ultra"):
         model_rows = rows[rows["model_key"] == model_key].set_index("method_key")
-        baseline = json.loads(
+        baseline_payload = json.loads(
             (nemotron_k_sweep_root / model_key / "baseline/result.json").read_text(
                 encoding="utf-8"
             )
-        )["summary"]
+        )
+        baseline_tokens = sum(
+            batch["output_tokens"] for batch in baseline_payload["rollout_batches"]
+        )
+        baseline_time = sum(
+            batch["rollout_time_s"] for batch in baseline_payload["rollout_batches"]
+        )
+        baseline_tok_s_gpu = (
+            baseline_tokens / baseline_time / baseline_payload["config"]["total_gpus"]
+        )
         for method_key in ("baseline", "k1", "k3", "k5"):
-            summary = json.loads(
+            payload = json.loads(
                 (nemotron_k_sweep_root / model_key / method_key / "result.json").read_text(
                     encoding="utf-8"
                 )
-            )["summary"]
-            row = model_rows.loc[method_key]
-            output_ratio = summary["total_output_tokens"] / baseline["total_output_tokens"]
-            assert row["output_tok_s_gpu"] == pytest.approx(
-                summary["output_tok_s_per_gpu"]
             )
+            rollout_batches = payload["rollout_batches"]
+            output_tokens = sum(batch["output_tokens"] for batch in rollout_batches)
+            rollout_time = sum(batch["rollout_time_s"] for batch in rollout_batches)
+            output_tok_s_gpu = (
+                output_tokens / rollout_time / payload["config"]["total_gpus"]
+            )
+            row = model_rows.loc[method_key]
+            output_ratio = output_tokens / baseline_tokens
+            assert row["output_tok_s_gpu"] == pytest.approx(output_tok_s_gpu)
             assert row["throughput_speedup"] == pytest.approx(
-                summary["output_tok_s_per_gpu"] / baseline["output_tok_s_per_gpu"]
+                output_tok_s_gpu / baseline_tok_s_gpu
             )
             assert row["output_token_ratio"] == pytest.approx(output_ratio)
-            if abs(output_ratio - 1.0) <= 0.01:
+            if latest._output_work_within_one_percent(
+                output_tokens,
+                baseline_tokens,
+            ):
                 assert row["rollout_time_speedup"] == pytest.approx(
-                    baseline["total_rollout_time_s"] / summary["total_rollout_time_s"]
+                    baseline_time / rollout_time
                 )
             else:
                 assert pd.isna(row["rollout_time_speedup"])
+            if method_key != "baseline":
+                num_drafts = sum(
+                    batch["spec_decode_metrics"]["num_drafts"]
+                    for batch in rollout_batches
+                )
+                num_draft_tokens = sum(
+                    batch["spec_decode_metrics"]["num_draft_tokens"]
+                    for batch in rollout_batches
+                )
+                num_accepted_tokens = sum(
+                    batch["spec_decode_metrics"]["num_accepted_tokens"]
+                    for batch in rollout_batches
+                )
+                assert row["acceptance_rate"] == pytest.approx(
+                    num_accepted_tokens / num_draft_tokens
+                )
+                assert row["mean_acceptance_length"] == pytest.approx(
+                    1.0 + num_accepted_tokens / num_drafts
+                )
 
     super_rows = rows[rows["model_key"] == "super"].set_index("method_key")
     ultra_rows = rows[rows["model_key"] == "ultra"].set_index("method_key")
@@ -990,6 +1243,23 @@ def test_latest_vllm_html_contains_validated_nemotron_native_mtp_k_sweep(
     assert "1.952x" in ultra_k3
     assert "n/a (output-token ratio outside 1%)" in ultra_k3
     assert "selected by smallest-K-within-2% policy" in ultra_k3
+
+
+def test_nemotron_k_sweep_chart_uses_shared_explicit_model_series_colors() -> None:
+    section = latest.render_nemotron_mtp_k_sweep_section()
+    chart = section.split("<svg", 1)[1].split("</svg>", 1)[0]
+
+    assert latest.NEMOTRON_MODEL_SERIES_COLORS == {
+        "Super": "#2563eb",
+        "Ultra": "#dc2626",
+    }
+    for model, color in latest.NEMOTRON_MODEL_SERIES_COLORS.items():
+        assert re.search(
+            rf'<rect[^>]+fill="{re.escape(color)}"[^>]*>'
+            rf'<text[^>]*>{model}</text>',
+            chart,
+        )
+        assert re.search(rf'<polyline[^>]+stroke="{re.escape(color)}"', chart)
 
 
 def test_pages_report_publishes_and_links_exact_nemotron_k_sweep_evidence(

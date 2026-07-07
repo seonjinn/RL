@@ -12,6 +12,7 @@ import math
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -116,6 +117,47 @@ NEMOTRON_MTP_K_SWEEP_ROOT = (
 NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256 = (
     "4abe89d00ef3581710958ad86b7f2063df753914165441287cca64563f56ab6d"
 )
+NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH = (
+    "2d1fbc9813736d303849fe0abc46927b8e9d6a998981d253fcac2c0a1bd68f6d"
+)
+NEMOTRON_MTP_K_SWEEP_PROMPT_SET_HASH = (
+    "e340aa9c1183cd8650b3fc288320d75f061f981c63b22da5e358f48668441f89"
+)
+NEMOTRON_MTP_K_SWEEP_PROMPT_BATCH_HASHES = [
+    "cc038f48ccfa59808525ca6f9874ad8c56e2f8b9b21b994411366627a4b72ccb",
+    "d3c2455a28c358105c0a665b441f83eb9979be72c51747733f0f5601ba975efc",
+    "e073b87ad663ed00aee96bf1b6fb0b15d0355a355e8a0015b4b7372cadd22caf",
+]
+NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE = "builtin_smoke_or_pinned_math_dataset"
+NEMOTRON_MTP_K_SWEEP_ROPE_CONFIG_HASH = (
+    "c5a448d4ee1c1c3c1acff52a016d20f1466d01f81cf2ba48207a7de52578a206"
+)
+NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES = {
+    "super": {
+        "model_config_hash": (
+            "699f34f0fc645d29ebffa5767fb59e6ae6ec98e3a4605485eb9913256d0df7e6"
+        ),
+        "model_checkpoint_hash": (
+            "e734fe7158a6a698869f4354c1a645304a081c163a23a575e558f1c3da0a1f98"
+        ),
+        "model_view_marker_hash": (
+            "d0571d9d675cd617819590be521daf3c423e25c47ef15051a1e732da2afe5d24"
+        ),
+        "distributed_executor_backend": "mp",
+    },
+    "ultra": {
+        "model_config_hash": (
+            "8f92735a43afae0d94b73fb9e658910ed548818a188eb2fc51513e88c9e689cd"
+        ),
+        "model_checkpoint_hash": (
+            "36c8d39c827c8fe26f02070cc812ecd2e105a37ea13af92ce4e14b82af503ddd"
+        ),
+        "model_view_marker_hash": (
+            "09a782c09cd3f0f1446b790e463e81f5eeb3ada2e7f3ce5f43b962efd542ac7d"
+        ),
+        "distributed_executor_backend": "ray",
+    },
+}
 NEMOTRON_MTP_K_SWEEP_RESULTS = (
     (
         "super",
@@ -224,6 +266,26 @@ NEMOTRON_MTP_K_SWEEP_SHARED_METADATA = (
     (("config", "scenario"), "synchronous_rl_rollout"),
     (("config", "sync_barrier"), "LLM.generate_return"),
     (("config", "source_recipe"), "sync-rl-math-rollout"),
+    (
+        ("config", "drafter_config_hash"),
+        NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH,
+    ),
+    (
+        ("config", "drafter_checkpoint_hash"),
+        NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH,
+    ),
+    (
+        ("config", "drafter_view_marker_hash"),
+        NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH,
+    ),
+    (("config", "prompt_set_hash"), NEMOTRON_MTP_K_SWEEP_PROMPT_SET_HASH),
+    (
+        ("config", "prompt_batch_hashes"),
+        NEMOTRON_MTP_K_SWEEP_PROMPT_BATCH_HASHES,
+    ),
+    (("config", "pipeline_parallel_size"), 1),
+    (("config", "context_profile"), NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE),
+    (("config", "rope_config_hash"), NEMOTRON_MTP_K_SWEEP_ROPE_CONFIG_HASH),
 )
 DFLARE_COMPLETED_DIRS = [
     DFLARE_RESULT_ROOT / "20260703_dflare_completed",
@@ -669,6 +731,10 @@ PALETTE = {
     "temp0": "#2563eb",
     "temp1": "#dc2626",
 }
+NEMOTRON_MODEL_SERIES_COLORS = {
+    "Super": "#2563eb",
+    "Ultra": "#dc2626",
+}
 
 METRIC_PALETTE = {
     "Generation throughput": "#1f78b4",
@@ -755,13 +821,19 @@ def chart_y_max(max_value: float, metric: str) -> float:
     return max(1.0, max_value * 1.22)
 
 
-def legend_svg(methods: list[str], x: float, y: float, gap: float = 116) -> str:
+def legend_svg(
+    methods: list[str],
+    x: float,
+    y: float,
+    gap: float = 116,
+    series_colors: Mapping[str, str] = PALETTE,
+) -> str:
     width = max(0, (len(methods) - 1) * gap)
     start = x - width / 2
     chunks = []
     for idx, method in enumerate(methods):
         lx = start + idx * gap
-        color = PALETTE.get(method, "#4b5563")
+        color = series_colors.get(method, "#4b5563")
         chunks.append(
             f'<rect x="{lx:.1f}" y="{y - 8:.1f}" width="14" height="14" rx="2" fill="{color}"/>'
             f'<text x="{lx + 20:.1f}" y="{y + 3:.1f}" font-size="13" fill="#374151">{esc(method_label(method))}</text>'
@@ -843,7 +915,14 @@ def grouped_bar_svg(rows: pd.DataFrame, title: str, metric: str, methods: list[s
     )
 
 
-def line_svg(rows: pd.DataFrame, title: str, metric: str, x_key: str, series_key: str) -> str:
+def line_svg(
+    rows: pd.DataFrame,
+    title: str,
+    metric: str,
+    x_key: str,
+    series_key: str,
+    series_colors: Mapping[str, str] = PALETTE,
+) -> str:
     if rows.empty:
         return ""
     rows = rows.dropna(subset=[metric, x_key, series_key]).copy()
@@ -895,7 +974,10 @@ def line_svg(rows: pd.DataFrame, title: str, metric: str, x_key: str, series_key
     ]
     lines = []
     for idx, item in enumerate(series):
-        color = PALETTE.get(item, ["#2563eb", "#dc2626", "#059669", "#7c3aed", "#ea580c"][idx % 5])
+        color = series_colors.get(
+            item,
+            ["#2563eb", "#dc2626", "#059669", "#7c3aed", "#ea580c"][idx % 5],
+        )
         sub = rows[rows[series_key].astype(str) == item].sort_values(x_key)
         points = []
         for _, row in sub.iterrows():
@@ -915,7 +997,7 @@ def line_svg(rows: pd.DataFrame, title: str, metric: str, x_key: str, series_key
     return (
         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">'
         f'<text x="{width / 2}" y="24" text-anchor="middle" font-size="18" font-weight="700" fill="#111827">{esc(title)}</text>'
-        f'{legend_svg(series, width / 2, 48, gap=122)}'
+        f'{legend_svg(series, width / 2, 48, gap=122, series_colors=series_colors)}'
         f'{"".join(grid)}{baseline_line}'
         f'<line x1="{left}" x2="{left}" y1="{top}" y2="{top + plot_h}" stroke="#cbd5e1"/>'
         f'<line x1="{left}" x2="{width - right}" y1="{top + plot_h}" y2="{top + plot_h}" stroke="#cbd5e1"/>'
@@ -2348,7 +2430,10 @@ def load_nemotron_mtp_legacy_smoke_rows(
             output_tok_s_gpu = float(summary["output_tok_s_per_gpu"])
             rollout_time_s = float(summary["total_rollout_time_s"])
             output_token_ratio = output_tokens / baseline_tokens
-            work_matches = abs(output_token_ratio - 1.0) <= 0.01
+            work_matches = _output_work_within_one_percent(
+                output_tokens,
+                baseline_tokens,
+            )
             throughput_speedup = output_tok_s_gpu / baseline_tok_s_gpu
             rollout_speedup = baseline_time_s / rollout_time_s
             spec_metrics = cast(
@@ -2489,6 +2574,7 @@ def _validate_nemotron_mtp_k_sweep_payload(
     payload: dict[str, object],
     relative_path: Path,
     *,
+    expected_model_key: str,
     expected_mode: str,
     expected_k: int,
     expected_model: str,
@@ -2496,6 +2582,8 @@ def _validate_nemotron_mtp_k_sweep_payload(
     expected_tp: int,
     expected_nodes: int,
 ) -> None:
+    model_identity = NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES[expected_model_key]
+    expected_backend = model_identity["distributed_executor_backend"]
     expected_metadata = list(NEMOTRON_MTP_K_SWEEP_SHARED_METADATA)
     expected_metadata.extend(
         [
@@ -2506,6 +2594,28 @@ def _validate_nemotron_mtp_k_sweep_payload(
             (("config", "topology", "nodes"), expected_nodes),
             (("config", "tensor_parallel_size"), expected_tp),
             (("config", "node_count"), expected_nodes),
+            (("config", "total_gpus"), expected_tp),
+            (
+                ("config", "distributed_executor_backend"),
+                expected_backend,
+            ),
+            (("config", "topology", "pipeline_parallel_size"), 1),
+            (
+                ("config", "topology", "distributed_executor_backend"),
+                expected_backend,
+            ),
+            (
+                ("config", "model_config_hash"),
+                model_identity["model_config_hash"],
+            ),
+            (
+                ("config", "model_checkpoint_hash"),
+                model_identity["model_checkpoint_hash"],
+            ),
+            (
+                ("config", "model_view_marker_hash"),
+                model_identity["model_view_marker_hash"],
+            ),
         ]
     )
     if expected_mode == "baseline":
@@ -2606,7 +2716,17 @@ def _nemotron_k_sweep_csv_value_matches(actual: object, expected: object) -> boo
         return bool(pd.isna(actual))
     if isinstance(expected, bool):
         return str(actual).strip().lower() == str(expected).lower()
-    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+    if isinstance(expected, int):
+        try:
+            numeric = float(actual)
+            return (
+                math.isfinite(numeric)
+                and numeric.is_integer()
+                and int(numeric) == expected
+            )
+        except (TypeError, ValueError):
+            return False
+    if isinstance(expected, float):
         try:
             return math.isclose(
                 float(actual),
@@ -2617,6 +2737,412 @@ def _nemotron_k_sweep_csv_value_matches(actual: object, expected: object) -> boo
         except (TypeError, ValueError):
             return False
     return str(actual) == str(expected)
+
+
+def _nemotron_k_sweep_json_value_matches(actual: object, expected: object) -> bool:
+    if isinstance(expected, bool):
+        return actual is expected
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            _nemotron_k_sweep_json_value_matches(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    if isinstance(expected, int):
+        return (
+            not isinstance(actual, bool)
+            and isinstance(actual, (int, float))
+            and math.isfinite(float(actual))
+            and float(actual).is_integer()
+            and int(actual) == expected
+        )
+    if isinstance(expected, float):
+        if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+            return False
+        return math.isclose(
+            float(actual),
+            float(expected),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    return actual == expected
+
+
+def _raise_nemotron_k_sweep_payload_mismatch(
+    relative_path: Path,
+    field: str,
+    expected: object,
+    actual: object,
+) -> None:
+    raise ValueError(
+        f"Nemotron MTP OSL 4K K-sweep payload {relative_path.as_posix()} "
+        f"has inconsistent raw evidence at {field}: expected {expected!r}, "
+        f"got {actual!r}"
+    )
+
+
+def _validate_nemotron_k_sweep_json_value(
+    relative_path: Path,
+    field: str,
+    actual: object,
+    expected: object,
+) -> None:
+    if not _nemotron_k_sweep_json_value_matches(actual, expected):
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            field,
+            expected,
+            actual,
+        )
+
+
+def _nemotron_k_sweep_exact_int(
+    value: object,
+    relative_path: Path,
+    field: str,
+) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or int(value) != value
+        or value < 0
+    ):
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            field,
+            "a non-negative integer",
+            value,
+        )
+    return int(value)
+
+
+def _nemotron_k_sweep_positive_float(
+    value: object,
+    relative_path: Path,
+    field: str,
+) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0.0
+    ):
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            field,
+            "a positive finite number",
+            value,
+        )
+    return float(value)
+
+
+def _nemotron_k_sweep_spec_metrics_from_counters(
+    *,
+    k: int,
+    num_drafts: int,
+    num_draft_tokens: int,
+    num_accepted_tokens: int,
+    num_accepted_tokens_per_pos: list[int],
+) -> dict[str, object]:
+    acceptance_rate = num_accepted_tokens / num_draft_tokens
+    accepted_tokens_per_draft = num_accepted_tokens / num_drafts
+    return {
+        "num_drafts": num_drafts,
+        "num_draft_tokens": num_draft_tokens,
+        "num_accepted_tokens": num_accepted_tokens,
+        "num_accepted_tokens_per_pos": num_accepted_tokens_per_pos,
+        "active": True,
+        "acceptance_rate": acceptance_rate,
+        "mean_acceptance_length": 1.0 + accepted_tokens_per_draft,
+        "accepted_tokens_per_draft": accepted_tokens_per_draft,
+        "metrics_available": True,
+        "acceptance_rate_per_pos": [
+            accepted / num_drafts for accepted in num_accepted_tokens_per_pos
+        ],
+    }
+
+
+def _validate_and_derive_nemotron_k_sweep_spec_metrics(
+    raw_metrics: object,
+    relative_path: Path,
+    field: str,
+    k: int,
+) -> dict[str, object]:
+    if k == 0:
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            field,
+            raw_metrics,
+            {},
+        )
+        return {}
+    if not isinstance(raw_metrics, dict):
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            field,
+            "a speculative-metrics object",
+            raw_metrics,
+        )
+
+    metrics = cast(dict[str, object], raw_metrics)
+    num_drafts = _nemotron_k_sweep_exact_int(
+        metrics.get("num_drafts"),
+        relative_path,
+        f"{field}.num_drafts",
+    )
+    num_draft_tokens = _nemotron_k_sweep_exact_int(
+        metrics.get("num_draft_tokens"),
+        relative_path,
+        f"{field}.num_draft_tokens",
+    )
+    num_accepted_tokens = _nemotron_k_sweep_exact_int(
+        metrics.get("num_accepted_tokens"),
+        relative_path,
+        f"{field}.num_accepted_tokens",
+    )
+    raw_per_position = metrics.get("num_accepted_tokens_per_pos")
+    if not isinstance(raw_per_position, list) or len(raw_per_position) != k:
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            f"{field}.num_accepted_tokens_per_pos",
+            f"a {k}-element list",
+            raw_per_position,
+        )
+    num_accepted_tokens_per_pos = [
+        _nemotron_k_sweep_exact_int(
+            value,
+            relative_path,
+            f"{field}.num_accepted_tokens_per_pos[{index}]",
+        )
+        for index, value in enumerate(raw_per_position)
+    ]
+    _validate_nemotron_k_sweep_json_value(
+        relative_path,
+        f"{field}.num_draft_tokens",
+        num_draft_tokens,
+        num_drafts * k,
+    )
+    _validate_nemotron_k_sweep_json_value(
+        relative_path,
+        f"{field}.num_accepted_tokens",
+        num_accepted_tokens,
+        sum(num_accepted_tokens_per_pos),
+    )
+    if num_drafts == 0 or num_draft_tokens == 0:
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            field,
+            "positive speculative counters",
+            metrics,
+        )
+
+    expected = _nemotron_k_sweep_spec_metrics_from_counters(
+        k=k,
+        num_drafts=num_drafts,
+        num_draft_tokens=num_draft_tokens,
+        num_accepted_tokens=num_accepted_tokens,
+        num_accepted_tokens_per_pos=num_accepted_tokens_per_pos,
+    )
+    _validate_nemotron_k_sweep_json_value(
+        relative_path,
+        f"{field}.keys",
+        sorted(metrics),
+        sorted(expected),
+    )
+    for metric, expected_value in expected.items():
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"{field}.{metric}",
+            metrics.get(metric),
+            expected_value,
+        )
+    return expected
+
+
+def _derive_nemotron_k_sweep_raw_metrics(
+    payload: dict[str, object],
+    relative_path: Path,
+    *,
+    k: int,
+    total_gpus: int,
+) -> dict[str, object]:
+    rollout_batches = cast(list[object], payload["rollout_batches"])
+    total_output_tokens = 0
+    rollout_times: list[float] = []
+    total_num_drafts = 0
+    total_num_draft_tokens = 0
+    total_num_accepted_tokens = 0
+    total_num_accepted_tokens_per_pos = [0] * k
+
+    for batch_index, raw_batch in enumerate(rollout_batches):
+        batch = cast(dict[str, object], raw_batch)
+        field = f"rollout_batches[{batch_index}]"
+        actual_output_tokens = batch.get("actual_output_tokens")
+        if not isinstance(actual_output_tokens, list):
+            _raise_nemotron_k_sweep_payload_mismatch(
+                relative_path,
+                f"{field}.actual_output_tokens",
+                "a request-level token-count list",
+                actual_output_tokens,
+            )
+        request_output_tokens = [
+            _nemotron_k_sweep_exact_int(
+                value,
+                relative_path,
+                f"{field}.actual_output_tokens[{index}]",
+            )
+            for index, value in enumerate(actual_output_tokens)
+        ]
+        batch_output_tokens = _nemotron_k_sweep_exact_int(
+            batch.get("output_tokens"),
+            relative_path,
+            f"{field}.output_tokens",
+        )
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"{field}.actual_output_tokens",
+            sum(request_output_tokens),
+            batch_output_tokens,
+        )
+        rollout_time_s = _nemotron_k_sweep_positive_float(
+            batch.get("rollout_time_s"),
+            relative_path,
+            f"{field}.rollout_time_s",
+        )
+        batch_output_tok_s = batch_output_tokens / rollout_time_s
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"{field}.output_tok_s",
+            batch.get("output_tok_s"),
+            batch_output_tok_s,
+        )
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"{field}.output_tok_s_per_gpu",
+            batch.get("output_tok_s_per_gpu"),
+            batch_output_tok_s / total_gpus,
+        )
+
+        spec_metrics = _validate_and_derive_nemotron_k_sweep_spec_metrics(
+            batch.get("spec_decode_metrics"),
+            relative_path,
+            f"{field}.spec_decode_metrics",
+            k,
+        )
+        if spec_metrics:
+            total_num_drafts += int(spec_metrics["num_drafts"])
+            total_num_draft_tokens += int(spec_metrics["num_draft_tokens"])
+            total_num_accepted_tokens += int(spec_metrics["num_accepted_tokens"])
+            for position, accepted in enumerate(
+                cast(list[int], spec_metrics["num_accepted_tokens_per_pos"])
+            ):
+                total_num_accepted_tokens_per_pos[position] += accepted
+
+        total_output_tokens += batch_output_tokens
+        rollout_times.append(rollout_time_s)
+
+    total_rollout_time_s = math.fsum(rollout_times)
+    output_tok_s = total_output_tokens / total_rollout_time_s
+    aggregate_spec_metrics = (
+        _nemotron_k_sweep_spec_metrics_from_counters(
+            k=k,
+            num_drafts=total_num_drafts,
+            num_draft_tokens=total_num_draft_tokens,
+            num_accepted_tokens=total_num_accepted_tokens,
+            num_accepted_tokens_per_pos=total_num_accepted_tokens_per_pos,
+        )
+        if k > 0
+        else {}
+    )
+    expected_summary = {
+        "total_output_tokens": total_output_tokens,
+        "total_rollout_time_s": total_rollout_time_s,
+        "output_tok_s": output_tok_s,
+        "output_tok_s_per_gpu": output_tok_s / total_gpus,
+        "spec_decode_metrics": aggregate_spec_metrics,
+    }
+    raw_summary = payload.get("summary")
+    if not isinstance(raw_summary, dict):
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            "summary",
+            "an aggregate summary object",
+            raw_summary,
+        )
+    summary = cast(dict[str, object], raw_summary)
+    for metric, expected_value in expected_summary.items():
+        if metric == "spec_decode_metrics":
+            raw_spec_metrics = summary.get(metric)
+            if not isinstance(raw_spec_metrics, dict):
+                _raise_nemotron_k_sweep_payload_mismatch(
+                    relative_path,
+                    f"summary.{metric}",
+                    expected_value,
+                    raw_spec_metrics,
+                )
+            _validate_nemotron_k_sweep_json_value(
+                relative_path,
+                f"summary.{metric}.keys",
+                sorted(raw_spec_metrics),
+                sorted(cast(dict[str, object], expected_value)),
+            )
+            for spec_metric, spec_expected in cast(
+                dict[str, object], expected_value
+            ).items():
+                _validate_nemotron_k_sweep_json_value(
+                    relative_path,
+                    f"summary.{metric}.{spec_metric}",
+                    raw_spec_metrics.get(spec_metric),
+                    spec_expected,
+                )
+            continue
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"summary.{metric}",
+            summary.get(metric),
+            expected_value,
+        )
+    return expected_summary
+
+
+def _validate_nemotron_k_sweep_prompt_hashes(
+    payload: dict[str, object],
+    reference_payload: dict[str, object],
+    relative_path: Path,
+) -> None:
+    rollout_batches = cast(list[dict[str, object]], payload["rollout_batches"])
+    reference_batches = cast(
+        list[dict[str, object]], reference_payload["rollout_batches"]
+    )
+    for batch_index, (batch, reference_batch) in enumerate(
+        zip(rollout_batches, reference_batches, strict=True)
+    ):
+        requests = cast(list[dict[str, object]], batch["requests"])
+        reference_requests = cast(
+            list[dict[str, object]], reference_batch["requests"]
+        )
+        for request_index, (request, reference_request) in enumerate(
+            zip(requests, reference_requests, strict=True)
+        ):
+            for hash_field in ("prompt_sha256", "source_prompt_sha256"):
+                _validate_nemotron_k_sweep_json_value(
+                    relative_path,
+                    f"rollout_batches[{batch_index}].requests[{request_index}]"
+                    f".{hash_field}",
+                    request.get(hash_field),
+                    reference_request.get(hash_field),
+                )
+
+
+def _output_work_within_one_percent(
+    output_tokens: int,
+    baseline_tokens: int,
+) -> bool:
+    return (
+        output_tokens >= 0
+        and baseline_tokens > 0
+        and 99 * baseline_tokens <= 100 * output_tokens <= 101 * baseline_tokens
+    )
 
 
 def _validate_nemotron_k_sweep_summary_row(
@@ -2705,22 +3231,21 @@ def load_nemotron_mtp_k_sweep_rows(
         "result_path",
     }
     missing_columns = sorted(required_summary_columns - set(summary_rows.columns))
+    if missing_columns:
+        raise ValueError(
+            "Nemotron MTP OSL 4K K-sweep summary.csv missing columns: "
+            f"{', '.join(missing_columns)}"
+        )
     summary_paths = summary_rows["result_path"].astype(str).tolist()
     expected_path_strings = {path.as_posix() for path in expected_paths}
     if (
-        missing_columns
-        or len(summary_rows) != 8
+        len(summary_rows) != 8
         or len(summary_paths) != len(set(summary_paths))
         or set(summary_paths) != expected_path_strings
     ):
         raise ValueError(
             "Nemotron MTP OSL 4K K-sweep summary.csv must contain exactly one row "
             "for each expected result.json payload"
-            + (
-                f"; missing columns: {', '.join(missing_columns)}"
-                if missing_columns
-                else ""
-            )
         )
     summary_by_path = summary_rows.set_index("result_path", drop=False)
 
@@ -2739,6 +3264,7 @@ def load_nemotron_mtp_k_sweep_rows(
         _validate_nemotron_mtp_k_sweep_payload(
             payload,
             path.relative_to(result_root),
+            expected_model_key=model_key,
             expected_mode="baseline" if method_key == "baseline" else "mtp_static",
             expected_k=k,
             expected_model=model,
@@ -2748,27 +3274,49 @@ def load_nemotron_mtp_k_sweep_rows(
         )
         payloads[(model_key, method_key)] = (payload, path)
 
+    prompt_reference = payloads[("super", "baseline")][0]
+    for payload, path in payloads.values():
+        _validate_nemotron_k_sweep_prompt_hashes(
+            payload,
+            prompt_reference,
+            path.relative_to(result_root),
+        )
+
+    raw_metrics = {
+        (model_key, method_key): _derive_nemotron_k_sweep_raw_metrics(
+            payloads[(model_key, method_key)][0],
+            payloads[(model_key, method_key)][1].relative_to(result_root),
+            k=k,
+            total_gpus=tp,
+        )
+        for model_key, method_key, k, _model, _job_id, tp, _nodes in (
+            NEMOTRON_MTP_K_SWEEP_RESULTS
+        )
+    }
+
     rows: list[dict[str, object]] = []
     for model_key, method_key, k, _model, job_id, tp, nodes in (
         NEMOTRON_MTP_K_SWEEP_RESULTS
     ):
         payload, path = payloads[(model_key, method_key)]
-        baseline_payload = payloads[(model_key, "baseline")][0]
         config = cast(dict[str, object], payload["config"])
-        summary = cast(dict[str, object], payload["summary"])
-        baseline_summary = cast(dict[str, object], baseline_payload["summary"])
-        output_tokens = int(summary["total_output_tokens"])
-        baseline_tokens = int(baseline_summary["total_output_tokens"])
-        output_tok_s_gpu = float(summary["output_tok_s_per_gpu"])
-        baseline_tok_s_gpu = float(baseline_summary["output_tok_s_per_gpu"])
-        rollout_time_s = float(summary["total_rollout_time_s"])
-        baseline_time_s = float(baseline_summary["total_rollout_time_s"])
+        metrics = raw_metrics[(model_key, method_key)]
+        baseline_metrics = raw_metrics[(model_key, "baseline")]
+        output_tokens = int(metrics["total_output_tokens"])
+        baseline_tokens = int(baseline_metrics["total_output_tokens"])
+        output_tok_s_gpu = float(metrics["output_tok_s_per_gpu"])
+        baseline_tok_s_gpu = float(baseline_metrics["output_tok_s_per_gpu"])
+        rollout_time_s = float(metrics["total_rollout_time_s"])
+        baseline_time_s = float(baseline_metrics["total_rollout_time_s"])
         output_token_ratio = output_tokens / baseline_tokens
         throughput_speedup = output_tok_s_gpu / baseline_tok_s_gpu
         raw_rollout_time_speedup = baseline_time_s / rollout_time_s
-        time_speedup_valid = abs(output_token_ratio - 1.0) <= 0.01
+        time_speedup_valid = _output_work_within_one_percent(
+            output_tokens,
+            baseline_tokens,
+        )
         spec_metrics = cast(
-            dict[str, object], summary.get("spec_decode_metrics", {})
+            dict[str, object], metrics["spec_decode_metrics"]
         )
         acceptance_rate = (
             float(spec_metrics["acceptance_rate"]) if spec_metrics else None
@@ -2939,6 +3487,7 @@ def render_nemotron_mtp_k_sweep_section(
         "speedup",
         "k",
         "model_display",
+        NEMOTRON_MODEL_SERIES_COLORS,
     )
     return "".join(
         [
