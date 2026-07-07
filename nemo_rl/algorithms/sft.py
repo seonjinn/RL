@@ -526,27 +526,42 @@ def _recursive_tensor_payload_bytes(value: Any) -> int:
     return 0
 
 
-def _recursive_deep_payload_bytes(value: Any, seen: set[int] | None = None) -> int:
+def _recursive_deep_payload_bytes(
+    value: Any,
+    seen: set[int] | None = None,
+    seen_storages: set[tuple[str, int, int]] | None = None,
+) -> int:
     if seen is None:
         seen = set()
+    if seen_storages is None:
+        seen_storages = set()
     value_id = id(value)
     if value_id in seen:
         return 0
     seen.add(value_id)
 
     if torch.is_tensor(value):
-        return sys.getsizeof(value) + int(value.numel() * value.element_size())
+        storage = value.untyped_storage()
+        storage_nbytes = int(storage.nbytes())
+        storage_key = (str(value.device), int(storage.data_ptr()), storage_nbytes)
+        retained_storage_bytes = 0
+        if storage_key not in seen_storages:
+            seen_storages.add(storage_key)
+            retained_storage_bytes = storage_nbytes
+        return sys.getsizeof(value) + retained_storage_bytes
     if isinstance(value, PackedTensor):
-        return sys.getsizeof(value) + _recursive_deep_payload_bytes(value.tensors, seen)
+        return sys.getsizeof(value) + _recursive_deep_payload_bytes(
+            value.tensors, seen, seen_storages
+        )
     if isinstance(value, Mapping):
         return sys.getsizeof(value) + sum(
-            _recursive_deep_payload_bytes(key, seen)
-            + _recursive_deep_payload_bytes(item, seen)
+            _recursive_deep_payload_bytes(key, seen, seen_storages)
+            + _recursive_deep_payload_bytes(item, seen, seen_storages)
             for key, item in value.items()
         )
     if isinstance(value, (list, tuple, set)):
         return sys.getsizeof(value) + sum(
-            _recursive_deep_payload_bytes(item, seen) for item in value
+            _recursive_deep_payload_bytes(item, seen, seen_storages) for item in value
         )
     return sys.getsizeof(value)
 

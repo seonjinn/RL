@@ -473,6 +473,22 @@ def test_validation_event_batch_records_recursive_payload_bytes() -> None:
     ] == _recursive_deep_payload_bytes(combined_data)
 
 
+def test_deep_payload_counts_retained_storage_once_for_tensor_views() -> None:
+    storage_owner = torch.zeros(4096, dtype=torch.float32)
+    first_view = storage_owner[:1]
+    second_view = storage_owner[1:2]
+    storage_bytes = storage_owner.untyped_storage().nbytes()
+
+    single_view_bytes = _recursive_deep_payload_bytes({"first": first_view})
+    two_view_bytes = _recursive_deep_payload_bytes(
+        {"first": first_view, "second": second_view}
+    )
+
+    assert single_view_bytes >= storage_bytes
+    assert two_view_bytes >= storage_bytes
+    assert two_view_bytes - single_view_bytes < storage_bytes
+
+
 def test_validation_cpu_cache_reuses_event_data_but_recomputes_loss() -> None:
     class CountingLoader:
         def __init__(self) -> None:
@@ -631,6 +647,7 @@ def test_validation_cpu_cache_invalidates_when_preprocessing_contract_changes(
         validation_event_cache_mode="cpu",
     )
     if changed_field == "make_sequence_length_divisible_by":
+        assert isinstance(changed_value, int)
         second_config.policy[changed_field] = changed_value
     else:
         setattr(second_config.sft, changed_field, changed_value)
