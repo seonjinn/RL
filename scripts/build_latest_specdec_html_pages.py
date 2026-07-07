@@ -2157,7 +2157,10 @@ def related_vllm_reports_section() -> str:
         return ""
     return (
         '<section class="section"><h2>Related Broader Reports</h2>'
-        '<p class="note">This latest page is intentionally focused on matched ISL4096/OSL32768 comparisons. Use these archive pages for broader historical, long-OSL, partial, or aggregate views that are not all directly comparable in one speedup matrix.</p>'
+        '<p class="note">This latest page combines several section-scoped cohorts. '
+        'Use these archive pages for additional historical, long-OSL, partial, or '
+        'aggregate views that are not all directly comparable in one speedup '
+        'matrix.</p>'
         '<div class="cards">'
         + "".join(items)
         + "</div></section>"
@@ -2432,6 +2435,25 @@ def _nemotron_smoke_metadata_value(
     return True, value
 
 
+def _strict_json_value_matches(actual: object, expected: object) -> bool:
+    if isinstance(expected, bool):
+        return type(actual) is bool and actual is expected
+    if isinstance(expected, int):
+        return type(actual) is int and actual == expected
+    if isinstance(expected, float):
+        return (
+            type(actual) is float
+            and math.isfinite(actual)
+            and actual == expected
+        )
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            _strict_json_value_matches(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
 def _validate_nemotron_smoke_payload(
     payload: dict[str, object],
     relative_path: Path,
@@ -2452,7 +2474,7 @@ def _validate_nemotron_smoke_payload(
     for field_path, expected in expected_metadata:
         found, actual = _nemotron_smoke_metadata_value(payload, field_path)
         field_name = ".".join(field_path)
-        if not found or actual != expected:
+        if not found or not _strict_json_value_matches(actual, expected):
             actual_display = repr(actual) if found else "<missing>"
             mismatches.append(
                 f"{field_name}: expected {expected!r}, got {actual_display}"
@@ -2546,20 +2568,57 @@ def load_nemotron_mtp_legacy_smoke_rows(
                 expected_job_id=expected_job_id,
             )
             payloads[mode] = (payload, path)
-        baseline_summary = cast(
-            dict[str, object], payloads["baseline"][0]["summary"]
-        )
-        baseline_tokens = int(baseline_summary["total_output_tokens"])
-        baseline_tok_s_gpu = float(baseline_summary["output_tok_s_per_gpu"])
-        baseline_time_s = float(baseline_summary["total_rollout_time_s"])
+        raw_metrics: dict[str, dict[str, object]] = {}
+        for mode, (payload, path) in payloads.items():
+            config = cast(dict[str, object], payload["config"])
+            total_gpus = config.get("total_gpus")
+            expected_total_gpus = 2 if model_key == "super" else 8
+            if not _strict_json_value_matches(total_gpus, expected_total_gpus):
+                raise ValueError(
+                    "Nemotron MTP legacy smoke payload "
+                    f"{path.relative_to(result_root).as_posix()} does not match "
+                    "the expected cohort: config.total_gpus: expected "
+                    f"{expected_total_gpus!r}, got {total_gpus!r}"
+                )
+            if mode == "baseline":
+                k = 0
+            else:
+                speculative = config.get("speculative_config")
+                raw_k = (
+                    speculative.get("num_speculative_tokens")
+                    if isinstance(speculative, dict)
+                    else None
+                )
+                if type(raw_k) is not int or raw_k <= 0:
+                    raise ValueError(
+                        "Nemotron MTP legacy smoke payload "
+                        f"{path.relative_to(result_root).as_posix()} does not match "
+                        "the expected cohort: "
+                        "config.speculative_config.num_speculative_tokens: "
+                        f"expected a positive integer, got {raw_k!r}"
+                    )
+                k = raw_k
+            raw_metrics[mode] = _derive_nemotron_k_sweep_raw_metrics(
+                payload,
+                path.relative_to(result_root),
+                k=k,
+                total_gpus=expected_total_gpus,
+                cohort_label="Nemotron MTP legacy smoke",
+                require_actual_output_tokens=False,
+                require_fixed_draft_width=mode == "mtp_static",
+            )
+        baseline_metrics = raw_metrics["baseline"]
+        baseline_tokens = int(baseline_metrics["total_output_tokens"])
+        baseline_tok_s_gpu = float(baseline_metrics["output_tok_s_per_gpu"])
+        baseline_time_s = float(baseline_metrics["total_rollout_time_s"])
         for mode, method in method_labels.items():
             payload, path = payloads[mode]
             config = cast(dict[str, object], payload["config"])
             runtime = cast(dict[str, object], payload["runtime"])
-            summary = cast(dict[str, object], payload["summary"])
-            output_tokens = int(summary["total_output_tokens"])
-            output_tok_s_gpu = float(summary["output_tok_s_per_gpu"])
-            rollout_time_s = float(summary["total_rollout_time_s"])
+            metrics = raw_metrics[mode]
+            output_tokens = int(metrics["total_output_tokens"])
+            output_tok_s_gpu = float(metrics["output_tok_s_per_gpu"])
+            rollout_time_s = float(metrics["total_rollout_time_s"])
             output_token_ratio = output_tokens / baseline_tokens
             work_matches = _output_work_within_one_percent(
                 output_tokens,
@@ -2568,7 +2627,7 @@ def load_nemotron_mtp_legacy_smoke_rows(
             throughput_speedup = output_tok_s_gpu / baseline_tok_s_gpu
             rollout_speedup = baseline_time_s / rollout_time_s
             spec_metrics = cast(
-                dict[str, object], summary.get("spec_decode_metrics", {})
+                dict[str, object], metrics["spec_decode_metrics"]
             )
             environment = cast(dict[str, object], runtime.get("environment", {}))
             if mode == "baseline":
@@ -2777,7 +2836,7 @@ def _validate_nemotron_mtp_k_sweep_payload(
     for field_path, expected in expected_metadata:
         found, actual = _nemotron_smoke_metadata_value(payload, field_path)
         field_name = ".".join(field_path)
-        if not found or actual != expected:
+        if not found or not _strict_json_value_matches(actual, expected):
             actual_display = repr(actual) if found else "<missing>"
             mismatches.append(
                 f"{field_name}: expected {expected!r}, got {actual_display}"
@@ -2845,12 +2904,18 @@ def _validate_nemotron_mtp_k_sweep_payload(
                 )
                 continue
             request_count = raw_batch.get("request_count")
-            if raw_batch.get("batch_index") != batch_index:
+            if not _strict_json_value_matches(
+                raw_batch.get("batch_index"),
+                batch_index,
+            ):
                 mismatches.append(
                     f"rollout_batches[{batch_index}].batch_index: expected "
                     f"{batch_index}, got {raw_batch.get('batch_index')!r}"
                 )
-            if request_count != expected_requests_per_batch:
+            if not _strict_json_value_matches(
+                request_count,
+                expected_requests_per_batch,
+            ):
                 mismatches.append(
                     f"rollout_batches[{batch_index}].request_count: expected "
                     f"{expected_requests_per_batch}, got {request_count!r}"
@@ -2865,13 +2930,17 @@ def _validate_nemotron_mtp_k_sweep_payload(
                     f"rollout_batches[{batch_index}].requests: expected "
                     f"{expected_requests_per_batch}, got {request_length!r}"
                 )
-            for vector_field in (
-                "actual_output_tokens",
-                "planned_output_tokens",
-                "forced_output_mask",
-                "output_token_hashes",
-            ):
-                vector = raw_batch.get(vector_field)
+            vectors = {
+                vector_field: raw_batch.get(vector_field)
+                for vector_field in (
+                    "actual_output_tokens",
+                    "planned_output_tokens",
+                    "forced_output_mask",
+                    "output_token_hashes",
+                )
+            }
+            vectors_have_expected_shape = True
+            for vector_field, vector in vectors.items():
                 vector_length = len(vector) if isinstance(vector, list) else None
                 if (
                     not isinstance(vector, list)
@@ -2884,6 +2953,7 @@ def _validate_nemotron_mtp_k_sweep_payload(
                         f"request_count={request_count!r} and "
                         f"len(requests)={request_length!r}, got {vector_length!r}"
                     )
+                    vectors_have_expected_shape = False
             if (
                 not isinstance(requests, list)
                 or len(requests) != expected_requests_per_batch
@@ -2907,11 +2977,67 @@ def _validate_nemotron_mtp_k_sweep_payload(
                 }
                 for field, expected in expected_request_protocol.items():
                     actual = raw_request.get(field)
-                    if actual != expected or type(actual) is not type(expected):
+                    if not _strict_json_value_matches(actual, expected):
                         mismatches.append(
                             f"rollout_batches[{batch_index}].requests[{request_index}]"
                             f".{field}: expected {expected!r}, got {actual!r}"
                         )
+                if not vectors_have_expected_shape:
+                    continue
+                actual_output_tokens = cast(
+                    list[object],
+                    vectors["actual_output_tokens"],
+                )[request_index]
+                planned_output_tokens = cast(
+                    list[object],
+                    vectors["planned_output_tokens"],
+                )[request_index]
+                forced_output = cast(
+                    list[object],
+                    vectors["forced_output_mask"],
+                )[request_index]
+                output_token_hash = cast(
+                    list[object],
+                    vectors["output_token_hashes"],
+                )[request_index]
+                vector_prefix = f"rollout_batches[{batch_index}]"
+                if not _strict_json_value_matches(
+                    planned_output_tokens,
+                    expected_max_tokens,
+                ):
+                    mismatches.append(
+                        f"{vector_prefix}.planned_output_tokens[{request_index}]: "
+                        f"expected request max_tokens {expected_max_tokens}, got "
+                        f"{planned_output_tokens!r}"
+                    )
+                if (
+                    type(actual_output_tokens) is not int
+                    or not 0 <= actual_output_tokens <= expected_max_tokens
+                    or (
+                        type(planned_output_tokens) is int
+                        and actual_output_tokens > planned_output_tokens
+                    )
+                ):
+                    mismatches.append(
+                        f"{vector_prefix}.actual_output_tokens[{request_index}]: "
+                        "expected an integer between 0 and planned_output_tokens "
+                        f"(at most {expected_max_tokens}), got "
+                        f"{actual_output_tokens!r}"
+                    )
+                if forced_output is not False:
+                    mismatches.append(
+                        f"{vector_prefix}.forced_output_mask[{request_index}]: "
+                        f"expected False for natural EOS, got {forced_output!r}"
+                    )
+                if (
+                    not isinstance(output_token_hash, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", output_token_hash) is None
+                ):
+                    mismatches.append(
+                        f"{vector_prefix}.output_token_hashes[{request_index}]: "
+                        "expected a lowercase 64-character SHA-256 hex digest, "
+                        f"got {output_token_hash!r}"
+                    )
 
     if mismatches:
         raise ValueError(
@@ -2989,9 +3115,10 @@ def _raise_nemotron_k_sweep_payload_mismatch(
     field: str,
     expected: object,
     actual: object,
+    cohort_label: str,
 ) -> None:
     raise ValueError(
-        f"Nemotron MTP OSL 4K K-sweep payload {relative_path.as_posix()} "
+        f"{cohort_label} payload {relative_path.as_posix()} "
         f"has inconsistent raw evidence at {field}: expected {expected!r}, "
         f"got {actual!r}"
     )
@@ -3002,6 +3129,7 @@ def _validate_nemotron_k_sweep_json_value(
     field: str,
     actual: object,
     expected: object,
+    cohort_label: str,
 ) -> None:
     if not _nemotron_k_sweep_json_value_matches(actual, expected):
         _raise_nemotron_k_sweep_payload_mismatch(
@@ -3009,6 +3137,7 @@ def _validate_nemotron_k_sweep_json_value(
             field,
             expected,
             actual,
+            cohort_label,
         )
 
 
@@ -3016,6 +3145,7 @@ def _nemotron_k_sweep_exact_int(
     value: object,
     relative_path: Path,
     field: str,
+    cohort_label: str,
 ) -> int:
     if (
         isinstance(value, bool)
@@ -3029,6 +3159,7 @@ def _nemotron_k_sweep_exact_int(
             field,
             "a non-negative integer",
             value,
+            cohort_label,
         )
     return int(value)
 
@@ -3037,6 +3168,7 @@ def _nemotron_k_sweep_positive_float(
     value: object,
     relative_path: Path,
     field: str,
+    cohort_label: str,
 ) -> float:
     if (
         isinstance(value, bool)
@@ -3049,6 +3181,7 @@ def _nemotron_k_sweep_positive_float(
             field,
             "a positive finite number",
             value,
+            cohort_label,
         )
     return float(value)
 
@@ -3084,6 +3217,9 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
     relative_path: Path,
     field: str,
     k: int,
+    cohort_label: str,
+    *,
+    require_fixed_draft_width: bool = True,
 ) -> dict[str, object]:
     if k == 0:
         _validate_nemotron_k_sweep_json_value(
@@ -3091,6 +3227,7 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
             field,
             raw_metrics,
             {},
+            cohort_label,
         )
         return {}
     if not isinstance(raw_metrics, dict):
@@ -3099,6 +3236,7 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
             field,
             "a speculative-metrics object",
             raw_metrics,
+            cohort_label,
         )
 
     metrics = cast(dict[str, object], raw_metrics)
@@ -3106,16 +3244,19 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
         metrics.get("num_drafts"),
         relative_path,
         f"{field}.num_drafts",
+        cohort_label,
     )
     num_draft_tokens = _nemotron_k_sweep_exact_int(
         metrics.get("num_draft_tokens"),
         relative_path,
         f"{field}.num_draft_tokens",
+        cohort_label,
     )
     num_accepted_tokens = _nemotron_k_sweep_exact_int(
         metrics.get("num_accepted_tokens"),
         relative_path,
         f"{field}.num_accepted_tokens",
+        cohort_label,
     )
     raw_per_position = metrics.get("num_accepted_tokens_per_pos")
     if not isinstance(raw_per_position, list) or len(raw_per_position) != k:
@@ -3124,26 +3265,31 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
             f"{field}.num_accepted_tokens_per_pos",
             f"a {k}-element list",
             raw_per_position,
+            cohort_label,
         )
     num_accepted_tokens_per_pos = [
         _nemotron_k_sweep_exact_int(
             value,
             relative_path,
             f"{field}.num_accepted_tokens_per_pos[{index}]",
+            cohort_label,
         )
         for index, value in enumerate(raw_per_position)
     ]
-    _validate_nemotron_k_sweep_json_value(
-        relative_path,
-        f"{field}.num_draft_tokens",
-        num_draft_tokens,
-        num_drafts * k,
-    )
+    if require_fixed_draft_width:
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"{field}.num_draft_tokens",
+            num_draft_tokens,
+            num_drafts * k,
+            cohort_label,
+        )
     _validate_nemotron_k_sweep_json_value(
         relative_path,
         f"{field}.num_accepted_tokens",
         num_accepted_tokens,
         sum(num_accepted_tokens_per_pos),
+        cohort_label,
     )
     if num_drafts == 0 or num_draft_tokens == 0:
         _raise_nemotron_k_sweep_payload_mismatch(
@@ -3151,6 +3297,7 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
             field,
             "positive speculative counters",
             metrics,
+            cohort_label,
         )
 
     expected = _nemotron_k_sweep_spec_metrics_from_counters(
@@ -3165,6 +3312,7 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
         f"{field}.keys",
         sorted(metrics),
         sorted(expected),
+        cohort_label,
     )
     for metric, expected_value in expected.items():
         _validate_nemotron_k_sweep_json_value(
@@ -3172,6 +3320,7 @@ def _validate_and_derive_nemotron_k_sweep_spec_metrics(
             f"{field}.{metric}",
             metrics.get(metric),
             expected_value,
+            cohort_label,
         )
     return expected
 
@@ -3182,8 +3331,20 @@ def _derive_nemotron_k_sweep_raw_metrics(
     *,
     k: int,
     total_gpus: int,
+    cohort_label: str,
+    require_actual_output_tokens: bool = True,
+    require_fixed_draft_width: bool = True,
 ) -> dict[str, object]:
-    rollout_batches = cast(list[object], payload["rollout_batches"])
+    raw_rollout_batches = payload.get("rollout_batches")
+    if not isinstance(raw_rollout_batches, list) or not raw_rollout_batches:
+        _raise_nemotron_k_sweep_payload_mismatch(
+            relative_path,
+            "rollout_batches",
+            "a non-empty list of rollout batches",
+            raw_rollout_batches,
+            cohort_label,
+        )
+    rollout_batches = cast(list[object], raw_rollout_batches)
     total_output_tokens = 0
     rollout_times: list[float] = []
     total_num_drafts = 0
@@ -3192,39 +3353,53 @@ def _derive_nemotron_k_sweep_raw_metrics(
     total_num_accepted_tokens_per_pos = [0] * k
 
     for batch_index, raw_batch in enumerate(rollout_batches):
-        batch = cast(dict[str, object], raw_batch)
-        field = f"rollout_batches[{batch_index}]"
-        actual_output_tokens = batch.get("actual_output_tokens")
-        if not isinstance(actual_output_tokens, list):
+        if not isinstance(raw_batch, dict):
             _raise_nemotron_k_sweep_payload_mismatch(
                 relative_path,
-                f"{field}.actual_output_tokens",
-                "a request-level token-count list",
-                actual_output_tokens,
+                f"rollout_batches[{batch_index}]",
+                "a rollout batch object",
+                raw_batch,
+                cohort_label,
             )
-        request_output_tokens = [
-            _nemotron_k_sweep_exact_int(
-                value,
-                relative_path,
-                f"{field}.actual_output_tokens[{index}]",
-            )
-            for index, value in enumerate(actual_output_tokens)
-        ]
+        batch = cast(dict[str, object], raw_batch)
+        field = f"rollout_batches[{batch_index}]"
         batch_output_tokens = _nemotron_k_sweep_exact_int(
             batch.get("output_tokens"),
             relative_path,
             f"{field}.output_tokens",
+            cohort_label,
         )
-        _validate_nemotron_k_sweep_json_value(
-            relative_path,
-            f"{field}.actual_output_tokens",
-            sum(request_output_tokens),
-            batch_output_tokens,
-        )
+        if require_actual_output_tokens:
+            actual_output_tokens = batch.get("actual_output_tokens")
+            if not isinstance(actual_output_tokens, list):
+                _raise_nemotron_k_sweep_payload_mismatch(
+                    relative_path,
+                    f"{field}.actual_output_tokens",
+                    "a request-level token-count list",
+                    actual_output_tokens,
+                    cohort_label,
+                )
+            request_output_tokens = [
+                _nemotron_k_sweep_exact_int(
+                    value,
+                    relative_path,
+                    f"{field}.actual_output_tokens[{index}]",
+                    cohort_label,
+                )
+                for index, value in enumerate(actual_output_tokens)
+            ]
+            _validate_nemotron_k_sweep_json_value(
+                relative_path,
+                f"{field}.actual_output_tokens",
+                sum(request_output_tokens),
+                batch_output_tokens,
+                cohort_label,
+            )
         rollout_time_s = _nemotron_k_sweep_positive_float(
             batch.get("rollout_time_s"),
             relative_path,
             f"{field}.rollout_time_s",
+            cohort_label,
         )
         batch_output_tok_s = batch_output_tokens / rollout_time_s
         _validate_nemotron_k_sweep_json_value(
@@ -3232,12 +3407,14 @@ def _derive_nemotron_k_sweep_raw_metrics(
             f"{field}.output_tok_s",
             batch.get("output_tok_s"),
             batch_output_tok_s,
+            cohort_label,
         )
         _validate_nemotron_k_sweep_json_value(
             relative_path,
             f"{field}.output_tok_s_per_gpu",
             batch.get("output_tok_s_per_gpu"),
             batch_output_tok_s / total_gpus,
+            cohort_label,
         )
 
         spec_metrics = _validate_and_derive_nemotron_k_sweep_spec_metrics(
@@ -3245,6 +3422,8 @@ def _derive_nemotron_k_sweep_raw_metrics(
             relative_path,
             f"{field}.spec_decode_metrics",
             k,
+            cohort_label,
+            require_fixed_draft_width=require_fixed_draft_width,
         )
         if spec_metrics:
             total_num_drafts += int(spec_metrics["num_drafts"])
@@ -3285,6 +3464,7 @@ def _derive_nemotron_k_sweep_raw_metrics(
             "summary",
             "an aggregate summary object",
             raw_summary,
+            cohort_label,
         )
     summary = cast(dict[str, object], raw_summary)
     for metric, expected_value in expected_summary.items():
@@ -3296,12 +3476,14 @@ def _derive_nemotron_k_sweep_raw_metrics(
                     f"summary.{metric}",
                     expected_value,
                     raw_spec_metrics,
+                    cohort_label,
                 )
             _validate_nemotron_k_sweep_json_value(
                 relative_path,
                 f"summary.{metric}.keys",
                 sorted(raw_spec_metrics),
                 sorted(cast(dict[str, object], expected_value)),
+                cohort_label,
             )
             for spec_metric, spec_expected in cast(
                 dict[str, object], expected_value
@@ -3311,6 +3493,7 @@ def _derive_nemotron_k_sweep_raw_metrics(
                     f"summary.{metric}.{spec_metric}",
                     raw_spec_metrics.get(spec_metric),
                     spec_expected,
+                    cohort_label,
                 )
             continue
         _validate_nemotron_k_sweep_json_value(
@@ -3318,6 +3501,7 @@ def _derive_nemotron_k_sweep_raw_metrics(
             f"summary.{metric}",
             summary.get(metric),
             expected_value,
+            cohort_label,
         )
     return expected_summary
 
@@ -3339,6 +3523,8 @@ def _validate_nemotron_k_sweep_request_provenance(
     expected_hashes: tuple[
         str, ...
     ] = NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES,
+    *,
+    cohort_label: str,
 ) -> None:
     rollout_batches = cast(list[dict[str, object]], payload["rollout_batches"])
     for batch_index, (batch, expected_hash) in enumerate(
@@ -3356,6 +3542,7 @@ def _validate_nemotron_k_sweep_request_provenance(
             "seed, prompt_tokens, max_tokens, min_tokens, ignore_eos)",
             _nemotron_k_sweep_request_provenance_hash(requests),
             expected_hash,
+            cohort_label,
         )
 
 
@@ -3530,6 +3717,7 @@ def _load_nemotron_mtp_fixed_k_rows(
             payload,
             path.relative_to(result_root),
             expected_request_provenance_hashes,
+            cohort_label=cohort_label,
         )
 
     raw_metrics = {
@@ -3538,6 +3726,7 @@ def _load_nemotron_mtp_fixed_k_rows(
             payloads[(model_key, method_key)][1].relative_to(result_root),
             k=k,
             total_gpus=tp,
+            cohort_label=cohort_label,
         )
         for model_key, method_key, k, _model, _job_id, tp, _nodes in (
             expected_results
@@ -4215,8 +4404,15 @@ def build_vllm_html(
         f"<title>vLLM Standalone SpecDec Results</title><style>{css}</style></head><body><main>",
         '<div class="topbar"><a href="../index.html">Back to report hub</a></div>',
         "<h1>vLLM Standalone SpecDec Results</h1>",
-        f"<p class=\"sub\">Updated {esc(updated)}. Data refresh from the 6/19 batch matrix, 6/20 extra-K/PARD sweeps, 6/16 temp0/temp1 trend analysis, and refreshed Lyris legacy breakdown JSONs for Qwen3-30B-A3B and Qwen3-8B.</p>",
-        "<div><span class=\"pill\">ISL 4096</span><span class=\"pill\">OSL 32768</span><span class=\"pill\">batch 1/2/4/8/16/32</span><span class=\"pill\">temperature 0.0 and 1.0</span><span class=\"pill\">top_p 1.0 where available</span></div>",
+        f"<p class=\"sub\">Updated {esc(updated)}. This page combines a legacy "
+        "Nemotron OSL128 capability smoke, validated natural-EOS Nemotron "
+        "OSL4K and OSL16K cohorts, and older Math/SWE ISL4096/OSL32768 "
+        "matrices. Each section states its own comparison scope.</p>",
+        "<div><span class=\"pill\">Nemotron legacy OSL 128 smoke</span>"
+        "<span class=\"pill\">Nemotron natural-EOS OSL 4K</span>"
+        "<span class=\"pill\">Nemotron natural-EOS OSL 16K</span>"
+        "<span class=\"pill\">Older matrices: ISL 4096 / OSL 32768</span>"
+        "<span class=\"pill\">Section-scoped sampling and topology</span></div>",
         "<div class=\"cards\">",
         f"<div class=\"card\"><b>{len(main)}</b><span>existing 6/19 rows</span></div>",
         f"<div class=\"card\"><b>{int(added['valid_result'].sum()) if not added.empty else 0}</b><span>valid added rows</span></div>",
@@ -4224,7 +4420,13 @@ def build_vllm_html(
         f"<div class=\"card\"><b>{len(failed)}</b><span>failed or invalid added rows</span></div>",
         f"<div class=\"card\"><b>{len(added_summary)}</b><span>added summary groups</span></div>",
         "</div>",
-        "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
+        "<section class=\"section\"><h2>Scope</h2><p>This page contains "
+        "multiple cohorts, not one global ISL/OSL: a legacy OSL128 capability "
+        "smoke; validated natural-EOS Nemotron OSL4K and OSL16K cohorts; and "
+        "older Math/SWE matrices at ISL 4096 / OSL 32768. Comparisons stay "
+        "within their named sections, and older matrix speedup cells remain "
+        "blank when the exact baseline is missing for the same domain, model, "
+        "temperature, batch size, ISL, and OSL.</p></section>",
         render_nemotron_mtp_legacy_smoke_section(nemotron_evidence_href_root),
         render_nemotron_mtp_k_sweep_section(
             evidence_href_root=nemotron_k_sweep_evidence_href_root

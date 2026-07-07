@@ -541,6 +541,52 @@ def test_nemotron_legacy_smoke_accepts_empty_runtime_image_sha256(
     assert len(rows) == 6
 
 
+@pytest.mark.parametrize(
+    "metric",
+    ("total_output_tokens", "total_rollout_time_s", "output_tok_s_per_gpu"),
+)
+def test_nemotron_legacy_smoke_rejects_summary_aggregate_not_in_raw_batches(
+    nemotron_smoke_root: Path,
+    metric: str,
+) -> None:
+    result_path = nemotron_smoke_root / "super/mtp_static/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["summary"][metric] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"summary\.{metric}"):
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+
+@pytest.mark.parametrize(
+    "counter",
+    (
+        "num_drafts",
+        "num_draft_tokens",
+        "num_accepted_tokens",
+        "num_accepted_tokens_per_pos",
+    ),
+)
+def test_nemotron_legacy_smoke_rejects_spec_counters_not_in_raw_batches(
+    nemotron_smoke_root: Path,
+    counter: str,
+) -> None:
+    result_path = nemotron_smoke_root / "super/mtp_dynamic/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    value = payload["summary"]["spec_decode_metrics"][counter]
+    if isinstance(value, list):
+        value[0] += 1
+    else:
+        payload["summary"]["spec_decode_metrics"][counter] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"summary\.spec_decode_metrics\.{counter}",
+    ):
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+
 def test_pages_report_publishes_and_links_exact_nemotron_smoke_evidence(
     tmp_path: Path,
 ) -> None:
@@ -747,6 +793,45 @@ def test_nemotron_k_sweep_rejects_unexpected_result_payload(
     ),
 )
 def test_nemotron_k_sweep_rejects_mismatched_shared_metadata(
+    nemotron_k_sweep_root: Path,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    (
+        (("config", "temperature"), 1),
+        (("config", "top_p"), True),
+        (("config", "seed"), 1234.0),
+        (("config", "tensor_parallel_size"), 2.0),
+        (("config", "topology", "tensor_parallel_size"), 2.0),
+        (("config", "node_count"), 1.0),
+        (("config", "topology", "nodes"), True),
+        (("config", "pipeline_parallel_size"), 1.0),
+        (("config", "total_gpus"), 2.0),
+        (("runtime", "gpu_count"), 4.0),
+    ),
+    ids=(
+        "temperature-int",
+        "top-p-bool",
+        "seed-float",
+        "config-tp-float",
+        "topology-tp-float",
+        "config-nodes-float",
+        "topology-nodes-bool",
+        "config-pp-float",
+        "total-gpus-float",
+        "runtime-gpu-count-float",
+    ),
+)
+def test_nemotron_k_sweep_rejects_non_strict_json_scalar_types(
     nemotron_k_sweep_root: Path,
     field_path: tuple[str, ...],
     bad_value: object,
@@ -1134,6 +1219,75 @@ def test_nemotron_k_sweep_rejects_truncated_per_request_vector(
     result_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match=vector_field):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize("bad_value", (True, 0, None))
+def test_nemotron_k_sweep_requires_every_forced_output_mask_value_false(
+    nemotron_k_sweep_root: Path,
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][0]["forced_output_mask"][0] = bad_value
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"forced_output_mask\[0\]"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("vector_field", "bad_value"),
+    (
+        ("actual_output_tokens", 4097),
+        ("actual_output_tokens", 1.0),
+        ("planned_output_tokens", -1),
+        ("planned_output_tokens", 4095),
+        ("planned_output_tokens", 4097),
+        ("planned_output_tokens", True),
+    ),
+    ids=(
+        "actual-above-planned",
+        "actual-float",
+        "planned-negative",
+        "planned-below-request-cap",
+        "planned-above-request-cap",
+        "planned-bool",
+    ),
+)
+def test_nemotron_k_sweep_rejects_invalid_natural_eos_token_vectors(
+    nemotron_k_sweep_root: Path,
+    vector_field: str,
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    batch = payload["rollout_batches"][0]
+    original = batch[vector_field][0]
+    batch[vector_field][0] = bad_value
+    if vector_field == "actual_output_tokens" and isinstance(bad_value, int):
+        batch["output_tokens"] += bad_value - original
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"{vector_field}\[0\]"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    "bad_hash",
+    ("", "0" * 63, "g" * 64, "A" * 64, 0, None),
+    ids=("empty", "short", "non-hex", "uppercase", "integer", "null"),
+)
+def test_nemotron_k_sweep_rejects_invalid_output_token_hash(
+    nemotron_k_sweep_root: Path,
+    bad_hash: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][0]["output_token_hashes"][0] = bad_hash
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"output_token_hashes\[0\]"):
         latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
 
 
@@ -1769,6 +1923,21 @@ def test_nemotron_osl16k_full_rejects_aggregate_not_in_raw_batches(
         latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
 
 
+def test_nemotron_osl16k_raw_validation_uses_osl16k_cohort_label(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    result_path = nemotron_osl16k_full_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][0]["actual_output_tokens"][0] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="actual_output_tokens") as error:
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+    assert "Nemotron MTP OSL 16K full payload" in str(error.value)
+    assert "Nemotron MTP OSL 4K K-sweep payload" not in str(error.value)
+
+
 def test_latest_vllm_html_contains_separate_nemotron_native_mtp_osl16k_full(
     tmp_path: Path,
 ) -> None:
@@ -1833,6 +2002,41 @@ def test_latest_vllm_html_contains_separate_nemotron_native_mtp_osl16k_full(
     assert "2.098x" in ultra_k5
 
 
+def test_latest_vllm_html_describes_each_report_cohort_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        latest,
+        "publish_nemotron_mtp_k_sweep_evidence",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        latest,
+        "render_nemotron_mtp_k_sweep_section",
+        lambda **_kwargs: "",
+    )
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=tmp_path / "public/data",
+    )
+
+    html_text = parse_html(temp_html)
+
+    for scope in (
+        "Nemotron legacy OSL 128 smoke",
+        "Nemotron natural-EOS OSL 4K",
+        "Nemotron natural-EOS OSL 16K",
+        "Older matrices: ISL 4096 / OSL 32768",
+        "multiple cohorts, not one global ISL/OSL",
+    ):
+        assert scope in html_text
+    assert "intentionally focused on matched ISL4096/OSL32768 comparisons" not in html_text
+
+
 def test_nemotron_osl16k_chart_uses_shared_explicit_model_series_colors() -> None:
     section = latest.render_nemotron_mtp_osl16k_full_section()
     chart = section.split("<svg", 1)[1].split("</svg>", 1)[0]
@@ -1893,6 +2097,19 @@ def test_pages_report_publishes_and_links_exact_nemotron_osl16k_evidence(
         assert sha256(evidence_root / relative_path) == sha256(
             NEMOTRON_OSL16K_FULL_ROOT / relative_path
         )
+
+
+def test_public_hub_describes_latest_vllm_page_as_multi_cohort() -> None:
+    html_text = parse_html(ROOT / "public/index.html")
+
+    for scope in (
+        "legacy Nemotron OSL128 smoke",
+        "natural-EOS Nemotron OSL4K/OSL16K cohorts",
+        "older ISL4096/OSL32768 Math/SWE matrices",
+        "not one global ISL/OSL",
+    ):
+        assert scope in html_text
+    assert "intentionally scoped to matched ISL4096/OSL32768 comparisons" not in html_text
 
 
 def test_final_review_design_and_plan_have_exactly_one_trailing_newline() -> None:
