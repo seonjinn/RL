@@ -4,6 +4,7 @@ import torch
 import pytest
 
 from nemo_rl.data.megatron_sft_packed import megatron_sft_packed_preprocessor
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 
 class _DummyTokenizer:
@@ -281,3 +282,35 @@ def test_collate_rejects_context_parallel_mismatch():
             [_packed_datum(0, context_parallel_size=2)],
             megatron_sft_context_parallel_size=1,
         )
+
+
+def test_from_batches_preserves_packed_validation_batch_order_and_metadata():
+    from nemo_rl.data.collate_fn import rl_collate_fn
+
+    batches = []
+    for batch_idx in range(4):
+        data = [_packed_datum(batch_idx * 2 + row_idx) for row_idx in range(2)]
+        if batch_idx == 1:
+            data[0]["packed_cu_seqlens"] = torch.tensor([0, 2, 4], dtype=torch.int32)
+            data[0]["packed_max_seqlen"] = 2
+        batches.append(rl_collate_fn(data, megatron_sft_context_parallel_size=1))
+
+    combined = BatchedDataDict.from_batches(
+        batches,
+        pad_value_dict={"input_ids": 0, "packed_cu_seqlens": -1},
+    )
+
+    assert combined["idx"] == list(range(8))
+    assert combined["packed_cu_seqlens"].shape == (8, 3)
+    assert torch.equal(
+        combined["packed_cu_seqlens"][2],
+        torch.tensor([0, 2, 4], dtype=torch.int32),
+    )
+    assert torch.equal(
+        combined["packed_cu_seqlens"][0],
+        torch.tensor([0, 4, -1], dtype=torch.int32),
+    )
+    assert torch.equal(
+        combined["packed_cu_seqlens_lengths"],
+        torch.tensor([2, 2, 3, 2, 2, 2, 2, 2]),
+    )

@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 import torch
+from pydantic import ValidationError
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from nemo_rl.algorithms.loss import NLLLossFn
@@ -116,6 +117,210 @@ def mock_components():
         "checkpointer": checkpointer,
         "master_config": master_config,
     }
+
+
+def _validation_config(execution_mode: str) -> MasterConfig:
+    return MasterConfig.model_construct(
+        sft=SFTConfig(
+            val_period=20,
+            val_batches=4,
+            val_global_batch_size=64,
+            val_micro_batch_size=1,
+            val_at_start=False,
+            validation_execution_mode=execution_mode,
+        ),
+        policy={
+            "make_sequence_length_divisible_by": 1,
+            "megatron_cfg": {"enabled": True},
+        },
+        data={},
+        logger={},
+        cluster={},
+        checkpointing={},
+    )
+
+
+def _packed_validation_batch(
+    batch_idx: int,
+    *,
+    batch_size: int = 64,
+    valid_rows: int = 64,
+) -> BatchedDataDict:
+    row_ids = torch.arange(
+        batch_idx * 64,
+        batch_idx * 64 + batch_size,
+        dtype=torch.int64,
+    )
+    input_ids = torch.stack((row_ids, row_ids + 1000), dim=1)
+    sample_mask = torch.zeros(batch_size, dtype=torch.float32)
+    sample_mask[:valid_rows] = 1.0
+    return BatchedDataDict(
+        input_ids=input_ids,
+        target_ids=input_ids + 1,
+        token_mask=torch.ones((batch_size, 2), dtype=torch.float32),
+        position_ids=torch.tensor([0, 1], dtype=torch.int64).repeat(batch_size, 1),
+        input_lengths=torch.full((batch_size,), 2, dtype=torch.int64),
+        sample_mask=sample_mask,
+        packed_cu_seqlens=torch.tensor([[0, 2]], dtype=torch.int32).repeat(
+            batch_size, 1
+        ),
+        packed_cu_seqlens_lengths=torch.full((batch_size,), 2, dtype=torch.int64),
+        packed_max_seqlens=torch.full((batch_size,), 2, dtype=torch.int64),
+        idx=row_ids.tolist(),
+        task_name=["validation"] * batch_size,
+    )
+
+
+def _validation_policy(losses: list[float]) -> MagicMock:
+    policy = MagicMock()
+    policy.sharding_annotations.get_axis_size.return_value = 64
+    policy.train.return_value = {
+        "loss": torch.tensor(losses),
+        "grad_norm": torch.tensor(0.0),
+        "all_mb_metrics": {"global_valid_toks": [1]},
+    }
+    return policy
+
+
+def _run_validation(
+    policy: MagicMock,
+    batches: list[BatchedDataDict],
+    execution_mode: str,
+) -> dict[str, float]:
+    metrics, _ = validate(
+        policy=policy,
+        val_dataloader=batches,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=_validation_config(execution_mode),
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+    )
+    return metrics
+
+
+def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
+    assert SFTConfig().validation_execution_mode == "per_batch"
+
+    with pytest.raises(ValidationError, match="validation_execution_mode"):
+        SFTConfig(validation_execution_mode="unsupported")
+
+
+def test_validation_event_batch_calls_policy_once_in_original_order() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+
+    _run_validation(policy, batches, "event_batch")
+
+    policy.train.assert_called_once()
+    combined_data, _ = policy.train.call_args.args
+    assert combined_data.size == 256
+    assert combined_data.size // policy.train.call_args.kwargs["gbs"] == 4
+    assert combined_data["idx"] == list(range(256))
+    assert torch.equal(combined_data["input_ids"][:, 0], torch.arange(256))
+    assert policy.train.call_args.kwargs == {
+        "eval_mode": True,
+        "gbs": 64,
+        "mbs": 1,
+    }
+
+
+def test_validation_event_batch_matches_per_batch_token_weighting() -> None:
+    batches = [
+        _packed_validation_batch(0, valid_rows=64),
+        _packed_validation_batch(1, valid_rows=32),
+        _packed_validation_batch(2, valid_rows=16),
+        _packed_validation_batch(3, valid_rows=63),
+    ]
+    losses = [1.0, 2.0, 4.0, 8.0]
+    per_batch_policy = _validation_policy([0.0])
+    per_batch_policy.train.side_effect = [
+        {
+            "loss": torch.tensor(loss),
+            "grad_norm": torch.tensor(0.0),
+            "all_mb_metrics": {"global_valid_toks": [1]},
+        }
+        for loss in losses
+    ]
+    event_policy = _validation_policy([loss / 4 for loss in losses])
+
+    per_batch_metrics = _run_validation(per_batch_policy, batches, "per_batch")
+    event_metrics = _run_validation(event_policy, batches, "event_batch")
+
+    assert float(event_metrics["val_loss"]) == pytest.approx(
+        float(per_batch_metrics["val_loss"])
+    )
+    assert float(event_metrics["val_loss"]) == pytest.approx(
+        (1.0 * 128 + 2.0 * 64 + 4.0 * 32 + 8.0 * 126) / (128 + 64 + 32 + 126)
+    )
+
+
+def test_validation_event_batch_preserves_zero_valid_token_behavior() -> None:
+    batches = [
+        _packed_validation_batch(batch_idx, valid_rows=0) for batch_idx in range(4)
+    ]
+    policy = _validation_policy([0.0, 0.0, 0.0, 0.0])
+    policy.train.return_value["all_mb_metrics"] = {}
+
+    with pytest.warns(UserWarning, match="No validation metrics were collected"):
+        metrics = _run_validation(policy, batches, "event_batch")
+
+    assert metrics == {"val_loss": 0.0}
+
+
+def test_validation_event_batch_rejects_wrong_batch_count() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(3)]
+    policy = _validation_policy([1.0, 2.0, 3.0])
+
+    with pytest.raises(ValueError, match="exactly 4 validation batches"):
+        _run_validation(policy, batches, "event_batch")
+
+    policy.train.assert_not_called()
+
+
+def test_validation_event_batch_rejects_inconsistent_packed_metadata() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    batches[2]["packed_cu_seqlens"] = batches[2]["packed_cu_seqlens"].to(torch.int64)
+    policy = _validation_policy([1.0, 2.0, 3.0, 4.0])
+
+    with pytest.raises(ValueError, match="packed_cu_seqlens.*dtype"):
+        _run_validation(policy, batches, "event_batch")
+
+    policy.train.assert_not_called()
+
+
+def test_validation_event_batch_rejects_wrong_total_size() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(3)]
+    batches.append(_packed_validation_batch(3, batch_size=63, valid_rows=63))
+    policy = _validation_policy([1.0, 2.0, 3.0, 4.0])
+    policy.sharding_annotations.get_axis_size.return_value = 1
+
+    with pytest.raises(ValueError, match="batch 3 has size 63; expected 64"):
+        _run_validation(policy, batches, "event_batch")
+
+    policy.train.assert_not_called()
+
+
+def test_validation_per_batch_keeps_legacy_policy_calls() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    policy = _validation_policy([0.0])
+    policy.train.side_effect = [
+        {
+            "loss": torch.tensor(float(batch_idx + 1)),
+            "grad_norm": torch.tensor(0.0),
+            "all_mb_metrics": {"global_valid_toks": [1]},
+        }
+        for batch_idx in range(4)
+    ]
+
+    _run_validation(policy, batches, "per_batch")
+
+    assert policy.train.call_count == 4
+    for batch, call in zip(batches, policy.train.call_args_list):
+        assert call.args[0] is batch
+        assert call.kwargs == {"eval_mode": True, "gbs": 64, "mbs": 1}
 
 
 def test_sft_collate_validates_policy_context_parallel_size():

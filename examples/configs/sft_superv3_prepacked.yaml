@@ -15,11 +15,12 @@ sft:
   max_num_steps: 15625  # TRAIN_SAMPLES(1000000) / GBS(64) = 15625
   only_unmask_final: false
 
-  val_period: 1000  # matches --eval-interval 1000
-  val_batches: 14   # matches --eval-iters 14
+  val_period: 20
+  val_batches: 4
   val_global_batch_size: 64
   val_micro_batch_size: 1
   val_at_start: false
+  validation_execution_mode: per_batch
   val_at_end: false
   seed: 42
 

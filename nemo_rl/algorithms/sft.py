@@ -17,7 +17,7 @@ import warnings
 from dataclasses import dataclass, fields
 from functools import partial
 from numbers import Real
-from typing import Any, Optional
+from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -178,6 +178,8 @@ class SFTConfig(BaseModel, extra="allow"):
     val_global_batch_size: int = 32
     val_micro_batch_size: int = 1
     val_at_start: bool = True
+    # Run each validation batch separately or submit the full four-batch event once.
+    validation_execution_mode: Literal["per_batch", "event_batch"] = "per_batch"
     # Whether to run validation on the last training step. Setting this to True ensures the
     # final checkpoint has validation metrics, which is required for get_best_checkpoint_path().
     val_at_end: bool = False
@@ -361,6 +363,219 @@ def setup(
 # =======================================================
 # Training & Validation
 # =======================================================
+_EVENT_VALIDATION_BATCH_COUNT = 4
+_PACKED_VALIDATION_METADATA_KEYS = {
+    "packed_cu_seqlens",
+    "packed_cu_seqlens_lengths",
+    "packed_max_seqlens",
+}
+
+
+def _validate_packed_validation_metadata(batch: BatchedDataDict[Any]) -> None:
+    if "packed_cu_seqlens" not in batch:
+        return
+
+    missing_keys = _PACKED_VALIDATION_METADATA_KEYS - batch.keys()
+    if missing_keys:
+        raise ValueError(
+            f"Packed validation batch is missing metadata keys: {sorted(missing_keys)}"
+        )
+
+    cu_seqlens = batch["packed_cu_seqlens"]
+    cu_seqlens_lengths = batch["packed_cu_seqlens_lengths"]
+    packed_max_seqlens = batch["packed_max_seqlens"]
+    if not all(
+        torch.is_tensor(value)
+        for value in (cu_seqlens, cu_seqlens_lengths, packed_max_seqlens)
+    ):
+        raise ValueError("Packed validation metadata must contain tensors")
+    if cu_seqlens.ndim != 2:
+        raise ValueError("packed_cu_seqlens must be a 2D tensor")
+    if cu_seqlens_lengths.ndim != 1 or packed_max_seqlens.ndim != 1:
+        raise ValueError(
+            "packed_cu_seqlens_lengths and packed_max_seqlens must be 1D tensors"
+        )
+
+    for row_idx in range(batch.size):
+        metadata_length = int(cu_seqlens_lengths[row_idx].item())
+        if metadata_length < 2 or metadata_length > cu_seqlens.shape[1]:
+            raise ValueError(
+                "packed_cu_seqlens_lengths contains an out-of-range value at "
+                f"row {row_idx}: {metadata_length}"
+            )
+        row_cu_seqlens = cu_seqlens[row_idx, :metadata_length]
+        if int(row_cu_seqlens[0].item()) != 0:
+            raise ValueError(f"packed_cu_seqlens row {row_idx} must start at 0")
+        if bool((row_cu_seqlens[1:] < row_cu_seqlens[:-1]).any().item()):
+            raise ValueError(
+                f"packed_cu_seqlens row {row_idx} must be monotonically non-decreasing"
+            )
+        if int(row_cu_seqlens[-1].item()) != int(
+            batch["input_lengths"][row_idx].item()
+        ):
+            raise ValueError(
+                f"packed_cu_seqlens row {row_idx} must end at input_lengths"
+            )
+        expected_max_seqlen = int(
+            (row_cu_seqlens[1:] - row_cu_seqlens[:-1]).max().item()
+        )
+        if expected_max_seqlen != int(packed_max_seqlens[row_idx].item()):
+            raise ValueError(
+                f"packed_max_seqlens row {row_idx} is inconsistent with "
+                "packed_cu_seqlens"
+            )
+        if metadata_length < cu_seqlens.shape[1] and not bool(
+            (cu_seqlens[row_idx, metadata_length:] == -1).all().item()
+        ):
+            raise ValueError(
+                f"packed_cu_seqlens row {row_idx} must use -1 metadata padding"
+            )
+
+
+def _combine_validation_event_batches(
+    batches: Sequence[BatchedDataDict[Any]],
+    *,
+    global_batch_size: int,
+    pad_token_id: int,
+) -> BatchedDataDict[Any]:
+    if len(batches) != _EVENT_VALIDATION_BATCH_COUNT:
+        raise ValueError(
+            "event_batch validation requires exactly 4 validation batches; "
+            f"collected {len(batches)}"
+        )
+    if global_batch_size <= 0:
+        raise ValueError(
+            f"Validation global batch size must be positive, got {global_batch_size}"
+        )
+
+    reference_keys = set(batches[0].keys())
+    reference_values = batches[0]
+    for batch_idx, batch in enumerate(batches):
+        if batch.size != global_batch_size:
+            raise ValueError(
+                f"Validation event batch {batch_idx} has size {batch.size}; "
+                f"expected {global_batch_size}"
+            )
+        if set(batch.keys()) != reference_keys:
+            missing_keys = sorted(reference_keys - batch.keys())
+            extra_keys = sorted(batch.keys() - reference_keys)
+            raise ValueError(
+                f"Validation event batch {batch_idx} has inconsistent keys; "
+                f"missing={missing_keys}, extra={extra_keys}"
+            )
+
+        for key, value in batch.items():
+            if torch.is_tensor(value):
+                if value.ndim == 0 or value.shape[0] != global_batch_size:
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} has "
+                        f"leading size {value.shape[0] if value.ndim else 0}; "
+                        f"expected {global_batch_size}"
+                    )
+                reference_value = reference_values[key]
+                if not torch.is_tensor(reference_value):
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} has "
+                        "an inconsistent value type"
+                    )
+                if value.dtype != reference_value.dtype:
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} dtype "
+                        f"{value.dtype} does not match {reference_value.dtype}"
+                    )
+                if value.device != reference_value.device:
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} device "
+                        f"{value.device} does not match {reference_value.device}"
+                    )
+                if value.ndim != reference_value.ndim:
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} rank "
+                        f"{value.ndim} does not match {reference_value.ndim}"
+                    )
+                if (
+                    key != "packed_cu_seqlens"
+                    and value.shape[1:] != reference_value.shape[1:]
+                ):
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} shape "
+                        f"{tuple(value.shape[1:])} does not match "
+                        f"{tuple(reference_value.shape[1:])}"
+                    )
+            elif isinstance(value, PackedTensor):
+                if len(value) != global_batch_size or not isinstance(
+                    reference_values[key], PackedTensor
+                ):
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} has "
+                        "inconsistent packed metadata"
+                    )
+                if value.dim_to_pack != reference_values[key].dim_to_pack:
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} has "
+                        "an inconsistent packed dimension"
+                    )
+            elif isinstance(value, list):
+                if len(value) != global_batch_size or not isinstance(
+                    reference_values[key], list
+                ):
+                    raise ValueError(
+                        f"Validation event batch {batch_idx} key {key!r} has "
+                        "inconsistent list metadata"
+                    )
+            else:
+                raise ValueError(
+                    f"Validation event batch {batch_idx} key {key!r} has "
+                    f"unsupported type {type(value)}"
+                )
+
+        _validate_packed_validation_metadata(batch)
+
+    combined = BatchedDataDict.from_batches(
+        batches,
+        pad_value_dict={
+            "input_ids": pad_token_id,
+            "packed_cu_seqlens": -1,
+        },
+    )
+    expected_size = _EVENT_VALIDATION_BATCH_COUNT * global_batch_size
+    if combined.size != expected_size:
+        raise ValueError(
+            f"Combined validation event has size {combined.size}; expected "
+            f"{expected_size} for 4 global batches"
+        )
+    for key, value in combined.items():
+        if torch.is_tensor(value) and value.shape[0] != expected_size:
+            raise ValueError(
+                f"Combined validation event key {key!r} has leading size "
+                f"{value.shape[0]}; expected {expected_size}"
+            )
+        if isinstance(value, (list, PackedTensor)) and len(value) != expected_size:
+            raise ValueError(
+                f"Combined validation event key {key!r} has leading size "
+                f"{len(value)}; expected {expected_size}"
+            )
+    return combined
+
+
+def _event_validation_losses(
+    val_results: dict[str, Any], expected_count: int, *, megatron_backend: bool
+) -> torch.Tensor:
+    losses = val_results["loss"]
+    if not torch.is_tensor(losses):
+        losses = torch.as_tensor(losses)
+    losses = losses.reshape(-1)
+    if losses.numel() != expected_count:
+        raise ValueError(
+            f"Event validation returned {losses.numel()} global-batch losses; "
+            f"expected {expected_count}"
+        )
+    if megatron_backend:
+        # Megatron normalizes each loss by num_global_batches inside one train call.
+        losses = losses * expected_count
+    return losses
+
+
 def _validate_with_loss_availability(
     policy: PolicyInterface,
     val_dataloader: Optional[StatefulDataLoader],
@@ -391,6 +606,9 @@ def _validate_with_loss_availability(
 
         val_metrics = {"val_loss": 0.0}
         sum_num_valid_tokens = 0
+        validation_execution_mode = master_config.sft.validation_execution_mode
+        event_batches: list[BatchedDataDict[Any]] = []
+        event_num_valid_tokens: list[torch.Tensor] = []
 
         policy.prepare_for_training()
         validation_batches = (
@@ -446,15 +664,60 @@ def _validate_with_loss_availability(
                     time.perf_counter() - data_processing_start,
                 )
 
-            ## just run model fwd
             timing_kwargs = (
                 {"timer": timer} if comparison_instrumentation_enabled else {}
             )
+            if validation_execution_mode == "event_batch":
+                event_batches.append(val_data)
+                event_num_valid_tokens.append(
+                    (
+                        val_data["sample_mask"].unsqueeze(-1) * val_data["token_mask"]
+                    ).sum()
+                )
+            else:
+                ## just run model fwd
+                val_results = policy.train(
+                    val_data,
+                    loss_fn,
+                    eval_mode=True,
+                    gbs=val_data.size,
+                    mbs=val_mbs,
+                    **timing_kwargs,
+                )
+                if comparison_instrumentation_enabled:
+                    for name, elapsed in val_results.get(
+                        "evaluation_timings", {}
+                    ).items():
+                        timer.record_elapsed(name, float(elapsed))
+
+                if len(val_results["all_mb_metrics"]) == 0:
+                    warnings.warn(
+                        "No validation metrics were collected for this batch."
+                        " This is likely because there were no valid samples."
+                    )
+                else:
+                    num_valid_tokens = (
+                        val_data["sample_mask"].unsqueeze(-1) * val_data["token_mask"]
+                    ).sum()
+                    val_metrics["val_loss"] += (
+                        float(val_results["loss"]) * num_valid_tokens
+                    )
+                    sum_num_valid_tokens += num_valid_tokens
+
+            if val_batches > 0 and batch_idx >= val_batches - 1:
+                break
+
+        if validation_execution_mode == "event_batch":
+            combined_val_data = _combine_validation_event_batches(
+                event_batches,
+                global_batch_size=val_batch_size,
+                pad_token_id=tokenizer.pad_token_id,
+            )
             val_results = policy.train(
-                val_data,
+                combined_val_data,
                 loss_fn,
                 eval_mode=True,
-                gbs=val_data.size,
+                gbs=val_batch_size,
                 mbs=val_mbs,
                 **timing_kwargs,
             )
@@ -468,14 +731,19 @@ def _validate_with_loss_availability(
                     " This is likely because there were no valid samples."
                 )
             else:
-                num_valid_tokens = (
-                    val_data["sample_mask"].unsqueeze(-1) * val_data["token_mask"]
-                ).sum()
-                val_metrics["val_loss"] += float(val_results["loss"]) * num_valid_tokens
-                sum_num_valid_tokens += num_valid_tokens
-
-            if val_batches > 0 and batch_idx >= val_batches - 1:
-                break
+                megatron_backend = (
+                    "megatron_cfg" in master_config.policy
+                    and master_config.policy["megatron_cfg"]["enabled"]
+                )
+                losses = _event_validation_losses(
+                    val_results,
+                    _EVENT_VALIDATION_BATCH_COUNT,
+                    megatron_backend=megatron_backend,
+                )
+                for loss, num_valid_tokens in zip(losses, event_num_valid_tokens):
+                    if num_valid_tokens > 0:
+                        val_metrics["val_loss"] += float(loss) * num_valid_tokens
+                        sum_num_valid_tokens += num_valid_tokens
 
         validation_loss_available = bool(sum_num_valid_tokens > 0)
         if validation_loss_available:
