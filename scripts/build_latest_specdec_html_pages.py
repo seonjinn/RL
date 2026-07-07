@@ -51,6 +51,53 @@ PERFCFG_DYNAMIC_REPLAY_CSV = (
 NEMOTRON_MTP_LEGACY_SMOKE_ROOT = (
     DFLARE_RESULT_ROOT / "results/nemotron_mtp_smoke_20260704"
 )
+NEMOTRON_MTP_LEGACY_SMOKE_RESULTS = (
+    (
+        "super",
+        "baseline",
+        "Nemotron-3-Super-120B-A12B-BF16",
+        "2326451",
+    ),
+    (
+        "super",
+        "mtp_static",
+        "Nemotron-3-Super-120B-A12B-BF16",
+        "2326452",
+    ),
+    (
+        "super",
+        "mtp_dynamic",
+        "Nemotron-3-Super-120B-A12B-BF16",
+        "2326453",
+    ),
+    (
+        "ultra",
+        "baseline",
+        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "2326448",
+    ),
+    (
+        "ultra",
+        "mtp_static",
+        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "2326449",
+    ),
+    (
+        "ultra",
+        "mtp_dynamic",
+        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "2326450",
+    ),
+)
+NEMOTRON_MTP_LEGACY_SMOKE_SHARED_METADATA = (
+    (("status",), "complete"),
+    (("runtime", "vllm_version"), "0.24.0"),
+    (("config", "cudagraph_mode"), "PIECEWISE"),
+    (("config", "compilation_config", "cudagraph_mode"), "PIECEWISE"),
+    (("config", "max_new_tokens"), 128),
+    (("config", "temperature"), 1.0),
+    (("config", "top_p"), 0.95),
+)
 DFLARE_COMPLETED_DIRS = [
     DFLARE_RESULT_ROOT / "20260703_dflare_completed",
     DFLARE_RESULT_ROOT / "20260704_dflare_completed",
@@ -2020,6 +2067,52 @@ def _nemotron_smoke_model_label(model_path: object) -> str:
     return Path(model).name
 
 
+def _nemotron_smoke_metadata_value(
+    payload: dict[str, object],
+    field_path: tuple[str, ...],
+) -> tuple[bool, object]:
+    value: object = payload
+    for key in field_path:
+        if not isinstance(value, dict) or key not in value:
+            return False, None
+        value = value[key]
+    return True, value
+
+
+def _validate_nemotron_smoke_payload(
+    payload: dict[str, object],
+    relative_path: Path,
+    *,
+    expected_mode: str,
+    expected_model: str,
+    expected_job_id: str,
+) -> None:
+    expected_metadata = list(NEMOTRON_MTP_LEGACY_SMOKE_SHARED_METADATA)
+    expected_metadata.extend(
+        [
+            (("config", "mode"), expected_mode),
+            (("config", "model"), expected_model),
+            (("runtime", "environment", "SLURM_JOB_ID"), expected_job_id),
+        ]
+    )
+    mismatches: list[str] = []
+    for field_path, expected in expected_metadata:
+        found, actual = _nemotron_smoke_metadata_value(payload, field_path)
+        field_name = ".".join(field_path)
+        if field_name == "config.model" and found:
+            actual = _nemotron_smoke_model_label(actual)
+        if not found or actual != expected:
+            actual_display = repr(actual) if found else "<missing>"
+            mismatches.append(
+                f"{field_name}: expected {expected!r}, got {actual_display}"
+            )
+    if mismatches:
+        raise ValueError(
+            f"Nemotron MTP legacy smoke payload {relative_path.as_posix()} "
+            f"does not match the expected cohort: {'; '.join(mismatches)}"
+        )
+
+
 def _nemotron_smoke_schedule(config: dict[str, object]) -> str:
     mode = text_value(config.get("mode"))
     speculative = config.get("speculative_config")
@@ -2045,15 +2138,42 @@ def load_nemotron_mtp_legacy_smoke_rows(
         "mtp_static": "Native MTP static",
         "mtp_dynamic": "Native MTP dynamic",
     }
+    expected_results = {
+        (model_key, mode): (model, job_id)
+        for model_key, mode, model, job_id in NEMOTRON_MTP_LEGACY_SMOKE_RESULTS
+    }
+    missing_paths = [
+        Path(model_key) / mode / "result.json"
+        for model_key, mode, _model, _job_id in NEMOTRON_MTP_LEGACY_SMOKE_RESULTS
+        if not (result_root / model_key / mode / "result.json").is_file()
+    ]
+    if missing_paths:
+        missing = ", ".join(path.as_posix() for path in missing_paths)
+        raise ValueError(
+            "Nemotron MTP legacy smoke cohort is incomplete; missing expected "
+            f"payloads: {missing}"
+        )
     for model_key in ("super", "ultra"):
         payloads: dict[str, tuple[dict[str, object], Path]] = {}
         for mode in method_labels:
             path = result_root / model_key / mode / "result.json"
-            if not path.exists():
-                continue
-            payloads[mode] = (json.loads(path.read_text(encoding="utf-8")), path)
-        if "baseline" not in payloads:
-            continue
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw_payload, dict):
+                relative_path = path.relative_to(result_root)
+                raise ValueError(
+                    "Nemotron MTP legacy smoke payload "
+                    f"{relative_path.as_posix()} must be a JSON object"
+                )
+            payload = cast(dict[str, object], raw_payload)
+            expected_model, expected_job_id = expected_results[(model_key, mode)]
+            _validate_nemotron_smoke_payload(
+                payload,
+                path.relative_to(result_root),
+                expected_mode=mode,
+                expected_model=expected_model,
+                expected_job_id=expected_job_id,
+            )
+            payloads[mode] = (payload, path)
         baseline_summary = cast(
             dict[str, object], payloads["baseline"][0]["summary"]
         )
@@ -2061,8 +2181,6 @@ def load_nemotron_mtp_legacy_smoke_rows(
         baseline_tok_s_gpu = float(baseline_summary["output_tok_s_per_gpu"])
         baseline_time_s = float(baseline_summary["total_rollout_time_s"])
         for mode, method in method_labels.items():
-            if mode not in payloads:
-                continue
             payload, path = payloads[mode]
             config = cast(dict[str, object], payload["config"])
             runtime = cast(dict[str, object], payload["runtime"])

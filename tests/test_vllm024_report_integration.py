@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import shutil
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -15,6 +18,50 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from scripts import build_latest_specdec_html_pages as latest  # noqa: E402
 from scripts import build_pages_index as index  # noqa: E402
+
+
+NEMOTRON_SMOKE_ROOT = (
+    ROOT
+    / "experiments/vllm_024_dynamicsd/report/results/nemotron_mtp_smoke_20260704"
+)
+EXPECTED_NEMOTRON_SMOKE_RESULTS = (
+    (
+        "super",
+        "baseline",
+        "Nemotron-3-Super-120B-A12B-BF16",
+        "2326451",
+    ),
+    (
+        "super",
+        "mtp_static",
+        "Nemotron-3-Super-120B-A12B-BF16",
+        "2326452",
+    ),
+    (
+        "super",
+        "mtp_dynamic",
+        "Nemotron-3-Super-120B-A12B-BF16",
+        "2326453",
+    ),
+    (
+        "ultra",
+        "baseline",
+        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "2326448",
+    ),
+    (
+        "ultra",
+        "mtp_static",
+        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "2326449",
+    ),
+    (
+        "ultra",
+        "mtp_dynamic",
+        "Nemotron-3-Ultra-550B-A55B-BF16",
+        "2326450",
+    ),
+)
 
 
 class RecordingHTMLParser(HTMLParser):
@@ -31,6 +78,29 @@ def parse_html(path: Path) -> str:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.fixture
+def nemotron_smoke_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(latest, "ROOT", tmp_path)
+    result_root = tmp_path / NEMOTRON_SMOKE_ROOT.name
+    shutil.copytree(NEMOTRON_SMOKE_ROOT, result_root)
+    return result_root
+
+
+def replace_json_value(
+    path: Path,
+    field_path: tuple[str, ...],
+    value: object,
+) -> None:
+    payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    parent = payload
+    for key in field_path[:-1]:
+        child = parent[key]
+        assert isinstance(child, dict)
+        parent = child
+    parent[field_path[-1]] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_task5_latest_builder_can_write_to_temp_outputs_without_checkout_side_effects(
@@ -244,6 +314,97 @@ def test_task6_latest_vllm_html_contains_perfcfg_dynamic_replay_results(
     assert "Qwen3-32B" in html_text
     assert "Qwen3-235B-A22B" in html_text
     assert (temp_public_data / "vllm024_perfcfg_dynamic_replay_20260706.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("model_key", "mode", "_model", "_job_id"),
+    EXPECTED_NEMOTRON_SMOKE_RESULTS,
+    ids=lambda value: str(value),
+)
+def test_nemotron_legacy_smoke_rejects_each_missing_expected_payload(
+    nemotron_smoke_root: Path,
+    model_key: str,
+    mode: str,
+    _model: str,
+    _job_id: str,
+) -> None:
+    relative_path = Path(model_key) / mode / "result.json"
+    (nemotron_smoke_root / relative_path).unlink()
+
+    with pytest.raises(ValueError, match=re.escape(relative_path.as_posix())):
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    (
+        (("status",), "running"),
+        (("runtime", "vllm_version"), "0.23.0"),
+        (("config", "cudagraph_mode"), "FULL"),
+        (("config", "compilation_config", "cudagraph_mode"), "FULL"),
+        (("config", "max_new_tokens"), 256),
+        (("config", "temperature"), 0.0),
+        (("config", "top_p"), 1.0),
+    ),
+    ids=(
+        "status",
+        "vllm-version",
+        "cudagraph-mode",
+        "compiled-cudagraph-mode",
+        "max-new-tokens",
+        "temperature",
+        "top-p",
+    ),
+)
+def test_nemotron_legacy_smoke_rejects_mismatched_shared_metadata(
+    nemotron_smoke_root: Path,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_smoke_root / "super/baseline/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+    field_name = ".".join(field_path)
+
+    with pytest.raises(ValueError, match=re.escape(field_name)):
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    (
+        (("config", "mode"), "wrong_method"),
+        (("config", "model"), "/models/wrong-model"),
+        (("runtime", "environment", "SLURM_JOB_ID"), "9999999"),
+    ),
+    ids=("method", "model", "job-id"),
+)
+@pytest.mark.parametrize(
+    ("model_key", "mode", "expected_model", "expected_job_id"),
+    EXPECTED_NEMOTRON_SMOKE_RESULTS,
+    ids=lambda value: str(value),
+)
+def test_nemotron_legacy_smoke_rejects_mismatched_payload_identity(
+    nemotron_smoke_root: Path,
+    model_key: str,
+    mode: str,
+    expected_model: str,
+    expected_job_id: str,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_smoke_root / model_key / mode / "result.json"
+    replace_json_value(result_path, field_path, bad_value)
+    field_name = ".".join(field_path)
+    expected_value = {
+        "config.mode": mode,
+        "config.model": expected_model,
+        "runtime.environment.SLURM_JOB_ID": expected_job_id,
+    }[field_name]
+
+    with pytest.raises(ValueError, match=re.escape(field_name)) as error:
+        latest.load_nemotron_mtp_legacy_smoke_rows(nemotron_smoke_root)
+
+    assert expected_value in str(error.value)
 
 
 def test_latest_vllm_html_contains_separate_nemotron_native_mtp_legacy_smoke(
