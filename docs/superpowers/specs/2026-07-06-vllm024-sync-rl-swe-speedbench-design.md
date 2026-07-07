@@ -147,4 +147,3 @@ and full NeMo-RL results remain distinct sections.
 8. Add PARD-2, DFlash, or DFlare rows only when exact compatible checkpoints
    and matched runtime baselines exist.
 9. Run natural-EOS SWE accuracy sentinels on the best configurations.
-

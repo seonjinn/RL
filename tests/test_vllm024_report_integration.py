@@ -180,6 +180,50 @@ def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
     assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in html_text
     assert ">32K<" in html_text or " 32K " in html_text
     assert ">64K<" in html_text or " 64K " in html_text
+    assert "Official support" in html_text
+    assert "Sync-RL overlay support" in html_text
+    assert "Official limitations" in html_text
+    assert "Overlay gates" in html_text
+
+    qwen_table = html_text.split("<h3>Qwen SWE Sync-RL support</h3>", 1)[1].split(
+        "</table>", 1
+    )[0]
+    nemotron_table = html_text.split(
+        "<h3>Nemotron SPEED-Bench support</h3>", 1
+    )[1].split("</table>", 1)[0]
+    assert "<th>Supported</th>" in qwen_table
+    assert "<th>Integration only</th>" in qwen_table
+    assert "<th>Official support</th>" not in qwen_table
+    assert "<th>Official support</th>" in nemotron_table
+    assert "<th>Sync-RL overlay support</th>" in nemotron_table
+    assert "<th>Official limitations</th>" in nemotron_table
+    assert "<th>Overlay gates</th>" in nemotron_table
+
+
+def test_task6_nemotron_support_uses_runner_capabilities_and_dynamic_gate() -> None:
+    _, nemotron = latest.load_sync_speedbench_support()
+
+    assert not nemotron.empty
+    for row in nemotron.to_dict(orient="records"):
+        assert "native MTP dynamic" not in row["official_support"]
+        assert "native MTP dynamic" in row["overlay_support"]
+        assert "native MTP dynamic unsupported" in row["official_limitations"]
+        assert "signed model/profile calibration artifact" in row["overlay_gates"]
+        assert "excluded from smoke" in row["overlay_gates"]
+
+
+def test_final_review_design_and_plan_have_exactly_one_trailing_newline() -> None:
+    paths = (
+        ROOT
+        / "docs/superpowers/specs/2026-07-06-vllm024-sync-rl-swe-speedbench-design.md",
+        ROOT
+        / "docs/superpowers/plans/2026-07-06-vllm024-sync-rl-swe-speedbench.md",
+    )
+
+    for path in paths:
+        payload = path.read_bytes()
+        assert payload.endswith(b"\n")
+        assert not payload.endswith(b"\n\n")
 
 
 def test_task6_task5_probe_report_uses_repo_root_safe_module_loading() -> None:

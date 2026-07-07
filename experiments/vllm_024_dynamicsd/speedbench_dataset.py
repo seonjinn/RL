@@ -302,11 +302,66 @@ def _modelopt_license_entry(path: Path) -> dict[str, str]:
     return {"relative_path": path.name, "sha256": sha256_file(path)}
 
 
+def _dependency_lock_entry(path: Path) -> dict[str, Any]:
+    _require_nonempty_file(path, label="SPEED-Bench dependency lock")
+    versions: dict[str, str] = {}
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.count("==") != 1 or any(token in line for token in (">", "<", "~=")):
+            raise ValueError(
+                f"dependency lock line {line_number} must use one exact == pin"
+            )
+        package, version = line.split("==", 1)
+        if not package or not version or package in versions:
+            raise ValueError(f"invalid dependency lock line {line_number}: {line!r}")
+        versions[package] = version
+    if not versions:
+        raise ValueError("SPEED-Bench dependency lock has no pinned packages")
+    return {
+        "lock_file": path.name,
+        "lock_sha256": sha256_file(path),
+        "versions": versions,
+    }
+
+
+def _modelopt_source_identity(path: Path) -> dict[str, Any]:
+    _require_nonempty_file(path, label="Model Optimizer source identity")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Model Optimizer source identity must be an object")
+    required = (
+        "schema_version",
+        "modelopt_commit",
+        "modelopt_tree",
+        "source_root",
+        "run_py_sha256",
+        "dataset_source_sha256",
+        "dataset_patch_sha256",
+        "patched_dataset_source_sha256",
+    )
+    for field in required:
+        if payload.get(field) in (None, "", "unknown"):
+            raise ValueError(f"Model Optimizer source identity missing {field}")
+    if payload["modelopt_commit"] != MODELOPT_REVISION:
+        raise ValueError(
+            "Model Optimizer source identity revision mismatch: "
+            f"{payload['modelopt_commit']} != {MODELOPT_REVISION}"
+        )
+    return payload
+
+
 def build_prepared_manifest(
     prepared_root: Path,
     *,
     dataset_license_root: Path,
     modelopt_license_path: Path,
+    dependency_lock_path: Path,
+    modelopt_source_identity_path: Path,
 ) -> dict[str, Any]:
     parquet_paths = discover_prepared_parquet_paths(prepared_root)
     parquet_entries = [
@@ -346,7 +401,11 @@ def build_prepared_manifest(
             "revision": MODELOPT_REVISION,
             "prepare_data_script": MODELOPT_PREPARE_DATA_SCRIPT,
             "license_files": [_modelopt_license_entry(modelopt_license_path)],
+            "source_identity": _modelopt_source_identity(
+                modelopt_source_identity_path
+            ),
         },
+        "dependencies": _dependency_lock_entry(dependency_lock_path),
         "parquet_files": parquet_entries,
         "prepared_configs": entries,
     }
@@ -369,11 +428,15 @@ def write_prepared_manifest(
     *,
     dataset_license_root: Path,
     modelopt_license_path: Path,
+    dependency_lock_path: Path,
+    modelopt_source_identity_path: Path,
 ) -> dict[str, Any]:
     manifest = build_prepared_manifest(
         prepared_root,
         dataset_license_root=dataset_license_root,
         modelopt_license_path=modelopt_license_path,
+        dependency_lock_path=dependency_lock_path,
+        modelopt_source_identity_path=modelopt_source_identity_path,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -396,6 +459,12 @@ def build_parser() -> argparse.ArgumentParser:
     write_manifest.add_argument("--checksums", type=Path, required=True)
     write_manifest.add_argument("--dataset-license-root", type=Path, required=True)
     write_manifest.add_argument("--modelopt-license", type=Path, required=True)
+    write_manifest.add_argument("--dependency-lock", type=Path, required=True)
+    write_manifest.add_argument(
+        "--modelopt-source-identity",
+        type=Path,
+        required=True,
+    )
     return parser
 
 
@@ -407,6 +476,8 @@ def main() -> None:
             args.output,
             dataset_license_root=args.dataset_license_root,
             modelopt_license_path=args.modelopt_license,
+            dependency_lock_path=args.dependency_lock,
+            modelopt_source_identity_path=args.modelopt_source_identity,
         )
         checksum_lines = write_checksum_file(args.prepared_root, args.checksums)
         print(

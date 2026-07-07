@@ -13,9 +13,19 @@ from typing import Any
 MATCHED_CONFIG_FIELDS = (
     "runtime_image_sha256",
     "model_config_hash",
+    "model_checkpoint_hash",
+    "model_view_marker_hash",
+    "drafter_config_hash",
+    "drafter_checkpoint_hash",
+    "drafter_view_marker_hash",
+    "context_profile",
+    "rope_config_hash",
     "prompt_set_hash",
     "request_plan_hash",
     "model",
+    "draft_model",
+    "node_count",
+    "topology",
     "tensor_parallel_size",
     "pipeline_parallel_size",
     "dtype",
@@ -26,7 +36,9 @@ MATCHED_CONFIG_FIELDS = (
     "enable_prefix_caching",
     "enable_chunked_prefill",
     "attention_backend",
+    "distributed_executor_backend",
     "cudagraph_mode",
+    "compilation_config",
     "num_prompts",
     "samples_per_prompt",
     "requests_per_rollout_batch",
@@ -41,6 +53,25 @@ MATCHED_CONFIG_FIELDS = (
     "prompt_batch_hashes",
 )
 
+REQUIRED_CONFIG_FIELDS = (
+    "runtime_image_sha256",
+    "model_config_hash",
+    "model_checkpoint_hash",
+    "model_view_marker_hash",
+    "drafter_config_hash",
+    "drafter_checkpoint_hash",
+    "drafter_view_marker_hash",
+    "context_profile",
+    "rope_config_hash",
+    "prompt_set_hash",
+    "request_plan_hash",
+    "model",
+    "node_count",
+    "topology",
+    "distributed_executor_backend",
+    "compilation_config",
+)
+
 
 def ratio(numerator: float, denominator: float) -> float | None:
     return round(numerator / denominator, 6) if denominator else None
@@ -48,6 +79,23 @@ def ratio(numerator: float, denominator: float) -> float | None:
 
 def reduction_pct(value: float, baseline: float) -> float | None:
     return round((1.0 - value / baseline) * 100.0, 6) if baseline else None
+
+
+def validate_required_config(variant: str, config: dict[str, Any]) -> None:
+    for field in REQUIRED_CONFIG_FIELDS:
+        value = config.get(field)
+        invalid_string = isinstance(value, str) and value.lower() in {
+            "",
+            "unknown",
+            "none",
+        }
+        if value is None or invalid_string or value == {} or value == []:
+            raise ValueError(
+                f"{field} is required and must not be missing, unknown, or empty "
+                f"for {variant}"
+            )
+    if not isinstance(config["node_count"], int) or config["node_count"] <= 0:
+        raise ValueError(f"node_count must be a positive integer for {variant}")
 
 
 def load_results(matrix_root: Path) -> dict[str, dict[str, Any]]:
@@ -71,8 +119,10 @@ def validate_matched_configs(results: dict[str, dict[str, Any]]) -> None:
         return
     reference_variant = "baseline" if "baseline" in results else sorted(results)[0]
     reference = results[reference_variant]["config"]
+    validate_required_config(reference_variant, reference)
     for variant, payload in results.items():
         config = payload["config"]
+        validate_required_config(variant, config)
         mismatches = {
             field: (reference.get(field), config.get(field))
             for field in MATCHED_CONFIG_FIELDS
@@ -105,14 +155,15 @@ def output_work_counts(payload: dict[str, Any]) -> OutputWork | None:
         batch_planned = batch.get("planned_output_tokens")
         batch_actual = batch.get("actual_output_tokens")
         batch_forced = batch.get("forced_output_mask")
-        if batch_planned is None and batch_actual is None:
-            continue
         if not isinstance(batch_planned, list) or not isinstance(batch_actual, list):
             raise ValueError("exact output work counts must be arrays")
-        if batch_forced is None:
-            batch_forced = [True] * len(batch_planned)
         if not isinstance(batch_forced, list):
             raise ValueError("exact output forced mask must be an array")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in [*batch_planned, *batch_actual]
+        ):
+            raise ValueError("exact output work count values must be nonnegative integers")
         if not all(isinstance(value, bool) for value in batch_forced):
             raise ValueError("exact output forced mask values must be booleans")
         if len(batch_planned) != len(batch_actual):
@@ -154,17 +205,16 @@ def validate_exact_output_work(results: dict[str, dict[str, Any]]) -> None:
         return
     baseline_work = output_work_counts(baseline)
     if baseline_work is None:
-        return
+        raise ValueError("missing exact output work counts for baseline")
     validate_forced_actual_counts("baseline", baseline_work)
-    baseline_forced_planned = forced_planned_counts(baseline_work)
     for variant, payload in results.items():
         work = output_work_counts(payload)
         if work is None:
             raise ValueError(f"missing exact output work counts for {variant}")
         validate_forced_actual_counts(variant, work)
-        if forced_planned_counts(work) != baseline_forced_planned:
+        if work != baseline_work:
             raise ValueError(
-                f"exact forced output work mismatch for {variant} vs baseline"
+                f"exact output work arrays mismatch for {variant} vs baseline"
             )
 
 
@@ -220,10 +270,7 @@ def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
         hashes = output_hashes(payload)
         work = output_work_counts(payload)
         baseline_work = output_work_counts(baseline) if baseline else None
-        forced_work = forced_planned_counts(work) if work else None
-        baseline_forced_work = (
-            forced_planned_counts(baseline_work) if baseline_work else None
-        )
+        exact_work_match = work == baseline_work if work and baseline_work else None
         rows.append(
             {
                 "variant": variant,
@@ -252,9 +299,7 @@ def build_summary(matrix_root: Path) -> list[dict[str, Any]]:
                 "acceptance_rate": metrics.get("acceptance_rate"),
                 "mean_acceptance_length": metrics.get("mean_acceptance_length"),
                 "exact_output_work_match_vs_baseline": (
-                    forced_work == baseline_forced_work
-                    if forced_work is not None and baseline_forced_work is not None
-                    else None
+                    exact_work_match
                 ),
                 "exact_output_hash_match_vs_baseline": (
                     hashes == baseline_hashes

@@ -37,6 +37,21 @@ ACCEPTANCE_LIMITATION = (
     "windows report contributor counts only; they are not output-position "
     "acceptance without additional instrumentation."
 )
+OFFICIAL_SPEEDBENCH_MODES = ("baseline", "static", "mtp_static")
+OVERLAY_SPEEDBENCH_MODES = (
+    "baseline",
+    "static",
+    "dynamic",
+    "mtp_static",
+    "mtp_dynamic",
+)
+
+
+def speedbench_runner_capabilities() -> dict[str, tuple[str, ...]]:
+    return {
+        "official": OFFICIAL_SPEEDBENCH_MODES,
+        "overlay": OVERLAY_SPEEDBENCH_MODES,
+    }
 
 MODELOPT_PINNED_COMMIT = "43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
 MODELOPT_RUN_PY_SHA256 = (
@@ -662,7 +677,7 @@ def expand_overlay_barrier_batches(
         raise ValueError("expected exactly 48 unique SPEED-Bench overlay prompts")
     if active_concurrency <= 0 or rollout_batches <= 0:
         raise ValueError("active_concurrency and rollout_batches must be positive")
-    requests_per_batch = max(16, active_concurrency)
+    requests_per_batch = active_concurrency
     batches: list[tuple[OverlayPrompt, ...]] = []
     for batch_index in range(rollout_batches):
         segment_index = batch_index % 3
@@ -824,6 +839,32 @@ async def run_one_request_async(
     )
 
 
+def exact_output_work(
+    requests: Sequence[OverlayRequest],
+    output_token_ids: Sequence[Sequence[int]],
+) -> dict[str, list[int] | list[bool]]:
+    planned = [request.max_tokens for request in requests]
+    actual = [len(token_ids) for token_ids in output_token_ids]
+    forced = [
+        request.ignore_eos or request.min_tokens == request.max_tokens
+        for request in requests
+    ]
+    for index, (request, actual_tokens, is_forced) in enumerate(
+        zip(requests, actual, forced, strict=True)
+    ):
+        if is_forced and actual_tokens != request.max_tokens:
+            raise ValueError(
+                f"forced output length mismatch at request {index}: "
+                f"prompt_id={request.prompt_id} sample_index={request.sample_index} "
+                f"planned={request.max_tokens} actual={actual_tokens}"
+            )
+    return {
+        "planned_output_tokens": planned,
+        "actual_output_tokens": actual,
+        "forced_output_mask": forced,
+    }
+
+
 async def run_overlay_batch_async(
     engine: Any,
     requests: Sequence[OverlayRequest],
@@ -870,6 +911,7 @@ async def run_overlay_batch_async(
     )
     barrier_finished_at_s = max(barrier_finished_at_s, max_request_finished_at_s)
     output_token_ids = [item.output_token_ids for item in completed]
+    work = exact_output_work(requests, output_token_ids)
     return {
         "sync_barrier": "AsyncLLM.gather",
         "request_count": len(completed),
@@ -879,6 +921,7 @@ async def run_overlay_batch_async(
         "ttft_s": [item.ttft_s for item in completed],
         "completion_time_s": [item.completion_time_s for item in completed],
         "output_token_ids": output_token_ids,
+        **work,
         "output_token_hashes": [token_hash(token_ids) for token_ids in output_token_ids],
         "prompt_token_ids": [
             list(item.request.prompt_token_ids) for item in completed
@@ -1055,7 +1098,7 @@ def build_official_speedbench_command(
     static_k: int = 0,
     temperature: float | None = None,
 ) -> list[str]:
-    if variant in ("dynamic", "mtp_dynamic"):
+    if variant not in OFFICIAL_SPEEDBENCH_MODES:
         raise ValueError(
             "pinned ModelOpt run.py does not support scheduled dynamic "
             f"speculation for official mode={variant}"
@@ -2146,6 +2189,9 @@ async def run_overlay(args: argparse.Namespace) -> dict[str, Any]:
             "draft_model": args.draft_model or "none",
             "tokenizer": tokenizer_path,
             "speculative_config": speculative_config,
+            "static_k": args.static_k,
+            "context_profile": args.context_profile,
+            "calibration_repeat": args.calibration_repeat,
             "request_plan": str(args.request_plan),
             "request_plan_hash": request_plan.plan_hash,
             "prepared_root": str(args.prepared_root),
@@ -2296,7 +2342,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--draft-model", default="")
     parser.add_argument(
         "--mode",
-        choices=("baseline", "static", "dynamic", "mtp_static", "mtp_dynamic"),
+        choices=OVERLAY_SPEEDBENCH_MODES,
         required=True,
     )
     parser.add_argument("--static-k", type=int, default=5)
@@ -2329,6 +2375,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--top-p", type=float, default=None)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--context-profile", default="")
+    parser.add_argument("--calibration-repeat", type=int)
     parser.add_argument("--warmup-max-tokens", type=int, default=32)
     parser.add_argument("--acceptance-window-size", type=int, default=16)
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
@@ -2359,6 +2407,8 @@ def main() -> None:
         raise ValueError("--prepared-checksums is required for overlay cohort")
     if args.request_plan is None:
         raise ValueError("--request-plan is required for overlay cohort")
+    if not args.context_profile:
+        raise ValueError("--context-profile is required for overlay cohort")
     asyncio.run(run_overlay(args))
 
 

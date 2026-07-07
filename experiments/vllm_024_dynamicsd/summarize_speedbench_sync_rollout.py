@@ -39,6 +39,7 @@ MATCHED_BASELINE_FIELDS = (
     "top_p",
     "sampling_protocol",
     "sampling",
+    "seed",
     "max_model_len",
     "max_new_tokens",
     "samples_per_prompt",
@@ -122,6 +123,65 @@ def validate_required_provenance(row: dict[str, Any]) -> None:
             value = row.get(field)
             if value is None or value == "unknown" or value == "":
                 raise ValueError(f"{field} is required and must not be unknown")
+    if row.get("cohort") == "overlay":
+        seed = row.get("seed")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise ValueError("seed is required for overlay rows")
+        validate_overlay_exact_work(row)
+
+
+def _nested_int_arrays(row: dict[str, Any], field: str) -> list[list[int]]:
+    value = row.get(field)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} is required for overlay exact forced work")
+    if not all(isinstance(batch, list) for batch in value):
+        raise ValueError(f"{field} must be an ordered array of batch arrays")
+    for batch in value:
+        if not all(
+            isinstance(item, int) and not isinstance(item, bool) and item >= 0
+            for item in batch
+        ):
+            raise ValueError(f"{field} values must be nonnegative integers")
+    return value
+
+
+def _nested_bool_arrays(row: dict[str, Any], field: str) -> list[list[bool]]:
+    value = row.get(field)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} is required for overlay exact forced work")
+    if not all(isinstance(batch, list) for batch in value):
+        raise ValueError(f"{field} must be an ordered array of batch arrays")
+    for batch in value:
+        if not all(isinstance(item, bool) for item in batch):
+            raise ValueError(f"{field} values must be booleans")
+    return value
+
+
+def validate_overlay_exact_work(
+    row: dict[str, Any],
+) -> tuple[list[list[int]], list[list[int]], list[list[bool]]]:
+    planned = _nested_int_arrays(row, "planned_output_tokens")
+    actual = _nested_int_arrays(row, "actual_output_tokens")
+    forced = _nested_bool_arrays(row, "forced_output_mask")
+    if not (len(planned) == len(actual) == len(forced)):
+        raise ValueError("overlay exact forced work batch arrays differ in length")
+    for batch_index, (planned_batch, actual_batch, forced_batch) in enumerate(
+        zip(planned, actual, forced, strict=True)
+    ):
+        if not (len(planned_batch) == len(actual_batch) == len(forced_batch)):
+            raise ValueError(
+                f"overlay exact forced work arrays differ in length at batch {batch_index}"
+            )
+        for request_index, (planned_tokens, actual_tokens, is_forced) in enumerate(
+            zip(planned_batch, actual_batch, forced_batch, strict=True)
+        ):
+            if is_forced and planned_tokens != actual_tokens:
+                raise ValueError(
+                    "overlay exact forced work underfill at "
+                    f"batch {batch_index} request {request_index}: "
+                    f"planned={planned_tokens} actual={actual_tokens}"
+                )
+    return planned, actual, forced
 
 
 def compare_rows(
@@ -143,6 +203,11 @@ def compare_rows(
     if mismatches:
         first = next(iter(mismatches))
         raise ValueError(f"matched runtime baseline mismatch: {first} {mismatches}")
+    if baseline_row.get("cohort") == "overlay":
+        baseline_work = validate_overlay_exact_work(baseline_row)
+        candidate_work = validate_overlay_exact_work(candidate_row)
+        if baseline_work != candidate_work:
+            raise ValueError("overlay exact forced work mismatch against baseline")
     baseline_throughput = float(baseline_row.get("output_tok_s_per_gpu", 0.0))
     candidate_throughput = float(candidate_row.get("output_tok_s_per_gpu", 0.0))
     baseline_time = float(baseline_row.get("total_rollout_time_s", 0.0))
@@ -171,6 +236,7 @@ def row_from_result(path: Path) -> dict[str, Any] | None:
     instrumentation = config.get("official_instrumentation")
     if not isinstance(instrumentation, dict):
         instrumentation = {}
+    rollout_batches = payload.get("rollout_batches", [])
     return {
         "cohort": config.get("cohort"),
         "variant": config.get("mode"),
@@ -194,6 +260,7 @@ def row_from_result(path: Path) -> dict[str, Any] | None:
         "top_p": config.get("top_p"),
         "sampling_protocol": config.get("sampling_protocol"),
         "sampling": config.get("sampling"),
+        "seed": config.get("seed"),
         "max_model_len": config.get("max_model_len"),
         "max_new_tokens": config.get("max_new_tokens"),
         "samples_per_prompt": config.get("samples_per_prompt"),
@@ -211,6 +278,15 @@ def row_from_result(path: Path) -> dict[str, Any] | None:
         ),
         "mamba_cache_philox_rounds": config.get("mamba_cache_philox_rounds"),
         "moe_backend": config.get("moe_backend"),
+        "planned_output_tokens": [
+            batch.get("planned_output_tokens") for batch in rollout_batches
+        ],
+        "actual_output_tokens": [
+            batch.get("actual_output_tokens") for batch in rollout_batches
+        ],
+        "forced_output_mask": [
+            batch.get("forced_output_mask") for batch in rollout_batches
+        ],
         "official_instrumentation_schema_version": config.get(
             "official_instrumentation_schema_version",
             instrumentation.get("schema_version"),

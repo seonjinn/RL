@@ -247,6 +247,131 @@ def model_config_hash(model: str) -> str | None:
     return file_sha256(Path(model) / "config.json")
 
 
+def _canonical_hash(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _required_file_hash(path: Path, *, label: str) -> str:
+    value = file_sha256(path)
+    if value is None:
+        raise ValueError(f"missing {label}: {path}")
+    return value
+
+
+def _view_marker_hash(model: Path) -> str:
+    marker = model / ".long_context_view.json"
+    if marker.is_file():
+        return _required_file_hash(marker, label="long-context view marker")
+    return _canonical_hash({"kind": "native_checkpoint", "path": str(model.resolve())})
+
+
+def _checkpoint_identity_hash(model: Path) -> str:
+    indexes = []
+    for name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        path = model / name
+        if path.is_file():
+            indexes.append({"name": name, "sha256": _required_file_hash(path, label=name)})
+    return _canonical_hash(
+        {
+            "path": str(model.resolve()),
+            "config_sha256": _required_file_hash(
+                model / "config.json",
+                label="model config",
+            ),
+            "indexes": indexes,
+            "view_marker_sha256": _view_marker_hash(model),
+        }
+    )
+
+
+def _rope_config(model: Path) -> dict[str, Any]:
+    config_path = model / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError(f"model config must be an object: {config_path}")
+    return {
+        key: config.get(key)
+        for key in (
+            "max_position_embeddings",
+            "original_max_position_embeddings",
+            "rope_parameters",
+            "rope_scaling",
+            "rope_theta",
+        )
+    }
+
+
+def _artifact_provenance(model_value: str, *, role: str) -> dict[str, str]:
+    if not model_value:
+        absent_hash = _canonical_hash({"kind": "absent", "role": role})
+        return {
+            "config_hash": absent_hash,
+            "checkpoint_hash": absent_hash,
+            "view_marker_hash": absent_hash,
+        }
+    model = Path(model_value)
+    return {
+        "config_hash": _required_file_hash(
+            model / "config.json",
+            label=f"{role} config",
+        ),
+        "checkpoint_hash": _checkpoint_identity_hash(model),
+        "view_marker_hash": _view_marker_hash(model),
+    }
+
+
+def build_execution_provenance(
+    args: argparse.Namespace,
+    *,
+    compilation_config: dict[str, Any],
+) -> dict[str, Any]:
+    runtime_sha = str(args.runtime_image_sha256 or "")
+    if not runtime_sha or runtime_sha.lower() in {"unknown", "none"}:
+        raise ValueError("runtime_image_sha256 is required and must not be unknown")
+    if args.node_count <= 0:
+        raise ValueError("node_count must be positive")
+    backend = str(args.distributed_executor_backend or "")
+    if not backend or backend.lower() in {"unknown", "none", "auto"}:
+        raise ValueError(
+            "distributed_executor_backend is required and must not be unknown"
+        )
+    context_profile = str(args.context_profile or "")
+    if not context_profile or context_profile.lower() in {"unknown", "none"}:
+        raise ValueError("context_profile is required and must not be unknown")
+    if not compilation_config:
+        raise ValueError("compilation_config is required and must not be empty")
+
+    model = _artifact_provenance(args.model, role="model")
+    drafter = _artifact_provenance(args.draft_model, role="drafter")
+    rope_payload: dict[str, Any] = {"model": _rope_config(Path(args.model))}
+    if args.draft_model:
+        rope_payload["drafter"] = _rope_config(Path(args.draft_model))
+    else:
+        rope_payload["drafter"] = {"kind": "absent"}
+    topology = {
+        "nodes": args.node_count,
+        "tensor_parallel_size": args.tensor_parallel_size,
+        "pipeline_parallel_size": args.pipeline_parallel_size,
+        "distributed_executor_backend": backend,
+    }
+    return {
+        "runtime_image_sha256": runtime_sha,
+        "node_count": args.node_count,
+        "distributed_executor_backend": backend,
+        "compilation_config": copy.deepcopy(compilation_config),
+        "model_config_hash": model["config_hash"],
+        "model_checkpoint_hash": model["checkpoint_hash"],
+        "model_view_marker_hash": model["view_marker_hash"],
+        "drafter_config_hash": drafter["config_hash"],
+        "drafter_checkpoint_hash": drafter["checkpoint_hash"],
+        "drafter_view_marker_hash": drafter["view_marker_hash"],
+        "context_profile": context_profile,
+        "rope_config_hash": _canonical_hash(rope_payload),
+        "topology": topology,
+    }
+
+
 def prompt_tokens(batch: list[PromptRecord]) -> list[list[int]]:
     return [record.token_ids for record in batch]
 
@@ -454,8 +579,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine-max-num-seqs", type=int, default=64)
     parser.add_argument("--attention-backend", default="")
     parser.add_argument("--moe-backend", default="")
-    parser.add_argument("--distributed-executor-backend", default="")
+    parser.add_argument("--distributed-executor-backend", required=True)
     parser.add_argument("--distributed-timeout-seconds", type=int)
+    parser.add_argument("--node-count", type=int, required=True)
+    parser.add_argument("--context-profile", required=True)
     parser.add_argument("--enable-expert-parallel", action="store_true")
     parser.add_argument("--model-loader-num-threads", type=int, default=0)
     parser.add_argument("--cudagraph-mode", default="PIECEWISE")
@@ -515,6 +642,10 @@ def main() -> None:
     }
     if args.disable_fuse_allreduce_rms:
         compilation_config["pass_config"] = {"fuse_allreduce_rms": False}
+    execution_provenance = build_execution_provenance(
+        args,
+        compilation_config=compilation_config,
+    )
 
     llm_kwargs: dict[str, Any] = {
         "model": args.model,
@@ -645,9 +776,8 @@ def main() -> None:
             "scenario": "synchronous_rl_rollout",
             "sync_barrier": "LLM.generate_return",
             "model": args.model,
-            "model_config_hash": model_config_hash(args.model),
-            "runtime_image_sha256": args.runtime_image_sha256 or None,
             "draft_model": args.draft_model,
+            **execution_provenance,
             "mode": args.mode,
             "speculative_config": speculative_config,
             "tensor_parallel_size": args.tensor_parallel_size,
@@ -665,15 +795,11 @@ def main() -> None:
             "enable_expert_parallel": args.enable_expert_parallel,
             "attention_backend": args.attention_backend or "auto",
             "moe_backend": args.moe_backend or "auto",
-            "distributed_executor_backend": (
-                args.distributed_executor_backend or "auto"
-            ),
             "distributed_timeout_seconds": args.distributed_timeout_seconds,
             "model_loader_extra_config": llm_kwargs.get(
                 "model_loader_extra_config"
             ),
             "cudagraph_mode": args.cudagraph_mode,
-            "compilation_config": compilation_config,
             "mamba_ssm_cache_dtype": args.mamba_ssm_cache_dtype or "auto",
             "mamba_backend": args.mamba_backend or "auto",
             "enable_mamba_cache_stochastic_rounding": (

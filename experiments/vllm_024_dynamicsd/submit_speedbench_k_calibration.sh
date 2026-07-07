@@ -3,6 +3,42 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+die() {
+  echo "$1" >&2
+  exit "${2:-2}"
+}
+
+require_safe_identifier() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    die "invalid scheduler identifier ${name}=${value}"
+  fi
+}
+
+require_safe_time_limit() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+    die "invalid scheduler identifier ${name}=${value}"
+  fi
+}
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    die "invalid scheduler integer ${name}=${value}"
+  fi
+}
+
+require_safe_dependency() {
+  local value="$1"
+  if [[ -n "${value}" && ! "${value}" =~ ^[A-Za-z0-9._,:+-]+$ ]]; then
+    die "invalid scheduler identifier DEPENDENCY=${value}"
+  fi
+}
+
 CLUSTER="${CLUSTER:-auto}"
 if [[ "${CLUSTER}" == "auto" ]]; then
   case "$(hostname)" in
@@ -33,7 +69,7 @@ LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.0-aarch64-ubuntu2404.sqsh}"
 MODEL="${MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137}"
-DRAFT_MODEL="${DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
+DRAFT_MODEL="${DRAFT_MODEL-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench-k-calibration}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_speedbench_k_calibration}"
 PREPARED_RUN_ROOT="${PREPARED_RUN_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench/speedbench-487aa718-43fee0cd}"
@@ -43,8 +79,12 @@ PREPARED_CHECKSUMS="${PREPARED_CHECKSUMS:-${PREPARED_RUN_ROOT}/resolved_parquet.
 DATASET_CONFIG="${DATASET_CONFIG:-throughput_1k}"
 REQUEST_PLAN="${REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
 REQUEST_PLAN_IN_CONTAINER="${REQUEST_PLAN_IN_CONTAINER:-/workspace/experiment/profiles/swe_sync_32k.json}"
+CONTEXT_PROFILE="${CONTEXT_PROFILE:-speedbench_32k}"
 CONCURRENCIES="${CONCURRENCIES:-1 8 32 64}"
 K_VALUES="${K_VALUES:-1 2 3 4 5}"
+REPEATS="${REPEATS:-3}"
+STATIC_VARIANT="${STATIC_VARIANT:-static}"
+METHOD="${METHOD:-eagle3}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}"
 TP="${TP:-2}"
 PP="${PP:-1}"
@@ -66,6 +106,31 @@ DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
 
+require_safe_identifier "ACCOUNT" "${ACCOUNT}"
+require_safe_identifier "PARTITION" "${PARTITION}"
+require_safe_time_limit "TIME_LIMIT" "${TIME_LIMIT}"
+require_positive_integer "NODES" "${NODES}"
+require_positive_integer "SEGMENT" "${SEGMENT}"
+require_safe_dependency "${DEPENDENCY}"
+for concurrency in ${CONCURRENCIES}; do
+  require_positive_integer "ACTIVE_CONCURRENCY" "${concurrency}"
+done
+for k_value in ${K_VALUES}; do
+  require_positive_integer "STATIC_K" "${k_value}"
+done
+
+if [[ "${REPEATS}" != "3" ]]; then
+  echo "REPEATS must be exactly 3 for calibration artifacts" >&2
+  exit 2
+fi
+case "${STATIC_VARIANT}:${METHOD}" in
+  static:eagle3|mtp_static:mtp) ;;
+  *)
+    echo "STATIC_VARIANT/METHOD must be static/eagle3 or mtp_static/mtp" >&2
+    exit 2
+    ;;
+esac
+
 MATRIX_ROOT="${RESULT_ROOT}/${RUN_ID}"
 MANIFEST="${MATRIX_ROOT}/jobs.tsv"
 
@@ -84,7 +149,8 @@ render_run_benchmark() {
   local variant="$1"
   local static_k="$2"
   local concurrency="$3"
-  local run_dir="$4"
+  local repeat="$4"
+  local run_dir="$5"
   local container_image_q
   local container_image_sha_q
   local runtime_image_q
@@ -122,6 +188,8 @@ EOF
   emit_arg_pair "--temperature" "${TEMPERATURE}"
   emit_arg_pair "--top-p" "${TOP_P}"
   emit_arg_pair "--seed" "${SEED}"
+  emit_arg_pair "--context-profile" "${CONTEXT_PROFILE}"
+  emit_arg_pair "--calibration-repeat" "${repeat}"
   emit_arg_pair "--cudagraph-mode" "${CUDAGRAPH_MODE}"
   emit_arg_pair "--prepared-root" "${PREPARED_ROOT}"
   emit_arg_pair "--prepared-manifest" "${PREPARED_MANIFEST}"
@@ -143,7 +211,8 @@ render_sbatch() {
   local variant="$1"
   local method="$2"
   local concurrency="$3"
-  local run_dir="$4"
+  local repeat="$4"
+  local run_dir="$5"
   local container_image_q
   local container_image_sha_q
   local runtime_image_q
@@ -162,8 +231,6 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=${SEGMENT}
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=coreai_dlalgo_llm-speedbench-c${concurrency}-${variant}
-#SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
 runtime_image_sha256="\$(if [[ -n ${runtime_image_q} ]]; then printf '%s\n' ${runtime_image_q}; elif [[ -s ${container_image_sha_q} ]]; then awk '{print \$1; exit}' ${container_image_sha_q}; else sha256sum ${container_image_q} | awk '{print \$1; exit}'; fi)"
@@ -175,6 +242,7 @@ echo 'cohort=overlay'
 echo 'method=${method}'
 echo 'variant=${variant}'
 echo 'active_concurrency=${concurrency}'
+echo 'calibration_repeat=${repeat}'
 echo 'cudagraph_mode=${CUDAGRAPH_MODE}'
 srun --nodes=${NODES} --ntasks=${NODES} --ntasks-per-node=1 \\
   --container-image=${container_image_q} \\
@@ -193,16 +261,17 @@ render_planned_job() {
   local method="$3"
   local static_k="$4"
   local concurrency="$5"
-  local run_dir="$6"
+  local repeat="$6"
+  local run_dir="$7"
   echo "${marker} speedbench_overlay=${variant}"
-  echo "${marker} cohort=overlay method=${method} active_concurrency=${concurrency} static_k=${static_k}"
+  echo "${marker} cohort=overlay method=${method} active_concurrency=${concurrency} static_k=${static_k} repeat=${repeat}"
   echo "${marker} planned_run_script=${run_dir}/run_benchmark.sh"
-  echo "# BEGIN run_benchmark.sh ${variant}-c${concurrency}-k${static_k}"
-  render_run_benchmark "${variant}" "${static_k}" "${concurrency}" "${run_dir}"
-  echo "# END run_benchmark.sh ${variant}-c${concurrency}-k${static_k}"
-  echo "# BEGIN submit.sbatch ${variant}-c${concurrency}-k${static_k}"
-  render_sbatch "${variant}" "${method}" "${concurrency}" "${run_dir}"
-  echo "# END submit.sbatch ${variant}-c${concurrency}-k${static_k}"
+  echo "# BEGIN run_benchmark.sh ${variant}-c${concurrency}-k${static_k}-r${repeat}"
+  render_run_benchmark "${variant}" "${static_k}" "${concurrency}" "${repeat}" "${run_dir}"
+  echo "# END run_benchmark.sh ${variant}-c${concurrency}-k${static_k}-r${repeat}"
+  echo "# BEGIN submit.sbatch ${variant}-c${concurrency}-k${static_k}-r${repeat}"
+  render_sbatch "${variant}" "${method}" "${concurrency}" "${repeat}" "${run_dir}"
+  echo "# END submit.sbatch ${variant}-c${concurrency}-k${static_k}-r${repeat}"
 }
 
 TEST_ONLY_ROOT=""
@@ -223,49 +292,50 @@ fi
 
 if [[ "${DRY_RUN}" != "true" && "${TEST_ONLY}" != "true" ]]; then
   mkdir -p "${MATRIX_ROOT}"
-  printf 'job_id\tcohort\tmethod\tvariant\tactive_concurrency\tstatic_k\trun_dir\n' >"${MANIFEST}"
+  printf 'job_id\tcohort\tmethod\tvariant\tactive_concurrency\tstatic_k\trepeat\trun_dir\n' >"${MANIFEST}"
 fi
 
 for concurrency in ${CONCURRENCIES}; do
   jobs=("baseline:baseline:0")
   for k_value in ${K_VALUES}; do
-    jobs+=("static:eagle3:${k_value}")
+    jobs+=("${STATIC_VARIANT}:${METHOD}:${k_value}")
   done
   for job in "${jobs[@]}"; do
     IFS=: read -r variant method static_k <<<"${job}"
-    run_dir="${MATRIX_ROOT}/c${concurrency}/${variant}"
-    if [[ "${variant}" == "static" ]]; then
-      run_dir="${MATRIX_ROOT}/c${concurrency}/static_k${static_k}"
-    fi
-    if [[ "${DRY_RUN}" == "true" ]]; then
-      render_planned_job "[DRY-RUN]" "${variant}" "${method}" "${static_k}" "${concurrency}" "${run_dir}"
-      continue
-    fi
-    if [[ "${TEST_ONLY}" == "true" ]]; then
-      echo "[TEST-ONLY] speedbench_overlay=${variant}"
-      test_run_dir="${TEST_ONLY_ROOT}/c${concurrency}/${variant}_${static_k}"
-      mkdir -p "${test_run_dir}"
-      render_run_benchmark "${variant}" "${static_k}" "${concurrency}" "${test_run_dir}" >"${test_run_dir}/run_benchmark.sh"
-      chmod 755 "${test_run_dir}/run_benchmark.sh"
-      render_sbatch "${variant}" "${method}" "${concurrency}" "${test_run_dir}" >"${test_run_dir}/submit.sbatch"
-      sbatch --test-only "${test_run_dir}/submit.sbatch"
-      continue
-    fi
-    mkdir -p "${run_dir}"
-    render_run_benchmark "${variant}" "${static_k}" "${concurrency}" "${run_dir}" >"${run_dir}/run_benchmark.sh"
-    chmod 755 "${run_dir}/run_benchmark.sh"
-    render_sbatch "${variant}" "${method}" "${concurrency}" "${run_dir}" >"${run_dir}/submit.sbatch"
-    sbatch_args=()
-    if [[ -n "${DEPENDENCY}" ]]; then
-      sbatch_args+=("--dependency=${DEPENDENCY}")
-    fi
-    if ((${#sbatch_args[@]})); then
+    for repeat in $(seq 1 "${REPEATS}"); do
+      run_dir="${MATRIX_ROOT}/c${concurrency}/${variant}/repeat${repeat}"
+      if [[ "${variant}" != "baseline" ]]; then
+        run_dir="${MATRIX_ROOT}/c${concurrency}/${variant}_k${static_k}/repeat${repeat}"
+      fi
+      if [[ "${DRY_RUN}" == "true" ]]; then
+        render_planned_job "[DRY-RUN]" "${variant}" "${method}" "${static_k}" "${concurrency}" "${repeat}" "${run_dir}"
+        continue
+      fi
+      sbatch_args=(
+        "--job-name=coreai_dlalgo_llm-speedbench-c${concurrency}-${variant}"
+        "--output=${run_dir}/slurm-%j.out"
+      )
+      if [[ -n "${DEPENDENCY}" ]]; then
+        sbatch_args+=("--dependency=${DEPENDENCY}")
+      fi
+      if [[ "${TEST_ONLY}" == "true" ]]; then
+        echo "[TEST-ONLY] speedbench_overlay=${variant} repeat=${repeat}"
+        test_run_dir="${TEST_ONLY_ROOT}/c${concurrency}/${variant}_${static_k}/repeat${repeat}"
+        mkdir -p "${test_run_dir}"
+        render_run_benchmark "${variant}" "${static_k}" "${concurrency}" "${repeat}" "${test_run_dir}" >"${test_run_dir}/run_benchmark.sh"
+        chmod 755 "${test_run_dir}/run_benchmark.sh"
+        render_sbatch "${variant}" "${method}" "${concurrency}" "${repeat}" "${test_run_dir}" >"${test_run_dir}/submit.sbatch"
+        sbatch --test-only "${sbatch_args[@]}" "${test_run_dir}/submit.sbatch"
+        continue
+      fi
+      mkdir -p "${run_dir}"
+      render_run_benchmark "${variant}" "${static_k}" "${concurrency}" "${repeat}" "${run_dir}" >"${run_dir}/run_benchmark.sh"
+      chmod 755 "${run_dir}/run_benchmark.sh"
+      render_sbatch "${variant}" "${method}" "${concurrency}" "${repeat}" "${run_dir}" >"${run_dir}/submit.sbatch"
       job_id="$(sbatch --parsable "${sbatch_args[@]}" "${run_dir}/submit.sbatch")"
-    else
-      job_id="$(sbatch --parsable "${run_dir}/submit.sbatch")"
-    fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "${job_id}" "overlay" "${method}" "${variant}" "${concurrency}" "${static_k}" "${run_dir}" | tee -a "${MANIFEST}"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${job_id}" "overlay" "${method}" "${variant}" "${concurrency}" "${static_k}" "${repeat}" "${run_dir}" | tee -a "${MANIFEST}"
+    done
   done
 done
 

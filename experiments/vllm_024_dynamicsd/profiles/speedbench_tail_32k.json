@@ -1,0 +1,12 @@
+{
+  "name": "speedbench_tail_32k",
+  "max_model_len": 36864,
+  "buckets": [
+    {
+      "max_tokens": 32768,
+      "min_tokens": 32768,
+      "weight": 1,
+      "ignore_eos": true
+    }
+  ]
+}

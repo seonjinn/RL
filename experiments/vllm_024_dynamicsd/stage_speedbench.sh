@@ -76,6 +76,8 @@ MODELOPT_REPO_DISPLAY="NVIDIA/Model-Optimizer"
 MODELOPT_REPO_URL="https://github.com/NVIDIA/Model-Optimizer.git"
 MODELOPT_REVISION="43fee0cd70fa9e5f85782d52a4bd8ad9c8b88446"
 MODELOPT_PREPARE_DATA_SCRIPT="examples/specdec_bench/prepare_data.py"
+MODELOPT_RUN_PY_SHA256="1b82c76f4beba534a3b6b1545122adb9a1e81da8a7ba50c4d49a4284fc26f356"
+DEPENDENCY_LOCK="/workspace/experiment/speedbench_requirements.lock"
 
 require_safe_identifier "ACCOUNT" "${ACCOUNT}"
 require_safe_identifier "PARTITION" "${PARTITION}"
@@ -129,9 +131,11 @@ EOF
   render_assignment "MODELOPT_REPO_URL" "${MODELOPT_REPO_URL}"
   render_assignment "MODELOPT_REVISION" "${MODELOPT_REVISION}"
   render_assignment "MODELOPT_PREPARE_DATA_SCRIPT" "${MODELOPT_PREPARE_DATA_SCRIPT}"
+  render_assignment "MODELOPT_RUN_PY_SHA256" "${MODELOPT_RUN_PY_SHA256}"
   render_assignment "MODELOPT_REPO_DISPLAY" "${MODELOPT_REPO_DISPLAY}"
   render_assignment "SPEED_DATASET_ID" "${SPEED_DATASET_ID}"
   render_assignment "SPEED_DATASET_REVISION" "${SPEED_DATASET_REVISION}"
+  render_assignment "DEPENDENCY_LOCK" "${DEPENDENCY_LOCK}"
   cat <<'EOF'
 
 test -s "$CONTAINER_IMAGE"
@@ -148,6 +152,9 @@ JOB_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/speedbench-stage-job.XXXXXX")"
 trap 'rm -rf "$JOB_TMPDIR"' EXIT
 PYDEPS_DIR="$JOB_TMPDIR/pydeps"
 MODELOPT_WORK_ROOT="$JOB_TMPDIR/modelopt"
+MODELOPT_SOURCE_ROOT="$SOURCE_ROOT/modelopt"
+MODELOPT_SOURCE_IDENTITY="$RUN_ROOT/modelopt_source_identity.json"
+MODELOPT_DATASET_PATCH="$RUN_ROOT/modelopt_dataset_revision.patch"
 
 read -r -d '' PAYLOAD <<'PAYLOAD' || true
 set -euo pipefail
@@ -165,21 +172,31 @@ MANIFEST="${11}"
 CHECKSUMS="${12}"
 PYDEPS_DIR="${13}"
 MODELOPT_WORK_ROOT="${14}"
+MODELOPT_SOURCE_ROOT="${15}"
+MODELOPT_SOURCE_IDENTITY="${16}"
+MODELOPT_DATASET_PATCH="${17}"
+DEPENDENCY_LOCK="${18}"
 
 export HF_HOME
+test -s "$DEPENDENCY_LOCK"
 export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 mkdir -p "$PYDEPS_DIR"
 python3 -m pip install --quiet --no-cache-dir \
   --target "$PYDEPS_DIR" \
-  'datasets>=3.6,<5' \
-  'huggingface_hub>=0.32,<1' \
-  'pandas>=2,<3' \
-  'pyarrow>=18,<21' \
-  'tiktoken>=0.8,<1'
+  --requirement "$DEPENDENCY_LOCK"
 export PYTHONPATH="$PYDEPS_DIR"
 git clone --filter=blob:none "$MODELOPT_REPO_URL" "$MODELOPT_WORK_ROOT"
 git -C "$MODELOPT_WORK_ROOT" checkout "$MODELOPT_REVISION"
+MODELOPT_TREE="$(git -C "$MODELOPT_WORK_ROOT" rev-parse 'HEAD^{tree}')"
+MODELOPT_RUN_PY="$MODELOPT_WORK_ROOT/examples/specdec_bench/run.py"
+MODELOPT_DATASET_SOURCE="$MODELOPT_WORK_ROOT/examples/specdec_bench/specdec_bench/datasets/speed.py"
+RUN_PY_SHA256="$(sha256sum "$MODELOPT_RUN_PY" | awk '{print $1; exit}')"
+DATASET_SOURCE_SHA256="$(sha256sum "$MODELOPT_DATASET_SOURCE" | awk '{print $1; exit}')"
+if [[ "$RUN_PY_SHA256" != "$MODELOPT_RUN_PY_SHA256" ]]; then
+  echo "pinned ModelOpt run.py hash mismatch: $RUN_PY_SHA256" >&2
+  exit 2
+fi
 export MODELOPT_WORK_ROOT SPEED_DATASET_REVISION
 python3 - <<'PY'
 import os
@@ -196,6 +213,51 @@ if needle not in text:
     raise SystemExit(f"Could not pin dataset revision in {path}")
 path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
 PY
+git -C "$MODELOPT_WORK_ROOT" diff --binary -- \
+  examples/specdec_bench/specdec_bench/datasets/speed.py >"$MODELOPT_DATASET_PATCH"
+test -s "$MODELOPT_DATASET_PATCH"
+DATASET_PATCH_SHA256="$(sha256sum "$MODELOPT_DATASET_PATCH" | awk '{print $1; exit}')"
+PATCHED_DATASET_SOURCE_SHA256="$(sha256sum "$MODELOPT_DATASET_SOURCE" | awk '{print $1; exit}')"
+PERSISTED_SOURCE_TMP="$SOURCE_ROOT/.modelopt.${SLURM_JOB_ID:-$$}.tmp"
+rm -rf "$PERSISTED_SOURCE_TMP"
+cp -a "$MODELOPT_WORK_ROOT" "$PERSISTED_SOURCE_TMP"
+rm -rf "$MODELOPT_SOURCE_ROOT"
+mv "$PERSISTED_SOURCE_TMP" "$MODELOPT_SOURCE_ROOT"
+python3 - \
+  "$MODELOPT_SOURCE_IDENTITY" \
+  "$MODELOPT_REVISION" \
+  "$MODELOPT_TREE" \
+  "$MODELOPT_SOURCE_ROOT" \
+  "$RUN_PY_SHA256" \
+  "$DATASET_SOURCE_SHA256" \
+  "$DATASET_PATCH_SHA256" \
+  "$PATCHED_DATASET_SOURCE_SHA256" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    output,
+    commit,
+    tree,
+    source_root,
+    run_py_sha256,
+    dataset_source_sha256,
+    dataset_patch_sha256,
+    patched_dataset_source_sha256,
+) = sys.argv[1:]
+payload = {
+    "schema_version": 1,
+    "modelopt_commit": commit,
+    "modelopt_tree": tree,
+    "source_root": source_root,
+    "run_py_sha256": run_py_sha256,
+    "dataset_source_sha256": dataset_source_sha256,
+    "dataset_patch_sha256": dataset_patch_sha256,
+    "patched_dataset_source_sha256": patched_dataset_source_sha256,
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
 export SOURCE_ROOT SPEED_DATASET_ID SPEED_DATASET_REVISION
 python3 - <<'PY'
 import os
@@ -209,8 +271,8 @@ snapshot_download(
     local_dir=os.path.join(os.environ["SOURCE_ROOT"], "speedbench"),
 )
 PY
-cp "$MODELOPT_WORK_ROOT/LICENSE" "$SOURCE_ROOT/modelopt-LICENSE"
-python3 "$MODELOPT_WORK_ROOT/$MODELOPT_PREPARE_DATA_SCRIPT" \
+cp "$MODELOPT_SOURCE_ROOT/LICENSE" "$SOURCE_ROOT/modelopt-LICENSE"
+python3 "$MODELOPT_SOURCE_ROOT/$MODELOPT_PREPARE_DATA_SCRIPT" \
   --dataset speed \
   --config all \
   --output_dir "$PREPARED_ROOT"
@@ -219,7 +281,9 @@ python3 /workspace/experiment/speedbench_dataset.py write-manifest \
   --output "$MANIFEST" \
   --checksums "$CHECKSUMS" \
   --dataset-license-root "$SOURCE_ROOT/speedbench" \
-  --modelopt-license "$SOURCE_ROOT/modelopt-LICENSE"
+  --modelopt-license "$SOURCE_ROOT/modelopt-LICENSE" \
+  --dependency-lock "$DEPENDENCY_LOCK" \
+  --modelopt-source-identity "$MODELOPT_SOURCE_IDENTITY"
 sha256sum "$MANIFEST" | tee "$MANIFEST.sha256"
 PAYLOAD
 
@@ -248,6 +312,10 @@ srun_args=(
   "$CHECKSUMS"
   "$PYDEPS_DIR"
   "$MODELOPT_WORK_ROOT"
+  "$MODELOPT_SOURCE_ROOT"
+  "$MODELOPT_SOURCE_IDENTITY"
+  "$MODELOPT_DATASET_PATCH"
+  "$DEPENDENCY_LOCK"
 )
 
 srun "${srun_args[@]}" 2>&1 | tee "$RUN_ROOT/stage.log"

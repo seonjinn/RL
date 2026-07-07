@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import importlib.util
 import json
 import math
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -34,6 +36,7 @@ DFLARE_COMPLETED_OUT = DFLARE_RESULT_ROOT / "dflare_completed_latest.csv"
 DFLARE_STATUS_CSV = DFLARE_RESULT_ROOT / "dflare_job_status_latest.csv"
 VLLM024_PROFILE_CSV = DFLARE_RESULT_ROOT / "vllm024_profiles_latest.csv"
 SPEEDBENCH_STAGE_SCRIPT = SYNC_RL_EXPERIMENT_ROOT / "stage_speedbench.sh"
+SPEEDBENCH_RUNNER = SYNC_RL_EXPERIMENT_ROOT / "benchmark_speedbench_sync_rollout.py"
 SYNC_RL_MODEL_MATRIX = SYNC_RL_EXPERIMENT_ROOT / "model_method_matrix.json"
 SYNC_RL_SUMMARY_FILES = {
     "DAPO-Math-17k": DFLARE_RESULT_ROOT / "results/dapo_sync_full/summary.csv",
@@ -1830,10 +1833,42 @@ def _profile_summary(profile: dict[str, object]) -> str:
     return f"{label} (OSL {max_new_tokens})" if max_new_tokens else label
 
 
+def load_speedbench_runner_capabilities() -> dict[str, tuple[str, ...]]:
+    module_name = "_vllm024_speedbench_report_capabilities"
+    spec = importlib.util.spec_from_file_location(module_name, SPEEDBENCH_RUNNER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load SPEED-Bench runner: {SPEEDBENCH_RUNNER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    experiment_path = str(SYNC_RL_EXPERIMENT_ROOT)
+    inserted_path = experiment_path not in sys.path
+    if inserted_path:
+        sys.path.insert(0, experiment_path)
+    try:
+        spec.loader.exec_module(module)
+        raw_capabilities = module.speedbench_runner_capabilities()
+    finally:
+        sys.modules.pop(module_name, None)
+        if inserted_path:
+            sys.path.remove(experiment_path)
+    if not isinstance(raw_capabilities, dict):
+        raise TypeError("SPEED-Bench runner capabilities must be a mapping")
+    capabilities: dict[str, tuple[str, ...]] = {}
+    for cohort in ("official", "overlay"):
+        modes = raw_capabilities.get(cohort)
+        if not isinstance(modes, tuple) or not modes:
+            raise TypeError(f"SPEED-Bench {cohort} capabilities must be a tuple")
+        capabilities[cohort] = tuple(str(mode) for mode in modes)
+    return capabilities
+
+
 def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
     if not SYNC_RL_MODEL_MATRIX.exists():
         return pd.DataFrame(), pd.DataFrame()
     matrix = json.loads(SYNC_RL_MODEL_MATRIX.read_text(encoding="utf-8"))
+    runner_capabilities = load_speedbench_runner_capabilities()
+    official_modes = set(runner_capabilities["official"])
+    overlay_modes = set(runner_capabilities["overlay"])
     qwen_rows: list[dict[str, str]] = []
     nemotron_rows: list[dict[str, str]] = []
     for model in matrix.get("models", []):
@@ -1841,6 +1876,7 @@ def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
         supported: list[str] = []
         integration: list[str] = []
         unsupported: list[str] = []
+        supported_variants: list[tuple[str, str]] = []
         for method in matrix.get("method_order", []):
             meta = methods.get(method)
             if not isinstance(meta, dict):
@@ -1849,6 +1885,9 @@ def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
             variants = meta.get("variants") or []
             if status == "supported":
                 if variants:
+                    supported_variants.extend(
+                        (str(method), str(variant)) for variant in variants
+                    )
                     supported.extend(
                         _method_variant_label(str(method), str(variant))
                         for variant in variants
@@ -1875,6 +1914,35 @@ def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
             qwen_rows.append(row)
         elif launcher == "nemotron_sync_rl_mtp":
             row["profiles"] = "official/overlay SPEED-Bench only"
+            row["official_support"] = ", ".join(
+                _method_variant_label(method, variant)
+                for method, variant in supported_variants
+                if variant in official_modes
+            )
+            row["overlay_support"] = ", ".join(
+                _method_variant_label(method, variant)
+                for method, variant in supported_variants
+                if variant in overlay_modes
+            )
+            official_limitations = [
+                f"{_method_variant_label(method, variant)} unsupported"
+                for method, variant in supported_variants
+                if variant not in official_modes
+            ]
+            row["official_limitations"] = (
+                ", ".join(official_limitations) if official_limitations else "none"
+            )
+            dynamic_overlay_labels = [
+                _method_variant_label(method, variant)
+                for method, variant in supported_variants
+                if variant in {"dynamic", "mtp_dynamic"} and variant in overlay_modes
+            ]
+            row["overlay_gates"] = (
+                ", ".join(dynamic_overlay_labels)
+                + ": signed model/profile calibration artifact required; excluded from smoke"
+                if dynamic_overlay_labels
+                else "none"
+            )
             nemotron_rows.append(row)
     return pd.DataFrame(qwen_rows), pd.DataFrame(nemotron_rows)
 
@@ -2033,8 +2101,10 @@ def render_sync_speedbench_status_section() -> str:
                 [
                     ("model", "Model", "text"),
                     ("profiles", "Profiles", "text"),
-                    ("supported", "Supported", "text"),
-                    ("integration", "Integration only", "text"),
+                    ("official_support", "Official support", "text"),
+                    ("overlay_support", "Sync-RL overlay support", "text"),
+                    ("official_limitations", "Official limitations", "text"),
+                    ("overlay_gates", "Overlay gates", "text"),
                     ("unsupported", "Unsupported", "text"),
                 ],
             ),

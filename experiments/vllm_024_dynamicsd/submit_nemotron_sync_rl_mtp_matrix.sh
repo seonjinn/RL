@@ -364,6 +364,7 @@ for model_key in ${MODELS}; do
     MAX_MODEL_LEN="${MAX_MODEL_LEN}" \
     PROMPT_JSONL="${PROMPT_JSONL}" \
     SOURCE_RECIPE="sync-rl-math-rollout" \
+    CONTEXT_PROFILE="${context_policy}" \
     SMOKE="${SMOKE}" \
     TIME_LIMIT="${TIME_LIMIT}" \
     DRY_RUN="${DRY_RUN}" \

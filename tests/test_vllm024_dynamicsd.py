@@ -122,6 +122,19 @@ def load_speedbench_sync_summary_module() -> ModuleType:
     return module
 
 
+def load_speedbench_calibration_summary_module() -> ModuleType:
+    path = EXPERIMENT / "summarize_speedbench_k_calibration.py"
+    assert path.is_file(), f"missing SPEED-Bench calibration summarizer: {path}"
+    spec = importlib.util.spec_from_file_location(
+        "vllm024_speedbench_calibration_summary",
+        path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_dry(script_name: str, **env_overrides: str) -> str:
     env = {
         "PATH": "/usr/bin:/bin",
@@ -285,6 +298,10 @@ def fake_speedbench_sync_summary_row(
         "top_p": 1.0,
         "sampling_protocol": "sync-rl-overlay-user",
         "sampling": {"temperature": 0.0, "top_p": 1.0},
+        "seed": 1234,
+        "planned_output_tokens": [[4, 8]],
+        "actual_output_tokens": [[4, 8]],
+        "forced_output_mask": [[True, True]],
         "max_model_len": 36864,
         "max_new_tokens": 32768,
         "samples_per_prompt": 1,
@@ -2297,17 +2314,7 @@ def write_sync_summary_result(
     request_plan_hash: str = "plan-sha",
     total_output_tokens: int = 10000,
 ) -> None:
-    strict_config = {
-        "runtime_image_sha256": "image-sha",
-        "model_config_hash": "model-sha",
-        "prompt_set_hash": "prompt-sha",
-        "request_plan_hash": request_plan_hash,
-        "cudagraph_mode": "PIECEWISE",
-        "tensor_parallel_size": 2,
-        "pipeline_parallel_size": 1,
-        "temperature": 1.0,
-        "top_p": 0.95,
-    }
+    strict_config = sync_summary_strict_config(request_plan_hash=request_plan_hash)
     result_dir = matrix_root / variant
     result_dir.mkdir()
     rollout_batches = []
@@ -2338,6 +2345,61 @@ def write_sync_summary_result(
     )
 
 
+def sync_summary_strict_config(
+    *,
+    request_plan_hash: str = "plan-sha",
+) -> dict[str, Any]:
+    return {
+        "runtime_image_sha256": "image-sha",
+        "model_config_hash": "model-sha",
+        "model_checkpoint_hash": "model-checkpoint-sha",
+        "model_view_marker_hash": "model-view-marker-sha",
+        "drafter_config_hash": "drafter-sha",
+        "drafter_checkpoint_hash": "drafter-checkpoint-sha",
+        "drafter_view_marker_hash": "drafter-view-marker-sha",
+        "context_profile": "swe_sync_32k",
+        "rope_config_hash": "rope-sha",
+        "prompt_set_hash": "prompt-sha",
+        "request_plan_hash": request_plan_hash,
+        "model": "/models/target",
+        "node_count": 1,
+        "topology": {
+            "nodes": 1,
+            "tensor_parallel_size": 2,
+            "pipeline_parallel_size": 1,
+            "distributed_executor_backend": "local",
+        },
+        "cudagraph_mode": "PIECEWISE",
+        "compilation_config": {
+            "cudagraph_mode": "PIECEWISE",
+            "pass_config": {"fuse_allreduce_rms": False},
+        },
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "dtype": "bfloat16",
+        "kv_cache_dtype": "auto",
+        "max_model_len": 36864,
+        "max_num_seqs": 8,
+        "max_num_batched_tokens": 32768,
+        "enable_prefix_caching": True,
+        "enable_chunked_prefill": True,
+        "attention_backend": "auto",
+        "distributed_executor_backend": "local",
+        "num_prompts": 2,
+        "samples_per_prompt": 1,
+        "requests_per_rollout_batch": 2,
+        "rollout_batches": 1,
+        "max_prompt_tokens": 4096,
+        "max_new_tokens": 32768,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "seed": 1234,
+        "prompt_jsonl": "/data/swe.jsonl",
+        "prompt_offset": 0,
+        "prompt_batch_hashes": ["prompt-batch-sha"],
+    }
+
+
 def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(
     tmp_path: Path,
 ) -> None:
@@ -2356,9 +2418,16 @@ def test_sync_rollout_summary_reports_baseline_and_static_relative_speedups(
                     "status": "complete",
                     "config": {
                         "mode": variant,
-                        "temperature": 1.0,
-                        "top_p": 0.9,
+                        **sync_summary_strict_config(),
                     },
+                    "rollout_batches": [
+                        {
+                            "planned_output_tokens": [4, 8],
+                            "actual_output_tokens": [4, 8],
+                            "forced_output_mask": [True, True],
+                            "output_token_hashes": [f"{variant}-a", f"{variant}-b"],
+                        }
+                    ],
                     "summary": {
                         "total_rollout_time_s": rollout_time,
                         "output_tok_s_per_gpu": throughput,
@@ -2399,9 +2468,16 @@ def test_sync_rollout_summary_supports_native_mtp_variants(tmp_path: Path) -> No
                     "status": "complete",
                     "config": {
                         "mode": variant,
-                        "temperature": 1.0,
-                        "top_p": 0.95,
+                        **sync_summary_strict_config(),
                     },
+                    "rollout_batches": [
+                        {
+                            "planned_output_tokens": [4, 8],
+                            "actual_output_tokens": [4, 8],
+                            "forced_output_mask": [True, True],
+                            "output_token_hashes": [f"{variant}-a", f"{variant}-b"],
+                        }
+                    ],
                     "summary": {
                         "total_rollout_time_s": rollout_time,
                         "output_tok_s_per_gpu": throughput,
@@ -2428,17 +2504,7 @@ def test_sync_rollout_summary_rejects_mismatched_request_plan_hash(
     tmp_path: Path,
 ) -> None:
     summary_module = load_sync_summary_module()
-    strict_config = {
-        "runtime_image_sha256": "image-sha",
-        "model_config_hash": "model-sha",
-        "prompt_set_hash": "prompt-sha",
-        "request_plan_hash": "plan-sha",
-        "cudagraph_mode": "PIECEWISE",
-        "tensor_parallel_size": 2,
-        "pipeline_parallel_size": 1,
-        "temperature": 1.0,
-        "top_p": 0.95,
-    }
+    strict_config = sync_summary_strict_config()
     for variant in ("baseline", "static", "dynamic"):
         result_dir = tmp_path / variant
         result_dir.mkdir()
@@ -2450,6 +2516,14 @@ def test_sync_rollout_summary_rejects_mismatched_request_plan_hash(
                 {
                     "status": "complete",
                     "config": config,
+                    "rollout_batches": [
+                        {
+                            "planned_output_tokens": [4, 8],
+                            "actual_output_tokens": [4, 8],
+                            "forced_output_mask": [True, True],
+                            "output_token_hashes": [f"{variant}-a", f"{variant}-b"],
+                        }
+                    ],
                     "summary": {
                         "total_rollout_time_s": 100.0,
                         "output_tok_s_per_gpu": 100.0,
@@ -2469,17 +2543,7 @@ def test_sync_rollout_summary_allows_different_hashes_with_equal_exact_work(
     tmp_path: Path,
 ) -> None:
     summary_module = load_sync_summary_module()
-    strict_config = {
-        "runtime_image_sha256": "image-sha",
-        "model_config_hash": "model-sha",
-        "prompt_set_hash": "prompt-sha",
-        "request_plan_hash": "plan-sha",
-        "cudagraph_mode": "PIECEWISE",
-        "tensor_parallel_size": 2,
-        "pipeline_parallel_size": 1,
-        "temperature": 1.0,
-        "top_p": 0.95,
-    }
+    strict_config = sync_summary_strict_config()
     output_hashes = {
         "baseline": ["a", "b"],
         "static": ["c", "d"],
@@ -2497,6 +2561,7 @@ def test_sync_rollout_summary_allows_different_hashes_with_equal_exact_work(
                         {
                             "planned_output_tokens": [4, 4],
                             "actual_output_tokens": [4, 4],
+                            "forced_output_mask": [True, True],
                             "output_token_hashes": output_hashes[variant],
                         }
                     ],
@@ -2518,7 +2583,7 @@ def test_sync_rollout_summary_allows_different_hashes_with_equal_exact_work(
     assert by_variant["dynamic"]["exact_output_hash_match_vs_baseline"] is False
 
 
-def test_sync_rollout_summary_allows_unforced_underfill_with_matching_forced_work(
+def test_sync_rollout_summary_rejects_any_exact_work_array_mismatch(
     tmp_path: Path,
 ) -> None:
     summary_module = load_sync_summary_module()
@@ -2538,11 +2603,8 @@ def test_sync_rollout_summary_allows_unforced_underfill_with_matching_forced_wor
             total_output_tokens=12 + unforced_actual,
         )
 
-    rows = summary_module.build_summary(tmp_path)
-    by_variant = {row["variant"]: row for row in rows}
-
-    assert by_variant["dynamic"]["exact_output_work_match_vs_baseline"] is True
-    assert by_variant["dynamic"]["exact_output_hash_match_vs_baseline"] is False
+    with pytest.raises(ValueError, match="exact output work arrays mismatch"):
+        summary_module.build_summary(tmp_path)
 
 
 def test_sync_rollout_summary_rejects_forced_planned_work_mismatch(
@@ -2574,7 +2636,7 @@ def test_sync_rollout_summary_rejects_forced_planned_work_mismatch(
         output_hashes=["same-a", "same-b", "same-c"],
     )
 
-    with pytest.raises(ValueError, match="exact forced output work mismatch"):
+    with pytest.raises(ValueError, match="exact output work arrays mismatch"):
         summary_module.build_summary(tmp_path)
 
 
@@ -2582,17 +2644,9 @@ def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
     tmp_path: Path,
 ) -> None:
     summary_module = load_sync_summary_module()
-    strict_config = {
-        "runtime_image_sha256": "image-sha",
-        "model_config_hash": "model-sha",
-        "prompt_set_hash": "prompt-sha",
-        "request_plan_hash": "plan-sha",
-        "cudagraph_mode": "PIECEWISE",
-        "tensor_parallel_size": 2,
-        "pipeline_parallel_size": 1,
-        "temperature": 0.0,
-        "top_p": 1.0,
-    }
+    strict_config = sync_summary_strict_config()
+    strict_config["temperature"] = 0.0
+    strict_config["top_p"] = 1.0
     for variant in ("baseline", "static", "dynamic"):
         result_dir = tmp_path / variant
         result_dir.mkdir()
@@ -2627,6 +2681,135 @@ def test_sync_rollout_summary_rejects_identical_hashes_with_underlength_work(
         summary_module.build_summary(tmp_path)
 
 
+def test_sync_rollout_builds_complete_execution_provenance(tmp_path: Path) -> None:
+    runner = load_sync_rollout_module()
+    model = tmp_path / "model"
+    drafter = tmp_path / "drafter"
+    for path, name in ((model, "target"), (drafter, "draft")):
+        path.mkdir()
+        (path / "config.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "max_position_embeddings": 131072,
+                    "rope_parameters": {"rope_type": "yarn", "factor": 4.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (path / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"layer": "model-00001.safetensors"}}),
+            encoding="utf-8",
+        )
+        (path / ".long_context_view.json").write_text(
+            json.dumps({"source": f"/{name}", "rope_factor": 4.0}),
+            encoding="utf-8",
+        )
+
+    args = types.SimpleNamespace(
+        model=str(model),
+        draft_model=str(drafter),
+        runtime_image_sha256="runtime-sha",
+        node_count=2,
+        context_profile="swe_sync_64k",
+        tensor_parallel_size=8,
+        pipeline_parallel_size=1,
+        distributed_executor_backend="ray",
+    )
+    compilation_config = {
+        "cudagraph_mode": "PIECEWISE",
+        "pass_config": {"fuse_allreduce_rms": False},
+    }
+
+    provenance = runner.build_execution_provenance(
+        args,
+        compilation_config=compilation_config,
+    )
+
+    assert provenance["runtime_image_sha256"] == "runtime-sha"
+    assert provenance["node_count"] == 2
+    assert provenance["distributed_executor_backend"] == "ray"
+    assert provenance["compilation_config"] == compilation_config
+    assert provenance["context_profile"] == "swe_sync_64k"
+    assert provenance["topology"] == {
+        "nodes": 2,
+        "tensor_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "distributed_executor_backend": "ray",
+    }
+    for field in (
+        "model_config_hash",
+        "model_checkpoint_hash",
+        "model_view_marker_hash",
+        "drafter_config_hash",
+        "drafter_checkpoint_hash",
+        "drafter_view_marker_hash",
+        "rope_config_hash",
+    ):
+        assert isinstance(provenance[field], str)
+        assert len(provenance[field]) == 64
+
+    args.runtime_image_sha256 = "unknown"
+    with pytest.raises(ValueError, match="runtime_image_sha256"):
+        runner.build_execution_provenance(args, compilation_config=compilation_config)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value", "delete_field"),
+    (
+        ("runtime_image_sha256", None, False),
+        ("node_count", "unknown", False),
+        ("distributed_executor_backend", "", False),
+        ("compilation_config", {}, False),
+        ("model_config_hash", None, False),
+        ("model_checkpoint_hash", "unknown", False),
+        ("model_view_marker_hash", "", False),
+        ("drafter_config_hash", None, True),
+        ("drafter_checkpoint_hash", None, False),
+        ("drafter_view_marker_hash", "unknown", False),
+        ("context_profile", "", False),
+        ("rope_config_hash", None, False),
+        ("topology", {}, False),
+    ),
+)
+def test_sync_rollout_summary_rejects_incomplete_execution_provenance(
+    tmp_path: Path,
+    field: str,
+    bad_value: object,
+    delete_field: bool,
+) -> None:
+    summary_module = load_sync_summary_module()
+    for variant in ("baseline", "static", "dynamic"):
+        write_sync_summary_result(
+            tmp_path,
+            variant,
+            planned=[4, 8],
+            actual=[4, 8],
+            forced=[True, True],
+        )
+    baseline_path = tmp_path / "baseline/result.json"
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if delete_field:
+        payload["config"].pop(field)
+    else:
+        payload["config"][field] = bad_value
+    baseline_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        summary_module.build_summary(tmp_path)
+
+
+def test_sync_rollout_summary_requires_all_ordered_exact_work_arrays(
+    tmp_path: Path,
+) -> None:
+    summary_module = load_sync_summary_module()
+    for variant in ("baseline", "static", "dynamic"):
+        write_sync_summary_result(tmp_path, variant)
+
+    with pytest.raises(ValueError, match="missing exact output work counts"):
+        summary_module.build_summary(tmp_path)
+
+
 def write_prepared_speedbench_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     adapter = load_speedbench_dataset_module()
     prepared_root = tmp_path / "prepared" / "speed"
@@ -2657,6 +2840,9 @@ def write_prepared_speedbench_fixture(tmp_path: Path) -> tuple[Path, Path, Path]
     (dataset_license_root / "README.md").write_text("readme\n", encoding="utf-8")
     modelopt_license = source_root / "modelopt-LICENSE"
     modelopt_license.write_text("apache\n", encoding="utf-8")
+    dependency_lock, source_identity = write_speedbench_provenance_fixture(
+        source_root
+    )
     manifest_path = tmp_path / "prepared_manifest.json"
     checksums_path = tmp_path / "checksums.sha256"
     adapter.write_prepared_manifest(
@@ -2664,9 +2850,43 @@ def write_prepared_speedbench_fixture(tmp_path: Path) -> tuple[Path, Path, Path]
         manifest_path,
         dataset_license_root=dataset_license_root,
         modelopt_license_path=modelopt_license,
+        dependency_lock_path=dependency_lock,
+        modelopt_source_identity_path=source_identity,
     )
     adapter.write_checksum_file(prepared_root, checksums_path)
     return prepared_root, manifest_path, checksums_path
+
+
+def write_speedbench_provenance_fixture(source_root: Path) -> tuple[Path, Path]:
+    source_root.mkdir(parents=True, exist_ok=True)
+    dependency_lock = source_root / "speedbench_requirements.lock"
+    dependency_lock.write_text(
+        "datasets==4.4.1\n"
+        "huggingface_hub==0.36.0\n"
+        "pandas==2.3.3\n"
+        "pyarrow==20.0.0\n"
+        "tiktoken==0.12.0\n",
+        encoding="utf-8",
+    )
+    source_identity = source_root / "modelopt_source_identity.json"
+    source_identity.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "modelopt_commit": PINNED_MODELOPT_COMMIT,
+                "modelopt_tree": "tree-sha",
+                "source_root": "sources/modelopt",
+                "run_py_sha256": PINNED_MODELOPT_RUN_PY_SHA256,
+                "dataset_source_sha256": "dataset-source-sha",
+                "dataset_patch_sha256": "dataset-patch-sha",
+                "patched_dataset_source_sha256": "patched-dataset-sha",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return dependency_lock, source_identity
 
 
 def install_jsonl_parquet_reader(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3847,12 +4067,13 @@ def test_speedbench_sync_overlay_keeps_48_unique_prompts_for_all_concurrency_tie
             rollout_batches=3,
         )
         assert len({prompt.prompt_id for prompt in overlay.prompts}) == 48
-        assert [len(batch) for batch in batches] == [max(16, concurrency)] * 3
-        assert {
+        assert [len(batch) for batch in batches] == [concurrency] * 3
+        observed_prompt_ids = {
             prompt.prompt_id
             for batch in batches
             for prompt in batch
-        } == {prompt.prompt_id for prompt in overlay.prompts}
+        }
+        assert len(observed_prompt_ids) == min(48, concurrency * 3)
 
 
 def test_speedbench_sync_overlay_uses_aliases_for_repeated_prompt_exact_work() -> None:
@@ -3989,6 +4210,87 @@ def test_speedbench_sync_overlay_async_gather_barrier_records_ttft_and_completio
     assert row["barrier_finished_at_s"] == 3.0
     assert row["barrier_time_s"] == 2.5
     assert row["prompt_token_ids"] == [[1, 2, 3], [4, 5]]
+
+
+def test_speedbench_sync_overlay_persists_and_validates_ordered_exact_work() -> None:
+    runner = load_speedbench_sync_module()
+
+    class FakeCandidate:
+        def __init__(self, token_ids: list[int]) -> None:
+            self.token_ids = token_ids
+            self.finish_reason = "length"
+
+    class FakeOutput:
+        def __init__(self, token_ids: list[int]) -> None:
+            self.outputs = [FakeCandidate(token_ids)]
+            self.finished = True
+
+    class FakeEngine:
+        def __init__(self, outputs: dict[str, list[int]]) -> None:
+            self.outputs = outputs
+
+        async def generate(
+            self,
+            *,
+            prompt: dict[str, list[int]],
+            sampling_params: object,
+            request_id: str,
+        ) -> Any:
+            del prompt, sampling_params
+            yield FakeOutput(self.outputs[request_id])
+
+    requests = [
+        runner.OverlayRequest(
+            request_id="forced",
+            prompt_id="p0",
+            prompt_sha256="p0-sha",
+            source_prompt_sha256=None,
+            category="low_entropy",
+            sample_index=0,
+            seed=11,
+            prompt_token_ids=[1],
+            max_tokens=3,
+            min_tokens=3,
+            ignore_eos=False,
+        ),
+        runner.OverlayRequest(
+            request_id="natural",
+            prompt_id="p1",
+            prompt_sha256="p1-sha",
+            source_prompt_sha256=None,
+            category="mixed",
+            sample_index=0,
+            seed=12,
+            prompt_token_ids=[2],
+            max_tokens=2,
+            min_tokens=0,
+            ignore_eos=False,
+        ),
+    ]
+
+    row = asyncio.run(
+        runner.run_overlay_batch_async(
+            FakeEngine({"forced": [1, 2, 3], "natural": [4]}),
+            requests,
+            sampling_params_by_request={"forced": object(), "natural": object()},
+        )
+    )
+
+    assert row["planned_output_tokens"] == [3, 2]
+    assert row["actual_output_tokens"] == [3, 1]
+    assert row["forced_output_mask"] == [True, False]
+
+    with pytest.raises(ValueError, match="forced output length mismatch"):
+        asyncio.run(
+            runner.run_overlay_batch_async(
+                FakeEngine({"forced": [1, 2], "natural": [4]}),
+                requests,
+                sampling_params_by_request={
+                    "forced": object(),
+                    "natural": object(),
+                },
+            )
+        )
 
 
 def test_speedbench_sync_reports_draft_acceptance_and_completion_lengths_separately() -> None:
@@ -4144,6 +4446,7 @@ def test_speedbench_sync_summary_rejects_missing_provenance_and_missing_baseline
                     "prompt_set_hash": "prompt-sha",
                     "sampling_protocol": "sync-rl-overlay-user",
                     "sampling": {"temperature": 0.0, "top_p": 1.0},
+                    "seed": 1234,
                     "max_model_len": 36864,
                     "max_new_tokens": 32768,
                     "samples_per_prompt": 1,
@@ -4160,6 +4463,13 @@ def test_speedbench_sync_summary_rejects_missing_provenance_and_missing_baseline
                     "mamba_cache_philox_rounds": "none",
                     "moe_backend": "auto",
                 },
+                "rollout_batches": [
+                    {
+                        "planned_output_tokens": [1],
+                        "actual_output_tokens": [1],
+                        "forced_output_mask": [True],
+                    }
+                ],
                 "summary": {
                     "total_rollout_time_s": 1.0,
                     "output_tok_s_per_gpu": 1.0,
@@ -4279,7 +4589,7 @@ def test_speedbench_sync_summary_extracts_official_instrumentation_from_result_j
     (
         (
             "submit_speedbench_k_calibration.sh",
-            "baseline-c1-k0",
+            "baseline-c1-k0-r1",
             {
                 "CLUSTER": "lyris",
                 "RUN_ID": "runtime-digest-cal",
@@ -4324,7 +4634,7 @@ def test_speedbench_sync_generated_run_script_passes_exact_supplied_runtime_dige
     (
         (
             "submit_speedbench_k_calibration.sh",
-            "baseline-c1-k0",
+            "baseline-c1-k0-r1",
             {
                 "CLUSTER": "lyris",
                 "RUN_ID": "runtime-sidecar-cal",
@@ -4419,7 +4729,7 @@ def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl()
     ]
 
     assert positions == sorted(positions)
-    assert output.count("[DRY-RUN] speedbench_overlay=") == 12
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 36
     assert "--prepared-root" in output
     assert "--prepared-manifest" in output
     assert "--prepared-checksums" in output
@@ -4436,6 +4746,9 @@ def test_speedbench_sync_k_calibration_uses_manifest_adapter_not_overlay_jsonl()
     assert 'BENCH_RUNTIME_IMAGE_SHA256:?BENCH_RUNTIME_IMAGE_SHA256 is required' not in output
     assert "--request-plan-exact-work" in output
     assert "--active-concurrency 64" in output
+    assert output.count("args+=(--calibration-repeat 1)") == 12
+    assert output.count("args+=(--calibration-repeat 2)") == 12
+    assert output.count("args+=(--calibration-repeat 3)") == 12
     assert "#SBATCH --segment=1" in output
     assert "--gres" not in output
     assert "/home/" not in output
@@ -4451,7 +4764,7 @@ def test_speedbench_sync_nemotron_ultra_uses_single_coordinated_ray_contract() -
     )
     manifest_lines = extract_manifest_rows(output)
 
-    assert output.count("[DRY-RUN] speedbench_overlay=") == 3
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 4
     assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
     assert "/workspace/experiment/run_multinode_ray.sh" in output
     assert "args+=(--distributed-executor-backend ray)" in output
@@ -4482,18 +4795,15 @@ def test_speedbench_sync_nemotron_ultra_uses_single_coordinated_ray_contract() -
     assert "method=eagle3" not in output
     assert "Qwen3-32B-speculator.eagle3" not in output
     assert "--gres" not in output
-    assert any(
-        line.startswith(
-            "UNSUPPORTED\tultra\tspeedbench_sync_overlay\teagle3\t-\t-\tnemotron_baseline_native_mtp_only\t"
+    for profile in ("32k", "64k"):
+        assert any(
+            line.startswith(
+                f"UNSUPPORTED\tultra\t{profile}\teagle3\t-\t-\t"
+                "nemotron_baseline_native_mtp_only\t"
+            )
+            for line in manifest_lines
         )
-        for line in manifest_lines
-    )
-    assert any(
-        line.startswith(
-            "SUPPORTED\tultra\tspeedbench_sync_overlay\tmtp_dynamic\tmtp_dynamic\t"
-        )
-        for line in manifest_lines
-    )
+    assert not any("\tmtp_dynamic\t" in line for line in manifest_lines)
 
 
 def test_speedbench_sync_overlay_async_gather_barrier_preserves_prompt_tokens() -> None:
@@ -4769,6 +5079,87 @@ def test_speedbench_sync_summary_requires_matched_runtime_baselines_within_cohor
         )
 
 
+def test_speedbench_sync_summary_requires_seed_and_exact_forced_work_equality() -> None:
+    summary = load_speedbench_sync_summary_module()
+    baseline = fake_speedbench_sync_summary_row(cohort="overlay")
+    candidate = fake_speedbench_sync_summary_row(
+        cohort="overlay",
+        variant="dynamic",
+    )
+
+    candidate["seed"] = 1235
+    with pytest.raises(ValueError, match="seed"):
+        summary.compare_rows(baseline, candidate)
+
+    candidate["seed"] = baseline["seed"]
+    candidate["actual_output_tokens"] = [[4, 7]]
+    with pytest.raises(ValueError, match="exact forced work"):
+        summary.compare_rows(baseline, candidate)
+
+    candidate["actual_output_tokens"] = baseline["actual_output_tokens"]
+    candidate["forced_output_mask"] = [[True, False]]
+    with pytest.raises(ValueError, match="exact forced work"):
+        summary.compare_rows(baseline, candidate)
+
+
+def test_speedbench_sync_summary_extracts_ordered_work_arrays_from_results(
+    tmp_path: Path,
+) -> None:
+    summary = load_speedbench_sync_summary_module()
+    result_path = tmp_path / "result.json"
+    row = fake_speedbench_sync_summary_row(cohort="overlay")
+    config_fields = {
+        key: value
+        for key, value in row.items()
+        if key
+        not in {
+            "variant",
+            "planned_output_tokens",
+            "actual_output_tokens",
+            "forced_output_mask",
+            "output_tok_s_per_gpu",
+            "total_rollout_time_s",
+            "total_output_tokens",
+        }
+    }
+    config_fields["mode"] = row["variant"]
+    result_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "config": config_fields,
+                "rollout_batches": [
+                    {
+                        "planned_output_tokens": [4, 8],
+                        "actual_output_tokens": [4, 8],
+                        "forced_output_mask": [True, True],
+                    },
+                    {
+                        "planned_output_tokens": [16],
+                        "actual_output_tokens": [16],
+                        "forced_output_mask": [True],
+                    },
+                ],
+                "summary": {
+                    "total_rollout_time_s": 10.0,
+                    "output_tok_s_per_gpu": 100.0,
+                    "total_output_tokens": 28,
+                    "spec_decode_metrics": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    extracted = summary.row_from_result(result_path)
+
+    assert extracted is not None
+    assert extracted["planned_output_tokens"] == [[4, 8], [16]]
+    assert extracted["actual_output_tokens"] == [[4, 8], [16]]
+    assert extracted["forced_output_mask"] == [[True, True], [True]]
+    assert extracted["seed"] == 1234
+
+
 def test_speedbench_sync_k_calibration_launcher_starts_with_required_concurrency_tiers() -> None:
     output = run_dry(
         "submit_speedbench_k_calibration.sh",
@@ -4784,13 +5175,17 @@ def test_speedbench_sync_k_calibration_launcher_starts_with_required_concurrency
     ]
 
     assert positions == sorted(positions)
-    assert output.count("[DRY-RUN] speedbench_overlay=") == 12
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 36
     assert "cohort=overlay" in output
     assert "method=baseline" in output
     assert "method=eagle3" in output
     assert "benchmark_speedbench_sync_rollout.py" in output
     assert "--request-plan-exact-work" in output
     assert "--active-concurrency 64" in output
+    assert "args+=(--context-profile speedbench_32k)" in output
+    assert "args+=(--calibration-repeat 1)" in output
+    assert "args+=(--calibration-repeat 2)" in output
+    assert "args+=(--calibration-repeat 3)" in output
     assert "#SBATCH --segment=1" in output
     assert "--gres" not in output
     assert "/home/" not in output
@@ -4805,11 +5200,11 @@ def test_speedbench_sync_nemotron_launcher_keeps_native_mtp_distinct_from_eagle(
     )
     manifest_lines = extract_manifest_rows(output)
 
-    assert output.count("[DRY-RUN] speedbench_overlay=") == 6
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 8
     assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
     assert "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in output
     assert "args+=(--mode mtp_static)" in output
-    assert "args+=(--mode mtp_dynamic)" in output
+    assert "args+=(--mode mtp_dynamic)" not in output
     assert "method=mtp" in output
     assert "method=eagle3" not in output
     assert "Qwen3-32B-speculator.eagle3" not in output
@@ -4818,18 +5213,310 @@ def test_speedbench_sync_nemotron_launcher_keeps_native_mtp_distinct_from_eagle(
     assert "#SBATCH --nodes=1" in output
     assert "#SBATCH --segment=1" in output
     assert "--gres" not in output
-    assert any(
-        line.startswith(
-            "UNSUPPORTED\tultra\tspeedbench_sync_overlay\teagle3\t-\t-\tnemotron_baseline_native_mtp_only\t"
+    for profile in ("32k", "64k"):
+        assert any(
+            line.startswith(
+                f"UNSUPPORTED\tultra\t{profile}\teagle3\t-\t-\t"
+                "nemotron_baseline_native_mtp_only\t"
+            )
+            for line in manifest_lines
         )
-        for line in manifest_lines
+    assert not any("\tmtp_dynamic\t" in line for line in manifest_lines)
+
+
+def write_speedbench_calibration_result(
+    root: Path,
+    *,
+    concurrency: int,
+    static_k: int,
+    repeat: int,
+    throughput: float,
+) -> Path:
+    result_dir = root / f"c{concurrency}" / f"k{static_k}" / f"repeat{repeat}"
+    result_dir.mkdir(parents=True)
+    path = result_dir / "result.json"
+    path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "config": {
+                    "cohort": "overlay",
+                    "mode": "static",
+                    "method": "eagle3",
+                    "model": "/models/qwen32",
+                    "model_config_hash": "model-config-sha",
+                    "context_profile": "speedbench_32k",
+                    "request_plan_hash": "request-plan-sha",
+                    "runtime_image_sha256": "runtime-sha",
+                    "dataset_config": "throughput_1k",
+                    "active_concurrency": concurrency,
+                    "static_k": static_k,
+                    "calibration_repeat": repeat,
+                    "temperature": 1.0,
+                    "top_p": 1.0,
+                    "seed": 1234,
+                    "sampling_protocol": "sync-rl-overlay-user",
+                },
+                "summary": {"output_tok_s_per_gpu": throughput},
+            }
+        ),
+        encoding="utf-8",
     )
-    assert any(
-        line.startswith(
-            "SUPPORTED\tultra\tspeedbench_sync_overlay\tmtp_dynamic\tmtp_dynamic\t"
+    return path
+
+
+def test_speedbench_calibration_summary_uses_medians_two_percent_and_monotone_fit(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    paths: list[Path] = []
+    throughputs = {
+        1: {1: (99.0, 100.0, 101.0), 2: (100.5, 101.0, 101.5), 3: (102.0, 103.0, 104.0)},
+        8: {1: (97.0, 98.0, 99.0), 2: (99.0, 100.0, 101.0), 3: (104.0, 105.0, 106.0)},
+        32: {1: (109.0, 110.0, 111.0), 2: (99.0, 100.0, 101.0), 3: (89.0, 90.0, 91.0)},
+    }
+    for concurrency, by_k in throughputs.items():
+        for static_k, repeats in by_k.items():
+            for repeat, throughput in enumerate(repeats, start=1):
+                paths.append(
+                    write_speedbench_calibration_result(
+                        tmp_path,
+                        concurrency=concurrency,
+                        static_k=static_k,
+                        repeat=repeat,
+                        throughput=throughput,
+                    )
+                )
+
+    artifact = calibration.build_calibration_artifact(paths)
+
+    assert artifact["repeats_per_cell"] == 3
+    assert artifact["selected_k_before_monotone_fit"] == {"1": 2, "8": 3, "32": 1}
+    assert artifact["selected_k"] == {"1": 2, "8": 2, "32": 1}
+    assert artifact["dynamic_schedule"] == "1:7:2,8:31:2,32:32:1"
+    assert calibration.verify_artifact_signature(artifact) is None
+    assert len(artifact["source_results"]) == 27
+
+    artifact_path = tmp_path / "schedule.json"
+    calibration.write_artifact(artifact_path, artifact)
+    assert calibration.validate_calibration_artifact(
+        artifact_path,
+        model="/models/qwen32",
+        model_config_hash="model-config-sha",
+        context_profile="speedbench_32k",
+        request_plan_hash="request-plan-sha",
+        runtime_image_sha256="runtime-sha",
+        method="eagle3",
+        dataset_config="throughput_1k",
+        temperature=1.0,
+        top_p=1.0,
+        seed=1234,
+    ) == "1:7:2,8:31:2,32:32:1"
+
+    artifact["dynamic_schedule"] = "1:32:5"
+    with pytest.raises(ValueError, match="signature"):
+        calibration.verify_artifact_signature(artifact)
+
+    artifact = calibration.build_calibration_artifact(paths)
+    artifact.pop("source_results")
+    calibration.write_artifact(artifact_path, calibration.sign_artifact(artifact))
+    with pytest.raises(ValueError, match="source_results"):
+        calibration.validate_calibration_artifact(
+            artifact_path,
+            model="/models/qwen32",
+            model_config_hash="model-config-sha",
+            context_profile="speedbench_32k",
+            request_plan_hash="request-plan-sha",
+            runtime_image_sha256="runtime-sha",
+            method="eagle3",
+            dataset_config="throughput_1k",
+            temperature=1.0,
+            top_p=1.0,
+            seed=1234,
         )
-        for line in manifest_lines
+
+
+def test_speedbench_calibration_summary_requires_three_successful_repeats(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    paths = [
+        write_speedbench_calibration_result(
+            tmp_path,
+            concurrency=1,
+            static_k=1,
+            repeat=repeat,
+            throughput=100.0 + repeat,
+        )
+        for repeat in (1, 2)
+    ]
+
+    with pytest.raises(ValueError, match="three successful repeats"):
+        calibration.build_calibration_artifact(paths)
+
+
+def test_speedbench_calibration_launcher_can_measure_native_mtp_static() -> None:
+    output = run_dry(
+        "submit_speedbench_k_calibration.sh",
+        CLUSTER="ptyche",
+        RUN_ID="mtp-calibration",
+        CONCURRENCIES="1",
+        K_VALUES="3",
+        STATIC_VARIANT="mtp_static",
+        METHOD="mtp",
+        DRAFT_MODEL="",
     )
+
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 6
+    assert output.count("args+=(--mode mtp_static)") == 3
+    assert "method=mtp" in output
+    assert "args+=(--draft-model '')" in output
+
+
+def test_speedbench_tail_canary_profiles_are_explicit_and_forced() -> None:
+    core = load_sync_rollout_core_module()
+    expected = {
+        "32k": (36864, 32768),
+        "64k": (69632, 65536),
+    }
+    for profile, (max_model_len, output_tokens) in expected.items():
+        plan = core.load_request_plan(
+            EXPERIMENT / f"profiles/speedbench_tail_{profile}.json"
+        )
+        assert plan.name == f"speedbench_tail_{profile}"
+        assert plan.max_model_len == max_model_len
+        assert len(plan.buckets) == 1
+        assert plan.buckets[0].max_tokens == output_tokens
+        assert plan.buckets[0].min_tokens == output_tokens
+        assert plan.buckets[0].ignore_eos is True
+
+
+def test_speedbench_nemotron_smoke_is_bs1_one_barrier_static_only() -> None:
+    output = run_dry(
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        MODELS="super",
+        RUN_ID="nemotron-smoke-gate",
+    )
+
+    assert output.count("[DRY-RUN] speedbench_overlay=") == 4
+    assert output.count("[DRY-RUN] speedbench_overlay=baseline") == 2
+    assert output.count("[DRY-RUN] speedbench_overlay=mtp_static") == 2
+    assert "speedbench_overlay=mtp_dynamic" not in output
+    assert "args+=(--active-concurrency 1)" in output
+    assert "args+=(--samples-per-prompt 1)" in output
+    assert "args+=(--rollout-batches 1)" in output
+    assert "profiles/speedbench_tail_32k.json" in output
+    assert "profiles/speedbench_tail_64k.json" in output
+    assert "args+=(--context-profile speedbench_32k)" in output
+    assert "args+=(--context-profile speedbench_64k)" in output
+
+
+def test_speedbench_nemotron_dynamic_requires_matching_signed_calibration(
+    tmp_path: Path,
+) -> None:
+    script = EXPERIMENT / "submit_nemotron_speedbench_sync_mtp_matrix.sh"
+    missing = subprocess.run(
+        ["bash", str(script)],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CLUSTER": "ptyche",
+            "DRY_RUN": "true",
+            "SMOKE": "false",
+            "MODELS": "super",
+            "REQUEST_PROFILES": "32k",
+            "VARIANTS": "mtp_dynamic",
+            "RUNTIME_IMAGE_SHA256": "runtime-sha",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode != 0
+    assert "calibration artifact" in missing.stderr.lower()
+
+    calibration = load_speedbench_calibration_summary_module()
+    matrix = load_model_method_matrix()
+    model = tmp_path / "super-model"
+    model.mkdir()
+    (model / "config.json").write_text('{"model_type":"nemotron"}\n', encoding="utf-8")
+    get_matrix_model(matrix, "super")["target_checkpoint"] = str(model)
+    matrix_path = tmp_path / "matrix.json"
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    core = load_sync_rollout_core_module()
+    plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
+    artifact_root = tmp_path / "calibration"
+    artifact_path = artifact_root / "super" / "32k" / "schedule.json"
+    artifact_path.parent.mkdir(parents=True)
+    payload = {
+        "schema_version": 1,
+        "status": "complete",
+        "model": str(model),
+        "model_config_hash": calibration.sha256_file(model / "config.json"),
+        "context_profile": "speedbench_32k",
+        "request_plan_hash": plan.plan_hash,
+        "runtime_image_sha256": "runtime-sha",
+        "method": "mtp",
+        "dataset_config": "throughput_1k",
+        "sampling": {
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "seed": 1234,
+            "sampling_protocol": "sync-rl-overlay-user",
+        },
+        "repeats_per_cell": 3,
+        "selection_policy": calibration.SELECTION_POLICY,
+        "fit_policy": calibration.FIT_POLICY,
+        "median_output_tok_s_per_gpu": {"1": {"3": 100.0}},
+        "selected_k_before_monotone_fit": {"1": 3},
+        "dynamic_schedule": "1:64:3",
+        "selected_k": {"1": 3},
+        "schedule": [{"start": 1, "end": 64, "k": 3}],
+        "source_results": [
+            {"path": f"repeat-{repeat}/result.json", "sha256": "a" * 64}
+            for repeat in (1, 2, 3)
+        ],
+    }
+    calibration.write_artifact(artifact_path, calibration.sign_artifact(payload))
+
+    output = run_dry(
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        SMOKE="false",
+        MODELS="super",
+        REQUEST_PROFILES="32k",
+        VARIANTS="mtp_dynamic",
+        MATRIX_FILE=str(matrix_path),
+        CALIBRATION_ARTIFACT_ROOT=str(artifact_root),
+        RUNTIME_IMAGE_SHA256="runtime-sha",
+        RUN_ID="nemotron-dynamic-gate",
+    )
+    assert "args+=(--mode mtp_dynamic)" in output
+    assert "args+=(--dynamic-schedule 1:64:3)" in output
+
+    mismatched = subprocess.run(
+        ["bash", str(script)],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CLUSTER": "ptyche",
+            "DRY_RUN": "true",
+            "SMOKE": "false",
+            "MODELS": "super",
+            "REQUEST_PROFILES": "32k",
+            "VARIANTS": "mtp_dynamic",
+            "MATRIX_FILE": str(matrix_path),
+            "CALIBRATION_ARTIFACT_ROOT": str(artifact_root),
+            "RUNTIME_IMAGE_SHA256": "runtime-sha",
+            "TOP_P": "0.9",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert mismatched.returncode != 0
+    assert "top_p" in mismatched.stderr
 
 
 def test_speedbench_dataset_batches_balance_entropy_classes() -> None:
@@ -4949,11 +5636,16 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
     (dataset_license_root / "README.md").write_text("dataset readme\n", encoding="utf-8")
     modelopt_license = source_root / "modelopt-LICENSE"
     modelopt_license.write_text("apache license\n", encoding="utf-8")
+    dependency_lock, source_identity = write_speedbench_provenance_fixture(
+        source_root
+    )
 
     manifest = adapter.build_prepared_manifest(
         speed_root,
         dataset_license_root=dataset_license_root,
         modelopt_license_path=modelopt_license,
+        dependency_lock_path=dependency_lock,
+        modelopt_source_identity_path=source_identity,
     )
     prepared_entries = {
         entry["config_name"]: entry
@@ -4981,6 +5673,20 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
             "sha256": adapter.sha256_file(modelopt_license),
         }
     ]
+    assert manifest["model_optimizer"]["source_identity"] == json.loads(
+        source_identity.read_text(encoding="utf-8")
+    )
+    assert manifest["dependencies"] == {
+        "lock_file": dependency_lock.name,
+        "lock_sha256": adapter.sha256_file(dependency_lock),
+        "versions": {
+            "datasets": "4.4.1",
+            "huggingface_hub": "0.36.0",
+            "pandas": "2.3.3",
+            "pyarrow": "20.0.0",
+            "tiktoken": "0.12.0",
+        },
+    }
     assert manifest["parquet_files"] == [
         {
             "relative_path": "qualitative/test.parquet",
@@ -5047,6 +5753,9 @@ def test_speedbench_dataset_manifest_rejects_missing_or_unexpected_parquet_sets(
     modelopt_license = tmp_path / "sources" / "modelopt-LICENSE"
     modelopt_license.parent.mkdir(parents=True, exist_ok=True)
     modelopt_license.write_text("apache license\n", encoding="utf-8")
+    dependency_lock, source_identity = write_speedbench_provenance_fixture(
+        modelopt_license.parent
+    )
 
     for config_name in (
         "qualitative",
@@ -5064,6 +5773,8 @@ def test_speedbench_dataset_manifest_rejects_missing_or_unexpected_parquet_sets(
             speed_root,
             dataset_license_root=dataset_license_root,
             modelopt_license_path=modelopt_license,
+            dependency_lock_path=dependency_lock,
+            modelopt_source_identity_path=source_identity,
         )
 
     extra = speed_root / "throughput_32k" / "test.parquet"
@@ -5078,6 +5789,8 @@ def test_speedbench_dataset_manifest_rejects_missing_or_unexpected_parquet_sets(
             speed_root,
             dataset_license_root=dataset_license_root,
             modelopt_license_path=modelopt_license,
+            dependency_lock_path=dependency_lock,
+            modelopt_source_identity_path=source_identity,
         )
 
 
@@ -5100,6 +5813,110 @@ def test_speedbench_dataset_stage_dry_run_pins_revisions_and_respects_licenses()
     assert "sha256sum" in output
     assert "--segment=1" in output
     assert "--gres" not in output
+
+
+def test_speedbench_stage_persists_authenticated_source_and_exact_dependency_lock() -> None:
+    lock_path = EXPERIMENT / "speedbench_requirements.lock"
+    lock_lines = lock_path.read_text(encoding="utf-8").splitlines()
+
+    assert lock_lines
+    assert all(
+        line.count("==") == 1 and not any(token in line for token in (">", "<", "~="))
+        for line in lock_lines
+    )
+
+    output = run_dry(
+        "stage_speedbench.sh",
+        CLUSTER="lyris",
+        REQUIRE_GIT_PULL="false",
+    )
+
+    assert 'MODELOPT_SOURCE_ROOT="$SOURCE_ROOT/modelopt"' in output
+    assert 'MODELOPT_SOURCE_IDENTITY="$RUN_ROOT/modelopt_source_identity.json"' in output
+    assert 'MODELOPT_DATASET_PATCH="$RUN_ROOT/modelopt_dataset_revision.patch"' in output
+    assert 'python3 -m pip install --quiet --no-cache-dir' in output
+    assert '--requirement "$DEPENDENCY_LOCK"' in output
+    assert 'MODELOPT_WORK_ROOT="$JOB_TMPDIR/modelopt"' in output
+    assert 'mv "$PERSISTED_SOURCE_TMP" "$MODELOPT_SOURCE_ROOT"' in output
+    assert '--dependency-lock "$DEPENDENCY_LOCK"' in output
+    assert '--modelopt-source-identity "$MODELOPT_SOURCE_IDENTITY"' in output
+    for requirement in lock_lines:
+        assert requirement not in output
+
+
+def test_speedbench_official_smoke_launcher_consumes_persisted_source(
+    tmp_path: Path,
+) -> None:
+    prepared_run_root = tmp_path / "prepared-run"
+    output = run_dry(
+        "submit_speedbench_official_matrix.sh",
+        CLUSTER="lyris",
+        RUN_ID="official-canary",
+        PREPARED_RUN_ROOT=str(prepared_run_root),
+        RESULT_ROOT=str(tmp_path / "results"),
+        RUNTIME_IMAGE_SHA256="runtime-digest",
+    )
+
+    assert output.count("[DRY-RUN] speedbench_official=") == 2
+    assert "[DRY-RUN] speedbench_official=baseline" in output
+    assert "[DRY-RUN] speedbench_official=static" in output
+    assert "mtp_dynamic" not in output
+    assert "dynamic_schedule" not in output
+    assert "args+=(--cohort official)" in output
+    assert "args+=(--active-concurrency 1)" in output
+    assert "args+=(--modelopt-root" in output
+    assert f"{prepared_run_root}/sources/modelopt" in output
+
+    script = extract_run_benchmark_script(output, "official-static")
+    argv = execute_generated_run_script(script, tmp_path)
+    assert_arg_value(argv, "--cohort", "official")
+    assert_arg_value(argv, "--mode", "static")
+    assert_arg_value(
+        argv,
+        "--modelopt-root",
+        str(prepared_run_root / "sources/modelopt"),
+    )
+    assert_arg_value(argv, "--runtime-image-sha256", "runtime-digest")
+
+
+def test_speedbench_official_test_only_executes_stub_sbatch_without_durable_runs(
+    tmp_path: Path,
+) -> None:
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    (stub_bin / "sbatch").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >>\"${SBATCH_LOG:?}\"\n"
+        "test -f \"${!#}\"\n",
+        encoding="utf-8",
+    )
+    (stub_bin / "sbatch").chmod(0o755)
+    result_root = tmp_path / "results"
+
+    subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_speedbench_official_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "SBATCH_LOG": str(sbatch_log),
+            "CLUSTER": "lyris",
+            "TEST_ONLY": "true",
+            "RUN_ID": "official-test-only",
+            "RESULT_ROOT": str(result_root),
+            "PREPARED_RUN_ROOT": str(tmp_path / "prepared-run"),
+            "RUNTIME_IMAGE_SHA256": "runtime-digest",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    calls = sbatch_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 2
+    assert all("--test-only" in call for call in calls)
+    assert not result_root.exists()
 
 
 def test_speedbench_stage_dry_run_skips_git_pull_and_leaves_roots_unchanged(
@@ -5295,6 +6112,178 @@ def test_speedbench_stage_rejects_invalid_scheduler_identifiers(
     assert completed.returncode != 0
     assert "invalid scheduler identifier" in completed.stderr
     assert not pwned.exists()
+
+
+@pytest.mark.parametrize(
+    ("script_name", "extra_env"),
+    (
+        (
+            "submit_sync_rollout.sh",
+            {"VARIANTS": "baseline", "JOB_LABEL": "sync-safe"},
+        ),
+        (
+            "submit_speedbench_k_calibration.sh",
+            {"CONCURRENCIES": "1", "K_VALUES": "1"},
+        ),
+        (
+            "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+            {
+                "MODELS": "super",
+                "VARIANTS": "baseline",
+                "REQUEST_PROFILES": "32k",
+            },
+        ),
+    ),
+)
+def test_dynamic_launchers_pass_hostile_paths_only_as_sbatch_array_arguments(
+    tmp_path: Path,
+    script_name: str,
+    extra_env: dict[str, str],
+) -> None:
+    marker = tmp_path / f"{script_name}.marker"
+    hostile_root = (
+        f"{tmp_path}/safe\n#SBATCH --comment=owned\n$(touch {marker})"
+    )
+    stub_bin = tmp_path / f"bin-{script_name}"
+    stub_bin.mkdir()
+    captured_script = tmp_path / f"{script_name}.sbatch"
+    captured_args = tmp_path / f"{script_name}.args"
+    (stub_bin / "sbatch").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "cp \"${!#}\" \"${CAPTURED_SCRIPT:?}\"\n"
+        ": >\"${CAPTURED_ARGS:?}\"\n"
+        "for arg in \"$@\"; do printf '%s\\0' \"$arg\" >>\"${CAPTURED_ARGS}\"; done\n",
+        encoding="utf-8",
+    )
+    (stub_bin / "sbatch").chmod(0o755)
+    env = {
+        "PATH": f"{stub_bin}:/usr/bin:/bin",
+        "CLUSTER": "ptyche",
+        "TEST_ONLY": "true",
+        "REQUIRE_GIT_PULL": "false",
+        "RESULT_ROOT": hostile_root,
+        "RUN_ID": "newline-safe",
+        "RUNTIME_IMAGE_SHA256": "runtime-sha",
+        "CAPTURED_SCRIPT": str(captured_script),
+        "CAPTURED_ARGS": str(captured_args),
+        **extra_env,
+    }
+
+    subprocess.run(
+        ["bash", str(EXPERIMENT / script_name)],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    script_text = captured_script.read_text(encoding="utf-8")
+    directive_lines = [
+        line for line in script_text.splitlines() if line.startswith("#SBATCH")
+    ]
+    argv = [
+        item.decode()
+        for item in captured_args.read_bytes().split(b"\0")
+        if item
+    ]
+    output_args = [arg for arg in argv if arg.startswith("--output=")]
+    job_name_args = [arg for arg in argv if arg.startswith("--job-name=")]
+
+    assert "#SBATCH --output=" not in script_text
+    assert "#SBATCH --job-name=" not in script_text
+    assert "#SBATCH --comment=owned" not in directive_lines
+    assert len(output_args) == 1
+    assert "\n#SBATCH --comment=owned\n" in output_args[0]
+    assert len(job_name_args) == 1
+    assert "--test-only" in argv
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    (
+        "submit_sync_rollout.sh",
+        "submit_speedbench_k_calibration.sh",
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+    ),
+)
+def test_dynamic_launchers_reject_hostile_scheduler_fields(
+    tmp_path: Path,
+    script_name: str,
+) -> None:
+    marker = tmp_path / "scheduler-marker"
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / script_name)],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CLUSTER": "ptyche",
+            "DRY_RUN": "true",
+            "ACCOUNT": f"coreai\n#SBATCH --comment=owned\n$(touch {marker})",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "invalid scheduler" in completed.stderr
+    assert not marker.exists()
+
+
+def test_dynamic_launcher_templates_validate_all_scheduler_directive_fields() -> None:
+    for script_name in (
+        "submit_sync_rollout.sh",
+        "submit_speedbench_k_calibration.sh",
+        "submit_nemotron_speedbench_sync_mtp_matrix.sh",
+    ):
+        text = (EXPERIMENT / script_name).read_text(encoding="utf-8")
+        assert "#SBATCH --job-name=" not in text
+        assert "#SBATCH --output=" not in text
+        for field in ("ACCOUNT", "PARTITION", "TIME_LIMIT", "NODES", "SEGMENT"):
+            assert f'"{field}"' in text
+        assert "--job-name=" in text
+        assert "--output=" in text
+        assert "sbatch_args" in text
+
+
+def test_speedbench_runner_declares_separate_official_and_overlay_capabilities() -> None:
+    speedbench = load_speedbench_sync_module()
+
+    assert speedbench.speedbench_runner_capabilities() == {
+        "official": ("baseline", "static", "mtp_static"),
+        "overlay": (
+            "baseline",
+            "static",
+            "dynamic",
+            "mtp_static",
+            "mtp_dynamic",
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("tensor_parallel_size", "expected_backend"),
+    (("1", "uni"), ("2", "mp")),
+)
+def test_single_node_sync_launcher_records_a_valid_vllm_executor_backend(
+    tensor_parallel_size: str,
+    expected_backend: str,
+) -> None:
+    output = run_dry(
+        "submit_sync_rollout.sh",
+        CLUSTER="ptyche",
+        REQUIRE_GIT_PULL="false",
+        VARIANTS="baseline",
+        TP=tensor_parallel_size,
+        PP="1",
+        NODES="1",
+    )
+
+    assert f"args+=(--distributed-executor-backend {expected_backend})" in output
+    assert "--distributed-executor-backend local" not in output
 
 
 def test_speedbench_stage_generated_runner_executes_with_hostile_paths(

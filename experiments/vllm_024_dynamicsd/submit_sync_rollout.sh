@@ -2,6 +2,43 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() {
+  echo "$1" >&2
+  exit "${2:-2}"
+}
+
+require_safe_identifier() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    die "invalid scheduler identifier ${name}=${value}"
+  fi
+}
+
+require_safe_time_limit() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+    die "invalid scheduler identifier ${name}=${value}"
+  fi
+}
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    die "invalid scheduler integer ${name}=${value}"
+  fi
+}
+
+require_safe_dependency() {
+  local value="$1"
+  if [[ -n "${value}" && ! "${value}" =~ ^[A-Za-z0-9._,:+-]+$ ]]; then
+    die "invalid scheduler identifier DEPENDENCY=${value}"
+  fi
+}
+
 CLUSTER="${CLUSTER:-auto}"
 if [[ "${CLUSTER}" == "auto" ]]; then
   case "$(hostname)" in
@@ -67,12 +104,35 @@ RESOLVED_REQUEST_PLAN_OUTPUT="${RESOLVED_REQUEST_PLAN_OUTPUT:-}"
 RESPONSE_OUTPUT="${RESPONSE_OUTPUT:-}"
 RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256:-}"
 SOURCE_RECIPE="${SOURCE_RECIPE:-}"
+CONTEXT_PROFILE="${CONTEXT_PROFILE:-sync_rollout}"
 GLOBAL_NUM_PROMPTS="${GLOBAL_NUM_PROMPTS:-}"
 GLOBAL_GENERATION_REPLICAS="${GLOBAL_GENERATION_REPLICAS:-}"
 DEPENDENCY="${DEPENDENCY:-}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
+
+require_safe_identifier "ACCOUNT" "${ACCOUNT}"
+require_safe_identifier "PARTITION" "${PARTITION}"
+require_safe_identifier "JOB_LABEL" "${JOB_LABEL}"
+require_positive_integer "TP" "${TP}"
+require_positive_integer "PP" "${PP}"
+require_positive_integer "NODES" "${NODES}"
+require_positive_integer "SEGMENT" "${SEGMENT}"
+require_safe_dependency "${DEPENDENCY}"
+
+if [[ -z "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
+  if (( NODES == 1 )); then
+    if (( TP * PP == 1 )); then
+      DISTRIBUTED_EXECUTOR_BACKEND="uni"
+    else
+      DISTRIBUTED_EXECUTOR_BACKEND="mp"
+    fi
+  else
+    echo "DISTRIBUTED_EXECUTOR_BACKEND is required for multi-node runs" >&2
+    exit 2
+  fi
+fi
 
 shell_quote() {
   printf "%q" "$1"
@@ -119,6 +179,7 @@ else
   MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"
   TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
 fi
+require_safe_time_limit "TIME_LIMIT" "${TIME_LIMIT}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-$((MAX_PROMPT_TOKENS + MAX_NEW_TOKENS + 256))}"
 if [[ "${SMOKE}" != "true" && -z "${PROMPT_JSONL}" ]]; then
   echo "SMOKE=false requires PROMPT_JSONL from a pinned prompt set" >&2
@@ -207,6 +268,8 @@ EOF
   emit_arg_pair "--dynamic-schedule" "${DYNAMIC_SCHEDULE}"
   emit_arg_pair "--tensor-parallel-size" "${TP}"
   emit_arg_pair "--pipeline-parallel-size" "${PP}"
+  emit_arg_pair "--node-count" "${NODES}"
+  emit_arg_pair "--context-profile" "${CONTEXT_PROFILE}"
   emit_arg_pair "--dtype" "bfloat16"
   emit_arg_pair "--kv-cache-dtype" "${KV_CACHE_DTYPE}"
   emit_arg_pair "--gpu-memory-utilization" "${GPU_MEMORY_UTILIZATION}"
@@ -235,9 +298,7 @@ EOF
   if [[ -n "${MOE_BACKEND}" ]]; then
     emit_arg_pair "--moe-backend" "${MOE_BACKEND}"
   fi
-  if [[ -n "${DISTRIBUTED_EXECUTOR_BACKEND}" ]]; then
-    emit_arg_pair "--distributed-executor-backend" "${DISTRIBUTED_EXECUTOR_BACKEND}"
-  fi
+  emit_arg_pair "--distributed-executor-backend" "${DISTRIBUTED_EXECUTOR_BACKEND}"
   if [[ -n "${DIST_TIMEOUT_SECONDS}" ]]; then
     emit_arg_pair "--distributed-timeout-seconds" "${DIST_TIMEOUT_SECONDS}"
   fi
@@ -337,8 +398,6 @@ render_sbatch() {
 #SBATCH --exclusive
 #SBATCH --segment=${SEGMENT}
 #SBATCH --time=${TIME_LIMIT}
-#SBATCH --job-name=coreai_dlalgo_llm-vllm024.${JOB_LABEL}-${variant}
-#SBATCH --output=${run_dir}/slurm-%j.out
 
 set -euo pipefail
 
@@ -469,7 +528,10 @@ for variant in ${VARIANTS}; do
   run_dir="${MATRIX_ROOT}/${variant}"
   sbatch_file="${run_dir}/submit.sbatch"
   run_script="${run_dir}/run_benchmark.sh"
-  sbatch_args=()
+  sbatch_args=(
+    "--job-name=coreai_dlalgo_llm-vllm024.${JOB_LABEL}-${variant}"
+    "--output=${run_dir}/slurm-%j.out"
+  )
   if [[ -n "${DEPENDENCY}" ]]; then
     sbatch_args+=("--dependency=${DEPENDENCY}")
   fi
@@ -486,11 +548,7 @@ for variant in ${VARIANTS}; do
     render_run_benchmark "${variant}" "${test_run_dir}" >"${test_run_script}"
     chmod 755 "${test_run_script}"
     render_sbatch "${variant}" "${test_run_dir}" >"${test_sbatch_file}"
-    if ((${#sbatch_args[@]})); then
-      sbatch --test-only "${sbatch_args[@]}" "${test_sbatch_file}"
-    else
-      sbatch --test-only "${test_sbatch_file}"
-    fi
+    sbatch --test-only "${sbatch_args[@]}" "${test_sbatch_file}"
     continue
   fi
 
@@ -498,11 +556,7 @@ for variant in ${VARIANTS}; do
   render_run_benchmark "${variant}" "${run_dir}" >"${run_script}"
   chmod 755 "${run_script}"
   render_sbatch "${variant}" "${run_dir}" >"${sbatch_file}"
-  if ((${#sbatch_args[@]})); then
-    job_id="$(sbatch --parsable "${sbatch_args[@]}" "${sbatch_file}")"
-  else
-    job_id="$(sbatch --parsable "${sbatch_file}")"
-  fi
+  job_id="$(sbatch --parsable "${sbatch_args[@]}" "${sbatch_file}")"
   printf '%s\t%s\t%s\n' "${job_id}" "${variant}" "${run_dir}" | tee -a "${MANIFEST}"
 done
 

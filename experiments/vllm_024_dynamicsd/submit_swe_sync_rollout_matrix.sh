@@ -391,6 +391,7 @@ for model_key in ${MODELS}; do
         RESOLVED_REQUEST_PLAN_OUTPUT=auto \
         RESPONSE_OUTPUT=auto \
         SOURCE_RECIPE="swe_sync_${profile}" \
+        CONTEXT_PROFILE="swe_sync_${profile}" \
         SMOKE="${SMOKE}" \
         NUM_PROMPTS="${num_prompts}" \
         SAMPLES_PER_PROMPT="${samples_per_prompt}" \
