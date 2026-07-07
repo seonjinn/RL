@@ -204,3 +204,9 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "command",
     ):
         assert field in source
+
+
+def test_dynamicsd_launcher_ignores_generated_submodule_dirt() -> None:
+    source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
+
+    assert source.count("--ignore-submodules=dirty") == 2

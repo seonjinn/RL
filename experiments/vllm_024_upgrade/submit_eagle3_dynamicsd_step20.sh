@@ -47,7 +47,8 @@ if [[ "${MODE}" == "submit" && -z "${WANDB_API_KEY:-}" ]]; then
 fi
 
 if [[ "${MODE}" == "submit" ]]; then
-  if ! git -C "${REPO_DIR}" diff --quiet || ! git -C "${REPO_DIR}" diff --cached --quiet; then
+  if ! git -C "${REPO_DIR}" diff --quiet --ignore-submodules=dirty \
+    || ! git -C "${REPO_DIR}" diff --cached --quiet --ignore-submodules=dirty; then
     echo "ERROR: submit requires a clean tracked checkout" >&2
     exit 2
   fi
