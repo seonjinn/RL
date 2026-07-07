@@ -145,7 +145,7 @@ def test_requires_both_throughput_inputs(throughput_inputs: dict[str, int]) -> N
 def test_requires_exact_python_integers_for_throughput_inputs(
     field_name: str, value: int | float
 ) -> None:
-    throughput_inputs: dict[str, int | float] = {
+    throughput_inputs: dict[str, Any] = {
         "processed_tokens": 16_631_382,
         "num_gpus": 512,
     }

@@ -47,7 +47,10 @@ def build_sft_comparison_metrics(
 
     Raises:
         TypeError: If a value is not a Python int or float.
-        ValueError: If an emitted scalar is NaN or infinite.
+        ValueError: If an emitted scalar is NaN or infinite, throughput inputs
+            are not provided as a pair, processed_tokens is negative, num_gpus
+            is non-positive, or train_step_time_s is non-positive when
+            throughput is emitted.
     """
     if not isinstance(observation.step, int) or isinstance(observation.step, bool):
         raise TypeError(
