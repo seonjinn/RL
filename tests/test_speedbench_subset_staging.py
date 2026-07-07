@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = REPO_ROOT / "experiments" / "vllm_024_dynamicsd"
 sys.path.insert(0, str(EXPERIMENT))
 
-import speedbench_dataset as adapter  # noqa: E402
+import speedbench_dataset as adapter  # pyright: ignore[reportMissingImports]  # noqa: E402
 
 
 def test_subset_discovery_accepts_only_requested_config(tmp_path: Path) -> None:
