@@ -1,0 +1,5 @@
+run_key	model	config_name	force_on_policy_ratio	nodes	segment	global_batch_size	steps
+q30_gbs2048_control	qwen3-30ba3b	grpo-qwen3-30ba3b-4n4g	false	4	4	2048	20
+q30_gbs2048_force	qwen3-30ba3b	grpo-qwen3-30ba3b-4n4g	true	4	4	2048	20
+q32_gbs2048_control	qwen3-32b	grpo-qwen3-32b-4n4g	false	4	4	2048	20
+q32_gbs2048_force	qwen3-32b	grpo-qwen3-32b-4n4g	true	4	4	2048	20
