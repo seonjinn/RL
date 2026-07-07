@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Generator
+import gc
+import weakref
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -31,6 +34,7 @@ from nemo_rl.algorithms.sft import (
     _iter_timed_batches,
     _measure_loop_interval,
     _optional_float,
+    _recursive_tensor_payload_bytes,
     sft_train,
     validate,
 )
@@ -119,16 +123,21 @@ def mock_components():
     }
 
 
-def _validation_config(execution_mode: str) -> MasterConfig:
+def _validation_config(execution_mode: str, **overrides: object) -> MasterConfig:
+    sft_config = {
+        "val_period": 20,
+        "val_batches": 4,
+        "val_global_batch_size": 64,
+        "val_micro_batch_size": 1,
+        "val_at_start": False,
+        "validation_execution_mode": execution_mode,
+        "validation_event_max_payload_bytes": 1_000_000,
+        "validation_event_verified_ray_object_store_available_bytes": 10_000_000,
+        "validation_event_memory_safety_multiplier": 2.0,
+    }
+    sft_config.update(overrides)
     return MasterConfig.model_construct(
-        sft=SFTConfig(
-            val_period=20,
-            val_batches=4,
-            val_global_batch_size=64,
-            val_micro_batch_size=1,
-            val_at_start=False,
-            validation_execution_mode=execution_mode,
-        ),
+        sft=SFTConfig(**sft_config),
         policy={
             "make_sequence_length_divisible_by": 1,
             "megatron_cfg": {"enabled": True},
@@ -184,8 +193,9 @@ def _validation_policy(losses: list[float]) -> MagicMock:
 
 def _run_validation(
     policy: MagicMock,
-    batches: list[BatchedDataDict],
+    batches: Iterable[BatchedDataDict],
     execution_mode: str,
+    master_config: MasterConfig | None = None,
 ) -> dict[str, float]:
     metrics, _ = validate(
         policy=policy,
@@ -193,7 +203,7 @@ def _run_validation(
         tokenizer=MagicMock(pad_token_id=0),
         loss_fn=NLLLossFn(),
         step=20,
-        master_config=_validation_config(execution_mode),
+        master_config=master_config or _validation_config(execution_mode),
         val_batches=4,
         val_batch_size=64,
         val_mbs=1,
@@ -206,6 +216,55 @@ def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
 
     with pytest.raises(ValidationError, match="validation_execution_mode"):
         SFTConfig(validation_execution_mode="unsupported")
+
+
+@pytest.mark.parametrize(
+    ("validation_args", "config_overrides", "message"),
+    [
+        ({"val_batches": 3}, {}, "val_batches=4"),
+        ({"val_batch_size": 32}, {}, "val_global_batch_size=64"),
+        ({"val_mbs": 2}, {}, "val_micro_batch_size=1"),
+        ({}, {"validation_event_max_payload_bytes": None}, "payload byte budget"),
+        (
+            {},
+            {"validation_event_verified_ray_object_store_available_bytes": None},
+            "launcher-verified Ray object-store available bytes",
+        ),
+        (
+            {},
+            {"validation_event_memory_safety_multiplier": 1.5},
+            "safety multiplier.*at least 2.0",
+        ),
+    ],
+)
+def test_validation_event_batch_rejects_invalid_config_before_setup_or_iteration(
+    validation_args: dict[str, int],
+    config_overrides: dict[str, object],
+    message: str,
+) -> None:
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    dataloader = MagicMock()
+    dataloader.__iter__.side_effect = AssertionError("dataloader was retained")
+    arguments = {
+        "val_batches": 4,
+        "val_batch_size": 64,
+        "val_mbs": 1,
+        **validation_args,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        validate(
+            policy=policy,
+            val_dataloader=dataloader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=_validation_config("event_batch", **config_overrides),
+            **arguments,
+        )
+
+    policy.prepare_for_training.assert_not_called()
+    dataloader.__iter__.assert_not_called()
 
 
 def test_validation_event_batch_calls_policy_once_in_original_order() -> None:
@@ -225,6 +284,27 @@ def test_validation_event_batch_calls_policy_once_in_original_order() -> None:
         "gbs": 64,
         "mbs": 1,
     }
+
+
+def test_validation_event_batch_records_recursive_payload_bytes() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+
+    _, timing_metrics = validate(
+        policy=policy,
+        val_dataloader=batches,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=_validation_config("event_batch"),
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+    )
+    combined_data, _ = policy.train.call_args.args
+
+    assert _recursive_tensor_payload_bytes(combined_data) == 23_552
+    assert timing_metrics["validation_event_payload_bytes"] == 23_552
 
 
 def test_validation_event_batch_matches_per_batch_token_weighting() -> None:
@@ -291,16 +371,105 @@ def test_validation_event_batch_rejects_inconsistent_packed_metadata() -> None:
     policy.train.assert_not_called()
 
 
-def test_validation_event_batch_rejects_wrong_total_size() -> None:
+def test_event_batch_rejects_partial_packed_batch_before_mutation() -> None:
     batches = [_packed_validation_batch(batch_idx) for batch_idx in range(3)]
-    batches.append(_packed_validation_batch(3, batch_size=63, valid_rows=63))
+    partial_batch = _packed_validation_batch(3, batch_size=63, valid_rows=63)
+    batches.append(partial_batch)
     policy = _validation_policy([1.0, 2.0, 3.0, 4.0])
-    policy.sharding_annotations.get_axis_size.return_value = 1
+    policy.sharding_annotations.get_axis_size.side_effect = AssertionError(
+        "generic padding was called"
+    )
 
-    with pytest.raises(ValueError, match="batch 3 has size 63; expected 64"):
+    with pytest.raises(
+        ValueError,
+        match="Packed event_batch validation requires batch size 64; got 63",
+    ):
         _run_validation(policy, batches, "event_batch")
 
+    assert all(
+        len(value) == 63
+        for value in partial_batch.values()
+        if torch.is_tensor(value) or isinstance(value, list)
+    )
     policy.train.assert_not_called()
+
+
+def test_validation_event_batch_enforces_payload_budget_before_train() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch", validation_event_max_payload_bytes=23_551
+    )
+
+    with pytest.raises(MemoryError, match="payload budget"):
+        _run_validation(policy, batches, "event_batch", config)
+
+    policy.train.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("host_available", "ray_available", "message"),
+    [
+        (47_103, 1_000_000, "host available memory"),
+        (1_000_000, 47_103, "Ray object-store available memory"),
+    ],
+)
+def test_validation_event_batch_enforces_memory_headroom_before_train(
+    host_available: int,
+    ray_available: int,
+    message: str,
+) -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch",
+        validation_event_verified_ray_object_store_available_bytes=ray_available,
+    )
+
+    with (
+        patch(
+            "nemo_rl.algorithms.sft.psutil.virtual_memory",
+            return_value=SimpleNamespace(available=host_available),
+        ) as virtual_memory,
+        pytest.raises(MemoryError, match=message),
+    ):
+        _run_validation(policy, batches, "event_batch", config)
+
+    virtual_memory.assert_called_once_with()
+    policy.train.assert_not_called()
+
+
+def test_validation_event_batch_releases_source_batches_before_train() -> None:
+    source_refs: list[weakref.ReferenceType[BatchedDataDict]] = []
+
+    class NonRetainingIterator:
+        def __init__(self) -> None:
+            self.batch_idx = 0
+
+        def __iter__(self) -> Iterator[BatchedDataDict]:
+            return self
+
+        def __next__(self) -> BatchedDataDict:
+            if self.batch_idx == 4:
+                raise StopIteration
+            batch = _packed_validation_batch(self.batch_idx)
+            self.batch_idx += 1
+            source_refs.append(weakref.ref(batch))
+            return batch
+
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    result = policy.train.return_value
+
+    def assert_sources_released(*_args: object, **_kwargs: object) -> dict[str, object]:
+        gc.collect()
+        assert all(source_ref() is None for source_ref in source_refs)
+        return result
+
+    policy.train.side_effect = assert_sources_released
+
+    _run_validation(policy, NonRetainingIterator(), "event_batch")
+
+    assert len(source_refs) == 4
 
 
 def test_validation_per_batch_keeps_legacy_policy_calls() -> None:

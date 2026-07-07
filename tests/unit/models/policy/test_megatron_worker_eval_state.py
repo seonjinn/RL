@@ -321,6 +321,16 @@ def _extract_worker_class(runtime: _Runtime):
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
     )
+    module_helper_names = {
+        "_global_batch_indices",
+        "_normalize_global_batch_loss_metrics",
+    }
+    module_helpers = [
+        _strip_function_metadata(copy.deepcopy(node))
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in module_helper_names
+    ]
+    assert {helper.name for helper in module_helpers} == module_helper_names
     methods = [
         _strip_function_metadata(copy.deepcopy(node))
         for node in source_class.body
@@ -338,7 +348,7 @@ def _extract_worker_class(runtime: _Runtime):
     if "type_params" in ast.ClassDef._fields:
         class_kwargs["type_params"] = []
     test_module = ast.Module(
-        body=[ast.ClassDef(**class_kwargs)],
+        body=[*module_helpers, ast.ClassDef(**class_kwargs)],
         type_ignores=[],
     )
     ast.fix_missing_locations(test_module)

@@ -11,15 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import math
 import os
 import time
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from functools import partial
 from numbers import Real
 from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
+import psutil
 import torch
 from pydantic import BaseModel
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -180,6 +183,12 @@ class SFTConfig(BaseModel, extra="allow"):
     val_at_start: bool = True
     # Run each validation batch separately or submit the full four-batch event once.
     validation_execution_mode: Literal["per_batch", "event_batch"] = "per_batch"
+    # Required event payload ceiling. None keeps event_batch fail-closed.
+    validation_event_max_payload_bytes: int | None = None
+    # Launcher-verified free Ray object-store capacity; Ray has no stable free-byte API.
+    validation_event_verified_ray_object_store_available_bytes: int | None = None
+    # Reserve room for serialization and transient copies beyond the combined payload.
+    validation_event_memory_safety_multiplier: float = 2.0
     # Whether to run validation on the last training step. Setting this to True ensures the
     # final checkpoint has validation metrics, which is required for get_best_checkpoint_path().
     val_at_end: bool = False
@@ -371,6 +380,99 @@ _PACKED_VALIDATION_METADATA_KEYS = {
 }
 
 
+def _validate_event_execution_config(
+    sft_config: SFTConfig,
+    *,
+    val_batches: int,
+    val_batch_size: int,
+    val_mbs: int,
+) -> tuple[int, int, float] | None:
+    if sft_config.validation_execution_mode != "event_batch":
+        return None
+    if sft_config.val_batches != 4 or val_batches != 4:
+        raise ValueError(
+            "event_batch validation requires sft.val_batches=4 and val_batches=4; "
+            f"got {sft_config.val_batches} and {val_batches}"
+        )
+    if sft_config.val_global_batch_size != 64 or val_batch_size != 64:
+        raise ValueError(
+            "event_batch validation requires sft.val_global_batch_size=64 and "
+            f"val_global_batch_size=64; got {sft_config.val_global_batch_size} "
+            f"and {val_batch_size}"
+        )
+    if sft_config.val_micro_batch_size != 1 or val_mbs != 1:
+        raise ValueError(
+            "event_batch validation requires sft.val_micro_batch_size=1 and "
+            f"val_micro_batch_size=1; got {sft_config.val_micro_batch_size} "
+            f"and {val_mbs}"
+        )
+
+    max_payload_bytes = sft_config.validation_event_max_payload_bytes
+    if max_payload_bytes is None or max_payload_bytes <= 0:
+        raise ValueError(
+            "event_batch validation requires an explicit positive payload byte "
+            "budget in sft.validation_event_max_payload_bytes"
+        )
+    ray_available_bytes = (
+        sft_config.validation_event_verified_ray_object_store_available_bytes
+    )
+    if ray_available_bytes is None or ray_available_bytes <= 0:
+        raise ValueError(
+            "event_batch validation requires launcher-verified Ray object-store "
+            "available bytes in "
+            "sft.validation_event_verified_ray_object_store_available_bytes"
+        )
+    safety_multiplier = sft_config.validation_event_memory_safety_multiplier
+    if not math.isfinite(safety_multiplier) or safety_multiplier < 2.0:
+        raise ValueError(
+            "event_batch validation memory safety multiplier must be finite and "
+            f"at least 2.0; got {safety_multiplier}"
+        )
+    return max_payload_bytes, ray_available_bytes, safety_multiplier
+
+
+def _recursive_tensor_payload_bytes(value: Any) -> int:
+    if torch.is_tensor(value):
+        return int(value.numel() * value.element_size())
+    if isinstance(value, PackedTensor):
+        return _recursive_tensor_payload_bytes(value.tensors)
+    if isinstance(value, Mapping):
+        return sum(_recursive_tensor_payload_bytes(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_recursive_tensor_payload_bytes(item) for item in value)
+    return 0
+
+
+def _validate_event_memory_capacity(
+    payload_bytes: int,
+    *,
+    max_payload_bytes: int,
+    host_available_bytes: int,
+    verified_ray_object_store_available_bytes: int,
+    safety_multiplier: float,
+) -> int:
+    if payload_bytes > max_payload_bytes:
+        raise MemoryError(
+            f"Validation event payload {payload_bytes} bytes exceeds the configured "
+            f"payload budget of {max_payload_bytes} bytes"
+        )
+
+    required_available_bytes = math.ceil(payload_bytes * safety_multiplier)
+    if host_available_bytes < required_available_bytes:
+        raise MemoryError(
+            f"Validation event requires {required_available_bytes} bytes of host "
+            f"available memory with safety headroom, but only "
+            f"{host_available_bytes} bytes are available"
+        )
+    if verified_ray_object_store_available_bytes < required_available_bytes:
+        raise MemoryError(
+            f"Validation event requires {required_available_bytes} bytes of Ray "
+            "object-store available memory with safety headroom, but the launcher "
+            f"verified only {verified_ray_object_store_available_bytes} bytes"
+        )
+    return required_available_bytes
+
+
 def _validate_packed_validation_metadata(batch: BatchedDataDict[Any]) -> None:
     if "packed_cu_seqlens" not in batch:
         return
@@ -433,7 +535,7 @@ def _validate_packed_validation_metadata(batch: BatchedDataDict[Any]) -> None:
 
 
 def _combine_validation_event_batches(
-    batches: Sequence[BatchedDataDict[Any]],
+    batches: list[BatchedDataDict[Any]],
     *,
     global_batch_size: int,
     pad_token_id: int,
@@ -538,6 +640,9 @@ def _combine_validation_event_batches(
             "packed_cu_seqlens": -1,
         },
     )
+    # The concatenation necessarily overlaps source and combined tensors. Drop the
+    # four source batch containers immediately to end that peak before submission.
+    batches.clear()
     expected_size = _EVENT_VALIDATION_BATCH_COUNT * global_batch_size
     if combined.size != expected_size:
         raise ValueError(
@@ -589,6 +694,12 @@ def _validate_with_loss_availability(
     comparison_instrumentation_enabled: bool = False,
 ) -> _SFTValidationResult:
     """Run validation and retain whether the reported loss was measured."""
+    event_memory_config = _validate_event_execution_config(
+        master_config.sft,
+        val_batches=val_batches,
+        val_batch_size=val_batch_size,
+        val_mbs=val_mbs,
+    )
     if val_dataloader is None:
         assert master_config.sft.val_period <= 0, (
             "val_dataloader is None, so sft.val_period must be <= 0"
@@ -597,6 +708,7 @@ def _validate_with_loss_availability(
         return _SFTValidationResult({}, {}, False)
 
     timer = Timer()
+    event_payload_bytes: int | None = None
 
     with timer.time("total_validation_time"):
         print(f"▶ Starting validation at step {step}...")
@@ -655,6 +767,16 @@ def _validate_with_loss_availability(
                 val_data.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
             # When running validation with drop_last=False, we might end up with a partial batch.
             # Check if we need to pad the final batch to make it divisible by micro_batch_size * dp_size.
+            if (
+                validation_execution_mode == "event_batch"
+                and "packed_cu_seqlens" in val_data
+                and val_data.size != val_batch_size
+            ):
+                raise ValueError(
+                    "Packed event_batch validation requires batch size 64; "
+                    f"got {val_data.size}. Packed partial batches cannot use the "
+                    "generic validation padding path."
+                )
             if val_data.size < val_batch_size:
                 dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
                 val_data = maybe_pad_last_batch(val_data, dp_size, val_mbs)
@@ -713,6 +835,21 @@ def _validate_with_loss_availability(
                 global_batch_size=val_batch_size,
                 pad_token_id=tokenizer.pad_token_id,
             )
+            del val_data  # pyright: ignore[reportPossiblyUnboundVariable]
+            del val_batch  # pyright: ignore[reportPossiblyUnboundVariable]
+            event_payload_bytes = _recursive_tensor_payload_bytes(combined_val_data)
+            if event_memory_config is None:
+                raise RuntimeError("event_batch memory configuration was not validated")
+            max_payload_bytes, ray_available_bytes, safety_multiplier = (
+                event_memory_config
+            )
+            _validate_event_memory_capacity(
+                event_payload_bytes,
+                max_payload_bytes=max_payload_bytes,
+                host_available_bytes=int(psutil.virtual_memory().available),
+                verified_ray_object_store_available_bytes=ray_available_bytes,
+                safety_multiplier=safety_multiplier,
+            )
             val_results = policy.train(
                 combined_val_data,
                 loss_fn,
@@ -759,6 +896,8 @@ def _validate_with_loss_availability(
 
     # Get timing metrics
     timing_metrics = timer.get_timing_metrics(reduction_op="sum")
+    if event_payload_bytes is not None:
+        timing_metrics["validation_event_payload_bytes"] = event_payload_bytes
     validation_time = timing_metrics.get("total_validation_time", 0)
 
     if validation_loss_available:

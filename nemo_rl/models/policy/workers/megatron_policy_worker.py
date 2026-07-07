@@ -100,6 +100,19 @@ from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
+def _global_batch_indices(*, total_dataset_size: int, global_batch_size: int) -> range:
+    return range(total_dataset_size // global_batch_size)
+
+
+def _normalize_global_batch_loss_metrics(
+    metrics: dict[str, Any], *, num_global_batches: int
+) -> dict[str, Any]:
+    return {
+        key: value if "_min" in key or "_max" in key else value / num_global_batches
+        for key, value in metrics.items()
+    }
+
+
 def _should_use_router_replay(
     *,
     enabled: bool,
@@ -583,7 +596,11 @@ class MegatronPolicyWorkerImpl(
             op=torch.distributed.ReduceOp.SUM,
             group=parallel_state.get_data_parallel_group(),
         )
-        num_global_batches = int(total_dataset_size.item()) // gbs
+        global_batch_indices = _global_batch_indices(
+            total_dataset_size=int(total_dataset_size.item()),
+            global_batch_size=gbs,
+        )
+        num_global_batches = len(global_batch_indices)
         uses_mxfp8_overlap_shared_param_buffer = (
             eval_mode and self._uses_mxfp8_overlap_shared_param_buffer()
         )
@@ -617,7 +634,7 @@ class MegatronPolicyWorkerImpl(
             all_mb_metrics = []
             losses = []
             total_num_microbatches = 0
-            for gb_idx in range(num_global_batches):
+            for gb_idx in global_batch_indices:
                 gb_result = process_global_batch(
                     data,
                     loss_fn=loss_fn,
@@ -798,12 +815,9 @@ class MegatronPolicyWorkerImpl(
                     gb_loss_metrics = []
                     mb_losses = []
                     for x in losses_reduced:
-                        loss_metrics = {}
-                        for k in x.keys():
-                            if "_min" in k or "_max" in k:
-                                loss_metrics[k] = x[k]
-                            else:
-                                loss_metrics[k] = x[k] / num_global_batches
+                        loss_metrics = _normalize_global_batch_loss_metrics(
+                            x, num_global_batches=num_global_batches
+                        )
                         gb_loss_metrics.append(loss_metrics)
                         curr_lr = self.scheduler.get_lr(self.optimizer.param_groups[0])
                         curr_wd = self.scheduler.get_wd()
