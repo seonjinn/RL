@@ -149,43 +149,30 @@ echo "dataset_license=License.pdf"
 echo "modelopt_license=LICENSE"
 
 JOB_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/speedbench-stage-job.XXXXXX")"
-trap 'rm -rf "$JOB_TMPDIR"' EXIT
 PYDEPS_DIR="$JOB_TMPDIR/pydeps"
-MODELOPT_WORK_ROOT="$JOB_TMPDIR/modelopt"
+# Do not use MODELOPT_WORK_ROOT="$JOB_TMPDIR/modelopt"; host /tmp is not container-visible.
+MODELOPT_WORK_ROOT="$RUN_ROOT/.modelopt-work.${SLURM_JOB_ID:-$$}"
 MODELOPT_SOURCE_ROOT="$SOURCE_ROOT/modelopt"
 MODELOPT_SOURCE_IDENTITY="$RUN_ROOT/modelopt_source_identity.json"
 MODELOPT_DATASET_PATCH="$RUN_ROOT/modelopt_dataset_revision.patch"
+cleanup_stage() {
+  rm -rf "$JOB_TMPDIR" "$MODELOPT_WORK_ROOT"
+}
+trap cleanup_stage EXIT
 
-read -r -d '' PAYLOAD <<'PAYLOAD' || true
+read -r -d '' HOST_SETUP <<'HOST_SETUP' || true
 set -euo pipefail
-HF_HOME="$1"
-SOURCE_ROOT="$2"
-MODELOPT_REPO_URL="$3"
-MODELOPT_REVISION="$4"
-MODELOPT_PREPARE_DATA_SCRIPT="$5"
-SPEED_DATASET_ID="$6"
-SPEED_DATASET_REVISION="$7"
-PREPARED_ROOT="$8"
-SPEED_PREPARED_ROOT="$9"
-JOB_TMPDIR="${10}"
-MANIFEST="${11}"
-CHECKSUMS="${12}"
-PYDEPS_DIR="${13}"
-MODELOPT_WORK_ROOT="${14}"
-MODELOPT_SOURCE_ROOT="${15}"
-MODELOPT_SOURCE_IDENTITY="${16}"
-MODELOPT_DATASET_PATCH="${17}"
-DEPENDENCY_LOCK="${18}"
+MODELOPT_REPO_URL="$1"
+MODELOPT_REVISION="$2"
+MODELOPT_WORK_ROOT="$3"
+MODELOPT_RUN_PY_SHA256="$4"
+SPEED_DATASET_REVISION="$5"
+MODELOPT_DATASET_PATCH="$6"
+SOURCE_ROOT="$7"
+MODELOPT_SOURCE_ROOT="$8"
+MODELOPT_SOURCE_IDENTITY="$9"
 
-export HF_HOME
-test -s "$DEPENDENCY_LOCK"
-export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
-export HF_DATASETS_CACHE="$HF_HOME/datasets"
-mkdir -p "$PYDEPS_DIR"
-python3 -m pip install --quiet --no-cache-dir \
-  --target "$PYDEPS_DIR" \
-  --requirement "$DEPENDENCY_LOCK"
-export PYTHONPATH="$PYDEPS_DIR"
+rm -rf "$MODELOPT_WORK_ROOT"
 git clone --filter=blob:none "$MODELOPT_REPO_URL" "$MODELOPT_WORK_ROOT"
 git -C "$MODELOPT_WORK_ROOT" checkout "$MODELOPT_REVISION"
 MODELOPT_TREE="$(git -C "$MODELOPT_WORK_ROOT" rev-parse 'HEAD^{tree}')"
@@ -258,6 +245,49 @@ payload = {
 }
 Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
+HOST_SETUP
+
+srun --ntasks=1 bash -lc "$HOST_SETUP" bash \
+  "$MODELOPT_REPO_URL" \
+  "$MODELOPT_REVISION" \
+  "$MODELOPT_WORK_ROOT" \
+  "$MODELOPT_RUN_PY_SHA256" \
+  "$SPEED_DATASET_REVISION" \
+  "$MODELOPT_DATASET_PATCH" \
+  "$SOURCE_ROOT" \
+  "$MODELOPT_SOURCE_ROOT" \
+  "$MODELOPT_SOURCE_IDENTITY"
+
+read -r -d '' PAYLOAD <<'PAYLOAD' || true
+set -euo pipefail
+HF_HOME="$1"
+SOURCE_ROOT="$2"
+MODELOPT_REPO_URL="$3"
+MODELOPT_REVISION="$4"
+MODELOPT_PREPARE_DATA_SCRIPT="$5"
+SPEED_DATASET_ID="$6"
+SPEED_DATASET_REVISION="$7"
+PREPARED_ROOT="$8"
+SPEED_PREPARED_ROOT="$9"
+JOB_TMPDIR="${10}"
+MANIFEST="${11}"
+CHECKSUMS="${12}"
+PYDEPS_DIR="${13}"
+MODELOPT_WORK_ROOT="${14}"
+MODELOPT_SOURCE_ROOT="${15}"
+MODELOPT_SOURCE_IDENTITY="${16}"
+MODELOPT_DATASET_PATCH="${17}"
+DEPENDENCY_LOCK="${18}"
+
+export HF_HOME
+test -s "$DEPENDENCY_LOCK"
+export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+mkdir -p "$PYDEPS_DIR"
+python3 -m pip install --quiet --no-cache-dir \
+  --target "$PYDEPS_DIR" \
+  --requirement "$DEPENDENCY_LOCK"
+export PYTHONPATH="$PYDEPS_DIR"
 export SOURCE_ROOT SPEED_DATASET_ID SPEED_DATASET_REVISION
 python3 - <<'PY'
 import os
