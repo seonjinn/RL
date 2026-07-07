@@ -265,11 +265,30 @@ def select_sync_overlay_rows(
     return tuple(batches)
 
 
-def expected_relative_parquet_paths() -> tuple[str, ...]:
-    return tuple(f"{config_name}/test.parquet" for config_name in EXPECTED_CONFIGS)
+def _normalize_expected_configs(expected_configs: Sequence[str]) -> tuple[str, ...]:
+    normalized = tuple(expected_configs)
+    if not normalized:
+        raise ValueError("expected at least one SPEED-Bench config")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("expected SPEED-Bench configs must be unique")
+    unsupported = sorted(set(normalized) - set(EXPECTED_CONFIGS))
+    if unsupported:
+        raise ValueError(f"unsupported expected configs: {', '.join(unsupported)}")
+    return normalized
 
 
-def discover_prepared_parquet_paths(prepared_root: Path) -> tuple[Path, ...]:
+def expected_relative_parquet_paths(
+    expected_configs: Sequence[str] = EXPECTED_CONFIGS,
+) -> tuple[str, ...]:
+    normalized = _normalize_expected_configs(expected_configs)
+    return tuple(f"{config_name}/test.parquet" for config_name in normalized)
+
+
+def discover_prepared_parquet_paths(
+    prepared_root: Path,
+    *,
+    expected_configs: Sequence[str] = EXPECTED_CONFIGS,
+) -> tuple[Path, ...]:
     discovered = tuple(
         sorted(
             (
@@ -281,7 +300,7 @@ def discover_prepared_parquet_paths(prepared_root: Path) -> tuple[Path, ...]:
         )
     )
     discovered_set = {str(path) for path in discovered}
-    expected_set = set(expected_relative_parquet_paths())
+    expected_set = set(expected_relative_parquet_paths(expected_configs))
     missing = sorted(expected_set - discovered_set)
     unexpected = sorted(discovered_set - expected_set)
     if missing:
@@ -362,8 +381,13 @@ def build_prepared_manifest(
     modelopt_license_path: Path,
     dependency_lock_path: Path,
     modelopt_source_identity_path: Path,
+    expected_configs: Sequence[str] = EXPECTED_CONFIGS,
 ) -> dict[str, Any]:
-    parquet_paths = discover_prepared_parquet_paths(prepared_root)
+    normalized_configs = _normalize_expected_configs(expected_configs)
+    parquet_paths = discover_prepared_parquet_paths(
+        prepared_root,
+        expected_configs=normalized_configs,
+    )
     parquet_entries = [
         {
             "relative_path": str(relative_path),
@@ -406,13 +430,22 @@ def build_prepared_manifest(
             ),
         },
         "dependencies": _dependency_lock_entry(dependency_lock_path),
+        "requested_configs": list(normalized_configs),
         "parquet_files": parquet_entries,
         "prepared_configs": entries,
     }
 
 
-def write_checksum_file(prepared_root: Path, output_path: Path) -> tuple[str, ...]:
-    parquet_paths = discover_prepared_parquet_paths(prepared_root)
+def write_checksum_file(
+    prepared_root: Path,
+    output_path: Path,
+    *,
+    expected_configs: Sequence[str] = EXPECTED_CONFIGS,
+) -> tuple[str, ...]:
+    parquet_paths = discover_prepared_parquet_paths(
+        prepared_root,
+        expected_configs=expected_configs,
+    )
     lines = tuple(
         f"{sha256_file(prepared_root / relative_path)}  {relative_path}"
         for relative_path in parquet_paths
@@ -430,6 +463,7 @@ def write_prepared_manifest(
     modelopt_license_path: Path,
     dependency_lock_path: Path,
     modelopt_source_identity_path: Path,
+    expected_configs: Sequence[str] = EXPECTED_CONFIGS,
 ) -> dict[str, Any]:
     manifest = build_prepared_manifest(
         prepared_root,
@@ -437,6 +471,7 @@ def write_prepared_manifest(
         modelopt_license_path=modelopt_license_path,
         dependency_lock_path=dependency_lock_path,
         modelopt_source_identity_path=modelopt_source_identity_path,
+        expected_configs=expected_configs,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -465,12 +500,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
     )
+    write_manifest.add_argument(
+        "--expected-config",
+        action="append",
+        choices=EXPECTED_CONFIGS,
+        dest="expected_configs",
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "write-manifest":
+        expected_configs = tuple(args.expected_configs or EXPECTED_CONFIGS)
         manifest = write_prepared_manifest(
             args.prepared_root,
             args.output,
@@ -478,8 +520,13 @@ def main() -> None:
             modelopt_license_path=args.modelopt_license,
             dependency_lock_path=args.dependency_lock,
             modelopt_source_identity_path=args.modelopt_source_identity,
+            expected_configs=expected_configs,
         )
-        checksum_lines = write_checksum_file(args.prepared_root, args.checksums)
+        checksum_lines = write_checksum_file(
+            args.prepared_root,
+            args.checksums,
+            expected_configs=expected_configs,
+        )
         print(
             json.dumps(
                 {

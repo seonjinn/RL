@@ -64,6 +64,7 @@ CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
 DATASET_ROOT="${DATASET_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/speedbench}"
 RUN_ID="${RUN_ID:-speedbench-487aa718-43fee0cd}"
+SPEED_CONFIGS="${SPEED_CONFIGS:-throughput_1k}"
 TIME_LIMIT="${TIME_LIMIT:-02:00:00}"
 DEPENDENCY="${DEPENDENCY:-}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -84,6 +85,12 @@ require_safe_identifier "PARTITION" "${PARTITION}"
 require_safe_identifier "RUN_ID" "${RUN_ID}"
 require_safe_time_limit "${TIME_LIMIT}"
 require_safe_dependency "${DEPENDENCY}"
+for speed_config in ${SPEED_CONFIGS}; do
+  case "${speed_config}" in
+    qualitative|throughput_1k|throughput_2k|throughput_8k|throughput_16k|throughput_32k) ;;
+    *) die "Unsupported SPEED_CONFIGS entry: ${speed_config}" ;;
+  esac
+done
 
 RUN_ROOT="${DATASET_ROOT}/${RUN_ID}"
 PREPARED_ROOT="${RUN_ROOT}/prepared"
@@ -136,6 +143,7 @@ EOF
   render_assignment "SPEED_DATASET_ID" "${SPEED_DATASET_ID}"
   render_assignment "SPEED_DATASET_REVISION" "${SPEED_DATASET_REVISION}"
   render_assignment "DEPENDENCY_LOCK" "${DEPENDENCY_LOCK}"
+  render_assignment "SPEED_CONFIGS" "${SPEED_CONFIGS}"
   cat <<'EOF'
 
 test -s "$CONTAINER_IMAGE"
@@ -278,6 +286,7 @@ MODELOPT_SOURCE_ROOT="${15}"
 MODELOPT_SOURCE_IDENTITY="${16}"
 MODELOPT_DATASET_PATCH="${17}"
 DEPENDENCY_LOCK="${18}"
+SPEED_CONFIGS="${19}"
 
 export HF_HOME
 test -s "$DEPENDENCY_LOCK"
@@ -302,18 +311,27 @@ snapshot_download(
 )
 PY
 cp "$MODELOPT_SOURCE_ROOT/LICENSE" "$SOURCE_ROOT/modelopt-LICENSE"
-python3 "$MODELOPT_SOURCE_ROOT/$MODELOPT_PREPARE_DATA_SCRIPT" \
-  --dataset speed \
-  --config all \
-  --output_dir "$PREPARED_ROOT"
-python3 /workspace/experiment/speedbench_dataset.py write-manifest \
-  --prepared-root "$SPEED_PREPARED_ROOT" \
-  --output "$MANIFEST" \
-  --checksums "$CHECKSUMS" \
-  --dataset-license-root "$SOURCE_ROOT/speedbench" \
-  --modelopt-license "$SOURCE_ROOT/modelopt-LICENSE" \
-  --dependency-lock "$DEPENDENCY_LOCK" \
+rm -rf "$SPEED_PREPARED_ROOT"
+for speed_config in $SPEED_CONFIGS; do
+  python3 "$MODELOPT_SOURCE_ROOT/$MODELOPT_PREPARE_DATA_SCRIPT" \
+    --dataset speed \
+    --config "$speed_config" \
+    --output_dir "$PREPARED_ROOT"
+done
+manifest_args=(
+  write-manifest
+  --prepared-root "$SPEED_PREPARED_ROOT"
+  --output "$MANIFEST"
+  --checksums "$CHECKSUMS"
+  --dataset-license-root "$SOURCE_ROOT/speedbench"
+  --modelopt-license "$SOURCE_ROOT/modelopt-LICENSE"
+  --dependency-lock "$DEPENDENCY_LOCK"
   --modelopt-source-identity "$MODELOPT_SOURCE_IDENTITY"
+)
+for speed_config in $SPEED_CONFIGS; do
+  manifest_args+=(--expected-config "$speed_config")
+done
+python3 /workspace/experiment/speedbench_dataset.py "${manifest_args[@]}"
 sha256sum "$MANIFEST" | tee "$MANIFEST.sha256"
 PAYLOAD
 
@@ -346,6 +364,7 @@ srun_args=(
   "$MODELOPT_SOURCE_IDENTITY"
   "$MODELOPT_DATASET_PATCH"
   "$DEPENDENCY_LOCK"
+  "$SPEED_CONFIGS"
 )
 
 srun "${srun_args[@]}" 2>&1 | tee "$RUN_ROOT/stage.log"
