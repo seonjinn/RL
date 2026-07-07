@@ -102,8 +102,8 @@ Passing local checks after implementation:
 - `python3 tests/unit/models/policy/test_megatron_worker_eval_state.py` executes
   the actual extracted worker helper bodies and passes both normal-buffer and
   MXFP8 shared-buffer state-equivalence tests.
-- Standalone Pyright reports zero errors and zero warnings for the new
-  dependency-free state-equivalence test module.
+- Standalone Pyright with `--pythonversion 3.13` reports zero errors and zero
+  warnings for the new dependency-free state-equivalence test module.
 - `python3 -m py_compile` passed for all changed Python and test files.
 - `ruff format --check` and `ruff check` passed for all changed Python and test
   files.

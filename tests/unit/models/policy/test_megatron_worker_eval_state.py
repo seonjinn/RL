@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import ast
+import builtins
 import copy
 import time
 import unittest
@@ -55,7 +56,7 @@ class _Tensor:
     def float(self) -> "_Tensor":
         return self
 
-    def item(self) -> float:
+    def item(self) -> builtins.float:
         if isinstance(self.value, list):
             assert len(self.value) == 1
             return self.value[0]
@@ -71,10 +72,10 @@ class _Tensor:
     def __eq__(self, other: object) -> bool:
         return isinstance(other, _Tensor) and self.value == other.value
 
-    def __rtruediv__(self, numerator: float) -> "_Tensor":
+    def __rtruediv__(self, numerator: builtins.float) -> "_Tensor":
         return _Tensor(numerator / self.item())
 
-    def __truediv__(self, denominator: float) -> "_Tensor":
+    def __truediv__(self, denominator: builtins.float) -> "_Tensor":
         return _Tensor(self.item() / denominator)
 
 
