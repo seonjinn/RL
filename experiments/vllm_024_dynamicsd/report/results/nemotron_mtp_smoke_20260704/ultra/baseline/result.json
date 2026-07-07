@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1021-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.24.0",
+    "torch_version": "2.11.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "0",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2326448"
+    }
+  },
+  "config": {
+    "tag": "ultra_baseline",
+    "scenario": "synchronous_rl_rollout",
+    "sync_barrier": "LLM.generate_return",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/snapshots/624ba927cfbef0427354998700de3d51173c8c04",
+    "draft_model": "",
+    "mode": "baseline",
+    "speculative_config": null,
+    "tensor_parallel_size": 8,
+    "pipeline_parallel_size": 1,
+    "total_gpus": 8,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "fp8",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 1408,
+    "max_num_seqs": 16,
+    "global_requests_per_rollout_batch": 16,
+    "max_num_batched_tokens": 32768,
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "enable_expert_parallel": true,
+    "attention_backend": "auto",
+    "moe_backend": "flashinfer_trtllm",
+    "distributed_executor_backend": "ray",
+    "distributed_timeout_seconds": 3600,
+    "model_loader_extra_config": {
+      "enable_multithread_load": true,
+      "num_threads": 96
+    },
+    "cudagraph_mode": "PIECEWISE",
+    "compilation_config": {
+      "cudagraph_mode": "PIECEWISE",
+      "pass_config": {
+        "fuse_allreduce_rms": false
+      }
+    },
+    "mamba_ssm_cache_dtype": "float16",
+    "mamba_backend": "flashinfer",
+    "enable_mamba_cache_stochastic_rounding": true,
+    "mamba_cache_philox_rounds": 5,
+    "num_prompts": 4,
+    "samples_per_prompt": 4,
+    "requests_per_rollout_batch": 16,
+    "rollout_batches": 2,
+    "max_prompt_tokens": 1024,
+    "max_new_tokens": 128,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "logprobs": 0,
+    "seed": 1234,
+    "warmup_max_tokens": 32,
+    "prompt_jsonl": null,
+    "prompt_offset": 0,
+    "source_recipe": "sync-rl-math-rollout",
+    "global_num_prompts": null,
+    "global_generation_replicas": null,
+    "prompt_batch_hashes": [
+      "a2a93962d8f35b920558ef5d19bb2165c9fbc652e7d6416509d42782456c4037",
+      "1bf3bbb11674e1c37842b6370101f941e2a29eb29346438b224d4b7696e08248"
+    ]
+  },
+  "rollout_batches": [
+    {
+      "batch_index": 0,
+      "request_count": 16,
+      "rollout_time_s": 3.113117366010556,
+      "output_tokens": 2048,
+      "output_tok_s": 657.861480701096,
+      "output_tok_s_per_gpu": 82.232685087637,
+      "requests_per_s": 5.139542817977312,
+      "completion_length": {
+        "min": 128,
+        "mean": 128.0,
+        "p50": 128.0,
+        "p90": 128.0,
+        "p99": 128.0,
+        "max": 128
+      },
+      "finish_reasons": {
+        "length": 16
+      },
+      "output_token_hashes": [
+        "93026dc1fbb520d5715243fa35de905c820d07287096a3625e3d01efa7b8f1a9",
+        "6a7d6647e586586ae61957c03e315a70c6247429e99d4207d666eabb1774fd29",
+        "1ac462d7dabf1eaf686a767e52d33009c3a8b16454869ff6f814c8dc198e43f7",
+        "e074cf4794cc8082e3bde8d27006230e0f298fa3a98adc96c7271106aa267d97",
+        "e73415dfcd4feca33b2e63bc3ff02f8613b210d4e10938dbeedaf15fef150840",
+        "34009dd2c78dcf248520139f3f6e6d530d391f49459069bf6f2c18edb09b35cb",
+        "7dc267173b5bf9fdf1092393367495e7322074c733ad86c1b51a8b7dd4ee68cd",
+        "9bce4582a5e6460eb2448456daa7a0cd4084c72d5eca5008624658c64871d1f4",
+        "004c8fb352c45f5f7511b693ebc6dd0a94bf198edcb9c8284d04241839f502df",
+        "178c4c767d81c02b2486c5d34e2298d2c8d93351486e684871316829e0d71165",
+        "fdff8f640ee274662ef0ec496b16d697000e436acde877f25a06b596c093de5b",
+        "ddbe39e1b7fb3d892944dc04639854d0739975823ade914bf439ecf118b3e00d",
+        "63210bfc02e351f94df0b4464152166295e4c9f9c24621617f067a218c94ebf1",
+        "5cfe1ec71fca534aa544e072cbbd7caaa778ec93103c924ddced59e8e03108f8",
+        "1e29a07e689893575c6df3ea7adf65d403d8c34d75a9c415d44c75e01a4af870",
+        "019976f2c930c24e4ab40034c25e3b7985d7df6d0f64764b5640c2fbee34e7c4"
+      ],
+      "spec_decode_metrics": {}
+    },
+    {
+      "batch_index": 1,
+      "request_count": 16,
+      "rollout_time_s": 3.1427142710017506,
+      "output_tokens": 2048,
+      "output_tok_s": 651.6659878682491,
+      "output_tok_s_per_gpu": 81.45824848353114,
+      "requests_per_s": 5.091140530220696,
+      "completion_length": {
+        "min": 128,
+        "mean": 128.0,
+        "p50": 128.0,
+        "p90": 128.0,
+        "p99": 128.0,
+        "max": 128
+      },
+      "finish_reasons": {
+        "length": 16
+      },
+      "output_token_hashes": [
+        "1c1c2aa5aef2f19b99f5528e0644d830b9c78c7cd70ae4fa160a80c1c54e9139",
+        "d5541034bf6de8ed34d5df637303dd8ad032d4230268c4f49c3d8ce6f594d80b",
+        "ed83d4334674aec290dbf05d3d0a5b21c10de2a7f6c78799d2f88b412cc7d0b7",
+        "13fb14970052febb009dfad2ab6f19043b466ed67228f2ab9ed0481f76168cef",
+        "043949a9764b962442e7ea2205a02d848dd08f68993def2b22cc53cbe6c25f27",
+        "0b11c636b6334383e96c2d216ace76f478165295987f949ce00ef4abf31ee798",
+        "bb8817951f655a50cc8fc4bcaeb9b26144196a6967b480625b76bbdad8c16b14",
+        "9468b2d5dcc862c71062ac094dff2652dcbba090ac331a49d83397c54df32477",
+        "a1152d8ab3fbd41175d21092eed33f06312b8c4e0d318dc7503033058cf48a44",
+        "bd547752ee8aafe4c1f4b0b065357fba147000d492b54b9721650ff91f66c1e8",
+        "96a7d147a45e34e2facbad1b46417c567812683023c97cd4a66d3a72d6f39397",
+        "24abe6e8104ed7e43f79579e3bd5ee92a4ed84f9d558628622529fdcef665845",
+        "47802a7d1b9c8f869499bf415fd7c8339aea91669db052ed74bf35095ec9352b",
+        "65e65f1b0202c6fa784b794ff395267a3133d53a897943f292cae63f89a6b401",
+        "4d590305ded3e84a417072ec527fac3de79db96493bf2bed1f278e4ce958f7c4",
+        "dfbed5a8e2251e892def72612dbf5337fefb69a8ae3a1566a7cc899c8b52750a"
+      ],
+      "spec_decode_metrics": {}
+    }
+  ],
+  "summary": {
+    "total_rollout_time_s": 6.255831637012307,
+    "offline_generation_makespan_s": 6.255831637012307,
+    "mean_rollout_time_s": 3.1279158185061533,
+    "median_rollout_time_s": 3.1279158185061533,
+    "total_output_tokens": 4096,
+    "output_tok_s": 654.7490785663454,
+    "output_tok_s_per_gpu": 81.84363482079317,
+    "requests_per_s": 5.115227176299573,
+    "spec_decode_metrics": {}
+  }
+}

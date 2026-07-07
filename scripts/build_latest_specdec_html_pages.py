@@ -13,6 +13,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -46,6 +47,9 @@ PERFCFG_DYNAMIC_REPLAY_CSV = (
     DFLARE_RESULT_ROOT
     / "results/perfcfg_dynamic_replay_20260706"
     / "vllm024_perfcfg_dynamic_replay_20260706.csv"
+)
+NEMOTRON_MTP_LEGACY_SMOKE_ROOT = (
+    DFLARE_RESULT_ROOT / "results/nemotron_mtp_smoke_20260704"
 )
 DFLARE_COMPLETED_DIRS = [
     DFLARE_RESULT_ROOT / "20260703_dflare_completed",
@@ -1308,6 +1312,14 @@ def published_data_html(value: object) -> str:
     return esc(text)
 
 
+def local_result_link_html(value: object, source: object) -> str:
+    label = text_value(value)
+    path = text_value(source)
+    if not label or not path:
+        return esc(label)
+    return f'<a href="../{esc(path)}"><code>{esc(label)}</code></a>'
+
+
 def wandb_link_html(row: pd.Series) -> str:
     direct_url = normalize_wandb_url(row.get("wandb_url", ""))
     if direct_url:
@@ -1795,6 +1807,8 @@ def table(rows: pd.DataFrame, columns: list[tuple[str, str, str]]) -> str:
                 text = "n/a" if pd.isna(value) else f"{float(value):.1f}"
             elif kind == "link":
                 text = wandb_link_html(row) if key == "wandb_url" else link_html(value)
+            elif kind == "result_link":
+                text = local_result_link_html(value, row.get("source", ""))
             else:
                 text = published_data_html(value) if key in {"source", "source_file", "manifest"} else esc(value)
             title = esc(value) if key in text_classes and text else ""
@@ -1995,6 +2009,169 @@ def load_perfcfg_dynamic_replay_rows() -> pd.DataFrame:
     rows["baseline_job"] = rows["baseline_job"].astype(str)
     rows["dynamic_job"] = rows["dynamic_job"].astype(str)
     return rows
+
+
+def _nemotron_smoke_model_label(model_path: object) -> str:
+    model = text_value(model_path)
+    if "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in model:
+        return "Nemotron-3-Super-120B-A12B-BF16"
+    if "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in model:
+        return "Nemotron-3-Ultra-550B-A55B-BF16"
+    return Path(model).name
+
+
+def _nemotron_smoke_schedule(config: dict[str, object]) -> str:
+    mode = text_value(config.get("mode"))
+    speculative = config.get("speculative_config")
+    if not isinstance(speculative, dict):
+        return "n/a"
+    static_k = int(speculative["num_speculative_tokens"])
+    if mode == "mtp_static":
+        return f"K={static_k}"
+    raw_schedule = speculative.get("num_speculative_tokens_per_batch_size", [])
+    schedule = [
+        f"batch {int(start)}-{int(end)}: K={int(k)}"
+        for start, end, k in raw_schedule
+    ]
+    return "; ".join(schedule) + " (uncalibrated)"
+
+
+def load_nemotron_mtp_legacy_smoke_rows(
+    result_root: Path = NEMOTRON_MTP_LEGACY_SMOKE_ROOT,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    method_labels = {
+        "baseline": "Baseline",
+        "mtp_static": "Native MTP static",
+        "mtp_dynamic": "Native MTP dynamic",
+    }
+    for model_key in ("super", "ultra"):
+        payloads: dict[str, tuple[dict[str, object], Path]] = {}
+        for mode in method_labels:
+            path = result_root / model_key / mode / "result.json"
+            if not path.exists():
+                continue
+            payloads[mode] = (json.loads(path.read_text(encoding="utf-8")), path)
+        if "baseline" not in payloads:
+            continue
+        baseline_summary = cast(
+            dict[str, object], payloads["baseline"][0]["summary"]
+        )
+        baseline_tokens = int(baseline_summary["total_output_tokens"])
+        baseline_tok_s_gpu = float(baseline_summary["output_tok_s_per_gpu"])
+        baseline_time_s = float(baseline_summary["total_rollout_time_s"])
+        for mode, method in method_labels.items():
+            if mode not in payloads:
+                continue
+            payload, path = payloads[mode]
+            config = cast(dict[str, object], payload["config"])
+            runtime = cast(dict[str, object], payload["runtime"])
+            summary = cast(dict[str, object], payload["summary"])
+            output_tokens = int(summary["total_output_tokens"])
+            output_tok_s_gpu = float(summary["output_tok_s_per_gpu"])
+            rollout_time_s = float(summary["total_rollout_time_s"])
+            output_token_ratio = output_tokens / baseline_tokens
+            work_matches = abs(output_token_ratio - 1.0) <= 0.01
+            throughput_speedup = output_tok_s_gpu / baseline_tok_s_gpu
+            rollout_speedup = baseline_time_s / rollout_time_s
+            spec_metrics = cast(
+                dict[str, object], summary.get("spec_decode_metrics", {})
+            )
+            environment = cast(dict[str, object], runtime.get("environment", {}))
+            if mode == "baseline":
+                throughput_display = "1.00x (reference)"
+                rollout_display = "1.00x (reference)"
+                validity = (
+                    "legacy capability smoke; reference only; one measured realization; "
+                    "runtime_image_sha256 missing"
+                )
+            else:
+                throughput_display = f"{throughput_speedup:.2f}x (directional only)"
+                if work_matches:
+                    rollout_display = f"{rollout_speedup:.2f}x (directional only)"
+                else:
+                    rollout_display = "n/a (invalid: output-token ratio outside 1%)"
+                natural_eos = "; natural EOS" if model_key == "super" else ""
+                validity = (
+                    "legacy capability smoke; directional only"
+                    f"{natural_eos}; one measured realization; "
+                    "runtime_image_sha256 missing"
+                )
+                if not work_matches:
+                    validity += "; direct rollout-time comparison invalid"
+            rows.append(
+                {
+                    "model": _nemotron_smoke_model_label(config.get("model")),
+                    "method": method,
+                    "job_id": text_value(environment.get("SLURM_JOB_ID")),
+                    "output_tok_s_gpu": output_tok_s_gpu,
+                    "throughput_speedup": throughput_display,
+                    "rollout_speedup": rollout_display,
+                    "output_token_ratio": (
+                        f"{output_tokens}/{baseline_tokens} = "
+                        f"{output_token_ratio:.4f}x"
+                    ),
+                    "acceptance_rate": (
+                        f"{float(spec_metrics['acceptance_rate']) * 100.0:.2f}%"
+                        if spec_metrics
+                        else "n/a"
+                    ),
+                    "mean_acceptance_length": (
+                        f"{float(spec_metrics['mean_acceptance_length']):.2f}"
+                        if spec_metrics
+                        else "n/a"
+                    ),
+                    "schedule": _nemotron_smoke_schedule(config),
+                    "validity": validity,
+                    "source": str(path.relative_to(ROOT)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def render_nemotron_mtp_legacy_smoke_section() -> str:
+    rows = load_nemotron_mtp_legacy_smoke_rows()
+    return "".join(
+        [
+            '<section class="section"><h2>Nemotron Native MTP Legacy Smoke</h2>',
+            '<p class="note">Every row is legacy capability smoke from vLLM 0.24.0 '
+            "with CUDA Graph PIECEWISE, OSL/max_new_tokens 128, temperature 1.0, "
+            "top_p 0.95, one measured realization, and runtime_image_sha256 missing. "
+            "Dynamic rows use uncalibrated dynamic schedules.</p>",
+            '<p class="note">These rows are excluded from calibrated '
+            "DynamicSD/DynamicMTP claims and existing validated matrices. "
+            "Baseline-relative ratios are directional only because there is one "
+            "measured realization; Super rows can also differ through natural EOS. "
+            "Rollout-time speedup is shown only when aggregate output-token work is "
+            "within 1% of the model baseline.</p>",
+            '<div class="table-wrap">',
+            table(
+                rows,
+                [
+                    ("model", "Model", "text"),
+                    ("method", "Method", "text"),
+                    ("job_id", "Job ID", "result_link"),
+                    ("output_tok_s_gpu", "Output tok/s/GPU", "num"),
+                    (
+                        "throughput_speedup",
+                        "Baseline-relative throughput speedup",
+                        "text",
+                    ),
+                    ("rollout_speedup", "Rollout-time speedup", "text"),
+                    ("output_token_ratio", "Output-token ratio", "text"),
+                    ("acceptance_rate", "Acceptance rate", "text"),
+                    (
+                        "mean_acceptance_length",
+                        "Mean acceptance length",
+                        "text",
+                    ),
+                    ("schedule", "Static K / dynamic schedule", "text"),
+                    ("validity", "Validity", "text"),
+                ],
+            ),
+            "</div></section>",
+        ]
+    )
 
 
 def count_speedbench_result_artifacts() -> dict[str, int]:
@@ -2228,6 +2405,7 @@ def build_vllm_html(
         f"<div class=\"card\"><b>{len(added_summary)}</b><span>added summary groups</span></div>",
         "</div>",
         "<section class=\"section\"><h2>Scope</h2><p>This page is the matched-comparison view for <b>ISL 4096 / OSL 32768</b>. It keeps speedup cells blank when the exact baseline is missing for the same domain, model, temperature, batch size, ISL, and OSL.</p></section>",
+        render_nemotron_mtp_legacy_smoke_section(),
         render_sync_speedbench_status_section(),
         related_vllm_reports_section(),
         "<section class=\"section\"><h2>Key Findings</h2><p>" + esc(key_finding) + "</p><p class=\"note\">Speedups are computed only when a matched baseline exists with the same domain, model, temperature, batch size, ISL and OSL.</p></section>",

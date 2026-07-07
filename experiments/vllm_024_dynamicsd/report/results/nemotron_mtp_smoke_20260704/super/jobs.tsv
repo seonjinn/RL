@@ -1,0 +1,4 @@
+job_id	variant	run_dir
+2326451	baseline	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/nemotron-sync-rl/20260704_nemotron_bf16_sync_rl_mtp_smoke_v1/super/baseline
+2326452	mtp_static	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/nemotron-sync-rl/20260704_nemotron_bf16_sync_rl_mtp_smoke_v1/super/mtp_static
+2326453	mtp_dynamic	/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/nemotron-sync-rl/20260704_nemotron_bf16_sync_rl_mtp_smoke_v1/super/mtp_dynamic

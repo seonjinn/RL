@@ -10,10 +10,11 @@ import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from scripts import build_latest_specdec_html_pages as latest
-from scripts import build_pages_index as index
+from scripts import build_latest_specdec_html_pages as latest  # noqa: E402
+from scripts import build_pages_index as index  # noqa: E402
 
 
 class RecordingHTMLParser(HTMLParser):
@@ -243,6 +244,93 @@ def test_task6_latest_vllm_html_contains_perfcfg_dynamic_replay_results(
     assert "Qwen3-32B" in html_text
     assert "Qwen3-235B-A22B" in html_text
     assert (temp_public_data / "vllm024_perfcfg_dynamic_replay_20260706.csv").exists()
+
+
+def test_latest_vllm_html_contains_separate_nemotron_native_mtp_legacy_smoke(
+    tmp_path: Path,
+) -> None:
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=tmp_path / "public/data",
+    )
+
+    html_text = parse_html(temp_html)
+    heading = "Nemotron Native MTP Legacy Smoke"
+    assert heading in html_text
+    smoke_section = html_text.split(f"<h2>{heading}</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+
+    for label in (
+        "Every row is legacy capability smoke",
+        "vLLM 0.24.0",
+        "CUDA Graph PIECEWISE",
+        "OSL/max_new_tokens 128",
+        "temperature 1.0",
+        "top_p 0.95",
+        "one measured realization",
+        "runtime_image_sha256 missing",
+        "uncalibrated dynamic schedules",
+        "excluded from calibrated DynamicSD/DynamicMTP claims",
+        "natural EOS",
+    ):
+        assert label in smoke_section
+
+    for header in (
+        "Model",
+        "Method",
+        "Job ID",
+        "Output tok/s/GPU",
+        "Baseline-relative throughput speedup",
+        "Rollout-time speedup",
+        "Output-token ratio",
+        "Acceptance rate",
+        "Mean acceptance length",
+        "Static K / dynamic schedule",
+        "Validity",
+    ):
+        assert f"<th>{header}</th>" in smoke_section
+
+    table_body = smoke_section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    rows = re.findall(r"<tr>.*?</tr>", table_body, flags=re.DOTALL)
+    assert len(rows) == 6
+    assert "Nemotron-3-Super-120B-A12B-BF16" in table_body
+    assert "Nemotron-3-Ultra-550B-A55B-BF16" in table_body
+
+    job_ids = ("2326451", "2326452", "2326453", "2326448", "2326449", "2326450")
+    for job_id in job_ids:
+        assert html_text.count(job_id) == 1
+        row = next(row for row in rows if job_id in row)
+        assert "legacy capability smoke" in row
+        assert "one measured realization" in row
+        assert "runtime_image_sha256 missing" in row
+
+    result_root = (
+        "../experiments/vllm_024_dynamicsd/report/results/"
+        "nemotron_mtp_smoke_20260704/"
+    )
+    assert smoke_section.count(f'href="{result_root}') == 6
+
+    super_static = next(row for row in rows if "2326452" in row)
+    assert "4011/3968 = 1.0108x" in super_static
+    assert "n/a (invalid: output-token ratio outside 1%)" in super_static
+    assert "1.58x" not in super_static
+
+    super_dynamic = next(row for row in rows if "2326453" in row)
+    assert "3959/3968 = 0.9977x" in super_dynamic
+    assert "0.99x (directional only)" in super_dynamic
+    assert "uncalibrated" in super_dynamic
+    assert "natural EOS" in super_dynamic
+
+    ultra_static = next(row for row in rows if "2326449" in row)
+    ultra_dynamic = next(row for row in rows if "2326450" in row)
+    assert "4096/4096 = 1.0000x" in ultra_static
+    assert "1.66x (directional only)" in ultra_static
+    assert "4096/4096 = 1.0000x" in ultra_dynamic
+    assert "1.53x (directional only)" in ultra_dynamic
 
 
 def test_final_review_design_and_plan_have_exactly_one_trailing_newline() -> None:
