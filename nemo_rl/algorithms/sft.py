@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from functools import partial
 from numbers import Real
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import numpy as np
 import psutil

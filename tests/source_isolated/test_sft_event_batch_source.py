@@ -237,7 +237,7 @@ def test_event_contract_validation_and_submission_order() -> None:
             val_mbs=1,
         )
 
-    validate_node = _function_node(sft_path, "validate")
+    validate_node = _function_node(sft_path, "_validate_with_loss_availability")
     calls = [node for node in ast.walk(validate_node) if isinstance(node, ast.Call)]
     config_call = next(
         node
