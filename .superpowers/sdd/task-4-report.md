@@ -47,6 +47,20 @@ path removes the remaining setup and statistic work.
   the fast path. Tests compare parameters, extra state, grad buffers, optimizer
   state, scheduler state, hook state, and the next training call with a direct
   training control.
+- The review follow-up adds a source-isolated behavioral harness that extracts
+  the real worker `train`, hook-transition, buffer-copy, MXFP8 predicate,
+  extra-state, and `param_sync_func` helper method bodies into one executable
+  class. Stateful minimal DDP and optimizer objects replace only the external
+  MCore dependencies; none of the worker helpers under review are replaced by
+  lambdas.
+- Both normal and MXFP8 shared-buffer tests compare `train -> train` with
+  `train -> fast eval -> train`. They compare model weights, parameter and
+  gradient buffers, optimizer and scheduler state, hook state, first-step
+  disable state, saved `param_sync_func`, and restored `param_sync_func`.
+  MXFP8 additionally proves copy-plus-zero precedes forced sync, the next
+  training forward runs with hooks and `param_sync_func` disabled, and both are
+  restored after the optimizer step. The tests did not expose a production
+  divergence, so the follow-up requires no production-code change.
 
 ## Optional Timing
 
@@ -85,6 +99,11 @@ Passing local checks after implementation:
 - Source-isolated execution of the actual `Policy.train` method: Megatron-only
   timing routing, DTensor isolation, driver max aggregation, and unchanged
   public signature passed.
+- `python3 tests/unit/models/policy/test_megatron_worker_eval_state.py` executes
+  the actual extracted worker helper bodies and passes both normal-buffer and
+  MXFP8 shared-buffer state-equivalence tests.
+- Standalone Pyright reports zero errors and zero warnings for the new
+  dependency-free state-equivalence test module.
 - `python3 -m py_compile` passed for all changed Python and test files.
 - `ruff format --check` and `ruff check` passed for all changed Python and test
   files.
