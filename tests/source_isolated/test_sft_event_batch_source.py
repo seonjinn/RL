@@ -221,6 +221,8 @@ def test_event_contract_validation_and_submission_order() -> None:
     )
     config = SimpleNamespace(
         validation_execution_mode="event_batch",
+        validation_event_cache_mode="off",
+        validation_event_cache_dataset_sha256=None,
         val_batches=4,
         val_global_batch_size=64,
         val_micro_batch_size=1,

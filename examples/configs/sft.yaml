@@ -11,6 +11,9 @@ sft:
   val_micro_batch_size: 1
   val_at_start: true
   validation_execution_mode: per_batch
+  # Set to cpu only for immutable event_batch validation data and pin its SHA-256.
+  validation_event_cache_mode: "off"
+  validation_event_cache_dataset_sha256: null
   validation_event_max_payload_bytes: null
   validation_event_verified_ray_object_store_available_bytes: null
   validation_event_memory_safety_multiplier: 2.0

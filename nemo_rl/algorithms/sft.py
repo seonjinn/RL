@@ -13,8 +13,11 @@
 # limitations under the License.
 import math
 import os
+import re
+import sys
 import time
 import warnings
+from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from functools import partial
@@ -72,6 +75,27 @@ class _SFTValidationResult:
     val_metrics: dict[str, Any]
     timing_metrics: dict[str, Any]
     validation_loss_available: bool
+
+
+@dataclass(frozen=True)
+class _CachedValidationEvent:
+    dataloader: object
+    dataset_sha256: str
+    only_unmask_final: bool
+    make_sequence_length_divisible_by: int
+    val_batches: int
+    val_batch_size: int
+    val_mbs: int
+    pad_token_id: int
+    combined_data: BatchedDataDict[Any]
+    num_valid_tokens: tuple[int, ...]
+    payload_bytes: int
+    deep_payload_bytes: int
+
+
+@dataclass
+class _ValidationEventCache:
+    entry: _CachedValidationEvent | None = None
 
 
 def _initial_sft_save_state() -> SFTSaveState:
@@ -193,6 +217,10 @@ class SFTConfig(BaseModel, extra="allow"):
     val_at_start: bool = True
     # Run each validation batch separately or submit the full four-batch event once.
     validation_execution_mode: Literal["per_batch", "event_batch"] = "per_batch"
+    # Reuse the immutable CPU event across validation calls within one SFT process.
+    validation_event_cache_mode: Literal["off", "cpu"] = "off"
+    # Required immutable validation-dataset fingerprint when CPU caching is enabled.
+    validation_event_cache_dataset_sha256: str | None = None
     # Required event payload ceiling. None keeps event_batch fail-closed.
     validation_event_max_payload_bytes: int | None = None
     # Launcher-verified free Ray object-store capacity; Ray has no stable free-byte API.
@@ -398,7 +426,22 @@ def _validate_event_execution_config(
     val_mbs: int,
 ) -> tuple[int, int, float] | None:
     if sft_config.validation_execution_mode != "event_batch":
+        if sft_config.validation_event_cache_mode != "off":
+            raise ValueError(
+                "Validation CPU cache requires event_batch execution; got "
+                f"{sft_config.validation_execution_mode}"
+            )
         return None
+    if sft_config.validation_event_cache_mode == "cpu":
+        dataset_sha256 = sft_config.validation_event_cache_dataset_sha256
+        if (
+            dataset_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", dataset_sha256) is None
+        ):
+            raise ValueError(
+                "Validation CPU cache requires a 64-character lowercase SHA-256 "
+                "in sft.validation_event_cache_dataset_sha256"
+            )
     if sft_config.val_batches != 4 or val_batches != 4:
         raise ValueError(
             "event_batch validation requires sft.val_batches=4 and val_batches=4; "
@@ -433,12 +476,42 @@ def _validate_event_execution_config(
             "sft.validation_event_verified_ray_object_store_available_bytes"
         )
     safety_multiplier = sft_config.validation_event_memory_safety_multiplier
-    if not math.isfinite(safety_multiplier) or safety_multiplier < 2.0:
+    minimum_safety_multiplier = (
+        3.0 if sft_config.validation_event_cache_mode == "cpu" else 2.0
+    )
+    if (
+        not math.isfinite(safety_multiplier)
+        or safety_multiplier < minimum_safety_multiplier
+    ):
         raise ValueError(
             "event_batch validation memory safety multiplier must be finite and "
-            f"at least 2.0; got {safety_multiplier}"
+            f"at least {minimum_safety_multiplier}; got {safety_multiplier}"
         )
     return max_payload_bytes, ray_available_bytes, safety_multiplier
+
+
+def _validation_event_cache_matches(
+    entry: _CachedValidationEvent,
+    *,
+    dataloader: object,
+    dataset_sha256: str,
+    only_unmask_final: bool,
+    make_sequence_length_divisible_by: int,
+    val_batches: int,
+    val_batch_size: int,
+    val_mbs: int,
+    pad_token_id: int,
+) -> bool:
+    return (
+        entry.dataloader is dataloader
+        and entry.dataset_sha256 == dataset_sha256
+        and entry.only_unmask_final == only_unmask_final
+        and entry.make_sequence_length_divisible_by == make_sequence_length_divisible_by
+        and entry.val_batches == val_batches
+        and entry.val_batch_size == val_batch_size
+        and entry.val_mbs == val_mbs
+        and entry.pad_token_id == pad_token_id
+    )
 
 
 def _recursive_tensor_payload_bytes(value: Any) -> int:
@@ -451,6 +524,51 @@ def _recursive_tensor_payload_bytes(value: Any) -> int:
     if isinstance(value, (list, tuple)):
         return sum(_recursive_tensor_payload_bytes(item) for item in value)
     return 0
+
+
+def _recursive_deep_payload_bytes(value: Any, seen: set[int] | None = None) -> int:
+    if seen is None:
+        seen = set()
+    value_id = id(value)
+    if value_id in seen:
+        return 0
+    seen.add(value_id)
+
+    if torch.is_tensor(value):
+        return sys.getsizeof(value) + int(value.numel() * value.element_size())
+    if isinstance(value, PackedTensor):
+        return sys.getsizeof(value) + _recursive_deep_payload_bytes(value.tensors, seen)
+    if isinstance(value, Mapping):
+        return sys.getsizeof(value) + sum(
+            _recursive_deep_payload_bytes(key, seen)
+            + _recursive_deep_payload_bytes(item, seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set)):
+        return sys.getsizeof(value) + sum(
+            _recursive_deep_payload_bytes(item, seen) for item in value
+        )
+    return sys.getsizeof(value)
+
+
+def _clone_validation_event_data(
+    data: BatchedDataDict[Any],
+) -> BatchedDataDict[Any]:
+    cloned = BatchedDataDict()
+    for key, value in data.items():
+        if torch.is_tensor(value):
+            cloned[key] = value.clone()
+        elif isinstance(value, PackedTensor):
+            cloned[key] = PackedTensor(
+                [
+                    tensor.clone() if tensor is not None else None
+                    for tensor in value.tensors
+                ],
+                value.dim_to_pack,
+            )
+        else:
+            cloned[key] = deepcopy(value)
+    return cloned
 
 
 def _validate_event_memory_capacity(
@@ -702,6 +820,7 @@ def _validate_with_loss_availability(
     val_batch_size: int,
     val_mbs: int,
     comparison_instrumentation_enabled: bool = False,
+    validation_event_cache: _ValidationEventCache | None = None,
 ) -> _SFTValidationResult:
     """Run validation and retain whether the reported loss was measured."""
     event_memory_config = _validate_event_execution_config(
@@ -719,6 +838,8 @@ def _validate_with_loss_availability(
 
     timer = Timer()
     event_payload_bytes: int | None = None
+    event_deep_payload_bytes: int | None = None
+    event_cache_hit = False
 
     with timer.time("total_validation_time"):
         print(f"▶ Starting validation at step {step}...")
@@ -730,138 +851,216 @@ def _validate_with_loss_availability(
         sum_num_valid_tokens = 0
         validation_execution_mode = master_config.sft.validation_execution_mode
         event_batches: list[BatchedDataDict[Any]] = []
-        event_num_valid_tokens: list[torch.Tensor] = []
+        event_num_valid_tokens: list[int] = []
+        combined_val_data: BatchedDataDict[Any] | None = None
+        new_cache_entry: _CachedValidationEvent | None = None
+        timing_kwargs = {"timer": timer} if comparison_instrumentation_enabled else {}
+
+        cache_entry: _CachedValidationEvent | None = None
+        if master_config.sft.validation_event_cache_mode == "cpu":
+            if validation_event_cache is None:
+                raise ValueError(
+                    "sft.validation_event_cache_mode=cpu requires a process-lifetime "
+                    "validation event cache"
+                )
+            dataset_sha256 = master_config.sft.validation_event_cache_dataset_sha256
+            if dataset_sha256 is None:
+                raise RuntimeError(
+                    "Validation cache dataset fingerprint was not validated"
+                )
+            make_sequence_length_divisible_by = master_config.policy[
+                "make_sequence_length_divisible_by"
+            ]
+            existing_entry = validation_event_cache.entry
+            if existing_entry is not None and _validation_event_cache_matches(
+                existing_entry,
+                dataloader=val_dataloader,
+                dataset_sha256=dataset_sha256,
+                only_unmask_final=master_config.sft.only_unmask_final,
+                make_sequence_length_divisible_by=make_sequence_length_divisible_by,
+                val_batches=val_batches,
+                val_batch_size=val_batch_size,
+                val_mbs=val_mbs,
+                pad_token_id=tokenizer.pad_token_id,
+            ):
+                cache_entry = existing_entry
+                combined_val_data = existing_entry.combined_data
+                event_num_valid_tokens = list(existing_entry.num_valid_tokens)
+                event_payload_bytes = existing_entry.payload_bytes
+                event_deep_payload_bytes = existing_entry.deep_payload_bytes
+                event_cache_hit = True
 
         policy.prepare_for_training()
-        validation_batches = (
-            _iter_timed_batches(
-                val_dataloader,
-                timer,
-                timing_label="data_fetch_s",
+        if cache_entry is None:
+            validation_batches = (
+                _iter_timed_batches(
+                    val_dataloader,
+                    timer,
+                    timing_label="data_fetch_s",
+                )
+                if comparison_instrumentation_enabled
+                else val_dataloader
             )
-            if comparison_instrumentation_enabled
-            else val_dataloader
-        )
-        for batch_idx, val_batch in enumerate(validation_batches):
-            data_processing_start = (
-                time.perf_counter() if comparison_instrumentation_enabled else None
-            )
-            if "packed_cu_seqlens" in val_batch:
-                val_data = val_batch
-            else:
-                ## add loss mask based on role to every message
-                add_loss_mask_to_message_log(
-                    val_batch["message_log"],
-                    roles_to_train_on=["assistant"],
-                    only_unmask_final=master_config.sft.only_unmask_final,
+            for batch_idx, val_batch in enumerate(validation_batches):
+                data_processing_start = (
+                    time.perf_counter() if comparison_instrumentation_enabled else None
                 )
+                if "packed_cu_seqlens" in val_batch:
+                    val_data = val_batch
+                else:
+                    ## add loss mask based on role to every message
+                    add_loss_mask_to_message_log(
+                        val_batch["message_log"],
+                        roles_to_train_on=["assistant"],
+                        only_unmask_final=master_config.sft.only_unmask_final,
+                    )
 
-                cat_and_padded, input_lengths = batched_message_log_to_flat_message(
-                    val_batch["message_log"],
-                    pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                    make_sequence_length_divisible_by=master_config.policy[
-                        "make_sequence_length_divisible_by"
-                    ],
-                )
+                    cat_and_padded, input_lengths = batched_message_log_to_flat_message(
+                        val_batch["message_log"],
+                        pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                        make_sequence_length_divisible_by=master_config.policy[
+                            "make_sequence_length_divisible_by"
+                        ],
+                    )
 
-                val_data: BatchedDataDict = BatchedDataDict(
-                    {
-                        "input_ids": cat_and_padded["token_ids"],
-                        "input_lengths": input_lengths,
-                        "token_mask": cat_and_padded["token_loss_mask"],
-                        "sample_mask": val_batch["loss_multiplier"],
-                    }
-                )
+                    val_data: BatchedDataDict = BatchedDataDict(
+                        {
+                            "input_ids": cat_and_padded["token_ids"],
+                            "input_lengths": input_lengths,
+                            "token_mask": cat_and_padded["token_loss_mask"],
+                            "sample_mask": val_batch["loss_multiplier"],
+                        }
+                    )
 
-                # update multimodal data
-                val_data.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
-            # When running validation with drop_last=False, we might end up with a partial batch.
-            # Check if we need to pad the final batch to make it divisible by micro_batch_size * dp_size.
-            if (
-                validation_execution_mode == "event_batch"
-                and "packed_cu_seqlens" in val_data
-                and val_data.size != val_batch_size
-            ):
-                raise ValueError(
-                    "Packed event_batch validation requires batch size 64; "
-                    f"got {val_data.size}. Packed partial batches cannot use the "
-                    "generic validation padding path."
-                )
-            if val_data.size < val_batch_size:
-                dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
-                val_data = maybe_pad_last_batch(val_data, dp_size, val_mbs)
-            if data_processing_start is not None:
-                timer.record_elapsed(
-                    "data_processing_s",
-                    time.perf_counter() - data_processing_start,
-                )
+                    # update multimodal data
+                    val_data.update(
+                        cat_and_padded.get_multimodal_dict(as_tensors=False)
+                    )
+                # When running validation with drop_last=False, we might end up with a partial batch.
+                # Check if we need to pad the final batch to make it divisible by micro_batch_size * dp_size.
+                if (
+                    validation_execution_mode == "event_batch"
+                    and "packed_cu_seqlens" in val_data
+                    and val_data.size != val_batch_size
+                ):
+                    raise ValueError(
+                        "Packed event_batch validation requires batch size 64; "
+                        f"got {val_data.size}. Packed partial batches cannot use the "
+                        "generic validation padding path."
+                    )
+                if val_data.size < val_batch_size:
+                    dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
+                    val_data = maybe_pad_last_batch(val_data, dp_size, val_mbs)
+                if data_processing_start is not None:
+                    timer.record_elapsed(
+                        "data_processing_s",
+                        time.perf_counter() - data_processing_start,
+                    )
 
-            timing_kwargs = (
-                {"timer": timer} if comparison_instrumentation_enabled else {}
-            )
-            if validation_execution_mode == "event_batch":
-                event_batches.append(val_data)
-                event_num_valid_tokens.append(
-                    (
-                        val_data["sample_mask"].unsqueeze(-1) * val_data["token_mask"]
-                    ).sum()
-                )
-            else:
-                ## just run model fwd
-                val_results = policy.train(
-                    val_data,
-                    loss_fn,
-                    eval_mode=True,
-                    gbs=val_data.size,
-                    mbs=val_mbs,
-                    **timing_kwargs,
-                )
-                if comparison_instrumentation_enabled:
-                    for name, elapsed in val_results.get(
-                        "evaluation_timings", {}
-                    ).items():
-                        timer.record_elapsed(name, float(elapsed))
-
-                if len(val_results["all_mb_metrics"]) == 0:
-                    warnings.warn(
-                        "No validation metrics were collected for this batch."
-                        " This is likely because there were no valid samples."
+                if validation_execution_mode == "event_batch":
+                    event_batches.append(val_data)
+                    event_num_valid_tokens.append(
+                        int(
+                            (
+                                val_data["sample_mask"].unsqueeze(-1)
+                                * val_data["token_mask"]
+                            )
+                            .sum()
+                            .item()
+                        )
                     )
                 else:
-                    num_valid_tokens = (
-                        val_data["sample_mask"].unsqueeze(-1) * val_data["token_mask"]
-                    ).sum()
-                    val_metrics["val_loss"] += (
-                        float(val_results["loss"]) * num_valid_tokens
+                    ## just run model fwd
+                    val_results = policy.train(
+                        val_data,
+                        loss_fn,
+                        eval_mode=True,
+                        gbs=val_data.size,
+                        mbs=val_mbs,
+                        **timing_kwargs,
                     )
-                    sum_num_valid_tokens += num_valid_tokens
+                    if comparison_instrumentation_enabled:
+                        for name, elapsed in val_results.get(
+                            "evaluation_timings", {}
+                        ).items():
+                            timer.record_elapsed(name, float(elapsed))
 
-            if val_batches > 0 and batch_idx >= val_batches - 1:
-                break
+                    if len(val_results["all_mb_metrics"]) == 0:
+                        warnings.warn(
+                            "No validation metrics were collected for this batch."
+                            " This is likely because there were no valid samples."
+                        )
+                    else:
+                        num_valid_tokens = (
+                            val_data["sample_mask"].unsqueeze(-1)
+                            * val_data["token_mask"]
+                        ).sum()
+                        val_metrics["val_loss"] += (
+                            float(val_results["loss"]) * num_valid_tokens
+                        )
+                        sum_num_valid_tokens += num_valid_tokens
+
+                if val_batches > 0 and batch_idx >= val_batches - 1:
+                    break
 
         if validation_execution_mode == "event_batch":
-            combined_val_data = _combine_validation_event_batches(
-                event_batches,
-                global_batch_size=val_batch_size,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-            del val_data  # pyright: ignore[reportPossiblyUnboundVariable]
-            del val_batch  # pyright: ignore[reportPossiblyUnboundVariable]
-            event_payload_bytes = _recursive_tensor_payload_bytes(combined_val_data)
-            if event_memory_config is None:
+            if combined_val_data is None:
+                combined_val_data = _combine_validation_event_batches(
+                    event_batches,
+                    global_batch_size=val_batch_size,
+                    pad_token_id=tokenizer.pad_token_id,
+                )
+                del val_data  # pyright: ignore[reportPossiblyUnboundVariable]
+                del val_batch  # pyright: ignore[reportPossiblyUnboundVariable]
+                event_payload_bytes = _recursive_tensor_payload_bytes(combined_val_data)
+                event_deep_payload_bytes = _recursive_deep_payload_bytes(
+                    combined_val_data
+                )
+                if master_config.sft.validation_event_cache_mode == "cpu":
+                    if validation_event_cache is None:
+                        raise RuntimeError("Validation event cache was not initialized")
+                    dataset_sha256 = (
+                        master_config.sft.validation_event_cache_dataset_sha256
+                    )
+                    if dataset_sha256 is None:
+                        raise RuntimeError(
+                            "Validation cache dataset fingerprint was not validated"
+                        )
+                    new_cache_entry = _CachedValidationEvent(
+                        dataloader=val_dataloader,
+                        dataset_sha256=dataset_sha256,
+                        only_unmask_final=master_config.sft.only_unmask_final,
+                        make_sequence_length_divisible_by=master_config.policy[
+                            "make_sequence_length_divisible_by"
+                        ],
+                        val_batches=val_batches,
+                        val_batch_size=val_batch_size,
+                        val_mbs=val_mbs,
+                        pad_token_id=tokenizer.pad_token_id,
+                        combined_data=combined_val_data,
+                        num_valid_tokens=tuple(event_num_valid_tokens),
+                        payload_bytes=event_payload_bytes,
+                        deep_payload_bytes=event_deep_payload_bytes,
+                    )
+            if event_memory_config is None or event_deep_payload_bytes is None:
                 raise RuntimeError("event_batch memory configuration was not validated")
             max_payload_bytes, ray_available_bytes, safety_multiplier = (
                 event_memory_config
             )
             _validate_event_memory_capacity(
-                event_payload_bytes,
+                event_deep_payload_bytes,
                 max_payload_bytes=max_payload_bytes,
                 host_available_bytes=int(psutil.virtual_memory().available),
                 verified_ray_object_store_available_bytes=ray_available_bytes,
                 safety_multiplier=safety_multiplier,
             )
+            submitted_val_data = (
+                _clone_validation_event_data(combined_val_data)
+                if master_config.sft.validation_event_cache_mode == "cpu"
+                else combined_val_data
+            )
             val_results = policy.train(
-                combined_val_data,
+                submitted_val_data,
                 loss_fn,
                 eval_mode=True,
                 gbs=val_batch_size,
@@ -903,11 +1102,19 @@ def _validate_with_loss_availability(
 
         # Calculate validation metrics
         policy.prepare_for_training()
+        if new_cache_entry is not None:
+            if validation_event_cache is None:
+                raise RuntimeError("Validation event cache was not initialized")
+            validation_event_cache.entry = new_cache_entry
 
     # Get timing metrics
     timing_metrics = timer.get_timing_metrics(reduction_op="sum")
     if event_payload_bytes is not None:
         timing_metrics["validation_event_payload_bytes"] = event_payload_bytes
+    if event_deep_payload_bytes is not None:
+        timing_metrics["validation_event_deep_payload_bytes"] = event_deep_payload_bytes
+    if master_config.sft.validation_event_cache_mode == "cpu":
+        timing_metrics["validation_event_cache_hit"] = int(event_cache_hit)
     validation_time = timing_metrics.get("total_validation_time", 0)
 
     if validation_loss_available:
@@ -941,6 +1148,7 @@ def validate(
     val_batch_size: int,
     val_mbs: int,
     comparison_instrumentation_enabled: bool = False,
+    validation_event_cache: _ValidationEventCache | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run validation and return the public metrics/timings two-tuple."""
     result = _validate_with_loss_availability(
@@ -954,6 +1162,7 @@ def validate(
         val_batch_size,
         val_mbs,
         comparison_instrumentation_enabled,
+        validation_event_cache,
     )
     return result.val_metrics, result.timing_metrics
 
@@ -998,6 +1207,11 @@ def sft_train(
         and megatron_cfg is not None
         and megatron_cfg["enabled"]
     )
+    validation_event_cache = (
+        _ValidationEventCache()
+        if sft_config.validation_event_cache_mode == "cpu"
+        else None
+    )
 
     if logger.comparison_metrics_enabled:
         logger.define_metric("comparison/step")
@@ -1020,6 +1234,7 @@ def sft_train(
             val_batch_size=sft_config.val_global_batch_size,
             val_mbs=sft_config.val_micro_batch_size,
             comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
+            validation_event_cache=validation_event_cache,
         )
         val_metrics = validation_result.val_metrics
         validation_timings = validation_result.timing_metrics
@@ -1120,6 +1335,7 @@ def sft_train(
                         val_batch_size=sft_config.val_global_batch_size,
                         val_mbs=sft_config.val_micro_batch_size,
                         comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
+                        validation_event_cache=validation_event_cache,
                     )
                     val_metrics = validation_result.val_metrics
                     validation_timings = validation_result.timing_metrics

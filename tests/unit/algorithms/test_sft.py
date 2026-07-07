@@ -28,6 +28,7 @@ from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.sft import (
     MasterConfig,
     SFTConfig,
+    _ValidationEventCache,
     _add_e2e_step_timing,
     _build_sft_collate_fn,
     _get_processed_token_count,
@@ -35,6 +36,7 @@ from nemo_rl.algorithms.sft import (
     _iter_timed_batches,
     _measure_loop_interval,
     _optional_float,
+    _recursive_deep_payload_bytes,
     _recursive_tensor_payload_bytes,
     sft_train,
     validate,
@@ -233,6 +235,13 @@ def _validation_config(execution_mode: str, **overrides: object) -> MasterConfig
         "validation_event_verified_ray_object_store_available_bytes": 10_000_000,
         "validation_event_memory_safety_multiplier": 2.0,
     }
+    if overrides.get("validation_event_cache_mode") == "cpu":
+        sft_config.update(
+            {
+                "validation_event_cache_dataset_sha256": "a" * 64,
+                "validation_event_memory_safety_multiplier": 3.0,
+            }
+        )
     sft_config.update(overrides)
     return MasterConfig.model_construct(
         sft=SFTConfig(**sft_config),
@@ -311,9 +320,40 @@ def _run_validation(
 
 def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
     assert SFTConfig().validation_execution_mode == "per_batch"
+    assert SFTConfig().validation_event_cache_mode == "off"
+    assert SFTConfig().validation_event_cache_dataset_sha256 is None
 
     with pytest.raises(ValidationError, match="validation_execution_mode"):
         SFTConfig(validation_execution_mode="unsupported")
+    with pytest.raises(ValidationError, match="validation_event_cache_mode"):
+        SFTConfig(validation_event_cache_mode="unsupported")
+
+
+def test_validation_cpu_cache_rejects_per_batch_execution_before_iteration() -> None:
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    dataloader = MagicMock()
+    dataloader.__iter__.side_effect = AssertionError("dataloader was retained")
+    config = _validation_config(
+        "per_batch",
+        validation_event_cache_mode="cpu",
+    )
+
+    with pytest.raises(ValueError, match="CPU cache requires event_batch"):
+        validate(
+            policy=policy,
+            val_dataloader=dataloader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=config,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            validation_event_cache=_ValidationEventCache(),
+        )
+
+    policy.prepare_for_training.assert_not_called()
+    dataloader.__iter__.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -332,6 +372,30 @@ def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
             {},
             {"validation_event_memory_safety_multiplier": 1.5},
             "safety multiplier.*at least 2.0",
+        ),
+        (
+            {},
+            {
+                "validation_event_cache_mode": "cpu",
+                "validation_event_cache_dataset_sha256": None,
+            },
+            "64-character lowercase SHA-256",
+        ),
+        (
+            {},
+            {
+                "validation_event_cache_mode": "cpu",
+                "validation_event_cache_dataset_sha256": "not-a-sha",
+            },
+            "64-character lowercase SHA-256",
+        ),
+        (
+            {},
+            {
+                "validation_event_cache_mode": "cpu",
+                "validation_event_memory_safety_multiplier": 2.0,
+            },
+            "safety multiplier.*at least 3.0",
         ),
     ],
 )
@@ -403,6 +467,309 @@ def test_validation_event_batch_records_recursive_payload_bytes() -> None:
 
     assert _recursive_tensor_payload_bytes(combined_data) == 23_552
     assert timing_metrics["validation_event_payload_bytes"] == 23_552
+    assert _recursive_deep_payload_bytes(combined_data) > 23_552
+    assert timing_metrics[
+        "validation_event_deep_payload_bytes"
+    ] == _recursive_deep_payload_bytes(combined_data)
+
+
+def test_validation_cpu_cache_reuses_event_data_but_recomputes_loss() -> None:
+    class CountingLoader:
+        def __init__(self) -> None:
+            self.iteration_count = 0
+
+        def __iter__(self) -> Iterator[BatchedDataDict]:
+            self.iteration_count += 1
+            return iter([_packed_validation_batch(batch_idx) for batch_idx in range(4)])
+
+    loader = CountingLoader()
+    cache = _ValidationEventCache()
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    results = iter(
+        [
+            {
+                "loss": torch.tensor([0.25, 0.5, 0.75, 1.0]),
+                "grad_norm": torch.tensor(0.0),
+                "all_mb_metrics": {"global_valid_toks": [1]},
+            },
+            {
+                "loss": torch.tensor([0.5, 1.0, 1.5, 2.0]),
+                "grad_norm": torch.tensor(0.0),
+                "all_mb_metrics": {"global_valid_toks": [1]},
+            },
+        ]
+    )
+    submitted_first_values: list[int] = []
+
+    def mutate_submitted_data(
+        data: BatchedDataDict, *_args: object, **_kwargs: object
+    ) -> dict[str, object]:
+        submitted_first_values.append(int(data["input_ids"][0, 0]))
+        data["input_ids"][0, 0] = -1
+        return next(results)
+
+    policy.train.side_effect = mutate_submitted_data
+    config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+
+    first_metrics, first_timings = validate(
+        policy=policy,
+        val_dataloader=loader,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=config,
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        validation_event_cache=cache,
+    )
+    second_metrics, second_timings = validate(
+        policy=policy,
+        val_dataloader=loader,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=40,
+        master_config=config,
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        validation_event_cache=cache,
+    )
+
+    assert loader.iteration_count == 1
+    assert policy.train.call_count == 2
+    first_train_data = policy.train.call_args_list[0].args[0]
+    second_train_data = policy.train.call_args_list[1].args[0]
+    assert first_train_data is not second_train_data
+    assert submitted_first_values == [0, 0]
+    assert cache.entry is not None
+    assert int(cache.entry.combined_data["input_ids"][0, 0]) == 0
+    assert float(first_metrics["val_loss"]) == pytest.approx(2.5)
+    assert float(second_metrics["val_loss"]) == pytest.approx(5.0)
+    assert first_timings["validation_event_cache_hit"] == 0
+    assert second_timings["validation_event_cache_hit"] == 1
+    assert (
+        second_timings["validation_event_payload_bytes"]
+        == first_timings["validation_event_payload_bytes"]
+    )
+
+
+def test_validation_cpu_cache_invalidates_for_a_different_dataloader() -> None:
+    class CountingLoader:
+        def __init__(self, row_offset: int) -> None:
+            self.iteration_count = 0
+            self.row_offset = row_offset
+
+        def __iter__(self) -> Iterator[BatchedDataDict]:
+            self.iteration_count += 1
+            batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+            for batch in batches:
+                batch["input_ids"] += self.row_offset
+            return iter(batches)
+
+    first_loader = CountingLoader(row_offset=0)
+    second_loader = CountingLoader(row_offset=10_000)
+    cache = _ValidationEventCache()
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+
+    for step, loader in [(20, first_loader), (40, second_loader)]:
+        validate(
+            policy=policy,
+            val_dataloader=loader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=step,
+            master_config=config,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            validation_event_cache=cache,
+        )
+
+    assert first_loader.iteration_count == 1
+    assert second_loader.iteration_count == 1
+    second_train_data = policy.train.call_args.args[0]
+    assert int(second_train_data["input_ids"][0, 0]) == 10_000
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value"),
+    [
+        ("validation_event_cache_dataset_sha256", "b" * 64),
+        ("only_unmask_final", True),
+        ("make_sequence_length_divisible_by", 2),
+    ],
+)
+def test_validation_cpu_cache_invalidates_when_preprocessing_contract_changes(
+    changed_field: str,
+    changed_value: object,
+) -> None:
+    class CountingLoader:
+        def __init__(self) -> None:
+            self.iteration_count = 0
+
+        def __iter__(self) -> Iterator[BatchedDataDict]:
+            self.iteration_count += 1
+            return iter([_packed_validation_batch(batch_idx) for batch_idx in range(4)])
+
+    loader = CountingLoader()
+    cache = _ValidationEventCache()
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    first_config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+    second_config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+    if changed_field == "make_sequence_length_divisible_by":
+        second_config.policy[changed_field] = changed_value
+    else:
+        setattr(second_config.sft, changed_field, changed_value)
+
+    timings = []
+    for step, config in [(20, first_config), (40, second_config)]:
+        _, validation_timings = validate(
+            policy=policy,
+            val_dataloader=loader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=step,
+            master_config=config,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            validation_event_cache=cache,
+        )
+        timings.append(validation_timings)
+
+    assert loader.iteration_count == 2
+    assert [timing["validation_event_cache_hit"] for timing in timings] == [0, 0]
+
+
+def test_validation_cpu_cache_publish_is_atomic_on_rebuild_failure() -> None:
+    first_loader = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    second_loader = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    second_loader[0]["input_ids"] += 10_000
+    cache = _ValidationEventCache()
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+
+    validate(
+        policy=policy,
+        val_dataloader=first_loader,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=config,
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        validation_event_cache=cache,
+    )
+    first_entry = cache.entry
+    too_small = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+        validation_event_max_payload_bytes=1,
+    )
+
+    with pytest.raises(MemoryError, match="payload budget"):
+        validate(
+            policy=policy,
+            val_dataloader=second_loader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=40,
+            master_config=too_small,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            validation_event_cache=cache,
+        )
+
+    assert cache.entry is first_entry
+
+
+def test_validation_cpu_cache_publish_waits_for_loss_validation_and_state_restore() -> (
+    None
+):
+    first_loader = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    second_loader = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    cache = _ValidationEventCache()
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+
+    validate(
+        policy=policy,
+        val_dataloader=first_loader,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=config,
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        validation_event_cache=cache,
+    )
+    first_entry = cache.entry
+    policy.train.return_value = {
+        "loss": torch.tensor([1.0]),
+        "grad_norm": torch.tensor(0.0),
+        "all_mb_metrics": {"global_valid_toks": [1]},
+    }
+
+    with pytest.raises(ValueError, match="returned 1 global-batch losses"):
+        validate(
+            policy=policy,
+            val_dataloader=second_loader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=40,
+            master_config=config,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            validation_event_cache=cache,
+        )
+
+    assert cache.entry is first_entry
+
+    policy.train.return_value = {
+        "loss": torch.tensor([0.25, 0.5, 0.75, 1.0]),
+        "grad_norm": torch.tensor(0.0),
+        "all_mb_metrics": {"global_valid_toks": [1]},
+    }
+    policy.prepare_for_training.side_effect = [None, RuntimeError("restore failed")]
+    with pytest.raises(RuntimeError, match="restore failed"):
+        validate(
+            policy=policy,
+            val_dataloader=second_loader,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=40,
+            master_config=config,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            validation_event_cache=cache,
+        )
+
+    assert cache.entry is first_entry
 
 
 def test_validation_event_batch_matches_per_batch_token_weighting() -> None:
@@ -806,6 +1173,46 @@ def test_exit_on_max_epochs(mock_components):
 
     # Verify we trained for exactly two epochs (20 batches).
     assert mock_components["policy"].train.call_count == 20
+
+
+def test_sft_train_reuses_one_process_lifetime_validation_cache(
+    mock_components,
+) -> None:
+    sft_config = mock_components["master_config"].sft
+    sft_config.max_num_steps = 2
+    sft_config.max_num_epochs = 1
+    sft_config.val_period = 1
+    sft_config.validation_execution_mode = "event_batch"
+    sft_config.validation_event_cache_mode = "cpu"
+    validation_result = SimpleNamespace(
+        val_metrics={"val_loss": 0.5},
+        timing_metrics={"validation_event_cache_hit": 0},
+        validation_loss_available=True,
+    )
+
+    with patch(
+        "nemo_rl.algorithms.sft._validate_with_loss_availability",
+        return_value=validation_result,
+    ) as run_validation:
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    cache_arguments = [
+        validation_call.kwargs["validation_event_cache"]
+        for validation_call in run_validation.call_args_list
+    ]
+    assert len(cache_arguments) == 2
+    assert isinstance(cache_arguments[0], _ValidationEventCache)
+    assert cache_arguments[1] is cache_arguments[0]
 
 
 def test_exit_on_timeout(mock_components, capsys):
