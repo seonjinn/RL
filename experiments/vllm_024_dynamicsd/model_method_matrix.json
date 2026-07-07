@@ -361,7 +361,7 @@
         "model_loader_threads": 48,
         "disable_fuse_allreduce_rms": false,
         "gpu_memory_utilization": 0.9,
-        "static_k": 3,
+        "static_k": 5,
         "dynamic_schedule": "1:4:3,5:8:2,9:256:1"
       },
       "profiles": [

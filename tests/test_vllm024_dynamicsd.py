@@ -1648,6 +1648,13 @@ def test_model_method_matrix_has_unique_large_model_profile_keys() -> None:
     assert ultra["topology"]["model_loader_threads"] == 96
 
 
+def test_nemotron_super_uses_official_static_mtp_depth() -> None:
+    matrix = load_model_method_matrix()
+    super_model = get_matrix_model(matrix, "super")
+
+    assert super_model["topology"]["static_k"] == 5
+
+
 def test_large_model_matrix_rejects_qwen8_only_dflash() -> None:
     matrix = load_model_method_matrix()
     qwen32 = get_matrix_model(matrix, "qwen32")
