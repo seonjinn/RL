@@ -147,6 +147,33 @@ def _validate_artifact_provenance(artifact: Mapping[str, Any]) -> None:
             ) from exc
 
 
+def _verified_source_paths(
+    artifact_path: Path,
+    artifact: Mapping[str, Any],
+) -> list[Path]:
+    source_results = artifact["source_results"]
+    assert isinstance(source_results, list)
+    paths: list[Path] = []
+    for source in source_results:
+        assert isinstance(source, dict)
+        recorded_path = Path(str(source["path"]))
+        path = (
+            recorded_path
+            if recorded_path.is_absolute()
+            else artifact_path.parent / recorded_path
+        )
+        if not path.is_file():
+            raise ValueError(f"missing calibration source result: {path}")
+        actual_hash = sha256_file(path)
+        if actual_hash != source["sha256"]:
+            raise ValueError(
+                "calibration source result hash mismatch: "
+                f"{path} actual={actual_hash} recorded={source['sha256']}"
+            )
+        paths.append(path)
+    return paths
+
+
 def _required_config_value(config: Mapping[str, Any], field: str) -> Any:
     value = config.get(field)
     if value is None or value == "" or value == "unknown":
@@ -176,7 +203,7 @@ def _load_calibration_row(path: Path) -> dict[str, Any] | None:
     if throughput <= 0:
         raise ValueError("calibration result output_tok_s_per_gpu must be positive")
     row["output_tok_s_per_gpu"] = float(throughput)
-    row["path"] = str(path)
+    row["path"] = str(path.resolve())
     row["sha256"] = sha256_file(path)
     return row
 
@@ -309,6 +336,17 @@ def validate_calibration_artifact(
     if artifact.get("status") != "complete" or artifact.get("repeats_per_cell") != 3:
         raise ValueError("calibration artifact is not a successful three-repeat artifact")
     _validate_artifact_provenance(artifact)
+    rebuilt = build_calibration_artifact(_verified_source_paths(path, artifact))
+    if artifact != rebuilt:
+        differing_fields = sorted(
+            field
+            for field in set(artifact) | set(rebuilt)
+            if artifact.get(field) != rebuilt.get(field)
+        )
+        raise ValueError(
+            "derived calibration artifact mismatch after source replay: "
+            f"fields={differing_fields}"
+        )
     expected = {
         "model": model,
         "model_config_hash": model_config_hash,

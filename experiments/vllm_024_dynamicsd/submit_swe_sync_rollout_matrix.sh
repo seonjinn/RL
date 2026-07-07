@@ -5,10 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MATRIX_FILE="${MATRIX_FILE:-${SCRIPT_DIR}/model_method_matrix.json}"
 LUSTRE_ROOT="${LUSTRE_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 HF_HOME="${HF_HOME:-${LUSTRE_ROOT}/hf_home}"
+CONTAINER_IMAGE="${CONTAINER_IMAGE:-${LUSTRE_ROOT}/containers/vllm-openai-v0.24.0-aarch64-ubuntu2404.sqsh}"
 MODELS="${MODELS:-qwen32}"
 REQUEST_PROFILES="${REQUEST_PROFILES:-32k}"
 TEMPERATURES="${TEMPERATURES:-0.0 1.0}"
-VARIANTS="${VARIANTS:-baseline static dynamic}"
+VARIANTS="${VARIANTS:-baseline static}"
 RUN_ID_BASE="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_swe_sync}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/swe-sync-rollout}"
 LONG_CONTEXT_VIEW_ROOT="${LONG_CONTEXT_VIEW_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/long-context-models/yarn4}"
@@ -16,6 +17,11 @@ SWE_PROMPT_JSONL="${SWE_PROMPT_JSONL:-${LUSTRE_ROOT}/vllm-benchmark/data/swebenc
 SMOKE="${SMOKE:-true}"
 FULL_CONTRACT="${FULL_CONTRACT:-false}"
 ROLLOUT_BATCHES="${ROLLOUT_BATCHES:-}"
+CALIBRATION_ARTIFACT_ROOT="${CALIBRATION_ARTIFACT_ROOT:-}"
+CALIBRATION_DATASET_CONFIG="${CALIBRATION_DATASET_CONFIG:-throughput_1k}"
+RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256:-}"
+TOP_P="${TOP_P:-0.95}"
+SEED="${SEED:-1234}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
@@ -45,6 +51,100 @@ cleanup_temp_manifest() {
     fi
     rm -rf "${TEMP_MANIFEST_ROOT}"
   fi
+}
+
+request_plan_hash() {
+  python3 - "$1" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+buckets = [
+    {
+        "ignore_eos": bucket.get("ignore_eos", False),
+        "max_tokens": bucket["max_tokens"],
+        "min_tokens": bucket.get("min_tokens", bucket["max_tokens"]),
+        "weight": bucket["weight"],
+    }
+    for bucket in payload["buckets"]
+]
+buckets.sort(
+    key=lambda bucket: (
+        bucket["max_tokens"],
+        bucket["min_tokens"],
+        bucket["weight"],
+        bucket["ignore_eos"],
+    )
+)
+canonical = {
+    "buckets": buckets,
+    "max_model_len": payload["max_model_len"],
+    "name": payload["name"],
+}
+encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+print(hashlib.sha256(encoded).hexdigest())
+PY
+}
+
+model_config_hash() {
+  python3 - "$1" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]) / "config.json"
+if not path.is_file():
+    raise SystemExit(f"missing model config for calibration gate: {path}")
+print(hashlib.sha256(path.read_bytes()).hexdigest())
+PY
+}
+
+runtime_digest_for_gate() {
+  if [[ -n "${RUNTIME_IMAGE_SHA256}" ]]; then
+    printf '%s\n' "${RUNTIME_IMAGE_SHA256}"
+  elif [[ -s "${CONTAINER_IMAGE}.sha256" ]]; then
+    awk '{print $1; exit}' "${CONTAINER_IMAGE}.sha256"
+  elif [[ -s "${CONTAINER_IMAGE}" ]]; then
+    sha256sum "${CONTAINER_IMAGE}" | awk '{print $1; exit}'
+  else
+    echo "runtime image SHA is required to validate a dynamic calibration artifact" >&2
+    return 1
+  fi
+}
+
+validated_dynamic_schedule() {
+  local model_key="$1"
+  local profile="$2"
+  local temperature_slug="$3"
+  local temperature="$4"
+  local model="$5"
+  local plan_hash="$6"
+  if [[ -z "${CALIBRATION_ARTIFACT_ROOT}" ]]; then
+    echo "CALIBRATION_ARTIFACT_ROOT is required for DynamicSD calibration artifact validation" >&2
+    return 1
+  fi
+  local artifact="${CALIBRATION_ARTIFACT_ROOT}/${model_key}/${profile}/eagle3/t${temperature_slug}/schedule.json"
+  if [[ ! -s "${artifact}" ]]; then
+    echo "calibration artifact is required for ${model_key}/${profile}/eagle3/t${temperature_slug}: ${artifact}" >&2
+    return 1
+  fi
+  local model_hash runtime_hash
+  model_hash="$(model_config_hash "${model}")"
+  runtime_hash="$(runtime_digest_for_gate)"
+  python3 "${SCRIPT_DIR}/summarize_speedbench_k_calibration.py" validate \
+    --artifact "${artifact}" \
+    --model "${model}" \
+    --model-config-hash "${model_hash}" \
+    --context-profile "swe_sync_${profile}" \
+    --request-plan-hash "${plan_hash}" \
+    --runtime-image-sha256 "${runtime_hash}" \
+    --method eagle3 \
+    --dataset-config "${CALIBRATION_DATASET_CONFIG}" \
+    --temperature "${temperature}" \
+    --top-p "${TOP_P}" \
+    --seed "${SEED}"
 }
 
 clear_qwen_matrix_state() {
@@ -237,6 +337,7 @@ for model_key in ${MODELS}; do
     load_qwen_matrix_state "${model_key}" "${profile}"
 
     supported_variants=()
+    dynamic_requested=false
     for method in pard pard2 dflash dflare mtp_static mtp_dynamic; do
       status_var="method_${method}_status"
       reason_code_var="method_${method}_reason_code"
@@ -284,32 +385,11 @@ for model_key in ${MODELS}; do
         supported_variants+=(static)
       fi
       if variant_requested dynamic; then
-        supported_variants+=(dynamic)
+        dynamic_requested=true
       fi
     fi
 
-    for temperature in ${TEMPERATURES}; do
-      temperature_slug="$(printf '%s' "${temperature}" | tr '.' 'p')"
-      base_run_root="${RESULT_ROOT}/${RUN_ID_BASE}/${model_key}/${profile}/t${temperature_slug}"
-      for variant in "${supported_variants[@]}"; do
-        method_key="baseline"
-        if [[ "${variant}" == "static" || "${variant}" == "dynamic" ]]; then
-          method_key="eagle3"
-        fi
-        record_manifest_row \
-          "SUPPORTED" \
-          "${model_key}" \
-          "${profile}" \
-          "${method_key}" \
-          "${variant}" \
-          "${temperature}" \
-          "${base_run_root}/matrix/${variant}" \
-          "-" \
-          "-"
-      done
-    done
-
-    if ((${#supported_variants[@]} == 0)); then
+    if ((${#supported_variants[@]} == 0)) && [[ "${dynamic_requested}" != "true" ]]; then
       continue
     fi
 
@@ -327,11 +407,7 @@ for model_key in ${MODELS}; do
       draft_model="${LONG_CONTEXT_VIEW_ROOT}/${draft_view_name}"
     fi
 
-    request_plan_hash="$(
-      PYTHONPATH="${SCRIPT_DIR}" python3 -c \
-        'import sys; from pathlib import Path; from sync_rollout_core import load_request_plan; print(load_request_plan(Path(sys.argv[1])).plan_hash)' \
-        "${request_plan_host}" 2>/dev/null || printf unknown
-    )"
+    request_plan_hash="$(request_plan_hash "${request_plan_host}")"
 
     if [[ "${SMOKE}" == "true" ]]; then
       num_prompts="${NUM_PROMPTS:-16}"
@@ -351,6 +427,40 @@ for model_key in ${MODELS}; do
 
     for temperature in ${TEMPERATURES}; do
       temperature_slug="$(printf '%s' "${temperature}" | tr '.' 'p')"
+      base_run_root="${RESULT_ROOT}/${RUN_ID_BASE}/${model_key}/${profile}/t${temperature_slug}"
+      temperature_variants=()
+      if ((${#supported_variants[@]} > 0)); then
+        temperature_variants=("${supported_variants[@]}")
+      fi
+      effective_dynamic_schedule="${DYNAMIC_SCHEDULE:-1:1:1}"
+      if [[ "${dynamic_requested}" == "true" ]]; then
+        effective_dynamic_schedule="$(
+          validated_dynamic_schedule \
+            "${model_key}" \
+            "${profile}" \
+            "${temperature_slug}" \
+            "${temperature}" \
+            "${model}" \
+            "${request_plan_hash}"
+        )"
+        temperature_variants+=(dynamic)
+      fi
+      for variant in "${temperature_variants[@]}"; do
+        method_key="baseline"
+        if [[ "${variant}" == "static" || "${variant}" == "dynamic" ]]; then
+          method_key="eagle3"
+        fi
+        record_manifest_row \
+          "SUPPORTED" \
+          "${model_key}" \
+          "${profile}" \
+          "${method_key}" \
+          "${variant}" \
+          "${temperature}" \
+          "${base_run_root}/matrix/${variant}" \
+          "-" \
+          "-"
+      done
       echo "swe_sync_model=${model_key}"
       echo "request_profile=${profile}"
       echo "context_policy=${profile_context_policy}"
@@ -366,21 +476,24 @@ for model_key in ${MODELS}; do
         PARTITION="${PARTITION:-gb200}" \
         LUSTRE_ROOT="${LUSTRE_ROOT}" \
         HF_HOME="${HF_HOME}" \
+        CONTAINER_IMAGE="${CONTAINER_IMAGE}" \
         MODEL="${model}" \
         DRAFT_MODEL="${draft_model}" \
         RESULT_ROOT="${RESULT_ROOT}/${RUN_ID_BASE}/${model_key}/${profile}/t${temperature_slug}" \
         RUN_ID="matrix" \
         JOB_LABEL="swe-${model_key}-${profile}-t${temperature_slug}" \
-        VARIANTS="${supported_variants[*]}" \
+        VARIANTS="${temperature_variants[*]}" \
         STATIC_K="${STATIC_K:-5}" \
-        DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-1:16:5,17:32:4,33:64:3,65:128:1,129:512:0}" \
+        DYNAMIC_SCHEDULE="${effective_dynamic_schedule}" \
         TP="${target_tp}" \
         PP=1 \
         NODES="${benchmark_nodes}" \
         SEGMENT="${benchmark_nodes}" \
         DISTRIBUTED_EXECUTOR_BACKEND="${distributed_backend}" \
         TEMPERATURE="${temperature}" \
-        TOP_P="${TOP_P:-0.95}" \
+        TOP_P="${TOP_P}" \
+        SEED="${SEED}" \
+        RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256}" \
         GPU_MEMORY_UTILIZATION="${gpu_memory_utilization}" \
         CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-PIECEWISE}" \
         ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS:-64}" \

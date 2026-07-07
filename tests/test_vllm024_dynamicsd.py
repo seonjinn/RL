@@ -1594,7 +1594,7 @@ def test_swe_sync_rollout_matrix_renders_request_plan_and_response_outputs() -> 
         MODELS="qwen32",
         REQUEST_PROFILES="32k",
         TEMPERATURES="0.0",
-        VARIANTS="baseline dynamic",
+        VARIANTS="baseline static",
         RUN_ID="swe-test",
     )
 
@@ -1977,12 +1977,111 @@ def test_swe_sync_rollout_submits_exact_supported_variants_only() -> None:
         MODELS="qwen32",
         REQUEST_PROFILES="32k",
         TEMPERATURES="0.0",
-        VARIANTS="baseline static dynamic",
+        VARIANTS="baseline static",
     )
 
-    assert extract_sync_variants(output) == ["baseline", "static", "dynamic"]
+    assert extract_sync_variants(output) == ["baseline", "static"]
     assert "[DRY-RUN] sync_variant=pard" not in output
     assert "[DRY-RUN] sync_variant=pard2" not in output
+
+
+def test_swe_dynamic_requires_calibration_artifact() -> None:
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "lyris",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "qwen32",
+            "REQUEST_PROFILES": "32k",
+            "TEMPERATURES": "0.0",
+            "VARIANTS": "dynamic",
+            "RUNTIME_IMAGE_SHA256": "runtime-sha",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "calibration artifact" in completed.stderr.lower()
+    assert "sync_variant=dynamic" not in completed.stdout
+
+
+def test_swe_dynamic_uses_only_matching_replayed_calibration(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    matrix = load_model_method_matrix()
+    model = tmp_path / "qwen32-model"
+    model.mkdir()
+    (model / "config.json").write_text('{"model_type":"qwen3"}\n', encoding="utf-8")
+    get_matrix_model(matrix, "qwen32")["target_checkpoint"] = str(model)
+    matrix_path = tmp_path / "matrix.json"
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    request_plan_hash = load_sync_rollout_core_module().load_request_plan(
+        EXPERIMENT / "profiles/swe_sync_32k.json"
+    ).plan_hash
+    artifact_root = tmp_path / "calibration"
+    artifact_path = (
+        artifact_root / "qwen32" / "32k" / "eagle3" / "t0p0" / "schedule.json"
+    )
+    schedule = write_launcher_calibration_artifact(
+        artifact_path,
+        model=str(model),
+        model_config_hash=calibration.sha256_file(model / "config.json"),
+        context_profile="swe_sync_32k",
+        request_plan_hash=request_plan_hash,
+        runtime_image_sha256="runtime-sha",
+        method="eagle3",
+        mode="static",
+        temperature=0.0,
+        top_p=0.95,
+    )
+
+    output = run_dry(
+        "submit_swe_sync_rollout_matrix.sh",
+        CLUSTER="lyris",
+        REQUIRE_GIT_PULL="false",
+        MODELS="qwen32",
+        REQUEST_PROFILES="32k",
+        TEMPERATURES="0.0",
+        VARIANTS="dynamic",
+        MATRIX_FILE=str(matrix_path),
+        CALIBRATION_ARTIFACT_ROOT=str(artifact_root),
+        RUNTIME_IMAGE_SHA256="runtime-sha",
+    )
+
+    assert extract_sync_variants(output) == ["dynamic"]
+    escaped_schedule = schedule.replace(",", r"\,")
+    assert f"args+=(--dynamic-schedule {escaped_schedule})" in output
+    assert "1:16:5,17:32:4,33:64:3" not in output
+
+    mismatched = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_swe_sync_rollout_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "lyris",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "qwen32",
+            "REQUEST_PROFILES": "32k",
+            "TEMPERATURES": "0.0",
+            "VARIANTS": "dynamic",
+            "MATRIX_FILE": str(matrix_path),
+            "CALIBRATION_ARTIFACT_ROOT": str(artifact_root),
+            "RUNTIME_IMAGE_SHA256": "runtime-sha",
+            "TOP_P": "0.9",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert mismatched.returncode != 0
+    assert "top_p" in mismatched.stderr
 
 
 def test_sync_rollout_smoke_false_prompt_requirement_is_domain_neutral() -> None:
@@ -2015,7 +2114,7 @@ def test_nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16() -> None:
         RUN_ID="sync-bf16-test",
     )
 
-    assert output.count("[DRY-RUN] sync_variant=") == 6
+    assert output.count("[DRY-RUN] sync_variant=") == 4
     assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in output
     assert "NVIDIA-Nemotron-3-Super-120B-A12B-BF16" in output
     assert "#SBATCH --nodes=2" in output
@@ -2029,8 +2128,104 @@ def test_nemotron_sync_rl_wrapper_covers_ultra_and_super_bf16() -> None:
     assert "args+=(--samples-per-prompt 4)" in output
     assert "args+=(--rollout-batches 2)" in output
     assert "args+=(--mode mtp_static)" in output
-    assert "args+=(--mode mtp_dynamic)" in output
+    assert "args+=(--mode mtp_dynamic)" not in output
     assert "--gres" not in output
+
+
+def test_nemotron_sync_rl_dynamic_requires_calibration_artifact() -> None:
+    completed = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_nemotron_sync_rl_mtp_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "ptyche",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "ultra",
+            "VARIANTS": "mtp_dynamic",
+            "RUNTIME_IMAGE_SHA256": "runtime-sha",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "calibration artifact" in completed.stderr.lower()
+    assert "sync_variant=mtp_dynamic" not in completed.stdout
+
+
+def test_nemotron_sync_rl_dynamic_uses_only_matching_replayed_calibration(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    matrix = load_model_method_matrix()
+    model = tmp_path / "nemotron-ultra"
+    model.mkdir()
+    (model / "config.json").write_text(
+        '{"model_type":"nemotron_h"}\n',
+        encoding="utf-8",
+    )
+    get_matrix_model(matrix, "ultra")["target_checkpoint"] = str(model)
+    matrix_path = tmp_path / "matrix.json"
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    request_plan_hash = load_sync_rollout_core_module().load_request_plan(
+        EXPERIMENT / "profiles/swe_sync_32k.json"
+    ).plan_hash
+    artifact_root = tmp_path / "calibration"
+    artifact_path = (
+        artifact_root / "ultra" / "sync_rl_math" / "mtp" / "schedule.json"
+    )
+    schedule = write_launcher_calibration_artifact(
+        artifact_path,
+        model=str(model),
+        model_config_hash=calibration.sha256_file(model / "config.json"),
+        context_profile="builtin_smoke_or_pinned_math_dataset",
+        request_plan_hash=request_plan_hash,
+        runtime_image_sha256="runtime-sha",
+        method="mtp",
+        mode="mtp_static",
+        temperature=1.0,
+        top_p=0.95,
+    )
+
+    output = run_dry(
+        "submit_nemotron_sync_rl_mtp_matrix.sh",
+        CLUSTER="ptyche",
+        REQUIRE_GIT_PULL="false",
+        MODELS="ultra",
+        VARIANTS="mtp_dynamic",
+        MATRIX_FILE=str(matrix_path),
+        CALIBRATION_ARTIFACT_ROOT=str(artifact_root),
+        RUNTIME_IMAGE_SHA256="runtime-sha",
+    )
+
+    assert extract_sync_variants(output) == ["mtp_dynamic"]
+    escaped_schedule = schedule.replace(",", r"\,")
+    assert f"args+=(--dynamic-schedule {escaped_schedule})" in output
+    assert "1:8:5,9:16:4" not in output
+
+    mismatched = subprocess.run(
+        ["bash", str(EXPERIMENT / "submit_nemotron_sync_rl_mtp_matrix.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DRY_RUN": "true",
+            "CLUSTER": "ptyche",
+            "REQUIRE_GIT_PULL": "false",
+            "MODELS": "ultra",
+            "VARIANTS": "mtp_dynamic",
+            "MATRIX_FILE": str(matrix_path),
+            "CALIBRATION_ARTIFACT_ROOT": str(artifact_root),
+            "RUNTIME_IMAGE_SHA256": "runtime-sha",
+            "TOP_P": "0.9",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert mismatched.returncode != 0
+    assert "top_p" in mismatched.stderr
 
 
 def test_nemotron_sync_rl_wrapper_records_unsupported_matrix_rows(
@@ -2047,7 +2242,7 @@ def test_nemotron_sync_rl_wrapper_records_unsupported_matrix_rows(
     manifest = extract_manifest_path(output)
     manifest_lines = extract_manifest_rows(output)
 
-    assert output.count("[DRY-RUN] sync_variant=") == 3
+    assert output.count("[DRY-RUN] sync_variant=") == 2
     assert not result_root.exists()
     assert not manifest.exists()
     assert any(
@@ -2097,7 +2292,6 @@ def test_nemotron_sync_rl_wrapper_exits_on_unknown_model_without_reusing_state()
     assert extract_sync_variants(completed.stdout) == [
         "baseline",
         "mtp_static",
-        "mtp_dynamic",
     ]
     assert "/bogus/" not in completed.stdout
 
@@ -2864,7 +3058,7 @@ def write_speedbench_provenance_fixture(source_root: Path) -> tuple[Path, Path]:
         "datasets==4.4.1\n"
         "huggingface_hub==0.36.0\n"
         "pandas==2.3.3\n"
-        "pyarrow==20.0.0\n"
+        "pyarrow==21.0.0\n"
         "tiktoken==0.12.0\n",
         encoding="utf-8",
     )
@@ -5231,6 +5425,17 @@ def write_speedbench_calibration_result(
     static_k: int,
     repeat: int,
     throughput: float,
+    mode: str = "static",
+    method: str = "eagle3",
+    model: str = "/models/qwen32",
+    model_config_hash: str = "model-config-sha",
+    context_profile: str = "speedbench_32k",
+    request_plan_hash: str = "request-plan-sha",
+    runtime_image_sha256: str = "runtime-sha",
+    dataset_config: str = "throughput_1k",
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    seed: int = 1234,
 ) -> Path:
     result_dir = root / f"c{concurrency}" / f"k{static_k}" / f"repeat{repeat}"
     result_dir.mkdir(parents=True)
@@ -5241,20 +5446,20 @@ def write_speedbench_calibration_result(
                 "status": "complete",
                 "config": {
                     "cohort": "overlay",
-                    "mode": "static",
-                    "method": "eagle3",
-                    "model": "/models/qwen32",
-                    "model_config_hash": "model-config-sha",
-                    "context_profile": "speedbench_32k",
-                    "request_plan_hash": "request-plan-sha",
-                    "runtime_image_sha256": "runtime-sha",
-                    "dataset_config": "throughput_1k",
+                    "mode": mode,
+                    "method": method,
+                    "model": model,
+                    "model_config_hash": model_config_hash,
+                    "context_profile": context_profile,
+                    "request_plan_hash": request_plan_hash,
+                    "runtime_image_sha256": runtime_image_sha256,
+                    "dataset_config": dataset_config,
                     "active_concurrency": concurrency,
                     "static_k": static_k,
                     "calibration_repeat": repeat,
-                    "temperature": 1.0,
-                    "top_p": 1.0,
-                    "seed": 1234,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "seed": seed,
                     "sampling_protocol": "sync-rl-overlay-user",
                 },
                 "summary": {"output_tok_s_per_gpu": throughput},
@@ -5263,6 +5468,64 @@ def write_speedbench_calibration_result(
         encoding="utf-8",
     )
     return path
+
+
+def validate_default_calibration_artifact(
+    calibration: ModuleType,
+    artifact_path: Path,
+) -> str:
+    return calibration.validate_calibration_artifact(
+        artifact_path,
+        model="/models/qwen32",
+        model_config_hash="model-config-sha",
+        context_profile="speedbench_32k",
+        request_plan_hash="request-plan-sha",
+        runtime_image_sha256="runtime-sha",
+        method="eagle3",
+        dataset_config="throughput_1k",
+        temperature=1.0,
+        top_p=1.0,
+        seed=1234,
+    )
+
+
+def write_launcher_calibration_artifact(
+    artifact_path: Path,
+    *,
+    model: str,
+    model_config_hash: str,
+    context_profile: str,
+    request_plan_hash: str,
+    runtime_image_sha256: str,
+    method: str,
+    mode: str,
+    temperature: float,
+    top_p: float,
+) -> str:
+    calibration = load_speedbench_calibration_summary_module()
+    paths = [
+        write_speedbench_calibration_result(
+            artifact_path.parent / "source-results",
+            concurrency=concurrency,
+            static_k=3,
+            repeat=repeat,
+            throughput=100.0 + repeat,
+            mode=mode,
+            method=method,
+            model=model,
+            model_config_hash=model_config_hash,
+            context_profile=context_profile,
+            request_plan_hash=request_plan_hash,
+            runtime_image_sha256=runtime_image_sha256,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        for concurrency in (1, 64)
+        for repeat in (1, 2, 3)
+    ]
+    artifact = calibration.build_calibration_artifact(paths)
+    calibration.write_artifact(artifact_path, artifact)
+    return str(artifact["dynamic_schedule"])
 
 
 def test_speedbench_calibration_summary_uses_medians_two_percent_and_monotone_fit(
@@ -5353,6 +5616,84 @@ def test_speedbench_calibration_summary_requires_three_successful_repeats(
 
     with pytest.raises(ValueError, match="three successful repeats"):
         calibration.build_calibration_artifact(paths)
+
+
+def test_calibration_validation_rejects_resigned_forged_derived_fields(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    paths = [
+        write_speedbench_calibration_result(
+            tmp_path / "sources",
+            concurrency=1,
+            static_k=static_k,
+            repeat=repeat,
+            throughput=100.0 + static_k + repeat,
+        )
+        for static_k in (1, 2)
+        for repeat in (1, 2, 3)
+    ]
+    artifact = calibration.build_calibration_artifact(paths)
+    artifact["median_output_tok_s_per_gpu"]["1"]["1"] = 999.0
+    artifact_path = tmp_path / "schedule.json"
+    calibration.write_artifact(artifact_path, calibration.sign_artifact(artifact))
+
+    with pytest.raises(ValueError, match="derived calibration artifact mismatch"):
+        validate_default_calibration_artifact(calibration, artifact_path)
+
+
+def test_calibration_validation_rejects_missing_recorded_source(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    paths = [
+        write_speedbench_calibration_result(
+            tmp_path / "sources",
+            concurrency=1,
+            static_k=1,
+            repeat=repeat,
+            throughput=100.0 + repeat,
+        )
+        for repeat in (1, 2, 3)
+    ]
+    artifact_path = tmp_path / "schedule.json"
+    calibration.write_artifact(
+        artifact_path,
+        calibration.build_calibration_artifact(paths),
+    )
+    paths[0].unlink()
+
+    with pytest.raises(ValueError, match="missing calibration source result"):
+        validate_default_calibration_artifact(calibration, artifact_path)
+
+
+def test_calibration_validation_replays_exact_repeat_numbers(
+    tmp_path: Path,
+) -> None:
+    calibration = load_speedbench_calibration_summary_module()
+    paths = [
+        write_speedbench_calibration_result(
+            tmp_path / "sources",
+            concurrency=1,
+            static_k=1,
+            repeat=repeat,
+            throughput=100.0 + repeat,
+        )
+        for repeat in (1, 2, 3)
+    ]
+    artifact = calibration.build_calibration_artifact(paths)
+    tampered_path = paths[-1]
+    tampered = json.loads(tampered_path.read_text(encoding="utf-8"))
+    tampered["config"]["calibration_repeat"] = 2
+    tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
+    for source in artifact["source_results"]:
+        if source["path"] == str(tampered_path):
+            source["sha256"] = calibration.sha256_file(tampered_path)
+    artifact_path = tmp_path / "schedule.json"
+    calibration.write_artifact(artifact_path, calibration.sign_artifact(artifact))
+
+    with pytest.raises(ValueError, match="numbered 1,2,3"):
+        validate_default_calibration_artifact(calibration, artifact_path)
 
 
 def test_speedbench_calibration_launcher_can_measure_native_mtp_static() -> None:
@@ -5448,37 +5789,18 @@ def test_speedbench_nemotron_dynamic_requires_matching_signed_calibration(
     plan = core.load_request_plan(EXPERIMENT / "profiles/swe_sync_32k.json")
     artifact_root = tmp_path / "calibration"
     artifact_path = artifact_root / "super" / "32k" / "schedule.json"
-    artifact_path.parent.mkdir(parents=True)
-    payload = {
-        "schema_version": 1,
-        "status": "complete",
-        "model": str(model),
-        "model_config_hash": calibration.sha256_file(model / "config.json"),
-        "context_profile": "speedbench_32k",
-        "request_plan_hash": plan.plan_hash,
-        "runtime_image_sha256": "runtime-sha",
-        "method": "mtp",
-        "dataset_config": "throughput_1k",
-        "sampling": {
-            "temperature": 1.0,
-            "top_p": 1.0,
-            "seed": 1234,
-            "sampling_protocol": "sync-rl-overlay-user",
-        },
-        "repeats_per_cell": 3,
-        "selection_policy": calibration.SELECTION_POLICY,
-        "fit_policy": calibration.FIT_POLICY,
-        "median_output_tok_s_per_gpu": {"1": {"3": 100.0}},
-        "selected_k_before_monotone_fit": {"1": 3},
-        "dynamic_schedule": "1:64:3",
-        "selected_k": {"1": 3},
-        "schedule": [{"start": 1, "end": 64, "k": 3}],
-        "source_results": [
-            {"path": f"repeat-{repeat}/result.json", "sha256": "a" * 64}
-            for repeat in (1, 2, 3)
-        ],
-    }
-    calibration.write_artifact(artifact_path, calibration.sign_artifact(payload))
+    schedule = write_launcher_calibration_artifact(
+        artifact_path,
+        model=str(model),
+        model_config_hash=calibration.sha256_file(model / "config.json"),
+        context_profile="speedbench_32k",
+        request_plan_hash=plan.plan_hash,
+        runtime_image_sha256="runtime-sha",
+        method="mtp",
+        mode="mtp_static",
+        temperature=1.0,
+        top_p=1.0,
+    )
 
     output = run_dry(
         "submit_nemotron_speedbench_sync_mtp_matrix.sh",
@@ -5493,7 +5815,8 @@ def test_speedbench_nemotron_dynamic_requires_matching_signed_calibration(
         RUN_ID="nemotron-dynamic-gate",
     )
     assert "args+=(--mode mtp_dynamic)" in output
-    assert "args+=(--dynamic-schedule 1:64:3)" in output
+    escaped_schedule = schedule.replace(",", r"\,")
+    assert f"args+=(--dynamic-schedule {escaped_schedule})" in output
 
     mismatched = subprocess.run(
         ["bash", str(script)],
@@ -5683,7 +6006,7 @@ def test_speedbench_dataset_manifest_pins_revisions_and_checksums(
             "datasets": "4.4.1",
             "huggingface_hub": "0.36.0",
             "pandas": "2.3.3",
-            "pyarrow": "20.0.0",
+            "pyarrow": "21.0.0",
             "tiktoken": "0.12.0",
         },
     }

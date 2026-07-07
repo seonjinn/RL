@@ -10,9 +10,16 @@ RAY_SITE="${RAY_SITE:-${LUSTRE_ROOT}/vllm024-dynamicsd/python-sites/ray-2.55.1-p
 MODELS="${MODELS:-ultra super}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_nemotron_sync_rl_mtp}"
 RESULT_ROOT="${RESULT_ROOT:-${LUSTRE_ROOT}/vllm024-dynamicsd/nemotron-sync-rl/${RUN_ID}}"
-VARIANTS="${VARIANTS:-baseline mtp_static mtp_dynamic}"
+VARIANTS="${VARIANTS:-baseline mtp_static}"
 SMOKE="${SMOKE:-true}"
 PROMPT_JSONL="${PROMPT_JSONL:-}"
+CALIBRATION_ARTIFACT_ROOT="${CALIBRATION_ARTIFACT_ROOT:-}"
+CALIBRATION_REQUEST_PLAN="${CALIBRATION_REQUEST_PLAN:-${SCRIPT_DIR}/profiles/swe_sync_32k.json}"
+CALIBRATION_DATASET_CONFIG="${CALIBRATION_DATASET_CONFIG:-throughput_1k}"
+RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256:-}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
+TOP_P="${TOP_P:-0.95}"
+SEED="${SEED:-1234}"
 DRY_RUN="${DRY_RUN:-false}"
 TEST_ONLY="${TEST_ONLY:-false}"
 REQUIRE_GIT_PULL="${REQUIRE_GIT_PULL:-true}"
@@ -77,6 +84,97 @@ cleanup_temp_manifest() {
     fi
     rm -rf "${TEMP_MANIFEST_ROOT}"
   fi
+}
+
+request_plan_hash() {
+  python3 - "$1" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+buckets = [
+    {
+        "ignore_eos": bucket.get("ignore_eos", False),
+        "max_tokens": bucket["max_tokens"],
+        "min_tokens": bucket.get("min_tokens", bucket["max_tokens"]),
+        "weight": bucket["weight"],
+    }
+    for bucket in payload["buckets"]
+]
+buckets.sort(
+    key=lambda bucket: (
+        bucket["max_tokens"],
+        bucket["min_tokens"],
+        bucket["weight"],
+        bucket["ignore_eos"],
+    )
+)
+canonical = {
+    "buckets": buckets,
+    "max_model_len": payload["max_model_len"],
+    "name": payload["name"],
+}
+encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+print(hashlib.sha256(encoded).hexdigest())
+PY
+}
+
+model_config_hash() {
+  python3 - "$1" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]) / "config.json"
+if not path.is_file():
+    raise SystemExit(f"missing model config for calibration gate: {path}")
+print(hashlib.sha256(path.read_bytes()).hexdigest())
+PY
+}
+
+runtime_digest_for_gate() {
+  if [[ -n "${RUNTIME_IMAGE_SHA256}" ]]; then
+    printf '%s\n' "${RUNTIME_IMAGE_SHA256}"
+  elif [[ -s "${CONTAINER_IMAGE}.sha256" ]]; then
+    awk '{print $1; exit}' "${CONTAINER_IMAGE}.sha256"
+  elif [[ -s "${CONTAINER_IMAGE}" ]]; then
+    sha256sum "${CONTAINER_IMAGE}" | awk '{print $1; exit}'
+  else
+    echo "runtime image SHA is required to validate a dynamic calibration artifact" >&2
+    return 1
+  fi
+}
+
+validated_dynamic_schedule() {
+  local model_key="$1"
+  local model="$2"
+  local plan_hash="$3"
+  if [[ -z "${CALIBRATION_ARTIFACT_ROOT}" ]]; then
+    echo "CALIBRATION_ARTIFACT_ROOT is required for DynamicMTP calibration artifact validation" >&2
+    return 1
+  fi
+  local artifact="${CALIBRATION_ARTIFACT_ROOT}/${model_key}/${profile_key}/mtp/schedule.json"
+  if [[ ! -s "${artifact}" ]]; then
+    echo "calibration artifact is required for ${model_key}/${profile_key}/mtp: ${artifact}" >&2
+    return 1
+  fi
+  local model_hash runtime_hash
+  model_hash="$(model_config_hash "${model}")"
+  runtime_hash="$(runtime_digest_for_gate)"
+  python3 "${SCRIPT_DIR}/summarize_speedbench_k_calibration.py" validate \
+    --artifact "${artifact}" \
+    --model "${model}" \
+    --model-config-hash "${model_hash}" \
+    --context-profile "${context_policy}" \
+    --request-plan-hash "${plan_hash}" \
+    --runtime-image-sha256 "${runtime_hash}" \
+    --method mtp \
+    --dataset-config "${CALIBRATION_DATASET_CONFIG}" \
+    --temperature "${TEMPERATURE}" \
+    --top-p "${TOP_P}" \
+    --seed "${SEED}"
 }
 
 clear_nemotron_matrix_state() {
@@ -292,6 +390,7 @@ for model_key in ${MODELS}; do
   done
 
   supported_variants=()
+  dynamic_requested=false
   if variant_requested baseline; then
     supported_variants+=(baseline)
   fi
@@ -299,6 +398,18 @@ for model_key in ${MODELS}; do
     supported_variants+=(mtp_static)
   fi
   if [[ "${method_mtp_dynamic_status}" == "supported" ]] && variant_requested mtp_dynamic; then
+    dynamic_requested=true
+  fi
+
+  effective_dynamic_schedule="${dynamic_schedule}"
+  if [[ "${dynamic_requested}" == "true" ]]; then
+    calibration_plan_hash="$(request_plan_hash "${CALIBRATION_REQUEST_PLAN}")"
+    effective_dynamic_schedule="$(
+      validated_dynamic_schedule \
+        "${model_key}" \
+        "${model_path}" \
+        "${calibration_plan_hash}"
+    )"
     supported_variants+=(mtp_dynamic)
   fi
 
@@ -334,7 +445,7 @@ for model_key in ${MODELS}; do
     JOB_LABEL="sync-${model_key}-bf16" \
     VARIANTS="${supported_variants[*]}" \
     STATIC_K="${static_k}" \
-    DYNAMIC_SCHEDULE="${dynamic_schedule}" \
+    DYNAMIC_SCHEDULE="${effective_dynamic_schedule}" \
     TP="${target_tp}" \
     PP=1 \
     NODES="${nodes}" \
@@ -354,8 +465,10 @@ for model_key in ${MODELS}; do
     CUDAGRAPH_MODE=PIECEWISE \
     ENGINE_MAX_NUM_SEQS="${ENGINE_MAX_NUM_SEQS}" \
     MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}" \
-    TEMPERATURE=1.0 \
-    TOP_P=0.95 \
+    TEMPERATURE="${TEMPERATURE}" \
+    TOP_P="${TOP_P}" \
+    SEED="${SEED}" \
+    RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256}" \
     NUM_PROMPTS="${NUM_PROMPTS}" \
     SAMPLES_PER_PROMPT="${SAMPLES_PER_PROMPT}" \
     ROLLOUT_BATCHES="${ROLLOUT_BATCHES}" \

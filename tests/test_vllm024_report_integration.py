@@ -180,7 +180,7 @@ def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
     assert "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16" in html_text
     assert ">32K<" in html_text or " 32K " in html_text
     assert ">64K<" in html_text or " 64K " in html_text
-    assert "Official support" in html_text
+    assert "Official launcher support" in html_text
     assert "Sync-RL overlay support" in html_text
     assert "Official limitations" in html_text
     assert "Overlay gates" in html_text
@@ -193,8 +193,8 @@ def test_task6_latest_vllm_html_contains_sync_rl_and_speedbench_status(
     )[1].split("</table>", 1)[0]
     assert "<th>Supported</th>" in qwen_table
     assert "<th>Integration only</th>" in qwen_table
-    assert "<th>Official support</th>" not in qwen_table
-    assert "<th>Official support</th>" in nemotron_table
+    assert "<th>Official launcher support</th>" not in qwen_table
+    assert "<th>Official launcher support</th>" in nemotron_table
     assert "<th>Sync-RL overlay support</th>" in nemotron_table
     assert "<th>Official limitations</th>" in nemotron_table
     assert "<th>Overlay gates</th>" in nemotron_table
@@ -205,6 +205,12 @@ def test_task6_nemotron_support_uses_runner_capabilities_and_dynamic_gate() -> N
 
     assert not nemotron.empty
     for row in nemotron.to_dict(orient="records"):
+        assert "native MTP static" not in row["official_support"]
+        assert "native MTP static" in row["overlay_support"]
+        assert "native MTP static: low-level runner capability only" in row[
+            "official_limitations"
+        ]
+        assert "no official Nemotron MTP launcher" in row["official_limitations"]
         assert "native MTP dynamic" not in row["official_support"]
         assert "native MTP dynamic" in row["overlay_support"]
         assert "native MTP dynamic unsupported" in row["official_limitations"]

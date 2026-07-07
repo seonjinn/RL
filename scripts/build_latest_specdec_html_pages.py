@@ -1869,6 +1869,7 @@ def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
     runner_capabilities = load_speedbench_runner_capabilities()
     official_modes = set(runner_capabilities["official"])
     overlay_modes = set(runner_capabilities["overlay"])
+    official_launcher_modes = {"baseline", "static"}
     qwen_rows: list[dict[str, str]] = []
     nemotron_rows: list[dict[str, str]] = []
     for model in matrix.get("models", []):
@@ -1917,18 +1918,23 @@ def load_sync_speedbench_support() -> tuple[pd.DataFrame, pd.DataFrame]:
             row["official_support"] = ", ".join(
                 _method_variant_label(method, variant)
                 for method, variant in supported_variants
-                if variant in official_modes
+                if variant in official_modes and variant in official_launcher_modes
             )
             row["overlay_support"] = ", ".join(
                 _method_variant_label(method, variant)
                 for method, variant in supported_variants
                 if variant in overlay_modes
             )
-            official_limitations = [
-                f"{_method_variant_label(method, variant)} unsupported"
-                for method, variant in supported_variants
-                if variant not in official_modes
-            ]
+            official_limitations = []
+            for method, variant in supported_variants:
+                label = _method_variant_label(method, variant)
+                if variant in official_modes and variant not in official_launcher_modes:
+                    official_limitations.append(
+                        f"{label}: low-level runner capability only; "
+                        "no official Nemotron MTP launcher"
+                    )
+                elif variant not in official_modes:
+                    official_limitations.append(f"{label} unsupported")
             row["official_limitations"] = (
                 ", ".join(official_limitations) if official_limitations else "none"
             )
@@ -2101,7 +2107,7 @@ def render_sync_speedbench_status_section() -> str:
                 [
                     ("model", "Model", "text"),
                     ("profiles", "Profiles", "text"),
-                    ("official_support", "Official support", "text"),
+                    ("official_support", "Official launcher support", "text"),
                     ("overlay_support", "Sync-RL overlay support", "text"),
                     ("official_limitations", "Official limitations", "text"),
                     ("overlay_gates", "Overlay gates", "text"),

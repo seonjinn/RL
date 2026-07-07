@@ -11,6 +11,9 @@ Review context:
 - Progress ledger: `.superpowers/sdd/progress.md`
 - Review package: `.superpowers/sdd/review-46c02e84..82562787.diff`
 - Commit: the signed `HEAD` containing this report; the exact SHA is reported at handoff.
+- Dependency follow-up: `e3e70ce8a6e51c3cb5ff00128805239d7cdecd25`
+- Host-side staging follow-up: `952ff8d922f0bf73f7aeab545d3398cd2e899752`
+- Subset-staging follow-up: `66217f2db4c065505107a827982c132a40ecf850`
 
 ## Finding Resolution
 
@@ -53,9 +56,17 @@ Review context:
 - Artifacts include exact model/profile/runtime/request-plan/sampling identity,
   source result paths and hashes, selection policies, medians, fitted schedule,
   and a canonical SHA-256 content signature.
-- Validation rejects missing repeat provenance, invalid source hashes,
-  inconsistent schedules, non-monotone K, bad signatures, and any identity or
-  sampling mismatch.
+- Validation reopens and hashes every recorded source result, requires exactly
+  repeats 1, 2, and 3 in every concurrency/K cell, rebuilds medians, 2-percent
+  selection, and monotone fit, then compares the complete rebuilt artifact and
+  signature with the submitted artifact.
+- Validation rejects missing sources, forged and re-signed derived fields,
+  invalid source hashes, inconsistent schedules, non-monotone K, bad
+  signatures, and any identity or sampling mismatch.
+- SWE DynamicSD and non-SPEED Nemotron DynamicMTP are opt-in and require a
+  matching source-replayed artifact. Baseline and static variants remain
+  available without calibration, and a matrix or environment schedule cannot
+  launch either dynamic variant.
 
 ### 5. SWE provenance and exact work
 
@@ -74,8 +85,11 @@ Review context:
 
 - The SPEED runner declares distinct official and overlay mode capabilities.
 - The report builder loads those declarations from the executable runner.
-- The Nemotron table now has separate Official support, Sync-RL overlay support,
-  Official limitations, and Overlay gates columns.
+- The Nemotron table now has separate Official launcher support, Sync-RL overlay
+  support, Official limitations, and Overlay gates columns.
+- Native MTP static remains accurately listed for the overlay, while its
+  official capability is identified as low-level runner support with no
+  official Nemotron MTP launcher.
 - Official DynamicMTP is shown as unsupported; overlay DynamicMTP is shown as
   signed-calibration-gated and excluded from smoke.
 - The Qwen SWE table retains its original support/integration columns.
@@ -96,6 +110,9 @@ Review context:
 ### 8. Exact SPEED staging dependencies
 
 - `speedbench_requirements.lock` uses exact versions for every staging dependency.
+- `pyarrow==21.0.0` satisfies the pinned `datasets==4.4.1` requirement proven by
+  the remote dry run; the prepared-manifest fixture and expected provenance use
+  the same exact version.
 - Staging installs only from that lock.
 - The prepared manifest records the lock filename, SHA-256, and all package
   versions.
@@ -117,22 +134,28 @@ Review context:
 - vLLM backend correction: 2 RED, then 2 GREEN.
 - Calibration provenance trust boundary: 1 RED, then GREEN after structural
   provenance validation.
+- Fresh calibration source replay: 3 RED, then GREEN for a forged re-signed
+  artifact, a missing source, and invalid repeat numbering.
+- Fresh SWE and non-SPEED Nemotron launch gates: 4 RED, then GREEN for missing,
+  matching, and mismatched calibration artifacts.
+- Fresh official-launcher HTML semantics: 1 RED, then GREEN after separating
+  MTP runner capability from launcher support.
 
 ## Verification
 
 - `python3 -m pytest -q tests/test_vllm024_dynamicsd.py`
-  - `186 passed in 29.54s`
+  - `193 passed in 31.95s`
 - `python3 -m pytest -q tests/test_vllm024_report_integration.py`
-  - `8 passed in 2.52s`
+  - `8 passed in 2.76s`
 - `PYTHONPATH=scripts python3 -m pytest -q`
-  - `268 passed, 28 subtests passed in 37.58s`
+  - `279 passed, 28 subtests passed in 44.38s`
 - Generated-script and stub-`sbatch` execution subset
-  - `10 passed, 176 deselected in 3.97s`
-- `bash -n experiments/vllm_024_dynamicsd/*.sh`
+  - `12 passed, 181 deselected in 3.75s`
+- `find experiments/vllm_024_dynamicsd -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n`
   - exit 0
-- Targeted `python3 -m compileall -q` for all changed Python and test modules
+- Targeted `python3 -m py_compile` for all changed Python and test modules
   - exit 0
-- Targeted Pyright for all changed Python and test modules
+- Targeted `pyright` for all changed Python and test modules
   - `0 errors, 0 warnings, 0 informations`
 - `git diff --check`
   - exit 0
