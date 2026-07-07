@@ -752,7 +752,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 and megatron_cfg["enabled"]
             ):
                 worker_train_kwargs["collect_eval_timing"] = True
-            if collect_train_timing:
+            if (
+                collect_train_timing
+                and megatron_cfg is not None
+                and megatron_cfg["enabled"]
+            ):
                 worker_train_kwargs["collect_train_timing"] = True
             futures = self.worker_group.run_all_workers_sharded_data(
                 "train",

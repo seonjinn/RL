@@ -716,6 +716,40 @@ def test_policy_aggregates_max_worker_backend_train_timing():
     assert results["backend_train_time_s"] == pytest.approx(0.2)
 
 
+def test_policy_does_not_request_backend_train_timing_for_non_megatron_worker():
+    policy = object.__new__(Policy)
+    policy.cfg = {
+        "train_global_batch_size": 1,
+        "train_micro_batch_size": 1,
+        "megatron_cfg": {"enabled": False},
+    }
+    policy.flops_tracker = None
+    policy._shard_for_train = lambda data, batch_size: [data]
+    policy.worker_group = MagicMock()
+    policy.worker_group.run_all_workers_sharded_data.return_value = [object()]
+    policy.worker_group.get_all_worker_results.return_value = [
+        {
+            "global_loss": torch.tensor(1.0),
+            "grad_norm": torch.tensor([0.0]),
+            "all_mb_metrics": {},
+        }
+    ]
+
+    results = policy.train(
+        SimpleNamespace(),
+        object(),
+        gbs=1,
+        mbs=1,
+        collect_train_timing=True,
+    )
+
+    common_kwargs = policy.worker_group.run_all_workers_sharded_data.call_args.kwargs[
+        "common_kwargs"
+    ]
+    assert "collect_train_timing" not in common_kwargs
+    assert "backend_train_time_s" not in results
+
+
 def create_megatron_test_config(
     model_name: str,
     tp: int = 1,

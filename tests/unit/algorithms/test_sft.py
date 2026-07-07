@@ -187,6 +187,40 @@ def test_training_without_comparison_metrics_skips_comparison_work(
     )
 
 
+def test_non_megatron_comparison_omits_backend_throughput_group(
+    mock_components,
+) -> None:
+    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_epochs = 1
+    mock_components["master_config"].policy["megatron_cfg"] = {"enabled": False}
+    logger = mock_components["logger"]
+    logger.comparison_metrics_enabled = True
+
+    with patch("nemo_rl.algorithms.sft._get_processed_token_count") as token_count:
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            logger,
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    token_count.assert_not_called()
+    assert (
+        mock_components["policy"].train.call_args.kwargs["collect_train_timing"]
+        is False
+    )
+    comparison_payload = logger.log_metrics.call_args_list[-1].args[0]
+    assert "performance/train_step_time_s" in comparison_payload
+    assert not any(key.startswith("throughput/") for key in comparison_payload)
+    assert "context/processed_tokens" not in comparison_payload
+    assert "context/num_gpus" not in comparison_payload
+
+
 def _validation_config(execution_mode: str, **overrides: object) -> MasterConfig:
     sft_config = {
         "val_period": 20,
@@ -936,6 +970,7 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
     mock_components["master_config"].sft.max_num_steps = 1
     mock_components["master_config"].sft.max_num_epochs = 1
     mock_components["master_config"].sft.val_period = 1
+    mock_components["master_config"].policy["megatron_cfg"] = {"enabled": True}
     policy = mock_components["policy"]
     train_result = policy.train.return_value
     train_result["all_mb_metrics"]["lr"] = [4.2e-7]

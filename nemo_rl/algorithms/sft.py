@@ -992,6 +992,12 @@ def sft_train(
     megatron_sft_dp_stride_order = master_config.data.get(
         "megatron_sft_dp_stride_order", False
     )
+    megatron_cfg = master_config.policy.get("megatron_cfg")
+    comparison_throughput_enabled = bool(
+        logger.comparison_metrics_enabled
+        and megatron_cfg is not None
+        and megatron_cfg["enabled"]
+    )
 
     if logger.comparison_metrics_enabled:
         logger.define_metric("comparison/step")
@@ -1076,7 +1082,7 @@ def sft_train(
                             cat_and_padded.get_multimodal_dict(as_tensors=False)
                         )
 
-                    if logger.comparison_metrics_enabled:
+                    if comparison_throughput_enabled:
                         processed_tokens = _get_processed_token_count(train_data)
                     dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
                     train_data = _maybe_reorder_megatron_sft_dp_stride(
@@ -1091,7 +1097,7 @@ def sft_train(
                         train_data,
                         loss_fn,
                         timer=timer,
-                        collect_train_timing=logger.comparison_metrics_enabled,
+                        collect_train_timing=comparison_throughput_enabled,
                     )
 
                 is_last_step = total_steps + 1 >= master_config.sft.max_num_steps or (
@@ -1280,15 +1286,18 @@ def sft_train(
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(timing_metrics, total_steps + 1, prefix="timing/train")
             if logger.comparison_metrics_enabled:
-                assert processed_tokens is not None
+                if comparison_throughput_enabled:
+                    assert processed_tokens is not None
                 comparison_metrics = build_sft_comparison_metrics(
                     SFTComparisonObservation(
                         step=total_steps + 1,
                         train_step_time_s=_optional_float(
                             timing_metrics.get("policy_training")
                         ),
-                        throughput_denominator_time_s=_optional_float(
-                            train_results.get("backend_train_time_s")
+                        throughput_denominator_time_s=(
+                            _optional_float(train_results.get("backend_train_time_s"))
+                            if comparison_throughput_enabled
+                            else None
                         ),
                         e2e_step_time_s=_optional_float(
                             timing_metrics.get("e2e_step_time")
@@ -1307,8 +1316,14 @@ def sft_train(
                         grad_norm=_optional_float(metrics.get("grad_norm")),
                         learning_rate=_optional_float(metrics.get("lr")),
                         processed_tokens=processed_tokens,
-                        valid_tokens=int(metrics.get("global_valid_toks", 0)),
-                        num_gpus=total_num_gpus,
+                        valid_tokens=(
+                            int(metrics.get("global_valid_toks", 0))
+                            if comparison_throughput_enabled
+                            else None
+                        ),
+                        num_gpus=(
+                            total_num_gpus if comparison_throughput_enabled else None
+                        ),
                     )
                 )
                 logger.log_metrics(
