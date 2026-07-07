@@ -549,21 +549,85 @@ def _recursive_deep_payload_bytes(
             seen_storages.add(storage_key)
             retained_storage_bytes = storage_nbytes
         return sys.getsizeof(value) + retained_storage_bytes
+    total_bytes = sys.getsizeof(value)
     if isinstance(value, PackedTensor):
-        return sys.getsizeof(value) + _recursive_deep_payload_bytes(
-            value.tensors, seen, seen_storages
-        )
+        total_bytes += _recursive_deep_payload_bytes(value.tensors, seen, seen_storages)
     if isinstance(value, Mapping):
-        return sys.getsizeof(value) + sum(
+        total_bytes += sum(
             _recursive_deep_payload_bytes(key, seen, seen_storages)
             + _recursive_deep_payload_bytes(item, seen, seen_storages)
             for key, item in value.items()
         )
-    if isinstance(value, (list, tuple, set)):
-        return sys.getsizeof(value) + sum(
+    elif isinstance(value, (list, tuple, set)):
+        total_bytes += sum(
             _recursive_deep_payload_bytes(item, seen, seen_storages) for item in value
         )
-    return sys.getsizeof(value)
+
+    object_state = getattr(value, "__dict__", None)
+    if isinstance(object_state, dict):
+        total_bytes += _recursive_deep_payload_bytes(object_state, seen, seen_storages)
+    for cls in type(value).__mro__:
+        slots = cls.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if slot in {"__dict__", "__weakref__"} or not hasattr(value, slot):
+                continue
+            total_bytes += _recursive_deep_payload_bytes(
+                getattr(value, slot), seen, seen_storages
+            )
+    return total_bytes
+
+
+def _validation_event_budget_payload_bytes(
+    *,
+    cache_mode: Literal["off", "cpu"],
+    logical_payload_bytes: int,
+    deep_payload_bytes: int,
+) -> int:
+    return deep_payload_bytes if cache_mode == "cpu" else logical_payload_bytes
+
+
+def _clone_validation_loss_fn(loss_fn: Any, cache_mode: Literal["off", "cpu"]) -> Any:
+    return deepcopy(loss_fn) if cache_mode == "cpu" else loss_fn
+
+
+def _validate_cpu_cache_payload(value: Any, seen: set[int] | None = None) -> None:
+    if seen is None:
+        seen = set()
+    value_id = id(value)
+    if value_id in seen:
+        return
+    seen.add(value_id)
+
+    if torch.is_tensor(value):
+        if value.device.type != "cpu":
+            raise ValueError(
+                "Validation CPU cache payload contains a tensor on "
+                f"{value.device.type}; all cached tensors must be on CPU"
+            )
+        return
+    if isinstance(value, PackedTensor):
+        _validate_cpu_cache_payload(value.tensors, seen)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _validate_cpu_cache_payload(key, seen)
+            _validate_cpu_cache_payload(item, seen)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            _validate_cpu_cache_payload(item, seen)
+
+    object_state = getattr(value, "__dict__", None)
+    if isinstance(object_state, dict):
+        _validate_cpu_cache_payload(object_state, seen)
+    for cls in type(value).__mro__:
+        slots = cls.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if slot in {"__dict__", "__weakref__"} or not hasattr(value, slot):
+                continue
+            _validate_cpu_cache_payload(getattr(value, slot), seen)
 
 
 def _clone_validation_event_data(
@@ -1057,13 +1121,24 @@ def _validate_with_loss_availability(
                         payload_bytes=event_payload_bytes,
                         deep_payload_bytes=event_deep_payload_bytes,
                     )
-            if event_memory_config is None or event_deep_payload_bytes is None:
+            if master_config.sft.validation_event_cache_mode == "cpu":
+                _validate_cpu_cache_payload(combined_val_data)
+            if (
+                event_memory_config is None
+                or event_payload_bytes is None
+                or event_deep_payload_bytes is None
+            ):
                 raise RuntimeError("event_batch memory configuration was not validated")
             max_payload_bytes, ray_available_bytes, safety_multiplier = (
                 event_memory_config
             )
+            budget_payload_bytes = _validation_event_budget_payload_bytes(
+                cache_mode=master_config.sft.validation_event_cache_mode,
+                logical_payload_bytes=event_payload_bytes,
+                deep_payload_bytes=event_deep_payload_bytes,
+            )
             _validate_event_memory_capacity(
-                event_deep_payload_bytes,
+                budget_payload_bytes,
                 max_payload_bytes=max_payload_bytes,
                 host_available_bytes=int(psutil.virtual_memory().available),
                 verified_ray_object_store_available_bytes=ray_available_bytes,
@@ -1076,7 +1151,9 @@ def _validate_with_loss_availability(
             )
             val_results = policy.train(
                 submitted_val_data,
-                loss_fn,
+                _clone_validation_loss_fn(
+                    loss_fn, master_config.sft.validation_event_cache_mode
+                ),
                 eval_mode=True,
                 gbs=val_batch_size,
                 mbs=val_mbs,

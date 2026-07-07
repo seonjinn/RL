@@ -530,11 +530,12 @@ def test_validation_cpu_cache_reuses_event_data_but_recomputes_loss() -> None:
         validation_event_cache_mode="cpu",
     )
 
+    shared_loss_fn = NLLLossFn()
     first_metrics, first_timings = validate(
         policy=policy,
         val_dataloader=loader,
         tokenizer=MagicMock(pad_token_id=0),
-        loss_fn=NLLLossFn(),
+        loss_fn=shared_loss_fn,
         step=20,
         master_config=config,
         val_batches=4,
@@ -546,7 +547,7 @@ def test_validation_cpu_cache_reuses_event_data_but_recomputes_loss() -> None:
         policy=policy,
         val_dataloader=loader,
         tokenizer=MagicMock(pad_token_id=0),
-        loss_fn=NLLLossFn(),
+        loss_fn=shared_loss_fn,
         step=40,
         master_config=config,
         val_batches=4,
@@ -557,6 +558,9 @@ def test_validation_cpu_cache_reuses_event_data_but_recomputes_loss() -> None:
 
     assert loader.iteration_count == 1
     assert policy.train.call_count == 2
+    submitted_loss_functions = [call.args[1] for call in policy.train.call_args_list]
+    assert all(loss is not shared_loss_fn for loss in submitted_loss_functions)
+    assert submitted_loss_functions[0] is not submitted_loss_functions[1]
     first_train_data = policy.train.call_args_list[0].args[0]
     second_train_data = policy.train.call_args_list[1].args[0]
     assert first_train_data is not second_train_data
@@ -884,6 +888,34 @@ def test_validation_event_batch_enforces_payload_budget_before_train() -> None:
     )
 
     with pytest.raises(MemoryError, match="payload budget"):
+        _run_validation(policy, batches, "event_batch", config)
+
+    policy.train.assert_not_called()
+
+
+def test_validation_event_batch_cache_off_preserves_logical_payload_budget() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch", validation_event_max_payload_bytes=23_552
+    )
+
+    _run_validation(policy, batches, "event_batch", config)
+
+    policy.train.assert_called_once()
+
+
+def test_validation_cpu_cache_rejects_non_cpu_tensor_before_train() -> None:
+    batches = [_packed_validation_batch(batch_idx) for batch_idx in range(4)]
+    for batch in batches:
+        batch["input_ids"] = batch["input_ids"].to("meta")
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    config = _validation_config(
+        "event_batch",
+        validation_event_cache_mode="cpu",
+    )
+
+    with pytest.raises(ValueError, match="CPU cache.*meta"):
         _run_validation(policy, batches, "event_batch", config)
 
     policy.train.assert_not_called()

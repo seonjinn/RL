@@ -3,6 +3,9 @@
 import ast
 import math
 import os
+import sys
+from collections import UserDict
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -25,9 +28,11 @@ def _function_node(
             if isinstance(node, ast.ClassDef) and node.name == class_name
         )
         body = class_node.body
-    return next(
+    matches = [
         node for node in body if isinstance(node, ast.FunctionDef) and node.name == name
-    )
+    ]
+    assert matches, f"Missing required function {name} in {path}"
+    return matches[0]
 
 
 def _load_functions(
@@ -209,6 +214,100 @@ def test_recursive_payload_bytes_and_capacity_guard_execute_real_helpers() -> No
             host_available_bytes=256,
             verified_ray_object_store_available_bytes=256,
             safety_multiplier=2.0,
+        )
+
+
+def test_deep_payload_counts_userdict_backing_state_and_nested_objects() -> None:
+    functions = _load_functions(
+        REPO_ROOT / "nemo_rl/algorithms/sft.py",
+        ["_recursive_deep_payload_bytes"],
+        namespace={
+            "torch": _FakeTorch,
+            "PackedTensor": _FakePackedTensor,
+            "Mapping": Mapping,
+            "sys": sys,
+        },
+    )
+
+    class NestedPayload:
+        def __init__(self) -> None:
+            self.blob = bytearray(4096)
+
+    class PayloadDict(UserDict[str, list[NestedPayload]]):
+        def __init__(self) -> None:
+            super().__init__({"nested": [NestedPayload()]})
+            self.metadata = bytearray(2048)
+
+    payload = PayloadDict()
+    measured = functions["_recursive_deep_payload_bytes"](payload)
+    lower_bound = sum(
+        sys.getsizeof(value)
+        for value in (
+            payload,
+            vars(payload),
+            payload.data,
+            payload.metadata,
+            payload["nested"][0],
+            vars(payload["nested"][0]),
+            payload["nested"][0].blob,
+        )
+    )
+
+    assert measured >= lower_bound
+
+
+def test_cache_budget_and_loss_clone_helpers_preserve_off_path() -> None:
+    functions = _load_functions(
+        REPO_ROOT / "nemo_rl/algorithms/sft.py",
+        ["_validation_event_budget_payload_bytes", "_clone_validation_loss_fn"],
+        namespace={"deepcopy": deepcopy},
+    )
+    original_loss = SimpleNamespace(mutable_state=[])
+
+    assert (
+        functions["_validation_event_budget_payload_bytes"](
+            cache_mode="off",
+            logical_payload_bytes=100,
+            deep_payload_bytes=150,
+        )
+        == 100
+    )
+    assert (
+        functions["_validation_event_budget_payload_bytes"](
+            cache_mode="cpu",
+            logical_payload_bytes=100,
+            deep_payload_bytes=150,
+        )
+        == 150
+    )
+    assert functions["_clone_validation_loss_fn"](original_loss, "off") is original_loss
+    cloned_loss = functions["_clone_validation_loss_fn"](original_loss, "cpu")
+    assert cloned_loss is not original_loss
+    cloned_loss.mutable_state.append("changed")
+    assert original_loss.mutable_state == []
+
+
+def test_cpu_cache_payload_rejects_reachable_non_cpu_tensor() -> None:
+    functions = _load_functions(
+        REPO_ROOT / "nemo_rl/algorithms/sft.py",
+        ["_validate_cpu_cache_payload"],
+        namespace={
+            "torch": _FakeTorch,
+            "PackedTensor": _FakePackedTensor,
+            "Mapping": Mapping,
+        },
+    )
+
+    class DeviceTensor(_FakeTensorType):
+        def __init__(self, device_type: str) -> None:
+            self.device = SimpleNamespace(type=device_type)
+
+    functions["_validate_cpu_cache_payload"](
+        {"nested": [_FakePackedTensor([DeviceTensor("cpu")])]}
+    )
+    with pytest.raises(ValueError, match="CPU cache.*meta"):
+        functions["_validate_cpu_cache_payload"](
+            {"nested": [_FakePackedTensor([DeviceTensor("meta")])]}
         )
 
 
