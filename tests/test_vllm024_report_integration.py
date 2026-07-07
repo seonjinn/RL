@@ -800,6 +800,73 @@ def test_nemotron_k_sweep_rejects_request_prompt_hash_mismatch(
         latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
 
 
+def test_nemotron_k_sweep_rejects_coherent_request_provenance_mutation(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    for model_key, method_key, _k, _job_id in EXPECTED_NEMOTRON_K_SWEEP_RESULTS:
+        result_path = nemotron_k_sweep_root / model_key / method_key / "result.json"
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        request = payload["rollout_batches"][0]["requests"][0]
+        request["prompt_id"] = "coherently-mutated-prompt"
+        request["prompt_sha256"] = "0" * 64
+        request["source_prompt_sha256"] = "1" * 64
+        result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="request_provenance_hash"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+def test_nemotron_k_sweep_rejects_wrong_config_seed(
+    nemotron_k_sweep_root: Path,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    replace_json_value(result_path, ("config", "seed"), 4321)
+
+    with pytest.raises(ValueError, match=r"config\.seed"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("batch_index", "request_index", "field", "bad_value"),
+    (
+        (0, 0, "seed", 4321),
+        (1, 17, "seed", 4321),
+        (2, 31, "seed", 4321),
+        (0, 1, "sample_index", 3),
+        (1, 2, "min_tokens", 1),
+        (1, 3, "max_tokens", 2048),
+        (2, 4, "ignore_eos", True),
+        (2, 5, "prompt_tokens", 1),
+    ),
+    ids=(
+        "first-batch-seed",
+        "middle-batch-seed",
+        "last-batch-seed",
+        "sample-index",
+        "min-tokens",
+        "max-tokens",
+        "ignore-eos",
+        "prompt-tokens",
+    ),
+)
+def test_nemotron_k_sweep_rejects_wrong_request_seed_or_protocol(
+    nemotron_k_sweep_root: Path,
+    batch_index: int,
+    request_index: int,
+    field: str,
+    bad_value: object,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][batch_index]["requests"][request_index][field] = (
+        bad_value
+    )
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
 @pytest.mark.parametrize(
     ("model_key", "method_key", "_k", "expected_job_id"),
     EXPECTED_NEMOTRON_K_SWEEP_RESULTS,
@@ -864,6 +931,26 @@ def test_nemotron_k_sweep_rejects_wrong_topology(
     replace_json_value(result_path, field_path, bad_value)
 
     with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    ("model_key", "expected_active_gpus", "bad_runtime_gpu_count"),
+    (("super", 2, 2), ("ultra", 8, 8)),
+)
+def test_nemotron_k_sweep_rejects_wrong_runtime_gpu_inventory(
+    nemotron_k_sweep_root: Path,
+    model_key: str,
+    expected_active_gpus: int,
+    bad_runtime_gpu_count: int,
+) -> None:
+    result_path = nemotron_k_sweep_root / model_key / "baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["config"]["total_gpus"] == expected_active_gpus
+    payload["runtime"]["gpu_count"] = bad_runtime_gpu_count
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"runtime\.gpu_count"):
         latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
 
 
@@ -998,6 +1085,31 @@ def test_nemotron_k_sweep_rejects_batch_output_tokens_not_backed_by_requests(
     result_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="actual_output_tokens"):
+        latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
+
+
+@pytest.mark.parametrize(
+    "vector_field",
+    (
+        "actual_output_tokens",
+        "planned_output_tokens",
+        "forced_output_mask",
+        "output_token_hashes",
+    ),
+)
+def test_nemotron_k_sweep_rejects_truncated_per_request_vector(
+    nemotron_k_sweep_root: Path,
+    vector_field: str,
+) -> None:
+    result_path = nemotron_k_sweep_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    batch = payload["rollout_batches"][0]
+    removed = batch[vector_field].pop()
+    if vector_field == "actual_output_tokens":
+        batch[vector_field][0] += removed
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=vector_field):
         latest.load_nemotron_mtp_k_sweep_rows(nemotron_k_sweep_root)
 
 

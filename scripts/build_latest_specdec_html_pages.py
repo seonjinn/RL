@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import html
 import importlib.util
 import json
@@ -128,6 +129,13 @@ NEMOTRON_MTP_K_SWEEP_PROMPT_BATCH_HASHES = [
     "d3c2455a28c358105c0a665b441f83eb9979be72c51747733f0f5601ba975efc",
     "e073b87ad663ed00aee96bf1b6fb0b15d0355a355e8a0015b4b7372cadd22caf",
 ]
+NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES = [
+    "c9682cbe32280f9c7367aa7f0ad85e4bb178ef3842c5b75929e555fb80005001",
+    "ae57be6315bc695c3905cd807b2ada44506505d44796b9089793ab2435e4b4ba",
+    "c19d6f1d69c497901658f8ffff9cda09fb96fa82db3e3cd0ea4a444b89a1b181",
+]
+NEMOTRON_MTP_K_SWEEP_SEED = 1234
+NEMOTRON_MTP_K_SWEEP_RUNTIME_GPU_COUNT = 4
 NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE = "builtin_smoke_or_pinned_math_dataset"
 NEMOTRON_MTP_K_SWEEP_ROPE_CONFIG_HASH = (
     "c5a448d4ee1c1c3c1acff52a016d20f1466d01f81cf2ba48207a7de52578a206"
@@ -260,6 +268,7 @@ NEMOTRON_MTP_K_SWEEP_SHARED_METADATA = (
     (("config", "temperature"), 1.0),
     (("config", "top_p"), 1.0),
     (("config", "max_new_tokens"), 4096),
+    (("config", "seed"), NEMOTRON_MTP_K_SWEEP_SEED),
     (("config", "num_prompts"), 8),
     (("config", "samples_per_prompt"), 4),
     (("config", "rollout_batches"), 3),
@@ -284,6 +293,7 @@ NEMOTRON_MTP_K_SWEEP_SHARED_METADATA = (
         NEMOTRON_MTP_K_SWEEP_PROMPT_BATCH_HASHES,
     ),
     (("config", "pipeline_parallel_size"), 1),
+    (("runtime", "gpu_count"), NEMOTRON_MTP_K_SWEEP_RUNTIME_GPU_COUNT),
     (("config", "context_profile"), NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE),
     (("config", "rope_config_hash"), NEMOTRON_MTP_K_SWEEP_ROPE_CONFIG_HASH),
 )
@@ -2641,6 +2651,42 @@ def _validate_nemotron_mtp_k_sweep_payload(
                 f"{field_name}: expected {expected!r}, got {actual_display}"
             )
 
+    topology_values = {
+        field: _nemotron_smoke_metadata_value(payload, path)[1]
+        for field, path in (
+            ("tensor_parallel_size", ("config", "tensor_parallel_size")),
+            ("pipeline_parallel_size", ("config", "pipeline_parallel_size")),
+            ("total_gpus", ("config", "total_gpus")),
+            ("node_count", ("config", "node_count")),
+            ("runtime_gpu_count", ("runtime", "gpu_count")),
+        )
+    }
+    if all(
+        not isinstance(value, bool) and isinstance(value, int)
+        for value in topology_values.values()
+    ):
+        tensor_parallel_size = cast(int, topology_values["tensor_parallel_size"])
+        pipeline_parallel_size = cast(
+            int,
+            topology_values["pipeline_parallel_size"],
+        )
+        total_gpus = cast(int, topology_values["total_gpus"])
+        node_count = cast(int, topology_values["node_count"])
+        runtime_gpu_count = cast(int, topology_values["runtime_gpu_count"])
+        active_gpus = tensor_parallel_size * pipeline_parallel_size
+        if total_gpus != active_gpus:
+            mismatches.append(
+                "config.total_gpus: expected tensor_parallel_size * "
+                f"pipeline_parallel_size = {active_gpus}, got "
+                f"{total_gpus!r}"
+            )
+        visible_gpu_capacity = runtime_gpu_count * node_count
+        if active_gpus > visible_gpu_capacity:
+            mismatches.append(
+                "runtime.gpu_count: local GPU inventory across config.node_count "
+                f"provides {visible_gpu_capacity} GPUs for {active_gpus} active GPUs"
+            )
+
     prompt_found, prompt_jsonl = _nemotron_smoke_metadata_value(
         payload,
         ("config", "prompt_jsonl"),
@@ -2666,23 +2712,44 @@ def _validate_nemotron_mtp_k_sweep_payload(
                     f"got {type(raw_batch).__name__}"
                 )
                 continue
+            request_count = raw_batch.get("request_count")
             if raw_batch.get("batch_index") != batch_index:
                 mismatches.append(
                     f"rollout_batches[{batch_index}].batch_index: expected "
                     f"{batch_index}, got {raw_batch.get('batch_index')!r}"
                 )
-            if raw_batch.get("request_count") != 32:
+            if request_count != 32:
                 mismatches.append(
                     f"rollout_batches[{batch_index}].request_count: expected 32, "
-                    f"got {raw_batch.get('request_count')!r}"
+                    f"got {request_count!r}"
                 )
             requests = raw_batch.get("requests")
+            request_length = len(requests) if isinstance(requests, list) else None
             if not isinstance(requests, list) or len(requests) != 32:
-                actual_count = len(requests) if isinstance(requests, list) else None
                 mismatches.append(
                     f"rollout_batches[{batch_index}].requests: expected 32, "
-                    f"got {actual_count!r}"
+                    f"got {request_length!r}"
                 )
+            for vector_field in (
+                "actual_output_tokens",
+                "planned_output_tokens",
+                "forced_output_mask",
+                "output_token_hashes",
+            ):
+                vector = raw_batch.get(vector_field)
+                vector_length = len(vector) if isinstance(vector, list) else None
+                if (
+                    not isinstance(vector, list)
+                    or vector_length != request_count
+                    or vector_length != request_length
+                ):
+                    mismatches.append(
+                        f"rollout_batches[{batch_index}].{vector_field}: expected "
+                        "one entry per request with "
+                        f"request_count={request_count!r} and "
+                        f"len(requests)={request_length!r}, got {vector_length!r}"
+                    )
+            if not isinstance(requests, list) or len(requests) != 32:
                 continue
             for request_index, raw_request in enumerate(requests):
                 if not isinstance(raw_request, dict):
@@ -2691,18 +2758,20 @@ def _validate_nemotron_mtp_k_sweep_payload(
                         f"expected an object, got {type(raw_request).__name__}"
                     )
                     continue
-                if raw_request.get("ignore_eos") is not False:
-                    mismatches.append(
-                        f"rollout_batches[{batch_index}].requests[{request_index}]"
-                        f".ignore_eos: expected False, got "
-                        f"{raw_request.get('ignore_eos')!r}"
-                    )
-                if raw_request.get("max_tokens") != 4096:
-                    mismatches.append(
-                        f"rollout_batches[{batch_index}].requests[{request_index}]"
-                        f".max_tokens: expected 4096, got "
-                        f"{raw_request.get('max_tokens')!r}"
-                    )
+                expected_request_protocol = {
+                    "sample_index": request_index % 4,
+                    "seed": NEMOTRON_MTP_K_SWEEP_SEED + batch_index * 32 + request_index,
+                    "max_tokens": 4096,
+                    "min_tokens": 0,
+                    "ignore_eos": False,
+                }
+                for field, expected in expected_request_protocol.items():
+                    actual = raw_request.get(field)
+                    if actual != expected or type(actual) is not type(expected):
+                        mismatches.append(
+                            f"rollout_batches[{batch_index}].requests[{request_index}]"
+                            f".{field}: expected {expected!r}, got {actual!r}"
+                        )
 
     if mismatches:
         raise ValueError(
@@ -3105,33 +3174,38 @@ def _derive_nemotron_k_sweep_raw_metrics(
     return expected_summary
 
 
-def _validate_nemotron_k_sweep_prompt_hashes(
+def _nemotron_k_sweep_request_provenance_hash(
+    requests: list[dict[str, object]],
+) -> str:
+    canonical_requests = json.dumps(
+        requests,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical_requests).hexdigest()
+
+
+def _validate_nemotron_k_sweep_request_provenance(
     payload: dict[str, object],
-    reference_payload: dict[str, object],
     relative_path: Path,
 ) -> None:
     rollout_batches = cast(list[dict[str, object]], payload["rollout_batches"])
-    reference_batches = cast(
-        list[dict[str, object]], reference_payload["rollout_batches"]
-    )
-    for batch_index, (batch, reference_batch) in enumerate(
-        zip(rollout_batches, reference_batches, strict=True)
+    for batch_index, (batch, expected_hash) in enumerate(
+        zip(
+            rollout_batches,
+            NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES,
+            strict=True,
+        )
     ):
         requests = cast(list[dict[str, object]], batch["requests"])
-        reference_requests = cast(
-            list[dict[str, object]], reference_batch["requests"]
+        _validate_nemotron_k_sweep_json_value(
+            relative_path,
+            f"rollout_batches[{batch_index}].request_provenance_hash "
+            "(prompt_id, prompt_sha256, source_prompt_sha256, sample_index, "
+            "seed, prompt_tokens, max_tokens, min_tokens, ignore_eos)",
+            _nemotron_k_sweep_request_provenance_hash(requests),
+            expected_hash,
         )
-        for request_index, (request, reference_request) in enumerate(
-            zip(requests, reference_requests, strict=True)
-        ):
-            for hash_field in ("prompt_sha256", "source_prompt_sha256"):
-                _validate_nemotron_k_sweep_json_value(
-                    relative_path,
-                    f"rollout_batches[{batch_index}].requests[{request_index}]"
-                    f".{hash_field}",
-                    request.get(hash_field),
-                    reference_request.get(hash_field),
-                )
 
 
 def _output_work_within_one_percent(
@@ -3274,11 +3348,9 @@ def load_nemotron_mtp_k_sweep_rows(
         )
         payloads[(model_key, method_key)] = (payload, path)
 
-    prompt_reference = payloads[("super", "baseline")][0]
     for payload, path in payloads.values():
-        _validate_nemotron_k_sweep_prompt_hashes(
+        _validate_nemotron_k_sweep_request_provenance(
             payload,
-            prompt_reference,
             path.relative_to(result_root),
         )
 
