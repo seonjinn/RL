@@ -9,6 +9,7 @@ import pytest
 
 from experiments.vllm_024_upgrade.summarize_eagle3_dynamicsd import (
     RunSummary,
+    _validate_manifest_rows,
     build_comparison_rows,
     main,
     summarize_history,
@@ -25,6 +26,9 @@ def _history(scale: float = 1.0) -> list[dict[str, float]]:
             "performance/tokens_per_sec_per_gpu": 25.0 * scale,
             "train/vllm/spec_acceptance_rate": 0.5 if scale > 1 else 0.0,
             "train/vllm/spec_acceptance_length": 2.5 if scale > 1 else 1.0,
+            "train/vllm/spec_num_drafts": 100.0 if scale > 1 else 0.0,
+            "train/vllm/spec_num_draft_tokens": 300.0 if scale > 1 else 0.0,
+            "train/vllm/spec_num_accepted_tokens": 150.0 if scale > 1 else 0.0,
             "train/reward": 0.4,
             "train/mean_gen_tokens_per_sample": 1024.0,
             "train/gen_kl_error": 0.01,
@@ -41,6 +45,19 @@ def test_summarize_history_uses_steps_2_through_20() -> None:
     assert summary.measured_steps == list(range(2, 21))
     assert summary.generation_time_s == 100.0
     assert summary.e2e_step_time_s == 200.0
+
+
+def test_summarize_history_allows_baseline_without_specdec_metrics() -> None:
+    history = _history()
+    for row in history:
+        del row["train/vllm/spec_acceptance_rate"]
+        del row["train/vllm/spec_acceptance_length"]
+
+    summary = summarize_history("qwen32b", "baseline", history)
+
+    assert summary.complete
+    assert summary.acceptance_rate is None
+    assert summary.mean_acceptance_length is None
 
 
 def test_summarize_history_rejects_missing_step_20() -> None:
@@ -63,12 +80,27 @@ def test_summarize_history_rejects_non_finite_required_metric() -> None:
 def test_summarize_history_requires_positive_specdec_evidence() -> None:
     history = _history(1.2)
     for row in history:
-        row["train/vllm/spec_acceptance_rate"] = 0.0
+        row["train/vllm/spec_num_accepted_tokens"] = 0.0
 
     summary = summarize_history("qwen32b", "eagle3_k5", history)
 
     assert not summary.complete
     assert summary.reason == "missing_specdec_evidence"
+
+
+def test_summarize_history_weights_specdec_ratios_by_counters() -> None:
+    history = _history(1.2)
+    history[1]["train/vllm/spec_num_drafts"] = 1.0
+    history[1]["train/vllm/spec_num_draft_tokens"] = 10.0
+    history[1]["train/vllm/spec_num_accepted_tokens"] = 5.0
+
+    summary = summarize_history("qwen32b", "dynamic", history)
+
+    expected_accepted = 5.0 + 18 * 150.0
+    assert summary.acceptance_rate == pytest.approx(expected_accepted / (10.0 + 18 * 300.0))
+    assert summary.mean_acceptance_length == pytest.approx(
+        1.0 + expected_accepted / (1.0 + 18 * 100.0)
+    )
 
 
 def test_build_comparison_rows_matches_model_baseline() -> None:
@@ -109,12 +141,37 @@ def test_build_comparison_rows_fails_health_gate_outside_ten_percent() -> None:
     assert not rows["dynamic"].reward_health_passed
 
 
+def test_build_comparison_rows_accepts_matching_zero_health_metrics() -> None:
+    baseline_history = _history()
+    dynamic_history = _history(1.2)
+    for row in [*baseline_history, *dynamic_history]:
+        row["train/gen_kl_error"] = 0.0
+    baseline = summarize_history("qwen32b", "baseline", baseline_history)
+    dynamic = summarize_history("qwen32b", "dynamic", dynamic_history)
+
+    rows = {row.variant: row for row in build_comparison_rows([baseline, dynamic])}
+
+    assert rows["dynamic"].kl_health_passed
+
+
+def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
+    rows = [
+        {"model": "qwen32b", "variant": "baseline", "commit": "aaa", "nodes": "4"},
+        {"model": "qwen32b", "variant": "dynamic", "commit": "bbb", "nodes": "4"},
+    ]
+    assert _validate_manifest_rows(rows) == "mismatched setup for model qwen32b"
+
+    rows[1] = {"model": "qwen32b", "variant": "baseline", "commit": "aaa", "nodes": "4"}
+    assert _validate_manifest_rows(rows) == "duplicate variant baseline for model qwen32b"
+
+
 class _FakeRun:
     url = "https://wandb.example/runs/dynamic-run"
 
     def scan_history(self, *, keys: list[str]):
         assert keys[0] == "_step"
-        return iter(_history(1.2))
+        assert "train/vllm/spec_num_drafts" in keys
+        return iter({key: row[key] for key in keys} for row in _history(1.2))
 
 
 class _FakeApi:
@@ -124,21 +181,28 @@ class _FakeApi:
 
 
 class _MatrixRun:
-    def __init__(self, scale: float) -> None:
+    def __init__(self, scale: float, variant: str) -> None:
         self._scale = scale
+        self._variant = variant
         self.url = f"https://wandb.example/runs/{scale}"
 
     def scan_history(self, *, keys: list[str]):
-        return iter(_history(self._scale))
+        if self._variant == "baseline":
+            assert not any("spec_" in key for key in keys)
+        else:
+            assert "train/vllm/spec_num_drafts" in keys
+        return iter({key: row[key] for key in keys} for row in _history(self._scale))
 
 
 class _MatrixApi:
     def run(self, path: str) -> _MatrixRun:
         run_id = path.rsplit("/", maxsplit=1)[-1]
-        return _MatrixRun(
-            {"one-base": 1.0, "one-fixed": 1.2, "one-dynamic": 1.5,
-             "two-base": 1.0, "two-fixed": 1.1, "two-dynamic": 1.3}[run_id]
+        scale = {"one-base": 1.0, "one-fixed": 1.2, "one-dynamic": 1.5,
+                 "two-base": 1.0, "two-fixed": 1.1, "two-dynamic": 1.3}[run_id]
+        variant = "baseline" if run_id.endswith("base") else (
+            "eagle3_k5" if run_id.endswith("fixed") else "dynamic"
         )
+        return _MatrixRun(scale, variant)
 
 
 def test_main_writes_manifest_metadata_and_explicit_csv(tmp_path: Path) -> None:
@@ -165,11 +229,12 @@ def test_main_writes_manifest_metadata_and_explicit_csv(tmp_path: Path) -> None:
         ["--manifest", str(manifest), "--output-dir", str(output_dir)], api=_FakeApi()
     )
 
-    assert exit_code == 0
+    assert exit_code == 1
     payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert payload[0]["job_id"] == "12345"
     assert payload[0]["wandb_run_id"] == "dynamic-run"
     assert payload[0]["wandb_url"] == "https://submitted.example/dynamic-run"
+    assert payload[0]["reason"].startswith("comparison_failed:")
     with (output_dir / "summary.csv").open(encoding="utf-8", newline="") as stream:
         fieldnames = csv.DictReader(stream).fieldnames
         assert fieldnames is not None

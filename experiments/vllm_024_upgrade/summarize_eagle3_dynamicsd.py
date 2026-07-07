@@ -26,6 +26,31 @@ METRIC_KEYS = {
 }
 EXPECTED_STEPS = set(range(2, 21))
 SPECDEC_VARIANTS = frozenset({"eagle3_k5", "dynamic"})
+SPECDEC_METRICS = frozenset({"acceptance_rate", "mean_acceptance_length"})
+SPECDEC_COUNTER_KEYS = {
+    "num_drafts": "train/vllm/spec_num_drafts",
+    "num_draft_tokens": "train/vllm/spec_num_draft_tokens",
+    "num_accepted_tokens": "train/vllm/spec_num_accepted_tokens",
+}
+POSITIVE_METRICS = frozenset(
+    {
+        "generation_time_s",
+        "e2e_step_time_s",
+        "generation_throughput",
+        "e2e_throughput",
+    }
+)
+MATCHED_SETUP_FIELDS = (
+    "recipe",
+    "nodes",
+    "segment",
+    "commit",
+    "container",
+    "container_sha256",
+    "max_steps",
+    "static_k",
+    "dynamic_schedule",
+)
 
 
 @dataclass(frozen=True)
@@ -120,26 +145,48 @@ def summarize_history(
             model, variant, f"missing_steps:{','.join(map(str, missing_steps))}", measured_steps
         )
 
+    required_metrics = set(METRIC_KEYS) - SPECDEC_METRICS
     values: dict[str, list[float]] = {metric_name: [] for metric_name in METRIC_KEYS}
+    counter_values: dict[str, list[float]] = {
+        metric_name: [] for metric_name in SPECDEC_COUNTER_KEYS
+    }
     for step in sorted(EXPECTED_STEPS):
         record = records_by_step[step]
-        for metric_name, wandb_key in METRIC_KEYS.items():
+        for metric_name in required_metrics:
+            wandb_key = METRIC_KEYS[metric_name]
             value = record.get(wandb_key)
             if not _is_finite_number(value):
                 return _empty_summary(
                     model, variant, f"non_finite_metrics:{metric_name}:{step}", measured_steps
                 )
             values[metric_name].append(float(value))
+        if variant in SPECDEC_VARIANTS:
+            for metric_name, wandb_key in SPECDEC_COUNTER_KEYS.items():
+                value = record.get(wandb_key)
+                if not _is_finite_number(value):
+                    return _empty_summary(
+                        model, variant, f"non_finite_metrics:{metric_name}:{step}", measured_steps
+                    )
+                counter_values[metric_name].append(float(value))
 
     averages = {
-        metric_name: statistics.fmean(metric_values)
+        metric_name: statistics.fmean(metric_values) if metric_values else None
         for metric_name, metric_values in values.items()
     }
-    if variant in SPECDEC_VARIANTS and (
-        averages["acceptance_rate"] <= 0.0
-        or averages["mean_acceptance_length"] <= 0.0
-    ):
-        return _empty_summary(model, variant, "missing_specdec_evidence", measured_steps)
+    for metric_name in POSITIVE_METRICS:
+        value = averages[metric_name]
+        if value is None or value <= 0.0:
+            return _empty_summary(
+                model, variant, f"non_positive_metric:{metric_name}", measured_steps
+            )
+    if variant in SPECDEC_VARIANTS:
+        total_drafts = sum(counter_values["num_drafts"])
+        total_draft_tokens = sum(counter_values["num_draft_tokens"])
+        total_accepted_tokens = sum(counter_values["num_accepted_tokens"])
+        if total_drafts <= 0.0 or total_draft_tokens <= 0.0 or total_accepted_tokens <= 0.0:
+            return _empty_summary(model, variant, "missing_specdec_evidence", measured_steps)
+        averages["acceptance_rate"] = total_accepted_tokens / total_draft_tokens
+        averages["mean_acceptance_length"] = 1.0 + total_accepted_tokens / total_drafts
 
     return RunSummary(
         model=model,
@@ -158,8 +205,10 @@ def _speedup(numerator: float | None, denominator: float | None) -> float | None
 
 
 def _health_metric(candidate: float | None, baseline: float | None) -> bool:
-    if candidate is None or baseline is None or baseline == 0.0:
+    if candidate is None or baseline is None:
         return False
+    if baseline == 0.0:
+        return math.isclose(candidate, 0.0, abs_tol=1e-8)
     return abs(candidate - baseline) / abs(baseline) <= 0.10
 
 
@@ -220,6 +269,9 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
 
     comparison_rows: list[ComparisonRow] = []
     for model_summaries in grouped.values():
+        variants = [summary.variant for summary in model_summaries]
+        if len(variants) != len(set(variants)):
+            raise ValueError(f"duplicate variants for model {model_summaries[0].model}")
         baselines = [summary for summary in model_summaries if summary.variant == "baseline"]
         if not baselines:
             raise ValueError(f"missing baseline for model {model_summaries[0].model}")
@@ -255,6 +307,23 @@ def _read_manifest(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream, delimiter="\t"))
 
 
+def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
+    seen: set[tuple[str, str]] = set()
+    setup_by_model: dict[str, tuple[str, ...]] = {}
+    for row in rows:
+        model = row.get("model", "")
+        variant = row.get("variant", "")
+        key = (model, variant)
+        if key in seen:
+            return f"duplicate variant {variant} for model {model}"
+        seen.add(key)
+        setup = tuple(row.get(field, "") for field in MATCHED_SETUP_FIELDS)
+        previous = setup_by_model.setdefault(model, setup)
+        if setup != previous:
+            return f"mismatched setup for model {model}"
+    return None
+
+
 def _write_json_atomic(path: Path, rows: list[dict[str, object]]) -> None:
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, delete=False
@@ -273,10 +342,27 @@ def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "wandb_run_id",
         "wandb_url",
     ]
-    with path.open("w", encoding="utf-8", newline="") as stream:
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", newline="", dir=path.parent, delete=False
+    ) as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+        stream.flush()
+        os.fsync(stream.fileno())
+        temporary_path = Path(stream.name)
+    temporary_path.replace(path)
+
+
+def _history_keys(variant: str) -> list[str]:
+    keys = [
+        wandb_key
+        for metric_name, wandb_key in METRIC_KEYS.items()
+        if metric_name not in SPECDEC_METRICS
+    ]
+    if variant in SPECDEC_VARIANTS:
+        keys.extend(SPECDEC_COUNTER_KEYS.values())
+    return ["_step", *keys]
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -296,6 +382,7 @@ def _create_wandb_api() -> WandbApi:
 def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     args = _parse_args(argv)
     manifest_rows = _read_manifest(args.manifest)
+    manifest_error = _validate_manifest_rows(manifest_rows)
     client = api if api is not None else _create_wandb_api()
     summaries: list[RunSummary] = []
     metadata: list[dict[str, str]] = []
@@ -313,7 +400,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
             summary = summarize_history(
                 model,
                 variant,
-                run.scan_history(keys=["_step", *METRIC_KEYS.values()]),
+                run.scan_history(keys=_history_keys(variant)),
             )
             if not manifest_row.get("wandb_url"):
                 manifest_row = {**manifest_row, "wandb_url": run.url}
@@ -322,7 +409,10 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
         summaries.append(summary)
         metadata.append(manifest_row)
 
+    comparison_error: ValueError | None = None
     try:
+        if manifest_error is not None:
+            raise ValueError(manifest_error)
         rows = [asdict(row) for row in build_comparison_rows(summaries)]
         metadata_by_run = {
             (summary.model, summary.variant): manifest_row
@@ -331,8 +421,12 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
         row_metadata = [
             metadata_by_run[(row["model"], row["variant"])] for row in rows
         ]
-    except ValueError:
+    except ValueError as error:
+        comparison_error = error
         rows = [_unmatched_row(summary) for summary in summaries]
+        for row in rows:
+            row["complete"] = False
+            row["reason"] = f"comparison_failed:{error}"
         row_metadata = metadata
     for row, manifest_row in zip(rows, row_metadata, strict=True):
         row["job_id"] = manifest_row.get("job_id", "")
@@ -342,7 +436,10 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(args.output_dir / "summary.json", rows)
     _write_csv(args.output_dir / "summary.csv", rows)
-    return int(any(not summary.complete for summary in summaries))
+    return int(
+        comparison_error is not None
+        or any(not bool(row.get("complete")) for row in rows)
+    )
 
 
 if __name__ == "__main__":

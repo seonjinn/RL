@@ -461,6 +461,47 @@ def test_configure_generation_config_uses_real_startup_weights_without_draft_ref
     assert configured["vllm_cfg"]["load_format"] == "auto"
 
 
+def test_configure_generation_config_preserves_dynamic_eagle3_schedule():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    schedule = [
+        [1, 16, 5],
+        [17, 32, 4],
+        [33, 64, 3],
+        [65, 128, 1],
+        [129, 512, 0],
+    ]
+    vllm_config["vllm_kwargs"] = {
+        "compilation_config": {"cudagraph_mode": "PIECEWISE"},
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/draft-model",
+            "num_speculative_tokens": 5,
+            "draft_tensor_parallel_size": 1,
+            "num_speculative_tokens_per_batch_size": schedule,
+        },
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_kwargs"]["speculative_config"] == {
+        "method": "eagle3",
+        "model": "/tmp/draft-model",
+        "num_speculative_tokens": 5,
+        "draft_tensor_parallel_size": 1,
+        "num_speculative_tokens_per_batch_size": schedule,
+    }
+    assert configured["vllm_kwargs"]["compilation_config"] == {
+        "cudagraph_mode": "PIECEWISE"
+    }
+
+
 def test_configure_generation_config_keeps_dummy_startup_weights_with_draft_refit():
     """Speculative training can keep dummy startup weights when draft refit is available."""
     vllm_config = deepcopy(basic_vllm_test_config)
