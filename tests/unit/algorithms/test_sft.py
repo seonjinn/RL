@@ -30,6 +30,7 @@ from nemo_rl.algorithms.sft import (
     SFTConfig,
     _add_e2e_step_timing,
     _build_sft_collate_fn,
+    _get_processed_token_count,
     _initial_sft_save_state,
     _iter_timed_batches,
     _measure_loop_interval,
@@ -40,6 +41,42 @@ from nemo_rl.algorithms.sft import (
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.utils.timer import Timer
+
+
+@pytest.mark.parametrize(
+    ("train_data", "expected_processed_tokens"),
+    [
+        pytest.param(
+            BatchedDataDict(
+                {
+                    "input_ids": torch.empty((2, 8), device="meta"),
+                    "input_lengths": torch.tensor([5, 7], device="cpu"),
+                    "packed_cu_seqlens": torch.tensor(
+                        [[0, 2, 5], [0, 3, 7]], device="cpu"
+                    ),
+                }
+            ),
+            12,
+            id="packed",
+        ),
+        pytest.param(
+            BatchedDataDict(
+                {
+                    "input_ids": torch.empty((3, 9), device="meta"),
+                    "input_lengths": torch.tensor([4, 6, 9], device="cpu"),
+                }
+            ),
+            19,
+            id="ordinary",
+        ),
+    ],
+)
+def test_get_processed_token_count_sums_cpu_input_lengths(
+    train_data: BatchedDataDict, expected_processed_tokens: int
+) -> None:
+    assert train_data["input_lengths"].device.type == "cpu"
+
+    assert _get_processed_token_count(train_data) == expected_processed_tokens
 
 
 @pytest.fixture
@@ -911,6 +948,7 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
     assert logger.define_metric.call_args_list == [
         call("comparison/step"),
         call("performance/*", step_metric="comparison/step"),
+        call("throughput/*", step_metric="comparison/step"),
         call("accuracy/*", step_metric="comparison/step"),
         call("context/*", step_metric="comparison/step"),
     ]
@@ -948,6 +986,10 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
         "accuracy/main_lm_loss": 0.5,
         "accuracy/grad_norm": 1.0,
         "accuracy/learning_rate": 4.2e-7,
+        "throughput/processed_tokens_per_second": pytest.approx(3 / 55.28),
+        "throughput/processed_tokens_per_second_per_gpu": pytest.approx(3 / 55.28 / 2),
+        "context/processed_tokens": 3,
+        "context/num_gpus": 2,
         "context/is_validation_step": 1,
     }
     if expected_validation_time is not None:

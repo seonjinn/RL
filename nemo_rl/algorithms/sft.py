@@ -129,6 +129,11 @@ def _optional_float(value: Any) -> float | None:
     return None
 
 
+def _get_processed_token_count(train_data: BatchedDataDict[Any]) -> int:
+    """Return the global token count from the CPU input lengths."""
+    return int(train_data["input_lengths"].sum().item())
+
+
 def _measure_loop_interval(
     previous_boundary: float | None, current_boundary: float
 ) -> tuple[float, float | None]:
@@ -986,6 +991,7 @@ def sft_train(
     if logger.comparison_metrics_enabled:
         logger.define_metric("comparison/step")
         logger.define_metric("performance/*", step_metric="comparison/step")
+        logger.define_metric("throughput/*", step_metric="comparison/step")
         logger.define_metric("accuracy/*", step_metric="comparison/step")
         logger.define_metric("context/*", step_metric="comparison/step")
 
@@ -1064,6 +1070,7 @@ def sft_train(
                             cat_and_padded.get_multimodal_dict(as_tensors=False)
                         )
 
+                    processed_tokens = _get_processed_token_count(train_data)
                     dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
                     train_data = _maybe_reorder_megatron_sft_dp_stride(
                         train_data,
@@ -1287,6 +1294,8 @@ def sft_train(
                         ),
                         grad_norm=_optional_float(metrics.get("grad_norm")),
                         learning_rate=_optional_float(metrics.get("lr")),
+                        processed_tokens=processed_tokens,
+                        num_gpus=total_num_gpus,
                     )
                 )
                 logger.log_metrics(

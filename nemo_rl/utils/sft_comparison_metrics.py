@@ -30,6 +30,8 @@ class SFTComparisonObservation:
     validation_loss: float | None = None
     grad_norm: float | None = None
     learning_rate: float | None = None
+    processed_tokens: int | None = None
+    num_gpus: int | None = None
 
 
 def build_sft_comparison_metrics(
@@ -76,6 +78,40 @@ def build_sft_comparison_metrics(
         if not math.isfinite(float_value):
             raise ValueError(f"{field_name} must be finite, got {float_value!r}")
         metrics[metric_name] = float_value
+
+    if (observation.processed_tokens is None) != (observation.num_gpus is None):
+        raise ValueError("processed_tokens and num_gpus must be provided together")
+
+    if observation.processed_tokens is not None:
+        if type(observation.processed_tokens) is not int:
+            raise TypeError(
+                "processed_tokens must be a Python int, "
+                f"got {type(observation.processed_tokens).__name__}"
+            )
+        if type(observation.num_gpus) is not int:
+            raise TypeError(
+                f"num_gpus must be a Python int, got {type(observation.num_gpus).__name__}"
+            )
+        if observation.processed_tokens < 0:
+            raise ValueError(
+                "processed_tokens must be non-negative, "
+                f"got {observation.processed_tokens}"
+            )
+        if observation.num_gpus <= 0:
+            raise ValueError(f"num_gpus must be positive, got {observation.num_gpus}")
+        if observation.train_step_time_s is None or observation.train_step_time_s <= 0:
+            raise ValueError(
+                "train_step_time_s must be positive when throughput is emitted"
+            )
+
+        train_step_time_s = float(observation.train_step_time_s)
+        processed_tokens_per_second = observation.processed_tokens / train_step_time_s
+        metrics["throughput/processed_tokens_per_second"] = processed_tokens_per_second
+        metrics["throughput/processed_tokens_per_second_per_gpu"] = (
+            processed_tokens_per_second / observation.num_gpus
+        )
+        metrics["context/processed_tokens"] = observation.processed_tokens
+        metrics["context/num_gpus"] = observation.num_gpus
 
     metrics["context/is_validation_step"] = int(
         observation.validation_time_s is not None
