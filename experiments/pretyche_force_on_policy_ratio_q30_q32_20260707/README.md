@@ -29,6 +29,7 @@ logprobs remain enabled because `loss_fn.reference_policy_kl_penalty=0.01`.
 - `scripts/validate_config_contract.sbatch`: containerized unit/config validation
 - `scripts/run_force_on_policy_benchmark.sbatch`: immutable benchmark runner
 - `scripts/submit_force_on_policy_matrix.sh`: test-only, smoke, and gated performance submission
+- `scripts/watch_smoke_and_submit_performance.sh`: persistent terminal-state watcher that invokes the strict smoke gate and submits performance jobs only after all smoke jobs pass
 - `results/`: job manifests and collected metrics after remote execution
 
 ## Submission sequence
@@ -49,6 +50,11 @@ completes successfully.
 The validation job starts from a clean source checkout and removes only the
 `tests/unit/unit_results*` artifacts that the selected pytest tests create, so
 the immutable-source guard remains clean for the benchmark jobs.
+
+For a queued smoke matrix, the watcher can run in a persistent login-node tmux
+session. It writes `results/watcher_status.tsv`, exits without submitting on any
+terminal smoke failure, invokes the submitter's test-only smoke gate, submits the
+four performance jobs, and monitors their initial queue state for five minutes.
 
 After all four smoke jobs complete successfully, the submitter independently
 checks the smoke manifest, SLURM state, step-2 marker, fatal signatures, and
