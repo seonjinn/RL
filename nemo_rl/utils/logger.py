@@ -81,6 +81,7 @@ class LoggerConfig(TypedDict):
     swanlab_enabled: bool
     tensorboard_enabled: bool
     mlflow_enabled: bool
+    comparison_metrics_enabled: NotRequired[bool]
     wandb: WandbConfig
     tensorboard: NotRequired[TensorboardConfig]
     swanlab: NotRequired[SwanlabConfig]
@@ -955,6 +956,9 @@ class Logger(LoggerInterface):
         self.loggers: list[LoggerInterface] = []
         self.wandb_logger = None
         self.swanlab_logger = None
+        self.comparison_metrics_enabled: bool = cfg.get(
+            "comparison_metrics_enabled", False
+        )
 
         self.base_log_dir = cfg["log_dir"]
         os.makedirs(self.base_log_dir, exist_ok=True)
@@ -1008,6 +1012,11 @@ class Logger(LoggerInterface):
 
         if not self.loggers:
             print("No loggers initialized")
+
+    def define_metric(self, name: str, step_metric: str | None = None) -> None:
+        """Define a W&B metric pattern and its optional custom step axis."""
+        if self.wandb_logger is not None:
+            self.wandb_logger.define_metric(name, step_metric=step_metric)
 
     def log_metrics(
         self,

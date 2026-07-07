@@ -261,6 +261,7 @@ data:
 logger:
   log_dir: "logs"
   wandb_enabled: True
+  comparison_metrics_enabled: false
   tensorboard_enabled: true
   mlflow_enabled: false
   swanlab_enabled: false

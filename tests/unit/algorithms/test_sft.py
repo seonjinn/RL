@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import MagicMock, patch
+from collections.abc import Generator
+from contextlib import contextmanager
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import torch
@@ -29,6 +31,7 @@ from nemo_rl.algorithms.sft import (
     _measure_loop_interval,
     sft_train,
 )
+from nemo_rl.utils.sft_comparison_metrics import SFTComparisonObservation
 from nemo_rl.utils.timer import Timer
 
 
@@ -69,6 +72,7 @@ def mock_components():
 
     loss_fn = NLLLossFn()
     logger = MagicMock()
+    logger.comparison_metrics_enabled = False
     checkpointer = MagicMock()
 
     # Create mock master config
@@ -298,3 +302,86 @@ def test_training_with_negative_val_period(mock_components):
     )
 
     assert mock_components["policy"].train.call_count == 3
+
+
+def test_training_logs_one_comparison_payload_with_custom_axis(mock_components):
+    """SFT emits one normalized comparison payload after validation completes."""
+
+    class FixedTimer:
+        @contextmanager
+        def time(self, _name: str) -> Generator[None, None, None]:
+            yield
+
+        def record_elapsed(self, _name: str, _elapsed: float) -> None:
+            return None
+
+        def get_timing_metrics(self, reduction_op: str) -> dict[str, float]:
+            assert reduction_op == "sum"
+            return {
+                "policy_training": 55.28,
+                "total_step_time": 60.0,
+                "data_fetch": 2.0,
+            }
+
+        def reset(self) -> None:
+            return None
+
+    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_epochs = 1
+    mock_components["master_config"].sft.val_period = 1
+    mock_components["policy"].train.return_value["all_mb_metrics"]["lr"] = [4.2e-7]
+    logger = mock_components["logger"]
+    logger.comparison_metrics_enabled = True
+    comparison_payload = {"comparison/step": 1, "context/is_validation_step": 1}
+
+    with (
+        patch("nemo_rl.algorithms.sft.Timer", FixedTimer),
+        patch(
+            "nemo_rl.algorithms.sft.validate",
+            return_value=(
+                {"val_loss": 0.6},
+                {"total_validation_time": 126.99},
+            ),
+        ),
+        patch(
+            "nemo_rl.algorithms.sft.build_sft_comparison_metrics",
+            return_value=comparison_payload,
+        ) as build_metrics,
+    ):
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            logger,
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    logger.define_metric.assert_has_calls(
+        [
+            call("comparison/step"),
+            call("performance/*", step_metric="comparison/step"),
+            call("accuracy/*", step_metric="comparison/step"),
+            call("context/*", step_metric="comparison/step"),
+        ]
+    )
+    build_metrics.assert_called_once_with(
+        SFTComparisonObservation(
+            step=1,
+            train_step_time_s=55.28,
+            e2e_step_time_s=62.0,
+            validation_time_s=126.99,
+            main_lm_loss=0.5,
+            validation_loss=0.6,
+            grad_norm=1.0,
+            learning_rate=4.2e-7,
+        )
+    )
+    logger.log_metrics.assert_any_call(
+        comparison_payload,
+        1,
+        step_metric="comparison/step",
+    )

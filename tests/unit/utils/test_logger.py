@@ -1750,6 +1750,31 @@ class TestLogger:
 
     @patch("nemo_rl.utils.logger.WandbLogger")
     @patch("nemo_rl.utils.logger.TensorboardLogger")
+    def test_define_comparison_metric_only_delegates_to_wandb(
+        self, mock_tb_logger, mock_wandb_logger, temp_dir
+    ):
+        """Comparison axis definitions are W&B-specific."""
+        cfg = {
+            "wandb_enabled": True,
+            "tensorboard_enabled": True,
+            "mlflow_enabled": False,
+            "swanlab_enabled": False,
+            "monitor_gpus": False,
+            "wandb": {"project": "test-project"},
+            "tensorboard": {"log_dir": "test_logs"},
+            "log_dir": temp_dir,
+        }
+        logger = Logger(cfg)
+
+        logger.define_metric("comparison/*", step_metric="comparison/step")
+
+        mock_wandb_logger.return_value.define_metric.assert_called_once_with(
+            "comparison/*", step_metric="comparison/step"
+        )
+        mock_tb_logger.return_value.define_metric.assert_not_called()
+
+    @patch("nemo_rl.utils.logger.WandbLogger")
+    @patch("nemo_rl.utils.logger.TensorboardLogger")
     def test_log_plot_token_mult_prob_error(
         self, mock_tb_logger, mock_wandb_logger, temp_dir
     ):

@@ -47,6 +47,10 @@ from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
+from nemo_rl.utils.sft_comparison_metrics import (
+    SFTComparisonObservation,
+    build_sft_comparison_metrics,
+)
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 
 
@@ -97,6 +101,13 @@ def _add_e2e_step_timing(timing_metrics: dict[str, float]) -> None:
     timing_metrics["e2e_step_time"] = timing_metrics.get(
         "total_step_time", 0.0
     ) + timing_metrics.get("data_fetch", 0.0)
+
+
+def _optional_float(value: Any) -> float | None:
+    """Return a scalar metric value, omitting non-scalar values from comparisons."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _measure_loop_interval(
@@ -491,6 +502,12 @@ def sft_train(
         "megatron_sft_dp_stride_order", False
     )
 
+    if logger.comparison_metrics_enabled:
+        logger.define_metric("comparison/step")
+        logger.define_metric("performance/*", step_metric="comparison/step")
+        logger.define_metric("accuracy/*", step_metric="comparison/step")
+        logger.define_metric("context/*", step_metric="comparison/step")
+
     # Run validation at the start if configured
     if val_at_start and total_steps == 0:
         print("\n🔍 Running initial validation...")
@@ -756,6 +773,36 @@ def sft_train(
                 timing_metrics["valid_tokens_per_sec_per_gpu"] = 0.0
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(timing_metrics, total_steps + 1, prefix="timing/train")
+            if logger.comparison_metrics_enabled:
+                comparison_metrics = build_sft_comparison_metrics(
+                    SFTComparisonObservation(
+                        step=total_steps + 1,
+                        train_step_time_s=_optional_float(
+                            timing_metrics.get("policy_training")
+                        ),
+                        e2e_step_time_s=_optional_float(
+                            timing_metrics.get("e2e_step_time")
+                        ),
+                        validation_time_s=_optional_float(
+                            validation_timings.get("total_validation_time")
+                            if validation_timings is not None
+                            else None,
+                        ),
+                        main_lm_loss=metrics.get("loss"),
+                        validation_loss=(
+                            val_metrics.get("val_loss")
+                            if val_metrics is not None
+                            else None
+                        ),
+                        grad_norm=metrics.get("grad_norm"),
+                        learning_rate=metrics.get("lr"),
+                    )
+                )
+                logger.log_metrics(
+                    comparison_metrics,
+                    total_steps + 1,
+                    step_metric="comparison/step",
+                )
 
             timer.reset()
             current_step += 1
