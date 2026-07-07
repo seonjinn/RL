@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import shutil
 import sys
@@ -28,6 +29,11 @@ NEMOTRON_K_SWEEP_ROOT = (
     ROOT
     / "experiments/vllm_024_dynamicsd/report/results/"
     "nemotron_mtp_k_sweep_osl4k_20260706"
+)
+NEMOTRON_OSL16K_FULL_ROOT = (
+    ROOT
+    / "experiments/vllm_024_dynamicsd/report/results/"
+    "nemotron_mtp_osl16k_20260706"
 )
 EXPECTED_NEMOTRON_SMOKE_RESULTS = (
     (
@@ -89,6 +95,13 @@ EXPECTED_NEMOTRON_K_SWEEP_RESULTS = (
     ("ultra", "k3", 3, "2335053"),
     ("ultra", "k5", 5, "2335030"),
 )
+EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS = (
+    ("super", "baseline", 0, "2335018"),
+    ("super", "k3", 3, "2335019"),
+    ("super", "k5", 5, "2335035"),
+    ("ultra", "baseline", 0, "2335020"),
+    ("ultra", "k5", 5, "2335021"),
+)
 
 
 class RecordingHTMLParser(HTMLParser):
@@ -123,6 +136,17 @@ def nemotron_k_sweep_root(
     monkeypatch.setattr(latest, "ROOT", tmp_path)
     result_root = tmp_path / NEMOTRON_K_SWEEP_ROOT.name
     shutil.copytree(NEMOTRON_K_SWEEP_ROOT, result_root)
+    return result_root
+
+
+@pytest.fixture
+def nemotron_osl16k_full_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    monkeypatch.setattr(latest, "ROOT", tmp_path)
+    result_root = tmp_path / NEMOTRON_OSL16K_FULL_ROOT.name
+    shutil.copytree(NEMOTRON_OSL16K_FULL_ROOT, result_root)
     return result_root
 
 
@@ -1421,6 +1445,453 @@ def test_pages_report_publishes_and_links_exact_nemotron_k_sweep_evidence(
     for relative_path in expected_relative_paths:
         assert sha256(evidence_root / relative_path) == sha256(
             NEMOTRON_K_SWEEP_ROOT / relative_path
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_key", "method_key", "_k", "_job_id"),
+    EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS,
+    ids=lambda value: str(value),
+)
+def test_nemotron_osl16k_full_rejects_each_missing_expected_payload(
+    nemotron_osl16k_full_root: Path,
+    model_key: str,
+    method_key: str,
+    _k: int,
+    _job_id: str,
+) -> None:
+    relative_path = Path(model_key) / method_key / "result.json"
+    (nemotron_osl16k_full_root / relative_path).unlink()
+
+    with pytest.raises(ValueError, match=re.escape(relative_path.as_posix())):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+def test_nemotron_osl16k_full_rejects_unexpected_result_payload(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    relative_path = Path("ultra/k3/result.json")
+    result_path = nemotron_osl16k_full_root / relative_path
+    result_path.parent.mkdir(parents=True)
+    shutil.copy2(
+        nemotron_osl16k_full_root / "ultra/k5/result.json",
+        result_path,
+    )
+
+    with pytest.raises(ValueError, match="unexpected payloads") as error:
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+    assert relative_path.as_posix() in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    (
+        (("status",), "running"),
+        (("runtime", "vllm_version"), "0.23.0"),
+        (("runtime", "gpu_count"), 8),
+        (("config", "runtime_image_sha256"), "wrong-image-sha"),
+        (("config", "cudagraph_mode"), "FULL"),
+        (("config", "compilation_config", "cudagraph_mode"), "FULL"),
+        (("config", "temperature"), 0.0),
+        (("config", "top_p"), 0.95),
+        (("config", "max_new_tokens"), 4096),
+        (("config", "num_prompts"), 8),
+        (("config", "samples_per_prompt"), 2),
+        (("config", "rollout_batches"), 2),
+        (("config", "requests_per_rollout_batch"), 32),
+        (("config", "seed"), 4321),
+        (("config", "scenario"), "offline_generation"),
+        (("config", "sync_barrier"), "none"),
+        (("config", "source_recipe"), "other"),
+        (("config", "prompt_jsonl"), "/tmp/other_openmath_prompts.jsonl"),
+        (("config", "prompt_set_hash"), "0" * 64),
+        (("config", "prompt_batch_hashes"), ["0" * 64] * 3),
+        (("config", "model_config_hash"), "0" * 64),
+        (("config", "model_checkpoint_hash"), "0" * 64),
+        (("config", "model_view_marker_hash"), "0" * 64),
+        (("config", "drafter_checkpoint_hash"), "0" * 64),
+        (("config", "context_profile"), "unverified"),
+        (("config", "rope_config_hash"), "0" * 64),
+    ),
+    ids=lambda value: str(value),
+)
+def test_nemotron_osl16k_full_rejects_wrong_cohort_identity(
+    nemotron_osl16k_full_root: Path,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_osl16k_full_root / "super/baseline/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+@pytest.mark.parametrize(
+    ("model_key", "method_key", "_k", "expected_job_id"),
+    EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS,
+    ids=lambda value: str(value),
+)
+def test_nemotron_osl16k_full_rejects_wrong_job_id_for_every_payload(
+    nemotron_osl16k_full_root: Path,
+    model_key: str,
+    method_key: str,
+    _k: int,
+    expected_job_id: str,
+) -> None:
+    result_path = nemotron_osl16k_full_root / model_key / method_key / "result.json"
+    replace_json_value(
+        result_path,
+        ("runtime", "environment", "SLURM_JOB_ID"),
+        "9999999",
+    )
+
+    with pytest.raises(ValueError, match="runtime.environment.SLURM_JOB_ID") as error:
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+    assert expected_job_id in str(error.value)
+
+
+@pytest.mark.parametrize("model_key", ("super", "ultra"))
+def test_nemotron_osl16k_full_rejects_wrong_checkpoint_revision(
+    nemotron_osl16k_full_root: Path,
+    model_key: str,
+) -> None:
+    result_path = nemotron_osl16k_full_root / model_key / "baseline/result.json"
+    expected_model_path = EXPECTED_NEMOTRON_SMOKE_MODEL_PATHS[model_key]
+    replace_json_value(
+        result_path,
+        ("config", "model"),
+        str(Path(expected_model_path).parent / ("0" * 40)),
+    )
+
+    with pytest.raises(ValueError, match=r"config\.model") as error:
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+    assert expected_model_path in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("model_key", "field_path", "bad_value"),
+    (
+        ("super", ("config", "topology", "tensor_parallel_size"), 4),
+        ("super", ("config", "node_count"), 2),
+        ("ultra", ("config", "tensor_parallel_size"), 4),
+        ("ultra", ("config", "topology", "nodes"), 1),
+    ),
+    ids=("super-tp", "super-nodes", "ultra-tp", "ultra-nodes"),
+)
+def test_nemotron_osl16k_full_rejects_wrong_topology(
+    nemotron_osl16k_full_root: Path,
+    model_key: str,
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    result_path = nemotron_osl16k_full_root / model_key / "baseline/result.json"
+    replace_json_value(result_path, field_path, bad_value)
+
+    with pytest.raises(ValueError, match=re.escape(".".join(field_path))):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    (
+        ("seed", 4321),
+        ("sample_index", 3),
+        ("max_tokens", 4096),
+        ("min_tokens", 1),
+        ("ignore_eos", True),
+    ),
+)
+def test_nemotron_osl16k_full_rejects_wrong_request_protocol(
+    nemotron_osl16k_full_root: Path,
+    field: str,
+    bad_value: object,
+) -> None:
+    result_path = nemotron_osl16k_full_root / "super/baseline/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["rollout_batches"][1]["requests"][2][field] = bad_value
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+def test_nemotron_osl16k_full_rejects_coherent_request_provenance_mutation(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    for model_key, method_key, _k, _job_id in (
+        EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS
+    ):
+        result_path = nemotron_osl16k_full_root / model_key / method_key / "result.json"
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        request = payload["rollout_batches"][0]["requests"][0]
+        request["prompt_id"] = "coherently-mutated-prompt"
+        request["prompt_sha256"] = "0" * 64
+        request["source_prompt_sha256"] = "1" * 64
+        result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="request_provenance_hash"):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+def test_nemotron_osl16k_full_reconciles_summary_csv_with_raw_batches(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    rows = latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+    assert len(rows) == 5
+    assert rows["job_id"].tolist() == [
+        job_id
+        for _model, _method, _k, job_id in EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS
+    ]
+    indexed = rows.set_index(["model_key", "method_key"])
+    for model_key, method_key, _k, _job_id in EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS:
+        payload = json.loads(
+            (
+                nemotron_osl16k_full_root
+                / model_key
+                / method_key
+                / "result.json"
+            ).read_text(encoding="utf-8")
+        )
+        batches = payload["rollout_batches"]
+        output_tokens = sum(batch["output_tokens"] for batch in batches)
+        rollout_time = sum(batch["rollout_time_s"] for batch in batches)
+        output_tok_s_gpu = output_tokens / rollout_time / payload["config"]["total_gpus"]
+        baseline = json.loads(
+            (
+                nemotron_osl16k_full_root
+                / model_key
+                / "baseline/result.json"
+            ).read_text(encoding="utf-8")
+        )
+        baseline_tokens = sum(
+            batch["output_tokens"] for batch in baseline["rollout_batches"]
+        )
+        baseline_time = sum(
+            batch["rollout_time_s"] for batch in baseline["rollout_batches"]
+        )
+        baseline_tok_s_gpu = (
+            baseline_tokens
+            / baseline_time
+            / baseline["config"]["total_gpus"]
+        )
+        row = indexed.loc[(model_key, method_key)]
+        assert row["output_tok_s_gpu"] == pytest.approx(output_tok_s_gpu)
+        assert row["throughput_speedup"] == pytest.approx(
+            output_tok_s_gpu / baseline_tok_s_gpu
+        )
+        assert row["output_token_ratio"] == pytest.approx(
+            output_tokens / baseline_tokens
+        )
+        if method_key != "baseline":
+            num_drafts = sum(
+                batch["spec_decode_metrics"]["num_drafts"] for batch in batches
+            )
+            num_draft_tokens = sum(
+                batch["spec_decode_metrics"]["num_draft_tokens"]
+                for batch in batches
+            )
+            num_accepted_tokens = sum(
+                batch["spec_decode_metrics"]["num_accepted_tokens"]
+                for batch in batches
+            )
+            assert row["acceptance_rate"] == pytest.approx(
+                num_accepted_tokens / num_draft_tokens
+            )
+            assert row["mean_acceptance_length"] == pytest.approx(
+                1.0 + num_accepted_tokens / num_drafts
+            )
+
+    assert indexed.loc[("super", "k3"), "throughput_speedup"] == pytest.approx(
+        1.709845465759743
+    )
+    assert indexed.loc[("super", "k5"), "throughput_speedup"] == pytest.approx(
+        1.7916630541624878
+    )
+    assert pd.isna(indexed.loc[("super", "k3"), "rollout_time_speedup"])
+    assert pd.isna(indexed.loc[("super", "k5"), "rollout_time_speedup"])
+    assert indexed.loc[("ultra", "k5"), "throughput_speedup"] == pytest.approx(
+        2.114279153339312
+    )
+    assert indexed.loc[("ultra", "k5"), "rollout_time_speedup"] == pytest.approx(
+        2.098458292569296
+    )
+    assert indexed.loc[("ultra", "k5"), "output_token_ratio"] == pytest.approx(
+        1.007539278157702
+    )
+
+
+def test_nemotron_osl16k_full_rejects_summary_csv_metric_mismatch(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    summary_path = nemotron_osl16k_full_root / "summary.csv"
+    summary = pd.read_csv(summary_path, float_precision="round_trip")
+    row = summary["result_path"] == "ultra/k5/result.json"
+    summary.loc[row, "throughput_speedup"] += 0.001
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match="throughput_speedup"):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+def test_nemotron_osl16k_full_rejects_one_ulp_summary_csv_drift(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    summary_path = nemotron_osl16k_full_root / "summary.csv"
+    summary = pd.read_csv(summary_path, float_precision="round_trip")
+    row = summary["result_path"] == "super/k3/result.json"
+    current = float(summary.loc[row, "time_speedup"].iloc[0])
+    summary.loc[row, "time_speedup"] = math.nextafter(current, math.inf)
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match="time_speedup"):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+def test_nemotron_osl16k_full_rejects_aggregate_not_in_raw_batches(
+    nemotron_osl16k_full_root: Path,
+) -> None:
+    result_path = nemotron_osl16k_full_root / "ultra/k5/result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["summary"]["total_output_tokens"] += 1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+    summary_path = nemotron_osl16k_full_root / "summary.csv"
+    summary = pd.read_csv(summary_path, float_precision="round_trip")
+    row = summary["result_path"] == "ultra/k5/result.json"
+    summary.loc[row, "total_output_tokens"] += 1
+    summary.to_csv(summary_path, index=False)
+
+    with pytest.raises(ValueError, match=r"summary\.total_output_tokens"):
+        latest.load_nemotron_mtp_osl16k_full_rows(nemotron_osl16k_full_root)
+
+
+def test_latest_vllm_html_contains_separate_nemotron_native_mtp_osl16k_full(
+    tmp_path: Path,
+) -> None:
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=tmp_path / "public/data",
+    )
+
+    html_text = parse_html(temp_html)
+    heading = "Nemotron Native MTP OSL 16K Full"
+    assert html_text.count(heading) == 1
+    section = html_text.split(f"<h2>{heading}</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+    osl4k_section = html_text.split(
+        "<h2>Nemotron Native MTP OSL 4K K Sweep</h2>", 1
+    )[1].split("</section>", 1)[0]
+
+    assert heading not in osl4k_section
+    assert "validated fixed-K evidence, not DynamicMTP" in section
+    assert "OpenMath natural-EOS Sync-RL-style rollout" in section
+    assert "OSL cap 16K" in section
+    assert "output work can differ" in section
+    assert "Super K3 1.710x and K5 1.792x throughput" in section
+    assert "90.05% and 92.16%" in section
+    assert "Ultra K5 2.114x throughput" in section
+    assert "2.098x rollout-time speedup" in section
+    assert "100.75% work ratio" in section
+    assert "54.94% acceptance" in section
+    assert "mean accepted length 3.75" in section
+    assert 'aria-label="Nemotron Native MTP OSL 16K fixed-K throughput speedup' in section
+    assert "1.0x baseline" in section
+
+    for header in (
+        "Model",
+        "Method / K",
+        "Job ID",
+        "tok/s/GPU",
+        "Throughput speedup",
+        "Rollout-time speedup",
+        "Output-token ratio",
+        "Acceptance",
+        "Mean accept length",
+        "Validity / evidence",
+    ):
+        assert f"<th>{header}</th>" in section
+
+    table_body = section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    table_rows = re.findall(r"<tr>.*?</tr>", table_body, flags=re.DOTALL)
+    assert len(table_rows) == 5
+    super_k3 = next(row for row in table_rows if "2335019" in row)
+    super_k5 = next(row for row in table_rows if "2335035" in row)
+    ultra_k5 = next(row for row in table_rows if "2335021" in row)
+    assert "1.710x" in super_k3
+    assert "n/a (output-token ratio outside 1%)" in super_k3
+    assert "1.792x" in super_k5
+    assert "n/a (output-token ratio outside 1%)" in super_k5
+    assert "2.114x" in ultra_k5
+    assert "2.098x" in ultra_k5
+
+
+def test_nemotron_osl16k_chart_uses_shared_explicit_model_series_colors() -> None:
+    section = latest.render_nemotron_mtp_osl16k_full_section()
+    chart = section.split("<svg", 1)[1].split("</svg>", 1)[0]
+
+    for model, color in latest.NEMOTRON_MODEL_SERIES_COLORS.items():
+        assert re.search(
+            rf'<rect[^>]+fill="{re.escape(color)}"[^>]*>'
+            rf'<text[^>]*>{model}</text>',
+            chart,
+        )
+        assert re.search(rf'<polyline[^>]+stroke="{re.escape(color)}"', chart)
+
+
+def test_pages_report_publishes_and_links_exact_nemotron_osl16k_evidence(
+    tmp_path: Path,
+) -> None:
+    public_root = tmp_path / "public"
+    report_path = public_root / "reports/vllm_standalone_results_latest.html"
+    public_data = public_root / "data"
+    href_root = "../data/nemotron_mtp_osl16k_20260706"
+    latest.build_latest_vllm_outputs(
+        output_html=report_path,
+        added_csv_out=tmp_path / "docs/vllm_standalone_added_results_latest.csv",
+        completed_csv_out=tmp_path / "report/dflare_completed_latest.csv",
+        public_data_dir=public_data,
+        nemotron_osl16k_evidence_href_root=href_root,
+    )
+
+    html_text = parse_html(report_path)
+    section = html_text.split(
+        "<h2>Nemotron Native MTP OSL 16K Full</h2>", 1
+    )[1].split("</section>", 1)[0]
+    evidence_hrefs = re.findall(
+        rf'href="({re.escape(href_root)}/[^"]*/result\.json)"',
+        section,
+    )
+    expected_relative_paths = {
+        Path(model_key) / method_key / "result.json"
+        for model_key, method_key, _k, _job_id in (
+            EXPECTED_NEMOTRON_OSL16K_FULL_RESULTS
+        )
+    }
+
+    assert len(evidence_hrefs) == 5
+    assert {
+        Path(href).relative_to(href_root) for href in evidence_hrefs
+    } == expected_relative_paths
+    for href in evidence_hrefs:
+        assert (report_path.parent / href).resolve().is_file()
+
+    evidence_root = public_data / "nemotron_mtp_osl16k_20260706"
+    published_paths = {
+        path.relative_to(evidence_root)
+        for path in evidence_root.glob("**/result.json")
+    }
+    assert published_paths == expected_relative_paths
+    for relative_path in expected_relative_paths:
+        assert sha256(evidence_root / relative_path) == sha256(
+            NEMOTRON_OSL16K_FULL_ROOT / relative_path
         )
 
 

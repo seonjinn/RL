@@ -129,11 +129,11 @@ NEMOTRON_MTP_K_SWEEP_PROMPT_BATCH_HASHES = [
     "d3c2455a28c358105c0a665b441f83eb9979be72c51747733f0f5601ba975efc",
     "e073b87ad663ed00aee96bf1b6fb0b15d0355a355e8a0015b4b7372cadd22caf",
 ]
-NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES = [
+NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES = (
     "c9682cbe32280f9c7367aa7f0ad85e4bb178ef3842c5b75929e555fb80005001",
     "ae57be6315bc695c3905cd807b2ada44506505d44796b9089793ab2435e4b4ba",
     "c19d6f1d69c497901658f8ffff9cda09fb96fa82db3e3cd0ea4a444b89a1b181",
-]
+)
 NEMOTRON_MTP_K_SWEEP_SEED = 1234
 NEMOTRON_MTP_K_SWEEP_RUNTIME_GPU_COUNT = 4
 NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE = "builtin_smoke_or_pinned_math_dataset"
@@ -294,6 +294,127 @@ NEMOTRON_MTP_K_SWEEP_SHARED_METADATA = (
     ),
     (("config", "pipeline_parallel_size"), 1),
     (("runtime", "gpu_count"), NEMOTRON_MTP_K_SWEEP_RUNTIME_GPU_COUNT),
+    (("config", "context_profile"), NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE),
+    (("config", "rope_config_hash"), NEMOTRON_MTP_K_SWEEP_ROPE_CONFIG_HASH),
+)
+NEMOTRON_MTP_OSL16K_FULL_ROOT = (
+    DFLARE_RESULT_ROOT / "results/nemotron_mtp_osl16k_20260706"
+)
+NEMOTRON_MTP_OSL16K_PROMPT_JSONL = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm024-dynamicsd/datasets/"
+    "openmathinstruct2_469216e3f46f_prompts_1024_offset0.jsonl"
+)
+NEMOTRON_MTP_OSL16K_PROMPT_SET_HASH = (
+    "fd03df32bffccd0fc627eb86db08979047408a73e668703b16c360f3f4bbf08c"
+)
+NEMOTRON_MTP_OSL16K_PROMPT_BATCH_HASHES = [
+    "e013833a4e66f9bc7f05e005e209da3e192d3273ab6f42c59e82144e186ca4de",
+    "594583a8182a207bd5a5b610a00a1d4399dee7c5505765148d334ffa936dd643",
+    "aef0606b42d855273cbe00fcaecc68d67842bc3e8835961c5b8cbd16b186ed0b",
+]
+NEMOTRON_MTP_OSL16K_REQUEST_PROVENANCE_HASHES = (
+    "1f6c94cf1fd52469695a7d508183e0e573562af5aa4cccbfe92a703a905efe18",
+    "362a1e51144fe7e778d6ee8d6514a261d6b116f84dc57e0aa09e3ec45148271d",
+    "c68b0cdd1799ae7f42cefceb54e9939554e9338ae0cd601e246909d495bddc1a",
+)
+NEMOTRON_MTP_OSL16K_FULL_RESULTS = (
+    (
+        "super",
+        "baseline",
+        0,
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
+        "2335018",
+        2,
+        1,
+    ),
+    (
+        "super",
+        "k3",
+        3,
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
+        "2335019",
+        2,
+        1,
+    ),
+    (
+        "super",
+        "k5",
+        5,
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/"
+        "snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
+        "2335035",
+        2,
+        1,
+    ),
+    (
+        "ultra",
+        "baseline",
+        0,
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
+        "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
+        "2335020",
+        8,
+        2,
+    ),
+    (
+        "ultra",
+        "k5",
+        5,
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/"
+        "snapshots/624ba927cfbef0427354998700de3d51173c8c04",
+        "2335021",
+        8,
+        2,
+    ),
+)
+NEMOTRON_MTP_OSL16K_FULL_SHARED_METADATA = (
+    (("status",), "complete"),
+    (("runtime", "vllm_version"), "0.24.0"),
+    (("runtime", "gpu_count"), NEMOTRON_MTP_K_SWEEP_RUNTIME_GPU_COUNT),
+    (
+        ("config", "runtime_image_sha256"),
+        NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256,
+    ),
+    (("config", "cudagraph_mode"), "PIECEWISE"),
+    (("config", "compilation_config", "cudagraph_mode"), "PIECEWISE"),
+    (("config", "temperature"), 1.0),
+    (("config", "top_p"), 1.0),
+    (("config", "max_new_tokens"), 16384),
+    (("config", "seed"), NEMOTRON_MTP_K_SWEEP_SEED),
+    (("config", "num_prompts"), 16),
+    (("config", "samples_per_prompt"), 4),
+    (("config", "requests_per_rollout_batch"), 64),
+    (("config", "global_requests_per_rollout_batch"), 64),
+    (("config", "rollout_batches"), 3),
+    (("config", "scenario"), "synchronous_rl_rollout"),
+    (("config", "sync_barrier"), "LLM.generate_return"),
+    (("config", "source_recipe"), "sync-rl-math-rollout"),
+    (("config", "prompt_jsonl"), NEMOTRON_MTP_OSL16K_PROMPT_JSONL),
+    (
+        ("config", "drafter_config_hash"),
+        NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH,
+    ),
+    (
+        ("config", "drafter_checkpoint_hash"),
+        NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH,
+    ),
+    (
+        ("config", "drafter_view_marker_hash"),
+        NEMOTRON_MTP_K_SWEEP_DRAFTER_IDENTITY_HASH,
+    ),
+    (("config", "prompt_set_hash"), NEMOTRON_MTP_OSL16K_PROMPT_SET_HASH),
+    (
+        ("config", "prompt_batch_hashes"),
+        NEMOTRON_MTP_OSL16K_PROMPT_BATCH_HASHES,
+    ),
+    (("config", "pipeline_parallel_size"), 1),
     (("config", "context_profile"), NEMOTRON_MTP_K_SWEEP_CONTEXT_PROFILE),
     (("config", "rope_config_hash"), NEMOTRON_MTP_K_SWEEP_ROPE_CONFIG_HASH),
 )
@@ -2591,10 +2712,21 @@ def _validate_nemotron_mtp_k_sweep_payload(
     expected_job_id: str,
     expected_tp: int,
     expected_nodes: int,
+    expected_shared_metadata: tuple[
+        tuple[tuple[str, ...], object], ...
+    ] = NEMOTRON_MTP_K_SWEEP_SHARED_METADATA,
+    expected_model_identities: Mapping[
+        str, Mapping[str, object]
+    ] = NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES,
+    expected_seed: int = NEMOTRON_MTP_K_SWEEP_SEED,
+    expected_requests_per_batch: int = 32,
+    expected_samples_per_prompt: int = 4,
+    expected_max_tokens: int = 4096,
+    cohort_label: str = "Nemotron MTP OSL 4K K-sweep",
 ) -> None:
-    model_identity = NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES[expected_model_key]
+    model_identity = expected_model_identities[expected_model_key]
     expected_backend = model_identity["distributed_executor_backend"]
-    expected_metadata = list(NEMOTRON_MTP_K_SWEEP_SHARED_METADATA)
+    expected_metadata = list(expected_shared_metadata)
     expected_metadata.extend(
         [
             (("config", "mode"), expected_mode),
@@ -2718,17 +2850,20 @@ def _validate_nemotron_mtp_k_sweep_payload(
                     f"rollout_batches[{batch_index}].batch_index: expected "
                     f"{batch_index}, got {raw_batch.get('batch_index')!r}"
                 )
-            if request_count != 32:
+            if request_count != expected_requests_per_batch:
                 mismatches.append(
-                    f"rollout_batches[{batch_index}].request_count: expected 32, "
-                    f"got {request_count!r}"
+                    f"rollout_batches[{batch_index}].request_count: expected "
+                    f"{expected_requests_per_batch}, got {request_count!r}"
                 )
             requests = raw_batch.get("requests")
             request_length = len(requests) if isinstance(requests, list) else None
-            if not isinstance(requests, list) or len(requests) != 32:
+            if (
+                not isinstance(requests, list)
+                or len(requests) != expected_requests_per_batch
+            ):
                 mismatches.append(
-                    f"rollout_batches[{batch_index}].requests: expected 32, "
-                    f"got {request_length!r}"
+                    f"rollout_batches[{batch_index}].requests: expected "
+                    f"{expected_requests_per_batch}, got {request_length!r}"
                 )
             for vector_field in (
                 "actual_output_tokens",
@@ -2749,7 +2884,10 @@ def _validate_nemotron_mtp_k_sweep_payload(
                         f"request_count={request_count!r} and "
                         f"len(requests)={request_length!r}, got {vector_length!r}"
                     )
-            if not isinstance(requests, list) or len(requests) != 32:
+            if (
+                not isinstance(requests, list)
+                or len(requests) != expected_requests_per_batch
+            ):
                 continue
             for request_index, raw_request in enumerate(requests):
                 if not isinstance(raw_request, dict):
@@ -2759,9 +2897,11 @@ def _validate_nemotron_mtp_k_sweep_payload(
                     )
                     continue
                 expected_request_protocol = {
-                    "sample_index": request_index % 4,
-                    "seed": NEMOTRON_MTP_K_SWEEP_SEED + batch_index * 32 + request_index,
-                    "max_tokens": 4096,
+                    "sample_index": request_index % expected_samples_per_prompt,
+                    "seed": expected_seed
+                    + batch_index * expected_requests_per_batch
+                    + request_index,
+                    "max_tokens": expected_max_tokens,
                     "min_tokens": 0,
                     "ignore_eos": False,
                 }
@@ -2775,12 +2915,17 @@ def _validate_nemotron_mtp_k_sweep_payload(
 
     if mismatches:
         raise ValueError(
-            f"Nemotron MTP OSL 4K K-sweep payload {relative_path.as_posix()} "
+            f"{cohort_label} payload {relative_path.as_posix()} "
             f"does not match the expected cohort: {'; '.join(mismatches)}"
         )
 
 
-def _nemotron_k_sweep_csv_value_matches(actual: object, expected: object) -> bool:
+def _nemotron_k_sweep_csv_value_matches(
+    actual: object,
+    expected: object,
+    *,
+    exact_float: bool = False,
+) -> bool:
     if expected is None:
         return bool(pd.isna(actual))
     if isinstance(expected, bool):
@@ -2797,9 +2942,12 @@ def _nemotron_k_sweep_csv_value_matches(actual: object, expected: object) -> boo
             return False
     if isinstance(expected, float):
         try:
+            numeric = float(actual)
+            if exact_float:
+                return math.isfinite(numeric) and numeric == expected
             return math.isclose(
-                float(actual),
-                float(expected),
+                numeric,
+                expected,
                 rel_tol=1e-12,
                 abs_tol=1e-12,
             )
@@ -3188,12 +3336,15 @@ def _nemotron_k_sweep_request_provenance_hash(
 def _validate_nemotron_k_sweep_request_provenance(
     payload: dict[str, object],
     relative_path: Path,
+    expected_hashes: tuple[
+        str, ...
+    ] = NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES,
 ) -> None:
     rollout_batches = cast(list[dict[str, object]], payload["rollout_batches"])
     for batch_index, (batch, expected_hash) in enumerate(
         zip(
             rollout_batches,
-            NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES,
+            expected_hashes,
             strict=True,
         )
     ):
@@ -3223,29 +3374,48 @@ def _validate_nemotron_k_sweep_summary_row(
     csv_row: pd.Series,
     expected_values: dict[str, object],
     relative_path: Path,
+    cohort_label: str = "Nemotron MTP OSL 4K K-sweep",
+    *,
+    exact_floats: bool = False,
 ) -> None:
     mismatches = []
     for field, expected in expected_values.items():
         actual = csv_row.get(field)
-        if not _nemotron_k_sweep_csv_value_matches(actual, expected):
+        if not _nemotron_k_sweep_csv_value_matches(
+            actual,
+            expected,
+            exact_float=exact_floats,
+        ):
             mismatches.append(
                 f"{field}: expected {expected!r}, got {actual!r}"
             )
     if mismatches:
         raise ValueError(
-            f"Nemotron MTP OSL 4K K-sweep summary.csv row "
+            f"{cohort_label} summary.csv row "
             f"{relative_path.as_posix()} does not match result.json: "
             f"{'; '.join(mismatches)}"
         )
 
 
-def load_nemotron_mtp_k_sweep_rows(
-    result_root: Path = NEMOTRON_MTP_K_SWEEP_ROOT,
+def _load_nemotron_mtp_fixed_k_rows(
+    result_root: Path,
+    *,
+    expected_results: tuple[tuple[str, str, int, str, str, int, int], ...],
+    expected_shared_metadata: tuple[tuple[tuple[str, ...], object], ...],
+    expected_request_provenance_hashes: tuple[str, ...],
+    expected_seed: int,
+    expected_requests_per_batch: int,
+    expected_samples_per_prompt: int,
+    expected_max_tokens: int,
+    expected_num_prompts: int,
+    runtime_image_sha256: str,
+    cohort_label: str,
+    exact_summary_csv_floats: bool = False,
 ) -> pd.DataFrame:
     expected_paths = {
         Path(model_key) / method_key / "result.json"
         for model_key, method_key, _k, _model, _job_id, _tp, _nodes in (
-            NEMOTRON_MTP_K_SWEEP_RESULTS
+            expected_results
         )
     }
     discovered_paths = {
@@ -3264,18 +3434,18 @@ def load_nemotron_mtp_k_sweep_rows(
             unexpected = ", ".join(path.as_posix() for path in unexpected_paths)
             details.append(f"unexpected payloads: {unexpected}")
         raise ValueError(
-            "Nemotron MTP OSL 4K K-sweep cohort must contain exactly the eight "
-            f"expected result.json payloads; {'; '.join(details)}"
+            f"{cohort_label} cohort must contain exactly the "
+            f"{len(expected_results)} expected result.json payloads; "
+            f"{'; '.join(details)}"
         )
 
     summary_csv = result_root / "summary.csv"
     if not summary_csv.is_file():
-        raise ValueError(
-            "Nemotron MTP OSL 4K K-sweep cohort requires summary.csv"
-        )
+        raise ValueError(f"{cohort_label} cohort requires summary.csv")
     summary_rows = pd.read_csv(
         summary_csv,
         dtype={"job_id": str, "result_path": str},
+        float_precision="round_trip",
     )
     required_summary_columns = {
         "model",
@@ -3307,31 +3477,31 @@ def load_nemotron_mtp_k_sweep_rows(
     missing_columns = sorted(required_summary_columns - set(summary_rows.columns))
     if missing_columns:
         raise ValueError(
-            "Nemotron MTP OSL 4K K-sweep summary.csv missing columns: "
+            f"{cohort_label} summary.csv missing columns: "
             f"{', '.join(missing_columns)}"
         )
     summary_paths = summary_rows["result_path"].astype(str).tolist()
     expected_path_strings = {path.as_posix() for path in expected_paths}
     if (
-        len(summary_rows) != 8
+        len(summary_rows) != len(expected_results)
         or len(summary_paths) != len(set(summary_paths))
         or set(summary_paths) != expected_path_strings
     ):
         raise ValueError(
-            "Nemotron MTP OSL 4K K-sweep summary.csv must contain exactly one row "
+            f"{cohort_label} summary.csv must contain exactly one row "
             "for each expected result.json payload"
         )
     summary_by_path = summary_rows.set_index("result_path", drop=False)
 
     payloads: dict[tuple[str, str], tuple[dict[str, object], Path]] = {}
     for model_key, method_key, k, model, job_id, tp, nodes in (
-        NEMOTRON_MTP_K_SWEEP_RESULTS
+        expected_results
     ):
         path = result_root / model_key / method_key / "result.json"
         raw_payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw_payload, dict):
             raise ValueError(
-                "Nemotron MTP OSL 4K K-sweep payload "
+                f"{cohort_label} payload "
                 f"{path.relative_to(result_root).as_posix()} must be a JSON object"
             )
         payload = cast(dict[str, object], raw_payload)
@@ -3345,6 +3515,13 @@ def load_nemotron_mtp_k_sweep_rows(
             expected_job_id=job_id,
             expected_tp=tp,
             expected_nodes=nodes,
+            expected_shared_metadata=expected_shared_metadata,
+            expected_model_identities=NEMOTRON_MTP_K_SWEEP_MODEL_IDENTITIES,
+            expected_seed=expected_seed,
+            expected_requests_per_batch=expected_requests_per_batch,
+            expected_samples_per_prompt=expected_samples_per_prompt,
+            expected_max_tokens=expected_max_tokens,
+            cohort_label=cohort_label,
         )
         payloads[(model_key, method_key)] = (payload, path)
 
@@ -3352,6 +3529,7 @@ def load_nemotron_mtp_k_sweep_rows(
         _validate_nemotron_k_sweep_request_provenance(
             payload,
             path.relative_to(result_root),
+            expected_request_provenance_hashes,
         )
 
     raw_metrics = {
@@ -3362,13 +3540,13 @@ def load_nemotron_mtp_k_sweep_rows(
             total_gpus=tp,
         )
         for model_key, method_key, k, _model, _job_id, tp, _nodes in (
-            NEMOTRON_MTP_K_SWEEP_RESULTS
+            expected_results
         )
     }
 
     rows: list[dict[str, object]] = []
     for model_key, method_key, k, _model, job_id, tp, nodes in (
-        NEMOTRON_MTP_K_SWEEP_RESULTS
+        expected_results
     ):
         payload, path = payloads[(model_key, method_key)]
         config = cast(dict[str, object], payload["config"])
@@ -3405,14 +3583,14 @@ def load_nemotron_mtp_k_sweep_rows(
             "status": "complete",
             "temperature": 1.0,
             "top_p": 1.0,
-            "max_new_tokens": 4096,
-            "num_prompts": 8,
-            "samples_per_prompt": 4,
+            "max_new_tokens": expected_max_tokens,
+            "num_prompts": expected_num_prompts,
+            "samples_per_prompt": expected_samples_per_prompt,
             "rollout_batches": 3,
             "tp": tp,
             "nodes": nodes,
             "cudagraph_mode": "PIECEWISE",
-            "runtime_image_sha256": NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256,
+            "runtime_image_sha256": runtime_image_sha256,
             "total_output_tokens": output_tokens,
             "total_rollout_time_s": rollout_time_s,
             "output_tok_s_per_gpu": output_tok_s_gpu,
@@ -3428,6 +3606,8 @@ def load_nemotron_mtp_k_sweep_rows(
             summary_by_path.loc[relative_path.as_posix()],
             csv_expected,
             relative_path,
+            cohort_label,
+            exact_floats=exact_summary_csv_floats,
         )
         rows.append(
             {
@@ -3456,7 +3636,7 @@ def load_nemotron_mtp_k_sweep_rows(
     frame = pd.DataFrame(rows)
     frame["absolute_best"] = False
     frame["selected_by_policy"] = False
-    for model_key in ("super", "ultra"):
+    for model_key in frame["model_key"].drop_duplicates():
         candidates = frame[
             (frame["model_key"] == model_key) & (frame["method_key"] != "baseline")
         ]
@@ -3483,6 +3663,62 @@ def load_nemotron_mtp_k_sweep_rows(
 
     frame["validity"] = frame.apply(validity, axis=1)
     return frame
+
+
+def load_nemotron_mtp_k_sweep_rows(
+    result_root: Path = NEMOTRON_MTP_K_SWEEP_ROOT,
+) -> pd.DataFrame:
+    return _load_nemotron_mtp_fixed_k_rows(
+        result_root,
+        expected_results=NEMOTRON_MTP_K_SWEEP_RESULTS,
+        expected_shared_metadata=NEMOTRON_MTP_K_SWEEP_SHARED_METADATA,
+        expected_request_provenance_hashes=(
+            NEMOTRON_MTP_K_SWEEP_REQUEST_PROVENANCE_HASHES
+        ),
+        expected_seed=NEMOTRON_MTP_K_SWEEP_SEED,
+        expected_requests_per_batch=32,
+        expected_samples_per_prompt=4,
+        expected_max_tokens=4096,
+        expected_num_prompts=8,
+        runtime_image_sha256=NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256,
+        cohort_label="Nemotron MTP OSL 4K K-sweep",
+    )
+
+
+def load_nemotron_mtp_osl16k_full_rows(
+    result_root: Path = NEMOTRON_MTP_OSL16K_FULL_ROOT,
+) -> pd.DataFrame:
+    rows = _load_nemotron_mtp_fixed_k_rows(
+        result_root,
+        expected_results=NEMOTRON_MTP_OSL16K_FULL_RESULTS,
+        expected_shared_metadata=NEMOTRON_MTP_OSL16K_FULL_SHARED_METADATA,
+        expected_request_provenance_hashes=(
+            NEMOTRON_MTP_OSL16K_REQUEST_PROVENANCE_HASHES
+        ),
+        expected_seed=NEMOTRON_MTP_K_SWEEP_SEED,
+        expected_requests_per_batch=64,
+        expected_samples_per_prompt=4,
+        expected_max_tokens=16384,
+        expected_num_prompts=16,
+        runtime_image_sha256=NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256,
+        cohort_label="Nemotron MTP OSL 16K full",
+        exact_summary_csv_floats=True,
+    )
+
+    def validity(row: pd.Series) -> str:
+        parts = ["strictly validated fixed-K full-run evidence"]
+        if row["method_key"] == "baseline":
+            parts.append("reference")
+        if bool(row["time_speedup_valid"]):
+            parts.append("rollout-time speedup comparable within 1% output work")
+        else:
+            parts.append(
+                "rollout-time speedup suppressed: output-token ratio outside 1%"
+            )
+        return "; ".join(parts)
+
+    rows["validity"] = rows.apply(validity, axis=1)
+    return rows
 
 
 def publish_nemotron_mtp_k_sweep_evidence(
@@ -3609,6 +3845,145 @@ def render_nemotron_mtp_k_sweep_section(
                         "text",
                     ),
                     ("validity", "Validity", "text"),
+                ],
+            ),
+            "</div></section>",
+        ]
+    )
+
+
+def publish_nemotron_mtp_osl16k_full_evidence(
+    *,
+    result_root: Path = NEMOTRON_MTP_OSL16K_FULL_ROOT,
+    public_data_dir: Path = PUBLIC_DATA,
+) -> tuple[Path, ...]:
+    load_nemotron_mtp_osl16k_full_rows(result_root)
+    destination_root = public_data_dir / result_root.name
+    if destination_root.exists():
+        shutil.rmtree(destination_root)
+    published = []
+    for model_key, method_key, _k, _model, _job_id, _tp, _nodes in (
+        NEMOTRON_MTP_OSL16K_FULL_RESULTS
+    ):
+        relative_path = Path(model_key) / method_key / "result.json"
+        destination = publish_public_data(
+            result_root / relative_path,
+            destination_root / relative_path.parent,
+        )
+        if destination is None:
+            raise ValueError(
+                "Nemotron MTP OSL 16K full evidence disappeared after "
+                f"validation: {relative_path.as_posix()}"
+            )
+        published.append(destination)
+    return tuple(published)
+
+
+def render_nemotron_mtp_osl16k_full_section(
+    result_root: Path = NEMOTRON_MTP_OSL16K_FULL_ROOT,
+    evidence_href_root: str | None = None,
+) -> str:
+    rows = load_nemotron_mtp_osl16k_full_rows(result_root)
+    display = rows.copy()
+    if evidence_href_root is not None:
+        href_root = evidence_href_root.rstrip("/")
+        display["result_href"] = display["result_relative_path"].map(
+            lambda relative_path: f"{href_root}/{relative_path}"
+        )
+    display["throughput_speedup_display"] = display["throughput_speedup"].map(
+        lambda value: f"{float(value):.3f}x"
+    )
+    display["rollout_time_speedup_display"] = display.apply(
+        lambda row: (
+            f"{float(row['rollout_time_speedup']):.3f}x"
+            if bool(row["time_speedup_valid"])
+            else "n/a (output-token ratio outside 1%)"
+        ),
+        axis=1,
+    )
+    display["output_token_ratio_display"] = display["output_token_ratio"].map(
+        lambda value: f"{float(value) * 100.0:.2f}%"
+    )
+    display["acceptance_rate_display"] = display["acceptance_rate"].map(
+        lambda value: "n/a" if pd.isna(value) else f"{float(value) * 100.0:.2f}%"
+    )
+    display["mean_acceptance_length_display"] = display[
+        "mean_acceptance_length"
+    ].map(lambda value: "n/a" if pd.isna(value) else f"{float(value):.2f}")
+
+    indexed = rows.set_index(["model_key", "method_key"])
+    super_k3 = indexed.loc[("super", "k3")]
+    super_k5 = indexed.loc[("super", "k5")]
+    ultra_k5 = indexed.loc[("ultra", "k5")]
+    chart_rows = rows[rows["method_key"] != "baseline"].rename(
+        columns={"throughput_speedup": "speedup"}
+    )
+    chart = line_svg(
+        chart_rows,
+        "Nemotron Native MTP OSL 16K fixed-K throughput speedup "
+        "by model / K (baseline = 1.0x)",
+        "speedup",
+        "k",
+        "model_display",
+        NEMOTRON_MODEL_SERIES_COLORS,
+    )
+    return "".join(
+        [
+            '<section class="section"><h2>Nemotron Native MTP OSL 16K Full</h2>',
+            '<p class="note">This is validated fixed-K evidence, not DynamicMTP, '
+            "and remains separate from calibrated dynamic-method claims. All five "
+            "jobs completed on vLLM 0.24.0 with CUDA Graph PIECEWISE, temperature "
+            "1.0 / top_p 1.0, max_new_tokens 16384, runtime image SHA "
+            f"<code>{NEMOTRON_MTP_K_SWEEP_RUNTIME_IMAGE_SHA256}</code>, Super TP2 / "
+            "1 node, and Ultra TP8 / 2 nodes.</p>",
+            '<p class="note">Methodology: OpenMath natural-EOS Sync-RL-style '
+            "rollout with an OSL cap 16K, so output work can differ. Each job uses "
+            "16 prompts, 4 samples per prompt, and 3 rollout barriers. Rollout-time "
+            "speedup is shown only when the exact aggregate output-token ratio is "
+            "within the inclusive &plusmn;1% bound of the matched model baseline.</p>",
+            '<p class="callout"><strong>Key findings.</strong> '
+            f"Super K3 {float(super_k3['throughput_speedup']):.3f}x and K5 "
+            f"{float(super_k5['throughput_speedup']):.3f}x throughput; both Super "
+            "rollout-time comparisons are invalid because their work ratios are "
+            f"{float(super_k3['output_token_ratio']) * 100.0:.2f}% and "
+            f"{float(super_k5['output_token_ratio']) * 100.0:.2f}%. Ultra K5 "
+            f"{float(ultra_k5['throughput_speedup']):.3f}x throughput and "
+            f"{float(ultra_k5['rollout_time_speedup']):.3f}x rollout-time speedup "
+            f"with a {float(ultra_k5['output_token_ratio']) * 100.0:.2f}% work "
+            f"ratio, {float(ultra_k5['acceptance_rate']) * 100.0:.2f}% acceptance, "
+            "and mean accepted length "
+            f"{float(ultra_k5['mean_acceptance_length']):.2f}.</p>",
+            f'<div class="chart-card k-sweep-chart">{chart}</div>',
+            '<div class="table-wrap">',
+            table(
+                display,
+                [
+                    ("model", "Model", "text"),
+                    ("method", "Method / K", "text"),
+                    ("job_id", "Job ID", "result_link"),
+                    ("output_tok_s_gpu", "tok/s/GPU", "num"),
+                    (
+                        "throughput_speedup_display",
+                        "Throughput speedup",
+                        "text",
+                    ),
+                    (
+                        "rollout_time_speedup_display",
+                        "Rollout-time speedup",
+                        "text",
+                    ),
+                    (
+                        "output_token_ratio_display",
+                        "Output-token ratio",
+                        "text",
+                    ),
+                    ("acceptance_rate_display", "Acceptance", "text"),
+                    (
+                        "mean_acceptance_length_display",
+                        "Mean accept length",
+                        "text",
+                    ),
+                    ("validity", "Validity / evidence", "text"),
                 ],
             ),
             "</div></section>",
@@ -3792,6 +4167,7 @@ def build_vllm_html(
     dflare_status: pd.DataFrame,
     nemotron_evidence_href_root: str | None = None,
     nemotron_k_sweep_evidence_href_root: str | None = None,
+    nemotron_osl16k_evidence_href_root: str | None = None,
 ) -> str:
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     added_summary = aggregate_added(added)
@@ -3852,6 +4228,9 @@ def build_vllm_html(
         render_nemotron_mtp_legacy_smoke_section(nemotron_evidence_href_root),
         render_nemotron_mtp_k_sweep_section(
             evidence_href_root=nemotron_k_sweep_evidence_href_root
+        ),
+        render_nemotron_mtp_osl16k_full_section(
+            evidence_href_root=nemotron_osl16k_evidence_href_root
         ),
         render_sync_speedbench_status_section(),
         related_vllm_reports_section(),
@@ -4010,6 +4389,7 @@ def build_latest_vllm_outputs(
     profile_csv: Path = VLLM024_PROFILE_CSV,
     nemotron_evidence_href_root: str | None = None,
     nemotron_k_sweep_evidence_href_root: str | None = None,
+    nemotron_osl16k_evidence_href_root: str | None = None,
 ) -> Path:
     output_html.parent.mkdir(parents=True, exist_ok=True)
     added_csv_out.parent.mkdir(parents=True, exist_ok=True)
@@ -4027,6 +4407,7 @@ def build_latest_vllm_outputs(
     publish_public_data(PERFCFG_DYNAMIC_REPLAY_CSV, public_data_dir)
     publish_nemotron_mtp_legacy_smoke_evidence(public_data_dir=public_data_dir)
     publish_nemotron_mtp_k_sweep_evidence(public_data_dir=public_data_dir)
+    publish_nemotron_mtp_osl16k_full_evidence(public_data_dir=public_data_dir)
     vllm_html = build_vllm_html(
         main_vllm,
         added,
@@ -4035,6 +4416,7 @@ def build_latest_vllm_outputs(
         dflare_status,
         nemotron_evidence_href_root,
         nemotron_k_sweep_evidence_href_root,
+        nemotron_osl16k_evidence_href_root,
     )
     output_html.write_text(vllm_html, encoding="utf-8")
     return output_html
