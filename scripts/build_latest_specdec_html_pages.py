@@ -42,6 +42,11 @@ SYNC_RL_SUMMARY_FILES = {
     "DAPO-Math-17k": DFLARE_RESULT_ROOT / "results/dapo_sync_full/summary.csv",
     "OpenMathInstruct-2": DFLARE_RESULT_ROOT / "results/openmath_sync_full/summary.csv",
 }
+PERFCFG_DYNAMIC_REPLAY_CSV = (
+    DFLARE_RESULT_ROOT
+    / "results/perfcfg_dynamic_replay_20260706"
+    / "vllm024_perfcfg_dynamic_replay_20260706.csv"
+)
 DFLARE_COMPLETED_DIRS = [
     DFLARE_RESULT_ROOT / "20260703_dflare_completed",
     DFLARE_RESULT_ROOT / "20260704_dflare_completed",
@@ -1983,6 +1988,15 @@ def load_completed_qwen32_math_dynamic_rows() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_perfcfg_dynamic_replay_rows() -> pd.DataFrame:
+    if not PERFCFG_DYNAMIC_REPLAY_CSV.exists():
+        return pd.DataFrame()
+    rows = pd.read_csv(PERFCFG_DYNAMIC_REPLAY_CSV)
+    rows["baseline_job"] = rows["baseline_job"].astype(str)
+    rows["dynamic_job"] = rows["dynamic_job"].astype(str)
+    return rows
+
+
 def count_speedbench_result_artifacts() -> dict[str, int]:
     counts = {"official": 0, "overlay": 0}
     for path in sorted(DFLARE_RESULT_ROOT.glob("**/result.json")):
@@ -2006,6 +2020,7 @@ def render_sync_speedbench_status_section() -> str:
     modelopt_revision = shell_assignment(SPEEDBENCH_STAGE_SCRIPT, "MODELOPT_REVISION")
     qwen_support, nemotron_support = load_sync_speedbench_support()
     completed = load_completed_qwen32_math_dynamic_rows()
+    perfcfg_replay = load_perfcfg_dynamic_replay_rows()
     speedbench_counts = count_speedbench_result_artifacts()
     cohort_rows = pd.DataFrame(
         [
@@ -2084,6 +2099,35 @@ def render_sync_speedbench_status_section() -> str:
                     ),
                     ("acceptance_rate", "Acceptance", "ratio_pct"),
                     ("source", "Source", "source"),
+                ],
+            ),
+            "</div>",
+            "<h3>Performance-Recipe DynamicSD Replay</h3>",
+            "<p class=\"note\">These temp 1.0 / top_p 1.0 rows replay the "
+            "historical schedule with CUDA Graph PIECEWISE. They are a historical "
+            "schedule replay and are excluded from calibrated claims until a signed "
+            "K-calibration artifact is available.</p>",
+            "<div class=\"table-wrap\">",
+            table(
+                perfcfg_replay,
+                [
+                    ("model", "Model", "text"),
+                    ("scope", "Scope", "text"),
+                    ("baseline_job", "Baseline job", "text"),
+                    ("dynamic_job", "Dynamic job", "text"),
+                    ("max_new_tokens", "Max OSL", "int"),
+                    ("requests_per_rollout_batch", "Requests/barrier", "int"),
+                    ("baseline_time_s", "Baseline time (s)", "num"),
+                    ("dynamic_time_s", "Dynamic time (s)", "num"),
+                    ("baseline_tok_s_gpu", "Baseline tok/s/GPU", "num"),
+                    ("dynamic_tok_s_gpu", "Dynamic tok/s/GPU", "num"),
+                    ("throughput_speedup", "Throughput speedup", "x"),
+                    ("time_speedup", "Time speedup", "x"),
+                    ("time_reduction_pct", "Time reduction", "pct_2dp"),
+                    ("acceptance_rate", "Acceptance", "ratio_pct"),
+                    ("mean_accept_len", "Mean accept len", "num"),
+                    ("work_match", "Work match", "text"),
+                    ("calibration_status", "Calibration status", "text"),
                 ],
             ),
             "</div>",
@@ -2353,6 +2397,7 @@ def build_latest_vllm_outputs(
     publish_public_data(profile_csv, public_data_dir)
     publish_public_data(completed_csv_out, public_data_dir)
     publish_public_data(status_csv, public_data_dir)
+    publish_public_data(PERFCFG_DYNAMIC_REPLAY_CSV, public_data_dir)
     vllm_html = build_vllm_html(main_vllm, added, native_rows, dflare_rows, dflare_status)
     output_html.write_text(vllm_html, encoding="utf-8")
     return output_html

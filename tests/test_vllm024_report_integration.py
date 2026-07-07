@@ -218,6 +218,33 @@ def test_task6_nemotron_support_uses_runner_capabilities_and_dynamic_gate() -> N
         assert "excluded from smoke" in row["overlay_gates"]
 
 
+def test_task6_latest_vllm_html_contains_perfcfg_dynamic_replay_results(
+    tmp_path: Path,
+) -> None:
+    temp_html = tmp_path / "docs/vllm_standalone_results_latest.html"
+    temp_added = tmp_path / "docs/vllm_standalone_added_results_latest.csv"
+    temp_completed = tmp_path / "report/dflare_completed_latest.csv"
+    temp_public_data = tmp_path / "public/data"
+    latest.build_latest_vllm_outputs(
+        output_html=temp_html,
+        added_csv_out=temp_added,
+        completed_csv_out=temp_completed,
+        public_data_dir=temp_public_data,
+    )
+
+    html_text = parse_html(temp_html)
+
+    assert "Performance-Recipe DynamicSD Replay" in html_text
+    assert "historical schedule replay" in html_text
+    assert "excluded from calibrated claims" in html_text
+    for job_id in ("2294695", "2294696", "2294697", "2294699", "2294694", "2294734"):
+        assert job_id in html_text
+    assert "Qwen3-30B-A3B" in html_text
+    assert "Qwen3-32B" in html_text
+    assert "Qwen3-235B-A22B" in html_text
+    assert (temp_public_data / "vllm024_perfcfg_dynamic_replay_20260706.csv").exists()
+
+
 def test_final_review_design_and_plan_have_exactly_one_trailing_newline() -> None:
     paths = (
         ROOT
