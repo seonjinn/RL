@@ -364,6 +364,27 @@ class TestWandbLogger:
         mock_run.log.assert_called_once_with(metrics, commit=False)
 
     @patch("nemo_rl.utils.logger.wandb")
+    def test_log_metrics_with_step_metric_finishes_live_row(self, mock_wandb):
+        """A finished custom-step payload commits the live W&B row."""
+        logger = WandbLogger({})
+        payload = {
+            "comparison/step": 20,
+            "accuracy/main_lm_loss": 2.5,
+        }
+
+        logger.log_metrics(
+            payload,
+            step=20,
+            step_metric="comparison/step",
+            step_finished=True,
+        )
+
+        mock_wandb.init.return_value.log.assert_called_once_with(
+            payload,
+            commit=True,
+        )
+
+    @patch("nemo_rl.utils.logger.wandb")
     def test_log_metrics_with_prefix_and_step_metric(self, mock_wandb):
         """Test logging metrics with both prefix and step metric."""
         cfg = {}

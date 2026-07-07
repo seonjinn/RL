@@ -172,9 +172,7 @@ def test_optional_float_omits_cuda_tensor_without_synchronizing() -> None:
     cuda_tensor.item.assert_not_called()
 
 
-def test_validate_preserves_synthetic_zero_and_marks_loss_unavailable(
-    mock_components,
-):
+def test_validate_preserves_synthetic_zero_and_returns_two_tuple(mock_components):
     val_batch = BatchedDataDict(
         {
             "packed_cu_seqlens": torch.tensor([[0, 1]]),
@@ -189,7 +187,7 @@ def test_validate_preserves_synthetic_zero_and_marks_loss_unavailable(
     }
 
     with pytest.warns(UserWarning, match="No validation metrics were collected"):
-        val_metrics, _, validation_loss_available = validate(
+        result = validate(
             policy,
             [val_batch],
             mock_components["tokenizer"],
@@ -201,8 +199,9 @@ def test_validate_preserves_synthetic_zero_and_marks_loss_unavailable(
             val_mbs=1,
         )
 
+    assert len(result) == 2
+    val_metrics, _ = result
     assert val_metrics == {"val_loss": 0.0}
-    assert validation_loss_available is False
 
 
 def test_exit_on_max_steps(mock_components):
@@ -507,4 +506,7 @@ def test_training_logs_exact_comparison_payload_and_preserves_native_metrics(
     assert comparison_payload == expected_comparison_payload
     assert all(isinstance(value, (float, int)) for value in comparison_payload.values())
     assert log_calls[4].args[1] == 1
-    assert log_calls[4].kwargs == {"step_metric": "comparison/step"}
+    assert log_calls[4].kwargs == {
+        "step_metric": "comparison/step",
+        "step_finished": True,
+    }

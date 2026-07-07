@@ -64,6 +64,13 @@ class SFTSaveState:
     total_valid_tokens: int  # Track total number of non-padding tokens during training
 
 
+@dataclass(frozen=True)
+class _SFTValidationResult:
+    val_metrics: dict[str, Any]
+    timing_metrics: dict[str, Any]
+    validation_loss_available: bool
+
+
 def _initial_sft_save_state() -> SFTSaveState:
     return SFTSaveState(
         epoch=0, step=0, total_steps=0, consumed_samples=0, total_valid_tokens=0
@@ -354,7 +361,7 @@ def setup(
 # =======================================================
 # Training & Validation
 # =======================================================
-def validate(
+def _validate_with_loss_availability(
     policy: PolicyInterface,
     val_dataloader: Optional[StatefulDataLoader],
     tokenizer,
@@ -364,14 +371,14 @@ def validate(
     val_batches: int,
     val_batch_size: int,
     val_mbs: int,
-):
-    """Run validation on the validation dataset."""
+) -> _SFTValidationResult:
+    """Run validation and retain whether the reported loss was measured."""
     if val_dataloader is None:
         assert master_config.sft.val_period <= 0, (
             "val_dataloader is None, so sft.val_period must be <= 0"
         )
         print("  ⚠️ No validation dataloader provided, skipping validation")
-        return {}, {}, False
+        return _SFTValidationResult({}, {}, False)
 
     timer = Timer()
 
@@ -474,7 +481,37 @@ def validate(
     # Make sure to reset the timer after validation
     timer.reset()
 
-    return val_metrics, timing_metrics, validation_loss_available
+    return _SFTValidationResult(
+        val_metrics=val_metrics,
+        timing_metrics=timing_metrics,
+        validation_loss_available=validation_loss_available,
+    )
+
+
+def validate(
+    policy: PolicyInterface,
+    val_dataloader: Optional[StatefulDataLoader],
+    tokenizer,
+    loss_fn,
+    step: int,
+    master_config: MasterConfig,
+    val_batches: int,
+    val_batch_size: int,
+    val_mbs: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run validation and return the public metrics/timings two-tuple."""
+    result = _validate_with_loss_availability(
+        policy,
+        val_dataloader,
+        tokenizer,
+        loss_fn,
+        step,
+        master_config,
+        val_batches,
+        val_batch_size,
+        val_mbs,
+    )
+    return result.val_metrics, result.timing_metrics
 
 
 def sft_train(
@@ -521,7 +558,7 @@ def sft_train(
     # Run validation at the start if configured
     if val_at_start and total_steps == 0:
         print("\n🔍 Running initial validation...")
-        val_metrics, validation_timings, _ = validate(
+        validation_result = _validate_with_loss_availability(
             policy,
             val_dataloader,
             tokenizer,
@@ -532,6 +569,8 @@ def sft_train(
             val_batch_size=sft_config.val_global_batch_size,
             val_mbs=sft_config.val_micro_batch_size,
         )
+        val_metrics = validation_result.val_metrics
+        validation_timings = validation_result.timing_metrics
 
         logger.log_metrics(val_metrics, total_steps, prefix="validation")
         logger.log_metrics(validation_timings, total_steps, prefix="timing/validation")
@@ -614,11 +653,7 @@ def sft_train(
                 if (val_period > 0 and (total_steps + 1) % val_period == 0) or (
                     val_at_end and is_last_step
                 ):
-                    (
-                        val_metrics,
-                        validation_timings,
-                        validation_loss_available,
-                    ) = validate(
+                    validation_result = _validate_with_loss_availability(
                         policy,
                         val_dataloader,
                         tokenizer,
@@ -628,6 +663,11 @@ def sft_train(
                         val_batches=sft_config.val_batches,
                         val_batch_size=sft_config.val_global_batch_size,
                         val_mbs=sft_config.val_micro_batch_size,
+                    )
+                    val_metrics = validation_result.val_metrics
+                    validation_timings = validation_result.timing_metrics
+                    validation_loss_available = (
+                        validation_result.validation_loss_available
                     )
                     logger.log_metrics(
                         validation_timings, total_steps + 1, prefix="timing/validation"
@@ -817,6 +857,7 @@ def sft_train(
                     comparison_metrics,
                     total_steps + 1,
                     step_metric="comparison/step",
+                    step_finished=True,
                 )
 
             timer.reset()
