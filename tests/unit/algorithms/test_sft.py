@@ -204,6 +204,89 @@ def test_validate_preserves_synthetic_zero_and_returns_two_tuple(mock_components
     assert val_metrics == {"val_loss": 0.0}
 
 
+def test_validation_comparison_instrumentation_records_local_subtimings():
+    val_data = BatchedDataDict(
+        {
+            "packed_cu_seqlens": torch.tensor([[0, 2]], dtype=torch.int32),
+            "sample_mask": torch.ones(1),
+            "token_mask": torch.ones(1, 2),
+        }
+    )
+    policy = MagicMock()
+    policy.train.return_value = {
+        "loss": torch.tensor(0.5),
+        "grad_norm": torch.tensor(0.0),
+        "all_mb_metrics": {"loss": [torch.tensor(0.5)]},
+        "evaluation_timings": {
+            "worker_state_transition_s": 0.1,
+            "forward_s": 0.2,
+            "metric_reduction_s": 0.3,
+            "state_restore_s": 0.4,
+        },
+    }
+    master_config = MasterConfig.model_construct(
+        sft=SFTConfig.model_construct(val_period=20, only_unmask_final=False),
+        policy={"make_sequence_length_divisible_by": 1},
+    )
+
+    _, timings = validate(
+        policy,
+        [val_data],
+        MagicMock(pad_token_id=0),
+        NLLLossFn(),
+        step=20,
+        master_config=master_config,
+        val_batches=1,
+        val_batch_size=1,
+        val_mbs=1,
+        comparison_instrumentation_enabled=True,
+    )
+
+    assert isinstance(policy.train.call_args.kwargs["timer"], Timer)
+    assert timings["worker_state_transition_s"] == pytest.approx(0.1)
+    assert timings["forward_s"] == pytest.approx(0.2)
+    assert timings["metric_reduction_s"] == pytest.approx(0.3)
+    assert timings["state_restore_s"] == pytest.approx(0.4)
+    assert "data_fetch_s" in timings
+    assert "data_processing_s" in timings
+
+
+def test_validation_default_does_not_request_comparison_instrumentation():
+    val_data = BatchedDataDict(
+        {
+            "packed_cu_seqlens": torch.tensor([[0, 2]], dtype=torch.int32),
+            "sample_mask": torch.ones(1),
+            "token_mask": torch.ones(1, 2),
+        }
+    )
+    policy = MagicMock()
+    policy.train.return_value = {
+        "loss": torch.tensor(0.5),
+        "grad_norm": torch.tensor(0.0),
+        "all_mb_metrics": {"loss": [torch.tensor(0.5)]},
+    }
+    master_config = MasterConfig.model_construct(
+        sft=SFTConfig.model_construct(val_period=20, only_unmask_final=False),
+        policy={"make_sequence_length_divisible_by": 1},
+    )
+
+    _, timings = validate(
+        policy,
+        [val_data],
+        MagicMock(pad_token_id=0),
+        NLLLossFn(),
+        step=20,
+        master_config=master_config,
+        val_batches=1,
+        val_batch_size=1,
+        val_mbs=1,
+    )
+
+    assert "timer" not in policy.train.call_args.kwargs
+    assert "data_fetch_s" not in timings
+    assert "data_processing_s" not in timings
+
+
 def test_exit_on_max_steps(mock_components):
     """Test that training loop exits when max_num_steps is reached"""
     # Set max steps to 12, which is less than len(train_dataloader) * max_num_epochs

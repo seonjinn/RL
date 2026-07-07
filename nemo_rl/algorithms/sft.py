@@ -91,7 +91,7 @@ def _build_sft_collate_fn(policy_config: PolicyConfig):
     )
 
 
-def _iter_timed_batches(dataloader, timer: Timer):
+def _iter_timed_batches(dataloader, timer: Timer, timing_label: str = "data_fetch"):
     """Yield batches while measuring the blocking dataloader fetch."""
     iterator = iter(dataloader)
     while True:
@@ -100,7 +100,7 @@ def _iter_timed_batches(dataloader, timer: Timer):
             batch = next(iterator)
         except StopIteration:
             return
-        timer.record_elapsed("data_fetch", time.perf_counter() - start)
+        timer.record_elapsed(timing_label, time.perf_counter() - start)
         yield batch
 
 
@@ -371,6 +371,7 @@ def _validate_with_loss_availability(
     val_batches: int,
     val_batch_size: int,
     val_mbs: int,
+    comparison_instrumentation_enabled: bool = False,
 ) -> _SFTValidationResult:
     """Run validation and retain whether the reported loss was measured."""
     if val_dataloader is None:
@@ -392,7 +393,19 @@ def _validate_with_loss_availability(
         sum_num_valid_tokens = 0
 
         policy.prepare_for_training()
-        for batch_idx, val_batch in enumerate(val_dataloader):
+        validation_batches = (
+            _iter_timed_batches(
+                val_dataloader,
+                timer,
+                timing_label="data_fetch_s",
+            )
+            if comparison_instrumentation_enabled
+            else val_dataloader
+        )
+        for batch_idx, val_batch in enumerate(validation_batches):
+            data_processing_start = (
+                time.perf_counter() if comparison_instrumentation_enabled else None
+            )
             if "packed_cu_seqlens" in val_batch:
                 val_data = val_batch
             else:
@@ -427,15 +440,27 @@ def _validate_with_loss_availability(
             if val_data.size < val_batch_size:
                 dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
                 val_data = maybe_pad_last_batch(val_data, dp_size, val_mbs)
+            if data_processing_start is not None:
+                timer.record_elapsed(
+                    "data_processing_s",
+                    time.perf_counter() - data_processing_start,
+                )
 
             ## just run model fwd
+            timing_kwargs = (
+                {"timer": timer} if comparison_instrumentation_enabled else {}
+            )
             val_results = policy.train(
                 val_data,
                 loss_fn,
                 eval_mode=True,
                 gbs=val_data.size,
                 mbs=val_mbs,
+                **timing_kwargs,
             )
+            if comparison_instrumentation_enabled:
+                for name, elapsed in val_results.get("evaluation_timings", {}).items():
+                    timer.record_elapsed(name, float(elapsed))
 
             if len(val_results["all_mb_metrics"]) == 0:
                 warnings.warn(
@@ -498,6 +523,7 @@ def validate(
     val_batches: int,
     val_batch_size: int,
     val_mbs: int,
+    comparison_instrumentation_enabled: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run validation and return the public metrics/timings two-tuple."""
     result = _validate_with_loss_availability(
@@ -510,6 +536,7 @@ def validate(
         val_batches,
         val_batch_size,
         val_mbs,
+        comparison_instrumentation_enabled,
     )
     return result.val_metrics, result.timing_metrics
 
@@ -568,6 +595,7 @@ def sft_train(
             val_batches=sft_config.val_batches,
             val_batch_size=sft_config.val_global_batch_size,
             val_mbs=sft_config.val_micro_batch_size,
+            comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
         )
         val_metrics = validation_result.val_metrics
         validation_timings = validation_result.timing_metrics
@@ -663,6 +691,7 @@ def sft_train(
                         val_batches=sft_config.val_batches,
                         val_batch_size=sft_config.val_global_batch_size,
                         val_mbs=sft_config.val_micro_batch_size,
+                        comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
                     )
                     val_metrics = validation_result.val_metrics
                     validation_timings = validation_result.timing_metrics

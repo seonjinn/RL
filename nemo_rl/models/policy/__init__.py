@@ -242,6 +242,9 @@ class MegatronConfigDisabled(TypedDict):
 class MegatronConfig(TypedDict):
     enabled: Literal[True]
     env_vars: NotRequired[dict[str, str] | None]
+    # Skip training-only optimizer and gradient work during forward-only evaluation.
+    # The recommended default is False; MXFP8 overlap retains its required parameter sync.
+    eval_mode_fast_path: NotRequired[bool]
     # 1 is the minimum recommendation for RL since we almost always need to offload before beginning generation.
     # Setting to 0 is faster, but you are more likely to run out of GPU memory. In SFT/DPO, the default is 0.
     empty_unused_memory_level: int

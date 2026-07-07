@@ -736,6 +736,21 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             if timer
             else nullcontext()
         ):
+            worker_train_kwargs: dict[str, Any] = {
+                "loss_fn": loss_fn,
+                "eval_mode": eval_mode,
+                "gbs": batch_size,
+                "mbs": micro_batch_size,
+                "check_dim_skip_keys": check_dim_skip_keys,
+            }
+            megatron_cfg = self.cfg.get("megatron_cfg")
+            if (
+                eval_mode
+                and timer is not None
+                and megatron_cfg is not None
+                and megatron_cfg["enabled"]
+            ):
+                worker_train_kwargs["collect_eval_timing"] = True
             futures = self.worker_group.run_all_workers_sharded_data(
                 "train",
                 data=sharded_data,
@@ -750,13 +765,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                     "tensor_parallel",
                     "pipeline_parallel",
                 ],
-                common_kwargs={
-                    "loss_fn": loss_fn,
-                    "eval_mode": eval_mode,
-                    "gbs": batch_size,
-                    "mbs": micro_batch_size,
-                    "check_dim_skip_keys": check_dim_skip_keys,
-                },
+                common_kwargs=worker_train_kwargs,
             )
         results = self.worker_group.get_all_worker_results(futures)
 
@@ -769,6 +778,13 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             aggregated_results["moe_metrics"] = results[0]["moe_metrics"]
         if "mtp_metrics" in results[0]:
             aggregated_results["mtp_metrics"] = results[0]["mtp_metrics"]
+        if "evaluation_timings" in results[0]:
+            aggregated_results["evaluation_timings"] = {
+                name: max(
+                    float(result["evaluation_timings"][name]) for result in results
+                )
+                for name in results[0]["evaluation_timings"]
+            }
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops

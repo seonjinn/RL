@@ -15,6 +15,7 @@ import copy
 import gc
 import os
 import re
+import time
 import warnings
 from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -525,6 +526,7 @@ class MegatronPolicyWorkerImpl(
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
+        collect_eval_timing: bool = False,
     ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
@@ -537,6 +539,27 @@ class MegatronPolicyWorkerImpl(
             "check_dim_skip_keys is only supported by the v2 DTensor worker; "
             "Megatron does not run cross-tokenizer distillation."
         )
+        megatron_cfg = self.cfg.get("megatron_cfg")
+        eval_mode_fast_path = bool(
+            eval_mode
+            and megatron_cfg is not None
+            and "eval_mode_fast_path" in megatron_cfg
+            and megatron_cfg["eval_mode_fast_path"]
+        )
+        evaluation_timings = (
+            {
+                "worker_state_transition_s": 0.0,
+                "forward_s": 0.0,
+                "metric_reduction_s": 0.0,
+                "state_restore_s": 0.0,
+            }
+            if eval_mode and collect_eval_timing
+            else None
+        )
+        state_transition_start = (
+            time.perf_counter() if evaluation_timings is not None else None
+        )
+
         # Note: zero_grad_buffer is called at the start of each global batch iteration
         # in the loop below, so we don't need to call it here.
         if hasattr(self.model, "inference_params"):
@@ -561,14 +584,19 @@ class MegatronPolicyWorkerImpl(
             group=parallel_state.get_data_parallel_group(),
         )
         num_global_batches = int(total_dataset_size.item()) // gbs
+        uses_mxfp8_overlap_shared_param_buffer = (
+            eval_mode and self._uses_mxfp8_overlap_shared_param_buffer()
+        )
 
         if eval_mode:
             ctx: AbstractContextManager[Any] = torch.no_grad()
+            model_was_training = bool(self.model.training)
             self.model.eval()
             saved_extra_state = self._get_model_extra_state_dict()
             reenable_forward_pre_hook_after_eval = (
                 self.should_disable_forward_pre_hook
                 and self._forward_pre_hook_enabled()
+                and (not eval_mode_fast_path or uses_mxfp8_overlap_shared_param_buffer)
             )
             if reenable_forward_pre_hook_after_eval:
                 self.disable_forward_pre_hook()
@@ -577,7 +605,13 @@ class MegatronPolicyWorkerImpl(
             # Ensure model is in training mode
             self.model.train()
             saved_extra_state = None
+            model_was_training = None
             reenable_forward_pre_hook_after_eval = False
+
+        if evaluation_timings is not None and state_transition_start is not None:
+            evaluation_timings["worker_state_transition_s"] = (
+                time.perf_counter() - state_transition_start
+            )
 
         with ctx:
             all_mb_metrics = []
@@ -632,11 +666,15 @@ class MegatronPolicyWorkerImpl(
 
                 rerun_state_machine = get_rerun_state_machine()
                 while rerun_state_machine.should_run_forward_backward(data_iterator):
-                    # Set grad to zero. For MXFP8 overlap eval, the param and
-                    # grad buffers are shared and pre-hooks are disabled above.
-                    # Avoid zeroing the shared param buffer before forward-only eval.
+                    # Forward-only fast-path evaluation leaves gradients untouched.
+                    # MXFP8 overlap retains its pre-forward sync above, where the
+                    # shared parameter/gradient buffer is copied and zeroed safely.
                     if not (
-                        eval_mode and self._uses_mxfp8_overlap_shared_param_buffer()
+                        eval_mode
+                        and (
+                            eval_mode_fast_path
+                            or uses_mxfp8_overlap_shared_param_buffer
+                        )
                     ):
                         self.model.zero_grad_buffer()
                         self.optimizer.zero_grad()
@@ -665,6 +703,9 @@ class MegatronPolicyWorkerImpl(
                         stage="train",
                         require=True,
                     )
+                    forward_start = (
+                        time.perf_counter() if evaluation_timings is not None else None
+                    )
                     with maybe_r3_trace_stage("train", enabled=use_router_replay):
                         losses_reduced = megatron_forward_backward(
                             model=self.model,
@@ -687,7 +728,14 @@ class MegatronPolicyWorkerImpl(
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
                         )
+                    if evaluation_timings is not None and forward_start is not None:
+                        evaluation_timings["forward_s"] += (
+                            time.perf_counter() - forward_start
+                        )
 
+                metric_reduction_start = (
+                    time.perf_counter() if evaluation_timings is not None else None
+                )
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
                 self._set_mtp_grad_scale_func(None)
@@ -700,28 +748,35 @@ class MegatronPolicyWorkerImpl(
                     torch.cuda.empty_cache()
 
                 # Update parameters.
-                if not eval_mode:
-                    update_successful, grad_norm, num_zeros_in_grad = (
-                        self.optimizer.step()
-                    )
-                else:
+                if eval_mode_fast_path:
                     update_successful, grad_norm, num_zeros_in_grad = (True, 0.0, 0.0)
+                else:
+                    if not eval_mode:
+                        update_successful, grad_norm, num_zeros_in_grad = (
+                            self.optimizer.step()
+                        )
+                    else:
+                        update_successful, grad_norm, num_zeros_in_grad = (
+                            True,
+                            0.0,
+                            0.0,
+                        )
 
-                pg_collection = get_pg_collection(self.model)
+                    pg_collection = get_pg_collection(self.model)
 
-                # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
-                # so we must gather across mp ranks
-                update_successful = logical_and_across_model_parallel_group(
-                    update_successful, mp_group=pg_collection.mp
-                )
-                # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
-                # so we must gather across mp ranks
-                grad_norm: float = reduce_max_stat_across_model_parallel_group(
-                    grad_norm, mp_group=pg_collection.mp
-                )
-                num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
-                    num_zeros_in_grad, mp_group=pg_collection.mp
-                )
+                    # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
+                    # so we must gather across mp ranks
+                    update_successful = logical_and_across_model_parallel_group(
+                        update_successful, mp_group=pg_collection.mp
+                    )
+                    # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
+                    # so we must gather across mp ranks
+                    grad_norm = reduce_max_stat_across_model_parallel_group(
+                        grad_norm, mp_group=pg_collection.mp
+                    )
+                    num_zeros_in_grad = reduce_max_stat_across_model_parallel_group(
+                        num_zeros_in_grad, mp_group=pg_collection.mp
+                    )
                 if (
                     not eval_mode
                     and self._first_train_step_forward_pre_hook_disabled
@@ -775,7 +830,17 @@ class MegatronPolicyWorkerImpl(
                     losses.append(
                         torch.tensor(mb_losses, device=global_valid_toks.device).sum()
                     )
+                if (
+                    evaluation_timings is not None
+                    and metric_reduction_start is not None
+                ):
+                    evaluation_timings["metric_reduction_s"] += (
+                        time.perf_counter() - metric_reduction_start
+                    )
 
+        state_restore_start = (
+            time.perf_counter() if evaluation_timings is not None else None
+        )
         if saved_extra_state is not None:
             self._restore_model_extra_state_dict(saved_extra_state)
         if reenable_forward_pre_hook_after_eval:
@@ -783,6 +848,12 @@ class MegatronPolicyWorkerImpl(
             # param AG to finish. Keep hooks disabled for that one step so grad
             # accumulation starts from a clean shared param/grad buffer.
             self._disable_forward_pre_hook_until_next_train_step()
+        if eval_mode_fast_path and model_was_training is not None:
+            self.model.train(model_was_training)
+        if evaluation_timings is not None and state_restore_start is not None:
+            evaluation_timings["state_restore_s"] = (
+                time.perf_counter() - state_restore_start
+            )
 
         if not eval_mode:
             # Step LR scheduler once per train() call, not per global batch.
@@ -792,6 +863,9 @@ class MegatronPolicyWorkerImpl(
             # train() call regardless of batch size.
             self.scheduler.step(increment=gbs)
 
+        metric_reduction_start = (
+            time.perf_counter() if evaluation_timings is not None else None
+        )
         # Aggregate metrics across all microbatches
         reduce_loss_across_cp = should_reduce_loss_across_context_parallel(
             self.cfg, batch
@@ -807,6 +881,10 @@ class MegatronPolicyWorkerImpl(
         mb_metrics = strip_context_parallel_local_loss_metric(
             mb_metrics, enabled=reduce_loss_across_cp
         )
+        if evaluation_timings is not None and metric_reduction_start is not None:
+            evaluation_timings["metric_reduction_s"] += (
+                time.perf_counter() - metric_reduction_start
+            )
 
         metrics = {
             "global_loss": global_loss.cpu(),
@@ -832,6 +910,8 @@ class MegatronPolicyWorkerImpl(
         # Collect MTP metrics (kept out of train()'s body so cloudpickle does not
         # pull an unpicklable torch ConfigModuleInstance into the worker actor).
         self._collect_mtp_metrics(metrics)
+        if evaluation_timings is not None:
+            metrics["evaluation_timings"] = evaluation_timings
         return metrics
 
     def _compute_moe_grad_scale(self, global_valid_toks):

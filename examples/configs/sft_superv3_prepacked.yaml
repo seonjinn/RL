@@ -102,6 +102,7 @@ policy:
 
   megatron_cfg:
     enabled: true
+    eval_mode_fast_path: false
     env_vars:
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       UB_TIMEOUT: "720"

@@ -15,9 +15,11 @@ import ast
 import os
 import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -40,6 +42,7 @@ from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointManager
+from nemo_rl.utils.timer import Timer
 from tests.unit.test_utils import SimpleLossFn
 
 pytestmark = pytest.mark.mcore
@@ -210,6 +213,441 @@ def test_disable_forward_pre_hook_until_next_step_uses_worker_override():
     assert worker._first_train_step_param_sync_func == "sync"
     assert model_config.param_sync_func is None
     assert worker._first_train_step_forward_pre_hook_disabled is True
+
+
+class _EvalFastPathModel:
+    def __init__(self, events: list[str]) -> None:
+        self.config = SimpleNamespace(mtp_num_layers=0, num_moe_experts=0)
+        self.events = events
+        self.extra_state = torch.tensor([3.0])
+        self.grad_buffer = torch.tensor([7.0])
+        self.hook_enabled = True
+        self.training = True
+        self.weight = torch.tensor([11.0])
+
+    def eval(self) -> None:
+        self.events.append("model_eval")
+        self.training = False
+
+    def load_state_dict(self, state_dict, strict=False) -> None:
+        del strict
+        self.extra_state.copy_(state_dict["layer._extra_state"])
+
+    def modules(self):
+        return []
+
+    def state_dict(self):
+        return {
+            "weight": self.weight,
+            "layer._extra_state": self.extra_state,
+        }
+
+    def train(self, mode: bool = True) -> None:
+        self.events.append(f"model_train:{mode}")
+        self.training = mode
+
+    def zero_grad_buffer(self) -> None:
+        self.events.append("model_zero_grad_buffer")
+        self.grad_buffer.zero_()
+
+
+class _EvalFastPathOptimizer:
+    def __init__(self, model: _EvalFastPathModel, events: list[str]) -> None:
+        self.events = events
+        self.model = model
+        self.param_groups = [{}]
+        self.state = {"step": 0}
+
+    def step(self):
+        self.events.append("optimizer_step")
+        self.model.weight.add_(1.0)
+        self.state["step"] += 1
+        return True, 2.0, 4.0
+
+    def zero_grad(self) -> None:
+        self.events.append("optimizer_zero_grad")
+
+
+class _EvalFastPathScheduler:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.state = {"steps": 0}
+
+    def get_lr(self, param_group) -> float:
+        del param_group
+        return 1.0e-5
+
+    def get_wd(self) -> float:
+        return 0.1
+
+    def step(self, increment: int) -> None:
+        self.events.append(f"scheduler_step:{increment}")
+        self.state["steps"] += 1
+
+
+class _SingleForwardRerunState:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def should_run_forward_backward(self, data_iterator) -> bool:
+        del data_iterator
+        self.calls += 1
+        return self.calls == 1
+
+
+def _build_eval_fast_path_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    enabled: bool,
+):
+    from nemo_rl.models.policy.workers import megatron_policy_worker as worker_module
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    events: list[str] = []
+    model = _EvalFastPathModel(events)
+    optimizer = _EvalFastPathOptimizer(model, events)
+    scheduler = _EvalFastPathScheduler(events)
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "train_global_batch_size": 1,
+        "train_micro_batch_size": 1,
+        "megatron_cfg": {
+            "empty_unused_memory_level": 0,
+            "eval_mode_fast_path": enabled,
+            "moe_per_layer_logging": False,
+            "use_fused_linear_logprobs": False,
+        },
+    }
+    worker.defer_fp32_logits = False
+    worker.delegate_pack_to_model = False
+    worker.dp_size = 1
+    worker.draft_model = None
+    worker.dtype = torch.float32
+    worker.fp8_cfg = {"enabled": True}
+    worker.mcore_state = SimpleNamespace(straggler_timer=None)
+    worker.model = model
+    worker.optimizer = optimizer
+    worker.sampling_params = None
+    worker.scheduler = scheduler
+    worker.should_disable_forward_pre_hook = True
+    worker._first_train_step_forward_pre_hook_disabled = False
+    worker._first_train_step_param_sync_func = None
+    worker._router_replay_enabled = False
+    worker._collect_mtp_metrics = lambda metrics: None
+    worker._forward_pre_hook_enabled = lambda: model.hook_enabled
+    worker._uses_mxfp8_overlap_shared_param_buffer = lambda: False
+
+    def copy_main_params_to_param_buffer(zero_grad_buffer: bool = False) -> None:
+        events.append("copy_main_params_to_param_buffer")
+        if zero_grad_buffer:
+            model.zero_grad_buffer()
+
+    def disable_forward_pre_hook(param_sync: bool = True) -> None:
+        events.append(f"disable_forward_pre_hook:{param_sync}")
+        if param_sync:
+            copy_main_params_to_param_buffer(zero_grad_buffer=True)
+        model.hook_enabled = False
+
+    worker._copy_main_params_to_param_buffer = copy_main_params_to_param_buffer
+    worker.disable_forward_pre_hook = disable_forward_pre_hook
+    worker.enable_forward_pre_hook = lambda: setattr(model, "hook_enabled", True)
+    worker._disable_forward_pre_hook_until_next_train_step = lambda: events.append(
+        "disable_forward_pre_hook_until_next_train_step"
+    )
+
+    original_tensor = torch.tensor
+
+    def cpu_tensor(*args, **kwargs):
+        kwargs.pop("device", None)
+        return original_tensor(*args, **kwargs)
+
+    monkeypatch.setattr(worker_module.torch, "tensor", cpu_tensor)
+    monkeypatch.setattr(
+        worker_module.torch.distributed,
+        "all_reduce",
+        lambda *args, **kwargs: events.append("dataset_all_reduce"),
+    )
+    monkeypatch.setattr(worker_module.torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(worker_module.torch.cuda, "get_device_name", lambda: "fake")
+    monkeypatch.setattr(
+        worker_module.parallel_state, "get_data_parallel_group", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        worker_module.parallel_state,
+        "is_pipeline_last_stage",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "process_global_batch",
+        lambda *args, **kwargs: {
+            "batch": {
+                "sample_mask": torch.ones(1),
+                "token_mask": torch.ones(1, 1),
+            },
+            "global_valid_seqs": torch.tensor(1.0),
+            "global_valid_toks": torch.tensor(1.0),
+        },
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "get_microbatch_iterator",
+        lambda *args, **kwargs: (iter([object()]), 1, 1, 1, 1),
+    )
+    monkeypatch.setattr(worker_module, "LossPostProcessor", lambda **kwargs: object())
+    monkeypatch.setattr(
+        worker_module,
+        "get_rerun_state_machine",
+        lambda: _SingleForwardRerunState(),
+    )
+    monkeypatch.setattr(
+        worker_module, "maybe_r3_trace_stage", lambda *args, **kwargs: nullcontext()
+    )
+
+    def forward_backward(*args, **kwargs):
+        events.append("forward")
+        if kwargs["forward_only"]:
+            model.extra_state.add_(5.0)
+        return [{"loss": torch.tensor(1.0)}]
+
+    monkeypatch.setattr(worker_module, "megatron_forward_backward", forward_backward)
+    monkeypatch.setattr(
+        worker_module,
+        "get_pg_collection",
+        lambda model: SimpleNamespace(mp=object()),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "logical_and_across_model_parallel_group",
+        lambda value, **kwargs: events.append("update_successful_reduction") or value,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "reduce_max_stat_across_model_parallel_group",
+        lambda value, **kwargs: events.append("max_stat_reduction") or value,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "broadcast_loss_metrics_from_last_stage",
+        lambda metrics: metrics,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "should_reduce_loss_across_context_parallel",
+        lambda cfg, batch: False,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "aggregate_training_statistics",
+        lambda *, all_mb_metrics, losses, data_parallel_group: (
+            {"loss": [torch.tensor(1.0)]},
+            torch.stack(losses).sum(),
+        ),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "strip_context_parallel_local_loss_metric",
+        lambda metrics, **kwargs: metrics,
+    )
+
+    return worker, model, optimizer, scheduler, events
+
+
+def _eval_fast_path_state(model, optimizer, scheduler) -> dict[str, object]:
+    return {
+        "extra_state": model.extra_state.clone(),
+        "grad_buffer": model.grad_buffer.clone(),
+        "hook_enabled": model.hook_enabled,
+        "optimizer": dict(optimizer.state),
+        "scheduler": dict(scheduler.state),
+        "training": model.training,
+        "weight": model.weight.clone(),
+    }
+
+
+def test_eval_mode_fast_path_skips_training_only_work_and_restores_state(
+    monkeypatch,
+):
+    worker, model, optimizer, scheduler, events = _build_eval_fast_path_worker(
+        monkeypatch, enabled=True
+    )
+    initial_state = _eval_fast_path_state(model, optimizer, scheduler)
+
+    results = worker.train(
+        SimpleNamespace(size=1),
+        object(),
+        eval_mode=True,
+        gbs=1,
+        mbs=1,
+        collect_eval_timing=True,
+    )
+
+    assert "dataset_all_reduce" in events
+    assert "forward" in events
+    assert "model_zero_grad_buffer" not in events
+    assert "optimizer_zero_grad" not in events
+    assert "copy_main_params_to_param_buffer" not in events
+    assert "optimizer_step" not in events
+    assert "scheduler_step:1" not in events
+    assert "update_successful_reduction" not in events
+    assert "max_stat_reduction" not in events
+    assert "disable_forward_pre_hook:True" not in events
+    assert _eval_fast_path_state(model, optimizer, scheduler) == initial_state
+    assert set(results["evaluation_timings"]) == {
+        "worker_state_transition_s",
+        "forward_s",
+        "metric_reduction_s",
+        "state_restore_s",
+    }
+    assert all(value >= 0 for value in results["evaluation_timings"].values())
+
+
+def test_eval_mode_fast_path_next_training_call_matches_direct_training(monkeypatch):
+    worker, model, optimizer, scheduler, events = _build_eval_fast_path_worker(
+        monkeypatch, enabled=True
+    )
+    worker.train(
+        SimpleNamespace(size=1),
+        object(),
+        eval_mode=True,
+        gbs=1,
+        mbs=1,
+    )
+    training_event_start = len(events)
+    post_eval_results = worker.train(
+        SimpleNamespace(size=1), object(), eval_mode=False, gbs=1, mbs=1
+    )
+    post_eval_state = _eval_fast_path_state(model, optimizer, scheduler)
+    training_events = events[training_event_start:]
+
+    control_worker, control_model, control_optimizer, control_scheduler, _ = (
+        _build_eval_fast_path_worker(monkeypatch, enabled=True)
+    )
+    control_results = control_worker.train(
+        SimpleNamespace(size=1), object(), eval_mode=False, gbs=1, mbs=1
+    )
+    control_state = _eval_fast_path_state(
+        control_model, control_optimizer, control_scheduler
+    )
+
+    assert "model_zero_grad_buffer" in training_events
+    assert "optimizer_zero_grad" in training_events
+    assert "copy_main_params_to_param_buffer" in training_events
+    assert "optimizer_step" in training_events
+    assert "scheduler_step:1" in training_events
+    assert "update_successful_reduction" in training_events
+    assert training_events.count("max_stat_reduction") == 2
+    assert post_eval_state == control_state
+    torch.testing.assert_close(
+        post_eval_results["global_loss"], control_results["global_loss"]
+    )
+    torch.testing.assert_close(
+        post_eval_results["grad_norm"], control_results["grad_norm"]
+    )
+
+
+def test_eval_mode_fast_path_default_false_preserves_legacy_operations(monkeypatch):
+    worker, model, _, _, events = _build_eval_fast_path_worker(
+        monkeypatch, enabled=False
+    )
+    del worker.cfg["megatron_cfg"]["eval_mode_fast_path"]
+
+    results = worker.train(
+        SimpleNamespace(size=1), object(), eval_mode=True, gbs=1, mbs=1
+    )
+
+    assert "model_zero_grad_buffer" in events
+    assert "optimizer_zero_grad" in events
+    assert "copy_main_params_to_param_buffer" in events
+    assert "disable_forward_pre_hook:True" in events
+    assert "update_successful_reduction" in events
+    assert events.count("max_stat_reduction") == 2
+    assert "evaluation_timings" not in results
+    assert model.training is False
+
+
+def test_eval_mode_fast_path_preserves_required_mxfp8_param_sync(monkeypatch):
+    worker, model, _, _, events = _build_eval_fast_path_worker(
+        monkeypatch, enabled=True
+    )
+    worker._uses_mxfp8_overlap_shared_param_buffer = lambda: True
+
+    worker.train(SimpleNamespace(size=1), object(), eval_mode=True, gbs=1, mbs=1)
+
+    assert "disable_forward_pre_hook:True" in events
+    assert "copy_main_params_to_param_buffer" in events
+    assert "model_zero_grad_buffer" in events
+    assert "optimizer_zero_grad" not in events
+    assert "optimizer_step" not in events
+    assert "scheduler_step:1" not in events
+    assert "update_successful_reduction" not in events
+    assert "max_stat_reduction" not in events
+    assert model.hook_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("megatron_enabled", "eval_mode", "use_timer", "expected_timing_request"),
+    [
+        (True, True, True, True),
+        (True, True, False, False),
+        (True, False, True, False),
+        (False, True, True, False),
+    ],
+)
+def test_policy_only_requests_worker_eval_timing_for_timed_megatron_evaluation(
+    megatron_enabled,
+    eval_mode,
+    use_timer,
+    expected_timing_request,
+):
+    policy = object.__new__(Policy)
+    policy.cfg = {
+        "train_global_batch_size": 1,
+        "train_micro_batch_size": 1,
+        "megatron_cfg": {"enabled": megatron_enabled},
+    }
+    policy.flops_tracker = None
+    policy._shard_for_train = lambda data, batch_size: [data]
+    policy.worker_group = MagicMock()
+    policy.worker_group.run_all_workers_sharded_data.return_value = [object()]
+    worker_results = [
+        {
+            "global_loss": torch.tensor(1.0),
+            "grad_norm": torch.tensor([0.0]),
+            "all_mb_metrics": {},
+        },
+        {
+            "global_loss": torch.tensor(1.0),
+            "grad_norm": torch.tensor([0.0]),
+            "all_mb_metrics": {},
+        },
+    ]
+    if expected_timing_request:
+        worker_results[0]["evaluation_timings"] = {"forward_s": 0.1}
+        worker_results[1]["evaluation_timings"] = {"forward_s": 0.2}
+    policy.worker_group.get_all_worker_results.return_value = worker_results
+
+    results = policy.train(
+        SimpleNamespace(),
+        object(),
+        eval_mode=eval_mode,
+        gbs=1,
+        mbs=1,
+        timer=Timer() if use_timer else None,
+    )
+
+    common_kwargs = policy.worker_group.run_all_workers_sharded_data.call_args.kwargs[
+        "common_kwargs"
+    ]
+    assert (common_kwargs.get("collect_eval_timing") is True) is (
+        expected_timing_request
+    )
+    if expected_timing_request:
+        assert results["evaluation_timings"] == {"forward_s": 0.2}
+    else:
+        assert "evaluation_timings" not in results
 
 
 def create_megatron_test_config(
