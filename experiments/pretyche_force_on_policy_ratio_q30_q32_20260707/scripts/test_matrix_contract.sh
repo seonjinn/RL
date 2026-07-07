@@ -34,6 +34,12 @@ test "$(awk -F '\t' 'NR > 1 && $8 == 20 {count++} END {print count + 0}' "$CONTR
     "$VALIDATOR" "$VALIDATOR_JOB"
 
 grep -q 'd4cfecf90db41cdf142629963b54b67ab479ab02' "$RUNNER"
+grep -q 'nemo_rl_nightly_20260630_0215.sqsh' "$RUNNER"
+grep -q 'nemo_rl_nightly_20260630_0215.sqsh' "$VALIDATOR_JOB"
+grep -q 'nemo_rl_nightly_20260630_0215.sqsh' "$SUBMITTER"
+grep -q 'bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a4083172132ff510' "$RUNNER"
+grep -q 'bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a4083172132ff510' "$VALIDATOR_JOB"
+grep -q 'bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a4083172132ff510' "$SUBMITTER"
 grep -q 'policy.train_global_batch_size=2048' "$RUNNER"
 grep -q 'loss_fn.force_on_policy_ratio=${FORCE_ON_POLICY_RATIO}' "$RUNNER"
 grep -q 'checkpointing.enabled=false' "$RUNNER"

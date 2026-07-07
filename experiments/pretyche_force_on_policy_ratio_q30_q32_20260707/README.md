@@ -9,6 +9,8 @@ and Qwen3-32B 4n4g performance recipes on Pre-Tyche.
 - NeMo-RL source: `d4cfecf90db41cdf142629963b54b67ab479ab02`
 - Container SHA-256:
   `bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a4083172132ff510`
+- Immutable container path:
+  `containers/nemo_rl_nightly_20260630_0215.sqsh`
 - Cluster: Pre-Tyche GB200-NVL36, partition `36x2-a01r`
 - Topology: 4 nodes, 4 GPUs per node, segment size 4
 - Recipes: `grpo-qwen3-30ba3b-4n4g.yaml` and

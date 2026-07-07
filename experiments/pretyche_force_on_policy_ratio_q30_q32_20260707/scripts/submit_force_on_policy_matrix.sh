@@ -8,6 +8,7 @@ EXP_ROOT=$BASE/pretyche_force_on_policy_ratio_q30_q32_20260707
 CONTRACT=$EXP_ROOT/manifests/config_contract.tsv
 RUNNER=$EXP_ROOT/scripts/run_force_on_policy_benchmark.sbatch
 EXPECTED_REPO_SHA=d4cfecf90db41cdf142629963b54b67ab479ab02
+EXPECTED_CONTAINER_SHA=bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a4083172132ff510
 TEST_ONLY=${TEST_ONLY:-1}
 SMOKE_ONLY=${SMOKE_ONLY:-1}
 RUN_FILTER=${RUN_FILTER:-.*}
@@ -29,7 +30,9 @@ test -z "$(git -C "$REPO" status --porcelain --ignore-submodules=untracked)"
 ! git -C "$REPO" submodule status --recursive | grep -Eq '^[-+U]'
 test -x "$RUNNER"
 test -s "$CONTRACT"
-test -s "$BASE/containers/nemo_rl_nightly.sqsh"
+CONTAINER=$BASE/containers/nemo_rl_nightly_20260630_0215.sqsh
+test -s "$CONTAINER"
+test "$(sha256sum "$CONTAINER" | awk '{print $1}')" = "$EXPECTED_CONTAINER_SHA"
 test -r "$HOME/.nemo_rl_tokens"
 
 runner_sha=$(sha256sum "$RUNNER" | awk '{print $1}')
