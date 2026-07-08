@@ -53,6 +53,7 @@ MATCHED_SETUP_FIELDS = (
     "max_input_seq_length",
     "max_total_sequence_length",
     "max_num_batched_tokens",
+    "logprob_batch_size",
 )
 
 

@@ -173,6 +173,7 @@ def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
         ("max_input_seq_length", "recipe", "4096"),
         ("max_total_sequence_length", "recipe", "36864"),
         ("max_num_batched_tokens", "16384", "8192"),
+        ("logprob_batch_size", "recipe", "1"),
     ],
 )
 def test_validate_manifest_rows_rejects_sequence_profile_mismatch(
@@ -192,6 +193,7 @@ def test_validate_manifest_rows_rejects_sequence_profile_mismatch(
         "max_input_seq_length": "recipe",
         "max_total_sequence_length": "recipe",
         "max_num_batched_tokens": "16384",
+        "logprob_batch_size": "recipe",
     }
     baseline = {**common, "variant": "baseline", field: baseline_value}
     candidate = {**common, "variant": "dynamic", field: candidate_value}
@@ -216,6 +218,7 @@ def test_validate_manifest_rows_requires_profile_core_triplet() -> None:
         "max_input_seq_length": "recipe",
         "max_total_sequence_length": "recipe",
         "max_num_batched_tokens": "16384",
+        "logprob_batch_size": "recipe",
     }
     rows = [
         {**common, "variant": "baseline"},

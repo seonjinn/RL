@@ -164,6 +164,7 @@ def test_dynamicsd_launcher_recipe_profile_preserves_recipe_lengths() -> None:
     assert "policy.generation.max_new_tokens=" not in output
     assert "policy.generation.vllm_cfg.max_model_len=" not in output
     assert "data.max_input_seq_length=" not in output
+    assert "policy.logprob_batch_size=" not in output
     assert "contract-test-attempt-1-recipe-qwen32b-dynamic" in output
 
 
@@ -185,6 +186,7 @@ def test_dynamicsd_launcher_longtail32k_profile_sets_exact_lengths() -> None:
     assert "policy.generation.max_new_tokens=32768" in output
     assert "policy.generation.vllm_cfg.max_model_len=36864" in output
     assert "data.max_input_seq_length=4096" in output
+    assert "policy.logprob_batch_size=1" in output
     assert "contract-test-attempt-1-longtail32k-qwen32b-dynamic" in output
 
 
@@ -343,6 +345,7 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "max_input_seq_length",
         "max_total_sequence_length",
         "max_num_batched_tokens",
+        "logprob_batch_size",
         "static_k",
         "dynamic_schedule",
         "command",

@@ -11,6 +11,7 @@ STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-[[1,16,5],[17,32,4],[33,64,3],[65,128,1],[129,512,0]]}"
 PROFILE="${PROFILE:-recipe}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
+LONGTAIL_LOGPROB_BATCH_SIZE="${LONGTAIL_LOGPROB_BATCH_SIZE:-1}"
 ACCOUNT="${ACCOUNT:-nemotron_sw_post}"
 PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
@@ -43,11 +44,13 @@ case "${PROFILE}" in
     profile_max_new_tokens="recipe"
     profile_max_input_seq_length="recipe"
     profile_max_total_sequence_length="recipe"
+    profile_logprob_batch_size="recipe"
     ;;
   longtail32k)
     profile_max_new_tokens="32768"
     profile_max_input_seq_length="4096"
     profile_max_total_sequence_length="36864"
+    profile_logprob_batch_size="${LONGTAIL_LOGPROB_BATCH_SIZE}"
     ;;
   *)
     echo "ERROR: profile must be recipe or longtail32k" >&2
@@ -180,6 +183,7 @@ submit_one() {
       "policy.generation.max_new_tokens=${profile_max_new_tokens}"
       "policy.generation.vllm_cfg.max_model_len=${profile_max_total_sequence_length}"
       "data.max_input_seq_length=${profile_max_input_seq_length}"
+      "policy.logprob_batch_size=${profile_logprob_batch_size}"
     )
   fi
   if [[ "${variant}" != "baseline" ]]; then
@@ -274,7 +278,7 @@ submit_one() {
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
       local manifest_header
-      manifest_header=$'timestamp\tmodel\tvariant\tprofile\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tmax_new_tokens\tmax_input_seq_length\tmax_total_sequence_length\tmax_num_batched_tokens\tstatic_k\tdynamic_schedule\tcommand'
+      manifest_header=$'timestamp\tmodel\tvariant\tprofile\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tmax_new_tokens\tmax_input_seq_length\tmax_total_sequence_length\tmax_num_batched_tokens\tlogprob_batch_size\tstatic_k\tdynamic_schedule\tcommand'
       if [[ ! -f "${manifest}" ]]; then
         printf '%s\n' "${manifest_header}" > "${manifest}"
       else
@@ -289,14 +293,15 @@ submit_one() {
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${PROFILE}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
         "${MAX_STEPS}" "${profile_max_new_tokens}" "${profile_max_input_seq_length}" \
         "${profile_max_total_sequence_length}" \
-        "${MAX_NUM_BATCHED_TOKENS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
+        "${MAX_NUM_BATCHED_TOKENS}" "${profile_logprob_batch_size}" "${draft_k}" \
+        "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
       ;;
     *)
       echo "ERROR: mode must be dry-run, test-only, or submit" >&2
