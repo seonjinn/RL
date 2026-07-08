@@ -471,17 +471,20 @@ def _torchdata_runtime_identity() -> tuple[str, type[Any], str, str]:
 
     distribution_name = distribution.metadata.get("Name")
     package_owners = importlib_metadata.packages_distributions().get(_TORCHDATA_PACKAGE)
-    if (
-        type(distribution_name) is not str
-        or type(package_owners) is not list
-        or not all(type(owner) is str for owner in package_owners)
-    ):
+    if type(distribution_name) is not str or type(package_owners) is not list:
         raise CorrectnessAuditError(
             "Correctness audit could not verify the torchdata package identity"
         )
-    normalized_distribution = _normalize_distribution_name(distribution_name)
+    untyped_package_owners = cast(list[object], package_owners)
+    if not all(type(owner) is str for owner in untyped_package_owners):
+        raise CorrectnessAuditError(
+            "Correctness audit could not verify the torchdata package identity"
+        )
+    verified_distribution_name = cast(str, distribution_name)
+    verified_package_owners = cast(list[str], untyped_package_owners)
+    normalized_distribution = _normalize_distribution_name(verified_distribution_name)
     normalized_owners = tuple(
-        _normalize_distribution_name(owner) for owner in package_owners
+        _normalize_distribution_name(owner) for owner in verified_package_owners
     )
     if normalized_distribution != _TORCHDATA_DISTRIBUTION or normalized_owners != (
         _TORCHDATA_DISTRIBUTION,
@@ -751,7 +754,6 @@ class SFTCorrectnessAuditor:
         try:
             result = validation()
             validation_succeeded = True
-            return result
         finally:
             previous_audit_time_s = self._elapsed_seconds
             audit_start = time.perf_counter()
@@ -820,6 +822,7 @@ class SFTCorrectnessAuditor:
                 raise CorrectnessAuditError(
                     f"SFT correctness audit rejected validation step {step}: {changed}"
                 )
+        return result
 
     def record_next_train_batch(self, batch: object) -> None:
         if not self._pending_records:

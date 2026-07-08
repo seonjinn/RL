@@ -13,13 +13,17 @@
   `45ca880cbaf32ec742a66934b36d3fb41420ee0f`
 - Loader identity fail-closed follow-up:
   `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
-- TorchData source-provenance follow-up: the signed commit containing the final
-  section below
-- Independent code-review gate: prior findings addressed; final controller
-  review remains pending
-- Supported-Linux execution gate: CW job `13566796` stopped at
-  `160 passed, 1 failed` on a restored-loader audit mutation; the read-only fix
-  and subsequent identity/provenance hardening require a full CW rerun
+- TorchData source-provenance follow-up:
+  `61d7ff5d9ee57e077ed5ccde2536bac037b9b32b`
+- Static typing follow-up: the signed commit containing the final section below
+- Independent code-review gate: prior findings addressed; controller review of
+  the static typing follow-up remains pending
+- Supported-Linux functional gate: CW job `13568701` passed at `61d7ff5d9`
+  with `269 passed, 47 warnings in 47.25s`, using isolated
+  `RAY_TMPDIR`/`TMPDIR` and an unset `RAY_ADDRESS`
+- Supported-Linux static gate: CW job `13568879` passed Ruff and reported 109
+  project-standard Pyrefly diagnostics. The Task 1-4-owned diagnostics are
+  addressed by the final section below; a CW Pyrefly rerun remains pending.
 
 The correctness audit is opt-in and disabled by default. The disabled path does
 not construct the auditor and adds no worker RPC, tensor reduction,
@@ -1047,3 +1051,123 @@ Result: exit 0 with no output after this report update.
   version, class, fields, and boundary identity.
 - Confirmed non-TorchData colliding loaders and the default-disabled path do not
   perform TorchData metadata or source-provenance work.
+
+## Static Typing Follow-Up (2026-07-08)
+
+### CW Evidence and Scope
+
+- CW functional job `13568701` passed at `61d7ff5d9` with `269 passed, 47
+  warnings in 47.25s`. It used isolated `RAY_TMPDIR`/`TMPDIR` and an unset
+  `RAY_ADDRESS`.
+- CW static job `13568879` passed Ruff. Its full project-standard Pyrefly run
+  reported 109 diagnostics, most outside the Tasks 1-4 range.
+- Blame confirms the corrected audit metadata, audit return, event evidence,
+  timing, artifact publication, and producer config lines are owned by Tasks
+  1-4. Legacy `sft.py`, worker, and `run_sft.py` typing debt was not changed.
+
+### Fix
+
+- Narrowed distribution metadata and package-owner values only after their
+  existing exact runtime type checks.
+- Moved `audit_validation()`'s successful return after its `finally`, preserving
+  validation exceptions, evidence capture, gate exceptions, and successful
+  result identity while making the return path explicit to Pyrefly.
+- Narrowed runtime masks after the existing tensor checks, bound non-optional
+  event evidence only inside the enabled-audit branch, and narrowed the scalar
+  validation timing before subtraction.
+- Moved `_publish_safetensors()`'s successful return after temporary-file
+  cleanup, with identical exception and cleanup behavior.
+- Typed the already runtime-validated resolved Hydra mapping as dynamic input
+  to the Pydantic `MasterConfig` constructor.
+- Added a source-structure regression requiring both successful returns to
+  occur after their cleanup/evidence `finally` blocks.
+
+The audit-disabled branch gains no assignment, assertion, metadata lookup,
+RNG read, worker RPC, reduction, synchronization, or timing call from this
+follow-up.
+
+### Changed Files
+
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `nemo_rl/algorithms/sft.py`
+- `nemo_rl/algorithms/sft_validation_artifact.py`
+- `examples/prepare_sft_validation_event.py`
+- `tests/source_isolated/test_sft_event_batch_source.py`
+- `.superpowers/sdd/task-4-report.md`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+
+### TDD Evidence
+
+```bash
+pytest -q tests/source_isolated/test_sft_event_batch_source.py -k task_owned_finally_blocks_return_explicitly_after_cleanup
+```
+
+RED result before the production change: exit 1, `1 failed, 44 deselected in
+0.09s`; the audit `try` still contained a return.
+
+### Exact Local Verification
+
+```bash
+rtk proxy /opt/homebrew/bin/pytest -q --disable-warnings tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 0, `45 passed in 0.98s` on the final rerun.
+
+```bash
+rtk proxy /opt/homebrew/bin/pytest -q --disable-warnings tests/unit/algorithms/test_sft_correctness_audit.py::test_auditor_records_next_batch_only_when_caller_supplies_natural_batch tests/unit/algorithms/test_sft_correctness_audit.py::test_auditor_gates_failed_validation_before_reraising tests/unit/algorithms/test_sft_validation_artifact.py::test_validation_artifact_round_trip_preserves_tensor_contract tests/unit/algorithms/test_sft.py::test_validation_audit_captures_actual_payload_identity_and_token_counts tests/unit/algorithms/test_sft.py::test_runtime_evidence_gate_detects_independent_identity_and_token_mutations tests/unit/algorithms/test_sft.py::test_sft_train_excludes_audit_time_from_reported_step_window
+```
+
+Result: exit 4 during `tests/unit/conftest.py` import; no unit test ran because
+local Ray is unavailable: `ModuleNotFoundError: No module named 'ray'`.
+
+```bash
+uv run --group dev pyrefly check nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_validation_artifact.py examples/prepare_sft_validation_event.py
+```
+
+Result: exit 2 before Pyrefly launch because the project lock supports Linux
+`x86_64`/`aarch64`, not local macOS `aarch64`.
+
+```bash
+uvx --from pyrefly==0.24.2 pyrefly check nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_validation_artifact.py examples/prepare_sft_validation_event.py
+```
+
+Result: exit 1 with 12 residual diagnostics and none on changed lines. Eight
+are missing local imports (`torch`, `omegaconf`, `pydantic`, and
+`safetensors.torch`); four are pre-existing `sft.py` diagnostics at lines 126,
+418, and 1256 (two diagnostics). All diagnostics identified by CW job
+`13568879` as Tasks 1-4-owned are absent from this focused result.
+
+```bash
+ruff check nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_validation_artifact.py examples/prepare_sft_validation_event.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 0, `Ruff: No issues found`.
+
+```bash
+ruff format --check nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_validation_artifact.py examples/prepare_sft_validation_event.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 0, `5 files already formatted`.
+
+```bash
+python3 -m py_compile nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_validation_artifact.py examples/prepare_sft_validation_event.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 0 with no output.
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output before documentation updates.
+
+### Self-Review and Remaining Concern
+
+- The two post-`finally` returns preserve prior success, cleanup, evidence,
+  original-exception, and gate-exception semantics.
+- Every cast follows an existing runtime proof; no validation condition was
+  weakened or removed.
+- Event payload binding and its assertion execute only when correctness audit
+  evidence collection is enabled.
+- The functional CW gate is passed at `61d7ff5d9`; the current type-only
+  follow-up still needs the controller's project-standard CW Pyrefly rerun.

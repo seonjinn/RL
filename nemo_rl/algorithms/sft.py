@@ -991,6 +991,8 @@ def _event_validation_num_valid_tokens(
         raise RuntimeError(
             "Correctness audit requires tensor sample_mask and token_mask"
         )
+    sample_mask = cast(torch.Tensor, sample_mask)
+    token_mask = cast(torch.Tensor, token_mask)
     expected_size = _EVENT_VALIDATION_BATCH_COUNT * global_batch_size
     if sample_mask.shape[0] != expected_size or token_mask.shape[0] != expected_size:
         raise RuntimeError(
@@ -1473,10 +1475,12 @@ def _validate_with_loss_availability_impl(
                     **timing_kwargs,
                 )
             else:
+                audit_val_data = combined_val_data
+                assert audit_val_data is not None
                 correctness_evidence_collector.capture_before(
-                    combined_val_data,
+                    audit_val_data,
                     lambda: _event_validation_num_valid_tokens(
-                        combined_val_data, global_batch_size=val_batch_size
+                        audit_val_data, global_batch_size=val_batch_size
                     ),
                 )
                 try:
@@ -1492,9 +1496,9 @@ def _validate_with_loss_availability_impl(
                     )
                 finally:
                     correctness_evidence_collector.capture_after(
-                        combined_val_data,
+                        audit_val_data,
                         lambda: _event_validation_num_valid_tokens(
-                            combined_val_data, global_batch_size=val_batch_size
+                            audit_val_data, global_batch_size=val_batch_size
                         ),
                     )
             if comparison_instrumentation_enabled:
@@ -1549,7 +1553,7 @@ def _validate_with_loss_availability_impl(
     ):
         timing_metrics["total_validation_time"] = max(
             0.0,
-            float(timing_metrics["total_validation_time"])
+            float(cast(float, timing_metrics["total_validation_time"]))
             - correctness_audit_time_in_validation_s,
         )
     if event_payload_bytes is not None:

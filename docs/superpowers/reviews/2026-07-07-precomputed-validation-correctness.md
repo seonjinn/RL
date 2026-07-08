@@ -13,8 +13,9 @@
   `45ca880cbaf32ec742a66934b36d3fb41420ee0f`
 - Loader identity fail-closed follow-up:
   `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
-- TorchData source-provenance follow-up: the signed commit containing this
-  document
+- TorchData source-provenance follow-up:
+  `61d7ff5d9ee57e077ed5ccde2536bac037b9b32b`
+- Static typing follow-up: the signed commit containing the final review section
 - Requirements: `.superpowers/sdd/task-4-brief.md`
 - Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
 
@@ -31,13 +32,14 @@ subsequent loader-adapter identity and source-provenance findings are addressed
 in the current range. This document does not claim that the controller has
 approved the follow-up.
 
-**Supported-Linux execution gate: PENDING FULL RERUN.** After the CUDA contract
-fix, CW job `13566796` reached `160 passed, 1 failed` before `maxfail=1` stopped
-the suite. The failing restart test showed that the first audit snapshot
-mutated the explicit generator while materializing a lazy restored loader
-iterator. The current follow-up avoids that mutation and adds production
-capture and next-batch parity coverage. The controller must rerun the full
-focused suite on CW Linux.
+**Supported-Linux functional gate: PASS AT `61d7ff5d9`.** CW job `13568701`
+completed with `269 passed, 47 warnings in 47.25s`, using isolated
+`RAY_TMPDIR`/`TMPDIR` and an unset `RAY_ADDRESS`.
+
+**Supported-Linux static gate: FOLLOW-UP PENDING.** CW job `13568879` passed
+Ruff, then the project-standard Pyrefly run reported 109 diagnostics. Most are
+pre-existing repository debt. The Tasks 1-4-owned diagnostics are corrected by
+the current type-only follow-up; the controller must rerun standard Pyrefly.
 
 The historical CW job `13559835` reported `177 passed, 3 warnings in 43.82s`
 at the approved Tasks 1-3 head `e8e13f5a9`; it does not cover either Task 4
@@ -179,39 +181,40 @@ still bypass TorchData metadata and use their protocol `state_dict()` directly.
 |---|---|---|---|
 | Dataset and preprocessing identity are pinned | Manifest provenance derives from active dataset, tokenizer, preprocessing, and container fingerprints | Tasks 1-3 provenance/startup tests; historical Linux gate through `e8e13f5a9` | Pass through Tasks 1-3 |
 | Artifact publication is atomic and fail closed | Strict schema and hashes, memory preflight, locked atomic publication | Corrupt, partial, interrupted, and concurrent publication tests | Pass through Tasks 1-3 |
-| Canonical precomputed and CPU-cache payloads remain owned and immutable | Loads own CPU tensors; submissions clone canonical CPU/precomputed payloads | Clone, mutation, failed-submission, cache lifecycle tests | Covered; current Linux rerun pending |
-| Live and precomputed loss weighting use exact valid tokens | Validation weights losses with exact `sample_mask * token_mask` counts and artifact counts | Parity and invalid-loss-shape tests | Covered; current Linux rerun pending |
-| Driver Python, NumPy, Torch CPU, and Torch CUDA RNG are exact | Production snapshots hash complete states; initialized CUDA devices use `get_rng_state_all()` | Real mutation matrix plus controlled driver CUDA API side effects | Covered; current Linux rerun pending |
-| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; exact TorchData 0.11 package, source origin, RECORD SHA-256, class, and layout are verified; pending/not-started state is hashed without creating an iterator; active state is read only after validation | Real restart/control test plus package/source provenance, identity, version, missing-field, bad-type, impossible-boundary, and colliding-loader tests | Covered locally by source contract; current Linux rerun pending |
-| Runtime validation payload survives exceptions | External collector exists independently of result and finalizes after restoration attempt | Mutating submission-failure, invalid-loss, and restore-failure production tests | Covered; current Linux rerun pending |
-| Ordered runtime sample identity is exact | Evidence independently hashes ordered `idx` and `input_ids` | Production path mutates only `idx` and asserts sample-identity rejection | Covered; current Linux rerun pending |
-| Runtime exact token counts are independent evidence | Counts are recomputed from current `sample_mask * token_mask` before and after submission | Production path mutates only a mask and asserts token-count rejection | Covered; current Linux rerun pending |
-| Next train batch is natural and comparable | Successful records remain pending until the existing training iterator yields a batch; explicit control comparison API gates it | Natural-batch, no-validation control, and restart/resume tests | Covered; current Linux rerun pending |
-| Every worker rank is represented | Concrete Policy RPC calls every worker, validates ranks, and sorts records | Multi-rank routing, duplicate-rank, and order tests | Covered; current Linux rerun pending |
-| Worker Torch CUDA RNG is read-only and mutation-sensitive | Worker calls `torch.cuda.get_rng_state(current_device)` | Controlled API side effects pass through production worker capture and gate | Covered; current Linux rerun pending |
-| MCore RNG is read without initialization | Worker calls only direct `get_all_rng_states()` and rejects assertion, empty, and non-mapping results | Controlled tracker mutation, uninitialized, empty, non-mapping, and source-guard tests | Covered; current Linux rerun pending |
-| Model parameters, buffers, and training mode are stable | Direct named traversal records local fingerprints and every module mode | Production model and independent mode mutation tests | Covered; current Linux rerun pending |
-| Optimizer main shards, state tensors, and steps are stable | Every param-group tensor and direct state tensor has owner, shape/dtype, moments, samples; exact steps are separate | Main-shard, `exp_avg`, and step mutation tests | Covered; current Linux rerun pending |
+| Canonical precomputed and CPU-cache payloads remain owned and immutable | Loads own CPU tensors; submissions clone canonical CPU/precomputed payloads | Clone, mutation, failed-submission, cache lifecycle tests | Pass in CW job `13568701` |
+| Live and precomputed loss weighting use exact valid tokens | Validation weights losses with exact `sample_mask * token_mask` counts and artifact counts | Parity and invalid-loss-shape tests | Pass in CW job `13568701` |
+| Driver Python, NumPy, Torch CPU, and Torch CUDA RNG are exact | Production snapshots hash complete states; initialized CUDA devices use `get_rng_state_all()` | Real mutation matrix plus controlled driver CUDA API side effects | Pass in CW job `13568701` |
+| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; exact TorchData 0.11 package, source origin, RECORD SHA-256, class, and layout are verified; pending/not-started state is hashed without creating an iterator; active state is read only after validation | Real restart/control test plus package/source provenance, identity, version, missing-field, bad-type, impossible-boundary, and colliding-loader tests | Pass in CW job `13568701` |
+| Runtime validation payload survives exceptions | External collector exists independently of result and finalizes after restoration attempt | Mutating submission-failure, invalid-loss, and restore-failure production tests | Pass in CW job `13568701` |
+| Ordered runtime sample identity is exact | Evidence independently hashes ordered `idx` and `input_ids` | Production path mutates only `idx` and asserts sample-identity rejection | Pass in CW job `13568701` |
+| Runtime exact token counts are independent evidence | Counts are recomputed from current `sample_mask * token_mask` before and after submission | Production path mutates only a mask and asserts token-count rejection | Pass in CW job `13568701` |
+| Next train batch is natural and comparable | Successful records remain pending until the existing training iterator yields a batch; explicit control comparison API gates it | Natural-batch, no-validation control, and restart/resume tests | Pass in CW job `13568701` |
+| Every worker rank is represented | Concrete Policy RPC calls every worker, validates ranks, and sorts records | Multi-rank routing, duplicate-rank, and order tests | Pass in CW job `13568701` |
+| Worker Torch CUDA RNG is read-only and mutation-sensitive | Worker calls `torch.cuda.get_rng_state(current_device)` | Controlled API side effects pass through production worker capture and gate | Pass in CW job `13568701` |
+| MCore RNG is read without initialization | Worker calls only direct `get_all_rng_states()` and rejects assertion, empty, and non-mapping results | Controlled tracker mutation, uninitialized, empty, non-mapping, and source-guard tests | Pass in CW job `13568701` |
+| Model parameters, buffers, and training mode are stable | Direct named traversal records local fingerprints and every module mode | Production model and independent mode mutation tests | Pass in CW job `13568701` |
+| Optimizer main shards, state tensors, and steps are stable | Every param-group tensor and direct state tensor has owner, shape/dtype, moments, samples; exact steps are separate | Main-shard, `exp_avg`, and step mutation tests | Pass in CW job `13568701` |
 | Forbidden worker paths remain absent | Fingerprint uses no state/load/checkpoint, mode change, parameter sync, seed/setter, forward, or optimizer step | Source-isolated and unit AST guards | Covered locally by source guard |
-| Failed validation cannot publish cache state | Cache publication occurs only after validation and restoration return successfully | Existing failed-submission, invalid-loss, restore-failure, and atomic-cache tests | Covered; current Linux rerun pending |
-| Audit overhead is isolated | Collector and worker audit timing are separate and removed from validation/step/loop windows | Fixed-timer, separate logging, and source path checks | Covered; current Linux rerun pending |
-| Disabled mode remains unchanged | No auditor/collector construction and direct submission/restoration branches | Disabled-path RPC/read assertions and source inspection | Covered; current Linux rerun pending |
+| Failed validation cannot publish cache state | Cache publication occurs only after validation and restoration return successfully | Existing failed-submission, invalid-loss, restore-failure, and atomic-cache tests | Pass in CW job `13568701` |
+| Audit overhead is isolated | Collector and worker audit timing are separate and removed from validation/step/loop windows | Fixed-timer, separate logging, and source path checks | Pass in CW job `13568701` |
+| Disabled mode remains unchanged | No auditor/collector construction and direct submission/restoration branches | Disabled-path RPC/read assertions and source inspection | Pass in CW job `13568701`; unchanged by typing fix |
 | Interfaces and unrelated backends remain scoped | Only concrete Policy method exists; PolicyInterface and unrelated backends are unchanged | Source inspection | Pass |
 
 ## Verification Evidence
 
-Passed locally on the current source-provenance follow-up:
+Passed locally on the current static typing follow-up:
 
-- `/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py`
-  returned `44 passed`.
+- `rtk proxy /opt/homebrew/bin/pytest -q --disable-warnings tests/source_isolated/test_sft_event_batch_source.py`
+  returned `45 passed in 0.98s` on the final rerun.
 - Ruff lint passed on all changed Python files.
 - Ruff format check passed on all changed Python files.
 - Python compilation passed for all changed Python files and requested focused
   test modules.
 - `git diff --check` passed.
-- Focused Pyright checks reported only missing local dependency imports plus
-  existing repository diagnostics; the new audit module/test check had only
-  unresolved Torch imports.
+- Pinned standalone Pyrefly reports no Task-owned diagnostic on a changed line.
+  Its 12 residual focused diagnostics are eight missing local dependency
+  imports plus four pre-existing `sft.py` diagnostics at lines 126, 418, and
+  1256 (two diagnostics).
 
 Blocked locally:
 
@@ -220,7 +223,7 @@ Blocked locally:
   `ModuleNotFoundError: No module named 'ray'`; no focused unit test runs.
 - No current Task 4 GPU/Ray/Megatron integration or full repository suite ran
   locally.
-- The controller's CW Linux gate and post-fix review are pending.
+- The project-standard CW Pyrefly rerun and post-fix review are pending.
 
 CW Linux partial result:
 
@@ -229,15 +232,37 @@ CW Linux partial result:
   `tests/unit/algorithms/test_sft_correctness_audit.py::test_correctness_gate_rejects_each_driver_state_family[cuda-rng]`.
 - Expected: `("torch_cuda_rng_digests",)`.
 - Actual: `("torch_cuda_rng_digests.0",)`.
-- A complete rerun after the test-contract correction remains pending; this
-  document does not claim that the supported-Linux gate passed.
+- At that point, a complete rerun after the test-contract correction remained
+  pending; later job `13568701` is the passing functional gate.
 
 - Job `13566796`: `160 passed, 1 failed`, then stopped at `maxfail=1`.
 - Failure:
   `tests/unit/algorithms/test_sft.py::test_restart_restores_loader_and_generator_then_runs_real_validation`.
 - Gate difference: `explicit_generator_digest`.
-- A complete rerun after the read-only capture correction remains pending; this
-  document does not claim that the supported-Linux gate passed.
+- At that point, a complete rerun after the read-only capture correction
+  remained pending; later job `13568701` is the passing functional gate.
+
+CW Linux final functional result:
+
+- Job `13568701` at `61d7ff5d9`: `269 passed, 47 warnings in 47.25s`, with
+  isolated `RAY_TMPDIR`/`TMPDIR` and unset `RAY_ADDRESS`.
+- Job `13568879`: Ruff passed; full project-standard Pyrefly reported 109
+  diagnostics. The current follow-up fixes only the Tasks 1-4-owned
+  diagnostics. A standard Pyrefly rerun is pending.
+
+## Static Typing Follow-Up
+
+The current follow-up adds explicit post-check narrowing for TorchData package
+metadata, tensors, event payload evidence, and scalar timing. It moves the
+successful audit and artifact-publication returns after their existing
+`finally` blocks so Pyrefly sees complete return paths without changing cleanup,
+evidence, or exception precedence. The Hydra-resolved producer mapping is
+typed as dynamic only after its existing runtime mapping check.
+
+The audit-only event payload binding and assertion remain inside the enabled
+collector branch. The disabled path gains no worker RPC, state read, reduction,
+synchronization, RNG access, or timing call. A source regression verifies both
+successful returns remain after their corresponding `finally` blocks.
 
 ## Residual Limits
 
@@ -248,5 +273,5 @@ CW Linux partial result:
 - Precomputed artifacts omit producer-only `idx`; ordered persisted
   `input_ids` remain their sample-identity evidence. Live and CPU-cache runtime
   paths independently include `idx` when present.
-- Merge readiness still requires controller approval and a current supported-
-  Linux execution of the focused Task 4 unit suite.
+- Merge readiness still requires controller approval and a project-standard CW
+  Pyrefly rerun of the current static typing follow-up.

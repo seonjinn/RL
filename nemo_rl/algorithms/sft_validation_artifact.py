@@ -612,10 +612,10 @@ def _publish_safetensors(
         else:
             os.replace(temporary_path, tensor_path)
             _fsync_directory(artifact_directory)
-        return tensor_file, tensor_file_sha256
     finally:
         if os.path.exists(temporary_path):
             os.unlink(temporary_path)
+    return tensor_file, tensor_file_sha256
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

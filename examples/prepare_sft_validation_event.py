@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from functools import partial
 from itertools import islice
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -110,7 +110,7 @@ def load_master_config(config_path: str | Path, overrides: list[str]) -> MasterC
     resolved = OmegaConf.to_container(config, resolve=True)
     if not isinstance(resolved, dict):
         raise TypeError("Resolved SFT config must be a mapping")
-    return MasterConfig(**resolved)
+    return MasterConfig(**cast(Any, resolved))
 
 
 def derive_validation_artifact_eligibility(

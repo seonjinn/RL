@@ -11,7 +11,7 @@ from collections import UserDict
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import pytest
 
@@ -1023,6 +1023,7 @@ def _load_train_loader_capture(
             "base64": base64,
             "binascii": binascii,
             "hashlib": hashlib,
+            "cast": cast,
             "importlib": SimpleNamespace(
                 import_module=lambda name: runtime_module,
             ),
@@ -1362,3 +1363,27 @@ def test_correctness_evidence_survives_validation_exceptions() -> None:
         argument.arg for argument in audit_method.args.kwonlyargs
     }
     assert "validation_evidence()" in audit_source
+
+
+def test_task_owned_finally_blocks_return_explicitly_after_cleanup() -> None:
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    audit_method = _function_node(
+        audit_path,
+        "audit_validation",
+        class_name="SFTCorrectnessAuditor",
+    )
+    audit_try = next(
+        statement for statement in audit_method.body if isinstance(statement, ast.Try)
+    )
+    assert not any(isinstance(node, ast.Return) for node in ast.walk(audit_try))
+    assert isinstance(audit_method.body[-1], ast.Return)
+
+    artifact_path = REPO_ROOT / "nemo_rl/algorithms/sft_validation_artifact.py"
+    publish_function = _function_node(artifact_path, "_publish_safetensors")
+    publish_try = next(
+        statement
+        for statement in publish_function.body
+        if isinstance(statement, ast.Try)
+    )
+    assert not any(isinstance(node, ast.Return) for node in ast.walk(publish_try))
+    assert isinstance(publish_function.body[-1], ast.Return)
