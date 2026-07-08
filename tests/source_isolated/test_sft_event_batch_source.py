@@ -846,8 +846,41 @@ def test_correctness_audit_finalizes_next_batch_and_captures_runtime_validation_
     evidence_capture_source = ast.unparse(evidence_capture)
     train_source = ast.unparse(train)
 
-    assert "_record_runtime_validation_evidence" in validation_source
+    assert "capture_before" in validation_source
+    assert "capture_after" in validation_source
     assert "capture_validation_evidence" in evidence_capture_source
-    assert "correctness_audit_evidence" in validation_source
-    assert "collect_correctness_audit_evidence" in train_source
+    assert "correctness_evidence_collector" in validation_source
+    assert "_ValidationCorrectnessEvidenceCollector" in train_source
     assert '"input_mode"' not in train_source
+
+
+def test_correctness_evidence_survives_validation_exceptions() -> None:
+    sft_path = REPO_ROOT / "nemo_rl/algorithms/sft.py"
+    sft_tree = ast.parse(sft_path.read_text())
+    class_names = {
+        node.name for node in sft_tree.body if isinstance(node, ast.ClassDef)
+    }
+    validation_impl = _function_node(sft_path, "_validate_with_loss_availability_impl")
+    validation_wrapper = _function_node(sft_path, "_validate_with_loss_availability")
+    impl_source = ast.unparse(validation_impl)
+    wrapper_source = ast.unparse(validation_wrapper)
+
+    assert "_ValidationCorrectnessEvidenceCollector" in class_names
+    assert "correctness_evidence_collector" in {
+        argument.arg for argument in validation_impl.args.kwonlyargs
+    }
+    assert "capture_after" in impl_source
+    assert "finally" in impl_source
+    assert "finalize_restoration_boundary" in wrapper_source
+
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    audit_method = _function_node(
+        audit_path,
+        "audit_validation",
+        class_name="SFTCorrectnessAuditor",
+    )
+    audit_source = ast.unparse(audit_method)
+    assert "validation_evidence" in {
+        argument.arg for argument in audit_method.args.kwonlyargs
+    }
+    assert "validation_evidence()" in audit_source

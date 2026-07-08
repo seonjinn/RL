@@ -447,45 +447,46 @@ class SFTCorrectnessAuditor:
         *,
         step: int,
         validation: Callable[[], _ResultT],
-        evidence_from_result: Callable[[_ResultT], CorrectnessValidationEvidencePair],
+        validation_evidence: Callable[[], CorrectnessValidationEvidencePair],
     ) -> _ResultT:
         audit_start = time.perf_counter()
         before = self._capture()
         self._elapsed_seconds += time.perf_counter() - audit_start
         validation_succeeded = False
-        validation_evidence: CorrectnessValidationEvidencePair | None = None
+        captured_validation_evidence: CorrectnessValidationEvidencePair | None = None
         try:
             result = validation()
-            validation_evidence = evidence_from_result(result)
             validation_succeeded = True
             return result
         finally:
             previous_audit_time_s = self._elapsed_seconds
             audit_start = time.perf_counter()
+            captured_validation_evidence = validation_evidence()
             after = self._capture()
-            if validation_evidence is not None:
-                before = dataclasses.replace(
-                    before,
-                    validation_payload_digest=(
-                        validation_evidence.before.payload_digest
-                    ),
-                    validation_sample_ids_digest=(
-                        validation_evidence.before.sample_ids_digest
-                    ),
-                    validation_token_counts_digest=(
-                        validation_evidence.before.token_counts_digest
-                    ),
-                )
-                after = dataclasses.replace(
-                    after,
-                    validation_payload_digest=validation_evidence.after.payload_digest,
-                    validation_sample_ids_digest=(
-                        validation_evidence.after.sample_ids_digest
-                    ),
-                    validation_token_counts_digest=(
-                        validation_evidence.after.token_counts_digest
-                    ),
-                )
+            before = dataclasses.replace(
+                before,
+                validation_payload_digest=(
+                    captured_validation_evidence.before.payload_digest
+                ),
+                validation_sample_ids_digest=(
+                    captured_validation_evidence.before.sample_ids_digest
+                ),
+                validation_token_counts_digest=(
+                    captured_validation_evidence.before.token_counts_digest
+                ),
+            )
+            after = dataclasses.replace(
+                after,
+                validation_payload_digest=(
+                    captured_validation_evidence.after.payload_digest
+                ),
+                validation_sample_ids_digest=(
+                    captured_validation_evidence.after.sample_ids_digest
+                ),
+                validation_token_counts_digest=(
+                    captured_validation_evidence.after.token_counts_digest
+                ),
+            )
             differences = compare_correctness_snapshots(before, after)
             gate = CorrectnessGateResult(
                 ready=not differences,
@@ -502,7 +503,7 @@ class SFTCorrectnessAuditor:
                 before_digest=before_digest,
                 after_digest=after_digest,
                 gate=gate,
-                validation_evidence=validation_evidence,
+                validation_evidence=captured_validation_evidence,
                 next_train_batch=None,
                 audit_time_s=audit_time_s,
                 status=(

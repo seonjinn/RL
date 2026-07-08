@@ -2,100 +2,145 @@
 
 ## Scope
 
-- Feature base: `c1a415dae1e0bc909eb1891b0d78be92da35e50f`
+- Full feature range: `c1a415dae1e0bc909eb1891b0d78be92da35e50f^..HEAD`
 - Approved Tasks 1-3 head: `e8e13f5a9e0694adb1a574fd4b7e35507ab3ca9b`
-- Task 4 implementation: `2c8bfdc5d63d8db05da34258148aea640222e311`
-- Inputs: `.superpowers/sdd/task-4-brief.md` and
-  `.superpowers/sdd/task-4-api-research.md`
+- Initial Task 4 implementation: `2c8bfdc5d63d8db05da34258148aea640222e311`
+- Initial review documentation: `f9361d3dd35b6e44d38c9786282cef60a73bf751`
+- First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
+- Second-review fix: the signed follow-up commit containing this document
+- Requirements: `.superpowers/sdd/task-4-brief.md`
+- Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
 
-The review covers dataset identity, artifact ownership, validation loss
-weighting, driver and worker RNG isolation, model and optimizer state,
-training-mode restoration, checkpoint continuation, memory accounting,
-disabled-path compatibility, and audit timing isolation.
+The full range covers validation artifact production, publication, loading,
+runtime consumption, CPU caching, exact loss weighting, opt-in correctness
+auditing, worker-local fingerprints, natural next-batch evidence, exception
+lifecycle handling, timing isolation, and the merge review gate.
 
-## Decision
+## Current Decision
 
-**Code review gate: PASS.** No Critical or Important finding remains.
+**Code review gate: READY FOR CONTROLLER RE-REVIEW.** The two Important findings
+from the second review and its stale-document Minor are addressed in the
+current follow-up. This document does not claim that the controller has
+approved the follow-up.
 
-**Supported-Linux execution gate: PENDING.** The local macOS host cannot collect
-the Ray-dependent unit suites because `ray` is not installed. The Task 4 unit
-suite must run in the reviewed Linux NeMo-RL environment before merge. Tasks
-1-3 passed their combined Linux gate at the approved head: 177 tests passed in
-CW job `13559835`.
+**Supported-Linux execution gate: PENDING.** The local macOS Python lacks Ray,
+Torch, TorchData, and Megatron, so the focused unit suite cannot collect. The
+controller must run the current Task 4 range on CW Linux after re-review.
 
-Worker tensor moments and deterministic samples are fingerprints. They are
-evidence of unchanged local state, not a cryptographic equality proof.
+The historical CW job `13559835` reported `177 passed, 3 warnings in 43.82s`
+at the approved Tasks 1-3 head `e8e13f5a9`; it does not cover either Task 4
+implementation or either Task 4 review-fix commit.
 
-## Independent Review
+Worker scalar moments and deterministic samples remain bounded fingerprints.
+They are mutation evidence, not cryptographic tensor-equality proofs.
 
-Independent read-only Codex review session
-`019f40c6-3d07-7b20-84c5-80e0a1e30c06` inspected Task 4 commit
-`2c8bfdc5d63d8db05da34258148aea640222e311` against its parent and returned:
+## Review History
 
-- Findings: none
-- Verdict: LGTM
+### Initial Review
 
-The CLI needed a resumed final-response request after its initial diff output,
-but the successful review did not modify the worktree.
+The initial review of `2c8bfdc5d` did not identify the later coverage and
+lifecycle gaps. Its prior PASS statement is superseded by the two subsequent
+review rounds.
+
+### First Review: Six Important Findings
+
+Commit `b104c8e894507644400eec38e6b8fea75196d5c6` addressed:
+
+1. Missing optimizer param-group/main-shard fingerprints.
+2. Detached, log-only next-train-batch evidence.
+3. Config metadata substituted for live/CPU-cache validation payload evidence.
+4. Empty or non-mapping MCore RNG tracker returns accepted as valid.
+5. Synthetic-only state mutation tests.
+6. A restart test that did not restore a real loader and generator around real
+   validation.
+
+The fix fingerprints every optimizer param-group tensor with a stable owner
+tuple, finalizes one comparable audit record after a naturally consumed batch,
+captures exact runtime payload/identity/token evidence, rejects invalid tracker
+maps, adds production mutation tests, and restores a real StatefulDataLoader
+and generator before running production SFT validation against a control.
+
+### Second Review: Two Important Findings and One Minor
+
+The current signed follow-up addresses:
+
+1. Validation evidence was owned by the validation return value and disappeared
+   when submission, loss validation, or training-mode restoration raised.
+2. Production mutation coverage omitted driver CUDA RNG, worker Torch/MCore RNG,
+   optimizer state tensors, independent sample identity, and independent exact
+   token-count changes.
+3. This review document described only the initial implementation and reported
+   a stale source-isolated count and decision.
+
+The runtime now creates one external evidence collector per audited validation.
+The opt-in submission branches capture before evidence, call the policy inside
+`try`, and capture after evidence in `finally`. The validation wrapper finalizes
+the collector in a `finally` after the training-mode restoration attempt. The
+auditor reads the finalized collector on both success and exception paths, so
+it never substitutes `None` payload, sample, or token digests. Collector
+capture failures also fail closed with an explicit audit error.
+
+The audit-disabled branches retain their direct policy submission and direct
+restoration call shapes. They do not construct a collector or execute its
+timers, hashes, reductions, or exception wrappers.
 
 ## Invariant Matrix
 
-| Invariant | Implementation evidence | Test/review evidence | Result |
+| Invariant | Current implementation evidence | Current test/review evidence | Status |
 |---|---|---|---|
-| Dataset identity is externally pinned | Runtime derives expected provenance from active config/source and trusted dataset, tokenizer, and container SHA-256 values | Task 3 startup/mismatch tests and approved Linux gate | Pass |
-| Producer supports deterministic prepacked data only | Eligibility rejects raw online packing, stochastic preprocessing, dynamic batching, multimodal data, and train-derived validation | Producer eligibility tests | Pass |
-| Canonical artifact remains CPU-owned and immutable | Load returns owning CPU tensors; each submission clones canonical event data | Round-trip, CPU-only, repeated-clone, mutation, and failed-submission tests | Pass |
-| Corrupt or partial artifacts fail closed | Strict manifest/tensor schema, content hashes, memory preflight, and atomic publication | Corrupt-byte, malformed-manifest, interrupted-publish, and writer-serialization tests | Pass |
-| Live and precomputed loss weighting match | Both paths use ordered global-batch losses and exact valid-token counts | Parity and invalid-loss-shape tests | Pass |
-| Python RNG is unchanged | Full Python state is canonically digested at both boundaries | Driver mutation matrix and read-only capture test | Pass |
-| NumPy RNG is unchanged | Full NumPy state array and metadata are digested | Driver mutation matrix and artifact-load isolation test | Pass |
-| Torch CPU/CUDA RNG is unchanged | CPU state and every initialized driver CUDA state are digested | Driver mutation matrix and read-only capture test | Pass |
-| Explicit generator is unchanged | `Generator.get_state()` is digested when the loader exposes one | Read-only capture and resume/restart tests | Pass |
-| Train-loader position is unchanged | Train-loader `state_dict()` is digested at both boundaries | Loader mutation and resume/restart tests | Pass |
-| Validation payload, sample identity, and token counts are stable | Precomputed tensors, ordered `input_ids`, and exact per-batch counts are digested at both boundaries | Mutable-payload and driver mutation tests | Pass |
-| Next train batch is not prefetched | Digesting occurs only after the existing loop naturally yields the batch | Natural-batch auditor and SFT wiring tests | Pass |
-| Every worker rank is represented | Concrete Policy method calls every worker and rank records are sorted; duplicate ranks fail | Multi-rank routing and order tests | Pass |
-| Torch CUDA RNG is read without advancing it | Worker uses `torch.cuda.get_rng_state(current_device)` | Read-only worker test and source guard | Pass |
-| MCore tracker is read without initialization | Worker calls only `get_all_rng_states()` and fails on uninitialized state | Tracker-failure test and source guard | Pass |
-| Model state remains unchanged | Direct parameter/buffer traversal records local shape, dtype, moments, and fixed sample hashes | Worker read-only and mutation tests | Pass |
-| Optimizer state remains unchanged | Direct wrapper-aware traversal records tensor moments and exact step counters | Worker read-only and mutation tests | Pass |
-| Training mode remains unchanged | Every named module training flag is recorded; audit never changes mode | Worker read-only, mutation, and source tests | Pass |
-| Forbidden state paths are absent | Audit avoids state/load/checkpoint, parameter sync, mode, seed, RNG setter, forward, and optimizer-step APIs | Transitive AST guard and independent review | Pass |
-| Failed validation cannot publish mutable cache state | Cache publication follows loss validation and successful mode restore | Invalid-loss, restore-failure, and atomic-cache tests | Pass |
-| Checkpoint/restart evidence is stable | Resumed generator and loader states reproduce the same snapshot digest | Resume/restart test | Pass |
-| Memory checks remain fail closed | Artifact load/submission retain copy-count, payload, host, and verified Ray headroom checks | Memory-budget and deep-payload tests | Pass |
-| Disabled mode has no audit work | Auditor construction is inside the enabled branch; all defaults are false | Disabled-path test and source inspection | Pass |
-| Audit overhead is excluded | Boundary audit time is outside validation timing and subtracted from step/loop windows; next-batch time has its own prefix | Fixed-timer and separate-logging tests | Pass |
-| Unrelated interfaces/backends are unchanged | `PolicyInterface` is unchanged; non-Megatron enablement fails before RPC | Source inspection and independent review | Pass |
+| Dataset and preprocessing identity are pinned | Manifest provenance derives from active dataset, tokenizer, preprocessing, and container fingerprints | Tasks 1-3 provenance/startup tests; historical Linux gate through `e8e13f5a9` | Pass through Tasks 1-3 |
+| Artifact publication is atomic and fail closed | Strict schema and hashes, memory preflight, locked atomic publication | Corrupt, partial, interrupted, and concurrent publication tests | Pass through Tasks 1-3 |
+| Canonical precomputed and CPU-cache payloads remain owned and immutable | Loads own CPU tensors; submissions clone canonical CPU/precomputed payloads | Clone, mutation, failed-submission, cache lifecycle tests | Covered; current Linux rerun pending |
+| Live and precomputed loss weighting use exact valid tokens | Validation weights losses with exact `sample_mask * token_mask` counts and artifact counts | Parity and invalid-loss-shape tests | Covered; current Linux rerun pending |
+| Driver Python, NumPy, Torch CPU, and Torch CUDA RNG are exact | Production snapshots hash complete states; initialized CUDA devices use `get_rng_state_all()` | Real mutation matrix plus controlled driver CUDA API side effects | Covered; current Linux rerun pending |
+| Explicit generator and train-loader position are exact | `Generator.get_state()` and loader `state_dict()` are hashed without advancing iteration | Real mutation tests and restored StatefulDataLoader restart/control test | Covered; current Linux rerun pending |
+| Runtime validation payload survives exceptions | External collector exists independently of result and finalizes after restoration attempt | Mutating submission-failure, invalid-loss, and restore-failure production tests | Covered; current Linux rerun pending |
+| Ordered runtime sample identity is exact | Evidence independently hashes ordered `idx` and `input_ids` | Production path mutates only `idx` and asserts sample-identity rejection | Covered; current Linux rerun pending |
+| Runtime exact token counts are independent evidence | Counts are recomputed from current `sample_mask * token_mask` before and after submission | Production path mutates only a mask and asserts token-count rejection | Covered; current Linux rerun pending |
+| Next train batch is natural and comparable | Successful records remain pending until the existing training iterator yields a batch; explicit control comparison API gates it | Natural-batch, no-validation control, and restart/resume tests | Covered; current Linux rerun pending |
+| Every worker rank is represented | Concrete Policy RPC calls every worker, validates ranks, and sorts records | Multi-rank routing, duplicate-rank, and order tests | Covered; current Linux rerun pending |
+| Worker Torch CUDA RNG is read-only and mutation-sensitive | Worker calls `torch.cuda.get_rng_state(current_device)` | Controlled API side effects pass through production worker capture and gate | Covered; current Linux rerun pending |
+| MCore RNG is read without initialization | Worker calls only direct `get_all_rng_states()` and rejects assertion, empty, and non-mapping results | Controlled tracker mutation, uninitialized, empty, non-mapping, and source-guard tests | Covered; current Linux rerun pending |
+| Model parameters, buffers, and training mode are stable | Direct named traversal records local fingerprints and every module mode | Production model and independent mode mutation tests | Covered; current Linux rerun pending |
+| Optimizer main shards, state tensors, and steps are stable | Every param-group tensor and direct state tensor has owner, shape/dtype, moments, samples; exact steps are separate | Main-shard, `exp_avg`, and step mutation tests | Covered; current Linux rerun pending |
+| Forbidden worker paths remain absent | Fingerprint uses no state/load/checkpoint, mode change, parameter sync, seed/setter, forward, or optimizer step | Source-isolated and unit AST guards | Covered locally by source guard |
+| Failed validation cannot publish cache state | Cache publication occurs only after validation and restoration return successfully | Existing failed-submission, invalid-loss, restore-failure, and atomic-cache tests | Covered; current Linux rerun pending |
+| Audit overhead is isolated | Collector and worker audit timing are separate and removed from validation/step/loop windows | Fixed-timer, separate logging, and source path checks | Covered; current Linux rerun pending |
+| Disabled mode remains unchanged | No auditor/collector construction and direct submission/restoration branches | Disabled-path RPC/read assertions and source inspection | Covered; current Linux rerun pending |
+| Interfaces and unrelated backends remain scoped | Only concrete Policy method exists; PolicyInterface and unrelated backends are unchanged | Source inspection | Pass |
 
 ## Verification Evidence
 
-Passed locally:
+Passed locally on the current second-review follow-up:
 
-- `pytest -q tests/source_isolated/test_sft_event_batch_source.py`: 16 passed
-- Ruff check and format check on the requested source set and Task 4 tests
-- Python compilation for all changed Python and test files
-- Dependency-light execution of the real snapshot ordering/mutation gate
-- Dependency-light execution of the real boundary/natural-batch flow
-- Transitive worker source guard for forbidden state, mode, sync, and RNG APIs
-- `git diff --check`
+- `/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py`
+  returned `19 passed`.
+- Ruff lint passed on all changed Python files.
+- Ruff format check passed on all changed Python files.
+- Python compilation passed for all changed Python files and requested focused
+  test modules.
+- `git diff --check` passed.
+- Focused Pyright checks reported only missing local dependency imports plus
+  existing repository diagnostics; the new audit module/test check had only
+  unresolved Torch imports.
 
-Environment-blocked locally:
+Blocked locally:
 
-- Focused unit collection stops in `tests/unit/conftest.py` with
-  `ModuleNotFoundError: No module named 'ray'`.
-- The requested Pyright command reports missing local Torch, Ray, Megatron,
-  Pydantic, TorchData, Transformers, OmegaConf, and Safetensors imports plus
-  pre-existing repository diagnostics. Focused cleanup left the new audit
-  module with only its unresolved local Torch import, and the new worker helper
-  line range with only unresolved Torch/Megatron imports.
+- `/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_validation_artifact.py`
+  stops in `tests/unit/conftest.py` with
+  `ModuleNotFoundError: No module named 'ray'`; no focused unit test runs.
+- No current Task 4 GPU/Ray/Megatron integration or full repository suite ran
+  locally.
+- The controller's CW Linux gate and post-fix review are pending.
 
 ## Residual Limits
 
-- Worker moments and fixed samples can miss localized changes; increase the
-  deterministic sample count when stronger evidence is required.
-- Audit mode intentionally performs local GPU reductions and host-visible
-  state reads. It is for correctness gates, not timed performance runs.
-- The artifact omits producer-only `idx` metadata. Ordered `input_ids` provide
-  persisted precomputed sample identity.
-- Linux Ray/Megatron execution remains the final merge prerequisite.
+- Fixed samples and moments can miss a localized tensor mutation. Increase the
+  deterministic sample count when stronger fingerprint evidence is required.
+- Audit mode intentionally performs worker RPCs, local tensor reductions, and
+  host-visible state reads. It must remain disabled in timed performance runs.
+- Precomputed artifacts omit producer-only `idx`; ordered persisted
+  `input_ids` remain their sample-identity evidence. Live and CPU-cache runtime
+  paths independently include `idx` when present.
+- Merge readiness still requires controller approval and a current supported-
+  Linux execution of the focused Task 4 unit suite.

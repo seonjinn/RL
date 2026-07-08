@@ -33,6 +33,7 @@ from nemo_rl.algorithms.sft import (
     MasterConfig,
     SFTConfig,
     _SFTValidationResult,
+    _ValidationCorrectnessEvidenceCollector,
     _ValidationEventCache,
     _add_e2e_step_timing,
     _build_sft_collate_fn,
@@ -43,7 +44,6 @@ from nemo_rl.algorithms.sft import (
     _optional_float,
     _recursive_deep_payload_bytes,
     _recursive_tensor_payload_bytes,
-    _require_validation_evidence,
     _validate_event_execution_config,
     _validate_with_loss_availability,
     sft_train,
@@ -441,7 +441,7 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
     )
     auditor_instance = MagicMock()
     auditor_instance.audit_validation.side_effect = (
-        lambda *, step, validation, evidence_from_result: validation()
+        lambda *, step, validation, validation_evidence: validation()
     )
     auditor_instance.consume_elapsed_seconds.side_effect = [0.25, 0.1]
 
@@ -473,7 +473,10 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
     auditor_instance.audit_validation.assert_called_once()
     assert auditor_instance.audit_validation.call_args.kwargs["step"] == 0
     validation.assert_called_once()
-    assert validation.call_args.kwargs["collect_correctness_audit_evidence"] is True
+    assert isinstance(
+        validation.call_args.kwargs["correctness_evidence_collector"],
+        _ValidationCorrectnessEvidenceCollector,
+    )
     auditor_instance.record_next_train_batch.assert_called_once()
     naturally_consumed_batch = auditor_instance.record_next_train_batch.call_args.args[
         0
@@ -515,6 +518,7 @@ def test_validation_audit_captures_actual_payload_identity_and_token_counts(
         [1.0] if execution_mode == "per_batch" else [1.0, 2.0, 3.0, 4.0]
     )
     cache = _ValidationEventCache() if cache_mode == "cpu" else None
+    collector = _ValidationCorrectnessEvidenceCollector()
 
     result = _validate_with_loss_availability(
         policy=policy,
@@ -527,7 +531,7 @@ def test_validation_audit_captures_actual_payload_identity_and_token_counts(
         val_batch_size=64,
         val_mbs=1,
         validation_event_cache=cache,
-        collect_correctness_audit_evidence=True,
+        correctness_evidence_collector=collector,
     )
 
     assert result.correctness_audit_evidence is not None
@@ -561,6 +565,7 @@ def test_validation_audit_captures_actual_payload_identity_and_token_counts(
 def test_validation_audit_fails_fast_without_exact_runtime_payload() -> None:
     master_config = _validation_config("per_batch")
     policy = _validation_policy([1.0])
+    collector = _ValidationCorrectnessEvidenceCollector()
     malformed_batch = BatchedDataDict(
         token_mask=torch.ones((64, 2)),
         sample_mask=torch.ones(64),
@@ -578,8 +583,168 @@ def test_validation_audit_fails_fast_without_exact_runtime_payload() -> None:
             val_batches=1,
             val_batch_size=64,
             val_mbs=1,
-            collect_correctness_audit_evidence=True,
+            correctness_evidence_collector=collector,
         )
+
+
+def _audit_worker_fingerprint_record() -> dict[str, Any]:
+    return {
+        "rank": 0,
+        "torch_cuda_rng": {"sha256": "cuda"},
+        "mcore_cuda_rng": {"model-parallel-rng": {"sha256": "mcore"}},
+        "model": {"parameters": {}, "buffers": {}},
+        "optimizer": {
+            "parameters": [],
+            "state_tensors": [],
+            "step_counters": [],
+        },
+        "training_mode_flags": {"": True},
+    }
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["submission", "invalid_loss", "restore"],
+)
+def test_validation_exception_paths_preserve_mutated_runtime_evidence(
+    failure_mode: str,
+) -> None:
+    event_mode = failure_mode == "invalid_loss"
+    policy = _validation_policy([1.0, 2.0, 3.0] if event_mode else [1.0])
+    policy.get_correctness_state_fingerprint.return_value = [
+        _audit_worker_fingerprint_record()
+    ]
+    validation_result = policy.train.return_value
+
+    def mutate_then_submit(
+        data: BatchedDataDict[Any], *_args: object, **_kwargs: object
+    ) -> Any:
+        data["input_ids"][0, 0] = -1
+        if failure_mode == "submission":
+            raise RuntimeError("submission failed")
+        return validation_result
+
+    policy.train.side_effect = mutate_then_submit
+    if failure_mode == "restore":
+        policy.prepare_for_training.side_effect = [
+            None,
+            RuntimeError("restore failed"),
+        ]
+    train_loader = MagicMock()
+    train_loader.state_dict.return_value = {"position": 0}
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=policy,
+        train_loader=train_loader,
+        explicit_generator=None,
+        record_sink=records.append,
+    )
+    collector = _ValidationCorrectnessEvidenceCollector()
+    batches = (
+        [_packed_validation_batch(index) for index in range(4)]
+        if event_mode
+        else [_packed_validation_batch(0)]
+    )
+
+    def run_validation() -> _SFTValidationResult:
+        return _validate_with_loss_availability(
+            policy=policy,
+            val_dataloader=batches,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=_validation_config(
+                "event_batch" if event_mode else "per_batch"
+            ),
+            val_batches=4 if event_mode else 1,
+            val_batch_size=64,
+            val_mbs=1,
+            correctness_evidence_collector=collector,
+        )
+
+    with (
+        patch.object(torch.cuda, "is_initialized", return_value=False),
+        pytest.raises(CorrectnessAuditError, match="validation_payload_digest"),
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=run_validation,
+            validation_evidence=collector.evidence,
+        )
+
+    assert len(records) == 1
+    assert records[0].validation_succeeded is False
+    assert records[0].validation_evidence is not None
+    assert records[0].gate.ready is False
+
+
+@pytest.mark.parametrize(
+    ("mutation_family", "expected_difference"),
+    [
+        pytest.param("idx", "validation_sample_ids_digest", id="sample-identity"),
+        pytest.param(
+            "token_count",
+            "validation_token_counts_digest",
+            id="mask-derived-token-count",
+        ),
+    ],
+)
+def test_runtime_evidence_gate_detects_independent_identity_and_token_mutations(
+    mutation_family: str,
+    expected_difference: str,
+) -> None:
+    policy = _validation_policy([1.0])
+    policy.get_correctness_state_fingerprint.return_value = [
+        _audit_worker_fingerprint_record()
+    ]
+    validation_result = policy.train.return_value
+
+    def mutate_runtime_evidence(
+        data: BatchedDataDict[Any], *_args: object, **_kwargs: object
+    ) -> Any:
+        if mutation_family == "idx":
+            data["idx"][0] = -1
+        else:
+            data["sample_mask"][0] = 0
+        return validation_result
+
+    policy.train.side_effect = mutate_runtime_evidence
+    train_loader = MagicMock()
+    train_loader.state_dict.return_value = {"position": 0}
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=policy,
+        train_loader=train_loader,
+        explicit_generator=None,
+        record_sink=records.append,
+    )
+    collector = _ValidationCorrectnessEvidenceCollector()
+
+    def run_validation() -> _SFTValidationResult:
+        return _validate_with_loss_availability(
+            policy=policy,
+            val_dataloader=[_packed_validation_batch(0)],
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=_validation_config("per_batch"),
+            val_batches=1,
+            val_batch_size=64,
+            val_mbs=1,
+            correctness_evidence_collector=collector,
+        )
+
+    with (
+        patch.object(torch.cuda, "is_initialized", return_value=False),
+        pytest.raises(CorrectnessAuditError, match=expected_difference),
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=run_validation,
+            validation_evidence=collector.evidence,
+        )
+
+    assert expected_difference in records[0].gate.differences
 
 
 def test_validation_audit_gate_rejects_real_runtime_payload_mutation() -> None:
@@ -616,6 +781,7 @@ def test_validation_audit_gate_rejects_real_runtime_payload_mutation() -> None:
         explicit_generator=None,
         record_sink=records.append,
     )
+    collector = _ValidationCorrectnessEvidenceCollector()
 
     def run_validation() -> _SFTValidationResult:
         return _validate_with_loss_availability(
@@ -628,7 +794,7 @@ def test_validation_audit_gate_rejects_real_runtime_payload_mutation() -> None:
             val_batches=1,
             val_batch_size=64,
             val_mbs=1,
-            collect_correctness_audit_evidence=True,
+            correctness_evidence_collector=collector,
         )
 
     with (
@@ -638,7 +804,7 @@ def test_validation_audit_gate_rejects_real_runtime_payload_mutation() -> None:
         auditor.audit_validation(
             step=20,
             validation=run_validation,
-            evidence_from_result=_require_validation_evidence,
+            validation_evidence=collector.evidence,
         )
 
     assert records[0].gate.ready is False
@@ -703,6 +869,7 @@ def test_restart_restores_loader_and_generator_then_runs_real_validation() -> No
         explicit_generator=resumed_generator,
         record_sink=records.append,
     )
+    collector = _ValidationCorrectnessEvidenceCollector()
     validation_config = _validation_config("per_batch")
 
     def run_validation() -> _SFTValidationResult:
@@ -716,14 +883,14 @@ def test_restart_restores_loader_and_generator_then_runs_real_validation() -> No
             val_batches=1,
             val_batch_size=64,
             val_mbs=1,
-            collect_correctness_audit_evidence=True,
+            correctness_evidence_collector=collector,
         )
 
     with patch.object(torch.cuda, "is_initialized", return_value=False):
         auditor.audit_validation(
             step=20,
             validation=run_validation,
-            evidence_from_result=_require_validation_evidence,
+            validation_evidence=collector.evidence,
         )
     resumed_next_batch = next(iter(resumed_loader))
     auditor.record_next_train_batch(resumed_next_batch)
@@ -770,7 +937,7 @@ def test_sft_train_excludes_audit_time_from_reported_step_window(
     )
     auditor_instance = MagicMock()
     auditor_instance.audit_validation.side_effect = (
-        lambda *, step, validation, evidence_from_result: validation()
+        lambda *, step, validation, validation_evidence: validation()
     )
     auditor_instance.consume_elapsed_seconds.side_effect = [0.0, 2.0]
 

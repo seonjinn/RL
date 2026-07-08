@@ -19,7 +19,7 @@ import time
 import warnings
 from copy import deepcopy
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from functools import partial
 from numbers import Real
 from typing import Any, Literal, Optional, cast
@@ -90,16 +90,6 @@ class _SFTValidationResult:
     pending_validation_cache_entry: "_CachedValidationEvent | None" = None
     correctness_audit_evidence: CorrectnessValidationEvidencePair | None = None
     correctness_audit_time_s: float = 0.0
-
-
-def _require_validation_evidence(
-    result: _SFTValidationResult,
-) -> CorrectnessValidationEvidencePair:
-    if result.correctness_audit_evidence is None:
-        raise CorrectnessAuditError(
-            "Validation did not return exact runtime correctness evidence"
-        )
-    return result.correctness_audit_evidence
 
 
 @dataclass(frozen=True)
@@ -990,21 +980,6 @@ def _capture_runtime_validation_evidence(
     )
 
 
-def _record_runtime_validation_evidence(
-    destination: list[CorrectnessValidationEvidence],
-    validation_payload: object,
-    validation_token_counts: Callable[[], tuple[int, ...]],
-) -> float:
-    audit_start = time.perf_counter()
-    destination.append(
-        _capture_runtime_validation_evidence(
-            validation_payload,
-            validation_token_counts(),
-        )
-    )
-    return time.perf_counter() - audit_start
-
-
 def _event_validation_num_valid_tokens(
     validation_payload: Mapping[str, object],
     *,
@@ -1034,6 +1009,89 @@ def _event_validation_num_valid_tokens(
     )
 
 
+class _ValidationCorrectnessEvidenceCollector:
+    """Retain exact runtime evidence independently of validation return values."""
+
+    def __init__(self) -> None:
+        self._before: list[CorrectnessValidationEvidence] = []
+        self._after: list[CorrectnessValidationEvidence] = []
+        self._evidence: CorrectnessValidationEvidencePair | None = None
+        self._capture_error: Exception | None = None
+        self._finalized = False
+        self._elapsed_seconds = 0.0
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return self._elapsed_seconds
+
+    def _capture(
+        self,
+        destination: list[CorrectnessValidationEvidence],
+        validation_payload: object,
+        validation_token_counts: Callable[[], tuple[int, ...]],
+    ) -> None:
+        audit_start = time.perf_counter()
+        try:
+            destination.append(
+                _capture_runtime_validation_evidence(
+                    validation_payload,
+                    validation_token_counts(),
+                )
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._capture_error = error
+            raise
+        finally:
+            self._elapsed_seconds += time.perf_counter() - audit_start
+
+    def capture_before(
+        self,
+        validation_payload: object,
+        validation_token_counts: Callable[[], tuple[int, ...]],
+    ) -> None:
+        self._capture(self._before, validation_payload, validation_token_counts)
+
+    def capture_after(
+        self,
+        validation_payload: object,
+        validation_token_counts: Callable[[], tuple[int, ...]],
+    ) -> None:
+        self._capture(self._after, validation_payload, validation_token_counts)
+
+    def finalize_restoration_boundary(self) -> None:
+        if self._finalized:
+            raise CorrectnessAuditError(
+                "Validation correctness evidence was finalized more than once"
+            )
+        self._finalized = True
+        if self._capture_error is not None:
+            return
+        if not self._before or len(self._before) != len(self._after):
+            self._capture_error = CorrectnessAuditError(
+                "Correctness audit could not capture exact runtime validation evidence"
+            )
+            return
+        audit_start = time.perf_counter()
+        self._evidence = CorrectnessValidationEvidencePair(
+            before=combine_validation_evidence(self._before),
+            after=combine_validation_evidence(self._after),
+        )
+        self._elapsed_seconds += time.perf_counter() - audit_start
+
+    def evidence(self) -> CorrectnessValidationEvidencePair:
+        if self._capture_error is not None:
+            if isinstance(self._capture_error, CorrectnessAuditError):
+                raise self._capture_error
+            raise CorrectnessAuditError(
+                "Validation correctness evidence capture failed"
+            ) from self._capture_error
+        if self._evidence is None:
+            raise CorrectnessAuditError(
+                "Validation correctness evidence was not finalized"
+            )
+        return self._evidence
+
+
 def _validate_with_loss_availability_impl(
     policy: PolicyInterface,
     val_dataloader: Optional[StatefulDataLoader],
@@ -1048,7 +1106,8 @@ def _validate_with_loss_availability_impl(
     validation_event_cache: _ValidationEventCache | None = None,
     *,
     precomputed_validation_event: PrecomputedValidationEvent | None = None,
-    collect_correctness_audit_evidence: bool = False,
+    correctness_evidence_collector: _ValidationCorrectnessEvidenceCollector
+    | None = None,
     mark_validation_prepared: Callable[[], None],
     restore_training_mode: Callable[[], None],
 ) -> _SFTValidationResult:
@@ -1080,13 +1139,6 @@ def _validate_with_loss_availability_impl(
     event_payload_bytes: int | None = None
     event_deep_payload_bytes: int | None = None
     event_cache_hit = False
-    correctness_evidence_before: list[CorrectnessValidationEvidence] | None = (
-        [] if collect_correctness_audit_evidence else None
-    )
-    correctness_evidence_after: list[CorrectnessValidationEvidence] | None = (
-        [] if collect_correctness_audit_evidence else None
-    )
-    correctness_audit_time_s = 0.0
 
     with timer.time("total_validation_time"):
         print(f"▶ Starting validation at step {step}...")
@@ -1220,12 +1272,19 @@ def _validate_with_loss_availability_impl(
                     )
                 else:
                     ## just run model fwd
-                    if collect_correctness_audit_evidence:
-                        assert correctness_evidence_before is not None
-                        correctness_audit_time_s += _record_runtime_validation_evidence(
-                            correctness_evidence_before,
+                    if correctness_evidence_collector is None:
+                        val_results = policy.train(
                             val_data,
-                            lambda: (
+                            loss_fn,
+                            eval_mode=True,
+                            gbs=val_data.size,
+                            mbs=val_mbs,
+                            **timing_kwargs,
+                        )
+                    else:
+
+                        def current_token_counts() -> tuple[int, ...]:
+                            return (
                                 int(
                                     (
                                         val_data["sample_mask"].unsqueeze(-1)
@@ -1234,32 +1293,26 @@ def _validate_with_loss_availability_impl(
                                     .sum()
                                     .item()
                                 ),
-                            ),
-                        )
-                    val_results = policy.train(
-                        val_data,
-                        loss_fn,
-                        eval_mode=True,
-                        gbs=val_data.size,
-                        mbs=val_mbs,
-                        **timing_kwargs,
-                    )
-                    if collect_correctness_audit_evidence:
-                        assert correctness_evidence_after is not None
-                        correctness_audit_time_s += _record_runtime_validation_evidence(
-                            correctness_evidence_after,
+                            )
+
+                        correctness_evidence_collector.capture_before(
                             val_data,
-                            lambda: (
-                                int(
-                                    (
-                                        val_data["sample_mask"].unsqueeze(-1)
-                                        * val_data["token_mask"]
-                                    )
-                                    .sum()
-                                    .item()
-                                ),
-                            ),
+                            current_token_counts,
                         )
+                        try:
+                            val_results = policy.train(
+                                val_data,
+                                loss_fn,
+                                eval_mode=True,
+                                gbs=val_data.size,
+                                mbs=val_mbs,
+                                **timing_kwargs,
+                            )
+                        finally:
+                            correctness_evidence_collector.capture_after(
+                                val_data,
+                                current_token_counts,
+                            )
                     if comparison_instrumentation_enabled:
                         for name, elapsed in val_results.get(
                             "evaluation_timings", {}
@@ -1290,28 +1343,34 @@ def _validate_with_loss_availability_impl(
             submitted_val_data = clone_validation_event_data(
                 precomputed_validation_event.data
             )
-            if collect_correctness_audit_evidence:
-                assert correctness_evidence_before is not None
-                correctness_audit_time_s += _record_runtime_validation_evidence(
-                    correctness_evidence_before,
+            if correctness_evidence_collector is None:
+                val_results = policy.train(
+                    submitted_val_data,
+                    loss_fn,
+                    eval_mode=True,
+                    gbs=val_batch_size,
+                    mbs=val_mbs,
+                    **timing_kwargs,
+                )
+            else:
+                correctness_evidence_collector.capture_before(
                     precomputed_validation_event.data,
                     lambda: precomputed_validation_event.num_valid_tokens,
                 )
-            val_results = policy.train(
-                submitted_val_data,
-                loss_fn,
-                eval_mode=True,
-                gbs=val_batch_size,
-                mbs=val_mbs,
-                **timing_kwargs,
-            )
-            if collect_correctness_audit_evidence:
-                assert correctness_evidence_after is not None
-                correctness_audit_time_s += _record_runtime_validation_evidence(
-                    correctness_evidence_after,
-                    precomputed_validation_event.data,
-                    lambda: precomputed_validation_event.num_valid_tokens,
-                )
+                try:
+                    val_results = policy.train(
+                        submitted_val_data,
+                        loss_fn,
+                        eval_mode=True,
+                        gbs=val_batch_size,
+                        mbs=val_mbs,
+                        **timing_kwargs,
+                    )
+                finally:
+                    correctness_evidence_collector.capture_after(
+                        precomputed_validation_event.data,
+                        lambda: precomputed_validation_event.num_valid_tokens,
+                    )
             if comparison_instrumentation_enabled:
                 for name, elapsed in val_results.get("evaluation_timings", {}).items():
                     timer.record_elapsed(name, float(elapsed))
@@ -1402,34 +1461,42 @@ def _validate_with_loss_availability_impl(
                 if master_config.sft.validation_event_cache_mode == "cpu"
                 else combined_val_data
             )
-            if collect_correctness_audit_evidence:
-                assert correctness_evidence_before is not None
-                correctness_audit_time_s += _record_runtime_validation_evidence(
-                    correctness_evidence_before,
+            if correctness_evidence_collector is None:
+                val_results = policy.train(
+                    submitted_val_data,
+                    _clone_validation_loss_fn(
+                        loss_fn, master_config.sft.validation_event_cache_mode
+                    ),
+                    eval_mode=True,
+                    gbs=val_batch_size,
+                    mbs=val_mbs,
+                    **timing_kwargs,
+                )
+            else:
+                correctness_evidence_collector.capture_before(
                     combined_val_data,
                     lambda: _event_validation_num_valid_tokens(
                         combined_val_data, global_batch_size=val_batch_size
                     ),
                 )
-            val_results = policy.train(
-                submitted_val_data,
-                _clone_validation_loss_fn(
-                    loss_fn, master_config.sft.validation_event_cache_mode
-                ),
-                eval_mode=True,
-                gbs=val_batch_size,
-                mbs=val_mbs,
-                **timing_kwargs,
-            )
-            if collect_correctness_audit_evidence:
-                assert correctness_evidence_after is not None
-                correctness_audit_time_s += _record_runtime_validation_evidence(
-                    correctness_evidence_after,
-                    combined_val_data,
-                    lambda: _event_validation_num_valid_tokens(
-                        combined_val_data, global_batch_size=val_batch_size
-                    ),
-                )
+                try:
+                    val_results = policy.train(
+                        submitted_val_data,
+                        _clone_validation_loss_fn(
+                            loss_fn, master_config.sft.validation_event_cache_mode
+                        ),
+                        eval_mode=True,
+                        gbs=val_batch_size,
+                        mbs=val_mbs,
+                        **timing_kwargs,
+                    )
+                finally:
+                    correctness_evidence_collector.capture_after(
+                        combined_val_data,
+                        lambda: _event_validation_num_valid_tokens(
+                            combined_val_data, global_batch_size=val_batch_size
+                        ),
+                    )
             if comparison_instrumentation_enabled:
                 for name, elapsed in val_results.get("evaluation_timings", {}).items():
                     timer.record_elapsed(name, float(elapsed))
@@ -1468,28 +1535,18 @@ def _validate_with_loss_availability_impl(
             if validation_event_cache is None:
                 raise RuntimeError("Validation event cache was not initialized")
 
-    correctness_audit_evidence: CorrectnessValidationEvidencePair | None = None
-    correctness_audit_time_in_validation_s = correctness_audit_time_s
-    if collect_correctness_audit_evidence:
-        if (
-            correctness_evidence_before is None
-            or correctness_evidence_after is None
-            or not correctness_evidence_before
-            or len(correctness_evidence_before) != len(correctness_evidence_after)
-        ):
-            raise RuntimeError(
-                "Correctness audit could not capture exact runtime validation evidence"
-            )
-        audit_start = time.perf_counter()
-        correctness_audit_evidence = CorrectnessValidationEvidencePair(
-            before=combine_validation_evidence(correctness_evidence_before),
-            after=combine_validation_evidence(correctness_evidence_after),
-        )
-        correctness_audit_time_s += time.perf_counter() - audit_start
+    correctness_audit_time_in_validation_s = (
+        correctness_evidence_collector.elapsed_seconds
+        if correctness_evidence_collector is not None
+        else 0.0
+    )
 
     # Get timing metrics
     timing_metrics = timer.get_timing_metrics(reduction_op="sum")
-    if collect_correctness_audit_evidence and "total_validation_time" in timing_metrics:
+    if (
+        correctness_evidence_collector is not None
+        and "total_validation_time" in timing_metrics
+    ):
         timing_metrics["total_validation_time"] = max(
             0.0,
             float(timing_metrics["total_validation_time"])
@@ -1523,8 +1580,7 @@ def _validate_with_loss_availability_impl(
         timing_metrics=timing_metrics,
         validation_loss_available=validation_loss_available,
         pending_validation_cache_entry=new_cache_entry,
-        correctness_audit_evidence=correctness_audit_evidence,
-        correctness_audit_time_s=correctness_audit_time_s,
+        correctness_audit_time_s=correctness_audit_time_in_validation_s,
     )
 
 
@@ -1542,7 +1598,8 @@ def _validate_with_loss_availability(
     validation_event_cache: _ValidationEventCache | None = None,
     *,
     precomputed_validation_event: PrecomputedValidationEvent | None = None,
-    collect_correctness_audit_evidence: bool = False,
+    correctness_evidence_collector: _ValidationCorrectnessEvidenceCollector
+    | None = None,
 ) -> _SFTValidationResult:
     """Run validation and restore training mode after every prepared execution."""
     validation_prepared = False
@@ -1572,13 +1629,28 @@ def _validate_with_loss_availability(
             comparison_instrumentation_enabled,
             validation_event_cache,
             precomputed_validation_event=precomputed_validation_event,
-            collect_correctness_audit_evidence=collect_correctness_audit_evidence,
+            correctness_evidence_collector=correctness_evidence_collector,
             mark_validation_prepared=mark_validation_prepared,
             restore_training_mode=restore_training_mode,
         )
     finally:
-        if validation_prepared:
-            policy.prepare_for_training()
+        if correctness_evidence_collector is None:
+            if validation_prepared:
+                policy.prepare_for_training()
+        else:
+            try:
+                if validation_prepared:
+                    policy.prepare_for_training()
+            finally:
+                correctness_evidence_collector.finalize_restoration_boundary()
+    if result is None:
+        raise RuntimeError("Validation completed without a result")
+    if correctness_evidence_collector is not None:
+        result = replace(
+            result,
+            correctness_audit_evidence=correctness_evidence_collector.evidence(),
+            correctness_audit_time_s=(correctness_evidence_collector.elapsed_seconds),
+        )
     if result.pending_validation_cache_entry is not None:
         if validation_event_cache is None:
             raise RuntimeError("Validation event cache was not initialized")
@@ -1684,6 +1756,12 @@ def sft_train(
     def run_validation_with_audit(
         validation_step: int,
     ) -> tuple[_SFTValidationResult, float]:
+        correctness_evidence_collector = (
+            _ValidationCorrectnessEvidenceCollector()
+            if correctness_auditor is not None
+            else None
+        )
+
         def execute_validation() -> _SFTValidationResult:
             return _validate_with_loss_availability(
                 policy,
@@ -1698,19 +1776,20 @@ def sft_train(
                 comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
                 validation_event_cache=validation_event_cache,
                 precomputed_validation_event=precomputed_validation_event,
-                collect_correctness_audit_evidence=(correctness_auditor is not None),
+                correctness_evidence_collector=correctness_evidence_collector,
             )
 
         if correctness_auditor is None:
             return execute_validation(), 0.0
+        assert correctness_evidence_collector is not None
         result = correctness_auditor.audit_validation(
             step=validation_step,
             validation=execute_validation,
-            evidence_from_result=_require_validation_evidence,
+            validation_evidence=correctness_evidence_collector.evidence,
         )
         elapsed = (
             correctness_auditor.consume_elapsed_seconds()
-            + result.correctness_audit_time_s
+            + correctness_evidence_collector.elapsed_seconds
         )
         return result, elapsed
 

@@ -349,3 +349,143 @@ Not run locally:
   RNG read, tensor reduction, synchronization, or evidence-hash call.
 - Confirmed the concrete `Policy` method remains unchanged, `PolicyInterface`
   is not expanded, and no unrelated backend or default validation path changed.
+
+## Second Review Fixes
+
+This section records the follow-up for the second Task 4 review's two
+Important findings and stale-documentation Minor. It supplements the prior
+review-fix section above.
+
+### Changes
+
+1. Validation evidence now belongs to a
+   `_ValidationCorrectnessEvidenceCollector` created outside the validation
+   return path. Each audited policy submission captures after-evidence in a
+   `finally`, and the model-training restoration boundary finalizes the
+   collector in a second `finally`. `SFTCorrectnessAuditor.audit_validation()`
+   consumes the collector on both success and exception, so failed submission,
+   invalid loss, and restoration failure are checked against actual runtime
+   digests rather than placeholder `None` values.
+2. Production-capture mutation coverage now includes controlled driver Torch
+   CUDA RNG API side effects, controlled worker Torch CUDA and MCore RNG API
+   side effects, a real optimizer `exp_avg` tensor, independent runtime `idx`
+   mutation, and independent mask-derived exact-token-count mutation. These
+   tests invoke the production capture and comparison gate.
+3. `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+   now covers the full current Task 4 commit range, both review rounds and
+   their fixes, current invariant evidence, the actual 19-test source-isolated
+   count, and the pending controller decision. It does not claim that the CW
+   Linux Task 4 gate passed.
+4. Self-review found and removed audit scaffolding from disabled execution:
+   policy submission and training-mode restoration keep direct calls when no
+   collector is present. The new `try`/`finally`, evidence hashing, RNG reads,
+   reductions, and audit timing are confined to enabled mode.
+
+### Changed Files
+
+- `nemo_rl/algorithms/sft.py`
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `tests/source_isolated/test_sft_event_batch_source.py`
+- `tests/unit/algorithms/test_sft.py`
+- `tests/unit/algorithms/test_sft_correctness_audit.py`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+- `.superpowers/sdd/task-4-report.md`
+
+### TDD Evidence
+
+The source-isolated contract test was added before the collector implementation:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py -k correctness_evidence_survives_validation_exceptions
+```
+
+Initial result: exit 1, `1 failed`; the failure was
+`AssertionError: assert '_ValidationCorrectnessEvidenceCollector' in class_names`.
+After implementing the external collector and finally boundaries, the focused
+test passed. The complete source-isolated file result is recorded below.
+
+### Exact Verification
+
+Requested focused unit command:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_validation_artifact.py
+```
+
+Result: exit 4 during collection; no unit tests ran.
+
+```text
+ImportError while loading conftest 'tests/unit/conftest.py'
+tests/unit/conftest.py:24: in <module>
+    import ray
+E   ModuleNotFoundError: No module named 'ray'
+```
+
+Requested source-isolated command:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `19 passed in 0.24s`, exit 0.
+
+Ruff lint command:
+
+```bash
+ruff check nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Ruff format command:
+
+```bash
+ruff format --check nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: `5 files already formatted`, exit 0.
+
+Compilation command:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft_validation_artifact.py
+```
+
+Result: exit 0 with no output.
+
+Diff validation command:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output after the report update.
+
+Not run locally:
+
+- The three requested unit files, because collection requires the unavailable
+  `ray` dependency.
+- A supported Linux run with Ray, Torch, TorchData, Megatron, and CUDA.
+- GPU/Ray/Megatron integration tests and the full repository suite.
+- The controller's CW Linux Task 4 gate and second post-fix review.
+
+### Self-Review
+
+- Confirmed the evidence provider is independent of `_SFTValidationResult` and
+  is consumed in the auditor's exception-safe `finally` path.
+- Confirmed every audited submission captures after-evidence even when policy
+  submission or loss validation raises, and restoration finalization runs even
+  when `model.train()` restoration raises.
+- Confirmed incomplete evidence raises `CorrectnessAuditError`; the gate cannot
+  compare placeholder `None` validation digests.
+- Confirmed exception-path tests mutate the actual submitted payload and assert
+  the production gate reports the corresponding digest mismatch.
+- Confirmed CUDA and MCore RNG tests use controlled side effects on the APIs
+  called by production capture without initializing trackers or advancing RNG.
+- Confirmed identity and exact-token tests mutate `idx` and mask data
+  independently, then invoke production runtime capture and comparison.
+- Confirmed disabled mode retains direct policy and restoration calls and adds
+  no audit RPC, RNG read, tensor reduction, synchronization, evidence hash, or
+  audit-timing work.
+- Confirmed no `PolicyInterface`, backend, checkpoint/state-load, model-mode,
+  parameter-sync, or unrelated source changes were introduced.

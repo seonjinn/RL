@@ -280,13 +280,13 @@ def test_auditor_handles_repeated_validation_boundaries() -> None:
         auditor.audit_validation(
             step=20,
             validation=lambda: None,
-            evidence_from_result=lambda _: _validation_evidence_pair(),
+            validation_evidence=_validation_evidence_pair,
         )
         auditor.record_next_train_batch({"input_ids": torch.tensor([[3, 4]])})
         auditor.audit_validation(
             step=40,
             validation=lambda: None,
-            evidence_from_result=lambda _: _validation_evidence_pair(),
+            validation_evidence=_validation_evidence_pair,
         )
         auditor.record_next_train_batch({"input_ids": torch.tensor([[5, 6]])})
 
@@ -315,7 +315,7 @@ def test_auditor_records_next_batch_only_when_caller_supplies_natural_batch() ->
             auditor.audit_validation(
                 step=20,
                 validation=lambda: "result",
-                evidence_from_result=lambda _: _validation_evidence_pair(),
+                validation_evidence=_validation_evidence_pair,
             )
             == "result"
         )
@@ -352,7 +352,7 @@ def test_auditor_gates_failed_validation_before_reraising() -> None:
         auditor.audit_validation(
             step=40,
             validation=fail_validation,
-            evidence_from_result=lambda _: _validation_evidence_pair(),
+            validation_evidence=_validation_evidence_pair,
         )
 
     assert len(records) == 1
@@ -551,19 +551,32 @@ def test_megatron_worker_fingerprint_rejects_empty_or_nonmapping_tracker_states(
         worker.get_correctness_state_fingerprint()
 
 
-def _capture_worker_fingerprint(worker: MegatronPolicyWorkerImpl) -> dict[str, Any]:
+def _capture_worker_fingerprint(
+    worker: MegatronPolicyWorkerImpl,
+    *,
+    torch_cuda_rng: torch.Tensor | None = None,
+    mcore_cuda_rng: torch.Tensor | None = None,
+) -> dict[str, Any]:
+    torch_cuda_rng = (
+        torch.tensor([1, 2, 3], dtype=torch.uint8)
+        if torch_cuda_rng is None
+        else torch_cuda_rng
+    )
+    mcore_cuda_rng = (
+        torch.tensor([4, 5, 6], dtype=torch.uint8)
+        if mcore_cuda_rng is None
+        else mcore_cuda_rng
+    )
     with (
         patch.object(torch.cuda, "current_device", return_value=0),
         patch.object(
             torch.cuda,
             "get_rng_state",
-            return_value=torch.tensor([1, 2, 3], dtype=torch.uint8),
+            return_value=torch_cuda_rng,
         ),
         patch(
             "nemo_rl.models.policy.workers.megatron_policy_worker.get_all_rng_states",
-            return_value={
-                "model-parallel-rng": torch.tensor([4, 5, 6], dtype=torch.uint8)
-            },
+            return_value={"model-parallel-rng": mcore_cuda_rng},
         ),
     ):
         return worker.get_correctness_state_fingerprint(
@@ -647,9 +660,114 @@ def test_production_capture_gate_detects_real_driver_state_mutations(
     assert expected_field in result.differences
 
 
+def test_production_capture_gate_detects_driver_torch_cuda_rng_mutation() -> None:
+    policy = MagicMock()
+    policy.get_correctness_state_fingerprint.return_value = [_worker_state(0)]
+    kwargs: dict[str, Any] = {
+        "policy": policy,
+        "train_loader": _LoaderFixture(),
+        "explicit_generator": None,
+        "validation_payload": {"input_ids": torch.tensor([[1, 2]])},
+        "validation_sample_ids": [17],
+        "validation_token_counts": (2,),
+    }
+
+    with (
+        patch.object(torch.cuda, "is_initialized", return_value=True),
+        patch.object(
+            torch.cuda,
+            "get_rng_state_all",
+            side_effect=[
+                [torch.tensor([1, 2], dtype=torch.uint8)],
+                [torch.tensor([1, 3], dtype=torch.uint8)],
+            ],
+        ),
+    ):
+        before = capture_correctness_snapshot(**kwargs)
+        after = capture_correctness_snapshot(**kwargs)
+
+    result = evaluate_correctness_gate(before, after)
+
+    assert result.ready is False
+    assert result.differences == ("torch_cuda_rng_digests.0",)
+
+
+@pytest.mark.parametrize(
+    ("state_family", "expected_path"),
+    [
+        pytest.param(
+            "torch_cuda_rng",
+            "worker_states.7.torch_cuda_rng",
+            id="worker-torch-cuda-rng",
+        ),
+        pytest.param(
+            "mcore_cuda_rng",
+            "worker_states.7.mcore_cuda_rng",
+            id="worker-mcore-cuda-rng",
+        ),
+    ],
+)
+def test_production_capture_gate_detects_worker_rng_api_mutations(
+    state_family: str,
+    expected_path: str,
+) -> None:
+    worker = _worker_fixture()
+    policy = MagicMock()
+    policy.get_correctness_state_fingerprint.side_effect = lambda: [
+        worker.get_correctness_state_fingerprint(
+            content_sample_count=3,
+            reduction_chunk_numel=2,
+        )
+    ]
+    torch_states = [
+        torch.tensor([1, 2, 3], dtype=torch.uint8),
+        torch.tensor([1, 2, 4], dtype=torch.uint8),
+    ]
+    mcore_states = [
+        {"model-parallel-rng": torch.tensor([4, 5, 6], dtype=torch.uint8)},
+        {"model-parallel-rng": torch.tensor([4, 5, 7], dtype=torch.uint8)},
+    ]
+    if state_family == "torch_cuda_rng":
+        tracker_side_effect = [mcore_states[0], mcore_states[0]]
+    else:
+        torch_states[1] = torch_states[0]
+        tracker_side_effect = mcore_states
+    kwargs: dict[str, Any] = {
+        "policy": policy,
+        "train_loader": _LoaderFixture(),
+        "explicit_generator": None,
+        "validation_payload": {"input_ids": torch.tensor([[1, 2]])},
+        "validation_sample_ids": [17],
+        "validation_token_counts": (2,),
+    }
+
+    with (
+        patch.object(torch.cuda, "is_initialized", return_value=False),
+        patch.object(torch.cuda, "current_device", return_value=0),
+        patch.object(torch.cuda, "get_rng_state", side_effect=torch_states),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.get_all_rng_states",
+            side_effect=tracker_side_effect,
+        ),
+    ):
+        before = capture_correctness_snapshot(**kwargs)
+        after = capture_correctness_snapshot(**kwargs)
+
+    result = evaluate_correctness_gate(before, after)
+
+    assert result.ready is False
+    assert any(path.startswith(expected_path) for path in result.differences)
+
+
 @pytest.mark.parametrize(
     "state_family",
-    ["model", "optimizer_main_shard", "optimizer_step", "training_mode"],
+    [
+        "model",
+        "optimizer_main_shard",
+        "optimizer_state_tensor",
+        "optimizer_step",
+        "training_mode",
+    ],
 )
 def test_production_capture_gate_detects_real_worker_state_mutations(
     state_family: str,
@@ -658,7 +776,14 @@ def test_production_capture_gate_detects_real_worker_state_mutations(
     model_parameter = next(worker.model.parameters())
     main_shard = torch.nn.Parameter(model_parameter.detach().clone() + 50)
     worker.optimizer.param_groups[0]["params"] = [main_shard]
-    worker.optimizer.state = {main_shard: {"step": torch.tensor(9)}}
+    worker.optimizer.state = {
+        main_shard: {
+            "exp_avg": torch.arange(main_shard.numel(), dtype=torch.float32).reshape(
+                main_shard.shape
+            ),
+            "step": torch.tensor(9),
+        }
+    }
     policy = MagicMock()
     policy.get_correctness_state_fingerprint.side_effect = lambda: [
         _capture_worker_fingerprint(worker)
@@ -679,6 +804,8 @@ def test_production_capture_gate_detects_real_worker_state_mutations(
                 model_parameter.add_(1)
             elif state_family == "optimizer_main_shard":
                 main_shard.add_(1)
+            elif state_family == "optimizer_state_tensor":
+                worker.optimizer.state[main_shard]["exp_avg"].add_(1)
             elif state_family == "optimizer_step":
                 worker.optimizer.state[main_shard]["step"].add_(1)
             else:
@@ -691,6 +818,7 @@ def test_production_capture_gate_detects_real_worker_state_mutations(
     expected_path = {
         "model": "worker_states.7.model",
         "optimizer_main_shard": "worker_states.7.optimizer.parameters",
+        "optimizer_state_tensor": "worker_states.7.optimizer.state_tensors",
         "optimizer_step": "worker_states.7.optimizer.step_counters",
         "training_mode": "worker_states.7.training_mode_flags",
     }[state_family]
@@ -724,7 +852,7 @@ def test_auditor_finalizes_next_batch_and_compares_to_no_validation_control() ->
         auditor.audit_validation(
             step=20,
             validation=lambda: _validation_evidence_pair(),
-            evidence_from_result=lambda result: result,
+            validation_evidence=_validation_evidence_pair,
         )
 
     assert records == []
