@@ -32,7 +32,6 @@ WANDB_ENTITY="${WANDB_ENTITY:-nvidia}"
 RUN_TAG="${RUN_TAG:-vllm024-dynamicsd-step20-20260707}"
 ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_024_upgrade/runs/${RUN_TAG}}"
-VLLM_PORT_BASE="${VLLM_PORT_BASE:-20001}"
 WALLTIME="${WALLTIME:-04:00:00}"
 TMPDIR="${TMPDIR_OVERRIDE:-/tmp}"
 CONTAINER_SHA256="${CONTAINER_SHA256:-}"
@@ -97,26 +96,22 @@ submit_one() {
   local draft_model
   local draft_k="${STATIC_K}"
   local nodes
-  local model_port_offset
 
   case "${model}" in
     qwen30ba3b)
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
       draft_model="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
       nodes=4
-      model_port_offset=0
       ;;
     qwen32b)
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml"
       draft_model="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
       nodes=4
-      model_port_offset=1000
       ;;
     qwen235b)
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml"
       draft_model="${QWEN235_DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba}"
       nodes=16
-      model_port_offset=2000
       ;;
   esac
 
@@ -130,25 +125,17 @@ submit_one() {
   local wandb_name="${wandb_run_id}"
   local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${model}-${variant}"
   local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${model}-${variant}"
-  local variant_port_offset=0
   case "${variant}" in
     eagle3_k5)
       draft_k=5
-      variant_port_offset=200
-      ;;
-    dynamic)
-      variant_port_offset=400
       ;;
     eagle3_k7)
       draft_k=7
-      variant_port_offset=600
       ;;
     eagle3_k9)
       draft_k=9
-      variant_port_offset=800
       ;;
   esac
-  local vllm_port=$((VLLM_PORT_BASE + model_port_offset + variant_port_offset))
 
   local overrides=(
     "grpo.max_num_steps=${MAX_STEPS}"
@@ -185,7 +172,7 @@ submit_one() {
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
-    "VLLM_PORT=${vllm_port}"
+    # BaseVllmGenerationWorker assigns a distinct rendezvous window per engine.
     "PYTHONPATH=${REPO_DIR}"
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"

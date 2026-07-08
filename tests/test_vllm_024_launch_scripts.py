@@ -182,7 +182,7 @@ def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
     assert "--nodes=16" in output
     assert "--segment=16" in output
     assert "--gres=gpu:4" in output
-    assert "VLLM_PORT=22801" in output
+    assert "VLLM_PORT=" not in output
 
 
 def test_dynamicsd_launcher_renders_dynamic_schedule() -> None:
@@ -227,10 +227,10 @@ def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:
     ) in output
 
 
-def test_dynamicsd_launcher_starts_outside_nemo_gym_port_range() -> None:
+def test_dynamicsd_launcher_delegates_engine_ports_to_nemorl() -> None:
     output = _dry_run_dynamicsd("qwen30ba3b", "baseline")
 
-    assert "VLLM_PORT=20001" in output
+    assert "VLLM_PORT=" not in output
 
 
 def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
