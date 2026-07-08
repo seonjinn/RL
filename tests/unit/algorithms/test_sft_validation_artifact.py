@@ -1065,6 +1065,30 @@ def test_validation_artifact_round_trip_preserves_tensor_contract(tmp_path) -> N
     assert content["tensor_file"].endswith(".safetensors")
 
 
+def test_validation_artifact_load_preserves_driver_rng_and_generator(tmp_path) -> None:
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
+    random.seed(101)
+    np.random.seed(202)
+    torch.manual_seed(303)
+    generator = torch.Generator().manual_seed(404)
+    python_state = random.getstate()
+    numpy_state = cast(tuple[Any, ...], np.random.get_state())
+    torch_state = torch.get_rng_state().clone()
+    generator_state = generator.get_state().clone()
+
+    load_validation_event(manifest, _fingerprint(), _memory_budget())
+
+    assert random.getstate() == python_state
+    current_numpy_state = cast(tuple[Any, ...], np.random.get_state())
+    assert current_numpy_state[0] == numpy_state[0]
+    assert np.array_equal(current_numpy_state[1], numpy_state[1])
+    assert current_numpy_state[2:] == numpy_state[2:]
+    assert torch.equal(torch.get_rng_state(), torch_state)
+    assert torch.equal(generator.get_state(), generator_state)
+
+
 def test_validation_artifact_rejects_unknown_non_tensor_value(tmp_path) -> None:
     event = _event_fixture()
     event.data["messages"] = ["unsupported"]

@@ -22,16 +22,17 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from functools import partial
 from numbers import Real
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 import numpy as np
 import psutil
 import torch
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import NLLLossFn
+from nemo_rl.algorithms.sft_correctness_audit import SFTCorrectnessAuditor
 from nemo_rl.algorithms.sft_validation_artifact import (
     PrecomputedValidationEvent,
     clone_validation_event_data,
@@ -212,6 +213,11 @@ def _maybe_reorder_megatron_sft_dp_stride(
     return reordered
 
 
+class CorrectnessAuditConfig(BaseModel, extra="allow"):
+    # Disabled audits perform no state reads, worker RPCs, reductions, or timing.
+    enabled: bool = False
+
+
 class SFTConfig(BaseModel, extra="allow"):
     max_num_steps: int = 60
     max_num_epochs: int = 1
@@ -238,6 +244,9 @@ class SFTConfig(BaseModel, extra="allow"):
     validation_event_verified_ray_object_store_available_bytes: int | None = None
     # Reserve room for serialization and transient copies beyond the combined payload.
     validation_event_memory_safety_multiplier: float = 2.0
+    correctness_audit: CorrectnessAuditConfig = Field(
+        default_factory=CorrectnessAuditConfig
+    )
     # Whether to run validation on the last training step. Setting this to True ensures the
     # final checkpoint has validation metrics, which is required for get_best_checkpoint_path().
     val_at_end: bool = False
@@ -1458,6 +1467,70 @@ def sft_train(
         if sft_config.validation_event_cache_mode == "cpu"
         else None
     )
+    correctness_auditor: SFTCorrectnessAuditor | None = None
+    if sft_config.correctness_audit.enabled:
+        if megatron_cfg is None or not megatron_cfg["enabled"]:
+            raise ValueError(
+                "sft.correctness_audit.enabled=true requires the Megatron backend"
+            )
+        explicit_generator = getattr(train_dataloader, "generator", None)
+        if not isinstance(explicit_generator, torch.Generator):
+            explicit_generator = None
+        if precomputed_validation_event is not None:
+            validation_payload: object = precomputed_validation_event.data
+            validation_sample_ids: object = precomputed_validation_event.data[
+                "input_ids"
+            ]
+            validation_token_counts: object = (
+                precomputed_validation_event.num_valid_tokens
+            )
+        else:
+            validation_payload = {
+                "input_mode": sft_config.validation_input_mode,
+                "data_config": master_config.data,
+            }
+            validation_sample_ids = master_config.data.get("validation")
+            validation_token_counts = (
+                sft_config.val_batches,
+                sft_config.val_global_batch_size,
+                sft_config.val_micro_batch_size,
+            )
+        correctness_auditor = SFTCorrectnessAuditor(
+            policy=policy,
+            train_loader=train_dataloader,
+            explicit_generator=explicit_generator,
+            validation_payload=validation_payload,
+            validation_sample_ids=validation_sample_ids,
+            validation_token_counts=validation_token_counts,
+        )
+
+    def run_validation_with_audit(
+        validation_step: int,
+    ) -> tuple[_SFTValidationResult, float]:
+        def execute_validation() -> _SFTValidationResult:
+            return _validate_with_loss_availability(
+                policy,
+                val_dataloader,
+                tokenizer,
+                loss_fn,
+                step=validation_step,
+                master_config=master_config,
+                val_batches=sft_config.val_batches,
+                val_batch_size=sft_config.val_global_batch_size,
+                val_mbs=sft_config.val_micro_batch_size,
+                comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
+                validation_event_cache=validation_event_cache,
+                precomputed_validation_event=precomputed_validation_event,
+            )
+
+        if correctness_auditor is None:
+            return execute_validation(), 0.0
+        result = correctness_auditor.audit_validation(
+            step=validation_step,
+            validation=execute_validation,
+        )
+        elapsed = correctness_auditor.consume_elapsed_seconds()
+        return result, elapsed
 
     if logger.comparison_metrics_enabled:
         logger.define_metric("comparison/step")
@@ -1469,20 +1542,13 @@ def sft_train(
     # Run validation at the start if configured
     if val_at_start and total_steps == 0:
         print("\n🔍 Running initial validation...")
-        validation_result = _validate_with_loss_availability(
-            policy,
-            val_dataloader,
-            tokenizer,
-            loss_fn,
-            step=0,
-            master_config=master_config,
-            val_batches=sft_config.val_batches,
-            val_batch_size=sft_config.val_global_batch_size,
-            val_mbs=sft_config.val_micro_batch_size,
-            comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
-            validation_event_cache=validation_event_cache,
-            precomputed_validation_event=precomputed_validation_event,
-        )
+        validation_result, initial_audit_time = run_validation_with_audit(0)
+        if initial_audit_time > 0:
+            logger.log_metrics(
+                {"audit_time_s": initial_audit_time},
+                0,
+                prefix="timing/correctness_audit",
+            )
         val_metrics = validation_result.val_metrics
         validation_timings = validation_result.timing_metrics
 
@@ -1490,6 +1556,7 @@ def sft_train(
         logger.log_metrics(validation_timings, total_steps, prefix="timing/validation")
 
     policy.prepare_for_training()
+    audit_excluded_since_loop_boundary = 0.0
 
     while (
         current_epoch < max_num_epochs and total_steps < master_config.sft.max_num_steps
@@ -1500,6 +1567,26 @@ def sft_train(
             previous_loop_boundary, loop_interval_time = _measure_loop_interval(
                 previous_loop_boundary, time.perf_counter()
             )
+            if loop_interval_time is not None:
+                loop_interval_time = max(
+                    0.0, loop_interval_time - audit_excluded_since_loop_boundary
+                )
+            audit_excluded_since_loop_boundary = 0.0
+            if correctness_auditor is not None:
+                correctness_auditor.record_next_train_batch(batch)
+                next_batch_audit_time = correctness_auditor.consume_elapsed_seconds()
+                if next_batch_audit_time > 0:
+                    audit_log_start = time.perf_counter()
+                    logger.log_metrics(
+                        {
+                            "next_train_batch_digest_time_s": next_batch_audit_time,
+                        },
+                        total_steps + 1,
+                        prefix="timing/correctness_audit",
+                    )
+                    audit_excluded_since_loop_boundary += (
+                        next_batch_audit_time + time.perf_counter() - audit_log_start
+                    )
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(train_dataloader), master_config.sft.max_num_steps)} {'=' * 25}"
             )
@@ -1507,6 +1594,8 @@ def sft_train(
             val_metrics, validation_timings = None, None
             validation_loss_available = False
             processed_tokens: int | None = None
+            audit_time_in_step = 0.0
+            validation_audit_time = 0.0
 
             with timer.time("total_step_time"):
                 # Prepare batch and generate responses
@@ -1571,20 +1660,11 @@ def sft_train(
                 if (val_period > 0 and (total_steps + 1) % val_period == 0) or (
                     val_at_end and is_last_step
                 ):
-                    validation_result = _validate_with_loss_availability(
-                        policy,
-                        val_dataloader,
-                        tokenizer,
-                        loss_fn,
-                        step=total_steps + 1,
-                        master_config=master_config,
-                        val_batches=sft_config.val_batches,
-                        val_batch_size=sft_config.val_global_batch_size,
-                        val_mbs=sft_config.val_micro_batch_size,
-                        comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
-                        validation_event_cache=validation_event_cache,
-                        precomputed_validation_event=precomputed_validation_event,
+                    validation_result, validation_audit_time = (
+                        run_validation_with_audit(total_steps + 1)
                     )
+                    audit_time_in_step += validation_audit_time
+                    audit_excluded_since_loop_boundary += validation_audit_time
                     val_metrics = validation_result.val_metrics
                     validation_timings = validation_result.timing_metrics
                     validation_loss_available = (
@@ -1690,7 +1770,25 @@ def sft_train(
                         )
                         checkpointer.finalize_checkpoint(checkpoint_path)
 
-            timing_metrics = timer.get_timing_metrics(reduction_op="sum")
+            if validation_audit_time > 0:
+                audit_log_start = time.perf_counter()
+                logger.log_metrics(
+                    {"audit_time_s": validation_audit_time},
+                    total_steps + 1,
+                    prefix="timing/correctness_audit",
+                )
+                audit_excluded_since_loop_boundary += (
+                    time.perf_counter() - audit_log_start
+                )
+
+            timing_metrics = cast(
+                dict[str, float], timer.get_timing_metrics(reduction_op="sum")
+            )
+            if audit_time_in_step > 0:
+                timing_metrics["total_step_time"] = max(
+                    0.0,
+                    timing_metrics.get("total_step_time", 0.0) - audit_time_in_step,
+                )
             _add_e2e_step_timing(timing_metrics)
             if loop_interval_time is not None:
                 timing_metrics["loop_interval_time"] = loop_interval_time
@@ -1802,9 +1900,13 @@ def sft_train(
             total_steps += 1
 
             if should_save_by_timeout:
+                if correctness_auditor is not None:
+                    correctness_auditor.flush_pending()
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
             if total_steps >= master_config.sft.max_num_steps:
+                if correctness_auditor is not None:
+                    correctness_auditor.flush_pending()
                 print(
                     "Max number of steps has been reached, stopping training early",
                     flush=True,
@@ -1813,3 +1915,6 @@ def sft_train(
 
         current_epoch += 1
         current_step = 0  # Reset step counter for new epoch
+
+    if correctness_auditor is not None:
+        correctness_auditor.flush_pending()

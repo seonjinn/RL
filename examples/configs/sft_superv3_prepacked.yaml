@@ -32,6 +32,8 @@ sft:
   validation_event_max_payload_bytes: null
   validation_event_verified_ray_object_store_available_bytes: null
   validation_event_memory_safety_multiplier: 2.0
+  correctness_audit:
+    enabled: false
   val_at_end: false
   seed: 42
 

@@ -16,6 +16,7 @@ import gc
 import weakref
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
@@ -26,6 +27,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.sft import (
+    CorrectnessAuditConfig,
     MasterConfig,
     SFTConfig,
     _ValidationEventCache,
@@ -359,11 +361,199 @@ def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
     assert SFTConfig().validation_event_cache_dataset_sha256 is None
     assert SFTConfig().validation_input_mode == "dataloader"
     assert SFTConfig().validation_precomputed_manifest is None
+    assert SFTConfig().correctness_audit == CorrectnessAuditConfig(enabled=False)
 
     with pytest.raises(ValidationError, match="validation_execution_mode"):
         SFTConfig(validation_execution_mode="unsupported")
     with pytest.raises(ValidationError, match="validation_event_cache_mode"):
         SFTConfig(validation_event_cache_mode="unsupported")
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        "examples/configs/sft.yaml",
+        "examples/configs/sft_superv3_prepacked.yaml",
+        "tests/unit/reference_configs/sft.yaml",
+    ],
+)
+def test_sft_configs_disable_correctness_audit_by_default(config_path: str) -> None:
+    config_text = Path(config_path).read_text()
+
+    assert "correctness_audit:\n    enabled: false" in config_text
+
+
+def test_sft_train_disabled_audit_has_no_audit_reads_or_rpc(mock_components) -> None:
+    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_epochs = 1
+    mock_components["master_config"].sft.correctness_audit = CorrectnessAuditConfig(
+        enabled=False
+    )
+
+    with patch("nemo_rl.algorithms.sft.SFTCorrectnessAuditor") as auditor:
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    auditor.assert_not_called()
+    mock_components["policy"].get_correctness_state_fingerprint.assert_not_called()
+
+
+def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
+    mock_components,
+) -> None:
+    sft_config = mock_components["master_config"].sft
+    sft_config.max_num_steps = 1
+    sft_config.max_num_epochs = 1
+    sft_config.val_at_start = True
+    sft_config.val_period = 0
+    sft_config.correctness_audit = CorrectnessAuditConfig(enabled=True)
+    mock_components["master_config"].policy["megatron_cfg"] = {"enabled": True}
+    event = _precomputed_event_fixture()
+    validation_result = SimpleNamespace(
+        val_metrics={"val_loss": 0.5},
+        timing_metrics={"total_validation_time": 1.0},
+        validation_loss_available=True,
+    )
+    auditor_instance = MagicMock()
+    auditor_instance.audit_validation.side_effect = lambda *, step, validation: (
+        validation()
+    )
+    auditor_instance.consume_elapsed_seconds.side_effect = [0.25, 0.1]
+
+    with (
+        patch(
+            "nemo_rl.algorithms.sft.SFTCorrectnessAuditor",
+            return_value=auditor_instance,
+        ) as auditor_class,
+        patch(
+            "nemo_rl.algorithms.sft._validate_with_loss_availability",
+            return_value=validation_result,
+        ) as validation,
+    ):
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            None,
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+            precomputed_validation_event=event,
+        )
+
+    auditor_class.assert_called_once()
+    assert auditor_class.call_args.kwargs["validation_payload"] is event.data
+    assert auditor_class.call_args.kwargs["validation_token_counts"] == (
+        128,
+        128,
+        128,
+        128,
+    )
+    auditor_instance.audit_validation.assert_called_once()
+    assert auditor_instance.audit_validation.call_args.kwargs["step"] == 0
+    validation.assert_called_once()
+    auditor_instance.record_next_train_batch.assert_called_once()
+    naturally_consumed_batch = auditor_instance.record_next_train_batch.call_args.args[
+        0
+    ]
+    assert naturally_consumed_batch["message_log"][0][0]["token_ids"].tolist() == [
+        1,
+        2,
+        3,
+    ]
+    auditor_instance.flush_pending.assert_called_once_with()
+    audit_timing_calls = [
+        log_call
+        for log_call in mock_components["logger"].log_metrics.call_args_list
+        if log_call.kwargs.get("prefix") == "timing/correctness_audit"
+    ]
+    assert [log_call.args[0] for log_call in audit_timing_calls] == [
+        {"audit_time_s": 0.25},
+        {"next_train_batch_digest_time_s": 0.1},
+    ]
+
+
+def test_sft_train_excludes_audit_time_from_reported_step_window(
+    mock_components,
+) -> None:
+    class FixedTimer:
+        @contextmanager
+        def time(self, _name: str) -> Generator[None, None, None]:
+            yield
+
+        def record_elapsed(self, _name: str, _elapsed: float) -> None:
+            return None
+
+        def get_timing_metrics(self, reduction_op: str) -> dict[str, float]:
+            assert reduction_op == "sum"
+            return {
+                "total_step_time": 10.0,
+                "data_fetch": 1.0,
+                "policy_training": 5.0,
+            }
+
+        def reset(self) -> None:
+            return None
+
+    sft_config = mock_components["master_config"].sft
+    sft_config.max_num_steps = 1
+    sft_config.max_num_epochs = 1
+    sft_config.val_at_start = False
+    sft_config.val_period = 1
+    sft_config.correctness_audit = CorrectnessAuditConfig(enabled=True)
+    mock_components["master_config"].policy["megatron_cfg"] = {"enabled": True}
+    validation_result = SimpleNamespace(
+        val_metrics={"val_loss": 0.5},
+        timing_metrics={"total_validation_time": 1.0},
+        validation_loss_available=True,
+    )
+    auditor_instance = MagicMock()
+    auditor_instance.audit_validation.side_effect = lambda *, step, validation: (
+        validation()
+    )
+    auditor_instance.consume_elapsed_seconds.side_effect = [0.0, 2.0]
+
+    with (
+        patch("nemo_rl.algorithms.sft.Timer", FixedTimer),
+        patch(
+            "nemo_rl.algorithms.sft.SFTCorrectnessAuditor",
+            return_value=auditor_instance,
+        ),
+        patch(
+            "nemo_rl.algorithms.sft._validate_with_loss_availability",
+            return_value=validation_result,
+        ),
+    ):
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    train_timing_call = next(
+        log_call
+        for log_call in mock_components["logger"].log_metrics.call_args_list
+        if log_call.kwargs.get("prefix") == "timing/train"
+    )
+    assert train_timing_call.args[0]["total_step_time"] == 8.0
+    assert train_timing_call.args[0]["e2e_step_time"] == 9.0
 
 
 @pytest.mark.parametrize(

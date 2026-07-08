@@ -348,6 +348,20 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         results = ray.get(futures)
         return results
 
+    def get_correctness_state_fingerprint(
+        self,
+        *,
+        content_sample_count: int = 8,
+        reduction_chunk_numel: int = 1 << 20,
+    ) -> list[dict[str, Any]]:
+        """Collect read-only correctness fingerprints from every policy worker."""
+        results = self.run_all_workers_single_data(
+            "get_correctness_state_fingerprint",
+            content_sample_count=content_sample_count,
+            reduction_chunk_numel=reduction_chunk_numel,
+        )
+        return sorted(results, key=lambda record: int(record["rank"]))
+
     def run_all_workers_multiple_data(self, method_name: str, *args, **kwargs) -> Any:
         """Run a method on all workers in parallel with different data.
 

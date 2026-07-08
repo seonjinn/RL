@@ -13,12 +13,14 @@
 # limitations under the License.
 import copy
 import gc
+import hashlib
 import os
 import re
 import time
 import warnings
 from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from numbers import Number
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
 
 import ray
@@ -40,6 +42,7 @@ from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
 )
 from megatron.core.optimizer import ChainedOptimizer
 from megatron.core.rerun_state_machine import get_rerun_state_machine
+from megatron.core.tensor_parallel.random import get_all_rng_states
 from megatron.core.utils import get_model_config
 from transformers import PreTrainedTokenizerBase
 
@@ -98,6 +101,123 @@ from nemo_rl.utils.packed_tensor import packed_broadcast_producer
 from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _small_tensor_state_fingerprint(tensor: torch.Tensor) -> dict[str, Any]:
+    cpu_tensor = tensor.detach().to(device="cpu").contiguous().reshape(-1)
+    payload = cpu_tensor.view(torch.uint8).numpy().tobytes()
+    return {
+        "dtype": str(tensor.dtype),
+        "shape": list(tensor.shape),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def _rng_state_fingerprint(state: object) -> dict[str, Any]:
+    if isinstance(state, torch.Generator):
+        generator = cast(Any, state)
+        return {
+            "state_type": "torch.Generator",
+            **_small_tensor_state_fingerprint(generator.get_state()),
+        }
+    if torch.is_tensor(state):
+        return {
+            "state_type": "torch.Tensor",
+            **_small_tensor_state_fingerprint(state),
+        }
+    raise TypeError(f"Unsupported MCore CUDA RNG state type {type(state).__qualname__}")
+
+
+def _fixed_sample_indices(numel: int, sample_count: int) -> list[int]:
+    if numel <= 0:
+        return []
+    count = min(numel, sample_count)
+    if count == 1:
+        return [0]
+    return [index * (numel - 1) // (count - 1) for index in range(count)]
+
+
+def _local_tensor_fingerprint(
+    value: torch.Tensor,
+    *,
+    content_sample_count: int,
+    reduction_chunk_numel: int,
+) -> dict[str, Any]:
+    local = value.detach()
+    local = getattr(local, "_local_tensor", local)
+    if not torch.is_tensor(local):
+        raise TypeError(
+            "Correctness fingerprint local tensor must be a torch.Tensor; got "
+            f"{type(local).__qualname__}"
+        )
+    if local.is_complex():
+        raise TypeError("Correctness fingerprints do not support complex tensors")
+
+    flat = local.reshape(-1)
+    sample_indices = _fixed_sample_indices(flat.numel(), content_sample_count)
+    if sample_indices:
+        index_tensor = torch.tensor(
+            sample_indices, dtype=torch.long, device=flat.device
+        )
+        samples = flat.index_select(0, index_tensor)
+        sample_sha256 = _small_tensor_state_fingerprint(samples)["sha256"]
+    else:
+        sample_sha256 = hashlib.sha256(b"").hexdigest()
+
+    accumulator_device = local.device
+    totals = torch.zeros(6, dtype=torch.float64, device=accumulator_device)
+    abs_max = torch.zeros((), dtype=torch.float64, device=accumulator_device)
+    for start in range(0, flat.numel(), reduction_chunk_numel):
+        chunk = flat[start : start + reduction_chunk_numel].to(dtype=torch.float64)
+        finite = torch.isfinite(chunk)
+        finite_values = torch.where(finite, chunk, torch.zeros_like(chunk))
+        totals[0] += finite_values.sum()
+        totals[1] += finite_values.square().sum()
+        totals[2] += finite.sum()
+        totals[3] += torch.isnan(chunk).sum()
+        totals[4] += torch.isposinf(chunk).sum()
+        totals[5] += torch.isneginf(chunk).sum()
+        if chunk.numel() > 0:
+            abs_max = torch.maximum(abs_max, finite_values.abs().max())
+
+    total_values = totals.to(device="cpu").tolist()
+    finite_count = int(total_values[2])
+    finite_sum = float(total_values[0])
+    finite_sum_square = float(total_values[1])
+    return {
+        "dtype": str(local.dtype),
+        "shape": list(local.shape),
+        "numel": int(local.numel()),
+        "moments": {
+            "sum": finite_sum,
+            "mean": finite_sum / finite_count if finite_count else None,
+            "mean_square": (finite_sum_square / finite_count if finite_count else None),
+            "abs_max": float(abs_max.to(device="cpu").item()) if finite_count else None,
+            "finite_count": finite_count,
+            "nan_count": int(total_values[3]),
+            "posinf_count": int(total_values[4]),
+            "neginf_count": int(total_values[5]),
+        },
+        "sample_indices": sample_indices,
+        "sample_sha256": sample_sha256,
+    }
+
+
+def _python_scalar(value: object) -> bool | int | float | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Number):
+        scalar = cast(Any, value).item() if hasattr(value, "item") else value
+        if isinstance(scalar, (int, float)):
+            return scalar
+    if torch.is_tensor(value):
+        tensor_value = cast(Any, value)
+        if tensor_value.numel() != 1:
+            return None
+        scalar = tensor_value.detach().item()
+        if isinstance(scalar, (bool, int, float)):
+            return scalar
+    return None
 
 
 def _global_batch_indices(*, total_dataset_size: int, global_batch_size: int) -> range:
@@ -176,6 +296,139 @@ class MegatronPolicyWorkerImpl(
             "tensor_parallel": parallel_state.get_tensor_model_parallel_rank(),
             "context_parallel": parallel_state.get_context_parallel_rank(),
             "pipeline_parallel": parallel_state.get_pipeline_model_parallel_rank(),
+        }
+
+    @torch.no_grad()
+    def get_correctness_state_fingerprint(
+        self,
+        *,
+        content_sample_count: int = 8,
+        reduction_chunk_numel: int = 1 << 20,
+    ) -> dict[str, Any]:
+        """Return lossy read-only fingerprints of worker-local training state."""
+        if content_sample_count <= 0:
+            raise ValueError("content_sample_count must be positive")
+        if reduction_chunk_numel <= 0:
+            raise ValueError("reduction_chunk_numel must be positive")
+
+        device = torch.cuda.current_device()
+        torch_cuda_rng = _rng_state_fingerprint(torch.cuda.get_rng_state(device=device))
+        try:
+            tracker_states = get_all_rng_states()
+        except AssertionError as error:
+            raise RuntimeError("MCore CUDA RNG tracker is uninitialized") from error
+        mcore_cuda_rng = {
+            name: _rng_state_fingerprint(state)
+            for name, state in sorted(tracker_states.items())
+        }
+
+        parameters = {
+            name: _local_tensor_fingerprint(
+                parameter,
+                content_sample_count=content_sample_count,
+                reduction_chunk_numel=reduction_chunk_numel,
+            )
+            for name, parameter in sorted(self.model.named_parameters())
+        }
+        buffers = {
+            name: _local_tensor_fingerprint(
+                buffer,
+                content_sample_count=content_sample_count,
+                reduction_chunk_numel=reduction_chunk_numel,
+            )
+            for name, buffer in sorted(self.model.named_buffers())
+        }
+        training_mode_flags = {
+            name: bool(module.training)
+            for name, module in sorted(self.model.named_modules())
+        }
+
+        optimizer_records: list[dict[str, Any]] = []
+        step_counters: list[dict[str, Any]] = []
+        optimizers = (
+            self.optimizer.chained_optimizers
+            if isinstance(self.optimizer, ChainedOptimizer)
+            else [self.optimizer]
+        )
+        for optimizer_index, optimizer in enumerate(optimizers):
+            if optimizer is None:
+                continue
+            for group_index, group in enumerate(optimizer.param_groups):
+                for param_index, parameter in enumerate(group["params"]):
+                    owner = [optimizer_index, group_index, param_index]
+                    state = optimizer.state.get(parameter, {})
+                    for state_key, value in sorted(
+                        state.items(), key=lambda item: str(item[0])
+                    ):
+                        key = str(state_key)
+                        scalar = _python_scalar(value) if key == "step" else None
+                        if scalar is not None:
+                            step_counters.append(
+                                {
+                                    "owner": owner,
+                                    "state_key": key,
+                                    "value": scalar,
+                                }
+                            )
+                        elif torch.is_tensor(value):
+                            optimizer_records.append(
+                                {
+                                    "owner": owner,
+                                    "state_key": key,
+                                    "tensor": _local_tensor_fingerprint(
+                                        value,
+                                        content_sample_count=content_sample_count,
+                                        reduction_chunk_numel=reduction_chunk_numel,
+                                    ),
+                                }
+                            )
+                        else:
+                            scalar = _python_scalar(value)
+                            optimizer_records.append(
+                                {
+                                    "owner": owner,
+                                    "state_key": key,
+                                    "scalar": scalar,
+                                    "metadata_type": type(value).__qualname__,
+                                }
+                            )
+                if "step" in group:
+                    scalar = _python_scalar(group["step"])
+                    if scalar is None:
+                        raise TypeError("Optimizer group step must be scalar")
+                    step_counters.append(
+                        {
+                            "group": [optimizer_index, group_index],
+                            "state_key": "step",
+                            "value": scalar,
+                        }
+                    )
+
+        step_counters.sort(
+            key=lambda record: (
+                0 if "owner" in record else 1,
+                record.get("owner", record.get("group", [])),
+                record["state_key"],
+            )
+        )
+        optimizer_records.sort(
+            key=lambda record: (record["owner"], record["state_key"])
+        )
+        return {
+            "rank": int(self.rank),
+            "device": int(device),
+            "coordinates": dict(sorted(self._local_coords().items())),
+            "torch_cuda_rng": torch_cuda_rng,
+            "mcore_cuda_rng": mcore_cuda_rng,
+            "model": {
+                "parameters": parameters,
+                "buffers": buffers,
+            },
+            "optimizer": {
+                "state_tensors": optimizer_records,
+                "step_counters": step_counters,
+            },
+            "training_mode_flags": training_mode_flags,
         }
 
     def _get_replica_group(self) -> Optional[Any]:
