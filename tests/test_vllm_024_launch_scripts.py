@@ -135,6 +135,78 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "WANDB_RESUME=never" in output
 
 
+def test_dynamicsd_launcher_pins_scheduler_budget_for_all_core_variants() -> None:
+    for variant in ("baseline", "eagle3_k5", "dynamic"):
+        output = _dry_run_dynamicsd("qwen32b", variant)
+
+        assert (
+            "policy.generation.vllm_kwargs.max_num_batched_tokens=16384" in output
+        )
+
+
+def test_dynamicsd_launcher_recipe_profile_preserves_recipe_lengths() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen32b",
+        "dynamic",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+        PROFILE="recipe",
+    )
+
+    assert "policy.max_total_sequence_length=36864" not in output
+    assert "policy.generation.max_new_tokens=32768" not in output
+    assert "policy.generation.vllm_cfg.max_model_len=36864" not in output
+    assert "contract-test-attempt-1-recipe-qwen32b-dynamic" in output
+
+
+def test_dynamicsd_launcher_longtail32k_profile_sets_exact_lengths() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen32b",
+        "dynamic",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+        PROFILE="longtail32k",
+    )
+
+    assert "policy.max_total_sequence_length=36864" in output
+    assert "policy.generation.max_new_tokens=32768" in output
+    assert "policy.generation.vllm_cfg.max_model_len=36864" in output
+    assert "contract-test-attempt-1-longtail32k-qwen32b-dynamic" in output
+
+
+def test_dynamicsd_launcher_renders_lyris_without_gres() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "dynamic",
+        REPO_DIR="/lustre/fsw/coreai_dlalgo_llm/users/sna/RL",
+        HF_HOME="/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
+        CONTAINER="/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+        ACCOUNT="coreai_dlalgo_llm",
+        PARTITION="gb200",
+        USE_GRES="false",
+    )
+
+    assert "--account=coreai_dlalgo_llm" in output
+    assert "--partition=gb200" in output
+    assert "--nodes=16" in output
+    assert "--segment=16" in output
+    assert "--gres" not in output
+
+
 def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:
     output = _dry_run_dynamicsd("qwen30ba3b", "eagle3_k5")
 
@@ -168,8 +240,29 @@ def test_dynamicsd_launcher_all_includes_k7_and_k9() -> None:
         ATTEMPT_ID="attempt-1",
     )
 
-    assert "contract-test-attempt-1-qwen30ba3b-eagle3_k7" in output
-    assert "contract-test-attempt-1-qwen30ba3b-eagle3_k9" in output
+    assert "contract-test-attempt-1-recipe-qwen30ba3b-eagle3_k7" in output
+    assert "contract-test-attempt-1-recipe-qwen30ba3b-eagle3_k9" in output
+
+
+def test_dynamicsd_launcher_core_selects_only_matched_triplet() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "core",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+    )
+
+    assert output.count("[DRY-RUN] command") == 3
+    assert "qwen30ba3b-baseline" in output
+    assert "qwen30ba3b-eagle3_k5" in output
+    assert "qwen30ba3b-dynamic" in output
+    assert "eagle3_k7" not in output
+    assert "eagle3_k9" not in output
 
 
 def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
@@ -224,7 +317,7 @@ def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:
     assert (
         "[DRY-RUN] wandb https://wandb.ai/nvidia/"
         "nemorl-vllm024-dynamicsd-aws-dfw/runs/"
-        "contract-test-attempt-1-qwen32b-dynamic"
+        "contract-test-attempt-1-recipe-qwen32b-dynamic"
     ) in output
 
 
@@ -241,6 +334,10 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "container",
         "container_sha256",
         "max_steps",
+        "profile",
+        "max_new_tokens",
+        "max_total_sequence_length",
+        "max_num_batched_tokens",
         "static_k",
         "dynamic_schedule",
         "command",

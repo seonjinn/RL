@@ -79,3 +79,64 @@ with the same model, recipe, graph mode, sampling, topology, container, and
 commit. The summary reports generation and E2E time/throughput speedups,
 acceptance rate, mean accepted length, job IDs, W&B links, and reward/response
 length/KL health gates.
+
+## Lyris Recipe and 32K Long-Tail Gate
+
+The Lyris cohort uses the same three upstream synchronous performance recipes
+and compares only the matched `baseline`, `eagle3_k5`, and `dynamic` triplet.
+The `recipe` profile preserves every recipe-owned sequence limit. The
+`longtail32k` profile sets `max_new_tokens=32768` and total/model length to
+`36864`. Both profiles explicitly set vLLM `max_num_batched_tokens=16384`,
+which includes scheduled draft tokens, and use draft TP1. Lyris jobs use the
+`coreai_dlalgo_llm` account, the `gb200` partition, no `--gres`, and one segment
+per allocated node.
+
+Set the cluster paths once in the dedicated Lyris worktree:
+
+```bash
+export LYRIS_ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna
+export REPO_DIR=${LYRIS_ROOT}/RL-vllm024-dynamicsd-20260708
+export CONTAINER=${LYRIS_ROOT}/containers/nemo_rl_nightly.sqsh
+export HF_HOME=${LYRIS_ROOT}/hf_home
+export WANDB_API_KEY_FILE=${LYRIS_ROOT}/.secrets/wandb_api_key
+export WANDB_PROJECT=nemorl-vllm024-dynamicsd-lyris
+export ACCOUNT=coreai_dlalgo_llm
+export PARTITION=gb200
+export USE_GRES=false
+```
+
+Run scheduler validation for each profile before allocating GPUs:
+
+```bash
+PROFILE=recipe MAX_STEPS=1 RUN_TAG=vllm024-dynamicsd-lyris-recipe-smoke-20260708 \
+  experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh \
+  test-only all core
+
+PROFILE=longtail32k MAX_STEPS=1 \
+  RUN_TAG=vllm024-dynamicsd-lyris-longtail32k-smoke-20260708 \
+  experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh \
+  test-only all core
+```
+
+Submit the one-step smoke cohorts with the same run tags by replacing
+`test-only` with `submit`. A model/profile triplet can advance only after all
+three jobs exit successfully, the SpecDec jobs report positive
+`spec_num_drafts`, `spec_num_draft_tokens`, and `spec_num_accepted_tokens`, the
+resolved vLLM config reports `max_num_batched_tokens=16384`, and logs contain no
+CUDA Graph fallback error. Use a distinct final run tag for each passing
+profile:
+
+```bash
+PROFILE=recipe MAX_STEPS=20 RUN_TAG=vllm024-dynamicsd-lyris-recipe-step20-20260708 \
+  experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh \
+  submit all core
+
+PROFILE=longtail32k MAX_STEPS=20 \
+  RUN_TAG=vllm024-dynamicsd-lyris-longtail32k-step20-20260708 \
+  experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh \
+  submit all core
+```
+
+Keep the recipe and long-tail manifests separate. The collector rejects any
+baseline/SpecDec comparison whose profile, sequence limits, scheduler token
+budget, topology, container, commit, or recipe differs.

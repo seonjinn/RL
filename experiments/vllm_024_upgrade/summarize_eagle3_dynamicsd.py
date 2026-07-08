@@ -42,12 +42,16 @@ POSITIVE_METRICS = frozenset(
 )
 MATCHED_SETUP_FIELDS = (
     "recipe",
+    "profile",
     "nodes",
     "segment",
     "commit",
     "container",
     "container_sha256",
     "max_steps",
+    "max_new_tokens",
+    "max_total_sequence_length",
+    "max_num_batched_tokens",
 )
 
 

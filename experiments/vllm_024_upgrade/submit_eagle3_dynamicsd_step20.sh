@@ -9,6 +9,8 @@ VARIANT_SELECTION="${3:-all}"
 MAX_STEPS="${MAX_STEPS:-20}"
 STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-[[1,16,5],[17,32,4],[33,64,3],[65,128,1],[129,512,0]]}"
+PROFILE="${PROFILE:-recipe}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 ACCOUNT="${ACCOUNT:-nemotron_sw_post}"
 PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
@@ -35,6 +37,21 @@ EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_024_upgrade/run
 WALLTIME="${WALLTIME:-04:00:00}"
 TMPDIR="${TMPDIR_OVERRIDE:-/tmp}"
 CONTAINER_SHA256="${CONTAINER_SHA256:-}"
+
+case "${PROFILE}" in
+  recipe)
+    profile_max_new_tokens="recipe"
+    profile_max_total_sequence_length="recipe"
+    ;;
+  longtail32k)
+    profile_max_new_tokens="32768"
+    profile_max_total_sequence_length="36864"
+    ;;
+  *)
+    echo "ERROR: profile must be recipe or longtail32k" >&2
+    exit 2
+    ;;
+esac
 
 if [[ "${MODE}" != "dry-run" && ! -f "${CONTAINER}" ]]; then
   echo "ERROR: container not found: ${CONTAINER}" >&2
@@ -81,10 +98,11 @@ esac
 
 case "${VARIANT_SELECTION}" in
   all) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 dynamic) ;;
+  core) variants=(baseline eagle3_k5 dynamic) ;;
   aggressive) variants=(eagle3_k7 eagle3_k9) ;;
   baseline|eagle3_k5|eagle3_k7|eagle3_k9|dynamic) variants=("${VARIANT_SELECTION}") ;;
   *)
-    echo "ERROR: variant must be all, aggressive, baseline, eagle3_k5, eagle3_k7, eagle3_k9, or dynamic" >&2
+    echo "ERROR: variant must be all, core, aggressive, baseline, eagle3_k5, eagle3_k7, eagle3_k9, or dynamic" >&2
     exit 2
     ;;
 esac
@@ -120,11 +138,11 @@ submit_one() {
     exit 2
   fi
 
-  local run_dir="${EXPERIMENT_ROOT}/${model}/${variant}"
-  local wandb_run_id="${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
+  local run_dir="${EXPERIMENT_ROOT}/${PROFILE}/${model}/${variant}"
+  local wandb_run_id="${RUN_TAG}-${ATTEMPT_ID}-${PROFILE}-${model}-${variant}"
   local wandb_name="${wandb_run_id}"
-  local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${model}-${variant}"
-  local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${model}-${variant}"
+  local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${ATTEMPT_ID}-${PROFILE}-${model}-${variant}"
+  local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${ATTEMPT_ID}-${PROFILE}-${model}-${variant}"
   case "${variant}" in
     eagle3_k5)
       draft_k=5
@@ -144,6 +162,7 @@ submit_one() {
     "policy.generation.vllm_cfg.enforce_eager=false"
     "policy.generation.temperature=1.0"
     "policy.generation.top_p=1.0"
+    "++policy.generation.vllm_kwargs.max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS}"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE"
     "cluster.segment_size=${nodes}"
     "logger.wandb_enabled=true"
@@ -153,6 +172,13 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
+  if [[ "${PROFILE}" == "longtail32k" ]]; then
+    overrides+=(
+      "policy.max_total_sequence_length=${profile_max_total_sequence_length}"
+      "policy.generation.max_new_tokens=${profile_max_new_tokens}"
+      "policy.generation.vllm_cfg.max_model_len=${profile_max_total_sequence_length}"
+    )
+  fi
   if [[ "${variant}" != "baseline" ]]; then
     local specdec_overrides=(
       "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
@@ -218,7 +244,7 @@ submit_one() {
     --exclusive
     --time="${WALLTIME}"
     --segment="${nodes}"
-    --job-name="${ACCOUNT}-nemorl.dynamicsd-${model}-${variant}"
+    --job-name="${ACCOUNT}-nemorl.dynamicsd-${PROFILE}-${model}-${variant}"
     --output="${run_dir}/slurm-%j.out"
     --comment=metrics
   )
@@ -247,16 +273,17 @@ submit_one() {
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
       if [[ ! -f "${manifest}" ]]; then
-        printf 'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\tcommand\n' > "${manifest}"
+        printf 'timestamp\tmodel\tvariant\tprofile\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tmax_new_tokens\tmax_total_sequence_length\tmax_num_batched_tokens\tstatic_k\tdynamic_schedule\tcommand\n' > "${manifest}"
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(date --iso-8601=seconds)" "${model}" "${variant}" "${PROFILE}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
-        "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
+        "${MAX_STEPS}" "${profile_max_new_tokens}" "${profile_max_total_sequence_length}" \
+        "${MAX_NUM_BATCHED_TOKENS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
       ;;
     *)
       echo "ERROR: mode must be dry-run, test-only, or submit" >&2

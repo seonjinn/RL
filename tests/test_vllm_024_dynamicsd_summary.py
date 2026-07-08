@@ -165,6 +165,40 @@ def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
     assert _validate_manifest_rows(rows) == "duplicate variant baseline for model qwen32b"
 
 
+@pytest.mark.parametrize(
+    "field,baseline_value,candidate_value",
+    [
+        ("profile", "recipe", "longtail32k"),
+        ("max_new_tokens", "recipe", "32768"),
+        ("max_total_sequence_length", "recipe", "36864"),
+        ("max_num_batched_tokens", "16384", "8192"),
+    ],
+)
+def test_validate_manifest_rows_rejects_sequence_profile_mismatch(
+    field: str, baseline_value: str, candidate_value: str
+) -> None:
+    common = {
+        "model": "qwen32b",
+        "recipe": "grpo-qwen3-32b-4n4g.yaml",
+        "nodes": "4",
+        "segment": "4",
+        "commit": "aaa",
+        "container": "/lustre/nemo-rl.sqsh",
+        "container_sha256": "sha256",
+        "max_steps": "20",
+        "profile": "recipe",
+        "max_new_tokens": "recipe",
+        "max_total_sequence_length": "recipe",
+        "max_num_batched_tokens": "16384",
+    }
+    baseline = {**common, "variant": "baseline", field: baseline_value}
+    candidate = {**common, "variant": "dynamic", field: candidate_value}
+
+    assert _validate_manifest_rows([baseline, candidate]) == (
+        "mismatched setup for model qwen32b"
+    )
+
+
 class _FakeRun:
     url = "https://wandb.example/runs/dynamic-run"
 
