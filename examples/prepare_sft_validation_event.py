@@ -419,6 +419,10 @@ def _preserved_rng_state() -> Iterator[None]:
 
 
 def _git_output(repository_root: Path, *args: str) -> str:
+    return _git_stdout(repository_root, *args).strip()
+
+
+def _git_stdout(repository_root: Path, *args: str) -> str:
     try:
         return subprocess.run(
             ["git", *args],
@@ -426,14 +430,14 @@ def _git_output(repository_root: Path, *args: str) -> str:
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.strip()
+        ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         raise RuntimeError(f"Could not read Git metadata: {' '.join(args)}") from error
 
 
 def _submodule_commits(repository_root: Path) -> tuple[tuple[str, str], ...]:
     commits: list[tuple[str, str]] = []
-    for line in _git_output(
+    for line in _git_stdout(
         repository_root, "submodule", "status", "--recursive"
     ).splitlines():
         if not line or line[0] != " ":

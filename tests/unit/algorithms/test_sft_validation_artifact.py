@@ -126,7 +126,7 @@ def _git(repository: Path, *args: str) -> str:
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
+    ).stdout.rstrip("\n")
 
 
 def _initialize_git_repository(repository: Path, tracked_file: str) -> None:
@@ -193,7 +193,21 @@ def _source_fingerprint(repository: Path) -> ValidationArtifactFingerprint:
 def test_source_fingerprint_accepts_clean_root_and_recursive_submodules(
     tmp_path: Path,
 ) -> None:
-    root, _, _ = _recursive_git_fixture(tmp_path)
+    root, child, leaf = _recursive_git_fixture(tmp_path)
+    for repository in (root, child, leaf):
+        assert (
+            _git(
+                repository,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=all",
+            )
+            == ""
+        )
+    recursive_status = _git(root, "submodule", "status", "--recursive")
+    status_lines = recursive_status.splitlines()
+    assert [line[:1] for line in status_lines] == [" ", " "], repr(recursive_status)
 
     fingerprint = _source_fingerprint(root)
 

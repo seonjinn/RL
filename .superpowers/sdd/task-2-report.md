@@ -153,3 +153,53 @@ Fresh locally available GREEN checks after the review fixes:
 
 The required Linux focused-suite GREEN result is pending the controller's CW
 container run and should be appended here after that run.
+
+## CW Job 13555872 Follow-Up
+
+### RED Evidence
+
+The controller ran the strengthened focused suite on CW Linux with:
+
+`uv run --python <py3.13> --frozen --group test pytest -q tests/unit/algorithms/test_sft_validation_artifact.py`
+
+The job collected 84 shard items, passed the first four preprocessing-provenance
+tests, and failed first at
+`test_source_fingerprint_accepts_clean_root_and_recursive_submodules`.
+`_submodule_commits` rejected the first recursive submodule-status line because
+its prefix was no longer a single space. Full log:
+
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260707-223736-home/sna-val-artifact-uv4_13555872.out`
+
+### Root Cause
+
+The recursive temporary Git fixture is clean. A standalone reconstruction of
+the same root -> child -> leaf submodule topology produced empty porcelain
+status for the root and both submodules, while raw
+`git submodule status --recursive` emitted two lines beginning with the valid
+single-space clean marker.
+
+Production `_git_output` normalized all Git stdout with `.strip()`. That removed
+the meaningful leading space from the first clean submodule line before
+`_submodule_commits` parsed it. The fixture was not misconstructed; production
+parsing destroyed valid status syntax.
+
+### Fix And Coverage
+
+- Added explicit assertions that root, child, and leaf porcelain status are
+  empty before fingerprint construction.
+- Added an assertion that the exact recursive status contains two lines whose
+  first character is the clean single-space marker; the assertion includes the
+  raw status representation on failure.
+- Split raw Git stdout from normalized scalar output. `_submodule_commits` now
+  parses raw stdout, while commit-ID and porcelain truthiness callers preserve
+  the prior stripped behavior.
+- Tracked/untracked root and recursive-submodule rejection logic is unchanged.
+
+Locally available checks after the fix:
+
+- Ruff lint passed.
+- Pyright passed with zero errors for the producer and focused test file.
+- Python compileall passed.
+- `git diff --check` passed.
+- Local focused Pytest remains blocked before collection because Ray is absent;
+  the controller will rerun the CW Linux suite from the signed fix commit.
