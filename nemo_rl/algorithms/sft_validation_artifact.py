@@ -25,7 +25,8 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from types import MappingProxyType
+
+from typing_extensions import Self
 
 import psutil
 import torch
@@ -54,13 +55,13 @@ _MANIFEST_KEYS = frozenset(
         "tensors",
     }
 )
-_ELIGIBILITY = MappingProxyType(
+_ELIGIBILITY_KEYS = frozenset(
     {
-        "dynamic_batching": False,
-        "multimodal": False,
-        "raw_online_packing": False,
-        "schema": "prepacked_sft_validation_v1",
-        "stochastic_preprocessing": False,
+        "dynamic_batching",
+        "multimodal_data",
+        "prepacked_input",
+        "raw_online_packing",
+        "stochastic_preprocessing",
     }
 )
 _REQUIRED_SFT_TENSOR_KEYS = frozenset(
@@ -121,6 +122,50 @@ _SAFETENSORS_DTYPE_NBYTES = {
 
 
 @dataclass(frozen=True)
+class ValidationArtifactEligibility:
+    prepacked_input: bool
+    raw_online_packing: bool
+    stochastic_preprocessing: bool
+    dynamic_batching: bool
+    multimodal_data: bool
+
+    def __post_init__(self) -> None:
+        for field_name in _ELIGIBILITY_KEYS:
+            if type(getattr(self, field_name)) is not bool:
+                raise TypeError(
+                    f"Validation artifact producer fact {field_name} must be a boolean"
+                )
+
+    @classmethod
+    def from_producer_facts(
+        cls,
+        *,
+        prepacked_input: bool,
+        raw_online_packing: bool,
+        stochastic_preprocessing: bool,
+        dynamic_batching: bool,
+        multimodal_data: bool,
+    ) -> Self:
+        """Create eligibility evidence from explicit producer facts."""
+        return cls(
+            prepacked_input=prepacked_input,
+            raw_online_packing=raw_online_packing,
+            stochastic_preprocessing=stochastic_preprocessing,
+            dynamic_batching=dynamic_batching,
+            multimodal_data=multimodal_data,
+        )
+
+
+_SUPPORTED_ELIGIBILITY = ValidationArtifactEligibility.from_producer_facts(
+    prepacked_input=True,
+    raw_online_packing=False,
+    stochastic_preprocessing=False,
+    dynamic_batching=False,
+    multimodal_data=False,
+)
+
+
+@dataclass(frozen=True)
 class ValidationArtifactFingerprint:
     dataset_sha256: str
     tokenizer_sha256: str
@@ -156,14 +201,16 @@ def save_validation_event(
     artifact_directory: Path,
     event: PrecomputedValidationEvent,
     fingerprint: ValidationArtifactFingerprint,
+    eligibility: ValidationArtifactEligibility,
 ) -> Path:
     """Atomically persist a tensor-only validation event and its manifest."""
-    artifact_directory.mkdir(parents=True, exist_ok=True)
+    _validate_producer_eligibility(eligibility)
     _validate_fingerprint_semantics(fingerprint)
     tensors = _event_tensors(event.data)
     retained_bytes = sum(tensor.nbytes for tensor in tensors.values())
     _validate_event_metadata(event, retained_bytes)
 
+    artifact_directory.mkdir(parents=True, exist_ok=True)
     manifest_path = artifact_directory / _MANIFEST_FILE_NAME
     with _serialized_writer(artifact_directory):
         tensor_file, tensor_file_sha256 = _publish_safetensors(
@@ -171,7 +218,7 @@ def save_validation_event(
         )
         manifest: dict[str, object] = {
             "artifact_version": _ARTIFACT_VERSION,
-            "eligibility": dict(_ELIGIBILITY),
+            "eligibility": _eligibility_as_manifest(eligibility),
             "fingerprint": _fingerprint_as_manifest(fingerprint),
             "num_valid_tokens": list(event.num_valid_tokens),
             "payload_digest": event.payload_digest,
@@ -280,6 +327,59 @@ def _event_tensors(
         tensors[key] = _clone_tensor(value)
     _validate_sft_tensor_schema(tensors)
     return tensors
+
+
+def _validate_producer_eligibility(eligibility: object) -> None:
+    if not isinstance(eligibility, ValidationArtifactEligibility):
+        raise TypeError(
+            "Validation artifact eligibility must be a "
+            "ValidationArtifactEligibility value"
+        )
+    for field_name in _ELIGIBILITY_KEYS:
+        if type(getattr(eligibility, field_name)) is not bool:
+            raise TypeError(
+                f"Validation artifact producer fact {field_name} must be a boolean"
+            )
+    if eligibility != _SUPPORTED_ELIGIBILITY:
+        raise ValueError(
+            "Validation artifact producer eligibility is not supported; only "
+            "deterministic prepacked text SFT data may be published"
+        )
+
+
+def _eligibility_as_manifest(
+    eligibility: ValidationArtifactEligibility,
+) -> dict[str, bool]:
+    return {
+        "dynamic_batching": eligibility.dynamic_batching,
+        "multimodal_data": eligibility.multimodal_data,
+        "prepacked_input": eligibility.prepacked_input,
+        "raw_online_packing": eligibility.raw_online_packing,
+        "stochastic_preprocessing": eligibility.stochastic_preprocessing,
+    }
+
+
+def _eligibility_from_manifest(value: object) -> ValidationArtifactEligibility:
+    if not isinstance(value, Mapping):
+        raise ValueError("Validation artifact eligibility must be an object")
+    _require_exact_keys(value, _ELIGIBILITY_KEYS, "eligibility")
+    try:
+        eligibility = ValidationArtifactEligibility.from_producer_facts(
+            prepacked_input=value["prepacked_input"],
+            raw_online_packing=value["raw_online_packing"],
+            stochastic_preprocessing=value["stochastic_preprocessing"],
+            dynamic_batching=value["dynamic_batching"],
+            multimodal_data=value["multimodal_data"],
+        )
+    except TypeError as error:
+        raise ValueError(
+            "Validation artifact eligibility facts must be booleans"
+        ) from error
+    try:
+        _validate_producer_eligibility(eligibility)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Validation artifact eligibility is not supported") from error
+    return eligibility
 
 
 def _validate_event_metadata(
@@ -722,17 +822,7 @@ def _require_exact_keys(
 
 def _validate_manifest_metadata(manifest: Mapping[str, object]) -> None:
     _fingerprint_from_manifest(manifest["fingerprint"])
-    eligibility = manifest["eligibility"]
-    if not isinstance(eligibility, Mapping):
-        raise ValueError("Validation artifact eligibility must be an object")
-    _require_exact_keys(eligibility, frozenset(_ELIGIBILITY), "eligibility")
-    for key, expected_value in _ELIGIBILITY.items():
-        actual_value = eligibility[key]
-        if (
-            type(actual_value) is not type(expected_value)
-            or actual_value != expected_value
-        ):
-            raise ValueError("Validation artifact eligibility is not supported")
+    _eligibility_from_manifest(manifest["eligibility"])
     token_counts = manifest["num_valid_tokens"]
     if not isinstance(token_counts, list) or len(token_counts) != 4:
         raise ValueError(

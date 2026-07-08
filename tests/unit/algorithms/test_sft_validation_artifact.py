@@ -16,6 +16,7 @@ import nemo_rl.algorithms.sft_validation_artifact as artifact_module
 from nemo_rl.algorithms.sft_validation_artifact import (
     MemoryBudget,
     PrecomputedValidationEvent,
+    ValidationArtifactEligibility,
     ValidationArtifactFingerprint,
     clone_validation_event_data,
     load_validation_event,
@@ -59,6 +60,16 @@ def _memory_budget() -> MemoryBudget:
     return MemoryBudget(available_bytes=1_000_000)
 
 
+def _supported_eligibility() -> ValidationArtifactEligibility:
+    return ValidationArtifactEligibility.from_producer_facts(
+        prepacked_input=True,
+        raw_online_packing=False,
+        stochastic_preprocessing=False,
+        dynamic_batching=False,
+        multimodal_data=False,
+    )
+
+
 def _manifest_content(manifest) -> dict[str, Any]:
     return json.loads(manifest.read_text())
 
@@ -70,7 +81,9 @@ def _write_manifest(manifest, content: dict[str, Any]) -> None:
 def test_validation_artifact_round_trip_preserves_tensor_contract(tmp_path) -> None:
     event = _event_fixture()
 
-    manifest = save_validation_event(tmp_path, event, _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, event, _fingerprint(), _supported_eligibility()
+    )
     loaded = load_validation_event(manifest, _fingerprint(), _memory_budget())
 
     assert loaded.num_valid_tokens == event.num_valid_tokens
@@ -87,7 +100,7 @@ def test_validation_artifact_rejects_unknown_non_tensor_value(tmp_path) -> None:
     event.data["messages"] = ["unsupported"]
 
     with pytest.raises(TypeError, match="tensor-only"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 @pytest.mark.parametrize(
@@ -95,7 +108,9 @@ def test_validation_artifact_rejects_unknown_non_tensor_value(tmp_path) -> None:
 )
 def test_load_fails_closed_on_fingerprint_mismatch(tmp_path, field: str) -> None:
     fingerprint = _fingerprint()
-    manifest = save_validation_event(tmp_path, _event_fixture(), fingerprint)
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), fingerprint, _supported_eligibility()
+    )
     changed = dataclasses.replace(fingerprint, **{field: "f" * 64})
 
     with pytest.raises(ValueError, match=field):
@@ -103,7 +118,9 @@ def test_load_fails_closed_on_fingerprint_mismatch(tmp_path, field: str) -> None
 
 
 def test_load_rejects_corrupted_tensor_bytes(tmp_path) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
     tensor_path = manifest.parent / _manifest_content(manifest)["tensor_file"]
     content = bytearray(tensor_path.read_bytes())
     content[-1] ^= 1
@@ -118,7 +135,7 @@ def test_save_rejects_non_cpu_tensor(tmp_path) -> None:
     event.data["input_ids"] = torch.empty(1, device="meta")
 
     with pytest.raises(ValueError, match="CPU tensors only"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
@@ -127,11 +144,13 @@ def test_save_rejects_cuda_tensor(tmp_path) -> None:
     event.data["input_ids"] = torch.zeros(1, device="cuda")
 
     with pytest.raises(ValueError, match="CPU tensors only"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 def test_load_enforces_three_copy_memory_headroom(tmp_path) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
 
     with pytest.raises(MemoryError, match="three-copy headroom"):
         load_validation_event(manifest, _fingerprint(), MemoryBudget(available_bytes=1))
@@ -162,7 +181,9 @@ def test_tensor_content_hash_is_independent_of_tensor_layout() -> None:
 
 
 def test_load_rejects_unknown_manifest_key(tmp_path) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
     content = _manifest_content(manifest)
     content["unexpected"] = True
     _write_manifest(manifest, content)
@@ -172,7 +193,9 @@ def test_load_rejects_unknown_manifest_key(tmp_path) -> None:
 
 
 def test_interrupted_publish_preserves_previous_artifact_pair(tmp_path) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
 
     with patch.object(
         artifact_module,
@@ -180,7 +203,12 @@ def test_interrupted_publish_preserves_previous_artifact_pair(tmp_path) -> None:
         side_effect=OSError("interrupted manifest publish"),
     ):
         with pytest.raises(OSError, match="interrupted"):
-            save_validation_event(tmp_path, _event_fixture(offset=100), _fingerprint())
+            save_validation_event(
+                tmp_path,
+                _event_fixture(offset=100),
+                _fingerprint(),
+                _supported_eligibility(),
+            )
 
     loaded = load_validation_event(manifest, _fingerprint(), _memory_budget())
     assert loaded.data["input_ids"][0, 0].item() == 0
@@ -210,7 +238,7 @@ def test_concurrent_writers_are_serialized(tmp_path) -> None:
             manifests = list(
                 executor.map(
                     lambda event: save_validation_event(
-                        tmp_path, event, _fingerprint()
+                        tmp_path, event, _fingerprint(), _supported_eligibility()
                     ),
                     events,
                 )
@@ -223,7 +251,9 @@ def test_concurrent_writers_are_serialized(tmp_path) -> None:
 
 
 def test_forged_small_manifest_fails_memory_check_before_tensor_load(tmp_path) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
     content = _manifest_content(manifest)
     content["retained_bytes"] = 0
     for record in content["tensors"].values():
@@ -256,7 +286,9 @@ def test_save_rejects_malformed_sha256_fingerprint(
     fingerprint = dataclasses.replace(_fingerprint(), **{field: value})
 
     with pytest.raises(ValueError, match=field):
-        save_validation_event(tmp_path, _event_fixture(), fingerprint)
+        save_validation_event(
+            tmp_path, _event_fixture(), fingerprint, _supported_eligibility()
+        )
 
 
 @pytest.mark.parametrize("commit", ["", "g" * 40, "a" * 39])
@@ -264,7 +296,9 @@ def test_save_rejects_malformed_nemo_rl_commit(tmp_path, commit: str) -> None:
     fingerprint = dataclasses.replace(_fingerprint(), nemo_rl_commit=commit)
 
     with pytest.raises(ValueError, match="nemo_rl_commit"):
-        save_validation_event(tmp_path, _event_fixture(), fingerprint)
+        save_validation_event(
+            tmp_path, _event_fixture(), fingerprint, _supported_eligibility()
+        )
 
 
 @pytest.mark.parametrize(
@@ -285,7 +319,9 @@ def test_save_rejects_invalid_recursive_submodule_entries(
     fingerprint = dataclasses.replace(_fingerprint(), submodule_commits=submodules)
 
     with pytest.raises(ValueError, match="submodule_commits"):
-        save_validation_event(tmp_path, _event_fixture(), fingerprint)
+        save_validation_event(
+            tmp_path, _event_fixture(), fingerprint, _supported_eligibility()
+        )
 
 
 @pytest.mark.parametrize(
@@ -299,7 +335,7 @@ def test_save_rejects_nonexact_token_counts(tmp_path, num_valid_tokens) -> None:
     event = dataclasses.replace(_event_fixture(), num_valid_tokens=num_valid_tokens)
 
     with pytest.raises(ValueError, match="non-negative integers"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 @pytest.mark.parametrize("retained_bytes", [True, -1])
@@ -307,7 +343,7 @@ def test_save_rejects_nonexact_retained_bytes(tmp_path, retained_bytes) -> None:
     event = dataclasses.replace(_event_fixture(), retained_bytes=retained_bytes)
 
     with pytest.raises(ValueError, match="retained_bytes"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 @pytest.mark.parametrize(
@@ -326,7 +362,9 @@ def test_save_rejects_nonexact_retained_bytes(tmp_path, retained_bytes) -> None:
     ],
 )
 def test_load_rejects_nonexact_memory_budget(tmp_path, budget: MemoryBudget) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
 
     with pytest.raises(ValueError, match="MemoryBudget"):
         load_validation_event(manifest, _fingerprint(), budget)
@@ -343,7 +381,9 @@ def test_load_rejects_nonexact_memory_budget(tmp_path, budget: MemoryBudget) -> 
 def test_load_rejects_nonexact_manifest_integers(
     tmp_path, field: str, value: object
 ) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
     content = _manifest_content(manifest)
     content[field] = value
     _write_manifest(manifest, content)
@@ -364,7 +404,9 @@ def test_load_rejects_nonexact_manifest_integers(
 def test_load_rejects_nonexact_tensor_record_integers(
     tmp_path, field: str, value: object
 ) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
     content = _manifest_content(manifest)
     content["tensors"]["input_ids"][field] = value
     _write_manifest(manifest, content)
@@ -381,7 +423,7 @@ def test_save_rejects_unknown_sft_tensor_key(tmp_path) -> None:
     event.data["pixel_values"] = torch.zeros((2, 3, 4, 4))
 
     with pytest.raises(ValueError, match="unknown SFT tensor keys.*pixel_values"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 def test_save_requires_complete_sft_tensor_schema(tmp_path) -> None:
@@ -389,7 +431,7 @@ def test_save_requires_complete_sft_tensor_schema(tmp_path) -> None:
     del event.data["sample_mask"]
 
     with pytest.raises(ValueError, match="missing required SFT tensor keys"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
 def test_save_requires_complete_packed_metadata_group(tmp_path) -> None:
@@ -397,32 +439,99 @@ def test_save_requires_complete_packed_metadata_group(tmp_path) -> None:
     event.data["packed_cu_seqlens"] = torch.tensor([[0, 3], [0, 2]], dtype=torch.int32)
 
     with pytest.raises(ValueError, match="packed metadata must include"):
-        save_validation_event(tmp_path, event, _fingerprint())
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
-def test_manifest_records_fail_closed_prepacked_eligibility(tmp_path) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+def test_supported_producer_eligibility_round_trips(tmp_path) -> None:
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
 
     assert _manifest_content(manifest)["eligibility"] == {
+        "prepacked_input": True,
         "dynamic_batching": False,
-        "multimodal": False,
+        "multimodal_data": False,
         "raw_online_packing": False,
-        "schema": "prepacked_sft_validation_v1",
         "stochastic_preprocessing": False,
     }
+    load_validation_event(manifest, _fingerprint(), _memory_budget())
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        pytest.param("prepacked_input", False, id="not-prepacked"),
         pytest.param("raw_online_packing", True, id="online-packing"),
         pytest.param("stochastic_preprocessing", True, id="stochastic"),
         pytest.param("dynamic_batching", True, id="dynamic-batching"),
-        pytest.param("multimodal", True, id="multimodal"),
+        pytest.param("multimodal_data", True, id="multimodal"),
+    ],
+)
+def test_save_rejects_unsupported_producer_fact_before_publication(
+    tmp_path, field: str, value: bool
+) -> None:
+    artifact_directory = tmp_path / "artifact"
+    eligibility = dataclasses.replace(_supported_eligibility(), **{field: value})
+
+    with pytest.raises(ValueError, match="producer eligibility"):
+        save_validation_event(
+            artifact_directory, _event_fixture(), _fingerprint(), eligibility
+        )
+
+    assert not artifact_directory.exists()
+
+
+def test_save_requires_explicit_producer_eligibility_before_publication(
+    tmp_path,
+) -> None:
+    artifact_directory = tmp_path / "artifact"
+    untyped_save: Any = save_validation_event
+
+    with pytest.raises(TypeError, match="eligibility"):
+        untyped_save(artifact_directory, _event_fixture(), _fingerprint())
+
+    assert not artifact_directory.exists()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "prepacked_input",
+        "raw_online_packing",
+        "stochastic_preprocessing",
+        "dynamic_batching",
+        "multimodal_data",
+    ],
+)
+def test_producer_eligibility_requires_exact_booleans(field: str) -> None:
+    facts: dict[str, object] = {
+        "prepacked_input": True,
+        "raw_online_packing": False,
+        "stochastic_preprocessing": False,
+        "dynamic_batching": False,
+        "multimodal_data": False,
+    }
+    facts[field] = 1
+    untyped_factory: Any = ValidationArtifactEligibility.from_producer_facts
+
+    with pytest.raises(TypeError, match=field):
+        untyped_factory(**facts)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("prepacked_input", False, id="not-prepacked"),
+        pytest.param("raw_online_packing", True, id="online-packing"),
+        pytest.param("stochastic_preprocessing", True, id="stochastic"),
+        pytest.param("dynamic_batching", True, id="dynamic-batching"),
+        pytest.param("multimodal_data", True, id="multimodal"),
     ],
 )
 def test_load_rejects_ineligible_artifact(tmp_path, field: str, value: object) -> None:
-    manifest = save_validation_event(tmp_path, _event_fixture(), _fingerprint())
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
     content = _manifest_content(manifest)
     content["eligibility"][field] = value
     _write_manifest(manifest, content)
