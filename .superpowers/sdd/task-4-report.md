@@ -6,9 +6,14 @@
 
 - Approved Tasks 1-3 head: `e8e13f5a9e0694adb1a574fd4b7e35507ab3ca9b`
 - Task 4 implementation commit: `2c8bfdc5d63d8db05da34258148aea640222e311`
-- Independent code-review gate: pass, with no findings
-- Supported-Linux execution gate: pending because the local macOS environment
-  does not provide Ray, Torch, or Megatron
+- First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
+- Second-review fix: `8f1ca28d09ff9823f1932c0b3d21a796edb8edbc`
+- CW contract follow-up: the signed commit containing the final section below
+- Independent code-review gate: prior findings addressed; final controller
+  review remains pending
+- Supported-Linux execution gate: CW job `13566467` stopped at
+  `105 passed, 1 failed` because one test expected a less granular comparator
+  path; a full post-fix rerun remains pending
 
 The correctness audit is opt-in and disabled by default. The disabled path does
 not construct the auditor and adds no worker RPC, tensor reduction,
@@ -489,3 +494,93 @@ Not run locally:
   audit-timing work.
 - Confirmed no `PolicyInterface`, backend, checkpoint/state-load, model-mode,
   parameter-sync, or unrelated source changes were introduced.
+
+## CW Linux Test-Contract Follow-Up
+
+### CW Failure Evidence
+
+- Job: `13566467`
+- Result before `maxfail=1` stopped the suite: `105 passed, 1 failed`
+- Failing test:
+  `tests/unit/algorithms/test_sft_correctness_audit.py::test_correctness_gate_rejects_each_driver_state_family[cuda-rng]`
+- Expected difference: `("torch_cuda_rng_digests",)`
+- Actual difference: `("torch_cuda_rng_digests.0",)`
+
+The production comparator recursively reports changed sequence elements. CUDA
+RNG digests are ordered by device, so the `.0` suffix correctly identifies the
+changed device and is stronger than the stale top-level test expectation.
+
+### Fix
+
+The parameterized test now expects `torch_cuda_rng_digests.0` only for its CUDA
+RNG case. Every scalar driver-state case continues to expect its existing
+top-level field path. Production comparator behavior is unchanged.
+
+The top-level status above and
+`docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md` now
+record both the partial CW result and the pending full post-fix rerun.
+
+### Changed Files
+
+- `tests/unit/algorithms/test_sft_correctness_audit.py`
+- `.superpowers/sdd/task-4-report.md`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+
+### Exact Local Verification
+
+Source-isolated test:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `19 passed in 0.45s`, exit 0.
+
+Ruff lint:
+
+```bash
+ruff check tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Ruff formatting and final format check:
+
+```bash
+ruff format tests/unit/algorithms/test_sft_correctness_audit.py
+ruff format --check tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Results: `1 file reformatted`, then `1 file already formatted`; both exit 0.
+
+Compilation:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: exit 0 with no output.
+
+Diff validation:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output after this report update.
+
+### Pending
+
+- The corrected Ray unit test cannot run in the local macOS environment because
+  Ray and Torch are unavailable.
+- The controller must rerun the complete focused Task 4 suite on CW Linux. Job
+  `13566467` is partial evidence only and is not recorded as a passing gate.
+
+### Self-Review
+
+- Confirmed `_compare_values()` intentionally descends into sequences and emits
+  the indexed CUDA-device path.
+- Confirmed only the CUDA parameter's expected path changes; scalar parameter
+  expectations are unchanged.
+- Confirmed no production Python, configuration, interface, or backend file is
+  modified by this follow-up.

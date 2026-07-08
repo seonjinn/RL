@@ -7,7 +7,8 @@
 - Initial Task 4 implementation: `2c8bfdc5d63d8db05da34258148aea640222e311`
 - Initial review documentation: `f9361d3dd35b6e44d38c9786282cef60a73bf751`
 - First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
-- Second-review fix: the signed follow-up commit containing this document
+- Second-review fix: `8f1ca28d09ff9823f1932c0b3d21a796edb8edbc`
+- CW test-contract follow-up: the signed commit containing this document
 - Requirements: `.superpowers/sdd/task-4-brief.md`
 - Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
 
@@ -19,13 +20,17 @@ lifecycle handling, timing isolation, and the merge review gate.
 ## Current Decision
 
 **Code review gate: READY FOR CONTROLLER RE-REVIEW.** The two Important findings
-from the second review and its stale-document Minor are addressed in the
-current follow-up. This document does not claim that the controller has
-approved the follow-up.
+from the second review, its stale-document Minor, and the subsequent CW
+test-contract mismatch are addressed in the current range. This document does
+not claim that the controller has approved the follow-up.
 
-**Supported-Linux execution gate: PENDING.** The local macOS Python lacks Ray,
-Torch, TorchData, and Megatron, so the focused unit suite cannot collect. The
-controller must run the current Task 4 range on CW Linux after re-review.
+**Supported-Linux execution gate: PENDING FULL RERUN.** CW job `13566467`
+reached `105 passed, 1 failed` before `maxfail=1` stopped the suite. The only
+failure was a stale test expectation: the CUDA RNG case expected
+`torch_cuda_rng_digests`, while the comparator correctly returned the stronger
+device-specific path `torch_cuda_rng_digests.0`. The current follow-up updates
+only that parameterized contract. The controller must rerun the full focused
+suite on CW Linux.
 
 The historical CW job `13559835` reported `177 passed, 3 warnings in 43.82s`
 at the approved Tasks 1-3 head `e8e13f5a9`; it does not cover either Task 4
@@ -84,6 +89,17 @@ The audit-disabled branches retain their direct policy submission and direct
 restoration call shapes. They do not construct a collector or execute its
 timers, hashes, reductions, or exception wrappers.
 
+### CW Linux Contract Follow-Up
+
+CW job `13566467` exposed one test-only mismatch after 105 tests passed. The
+parameterized driver-state test used each dataclass field name as the expected
+difference, but CUDA RNG digests are a sequence and the production comparator
+recurses into sequences. A mutation of device 0 therefore intentionally
+reports `torch_cuda_rng_digests.0`. The test now carries an explicit expected
+path per parameter: CUDA expects the indexed path, while all scalar families
+retain their existing top-level expectation. Production comparison behavior is
+unchanged.
+
 ## Invariant Matrix
 
 | Invariant | Current implementation evidence | Current test/review evidence | Status |
@@ -132,6 +148,16 @@ Blocked locally:
 - No current Task 4 GPU/Ray/Megatron integration or full repository suite ran
   locally.
 - The controller's CW Linux gate and post-fix review are pending.
+
+CW Linux partial result:
+
+- Job `13566467`: `105 passed, 1 failed`, then stopped at `maxfail=1`.
+- Failure:
+  `tests/unit/algorithms/test_sft_correctness_audit.py::test_correctness_gate_rejects_each_driver_state_family[cuda-rng]`.
+- Expected: `("torch_cuda_rng_digests",)`.
+- Actual: `("torch_cuda_rng_digests.0",)`.
+- A complete rerun after the test-contract correction remains pending; this
+  document does not claim that the supported-Linux gate passed.
 
 ## Residual Limits
 

@@ -140,7 +140,12 @@ def test_correctness_gate_rejects_each_driver_state_family(
     result = evaluate_correctness_gate(before, after)
 
     assert result.ready is False
-    assert result.differences == (field_name,)
+    expected_difference = (
+        "torch_cuda_rng_digests.0"
+        if field_name == "torch_cuda_rng_digests"
+        else field_name
+    )
+    assert result.differences == (expected_difference,)
 
 
 class _LoaderFixture:
