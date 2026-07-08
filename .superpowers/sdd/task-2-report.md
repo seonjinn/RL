@@ -26,7 +26,8 @@ reviewed runtime CPU validation-cache implementation.
   `sequence_packing.enabled` flag is deliberately not used as raw online-packing
   evidence.
 - Publication calls `save_validation_event(..., eligibility=eligibility)` and
-  uses `ValidationArtifactFingerprint` built from explicit external digests plus
+  uses `ValidationArtifactFingerprint` built from explicit dataset, tokenizer,
+  and container digests; internally derived preprocessing provenance; and
   checked-out Git and submodule revisions.
 
 ## RED Evidence
@@ -79,3 +80,76 @@ clean.
 Run the focused pytest command in the supported Linux `uv` environment before
 merging. That is the remaining validation gap; no production behavior was
 observed locally because the required runtime dependencies are unavailable.
+
+## Review Fixes
+
+### Config Provenance
+
+- The producer now derives `preprocessing_sha256` internally from a canonical
+  JSON encoding of an explicitly selected subset of the fully resolved
+  `MasterConfig` after Hydra overrides.
+- The subset includes validation/default data processing, input length and text
+  processing flags, tokenizer rendering config, maximum sequence length,
+  sequence/dynamic batching, TP/CP and divisibility settings, packed loss mode,
+  and validation batch count/global batch size/microbatch size.
+- `--preprocessing-sha256` is now optional and acts only as an expected value.
+  A mismatch fails before tokenizer construction, data loading, or publication.
+- Added tests proving `data.max_input_seq_length` changes the digest while
+  `logger.wandb.name` does not, plus a CLI pre-publication mismatch test.
+
+### Source Provenance
+
+- Fingerprint construction now runs `git status --porcelain=v1
+  --untracked-files=all --ignore-submodules=all` in the root repository and in
+  every recursive submodule before reading the source fingerprint.
+- Added real temporary-Git tests for a clean recursive tree, tracked root
+  changes, untracked root files, tracked submodule changes, and untracked files
+  in a nested submodule.
+
+### Production Path
+
+- Added a Linux integration path that writes real `.jsonl.packed` records,
+  loads `MegatronSFTPackedDataset` through `setup_data` and
+  `AllTaskProcessedDataset`, and uses the unpatched production collate and
+  `StatefulDataLoader`.
+- The real-loader tests cover four complete GBS64 batches with token counts
+  `(64, 128, 192, 256)`, row order across all 256 rows, 192-row input, and a
+  255-row partial-final-batch input.
+- The CLI integration test uses the real resolved Super V3 config, Hydra path
+  overrides, real packed loading/collation/dataloader, and real artifact
+  serialization. External tokenizer construction and Git fingerprinting are
+  isolated in that test; Git provenance has separate real-repository coverage.
+- The RNG unit loader deliberately consumes Python, NumPy, and Torch RNG state.
+  The test compares complete snapshots, so removing producer restoration causes
+  failure.
+
+### Review RED/GREEN Evidence
+
+The strengthened tests were written before their corresponding production
+changes. Local RED/GREEN execution remains unavailable for the same environment
+reason documented above:
+
+- `python3 -m pytest -q tests/unit/algorithms/test_sft_validation_artifact.py`
+  exits during conftest import with `ModuleNotFoundError: No module named 'ray'`.
+- `uv run ...` cannot use this repository lockfile on macOS because its supported
+  environments are Linux x86_64/aarch64 only.
+
+Fresh locally available GREEN checks after the review fixes:
+
+- `ruff format --check examples/prepare_sft_validation_event.py examples/run_sft.py tests/unit/algorithms/test_sft_validation_artifact.py`
+  passed.
+- `ruff check examples/prepare_sft_validation_event.py examples/run_sft.py tests/unit/algorithms/test_sft_validation_artifact.py`
+  passed with `Ruff: No issues found`.
+- `pyright examples/prepare_sft_validation_event.py` passed with zero errors.
+- `pyright tests/unit/algorithms/test_sft_validation_artifact.py` passed with zero
+  errors.
+- `python3 -m compileall -q examples/prepare_sft_validation_event.py examples/run_sft.py tests/unit/algorithms/test_sft_validation_artifact.py`
+  passed.
+- `git diff --check` passed.
+- Direct `pyrefly` execution is unavailable (`command not found`), and
+  `uv run --group dev pyrefly check examples/prepare_sft_validation_event.py`
+  exits because the lockfile supports Linux only. The producer is now explicitly
+  listed in `pyrefly.toml` for the controller's Linux run.
+
+The required Linux focused-suite GREEN result is pending the controller's CW
+container run and should be appended here after that run.

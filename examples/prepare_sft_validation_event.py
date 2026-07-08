@@ -89,9 +89,85 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--dataset-sha256", required=True)
     parser.add_argument("--tokenizer-sha256", required=True)
-    parser.add_argument("--preprocessing-sha256", required=True)
+    parser.add_argument(
+        "--preprocessing-sha256",
+        help="Optional expected digest of the resolved preprocessing config",
+    )
     parser.add_argument("--container-sha256", required=True)
     return parser.parse_known_args()
+
+
+def load_master_config(config_path: str | Path, overrides: list[str]) -> MasterConfig:
+    """Load one fully resolved SFT config after applying Hydra overrides."""
+    register_omegaconf_resolvers()
+    config = load_config(config_path)
+    if overrides:
+        config = parse_hydra_overrides(config, overrides)
+    resolved = OmegaConf.to_container(config, resolve=True)
+    if not isinstance(resolved, dict):
+        raise TypeError("Resolved SFT config must be a mapping")
+    return MasterConfig(**resolved)
+
+
+def derive_preprocessing_sha256(
+    config: MasterConfig,
+    *,
+    expected_sha256: str | None = None,
+) -> str:
+    """Hash the canonical artifact-relevant subset of a resolved SFT config."""
+    megatron_config = config.policy.get("megatron_cfg")
+    if not isinstance(megatron_config, Mapping):
+        raise ValueError(
+            "Validation artifact preprocessing provenance requires policy.megatron_cfg"
+        )
+    provenance = {
+        "data": {
+            "validation": config.data.get("validation"),
+            "default": config.data.get("default"),
+            "max_input_seq_length": config.data.get("max_input_seq_length"),
+            "add_bos": config.data.get("add_bos"),
+            "add_eos": config.data.get("add_eos"),
+            "add_generation_prompt": config.data.get("add_generation_prompt"),
+            "shuffle": config.data.get("shuffle"),
+        },
+        "policy": {
+            "tokenizer": config.policy.get("tokenizer"),
+            "max_total_sequence_length": config.policy.get("max_total_sequence_length"),
+            "sequence_packing": config.policy.get("sequence_packing"),
+            "dynamic_batching": config.policy.get("dynamic_batching"),
+            "make_sequence_length_divisible_by": config.policy.get(
+                "make_sequence_length_divisible_by"
+            ),
+            "megatron_cfg": {
+                "enabled": megatron_config.get("enabled"),
+                "tensor_model_parallel_size": megatron_config.get(
+                    "tensor_model_parallel_size"
+                ),
+                "context_parallel_size": megatron_config.get("context_parallel_size"),
+                "prepacked_sft_loss_mode": megatron_config.get(
+                    "prepacked_sft_loss_mode"
+                ),
+            },
+        },
+        "sft": {
+            "val_batches": config.sft.val_batches,
+            "val_global_batch_size": config.sft.val_global_batch_size,
+            "val_micro_batch_size": config.sft.val_micro_batch_size,
+        },
+    }
+    canonical = json.dumps(
+        provenance,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    preprocessing_sha256 = hashlib.sha256(canonical).hexdigest()
+    if expected_sha256 is not None and expected_sha256 != preprocessing_sha256:
+        raise ValueError(
+            "Validation artifact expected preprocessing SHA-256 does not match "
+            f"resolved config: expected {expected_sha256}, got {preprocessing_sha256}"
+        )
+    return preprocessing_sha256
 
 
 def derive_validation_artifact_eligibility(
@@ -228,12 +304,14 @@ def build_validation_artifact_fingerprint(
     repository_root: Path,
 ) -> ValidationArtifactFingerprint:
     """Build an artifact fingerprint from explicit inputs and checked-out source."""
+    submodule_commits = _submodule_commits(repository_root)
+    _require_clean_repository_tree(repository_root, submodule_commits)
     return ValidationArtifactFingerprint(
         dataset_sha256=dataset_sha256,
         tokenizer_sha256=tokenizer_sha256,
         preprocessing_sha256=preprocessing_sha256,
         nemo_rl_commit=_git_output(repository_root, "rev-parse", "HEAD"),
-        submodule_commits=_submodule_commits(repository_root),
+        submodule_commits=submodule_commits,
         container_sha256=container_sha256,
     )
 
@@ -263,10 +341,10 @@ def _validate_packed_processor_contract(val_dataset: AllTaskProcessedDataset) ->
             "megatron_sft_packed processor contract"
         )
     _, processor = processors[_PACKED_DATASET_NAME]
-    if (
-        not isinstance(processor, partial)
-        or processor.func is not megatron_sft_packed_preprocessor
-    ):
+    processor_function = processor
+    while isinstance(processor_function, partial):
+        processor_function = processor_function.func
+    if processor_function is not megatron_sft_packed_preprocessor:
         raise ValueError(
             "Validation artifact production requires the known "
             "megatron_sft_packed processor contract"
@@ -373,19 +451,41 @@ def _submodule_commits(repository_root: Path) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(commits))
 
 
+def _require_clean_repository_tree(
+    repository_root: Path,
+    submodule_commits: tuple[tuple[str, str], ...],
+) -> None:
+    repositories = ((".", repository_root),) + tuple(
+        (path, repository_root / path) for path, _ in submodule_commits
+    )
+    for display_path, repository in repositories:
+        status = _git_output(
+            repository,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=all",
+        )
+        if status:
+            raise RuntimeError(
+                "Validation artifact production requires a clean repository and "
+                f"submodules; {display_path!r} has tracked or untracked changes"
+            )
+
+
 def main() -> None:
     """Load config, produce a validation event, and atomically publish it."""
-    register_omegaconf_resolvers()
     args, overrides = parse_args()
     config_path = (
         args.config
         if args.config
         else str(Path(__file__).parent / "configs" / "sft.yaml")
     )
-    config = load_config(config_path)
-    if overrides:
-        config = parse_hydra_overrides(config, overrides)
-    config = MasterConfig(**OmegaConf.to_container(config, resolve=True))
+    config = load_master_config(config_path, overrides)
+    preprocessing_sha256 = derive_preprocessing_sha256(
+        config,
+        expected_sha256=args.preprocessing_sha256,
+    )
 
     tokenizer = get_tokenizer(config.policy["tokenizer"])
     _, val_dataset = setup_data(tokenizer, config.data)
@@ -397,7 +497,7 @@ def main() -> None:
     fingerprint = build_validation_artifact_fingerprint(
         dataset_sha256=args.dataset_sha256,
         tokenizer_sha256=args.tokenizer_sha256,
-        preprocessing_sha256=args.preprocessing_sha256,
+        preprocessing_sha256=preprocessing_sha256,
         container_sha256=args.container_sha256,
         repository_root=repository_root,
     )

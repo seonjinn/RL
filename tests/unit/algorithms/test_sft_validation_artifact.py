@@ -4,12 +4,16 @@ import dataclasses
 import hashlib
 import json
 import random
+import subprocess
+import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
@@ -17,10 +21,15 @@ import pytest
 import torch
 
 from examples import run_sft
+import examples.prepare_sft_validation_event as producer_module
 from examples.prepare_sft_validation_event import (
+    build_validation_artifact_fingerprint,
     build_precomputed_validation_event,
     derive_validation_artifact_eligibility,
+    derive_preprocessing_sha256,
     digest_validation_event_data,
+    load_master_config,
+    main as producer_main,
 )
 import nemo_rl.algorithms.sft as run_sft_sft
 import nemo_rl.algorithms.sft_validation_artifact as artifact_module
@@ -34,8 +43,192 @@ from nemo_rl.algorithms.sft_validation_artifact import (
     save_validation_event,
     tensor_content_sha256,
 )
+from nemo_rl.data import DataConfig
+from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.data.megatron_sft_packed import megatron_sft_packed_preprocessor
+
+
+_SUPER_V3_CONFIG = (
+    Path(__file__).resolve().parents[3]
+    / "examples"
+    / "configs"
+    / "sft_superv3_prepacked.yaml"
+)
+
+
+def test_preprocessing_digest_changes_for_relevant_hydra_override() -> None:
+    baseline = load_master_config(_SUPER_V3_CONFIG, [])
+    changed = load_master_config(
+        _SUPER_V3_CONFIG,
+        ["data.max_input_seq_length=131072"],
+    )
+
+    assert derive_preprocessing_sha256(baseline) != derive_preprocessing_sha256(changed)
+
+
+def test_preprocessing_digest_ignores_logger_run_name_override() -> None:
+    baseline = load_master_config(_SUPER_V3_CONFIG, [])
+    changed = load_master_config(
+        _SUPER_V3_CONFIG,
+        ["logger.wandb.name=artifact-provenance-test"],
+    )
+
+    assert derive_preprocessing_sha256(baseline) == derive_preprocessing_sha256(changed)
+
+
+def test_preprocessing_digest_rejects_mismatched_expected_value() -> None:
+    config = load_master_config(_SUPER_V3_CONFIG, [])
+
+    with pytest.raises(ValueError, match="expected preprocessing SHA-256"):
+        derive_preprocessing_sha256(config, expected_sha256="0" * 64)
+
+
+def test_cli_rejects_preprocessing_mismatch_before_data_or_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prepare_sft_validation_event.py",
+            "--config",
+            str(_SUPER_V3_CONFIG),
+            "--artifact-dir",
+            str(tmp_path / "artifact"),
+            "--dataset-sha256",
+            "a" * 64,
+            "--tokenizer-sha256",
+            "b" * 64,
+            "--container-sha256",
+            "f" * 64,
+            "--preprocessing-sha256",
+            "0" * 64,
+        ],
+    )
+
+    with (
+        patch.object(producer_module, "get_tokenizer") as tokenizer_loader,
+        patch.object(producer_module, "save_validation_event") as publisher,
+        pytest.raises(ValueError, match="expected preprocessing SHA-256"),
+    ):
+        producer_main()
+
+    tokenizer_loader.assert_not_called()
+    publisher.assert_not_called()
+
+
+def _git(repository: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _initialize_git_repository(repository: Path, tracked_file: str) -> None:
+    repository.mkdir()
+    _git(repository, "init")
+    _git(repository, "config", "user.email", "artifact-test@example.com")
+    _git(repository, "config", "user.name", "Artifact Test")
+    (repository / tracked_file).write_text(f"clean {tracked_file}\n")
+    _git(repository, "add", tracked_file)
+    _git(repository, "commit", "-m", f"add {tracked_file}")
+
+
+def _recursive_git_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    leaf = tmp_path / "leaf"
+    _initialize_git_repository(leaf, "leaf.txt")
+
+    child = tmp_path / "child"
+    _initialize_git_repository(child, "child.txt")
+    _git(
+        child,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(leaf),
+        "modules/leaf",
+    )
+    _git(child, "commit", "-am", "add leaf submodule")
+
+    root = tmp_path / "root"
+    _initialize_git_repository(root, "root.txt")
+    _git(
+        root,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(child),
+        "modules/child",
+    )
+    _git(root, "commit", "-am", "add child submodule")
+    _git(
+        root,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+    )
+    return root, root / "modules" / "child", root / "modules" / "child/modules/leaf"
+
+
+def _source_fingerprint(repository: Path) -> ValidationArtifactFingerprint:
+    return build_validation_artifact_fingerprint(
+        dataset_sha256="a" * 64,
+        tokenizer_sha256="b" * 64,
+        preprocessing_sha256="c" * 64,
+        container_sha256="d" * 64,
+        repository_root=repository,
+    )
+
+
+def test_source_fingerprint_accepts_clean_root_and_recursive_submodules(
+    tmp_path: Path,
+) -> None:
+    root, _, _ = _recursive_git_fixture(tmp_path)
+
+    fingerprint = _source_fingerprint(root)
+
+    assert fingerprint.nemo_rl_commit == _git(root, "rev-parse", "HEAD")
+    assert [path for path, _ in fingerprint.submodule_commits] == [
+        "modules/child",
+        "modules/child/modules/leaf",
+    ]
+
+
+@pytest.mark.parametrize(
+    "dirty_case",
+    [
+        "tracked-root",
+        "untracked-root",
+        "tracked-submodule",
+        "untracked-submodule",
+    ],
+)
+def test_source_fingerprint_rejects_dirty_repository_tree(
+    tmp_path: Path,
+    dirty_case: str,
+) -> None:
+    root, child, leaf = _recursive_git_fixture(tmp_path)
+    if dirty_case == "tracked-root":
+        (root / "root.txt").write_text("dirty root\n")
+    elif dirty_case == "untracked-root":
+        (root / "untracked.txt").write_text("untracked root\n")
+    elif dirty_case == "tracked-submodule":
+        (child / "child.txt").write_text("dirty child\n")
+    else:
+        (leaf / "untracked.txt").write_text("untracked leaf\n")
+
+    with pytest.raises(RuntimeError, match="clean repository and submodules"):
+        _source_fingerprint(root)
 
 
 class _ResponseDatasetFixture:
@@ -49,15 +242,18 @@ class _ResponseDatasetFixture:
         return {}
 
 
-def _data_config_fixture() -> dict[str, object]:
-    return {
-        "train": {"dataset_name": "train"},
-        "validation": {"dataset_name": "validation"},
-        "add_bos": False,
-        "add_eos": True,
-        "add_generation_prompt": False,
-        "max_input_seq_length": 16,
-    }
+def _data_config_fixture() -> DataConfig:
+    return cast(
+        DataConfig,
+        {
+            "train": {"dataset_name": "train"},
+            "validation": {"dataset_name": "validation"},
+            "add_bos": False,
+            "add_eos": True,
+            "add_generation_prompt": False,
+            "max_input_seq_length": 16,
+        },
+    )
 
 
 def test_setup_data_skips_configured_validation_when_requested() -> None:
@@ -118,8 +314,116 @@ def _packed_validation_batch(batch_index: int) -> BatchedDataDict:
     )
 
 
-def _producer_config_fixture() -> SimpleNamespace:
-    return SimpleNamespace(
+class _PackedTokenizerFixture:
+    pad_token_id = 0
+    eos_token_id = 0
+    bos_token_id = None
+
+    def apply_chat_template(
+        self, messages: list[dict[str, str]], **_kwargs: object
+    ) -> list[int]:
+        token_ids: list[int] = []
+        for message in messages:
+            content = message["content"].strip()
+            if content:
+                token_ids.extend(int(piece) for piece in content.split())
+        return token_ids
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        assert token == "<unk>"
+        return 0
+
+
+def _write_packed_validation_rows(path: Path, row_count: int) -> None:
+    with path.open("w") as file_handle:
+        for row_index in range(row_count):
+            batch_index = row_index // 64
+            assistant_tokens = " ".join(
+                str(1000 + batch_index * 10 + offset)
+                for offset in range(batch_index + 1)
+            )
+            record = {
+                "messages": [
+                    {"role": "system", "content": str(row_index + 10)},
+                    {"role": "assistant", "content": assistant_tokens},
+                ]
+            }
+            file_handle.write(json.dumps(record) + "\n")
+
+
+def _real_producer_config(data_path: Path) -> run_sft_sft.MasterConfig:
+    data_config = {
+        "max_input_seq_length": 8,
+        "add_bos": False,
+        "add_eos": True,
+        "add_generation_prompt": False,
+        "shuffle": False,
+        "num_workers": 0,
+        "train": {
+            "dataset_name": "megatron_sft_packed",
+            "data_path": str(data_path),
+            "chat_key": "messages",
+        },
+        "validation": {
+            "dataset_name": "megatron_sft_packed",
+            "data_path": str(data_path),
+            "chat_key": "messages",
+        },
+        "default": {
+            "prompt_file": None,
+            "system_prompt_file": None,
+            "megatron_sft_prompt_format": "identity",
+            "megatron_sft_pad_token": "<unk>",
+            "megatron_sft_assistant_prefix_len": 0,
+            "megatron_sft_context_parallel_size": 1,
+        },
+    }
+    return run_sft_sft.MasterConfig.model_construct(
+        data=data_config,
+        policy={
+            "tokenizer": {
+                "name": "fixture",
+                "chat_template": None,
+                "chat_template_kwargs": None,
+            },
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {
+                "enabled": True,
+                "train_mb_tokens": 8,
+                "algorithm": "modified_first_fit_decreasing",
+                "sequence_length_round": 1,
+            },
+            "max_total_sequence_length": 8,
+            "make_sequence_length_divisible_by": 1,
+            "megatron_cfg": {
+                "enabled": True,
+                "tensor_model_parallel_size": 1,
+                "context_parallel_size": 1,
+                "prepacked_sft_loss_mode": "labels",
+            },
+        },
+        sft=run_sft_sft.SFTConfig(
+            val_batches=4,
+            val_global_batch_size=64,
+            val_micro_batch_size=1,
+        ),
+        logger={},
+        cluster={},
+        checkpointing={},
+    )
+
+
+def _real_validation_dataset(
+    config: run_sft_sft.MasterConfig,
+    tokenizer: _PackedTokenizerFixture,
+) -> AllTaskProcessedDataset:
+    _, val_dataset = run_sft.setup_data(tokenizer, config.data)
+    assert val_dataset is not None
+    return val_dataset
+
+
+def _producer_config_fixture() -> run_sft_sft.MasterConfig:
+    return run_sft_sft.MasterConfig.model_construct(
         data={
             "validation": {"dataset_name": "megatron_sft_packed"},
             "shuffle": False,
@@ -138,27 +442,38 @@ def _producer_config_fixture() -> SimpleNamespace:
     )
 
 
-def _producer_dataset_fixture(batches: list[BatchedDataDict]) -> SimpleNamespace:
-    return SimpleNamespace(
-        batches=batches,
-        task_data_processors={
-            "megatron_sft_packed": (
-                None,
-                partial(megatron_sft_packed_preprocessor, prompt_format="identity"),
-            )
-        },
-        task_data_preprocessors={},
+def _producer_dataset_fixture(
+    batches: list[BatchedDataDict],
+) -> AllTaskProcessedDataset:
+    return cast(
+        AllTaskProcessedDataset,
+        SimpleNamespace(
+            batches=batches,
+            task_data_processors={
+                "megatron_sft_packed": (
+                    None,
+                    partial(
+                        megatron_sft_packed_preprocessor,
+                        prompt_format="identity",
+                    ),
+                )
+            },
+            task_data_preprocessors={},
+        ),
     )
 
 
-class _FixtureDataLoader:
-    def __init__(self, dataset, **kwargs: object) -> None:
+class _RngConsumingFixtureDataLoader:
+    def __init__(self, dataset: Any, **kwargs: object) -> None:
         assert kwargs["batch_size"] == 64
         assert kwargs["shuffle"] is False
         assert kwargs["drop_last"] is True
-        self._batches = dataset.batches
+        self._batches: list[BatchedDataDict] = dataset.batches
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[BatchedDataDict]:
+        random.random()
+        np.random.random()
+        torch.rand(1)
         return iter(self._batches)
 
 
@@ -167,7 +482,7 @@ def _producer_event(
 ) -> PrecomputedValidationEvent:
     with patch(
         "examples.prepare_sft_validation_event.StatefulDataLoader",
-        _FixtureDataLoader,
+        _RngConsumingFixtureDataLoader,
     ):
         return build_precomputed_validation_event(
             _producer_config_fixture(),
@@ -176,7 +491,7 @@ def _producer_event(
         )
 
 
-def test_producer_matches_live_packed_event_combination() -> None:
+def test_producer_unit_combination_matches_runtime_helper() -> None:
     batches = [_packed_validation_batch(batch_index) for batch_index in range(4)]
     expected_token_counts = (128, 128, 128, 128)
     live_batches = list(batches)
@@ -195,6 +510,119 @@ def test_producer_matches_live_packed_event_combination() -> None:
     assert produced.data["input_ids"][:, 0].tolist() == list(range(256))
 
 
+def test_producer_real_loader_preserves_rows_and_distinct_batch_token_counts(
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "validation.jsonl.packed"
+    _write_packed_validation_rows(data_path, 256)
+    tokenizer = _PackedTokenizerFixture()
+    config = _real_producer_config(data_path)
+    val_dataset = _real_validation_dataset(config, tokenizer)
+
+    produced = build_precomputed_validation_event(config, tokenizer, val_dataset)
+
+    assert produced.num_valid_tokens == (64, 128, 192, 256)
+    assert produced.data["input_ids"][:, 0].tolist() == list(range(10, 266))
+
+
+@pytest.mark.parametrize("row_count", [192, 255])
+def test_producer_real_loader_rejects_fewer_than_four_complete_batches(
+    tmp_path: Path,
+    row_count: int,
+) -> None:
+    data_path = tmp_path / "validation.jsonl.packed"
+    _write_packed_validation_rows(data_path, row_count)
+    tokenizer = _PackedTokenizerFixture()
+    config = _real_producer_config(data_path)
+    val_dataset = _real_validation_dataset(config, tokenizer)
+
+    with pytest.raises(ValueError, match="four complete validation batches"):
+        build_precomputed_validation_event(config, tokenizer, val_dataset)
+
+
+def _super_v3_integration_overrides(data_path: Path) -> list[str]:
+    return [
+        f"data.train.data_path={data_path}",
+        f"data.validation.data_path={data_path}",
+        "data.max_input_seq_length=8",
+        "data.num_workers=0",
+        "policy.max_total_sequence_length=8",
+        "policy.megatron_cfg.tensor_model_parallel_size=1",
+        "policy.megatron_cfg.context_parallel_size=1",
+        "sft.val_batches=4",
+        "sft.val_global_batch_size=64",
+        "sft.val_micro_batch_size=1",
+    ]
+
+
+def test_producer_cli_wires_resolved_config_into_real_data_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_path = tmp_path / "validation.jsonl.packed"
+    artifact_directory = tmp_path / "artifact"
+    _write_packed_validation_rows(data_path, 256)
+    overrides = _super_v3_integration_overrides(data_path)
+    resolved_config = load_master_config(_SUPER_V3_CONFIG, overrides)
+    expected_preprocessing_sha256 = derive_preprocessing_sha256(resolved_config)
+    captured_fingerprint: ValidationArtifactFingerprint | None = None
+
+    def capture_fingerprint(**kwargs: Any) -> ValidationArtifactFingerprint:
+        nonlocal captured_fingerprint
+        captured_fingerprint = dataclasses.replace(
+            _fingerprint(),
+            dataset_sha256=kwargs["dataset_sha256"],
+            tokenizer_sha256=kwargs["tokenizer_sha256"],
+            preprocessing_sha256=kwargs["preprocessing_sha256"],
+            container_sha256=kwargs["container_sha256"],
+        )
+        return captured_fingerprint
+
+    monkeypatch.setattr(
+        producer_module,
+        "get_tokenizer",
+        lambda _config: _PackedTokenizerFixture(),
+    )
+    monkeypatch.setattr(
+        producer_module,
+        "build_validation_artifact_fingerprint",
+        capture_fingerprint,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prepare_sft_validation_event.py",
+            "--config",
+            str(_SUPER_V3_CONFIG),
+            "--artifact-dir",
+            str(artifact_directory),
+            "--dataset-sha256",
+            "a" * 64,
+            "--tokenizer-sha256",
+            "b" * 64,
+            "--container-sha256",
+            "f" * 64,
+            "--preprocessing-sha256",
+            expected_preprocessing_sha256,
+            *overrides,
+        ],
+    )
+
+    producer_main()
+
+    assert captured_fingerprint is not None
+    assert captured_fingerprint.preprocessing_sha256 == expected_preprocessing_sha256
+    manifest = next(artifact_directory.glob("*.json"))
+    loaded = load_validation_event(
+        manifest,
+        captured_fingerprint,
+        MemoryBudget(available_bytes=10_000_000),
+    )
+    assert loaded.num_valid_tokens == (64, 128, 192, 256)
+    assert loaded.data["input_ids"][:, 0].tolist() == list(range(10, 266))
+
+
 def test_producer_rejects_unknown_validation_dataset_contract() -> None:
     config = _producer_config_fixture()
     config.data["validation"] = {"dataset_name": "unknown"}
@@ -207,15 +635,21 @@ def test_producer_rejects_unknown_validation_dataset_contract() -> None:
 
 
 def test_repeated_production_preserves_rng_and_serialized_artifact(tmp_path) -> None:
+    random.seed(101)
+    np.random.seed(202)
+    torch.manual_seed(303)
     python_state = random.getstate()
-    numpy_state = np.random.get_state()
+    numpy_state = cast(tuple[Any, ...], np.random.get_state())
     torch_state = torch.get_rng_state()
 
     first = _producer_event([_packed_validation_batch(index) for index in range(4)])
     second = _producer_event([_packed_validation_batch(index) for index in range(4)])
 
     assert random.getstate() == python_state
-    assert np.array_equal(np.random.get_state()[1], numpy_state[1])
+    current_numpy_state = cast(tuple[Any, ...], np.random.get_state())
+    assert current_numpy_state[0] == numpy_state[0]
+    assert np.array_equal(current_numpy_state[1], numpy_state[1])
+    assert current_numpy_state[2:] == numpy_state[2:]
     assert torch.equal(torch.get_rng_state(), torch_state)
 
     first_manifest = save_validation_event(
