@@ -158,9 +158,10 @@ def test_dynamicsd_launcher_recipe_profile_preserves_recipe_lengths() -> None:
         PROFILE="recipe",
     )
 
-    assert "policy.max_total_sequence_length=36864" not in output
-    assert "policy.generation.max_new_tokens=32768" not in output
-    assert "policy.generation.vllm_cfg.max_model_len=36864" not in output
+    assert "policy.max_total_sequence_length=" not in output
+    assert "policy.generation.max_new_tokens=" not in output
+    assert "policy.generation.vllm_cfg.max_model_len=" not in output
+    assert "data.max_input_seq_length=" not in output
     assert "contract-test-attempt-1-recipe-qwen32b-dynamic" in output
 
 
@@ -181,6 +182,7 @@ def test_dynamicsd_launcher_longtail32k_profile_sets_exact_lengths() -> None:
     assert "policy.max_total_sequence_length=36864" in output
     assert "policy.generation.max_new_tokens=32768" in output
     assert "policy.generation.vllm_cfg.max_model_len=36864" in output
+    assert "data.max_input_seq_length=4096" in output
     assert "contract-test-attempt-1-longtail32k-qwen32b-dynamic" in output
 
 
@@ -336,6 +338,7 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "max_steps",
         "profile",
         "max_new_tokens",
+        "max_input_seq_length",
         "max_total_sequence_length",
         "max_num_batched_tokens",
         "static_k",
@@ -343,6 +346,16 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "command",
     ):
         assert field in source
+
+
+def test_dynamicsd_launcher_rejects_an_existing_legacy_manifest_header() -> None:
+    source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'existing_header="$(head -n 1 "${manifest}")"' in source
+    assert "existing manifest header does not match launcher schema" in source
+    assert source.index('existing_header="$(head -n 1 "${manifest}")"') < source.index(
+        'sbatch --parsable "${sbatch_args[@]}"'
+    )
 
 
 def test_dynamicsd_launcher_ignores_generated_submodule_dirt() -> None:

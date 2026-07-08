@@ -50,6 +50,7 @@ MATCHED_SETUP_FIELDS = (
     "container_sha256",
     "max_steps",
     "max_new_tokens",
+    "max_input_seq_length",
     "max_total_sequence_length",
     "max_num_batched_tokens",
 )
@@ -312,6 +313,7 @@ def _read_manifest(path: Path) -> list[dict[str, str]]:
 def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
     seen: set[tuple[str, str]] = set()
     setup_by_model: dict[str, tuple[str, ...]] = {}
+    profile_variants_by_model: dict[str, set[str]] = {}
     for row in rows:
         model = row.get("model", "")
         variant = row.get("variant", "")
@@ -323,6 +325,16 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         previous = setup_by_model.setdefault(model, setup)
         if setup != previous:
             return f"mismatched setup for model {model}"
+        if row.get("profile"):
+            profile_variants_by_model.setdefault(model, set()).add(variant)
+    required_variants = {"baseline", "eagle3_k5", "dynamic"}
+    for model, variants in profile_variants_by_model.items():
+        missing_variants = sorted(required_variants - variants)
+        if missing_variants:
+            return (
+                f"missing required variants for model {model}: "
+                f"{','.join(missing_variants)}"
+            )
     return None
 
 

@@ -170,6 +170,7 @@ def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
     [
         ("profile", "recipe", "longtail32k"),
         ("max_new_tokens", "recipe", "32768"),
+        ("max_input_seq_length", "recipe", "4096"),
         ("max_total_sequence_length", "recipe", "36864"),
         ("max_num_batched_tokens", "16384", "8192"),
     ],
@@ -188,6 +189,7 @@ def test_validate_manifest_rows_rejects_sequence_profile_mismatch(
         "max_steps": "20",
         "profile": "recipe",
         "max_new_tokens": "recipe",
+        "max_input_seq_length": "recipe",
         "max_total_sequence_length": "recipe",
         "max_num_batched_tokens": "16384",
     }
@@ -196,6 +198,32 @@ def test_validate_manifest_rows_rejects_sequence_profile_mismatch(
 
     assert _validate_manifest_rows([baseline, candidate]) == (
         "mismatched setup for model qwen32b"
+    )
+
+
+def test_validate_manifest_rows_requires_profile_core_triplet() -> None:
+    common = {
+        "model": "qwen32b",
+        "profile": "recipe",
+        "recipe": "grpo-qwen3-32b-4n4g.yaml",
+        "nodes": "4",
+        "segment": "4",
+        "commit": "aaa",
+        "container": "/lustre/nemo-rl.sqsh",
+        "container_sha256": "sha256",
+        "max_steps": "20",
+        "max_new_tokens": "recipe",
+        "max_input_seq_length": "recipe",
+        "max_total_sequence_length": "recipe",
+        "max_num_batched_tokens": "16384",
+    }
+    rows = [
+        {**common, "variant": "baseline"},
+        {**common, "variant": "dynamic"},
+    ]
+
+    assert _validate_manifest_rows(rows) == (
+        "missing required variants for model qwen32b: eagle3_k5"
     )
 
 

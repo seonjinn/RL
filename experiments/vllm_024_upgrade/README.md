@@ -86,7 +86,8 @@ The Lyris cohort uses the same three upstream synchronous performance recipes
 and compares only the matched `baseline`, `eagle3_k5`, and `dynamic` triplet.
 The `recipe` profile preserves every recipe-owned sequence limit. The
 `longtail32k` profile sets `max_new_tokens=32768` and total/model length to
-`36864`. Both profiles explicitly set vLLM `max_num_batched_tokens=16384`,
+`36864`, while pinning `data.max_input_seq_length=4096`. Both profiles
+explicitly set vLLM `max_num_batched_tokens=16384`,
 which includes scheduled draft tokens, and use draft TP1. Lyris jobs use the
 `coreai_dlalgo_llm` account, the `gb200` partition, no `--gres`, and one segment
 per allocated node.
@@ -103,6 +104,7 @@ export WANDB_PROJECT=nemorl-vllm024-dynamicsd-lyris
 export ACCOUNT=coreai_dlalgo_llm
 export PARTITION=gb200
 export USE_GRES=false
+export WALLTIME=05:00:00
 ```
 
 Run scheduler validation for each profile before allocating GPUs:

@@ -41,10 +41,12 @@ CONTAINER_SHA256="${CONTAINER_SHA256:-}"
 case "${PROFILE}" in
   recipe)
     profile_max_new_tokens="recipe"
+    profile_max_input_seq_length="recipe"
     profile_max_total_sequence_length="recipe"
     ;;
   longtail32k)
     profile_max_new_tokens="32768"
+    profile_max_input_seq_length="4096"
     profile_max_total_sequence_length="36864"
     ;;
   *)
@@ -177,6 +179,7 @@ submit_one() {
       "policy.max_total_sequence_length=${profile_max_total_sequence_length}"
       "policy.generation.max_new_tokens=${profile_max_new_tokens}"
       "policy.generation.vllm_cfg.max_model_len=${profile_max_total_sequence_length}"
+      "data.max_input_seq_length=${profile_max_input_seq_length}"
     )
   fi
   if [[ "${variant}" != "baseline" ]]; then
@@ -269,20 +272,30 @@ submit_one() {
       ;;
     submit)
       mkdir -p "${run_dir}"
+      local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
+      local manifest_header
+      manifest_header=$'timestamp\tmodel\tvariant\tprofile\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tmax_new_tokens\tmax_input_seq_length\tmax_total_sequence_length\tmax_num_batched_tokens\tstatic_k\tdynamic_schedule\tcommand'
+      if [[ ! -f "${manifest}" ]]; then
+        printf '%s\n' "${manifest_header}" > "${manifest}"
+      else
+        local existing_header
+        existing_header="$(head -n 1 "${manifest}")"
+        if [[ "${existing_header}" != "${manifest_header}" ]]; then
+          echo "ERROR: existing manifest header does not match launcher schema: ${manifest}" >&2
+          exit 2
+        fi
+      fi
       local job_id
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
-      local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      if [[ ! -f "${manifest}" ]]; then
-        printf 'timestamp\tmodel\tvariant\tprofile\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tmax_new_tokens\tmax_total_sequence_length\tmax_num_batched_tokens\tstatic_k\tdynamic_schedule\tcommand\n' > "${manifest}"
-      fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${PROFILE}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
-        "${MAX_STEPS}" "${profile_max_new_tokens}" "${profile_max_total_sequence_length}" \
+        "${MAX_STEPS}" "${profile_max_new_tokens}" "${profile_max_input_seq_length}" \
+        "${profile_max_total_sequence_length}" \
         "${MAX_NUM_BATCHED_TOKENS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
       ;;
     *)
