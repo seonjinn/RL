@@ -12,13 +12,18 @@ previous-policy logprob pass: mean policy-and-reference-logprob time fell by
 41.64% to 50.10%, while generation and policy-training times were essentially
 unchanged.
 
-The three Async-1off pairs do not have performance results. All six jobs failed
-before step 1 because `cluster.segment_size` was set to the total allocation
-size even though the non-colocated recipes split half of the nodes into the
-training cluster. The runtime correctly rejected training node counts that were
-not divisible by the configured segment size. This is a benchmark-contract
-topology error, not an OOM, hang, model failure, or `force_on_policy_ratio`
-failure.
+The corrected Async-1off matrix was submitted on 2026-07-07. At the 21:39 PDT
+snapshot, both Llama variants, both Qwen3-30B-A3B variants, and the Qwen3-32B
+control had completed setup without an OOM or fatal runtime error. Four jobs
+had entered the training loop; the Qwen3-30B-A3B control had completed setup
+and was filling its initial replay buffer. The Qwen3-32B force job remained
+pending for priority. Async performance is not reported until the paired
+20-step runs finish.
+
+The first Llama and Qwen3-30B-A3B control attempts encountered a transient
+Hugging Face Hub API `429 Too Many Requests` during vLLM worker construction.
+They were resubmitted under distinct `_retry1` run keys after the rate-limit
+window reset; both retries passed the failing point without a 429.
 
 ## Fixed identities
 
@@ -29,7 +34,8 @@ failure.
 - Source remote: `https://github.com/seonjinn/RL.git`
 - Experiment harness branch:
   `sna/q30-q32-force-on-policy-benchmark-20260707`
-- Harness commit: `28d913ed6276cc70a8ae218ee659919dba0fe5db`
+- Harness commit at submission:
+  `84d00bbe341ba1205265a0a407d436781bb56505`
 - Container: `nemo_rl_nightly_20260630_0215.sqsh`
 - Container SHA-256:
   `bf841732e6615aca7a00a6c4ba47d7298a118137fc914296a4083172132ff510`
@@ -106,7 +112,33 @@ logprob-error spikes.
 | Llama 3.1 8B sync control | 2338825 | COMPLETED | [20mmvv5t](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/20mmvv5t) |
 | Llama 3.1 8B sync force | 2338826 | COMPLETED | [omilek7u](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/omilek7u) |
 
-## Async-1off terminal classification
+## Corrected Async-1off run status
+
+Snapshot: 2026-07-07 21:39 PDT, after monitoring every running or retried job
+for at least five minutes.
+
+| Run | Job | Snapshot state | Progress | W&B |
+|---|---:|---|---|---|
+| Llama 3.1 8B control, initial | 2339797 | FAILED (`1:0`) | Hugging Face API 429 before setup completed | [6w3kvdlo](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/6w3kvdlo) |
+| Llama 3.1 8B control, retry 1 | 2339835 | RUNNING | Setup complete; Step 2/20 entered | [tjazqs5y](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/tjazqs5y) |
+| Llama 3.1 8B force | 2339798 | RUNNING | Setup complete; Step 9/20 entered | [eofxqju1](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/eofxqju1) |
+| Qwen3-30B-A3B control, initial | 2339799 | FAILED (`1:0`) | Hugging Face API 429 before setup completed | [hf69toot](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/hf69toot) |
+| Qwen3-30B-A3B control, retry 1 | 2339836 | RUNNING | Setup complete; filling the step-0 replay buffer | [rlkwoyth](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/rlkwoyth) |
+| Qwen3-30B-A3B force | 2339800 | RUNNING | Setup complete; Step 3/20 entered | [qjhqykan](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/qjhqykan) |
+| Qwen3-32B control | 2339801 | RUNNING | Setup complete; Step 2/20 entered | [tbgaxlam](https://wandb.ai/nvidia/sna-force-on-policy-llama-qwen-async-gb200/runs/tbgaxlam) |
+| Qwen3-32B force | 2339802 | PENDING | Priority; estimated start 2026-07-08 01:07 PDT | Not created |
+
+The corrected topology is:
+
+- Llama 3.1 8B: two allocated nodes, split into one training and one inference
+  node, with no segment override.
+- Qwen3-30B-A3B: four allocated nodes with `segment_size=2`, split into two
+  training and two inference nodes. The scheduler and application segment
+  values both equal 2.
+- Qwen3-32B: eight allocated nodes, split into four training and four inference
+  nodes, with no segment override.
+
+## Original Async-1off terminal classification
 
 No Async-1off speedup is reported because none of these jobs reached step 1.
 
@@ -124,8 +156,8 @@ post-split training topology. Llama and Qwen3-32B normally inherit
 Qwen3-30B-A3B already inherits `segment_size=4` from its synchronous parent, so
 the upstream Async recipe also needs a topology override on this source SHA.
 
-The next valid paired run should preserve `segment_size=null` for Llama and
-Qwen3-32B. Qwen3-30B-A3B must use a common control/treatment override of either
-`null` or 2, and the preflight validator must assert divisibility against the
-derived training node count. This report does not claim an Async result and no
-silent retry with altered topology was submitted.
+The corrected run preserves `segment_size=null` for Llama and Qwen3-32B and
+uses the common control/treatment override `segment_size=2` for
+Qwen3-30B-A3B. Its preflight validator checks divisibility against the derived
+training node count. These topology settings are identical within every
+control/treatment pair.
