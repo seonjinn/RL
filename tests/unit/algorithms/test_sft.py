@@ -335,6 +335,8 @@ def _run_validation(
     batches: Iterable[BatchedDataDict],
     execution_mode: str,
     master_config: MasterConfig | None = None,
+    *,
+    validation_event_cache: _ValidationEventCache | None = None,
 ) -> dict[str, float]:
     metrics, _ = validate(
         policy=policy,
@@ -346,6 +348,7 @@ def _run_validation(
         val_batches=4,
         val_batch_size=64,
         val_mbs=1,
+        validation_event_cache=validation_event_cache,
     )
     return metrics
 
@@ -1141,7 +1144,13 @@ def test_validation_cpu_cache_rejects_non_cpu_tensor_before_train() -> None:
     )
 
     with pytest.raises(ValueError, match="CPU cache.*meta"):
-        _run_validation(policy, batches, "event_batch", config)
+        _run_validation(
+            policy,
+            batches,
+            "event_batch",
+            config,
+            validation_event_cache=_ValidationEventCache(),
+        )
 
     policy.train.assert_not_called()
 

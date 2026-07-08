@@ -304,3 +304,69 @@ Direct Pyright remains unavailable as a clean project gate in the sparse local
 environment. It reports unresolved Torch, Pydantic, and TorchData imports plus
 pre-existing diagnostics elsewhere in `test_sft.py`; no diagnostic points to
 the corrected helper. The controller will rerun the complete CW Linux suite.
+
+## CW Job 13559485 CPU-Cache Test-Helper Fix
+
+### Linux RED Evidence
+
+The controller reran the combined Task 3 suite on CW Linux. The job passed 45
+tests and then failed at:
+
+```text
+tests/unit/algorithms/test_sft.py::test_validation_cpu_cache_rejects_non_cpu_tensor_before_train
+ValueError: sft.validation_event_cache_mode=cpu requires a process-lifetime
+validation event cache
+```
+
+The test expected the later `CPU cache.*meta` payload rejection, but
+`_run_validation()` passed `validation_event_cache=None`.
+
+Full log:
+
+```text
+/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260708-001543-task3-r2/sna-val-runtime-task3-r2_13559485.out
+```
+
+### Root Cause And Baseline Comparison
+
+This is an older test-helper omission, not a Task 3 production regression. At
+the approved Task 2 baseline `fb9ca3d52`, production validation already rejected
+CPU-cache mode when `validation_event_cache` was absent, and the same test's
+`_run_validation()` helper already omitted that argument.
+
+An AST caller audit found exactly one `_run_validation()` caller configured for
+CPU cache: the failing non-CPU-tensor test. Other CPU-cache tests call
+`validate()` directly and already pass an explicit shared `_ValidationEventCache`.
+
+Focused pre-fix helper execution reproduced:
+
+```text
+TypeError: _run_validation() got an unexpected keyword argument
+'validation_event_cache'
+```
+
+### Fix And Regression Evidence
+
+`_run_validation()` now accepts a keyword-only optional cache and forwards it
+unchanged to `validate()`. The affected CPU-mode test explicitly supplies a new
+`_ValidationEventCache()` so it reaches the intended meta-tensor rejection.
+The helper does not create caches implicitly, preserving caller ownership of
+the process-lifetime cache. Production and precomputed paths are unchanged.
+
+Focused post-fix helper execution verified object identity through the call:
+
+```text
+explicit cache forwarded
+```
+
+Locally available checks after the fix:
+
+```text
+Source-isolated pytest: 16 passed in 0.20s
+Ruff: no issues
+Ruff format: already formatted
+Python py_compile: passed
+git diff --check: passed
+```
+
+The controller will rerun the complete CW Linux suite.
