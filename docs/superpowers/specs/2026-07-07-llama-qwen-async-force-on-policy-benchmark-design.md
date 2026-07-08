@@ -30,9 +30,9 @@ Each recipe has a control and a treatment, for eight 20-step jobs total.
 | Family | Recipe | Mode | Nodes | GPUs/node | Segment | Pair |
 |---|---|---|---:|---:|---:|---|
 | Llama 3.1 8B | `grpo-llama3.1-8b-instruct-2n4g.yaml` | sync | 2 | 4 | 2 | control/force |
-| Llama 3.1 8B | `grpo-llama3.1-8b-instruct-2n4g-async-1off.yaml` | async-1off | 2 | 4 | 2 | control/force |
-| Qwen3-30B-A3B | `grpo-qwen3-30ba3b-4n4g-async-1off.yaml` | async-1off | 4 | 4 | 4 | control/force |
-| Qwen3-32B | `grpo-qwen3-32b-8n4g-async-1off.yaml` | async-1off | 8 | 4 | 8 | control/force |
+| Llama 3.1 8B | `grpo-llama3.1-8b-instruct-2n4g-async-1off.yaml` | async-1off | 2 | 4 | unset | control/force |
+| Qwen3-30B-A3B | `grpo-qwen3-30ba3b-4n4g-async-1off.yaml` | async-1off | 4 | 4 | 2 | control/force |
+| Qwen3-32B | `grpo-qwen3-32b-8n4g-async-1off.yaml` | async-1off | 8 | 4 | unset | control/force |
 
 The following are intentionally excluded:
 
@@ -51,8 +51,25 @@ Both sides of every pair apply the same overrides:
 grpo.max_num_steps=20
 checkpointing.enabled=false
 policy.train_global_batch_size=2048
-cluster.segment_size=<native node count>
 ```
+
+Topology overrides follow the official r0.7.0 recipe and launch-script
+contract rather than the total allocation size:
+
+- Llama 3.1 8B Async-1off inherits `cluster.segment_size=null`; do not pass a
+  `cluster.segment_size` override or Slurm `--segment`.
+- Qwen3-30B-A3B Async-1off uses `cluster.segment_size=2` and Slurm
+  `--segment=2`. Its training EP group has eight ranks across four GPUs per
+  node, so it spans two nodes.
+- Qwen3-32B Async-1off inherits `cluster.segment_size=null`; do not pass a
+  `cluster.segment_size` override or Slurm `--segment`.
+- The already-completed synchronous Llama pair retains its original common
+  `cluster.segment_size=2` override and is not part of the retry.
+
+The pinned source predates the r0.7.0 Qwen3-30B-A3B Async correction and
+inherits `segment_size=4` from the synchronous parent. The experiment runner
+therefore supplies the official value `2` as a common control/treatment
+override without modifying NeMo-RL source.
 
 The only paired difference is:
 
@@ -71,6 +88,12 @@ Every resolved recipe must satisfy:
 - `grpo.seq_logprob_error_threshold=null`
 - recipe mode and `in_flight_weight_updates` match the original YAML
 - native four-GPU-per-node topology matches the manifest
+- for non-colocated Async, derived training nodes equal total nodes minus
+  inference nodes
+- every non-null segment size evenly divides both total nodes and derived
+  training nodes
+- Qwen3-30B-A3B's segment equals
+  `expert_model_parallel_size / cluster.gpus_per_node = 8 / 4 = 2`
 
 The sync Llama pair must resolve with async disabled. The three async pairs
 must resolve with async enabled, maximum trajectory age one, and in-flight
@@ -87,12 +110,16 @@ matrix. Direct submission is still gated by lightweight checks:
    policy-gradient behavior in the pinned container.
 3. Verify source HEAD/upstream, recursive submodules, clean source status,
    immutable container SHA-256, and runner SHA-256.
-4. Run `sbatch --test-only` for all eight jobs before any real submission.
+4. Run `sbatch --test-only` for the six corrected Async jobs before any real
+   retry submission.
 5. Refuse an existing non-empty job manifest to prevent duplicate submission.
 6. Record job ID, recipe, mode, force value, topology, source SHA, container
    SHA, runner SHA, and W&B run name immediately after submission.
 7. Monitor every submitted job for at least five minutes and inspect any early
    exit before proceeding.
+
+The corrected retry is a new manifest and result namespace. It must not
+overwrite the six failed job records or the completed synchronous results.
 
 Use paired walltimes that are identical within each pair:
 
@@ -150,5 +177,7 @@ limitations. No speedup is reported for an incomplete pair.
   hide it with a timeout increase or backend override.
 - A failed pair is not silently retried with a different recipe, backend,
   topology, or container.
+- A topology retry must use the r0.7.0 values above and must validate the
+  post-split training node count before submission.
 - AWS-DFW is a fallback only if Pre-Tyche cannot schedule the native topology;
   cross-cluster results are labeled separately and are never pooled.
