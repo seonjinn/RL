@@ -854,6 +854,64 @@ def test_correctness_audit_finalizes_next_batch_and_captures_runtime_validation_
     assert '"input_mode"' not in train_source
 
 
+def test_correctness_audit_reads_pending_loader_state_without_initializing_iterator() -> (
+    None
+):
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    functions = _load_functions(audit_path, ["_capture_train_loader_state"])
+
+    class LazyRestoredLoader:
+        def __init__(self) -> None:
+            self._iterator = None
+            self._initial_iter_for_state_dict = False
+            self.next_iter_state = {"position": 3}
+            self.state_dict_calls = 0
+
+        def state_dict(self) -> dict[str, object]:
+            self.state_dict_calls += 1
+            self._iterator = object()
+            self.next_iter_state = None
+            return {"position": 3}
+
+    loader = LazyRestoredLoader()
+    pending_state = loader.next_iter_state
+
+    captured = functions["_capture_train_loader_state"](loader)
+
+    assert captured == {
+        "boundary": "pending",
+        "initial_iter_for_state_dict": False,
+        "state": {"position": 3},
+    }
+    assert loader.state_dict_calls == 0
+    assert loader._iterator is None
+    assert loader.next_iter_state is pending_state
+
+    fresh_loader = LazyRestoredLoader()
+    fresh_loader.next_iter_state = None
+    assert functions["_capture_train_loader_state"](fresh_loader) == {
+        "boundary": "not_started",
+        "initial_iter_for_state_dict": False,
+        "state": None,
+    }
+    assert fresh_loader.state_dict_calls == 0
+
+    class OpaqueLoader:
+        def __init__(self) -> None:
+            self.state_dict_calls = 0
+
+        def state_dict(self) -> dict[str, object]:
+            self.state_dict_calls += 1
+            return {"position": 4}
+
+    opaque_loader = OpaqueLoader()
+    assert functions["_capture_train_loader_state"](opaque_loader) == {"position": 4}
+    assert opaque_loader.state_dict_calls == 1
+
+    capture_node = _function_node(audit_path, "capture_correctness_snapshot")
+    assert "_capture_train_loader_state" in ast.unparse(capture_node)
+
+
 def test_correctness_evidence_survives_validation_exceptions() -> None:
     sft_path = REPO_ROOT / "nemo_rl/algorithms/sft.py"
     sft_tree = ast.parse(sft_path.read_text())

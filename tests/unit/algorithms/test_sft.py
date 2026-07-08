@@ -53,6 +53,8 @@ from nemo_rl.algorithms.sft_correctness_audit import (
     CorrectnessAuditError,
     CorrectnessAuditRecord,
     SFTCorrectnessAuditor,
+    _state_digest,
+    capture_correctness_snapshot,
     capture_next_train_batch_evidence,
     capture_validation_evidence,
     combine_validation_evidence,
@@ -827,6 +829,63 @@ def _restart_train_loader(generator: torch.Generator) -> StatefulDataLoader:
         generator=generator,
         num_workers=0,
     )
+
+
+def test_capture_is_read_only_at_lazy_restored_loader_boundary() -> None:
+    checkpoint_generator = torch.Generator().manual_seed(606)
+    checkpoint_loader = _restart_train_loader(checkpoint_generator)
+    next(iter(checkpoint_loader))
+    loader_state = deepcopy(checkpoint_loader.state_dict())
+    generator_state = checkpoint_generator.get_state().clone()
+
+    probe_generator = torch.Generator()
+    probe_generator.set_state(generator_state)
+    probe_loader = _restart_train_loader(probe_generator)
+    probe_loader.load_state_dict(deepcopy(loader_state))
+    probe_generator_before = probe_generator.get_state().clone()
+    probe_loader.state_dict()
+    assert not torch.equal(probe_generator.get_state(), probe_generator_before)
+    assert probe_loader._iterator is not None
+    assert probe_loader._initial_iter_for_state_dict is True
+    assert probe_loader.next_iter_state is None
+
+    resumed_generator = torch.Generator()
+    resumed_generator.set_state(generator_state)
+    resumed_loader = _restart_train_loader(resumed_generator)
+    resumed_loader.load_state_dict(deepcopy(loader_state))
+    control_generator = torch.Generator()
+    control_generator.set_state(generator_state)
+    control_loader = _restart_train_loader(control_generator)
+    control_loader.load_state_dict(deepcopy(loader_state))
+    policy = MagicMock()
+    policy.get_correctness_state_fingerprint.return_value = [
+        _audit_worker_fingerprint_record()
+    ]
+    generator_before = resumed_generator.get_state().clone()
+    pending_state = resumed_loader.next_iter_state
+    assert pending_state is not None
+    pending_state_digest = _state_digest(pending_state)
+    assert resumed_loader._iterator is None
+    assert resumed_loader._initial_iter_for_state_dict is False
+
+    with patch.object(torch.cuda, "is_initialized", return_value=False):
+        capture_correctness_snapshot(
+            policy=policy,
+            train_loader=resumed_loader,
+            explicit_generator=resumed_generator,
+            validation_payload=None,
+            validation_sample_ids=None,
+            validation_token_counts=None,
+        )
+
+    assert torch.equal(resumed_generator.get_state(), generator_before)
+    assert resumed_loader._iterator is None
+    assert resumed_loader._initial_iter_for_state_dict is False
+    assert resumed_loader.next_iter_state is pending_state
+    assert _state_digest(resumed_loader.next_iter_state) == pending_state_digest
+    assert capture_next_train_batch_evidence(
+        next(iter(resumed_loader))
+    ) == capture_next_train_batch_evidence(next(iter(control_loader)))
 
 
 def test_restart_restores_loader_and_generator_then_runs_real_validation() -> None:

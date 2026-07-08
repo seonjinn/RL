@@ -309,6 +309,40 @@ def evaluate_correctness_gate(
     return CorrectnessGateResult(ready=not differences, differences=differences)
 
 
+def _capture_train_loader_state(train_loader: _StatefulLoader) -> object:
+    """Read loader state without lazily creating a restored loader iterator."""
+    try:
+        loader_attributes = vars(train_loader)
+    except TypeError:
+        return train_loader.state_dict()
+    if (
+        "_iterator" not in loader_attributes
+        or "next_iter_state" not in loader_attributes
+    ):
+        return train_loader.state_dict()
+
+    iterator = loader_attributes["_iterator"]
+    pending_state = loader_attributes["next_iter_state"]
+    initial_iter_for_state_dict = loader_attributes.get(
+        "_initial_iter_for_state_dict", False
+    )
+    if not isinstance(initial_iter_for_state_dict, bool):
+        raise TypeError(
+            "Stateful train-loader iterator boundary flag must be a boolean"
+        )
+    if iterator is None:
+        return {
+            "boundary": "pending" if pending_state is not None else "not_started",
+            "initial_iter_for_state_dict": initial_iter_for_state_dict,
+            "state": pending_state,
+        }
+    return {
+        "boundary": "active",
+        "initial_iter_for_state_dict": initial_iter_for_state_dict,
+        "state": train_loader.state_dict(),
+    }
+
+
 def capture_correctness_snapshot(
     *,
     policy: _CorrectnessFingerprintPolicy,
@@ -346,7 +380,7 @@ def capture_correctness_snapshot(
             if explicit_generator is not None
             else None
         ),
-        train_loader_digest=_state_digest(train_loader.state_dict()),
+        train_loader_digest=_state_digest(_capture_train_loader_state(train_loader)),
         next_train_batch_digest=(
             _state_digest(next_train_batch) if next_train_batch is not None else None
         ),

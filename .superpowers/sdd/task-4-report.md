@@ -8,12 +8,14 @@
 - Task 4 implementation commit: `2c8bfdc5d63d8db05da34258148aea640222e311`
 - First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
 - Second-review fix: `8f1ca28d09ff9823f1932c0b3d21a796edb8edbc`
-- CW contract follow-up: the signed commit containing the final section below
+- CW contract follow-up: `175e39c9250af597e8c860d846f9be44dd39799c`
+- CW read-only capture follow-up: the signed commit containing the final section
+  below
 - Independent code-review gate: prior findings addressed; final controller
   review remains pending
-- Supported-Linux execution gate: CW job `13566467` stopped at
-  `105 passed, 1 failed` because one test expected a less granular comparator
-  path; a full post-fix rerun remains pending
+- Supported-Linux execution gate: CW job `13566796` stopped at
+  `160 passed, 1 failed` on a restored-loader audit mutation; a full post-fix
+  rerun remains pending
 
 The correctness audit is opt-in and disabled by default. The disabled path does
 not construct the auditor and adds no worker RPC, tensor reduction,
@@ -584,3 +586,161 @@ Result: exit 0 with no output after this report update.
   expectations are unchanged.
 - Confirmed no production Python, configuration, interface, or backend file is
   modified by this follow-up.
+
+## CW Linux Read-Only Capture Follow-Up
+
+### CW Failure Evidence
+
+- Job: `13566796`
+- Result before `maxfail=1` stopped the suite: `160 passed, 1 failed`
+- Failing test:
+  `tests/unit/algorithms/test_sft.py::test_restart_restores_loader_and_generator_then_runs_real_validation`
+- Audit rejection: `CorrectnessAuditError` at step 20 with difference
+  `explicit_generator_digest`
+
+### Root Cause
+
+TorchData 0.11.0 `StatefulDataLoader.load_state_dict()` leaves a newly restored
+loader at a lazy boundary: `_iterator` is `None`, the checkpoint is stored in
+`next_iter_state`, and `_initial_iter_for_state_dict` is false. Its first
+`state_dict()` call creates an iterator before returning state. PyTorch iterator
+construction consumes the loader's shared explicit generator for its base
+seed, and TorchData simultaneously moves the loader to a live iterator with no
+pending state. The first correctness snapshot therefore changed both the
+generator and loader boundary while attempting to observe them.
+
+The new real TorchData regression proves the mechanism directly: after
+`load_state_dict()`, a direct `state_dict()` changes the generator, creates the
+iterator, flips `_initial_iter_for_state_dict`, and clears `next_iter_state`.
+
+### Fix
+
+`capture_correctness_snapshot()` now obtains loader evidence through
+`_capture_train_loader_state()`. For TorchData's pending and not-started
+boundaries, the helper hashes the stored pending state and an explicit boundary
+record without calling `state_dict()` or creating an iterator. Active loaders
+continue to use `state_dict()`, and opaque protocol implementations retain the
+existing fallback.
+
+The generator digest remains enabled and in its original capture order. The
+fix does not restore RNG after mutation, suppress a comparison, pre-create an
+iterator, or consume a train batch. The regression verifies that production
+capture preserves generator bytes, pending loader state, all lazy-boundary
+fields, and the exact next naturally consumed batch against an equivalent
+no-capture control.
+
+The audit-only helper is reached only when the opt-in auditor captures a
+snapshot. The default-disabled training path remains unchanged and performs no
+loader inspection, RNG read, worker RPC, reduction, or synchronization.
+
+### Changed Files
+
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `tests/source_isolated/test_sft_event_batch_source.py`
+- `tests/unit/algorithms/test_sft.py`
+- `.superpowers/sdd/task-4-report.md`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+
+### TDD Evidence
+
+The source-isolated read-only contract was added before the production helper:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py -k reads_pending_loader_state
+```
+
+RED result: exit 1, `1 failed, 19 deselected`; the failure was
+`AssertionError: Missing required function _capture_train_loader_state`.
+
+After the helper was implemented, the same command returned
+`1 passed, 19 deselected in 0.02s`, exit 0.
+
+The real TorchData production regression cannot execute locally because the
+unit conftest requires Ray. CW job `13566796` is the RED evidence for the
+original restart path; the controller's post-fix CW run remains the required
+GREEN evidence.
+
+### Exact Local Verification
+
+Focused real regression attempt:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft.py -k "capture_is_read_only_at_lazy_restored_loader_boundary or restart_restores_loader_and_generator_then_runs_real_validation"
+```
+
+Result: exit 4 during conftest import; no unit test ran.
+
+```text
+tests/unit/conftest.py:24: in <module>
+    import ray
+E   ModuleNotFoundError: No module named 'ray'
+```
+
+Source-isolated suite:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `20 passed in 0.40s`, exit 0.
+
+Ruff lint:
+
+```bash
+ruff check nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Ruff format check:
+
+```bash
+ruff format --check nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py
+```
+
+Result: `3 files already formatted`, exit 0.
+
+Compilation:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py
+```
+
+Result: exit 0 with no output.
+
+Focused type check:
+
+```bash
+pyright nemo_rl/algorithms/sft_correctness_audit.py
+```
+
+Result: exit 1 with one environment diagnostic only:
+`Import "torch" could not be resolved (reportMissingImports)` at line 25. No
+additional type diagnostics were reported.
+
+Diff validation:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output after this report update.
+
+### Pending
+
+- The real TorchData regression and focused Ray unit suite require the
+  controller's CW Linux environment.
+- Job `13566796` is partial failing evidence only. A complete post-fix CW rerun
+  and controller review remain pending.
+
+### Self-Review
+
+- Confirmed pending/not-started capture never calls loader `state_dict()` and
+  cannot create an iterator or consume the shared generator.
+- Confirmed active and opaque loader handling preserves the existing state
+  capture behavior.
+- Confirmed the regression distinguishes direct third-party mutation from the
+  production helper and compares the next natural batch to a separate control.
+- Confirmed `explicit_generator_digest` is still captured and compared.
+- Confirmed no validation, cache, policy, worker, interface, configuration, or
+  default-disabled execution path changed.

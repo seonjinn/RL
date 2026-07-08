@@ -8,7 +8,8 @@
 - Initial review documentation: `f9361d3dd35b6e44d38c9786282cef60a73bf751`
 - First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
 - Second-review fix: `8f1ca28d09ff9823f1932c0b3d21a796edb8edbc`
-- CW test-contract follow-up: the signed commit containing this document
+- CW test-contract follow-up: `175e39c9250af597e8c860d846f9be44dd39799c`
+- CW read-only capture follow-up: the signed commit containing this document
 - Requirements: `.superpowers/sdd/task-4-brief.md`
 - Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
 
@@ -19,18 +20,18 @@ lifecycle handling, timing isolation, and the merge review gate.
 
 ## Current Decision
 
-**Code review gate: READY FOR CONTROLLER RE-REVIEW.** The two Important findings
-from the second review, its stale-document Minor, and the subsequent CW
-test-contract mismatch are addressed in the current range. This document does
-not claim that the controller has approved the follow-up.
+**Code review gate: READY FOR CONTROLLER RE-REVIEW.** The prior review findings,
+the CUDA test-contract mismatch, and the restored-loader read-only failure are
+addressed in the current range. This document does not claim that the
+controller has approved the follow-up.
 
-**Supported-Linux execution gate: PENDING FULL RERUN.** CW job `13566467`
-reached `105 passed, 1 failed` before `maxfail=1` stopped the suite. The only
-failure was a stale test expectation: the CUDA RNG case expected
-`torch_cuda_rng_digests`, while the comparator correctly returned the stronger
-device-specific path `torch_cuda_rng_digests.0`. The current follow-up updates
-only that parameterized contract. The controller must rerun the full focused
-suite on CW Linux.
+**Supported-Linux execution gate: PENDING FULL RERUN.** After the CUDA contract
+fix, CW job `13566796` reached `160 passed, 1 failed` before `maxfail=1` stopped
+the suite. The failing restart test showed that the first audit snapshot
+mutated the explicit generator while materializing a lazy restored loader
+iterator. The current follow-up avoids that mutation and adds production
+capture and next-batch parity coverage. The controller must rerun the full
+focused suite on CW Linux.
 
 The historical CW job `13559835` reported `177 passed, 3 warnings in 43.82s`
 at the approved Tasks 1-3 head `e8e13f5a9`; it does not cover either Task 4
@@ -95,10 +96,32 @@ CW job `13566467` exposed one test-only mismatch after 105 tests passed. The
 parameterized driver-state test used each dataclass field name as the expected
 difference, but CUDA RNG digests are a sequence and the production comparator
 recurses into sequences. A mutation of device 0 therefore intentionally
-reports `torch_cuda_rng_digests.0`. The test now carries an explicit expected
-path per parameter: CUDA expects the indexed path, while all scalar families
-retain their existing top-level expectation. Production comparison behavior is
-unchanged.
+reports `torch_cuda_rng_digests.0`. The test now expects the indexed path for
+CUDA, while all scalar families retain their existing top-level expectation.
+Production comparison behavior is unchanged.
+
+### CW Linux Read-Only Capture Follow-Up
+
+CW job `13566796` exposed a production read-only violation after 160 tests
+passed. TorchData 0.11.0 leaves a restored loader with `_iterator is None` and
+its checkpoint in `next_iter_state`. Calling `StatefulDataLoader.state_dict()`
+at that boundary creates the iterator. PyTorch iterator construction consumes
+the loader's shared explicit generator for its base seed, while TorchData moves
+the loader from the pending boundary to a live iterator. The audit therefore
+changed both states during observation and later rejected validation on
+`explicit_generator_digest`.
+
+Production capture now reads and hashes the pending checkpoint directly,
+including an explicit `pending` boundary marker, without calling
+`state_dict()`. It similarly represents a not-started loader without creating
+an iterator. Active and opaque loaders retain their existing state-dict path.
+The fix does not reorder generator and loader digests, restore RNG after a
+mutation, or suppress `explicit_generator_digest` comparison.
+
+The regression first demonstrates the locked TorchData mutation, then calls
+production `capture_correctness_snapshot()` and verifies that the generator,
+pending loader state, iterator boundary, and next naturally consumed batch all
+remain identical to an equivalent no-capture control.
 
 ## Invariant Matrix
 
@@ -109,7 +132,7 @@ unchanged.
 | Canonical precomputed and CPU-cache payloads remain owned and immutable | Loads own CPU tensors; submissions clone canonical CPU/precomputed payloads | Clone, mutation, failed-submission, cache lifecycle tests | Covered; current Linux rerun pending |
 | Live and precomputed loss weighting use exact valid tokens | Validation weights losses with exact `sample_mask * token_mask` counts and artifact counts | Parity and invalid-loss-shape tests | Covered; current Linux rerun pending |
 | Driver Python, NumPy, Torch CPU, and Torch CUDA RNG are exact | Production snapshots hash complete states; initialized CUDA devices use `get_rng_state_all()` | Real mutation matrix plus controlled driver CUDA API side effects | Covered; current Linux rerun pending |
-| Explicit generator and train-loader position are exact | `Generator.get_state()` and loader `state_dict()` are hashed without advancing iteration | Real mutation tests and restored StatefulDataLoader restart/control test | Covered; current Linux rerun pending |
+| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; pending/not-started TorchData state is hashed without creating an iterator; active loader state is read from `state_dict()` | Real mutation tests plus restored-boundary capture and next-batch control test | Covered locally by source contract; current Linux rerun pending |
 | Runtime validation payload survives exceptions | External collector exists independently of result and finalizes after restoration attempt | Mutating submission-failure, invalid-loss, and restore-failure production tests | Covered; current Linux rerun pending |
 | Ordered runtime sample identity is exact | Evidence independently hashes ordered `idx` and `input_ids` | Production path mutates only `idx` and asserts sample-identity rejection | Covered; current Linux rerun pending |
 | Runtime exact token counts are independent evidence | Counts are recomputed from current `sample_mask * token_mask` before and after submission | Production path mutates only a mask and asserts token-count rejection | Covered; current Linux rerun pending |
@@ -127,10 +150,10 @@ unchanged.
 
 ## Verification Evidence
 
-Passed locally on the current second-review follow-up:
+Passed locally on the current read-only follow-up:
 
 - `/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py`
-  returned `19 passed`.
+  returned `20 passed`.
 - Ruff lint passed on all changed Python files.
 - Ruff format check passed on all changed Python files.
 - Python compilation passed for all changed Python files and requested focused
@@ -157,6 +180,13 @@ CW Linux partial result:
 - Expected: `("torch_cuda_rng_digests",)`.
 - Actual: `("torch_cuda_rng_digests.0",)`.
 - A complete rerun after the test-contract correction remains pending; this
+  document does not claim that the supported-Linux gate passed.
+
+- Job `13566796`: `160 passed, 1 failed`, then stopped at `maxfail=1`.
+- Failure:
+  `tests/unit/algorithms/test_sft.py::test_restart_restores_loader_and_generator_then_runs_real_validation`.
+- Gate difference: `explicit_generator_digest`.
+- A complete rerun after the read-only capture correction remains pending; this
   document does not claim that the supported-Linux gate passed.
 
 ## Residual Limits
