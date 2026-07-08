@@ -25,7 +25,7 @@ METRIC_KEYS = {
     "approx_kl": "train/gen_kl_error",
 }
 EXPECTED_STEPS = set(range(2, 21))
-SPECDEC_VARIANTS = frozenset({"eagle3_k5", "dynamic"})
+SPECDEC_VARIANTS = frozenset({"eagle3_k5", "eagle3_k7", "eagle3_k9", "dynamic"})
 SPECDEC_METRICS = frozenset({"acceptance_rate", "mean_acceptance_length"})
 SPECDEC_COUNTER_KEYS = {
     "num_drafts": "train/vllm/spec_num_drafts",
@@ -48,8 +48,6 @@ MATCHED_SETUP_FIELDS = (
     "container",
     "container_sha256",
     "max_steps",
-    "static_k",
-    "dynamic_schedule",
 )
 
 

@@ -26,13 +26,13 @@ false on Pre-Tyche.
 
 ## Eagle-3 DynamicSD on AWS-DFW
 
-The DynamicSD cohort compares target-only decoding, fixed Eagle-3 K5, and
+The DynamicSD cohort compares target-only decoding, fixed Eagle-3 K5/K7/K9, and
 Eagle-3 with scheduler-batch-size-dependent K for Qwen3-30B-A3B and Qwen3-32B.
 All three variants use the same upstream performance recipe, vLLM 0.24,
 `temperature=1.0`, `top_p=1.0`, and PIECEWISE CUDA Graphs. Keep this cohort
 separate from historical eager-mode or full-CUDA-graph measurements.
 
-Render all six commands locally:
+Render all ten commands locally:
 
 ```bash
 experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh \

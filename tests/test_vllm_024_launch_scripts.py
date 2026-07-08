@@ -145,6 +145,33 @@ def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:
     assert "Qwen3-30B-A3B-Thinking-2507-speculator.eagle3" in output
 
 
+def test_dynamicsd_launcher_renders_aggressive_fixed_k_values() -> None:
+    k7_output = _dry_run_dynamicsd("qwen32b", "eagle3_k7")
+    k9_output = _dry_run_dynamicsd("qwen32b", "eagle3_k9")
+
+    assert "speculative_config.num_speculative_tokens=7" in k7_output
+    assert "speculative_config.num_speculative_tokens=9" in k9_output
+    assert "num_speculative_tokens_per_batch_size" not in k7_output
+    assert "num_speculative_tokens_per_batch_size" not in k9_output
+
+
+def test_dynamicsd_launcher_all_includes_k7_and_k9() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "all",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+    )
+
+    assert "contract-test-attempt-1-qwen30ba3b-eagle3_k7" in output
+    assert "contract-test-attempt-1-qwen30ba3b-eagle3_k9" in output
+
+
 def test_dynamicsd_launcher_renders_dynamic_schedule() -> None:
     output = _dry_run_dynamicsd("qwen32b", "dynamic")
 

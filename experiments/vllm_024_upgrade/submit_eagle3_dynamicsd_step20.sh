@@ -81,10 +81,11 @@ case "${MODEL_SELECTION}" in
 esac
 
 case "${VARIANT_SELECTION}" in
-  all) variants=(baseline eagle3_k5 dynamic) ;;
-  baseline|eagle3_k5|dynamic) variants=("${VARIANT_SELECTION}") ;;
+  all) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 dynamic) ;;
+  aggressive) variants=(eagle3_k7 eagle3_k9) ;;
+  baseline|eagle3_k5|eagle3_k7|eagle3_k9|dynamic) variants=("${VARIANT_SELECTION}") ;;
   *)
-    echo "ERROR: variant must be all, baseline, eagle3_k5, or dynamic" >&2
+    echo "ERROR: variant must be all, aggressive, baseline, eagle3_k5, eagle3_k7, eagle3_k9, or dynamic" >&2
     exit 2
     ;;
 esac
@@ -94,6 +95,7 @@ submit_one() {
   local variant="$2"
   local recipe
   local draft_model
+  local draft_k="${STATIC_K}"
   local nodes
   local model_port_offset
 
@@ -123,8 +125,23 @@ submit_one() {
   local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${model}-${variant}"
   local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${model}-${variant}"
   local variant_port_offset=0
-  [[ "${variant}" == "eagle3_k5" ]] && variant_port_offset=200
-  [[ "${variant}" == "dynamic" ]] && variant_port_offset=400
+  case "${variant}" in
+    eagle3_k5)
+      draft_k=5
+      variant_port_offset=200
+      ;;
+    dynamic)
+      variant_port_offset=400
+      ;;
+    eagle3_k7)
+      draft_k=7
+      variant_port_offset=600
+      ;;
+    eagle3_k9)
+      draft_k=9
+      variant_port_offset=800
+      ;;
+  esac
   local vllm_port=$((VLLM_PORT_BASE + model_port_offset + variant_port_offset))
 
   local overrides=(
@@ -147,7 +164,7 @@ submit_one() {
     local specdec_overrides=(
       "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
       "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
-      "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${STATIC_K}"
+      "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
       "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
     )
     if [[ "${variant}" == "dynamic" ]]; then
@@ -243,7 +260,7 @@ submit_one() {
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
-        "${MAX_STEPS}" "${STATIC_K}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
+        "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
       ;;
     *)
       echo "ERROR: mode must be dry-run, test-only, or submit" >&2
