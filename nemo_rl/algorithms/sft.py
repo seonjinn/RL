@@ -18,7 +18,7 @@ import sys
 import time
 import warnings
 from copy import deepcopy
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from functools import partial
 from numbers import Real
@@ -32,6 +32,10 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import NLLLossFn
+from nemo_rl.algorithms.sft_validation_artifact import (
+    PrecomputedValidationEvent,
+    clone_validation_event_data,
+)
 from nemo_rl.algorithms.utils import maybe_pad_last_batch, set_seed
 from nemo_rl.data import DataConfig
 from nemo_rl.data.collate_fn import rl_collate_fn
@@ -75,6 +79,7 @@ class _SFTValidationResult:
     val_metrics: dict[str, Any]
     timing_metrics: dict[str, Any]
     validation_loss_available: bool
+    pending_validation_cache_entry: "_CachedValidationEvent | None" = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +220,12 @@ class SFTConfig(BaseModel, extra="allow"):
     val_global_batch_size: int = 32
     val_micro_batch_size: int = 1
     val_at_start: bool = True
+    # Consume validation from the configured dataloader or a verified event artifact.
+    validation_input_mode: Literal["dataloader", "precomputed_event"] = "dataloader"
+    validation_precomputed_manifest: str | None = None
+    validation_precomputed_dataset_sha256: str | None = None
+    validation_precomputed_tokenizer_sha256: str | None = None
+    validation_precomputed_container_sha256: str | None = None
     # Run each validation batch separately or submit the full four-batch event once.
     validation_execution_mode: Literal["per_batch", "event_batch"] = "per_batch"
     # Reuse the immutable CPU event across validation calls within one SFT process.
@@ -425,6 +436,38 @@ def _validate_event_execution_config(
     val_batch_size: int,
     val_mbs: int,
 ) -> tuple[int, int, float] | None:
+    precomputed_event = sft_config.validation_input_mode == "precomputed_event"
+    if precomputed_event:
+        if (
+            sft_config.validation_execution_mode != "event_batch"
+            or not sft_config.validation_precomputed_manifest
+        ):
+            raise ValueError(
+                "Precomputed validation requires event_batch and a manifest"
+            )
+        if sft_config.validation_event_cache_mode != "off":
+            raise ValueError(
+                "Precomputed validation does not support the runtime CPU cache"
+            )
+        for digest, label in (
+            (sft_config.validation_precomputed_dataset_sha256, "dataset SHA-256"),
+            (
+                sft_config.validation_precomputed_tokenizer_sha256,
+                "tokenizer SHA-256",
+            ),
+            (
+                sft_config.validation_precomputed_container_sha256,
+                "container SHA-256",
+            ),
+        ):
+            if (
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise ValueError(
+                    "Precomputed validation requires a trusted 64-character "
+                    f"lowercase {label}"
+                )
     if sft_config.validation_execution_mode != "event_batch":
         if sft_config.validation_event_cache_mode != "off":
             raise ValueError(
@@ -459,6 +502,9 @@ def _validate_event_execution_config(
             f"val_micro_batch_size=1; got {sft_config.val_micro_batch_size} "
             f"and {val_mbs}"
         )
+
+    if precomputed_event:
+        return None
 
     max_payload_bytes = sft_config.validation_event_max_payload_bytes
     if max_payload_bytes is None or max_payload_bytes <= 0:
@@ -881,7 +927,7 @@ def _event_validation_losses(
     return losses
 
 
-def _validate_with_loss_availability(
+def _validate_with_loss_availability_impl(
     policy: PolicyInterface,
     val_dataloader: Optional[StatefulDataLoader],
     tokenizer,
@@ -893,6 +939,10 @@ def _validate_with_loss_availability(
     val_mbs: int,
     comparison_instrumentation_enabled: bool = False,
     validation_event_cache: _ValidationEventCache | None = None,
+    *,
+    precomputed_validation_event: PrecomputedValidationEvent | None = None,
+    mark_validation_prepared: Callable[[], None],
+    restore_training_mode: Callable[[], None],
 ) -> _SFTValidationResult:
     """Run validation and retain whether the reported loss was measured."""
     event_memory_config = _validate_event_execution_config(
@@ -901,7 +951,17 @@ def _validate_with_loss_availability(
         val_batch_size=val_batch_size,
         val_mbs=val_mbs,
     )
-    if val_dataloader is None:
+    precomputed_mode = master_config.sft.validation_input_mode == "precomputed_event"
+    if precomputed_mode and precomputed_validation_event is None:
+        raise ValueError(
+            "Precomputed validation mode requires a loaded validation event"
+        )
+    if not precomputed_mode and precomputed_validation_event is not None:
+        raise ValueError(
+            "A precomputed validation event requires validation_input_mode="
+            "precomputed_event"
+        )
+    if val_dataloader is None and not precomputed_mode:
         assert master_config.sft.val_period <= 0, (
             "val_dataloader is None, so sft.val_period must be <= 0"
         )
@@ -962,8 +1022,10 @@ def _validate_with_loss_availability(
                 event_deep_payload_bytes = existing_entry.deep_payload_bytes
                 event_cache_hit = True
 
+        mark_validation_prepared()
         policy.prepare_for_training()
-        if cache_entry is None:
+        if cache_entry is None and not precomputed_mode:
+            assert val_dataloader is not None
             validation_batches = (
                 _iter_timed_batches(
                     val_dataloader,
@@ -1075,7 +1137,44 @@ def _validate_with_loss_availability(
                 if val_batches > 0 and batch_idx >= val_batches - 1:
                     break
 
-        if validation_execution_mode == "event_batch":
+        if precomputed_validation_event is not None:
+            event_num_valid_tokens = list(precomputed_validation_event.num_valid_tokens)
+            event_payload_bytes = precomputed_validation_event.retained_bytes
+            submitted_val_data = clone_validation_event_data(
+                precomputed_validation_event.data
+            )
+            val_results = policy.train(
+                submitted_val_data,
+                loss_fn,
+                eval_mode=True,
+                gbs=val_batch_size,
+                mbs=val_mbs,
+                **timing_kwargs,
+            )
+            if comparison_instrumentation_enabled:
+                for name, elapsed in val_results.get("evaluation_timings", {}).items():
+                    timer.record_elapsed(name, float(elapsed))
+
+            if len(val_results["all_mb_metrics"]) == 0:
+                warnings.warn(
+                    "No validation metrics were collected for this batch."
+                    " This is likely because there were no valid samples."
+                )
+            else:
+                megatron_backend = (
+                    "megatron_cfg" in master_config.policy
+                    and master_config.policy["megatron_cfg"]["enabled"]
+                )
+                losses = _event_validation_losses(
+                    val_results,
+                    _EVENT_VALIDATION_BATCH_COUNT,
+                    megatron_backend=megatron_backend,
+                )
+                for loss, num_valid_tokens in zip(losses, event_num_valid_tokens):
+                    if num_valid_tokens > 0:
+                        val_metrics["val_loss"] += float(loss) * num_valid_tokens
+                        sum_num_valid_tokens += num_valid_tokens
+        elif validation_execution_mode == "event_batch":
             if combined_val_data is None:
                 combined_val_data = _combine_validation_event_batches(
                     event_batches,
@@ -1185,12 +1284,10 @@ def _validate_with_loss_availability(
                 " This is likely because there were no valid samples in the validation set."
             )
 
-        # Calculate validation metrics
-        policy.prepare_for_training()
+        restore_training_mode()
         if new_cache_entry is not None:
             if validation_event_cache is None:
                 raise RuntimeError("Validation event cache was not initialized")
-            validation_event_cache.entry = new_cache_entry
 
     # Get timing metrics
     timing_metrics = timer.get_timing_metrics(reduction_op="sum")
@@ -1200,6 +1297,8 @@ def _validate_with_loss_availability(
         timing_metrics["validation_event_deep_payload_bytes"] = event_deep_payload_bytes
     if master_config.sft.validation_event_cache_mode == "cpu":
         timing_metrics["validation_event_cache_hit"] = int(event_cache_hit)
+    if precomputed_mode:
+        timing_metrics["validation_precomputed_event"] = 1
     validation_time = timing_metrics.get("total_validation_time", 0)
 
     if validation_loss_available:
@@ -1219,7 +1318,64 @@ def _validate_with_loss_availability(
         val_metrics=val_metrics,
         timing_metrics=timing_metrics,
         validation_loss_available=validation_loss_available,
+        pending_validation_cache_entry=new_cache_entry,
     )
+
+
+def _validate_with_loss_availability(
+    policy: PolicyInterface,
+    val_dataloader: Optional[StatefulDataLoader],
+    tokenizer,
+    loss_fn,
+    step: int,
+    master_config: MasterConfig,
+    val_batches: int,
+    val_batch_size: int,
+    val_mbs: int,
+    comparison_instrumentation_enabled: bool = False,
+    validation_event_cache: _ValidationEventCache | None = None,
+    *,
+    precomputed_validation_event: PrecomputedValidationEvent | None = None,
+) -> _SFTValidationResult:
+    """Run validation and restore training mode after every prepared execution."""
+    validation_prepared = False
+
+    def mark_validation_prepared() -> None:
+        nonlocal validation_prepared
+        validation_prepared = True
+
+    def restore_training_mode() -> None:
+        nonlocal validation_prepared
+        if validation_prepared:
+            validation_prepared = False
+            policy.prepare_for_training()
+
+    result: _SFTValidationResult | None = None
+    try:
+        result = _validate_with_loss_availability_impl(
+            policy,
+            val_dataloader,
+            tokenizer,
+            loss_fn,
+            step,
+            master_config,
+            val_batches,
+            val_batch_size,
+            val_mbs,
+            comparison_instrumentation_enabled,
+            validation_event_cache,
+            precomputed_validation_event=precomputed_validation_event,
+            mark_validation_prepared=mark_validation_prepared,
+            restore_training_mode=restore_training_mode,
+        )
+    finally:
+        if validation_prepared:
+            policy.prepare_for_training()
+    if result.pending_validation_cache_entry is not None:
+        if validation_event_cache is None:
+            raise RuntimeError("Validation event cache was not initialized")
+        validation_event_cache.entry = result.pending_validation_cache_entry
+    return result
 
 
 def validate(
@@ -1234,6 +1390,8 @@ def validate(
     val_mbs: int,
     comparison_instrumentation_enabled: bool = False,
     validation_event_cache: _ValidationEventCache | None = None,
+    *,
+    precomputed_validation_event: PrecomputedValidationEvent | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run validation and return the public metrics/timings two-tuple."""
     result = _validate_with_loss_availability(
@@ -1248,6 +1406,7 @@ def validate(
         val_mbs,
         comparison_instrumentation_enabled,
         validation_event_cache,
+        precomputed_validation_event=precomputed_validation_event,
     )
     return result.val_metrics, result.timing_metrics
 
@@ -1262,6 +1421,8 @@ def sft_train(
     logger,
     checkpointer,
     sft_save_state: SFTSaveState,
+    *,
+    precomputed_validation_event: PrecomputedValidationEvent | None = None,
 ) -> None:
     # Run basic sft training
     timer = Timer()
@@ -1320,6 +1481,7 @@ def sft_train(
             val_mbs=sft_config.val_micro_batch_size,
             comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
             validation_event_cache=validation_event_cache,
+            precomputed_validation_event=precomputed_validation_event,
         )
         val_metrics = validation_result.val_metrics
         validation_timings = validation_result.timing_metrics
@@ -1421,6 +1583,7 @@ def sft_train(
                         val_mbs=sft_config.val_micro_batch_size,
                         comparison_instrumentation_enabled=logger.comparison_metrics_enabled,
                         validation_event_cache=validation_event_cache,
+                        precomputed_validation_event=precomputed_validation_event,
                     )
                     val_metrics = validation_result.val_metrics
                     validation_timings = validation_result.timing_metrics

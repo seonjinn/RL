@@ -419,6 +419,7 @@ def test_event_contract_validation_and_submission_order() -> None:
         namespace={"math": math},
     )
     config = SimpleNamespace(
+        validation_input_mode="dataloader",
         validation_execution_mode="event_batch",
         validation_event_cache_mode="off",
         validation_event_cache_dataset_sha256=None,
@@ -438,7 +439,7 @@ def test_event_contract_validation_and_submission_order() -> None:
             val_mbs=1,
         )
 
-    validate_node = _function_node(sft_path, "_validate_with_loss_availability")
+    validate_node = _function_node(sft_path, "_validate_with_loss_availability_impl")
     calls = [node for node in ast.walk(validate_node) if isinstance(node, ast.Call)]
     config_call = next(
         node
@@ -488,3 +489,292 @@ def test_event_contract_validation_and_submission_order() -> None:
         if isinstance(node.func, ast.Attribute) and node.func.attr == "clear"
     )
     assert from_batches_call.lineno < clear_call.lineno
+
+
+def test_precomputed_event_contract_fails_closed_without_runtime_dependencies() -> None:
+    functions = _load_functions(
+        REPO_ROOT / "nemo_rl/algorithms/sft.py",
+        ["_validate_event_execution_config"],
+        namespace={"math": math, "re": __import__("re")},
+    )
+    base = {
+        "validation_input_mode": "precomputed_event",
+        "validation_execution_mode": "event_batch",
+        "validation_event_cache_mode": "off",
+        "validation_event_cache_dataset_sha256": None,
+        "validation_precomputed_manifest": "/tmp/validation.manifest.json",
+        "validation_precomputed_dataset_sha256": "a" * 64,
+        "validation_precomputed_tokenizer_sha256": "b" * 64,
+        "validation_precomputed_container_sha256": "c" * 64,
+        "val_batches": 4,
+        "val_global_batch_size": 64,
+        "val_micro_batch_size": 1,
+        "validation_event_max_payload_bytes": None,
+        "validation_event_verified_ray_object_store_available_bytes": None,
+        "validation_event_memory_safety_multiplier": 2.0,
+    }
+
+    assert (
+        functions["_validate_event_execution_config"](
+            SimpleNamespace(**base),
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+        )
+        is None
+    )
+
+    for field_name, message in (
+        ("validation_precomputed_manifest", "event_batch and a manifest"),
+        ("validation_precomputed_dataset_sha256", "dataset SHA-256"),
+        ("validation_precomputed_tokenizer_sha256", "tokenizer SHA-256"),
+        ("validation_precomputed_container_sha256", "container SHA-256"),
+    ):
+        invalid = dict(base)
+        invalid[field_name] = None
+        with pytest.raises(ValueError, match=message):
+            functions["_validate_event_execution_config"](
+                SimpleNamespace(**invalid),
+                val_batches=4,
+                val_batch_size=64,
+                val_mbs=1,
+            )
+
+    cached = dict(base)
+    cached["validation_event_cache_mode"] = "cpu"
+    with pytest.raises(ValueError, match="runtime CPU cache"):
+        functions["_validate_event_execution_config"](
+            SimpleNamespace(**cached),
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+        )
+
+
+def test_validation_provenance_is_shared_with_the_producer() -> None:
+    producer_path = REPO_ROOT / "examples/prepare_sft_validation_event.py"
+    producer_tree = ast.parse(producer_path.read_text())
+    shared_import = next(
+        node
+        for node in producer_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "nemo_rl.algorithms.sft_validation_provenance"
+    )
+    imported_names = {alias.name for alias in shared_import.names}
+    assert {
+        "build_validation_artifact_fingerprint",
+        "derive_preprocessing_sha256",
+        "validate_validation_source_config",
+    } <= imported_names
+
+    producer_functions = {
+        node.name for node in producer_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert (
+        not {
+            "build_validation_artifact_fingerprint",
+            "derive_preprocessing_sha256",
+            "validate_validation_source_config",
+        }
+        & producer_functions
+    )
+
+    shared_path = REPO_ROOT / "nemo_rl/algorithms/sft_validation_provenance.py"
+    shared_functions = {
+        node.name
+        for node in ast.parse(shared_path.read_text()).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert {
+        "build_validation_artifact_fingerprint",
+        "derive_preprocessing_sha256",
+        "validate_validation_source_config",
+    } <= shared_functions
+
+
+def test_precomputed_event_is_explicit_cloned_and_restored_in_finally() -> None:
+    sft_path = REPO_ROOT / "nemo_rl/algorithms/sft.py"
+    validation_node = _function_node(sft_path, "_validate_with_loss_availability")
+    validation_impl_node = _function_node(
+        sft_path, "_validate_with_loss_availability_impl"
+    )
+    validate_node = _function_node(sft_path, "validate")
+    train_node = _function_node(sft_path, "sft_train")
+
+    for function_node in (validation_node, validate_node, train_node):
+        assert "precomputed_validation_event" in {
+            argument.arg for argument in function_node.args.kwonlyargs
+        }
+
+    clone_calls = [
+        node
+        for node in ast.walk(validation_impl_node)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "clone_validation_event_data"
+    ]
+    assert len(clone_calls) == 1
+    successful_restore_calls = [
+        node
+        for node in ast.walk(validation_impl_node)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "restore_training_mode"
+    ]
+    assert len(successful_restore_calls) == 1
+
+    restoration_tries = []
+    for try_node in (
+        node for node in ast.walk(validation_node) if isinstance(node, ast.Try)
+    ):
+        final_calls = [
+            node
+            for statement in try_node.finalbody
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "prepare_for_training"
+        ]
+        if final_calls:
+            restoration_tries.append(try_node)
+    assert restoration_tries
+
+    cache_publications = [
+        node
+        for node in ast.walk(validation_node)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Attribute) and target.attr == "entry"
+            for target in node.targets
+        )
+    ]
+    assert len(cache_publications) == 1
+    assert cache_publications[0].lineno > restoration_tries[0].end_lineno
+
+    for caller_node, callee_name in (
+        (validate_node, "_validate_with_loss_availability"),
+        (train_node, "_validate_with_loss_availability"),
+    ):
+        forwarded_calls = [
+            node
+            for node in ast.walk(caller_node)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == callee_name
+        ]
+        assert forwarded_calls
+        assert all(
+            any(
+                keyword.arg == "precomputed_validation_event"
+                for keyword in call.keywords
+            )
+            for call in forwarded_calls
+        )
+
+
+def test_runtime_loads_verified_event_before_distributed_or_data_setup() -> None:
+    runner_path = REPO_ROOT / "examples/run_sft.py"
+    loader_node = _function_node(runner_path, "_load_precomputed_validation_event")
+    main_node = _function_node(runner_path, "main")
+
+    loader_calls = [
+        node for node in ast.walk(loader_node) if isinstance(node, ast.Call)
+    ]
+    called_names = {
+        node.func.id for node in loader_calls if isinstance(node.func, ast.Name)
+    }
+    assert {
+        "_validate_event_execution_config",
+        "validate_validation_source_config",
+        "derive_preprocessing_sha256",
+        "build_validation_artifact_fingerprint",
+        "load_validation_event",
+    } <= called_names
+
+    loader_source = ast.unparse(loader_node)
+    for field_name in (
+        "validation_precomputed_dataset_sha256",
+        "validation_precomputed_tokenizer_sha256",
+        "validation_precomputed_container_sha256",
+    ):
+        assert field_name in loader_source
+
+    load_call = next(
+        node
+        for node in loader_calls
+        if isinstance(node.func, ast.Name) and node.func.id == "load_validation_event"
+    )
+    assert isinstance(load_call.args[1], ast.Name)
+    assert load_call.args[1].id == "expected_fingerprint"
+
+    main_calls = [node for node in ast.walk(main_node) if isinstance(node, ast.Call)]
+    precomputed_load = next(
+        node
+        for node in main_calls
+        if isinstance(node.func, ast.Name)
+        and node.func.id == "_load_precomputed_validation_event"
+    )
+    init_ray_call = next(
+        node
+        for node in main_calls
+        if isinstance(node.func, ast.Name) and node.func.id == "init_ray"
+    )
+    tokenizer_call = next(
+        node
+        for node in main_calls
+        if isinstance(node.func, ast.Name) and node.func.id == "get_tokenizer"
+    )
+    setup_data_calls = [
+        node
+        for node in main_calls
+        if isinstance(node.func, ast.Name) and node.func.id == "setup_data"
+    ]
+    setup_call = next(
+        node
+        for node in main_calls
+        if isinstance(node.func, ast.Name) and node.func.id == "setup"
+    )
+    assert precomputed_load.lineno < init_ray_call.lineno
+    assert precomputed_load.lineno < tokenizer_call.lineno
+    assert all(precomputed_load.lineno < call.lineno for call in setup_data_calls)
+    assert precomputed_load.lineno < setup_call.lineno
+    assert any(
+        any(
+            keyword.arg == "load_validation"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+            for keyword in call.keywords
+        )
+        for call in setup_data_calls
+    )
+
+    sft_train_call = next(
+        node
+        for node in main_calls
+        if isinstance(node.func, ast.Name) and node.func.id == "sft_train"
+    )
+    assert any(
+        keyword.arg == "precomputed_validation_event"
+        for keyword in sft_train_call.keywords
+    )
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        Path("examples/configs/sft.yaml"),
+        Path("examples/configs/sft_superv3_prepacked.yaml"),
+        Path("tests/unit/reference_configs/sft.yaml"),
+    ],
+)
+def test_sft_exemplar_configs_document_precomputed_inputs(config_path: Path) -> None:
+    config_text = (REPO_ROOT / config_path).read_text()
+
+    assert "validation_input_mode: dataloader" in config_text
+    for field_name in (
+        "validation_precomputed_manifest",
+        "validation_precomputed_dataset_sha256",
+        "validation_precomputed_tokenizer_sha256",
+        "validation_precomputed_container_sha256",
+    ):
+        assert f"{field_name}: null" in config_text

@@ -38,9 +38,11 @@ from nemo_rl.algorithms.sft import (
     _optional_float,
     _recursive_deep_payload_bytes,
     _recursive_tensor_payload_bytes,
+    _validate_event_execution_config,
     sft_train,
     validate,
 )
+from nemo_rl.algorithms.sft_validation_artifact import PrecomputedValidationEvent
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.utils.timer import Timer
 
@@ -256,6 +258,36 @@ def _validation_config(execution_mode: str, **overrides: object) -> MasterConfig
     )
 
 
+def _precomputed_validation_config(**overrides: object) -> MasterConfig:
+    return _validation_config(
+        "event_batch",
+        validation_input_mode="precomputed_event",
+        validation_precomputed_manifest="/tmp/validation.manifest.json",
+        validation_precomputed_dataset_sha256="a" * 64,
+        validation_precomputed_tokenizer_sha256="b" * 64,
+        validation_precomputed_container_sha256="c" * 64,
+        validation_event_cache_mode="off",
+        **overrides,
+    )
+
+
+def _precomputed_event_fixture(
+    num_valid_tokens: tuple[int, int, int, int] = (128, 128, 128, 128),
+) -> PrecomputedValidationEvent:
+    data = BatchedDataDict(
+        input_ids=torch.zeros((256, 2), dtype=torch.int64),
+        input_lengths=torch.full((256,), 2, dtype=torch.int64),
+        sample_mask=torch.ones(256, dtype=torch.float32),
+        token_mask=torch.ones((256, 2), dtype=torch.float32),
+    )
+    return PrecomputedValidationEvent(
+        data=data,
+        num_valid_tokens=num_valid_tokens,
+        payload_digest="d" * 64,
+        retained_bytes=sum(tensor.nbytes for tensor in data.values()),
+    )
+
+
 def _packed_validation_batch(
     batch_idx: int,
     *,
@@ -322,11 +354,204 @@ def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
     assert SFTConfig().validation_execution_mode == "per_batch"
     assert SFTConfig().validation_event_cache_mode == "off"
     assert SFTConfig().validation_event_cache_dataset_sha256 is None
+    assert SFTConfig().validation_input_mode == "dataloader"
+    assert SFTConfig().validation_precomputed_manifest is None
 
     with pytest.raises(ValidationError, match="validation_execution_mode"):
         SFTConfig(validation_execution_mode="unsupported")
     with pytest.raises(ValidationError, match="validation_event_cache_mode"):
         SFTConfig(validation_event_cache_mode="unsupported")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {"validation_execution_mode": "per_batch"},
+            "requires event_batch and a manifest",
+        ),
+        (
+            {"validation_precomputed_manifest": None},
+            "requires event_batch and a manifest",
+        ),
+    ],
+)
+def test_precomputed_mode_requires_event_batch_and_manifest(
+    overrides: dict[str, object], message: str
+) -> None:
+    config = _precomputed_validation_config(**overrides)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_event_execution_config(
+            config.sft,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "message"),
+    [
+        ("validation_precomputed_dataset_sha256", "dataset SHA-256"),
+        ("validation_precomputed_tokenizer_sha256", "tokenizer SHA-256"),
+        ("validation_precomputed_container_sha256", "container SHA-256"),
+    ],
+)
+def test_precomputed_mode_requires_trusted_external_digests(
+    field_name: str, message: str
+) -> None:
+    config = _precomputed_validation_config(**{field_name: None})
+
+    with pytest.raises(ValueError, match=message):
+        _validate_event_execution_config(
+            config.sft,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+        )
+
+
+def test_precomputed_mode_rejects_runtime_cpu_cache() -> None:
+    config = _precomputed_validation_config(
+        validation_event_cache_mode="cpu",
+    )
+
+    with pytest.raises(ValueError, match="runtime CPU cache"):
+        _validate_event_execution_config(
+            config.sft,
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("validation_args", "message"),
+    [
+        ({"val_batches": 3}, "val_batches=4"),
+        ({"val_batch_size": 32}, "val_global_batch_size=64"),
+        ({"val_mbs": 2}, "val_micro_batch_size=1"),
+    ],
+)
+def test_precomputed_mode_requires_fixed_event_shape(
+    validation_args: dict[str, int], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _validate_event_execution_config(
+            _precomputed_validation_config().sft,
+            val_batches=validation_args.get("val_batches", 4),
+            val_batch_size=validation_args.get("val_batch_size", 64),
+            val_mbs=validation_args.get("val_mbs", 1),
+        )
+
+
+def test_precomputed_validation_never_iterates_loader() -> None:
+    loader = MagicMock()
+    loader.__iter__.side_effect = AssertionError("must not iterate")
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+
+    metrics, timings = validate(
+        policy=policy,
+        val_dataloader=loader,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=_precomputed_validation_config(),
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        precomputed_validation_event=_precomputed_event_fixture(),
+    )
+
+    assert metrics["val_loss"] == pytest.approx(2.5)
+    assert timings["validation_precomputed_event"] == 1
+    loader.__iter__.assert_not_called()
+
+
+def test_precomputed_validation_clones_every_submission() -> None:
+    event = _precomputed_event_fixture()
+    observed_first_values: list[int] = []
+    submitted: list[BatchedDataDict] = []
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    result = policy.train.return_value
+
+    def mutate_submission(
+        data: BatchedDataDict, *_args: object, **_kwargs: object
+    ) -> dict[str, object]:
+        submitted.append(data)
+        observed_first_values.append(int(data["input_ids"][0, 0].item()))
+        data["input_ids"][0, 0] = -1
+        return result
+
+    policy.train.side_effect = mutate_submission
+    for step in (20, 40):
+        validate(
+            policy=policy,
+            val_dataloader=None,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=step,
+            master_config=_precomputed_validation_config(),
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            precomputed_validation_event=event,
+        )
+
+    assert submitted[0] is not submitted[1]
+    assert observed_first_values == [0, 0]
+    assert event.data["input_ids"][0, 0].item() == 0
+
+
+def test_precomputed_and_live_event_weight_losses_identically() -> None:
+    batches = [
+        _packed_validation_batch(0, valid_rows=64),
+        _packed_validation_batch(1, valid_rows=32),
+        _packed_validation_batch(2, valid_rows=16),
+        _packed_validation_batch(3, valid_rows=63),
+    ]
+    losses = [1.0, 2.0, 4.0, 8.0]
+    num_valid_tokens = (128, 64, 32, 126)
+    live_policy = _validation_policy([loss / 4 for loss in losses])
+    precomputed_policy = _validation_policy([loss / 4 for loss in losses])
+
+    live = _run_validation(live_policy, batches, "event_batch")
+    precomputed, _ = validate(
+        policy=precomputed_policy,
+        val_dataloader=None,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=_precomputed_validation_config(),
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        precomputed_validation_event=_precomputed_event_fixture(num_valid_tokens),
+    )
+
+    assert precomputed["val_loss"] == pytest.approx(live["val_loss"])
+
+
+def test_precomputed_validation_restores_training_mode_on_error() -> None:
+    policy = _validation_policy([0.25, 0.5, 0.75, 1.0])
+    policy.train.side_effect = RuntimeError("injected validation failure")
+
+    with pytest.raises(RuntimeError, match="injected validation failure"):
+        validate(
+            policy=policy,
+            val_dataloader=None,
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=_precomputed_validation_config(),
+            val_batches=4,
+            val_batch_size=64,
+            val_mbs=1,
+            precomputed_validation_event=_precomputed_event_fixture(),
+        )
+
+    assert policy.prepare_for_training.call_count == 2
 
 
 def test_validation_cpu_cache_rejects_per_batch_execution_before_iteration() -> None:

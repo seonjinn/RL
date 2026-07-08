@@ -10,6 +10,11 @@ sft:
   val_global_batch_size: 32
   val_micro_batch_size: 1
   val_at_start: true
+  validation_input_mode: dataloader
+  validation_precomputed_manifest: null
+  validation_precomputed_dataset_sha256: null
+  validation_precomputed_tokenizer_sha256: null
+  validation_precomputed_container_sha256: null
   validation_execution_mode: per_batch
   validation_event_cache_mode: "off"
   validation_event_cache_dataset_sha256: null

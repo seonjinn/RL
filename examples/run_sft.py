@@ -16,11 +16,26 @@ import argparse
 import os
 import pprint
 from functools import partial
+from pathlib import Path
 
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 
-from nemo_rl.algorithms.sft import MasterConfig, setup, sft_train
+from nemo_rl.algorithms.sft import (
+    MasterConfig,
+    _validate_event_execution_config,
+    setup,
+    sft_train,
+)
+from nemo_rl.algorithms.sft_validation_artifact import (
+    PrecomputedValidationEvent,
+    load_validation_event,
+)
+from nemo_rl.algorithms.sft_validation_provenance import (
+    build_validation_artifact_fingerprint,
+    derive_preprocessing_sha256,
+    validate_validation_source_config,
+)
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data import DataConfig
 from nemo_rl.data.datasets import (
@@ -166,6 +181,41 @@ def setup_data(
     return dataset, val_dataset
 
 
+def _load_precomputed_validation_event(
+    config: MasterConfig,
+) -> PrecomputedValidationEvent | None:
+    if config.sft.validation_input_mode != "precomputed_event":
+        return None
+    _validate_event_execution_config(
+        config.sft,
+        val_batches=config.sft.val_batches,
+        val_batch_size=config.sft.val_global_batch_size,
+        val_mbs=config.sft.val_micro_batch_size,
+    )
+    validate_validation_source_config(config)
+
+    manifest = config.sft.validation_precomputed_manifest
+    dataset_sha256 = config.sft.validation_precomputed_dataset_sha256
+    tokenizer_sha256 = config.sft.validation_precomputed_tokenizer_sha256
+    container_sha256 = config.sft.validation_precomputed_container_sha256
+    if (
+        manifest is None
+        or dataset_sha256 is None
+        or tokenizer_sha256 is None
+        or container_sha256 is None
+    ):
+        raise RuntimeError("Precomputed validation configuration was not validated")
+
+    expected_fingerprint = build_validation_artifact_fingerprint(
+        dataset_sha256=dataset_sha256,
+        tokenizer_sha256=tokenizer_sha256,
+        preprocessing_sha256=derive_preprocessing_sha256(config),
+        container_sha256=container_sha256,
+        repository_root=Path(__file__).resolve().parents[1],
+    )
+    return load_validation_event(Path(manifest), expected_fingerprint)
+
+
 def main(is_vlm: bool = False):
     """Main entry point."""
     # Parse arguments
@@ -186,6 +236,8 @@ def main(is_vlm: bool = False):
     config = MasterConfig(**config)
     print("Applied CLI overrides")
 
+    precomputed_validation_event = _load_precomputed_validation_event(config)
+
     # Print config
     print("Final config:")
     pprint.pprint(config)
@@ -203,7 +255,14 @@ def main(is_vlm: bool = False):
     tokenizer = get_tokenizer(config.policy["tokenizer"], get_processor=is_vlm)
 
     # setup data
-    dataset, val_dataset = setup_data(tokenizer, config.data)
+    if precomputed_validation_event is None:
+        dataset, val_dataset = setup_data(tokenizer, config.data)
+    else:
+        dataset, val_dataset = setup_data(
+            tokenizer,
+            config.data,
+            load_validation=False,
+        )
 
     (
         policy,
@@ -227,6 +286,7 @@ def main(is_vlm: bool = False):
         logger,
         checkpointer,
         sft_save_state,
+        precomputed_validation_event=precomputed_validation_event,
     )
 
 
