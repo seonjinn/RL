@@ -398,6 +398,229 @@ def test_setup_data_loads_configured_validation_by_default() -> None:
     assert loaded_config_names == ["train", "validation"]
 
 
+def _runtime_main_config(*, precomputed: bool) -> run_sft_sft.MasterConfig:
+    config = load_master_config(_SUPER_V3_CONFIG, [])
+    if precomputed:
+        config.sft.validation_input_mode = "precomputed_event"
+        config.sft.validation_execution_mode = "event_batch"
+        config.sft.validation_event_cache_mode = "off"
+        config.sft.validation_precomputed_manifest = "/tmp/validation.manifest.json"
+        config.sft.validation_precomputed_dataset_sha256 = "a" * 64
+        config.sft.validation_precomputed_tokenizer_sha256 = "b" * 64
+        config.sft.validation_precomputed_container_sha256 = "c" * 64
+    return config
+
+
+def _setup_result(master_config: run_sft_sft.MasterConfig) -> tuple[object, ...]:
+    return (
+        object(),
+        object(),
+        object(),
+        object(),
+        object(),
+        object(),
+        object(),
+        object(),
+        master_config,
+    )
+
+
+def test_run_sft_main_artifact_failure_precedes_all_runtime_side_effects() -> None:
+    config = _runtime_main_config(precomputed=True)
+    expected_fingerprint = _fingerprint()
+
+    with (
+        patch.object(
+            run_sft,
+            "parse_args",
+            return_value=(SimpleNamespace(config="runtime.yaml"), []),
+        ),
+        patch.object(run_sft, "register_omegaconf_resolvers"),
+        patch.object(run_sft, "load_config", return_value=object()),
+        patch.object(
+            run_sft.OmegaConf,
+            "to_container",
+            return_value=config.model_dump(),
+        ),
+        patch.object(run_sft, "validate_validation_source_config"),
+        patch.object(
+            run_sft,
+            "derive_preprocessing_sha256",
+            return_value="d" * 64,
+        ),
+        patch.object(
+            run_sft,
+            "build_validation_artifact_fingerprint",
+            return_value=expected_fingerprint,
+        ),
+        patch.object(
+            run_sft,
+            "load_validation_event",
+            side_effect=ValueError("fingerprint mismatch"),
+        ) as artifact_loader,
+        patch.object(run_sft, "init_ray") as ray_initializer,
+        patch.object(run_sft, "get_tokenizer") as tokenizer_loader,
+        patch.object(run_sft, "setup_data") as data_loader,
+        patch.object(run_sft, "setup") as setup_runtime,
+        patch.object(run_sft, "sft_train") as train_runtime,
+        pytest.raises(ValueError, match="fingerprint mismatch"),
+    ):
+        run_sft.main()
+
+    artifact_loader.assert_called_once_with(
+        Path(config.sft.validation_precomputed_manifest),
+        expected_fingerprint,
+    )
+    ray_initializer.assert_not_called()
+    tokenizer_loader.assert_not_called()
+    data_loader.assert_not_called()
+    setup_runtime.assert_not_called()
+    train_runtime.assert_not_called()
+
+
+def test_run_sft_main_precomputed_event_loads_once_and_is_forwarded() -> None:
+    config = _runtime_main_config(precomputed=True)
+    expected_fingerprint = _fingerprint()
+    event = _event_fixture()
+    tokenizer = object()
+    train_dataset = object()
+    setup_result = _setup_result(config)
+    call_order: list[str] = []
+
+    def load_event(*_args: object, **_kwargs: object) -> PrecomputedValidationEvent:
+        call_order.append("load_validation_event")
+        return event
+
+    def initialize_ray() -> None:
+        call_order.append("init_ray")
+
+    def load_tokenizer(*_args: object, **_kwargs: object) -> object:
+        call_order.append("get_tokenizer")
+        return tokenizer
+
+    def load_data(*_args: object, **_kwargs: object) -> tuple[object, None]:
+        call_order.append("setup_data")
+        return train_dataset, None
+
+    def setup_training(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+        call_order.append("setup")
+        return setup_result
+
+    with (
+        patch.object(
+            run_sft,
+            "parse_args",
+            return_value=(SimpleNamespace(config="runtime.yaml"), []),
+        ),
+        patch.object(run_sft, "register_omegaconf_resolvers"),
+        patch.object(run_sft, "load_config", return_value=object()),
+        patch.object(
+            run_sft.OmegaConf,
+            "to_container",
+            return_value=config.model_dump(),
+        ),
+        patch.object(run_sft, "validate_validation_source_config"),
+        patch.object(
+            run_sft,
+            "derive_preprocessing_sha256",
+            return_value="d" * 64,
+        ),
+        patch.object(
+            run_sft,
+            "build_validation_artifact_fingerprint",
+            return_value=expected_fingerprint,
+        ),
+        patch.object(
+            run_sft,
+            "load_validation_event",
+            side_effect=load_event,
+        ) as artifact_loader,
+        patch.object(run_sft, "get_next_experiment_dir", return_value="/tmp/logs"),
+        patch.object(run_sft, "init_ray", side_effect=initialize_ray),
+        patch.object(
+            run_sft,
+            "get_tokenizer",
+            side_effect=load_tokenizer,
+        ),
+        patch.object(run_sft, "setup_data", side_effect=load_data) as data_loader,
+        patch.object(run_sft, "setup", side_effect=setup_training) as setup_runtime,
+        patch.object(run_sft, "sft_train") as train_runtime,
+    ):
+        run_sft.main()
+
+    assert call_order == [
+        "load_validation_event",
+        "init_ray",
+        "get_tokenizer",
+        "setup_data",
+        "setup",
+    ]
+    artifact_loader.assert_called_once_with(
+        Path(config.sft.validation_precomputed_manifest),
+        expected_fingerprint,
+    )
+    called_config = setup_runtime.call_args.args[0]
+    data_loader.assert_called_once_with(
+        tokenizer,
+        called_config.data,
+        load_validation=False,
+    )
+    setup_runtime.assert_called_once_with(
+        called_config,
+        tokenizer,
+        train_dataset,
+        None,
+    )
+    assert set(train_runtime.call_args.kwargs) == {"precomputed_validation_event"}
+    assert train_runtime.call_args.kwargs["precomputed_validation_event"] is event
+
+
+def test_run_sft_main_default_mode_keeps_validation_data_loading() -> None:
+    config = _runtime_main_config(precomputed=False)
+    tokenizer = object()
+    train_dataset = object()
+    val_dataset = object()
+    setup_result = _setup_result(config)
+
+    with (
+        patch.object(
+            run_sft,
+            "parse_args",
+            return_value=(SimpleNamespace(config="runtime.yaml"), []),
+        ),
+        patch.object(run_sft, "register_omegaconf_resolvers"),
+        patch.object(run_sft, "load_config", return_value=object()),
+        patch.object(
+            run_sft.OmegaConf,
+            "to_container",
+            return_value=config.model_dump(),
+        ),
+        patch.object(run_sft, "load_validation_event") as artifact_loader,
+        patch.object(run_sft, "get_next_experiment_dir", return_value="/tmp/logs"),
+        patch.object(run_sft, "init_ray"),
+        patch.object(run_sft, "get_tokenizer", return_value=tokenizer),
+        patch.object(
+            run_sft,
+            "setup_data",
+            return_value=(train_dataset, val_dataset),
+        ) as data_loader,
+        patch.object(run_sft, "setup", return_value=setup_result) as setup_runtime,
+        patch.object(run_sft, "sft_train") as train_runtime,
+    ):
+        run_sft.main()
+
+    artifact_loader.assert_not_called()
+    called_config = setup_runtime.call_args.args[0]
+    data_loader.assert_called_once_with(tokenizer, called_config.data)
+    setup_runtime.assert_called_once_with(
+        called_config,
+        tokenizer,
+        train_dataset,
+        val_dataset,
+    )
+    assert train_runtime.call_args.kwargs == {"precomputed_validation_event": None}
+
+
 def _packed_validation_batch(batch_index: int) -> BatchedDataDict:
     row_ids = torch.arange(batch_index * 64, (batch_index + 1) * 64)
     input_ids = torch.stack((row_ids, row_ids + 1000), dim=1)

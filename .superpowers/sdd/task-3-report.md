@@ -168,3 +168,76 @@ pytest -q tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_valid
 pytest -q tests/source_isolated/test_sft_event_batch_source.py
 pyright nemo_rl/algorithms/sft.py examples/run_sft.py
 ```
+
+## Review Fixes: Executable Startup Coverage And Pyrefly
+
+### Behavioral Startup Coverage
+
+Added three executable `examples.run_sft.main()` tests to the Linux-capable
+`tests/unit/algorithms/test_sft_validation_artifact.py` suite. The tests execute
+the real runner orchestration and patch only CLI/config loading and external
+runtime side effects.
+
+- Artifact fingerprint/load failure propagates before `init_ray()`, tokenizer
+  construction, data setup, model setup, or training.
+- Successful precomputed startup loads the artifact exactly once before Ray,
+  tokenizer, data, and model setup; calls `setup_data(...,
+  load_validation=False)`; passes `val_dataset=None` to `setup()`; and forwards
+  the exact loaded event by keyword to `sft_train()`.
+- Default dataloader mode does not call the artifact loader, calls
+  `setup_data(tokenizer, config.data)` without suppressing validation, and
+  passes the returned validation dataset into `setup()`.
+
+No production change was required. The existing runner behavior satisfies the
+new executable contract.
+
+The tests were added before metadata changes. Local execution attempts record
+the platform dependency gap explicitly:
+
+```text
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft_validation_artifact.py -k 'run_sft_main' -vv
+ImportError from tests/unit/conftest.py: ModuleNotFoundError: No module named 'ray'
+
+/opt/homebrew/bin/pytest -q -o addopts='' --confcutdir=tests/unit/algorithms \
+  tests/unit/algorithms/test_sft_validation_artifact.py -k 'run_sft_main' -vv
+Collection error: ModuleNotFoundError: No module named 'torch'
+```
+
+The controller will execute these behavioral tests with the full focused Linux
+unit suites.
+
+### Pyrefly Coverage
+
+Added `nemo_rl/algorithms/sft_validation_provenance.py` to
+`pyrefly.toml` `project-includes`. Standalone execution is available through
+`uvx` on this host:
+
+```text
+uvx pyrefly check nemo_rl/algorithms/sft_validation_provenance.py
+INFO 0 errors
+```
+
+The full configured project invocation was also attempted:
+
+```text
+uvx pyrefly check
+INFO 167 errors
+```
+
+Those project-wide diagnostics are missing local dependencies such as Torch,
+OmegaConf, Safetensors, Pydantic, and YAML plus pre-existing diagnostics in
+other allow-listed files. No diagnostic was reported for
+`sft_validation_provenance.py` in the focused run.
+
+Additional local checks for the executable test file passed:
+
+```text
+ruff check tests/unit/algorithms/test_sft_validation_artifact.py
+Ruff: No issues found
+
+pyright tests/unit/algorithms/test_sft_validation_artifact.py
+0 errors, 0 warnings, 0 informations
+
+.venv/bin/python -m py_compile tests/unit/algorithms/test_sft_validation_artifact.py
+exit 0
+```
