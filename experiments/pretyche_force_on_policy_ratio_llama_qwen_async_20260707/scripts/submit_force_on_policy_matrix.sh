@@ -4,7 +4,7 @@ set -euo pipefail
 
 BASE=/lustre/fsw/coreai_dlalgo_llm/users/sna
 REPO=$BASE/nemo-rl-main-pr3030-q235-20260701
-EXP_ROOT=$BASE/pretyche_force_on_policy_ratio_llama_qwen_async_20260707
+EXP_ROOT=$BASE/pretyche_force_on_policy_ratio_async_retry_20260707
 CONTRACT=$EXP_ROOT/manifests/config_contract.tsv
 RUNNER=$EXP_ROOT/scripts/run_force_on_policy_benchmark.sbatch
 CONTAINER=$BASE/containers/nemo_rl_nightly_20260630_0215.sqsh
@@ -49,8 +49,15 @@ submit_case() {
     local steps=${10}
     local time_limit=${11}
     local -a submit_mode=(--test-only)
+    local -a segment_args=()
+    local segment_export=
     if [[ $TEST_ONLY == 0 ]]; then
         submit_mode=(--parsable)
+    fi
+    if [[ $segment != none ]]; then
+        [[ $segment =~ ^[1-9][0-9]*$ ]]
+        segment_args=(--segment="$segment")
+        segment_export=$segment
     fi
 
     local output
@@ -59,11 +66,11 @@ submit_case() {
         --partition=36x2-a01r \
         --nodes="$nodes" \
         --exclusive \
-        --segment="$segment" \
+        "${segment_args[@]}" \
         --time="$time_limit" \
         --comment=metrics \
-        --job-name="coreai_dlalgo_llm-nemorl.force-ratio-${run_key}-20s" \
-        --export="ALL,CONFIG_NAME=${config_name},RUN_KEY=${run_key},MODEL=${model},MODE=${mode},FORCE_ON_POLICY_RATIO=${force_value},EXPECTED_NODES=${nodes},SEGMENT_SIZE=${segment},EXPECTED_RUNNER_SHA=${runner_sha}" \
+        --job-name="coreai_dlalgo_llm-nemorl.force-ratio-retry-${run_key}-20s" \
+        --export="ALL,CONFIG_NAME=${config_name},RUN_KEY=${run_key},MODEL=${model},MODE=${mode},FORCE_ON_POLICY_RATIO=${force_value},EXPECTED_NODES=${nodes},SEGMENT_SIZE=${segment_export},EXPECTED_RUNNER_SHA=${runner_sha}" \
         "$RUNNER" 2>&1)
     printf '%s\t%s\n' "$run_key" "$output"
 
@@ -81,7 +88,19 @@ while IFS=$'\t' read -r run_key model config_name mode force_value nodes gpus_pe
         continue
     fi
     test "$gpus_per_node" = 4
-    test "$nodes" = "$segment"
+    test "$mode" = async1off
+    case "$model" in
+        qwen3-30ba3b)
+            test "$segment" = 2
+            ;;
+        llama3.1-8b|qwen3-32b)
+            test "$segment" = none
+            ;;
+        *)
+            printf 'Unsupported model: %s\n' "$model" >&2
+            exit 2
+            ;;
+    esac
     test "$global_batch_size" = 2048
     test "$steps" = 20
     [[ $time_limit == 02:00:00 || $time_limit == 03:00:00 || $time_limit == 04:00:00 ]]
