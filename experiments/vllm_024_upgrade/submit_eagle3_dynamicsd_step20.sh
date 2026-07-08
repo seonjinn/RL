@@ -227,7 +227,7 @@ submit_one() {
     "BASE_LOG_DIR=${run_dir}"
     "GPUS_PER_NODE=4"
     "HF_HOME=${HF_HOME}"
-    "NEMO_RL_VENV_DIR=${run_dir}/venvs"
+    "NEMO_RL_VENV_DIR=${run_dir}/venvs-${ATTEMPT_ID}"
     "NRL_FORCE_REBUILD_VENVS=false"
     "PYTHONPATH=${REPO_DIR}"
     "PYTHONDONTWRITEBYTECODE=1"

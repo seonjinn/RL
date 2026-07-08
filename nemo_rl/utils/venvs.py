@@ -18,7 +18,6 @@ import shlex
 import shutil
 import subprocess
 import time
-from functools import lru_cache
 from pathlib import Path
 
 import ray
@@ -51,7 +50,6 @@ def _venv_python_is_usable(python_path: Path) -> bool:
     return True
 
 
-@lru_cache(maxsize=None)
 def create_local_venv(
     py_executable: str, venv_name: str, force_rebuild: bool = False
 ) -> str:

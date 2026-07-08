@@ -1,10 +1,39 @@
 import multiprocessing
 import os
+import shutil
 import time
 from pathlib import Path
 from unittest.mock import patch
 
 from nemo_rl.utils import venvs
+
+
+def test_create_local_venv_rebuilds_a_deleted_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    build_paths: list[Path] = []
+
+    def fake_run(command: list[str], **_: object) -> None:
+        if command[:2] == ["uv", "venv"]:
+            venv_path = Path(command[-1])
+            build_paths.append(venv_path)
+            python_path = venv_path / "bin" / "python"
+            python_path.parent.mkdir(parents=True, exist_ok=True)
+            python_path.touch()
+
+    cache_clear = getattr(venvs.create_local_venv, "cache_clear", None)
+    if cache_clear is not None:
+        cache_clear()
+    monkeypatch.setattr(venvs.subprocess, "run", fake_run)
+
+    with patch.dict(os.environ, {"NEMO_RL_VENV_DIR": str(tmp_path)}):
+        first_path = venvs.create_local_venv("uv run --extra vllm", "shared-vllm")
+        shutil.rmtree(tmp_path / "shared-vllm")
+        second_path = venvs.create_local_venv("uv run --extra vllm", "shared-vllm")
+
+    assert first_path == second_path
+    assert Path(second_path).exists()
+    assert build_paths == [tmp_path / "shared-vllm", tmp_path / "shared-vllm"]
 
 
 def test_actor_venv_build_is_serialized_across_processes(
