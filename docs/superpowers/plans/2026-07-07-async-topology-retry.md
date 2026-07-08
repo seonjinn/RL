@@ -156,6 +156,7 @@ Create the fresh retry root and transfer the manifest and scripts. Verify remote
 ### Task 4: Validate, submit, and monitor six jobs
 
 **Files:**
+- Create: `experiments/pretyche_force_on_policy_ratio_llama_qwen_async_20260707/scripts/validate_config_contract.sbatch`
 - Remote manifest and scripts under `/lustre/fsw/coreai_dlalgo_llm/users/sna/pretyche_force_on_policy_ratio_async_retry_20260707`.
 - Remote results manifest `results/jobs.tsv`.
 

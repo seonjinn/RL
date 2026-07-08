@@ -23,5 +23,9 @@ checks before real submission. Qwen3-30B-A3B uses application and Slurm segment
 to `pretyche_force_on_policy_ratio_async_retry_20260707` so the failed original
 jobs and completed synchronous results remain unchanged.
 
+`scripts/validate_config_contract.sbatch` runs the force-ratio unit tests and
+the six-case resolved-config validator in the pinned nightly container before
+the retry matrix is submitted.
+
 See [REPORT.md](REPORT.md) for the completed synchronous results and the
 terminal classification of the Async-1off topology failures.

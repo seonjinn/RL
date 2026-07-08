@@ -8,11 +8,13 @@ CONTRACT=$EXP_ROOT/manifests/config_contract.tsv
 VALIDATOR=$SCRIPT_DIR/validate_config_contract.py
 RUNNER=$SCRIPT_DIR/run_force_on_policy_benchmark.sbatch
 SUBMITTER=$SCRIPT_DIR/submit_force_on_policy_matrix.sh
+VALIDATION_RUNNER=$SCRIPT_DIR/validate_config_contract.sbatch
 
 test -f "$CONTRACT"
 test -f "$VALIDATOR"
 test -f "$RUNNER"
 test -f "$SUBMITTER"
+test -f "$VALIDATION_RUNNER"
 
 PYCACHE_DIR=$(mktemp -d)
 trap 'rm -rf "$PYCACHE_DIR"' EXIT
@@ -21,6 +23,7 @@ grep -q 'grpo.max_num_steps=' "$VALIDATOR"
 grep -q 'checkpointing.enabled=false' "$VALIDATOR"
 bash -n "$RUNNER"
 bash -n "$SUBMITTER"
+bash -n "$VALIDATION_RUNNER"
 
 test "$(awk 'END {print NR - 1}' "$CONTRACT")" -eq 6
 test "$(awk -F '\t' 'NR > 1 {print $5}' "$CONTRACT" | sort | uniq -c | tr -s ' ' | sed 's/^ //')" = $'3 false\n3 true'
@@ -58,6 +61,10 @@ grep -q 'segment_export=' "$SUBMITTER"
 grep -Fq '"${segment_args[@]}"' "$SUBMITTER"
 grep -q 'pretyche_force_on_policy_ratio_async_retry_20260707' "$RUNNER"
 grep -q 'pretyche_force_on_policy_ratio_async_retry_20260707' "$SUBMITTER"
+grep -q 'pretyche_force_on_policy_ratio_async_retry_20260707' "$VALIDATION_RUNNER"
+grep -q 'test_grpo_train_skips_prev_logprobs_when_force_on_policy_ratio' "$VALIDATION_RUNNER"
+grep -q 'test_clipped_pg_loss_force_on_policy_ratio' "$VALIDATION_RUNNER"
+grep -q 'validate_config_contract.py' "$VALIDATION_RUNNER"
 grep -q 'TEST_ONLY' "$SUBMITTER"
 grep -q 'Refusing duplicate submission' "$SUBMITTER"
 
@@ -71,7 +78,7 @@ if grep -Fq 'cluster.segment_size=${SEGMENT_SIZE}' "$RUNNER"; then
 fi
 
 if grep -Eq -- '--gres|RAY_CGRAPH_get_timeout|distributed_timeout|NCCL_TIMEOUT|moe_flex_dispatcher_backend|hybridep|moe_backend=' \
-    "$RUNNER" "$SUBMITTER"; then
+    "$RUNNER" "$SUBMITTER" "$VALIDATION_RUNNER"; then
     printf 'Disallowed benchmark override found.\n' >&2
     exit 1
 fi
