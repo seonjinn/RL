@@ -2,7 +2,9 @@
 
 ## Status
 
-`DONE_WITH_CONCERNS`
+`DONE`
+
+Review verdict: `APPROVED` with no Critical or Important findings.
 
 - Approved Tasks 1-3 head: `e8e13f5a9e0694adb1a574fd4b7e35507ab3ca9b`
 - Task 4 implementation commit: `2c8bfdc5d63d8db05da34258148aea640222e311`
@@ -15,15 +17,18 @@
   `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
 - TorchData source-provenance follow-up:
   `61d7ff5d912504a2eeba237d148521b9445d9b6d`
-- Static typing follow-up: the signed commit containing the final section below
-- Independent code-review gate: prior findings addressed; controller review of
-  the static typing follow-up remains pending
-- Supported-Linux functional gate: CW job `13568701` passed at `61d7ff5d9`
-  with `269 passed, 47 warnings in 47.25s`, using isolated
-  `RAY_TMPDIR`/`TMPDIR` and an unset `RAY_ADDRESS`
-- Supported-Linux static gate: CW job `13568879` passed Ruff and reported 109
-  project-standard Pyrefly diagnostics. The Task 1-4-owned diagnostics are
-  addressed by the final section below; a CW Pyrefly rerun remains pending.
+- Static typing follow-up:
+  `fa46a59abe09c9072849b2d6bd61a53844669571`
+- Documentation hash correction:
+  `8bb32913fbe0eba31eba0c07ccef9cfc7fb91a8e`
+- Final supported-Linux functional gate: CW job `13570335` completed `0:0` in
+  `00:02:46` on exclusive node `pool0-01583`; pytest reported `270 passed, 47
+  warnings in 35.86s`.
+- Final supported-Linux static gate: CW job `13569441` passed Ruff check and
+  Ruff format check for exactly seven target Python files. Pyrefly reported 92
+  pre-existing diagnostics and no Task 4 changed-line diagnostic.
+- Final reviewer verdict: `APPROVED`; no Critical or Important findings. The
+  sole Minor documentation hash typo was fixed by `8bb32913`.
 
 The correctness audit is opt-in and disabled by default. The disabled path does
 not construct the auditor and adds no worker RPC, tensor reduction,
@@ -50,6 +55,7 @@ The documentation follow-up changes:
 
 - `.superpowers/sdd/task-4-report.md`
 - `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+- `.superpowers/sdd/progress.md`
 
 ## Implementation
 
@@ -163,7 +169,7 @@ Tasks 1-3 previously passed their combined supported-Linux gate at the approved
 head: CW job `13559835`, `177 passed, 3 warnings in 43.82s`. That result does
 not replace a Linux execution of the new Task 4 tests.
 
-Not run for Task 4:
+Historical local limitations before the final CW gate:
 
 - The focused unit command on a supported Linux environment with Ray, Torch,
   and Megatron installed.
@@ -195,13 +201,8 @@ Not run for Task 4:
 Detailed invariant evidence is recorded in
 `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`.
 
-## Remaining Concerns
+## Residual Limitations
 
-- The focused Ray-dependent Task 4 unit suite has not run on supported Linux.
-  It is the remaining execution gate before merge.
-- Local Pyright cannot produce a clean project result without the Linux project
-  dependencies. The focused audit diagnostics were reduced to unresolved
-  dependency imports.
 - Worker moments and deterministic samples can miss a localized tensor change;
   they are bounded diagnostic evidence, not equality proofs.
 - Audit mode intentionally performs worker RPCs, local GPU reductions, and
@@ -387,10 +388,9 @@ review-fix section above.
    mutation, and independent mask-derived exact-token-count mutation. These
    tests invoke the production capture and comparison gate.
 3. `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
-   now covers the full current Task 4 commit range, both review rounds and
-   their fixes, current invariant evidence, the actual 19-test source-isolated
-   count, and the pending controller decision. It does not claim that the CW
-   Linux Task 4 gate passed.
+   was updated at that point to cover the then-current Task 4 range, review
+   rounds, invariant evidence, source-isolated count, and then-pending
+   controller decision. The final gate evidence is recorded below.
 4. Self-review found and removed audit scaffolding from disabled execution:
    policy submission and training-mode restoration keep direct calls when no
    collector is present. The new `try`/`finally`, evidence hashing, RNG reads,
@@ -579,12 +579,11 @@ git diff --check
 
 Result: exit 0 with no output after this report update.
 
-### Pending
+### Historical Gate State
 
-- The corrected Ray unit test cannot run in the local macOS environment because
-  Ray and Torch are unavailable.
-- The controller must rerun the complete focused Task 4 suite on CW Linux. Job
-  `13566467` is partial evidence only and is not recorded as a passing gate.
+At this follow-up, local macOS could not run the Ray unit test and CW job
+`13566467` was partial evidence only. Final CW job `13570335` supersedes that
+state and is the passing functional gate.
 
 ### Self-Review
 
@@ -734,12 +733,10 @@ git diff --check
 
 Result: exit 0 with no output after this report update.
 
-### Pending
+### Historical Gate State
 
-- The real TorchData regression and focused Ray unit suite require the
-  controller's CW Linux environment.
-- Job `13566796` is partial failing evidence only. A complete post-fix CW rerun
-  and controller review remain pending.
+At this follow-up, job `13566796` remained partial failing evidence. Final CW
+job `13570335` supersedes that state and is the passing functional gate.
 
 ### Self-Review
 
@@ -883,11 +880,11 @@ git diff --check
 
 Result: exit 0 with no output after this report update.
 
-### Pending
+### Historical Gate State
 
-- The local environment cannot collect the Ray/Torch unit suite.
-- A full CW Linux rerun of the current commit range and controller review remain
-  pending. No prior partial CW job is represented as a passing gate.
+At this follow-up, local Ray/Torch collection was unavailable and the full CW
+rerun had not occurred. Final CW job `13570335` and the final `APPROVED` review
+supersede that state.
 
 ### Self-Review
 
@@ -1030,11 +1027,11 @@ git diff --check
 
 Result: exit 0 with no output after this report update.
 
-### Pending
+### Historical Gate State
 
-- The local environment cannot collect the Ray/Torch unit suite.
-- A full CW Linux rerun of the current commit range and controller review remain
-  pending. No prior partial CW job is represented as a passing gate.
+At this follow-up, local Ray/Torch collection was unavailable and the full CW
+rerun had not occurred. Final CW job `13570335` and the final `APPROVED` review
+supersede that state.
 
 ### Self-Review
 
@@ -1054,7 +1051,7 @@ Result: exit 0 with no output after this report update.
 
 ## Static Typing Follow-Up (2026-07-08)
 
-### CW Evidence and Scope
+### Intermediate CW Evidence and Scope
 
 - CW functional job `13568701` passed at `61d7ff5d9` with `269 passed, 47
   warnings in 47.25s`. It used isolated `RAY_TMPDIR`/`TMPDIR` and an unset
@@ -1161,7 +1158,7 @@ git diff --check
 
 Result: exit 0 with no output before documentation updates.
 
-### Self-Review and Remaining Concern
+### Self-Review
 
 - The two post-`finally` returns preserve prior success, cleanup, evidence,
   original-exception, and gate-exception semantics.
@@ -1169,5 +1166,40 @@ Result: exit 0 with no output before documentation updates.
   weakened or removed.
 - Event payload binding and its assertion execute only when correctness audit
   evidence collection is enabled.
-- The functional CW gate is passed at `61d7ff5d9`; the current type-only
-  follow-up still needs the controller's project-standard CW Pyrefly rerun.
+- The type-only follow-up introduced no default-path or audit behavior change.
+
+## Final Gate Evidence (2026-07-08)
+
+### Functional Gate
+
+CW job `13570335` used the exclusive one-node test harness on `pool0-01583`.
+Python 3.13 Ray was prestarted with `--include-dashboard=false`; pytest then
+reported `270 passed, 47 warnings in 35.86s`. The job completed `0:0` in
+`00:02:46`.
+
+The prestart was required because `tests/unit/conftest.py` calls `init_ray()`,
+whose implementation first calls `ray.init(address="auto")` and otherwise
+starts Ray with `include_dashboard=True`. Shared-node attempts could connect to
+an unrelated Python 3.12 Ray cluster, as observed in job `13569847`, or fail in
+MetricsHead dashboard startup. This was test-harness setup only; no production
+code changed. Earlier passing job `13568701` (`269 passed`) is superseded by
+job `13570335`.
+
+### Static Gate
+
+CW job `13569441` passed Ruff check and Ruff format `--check` for exactly seven
+target Python files.
+
+Project-standard Pyrefly reported 92 pre-existing diagnostics. It reported no
+diagnostic in `sft_correctness_audit.py`, `sft_validation_artifact.py`, or
+`examples/prepare_sft_validation_event.py`. The only `sft.py` diagnostics were
+at lines 126, 418, and 1256. Blame attributes those lines to pre-Task-4 commits
+`fc2ccc32d4`, `f2ab62c203`, and `3105b659a0`, respectively, and a zero-context
+diff for `e8e13f5a9..8bb32913` contains none of those expressions. No Task 4
+changed-line Pyrefly diagnostic remains.
+
+### Review Gate
+
+Final reviewer verdict: `APPROVED`, with no Critical or Important findings.
+The sole Minor documentation hash typo was fixed by signed commit `8bb32913`.
+Task 4 is complete for commit range `e8e13f5a9..8bb32913`.

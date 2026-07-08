@@ -15,7 +15,11 @@
   `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
 - TorchData source-provenance follow-up:
   `61d7ff5d912504a2eeba237d148521b9445d9b6d`
-- Static typing follow-up: the signed commit containing the final review section
+- Static typing follow-up:
+  `fa46a59abe09c9072849b2d6bd61a53844669571`
+- Documentation hash correction:
+  `8bb32913fbe0eba31eba0c07ccef9cfc7fb91a8e`
+- Final Task 4 range: `e8e13f5a9..8bb32913`
 - Requirements: `.superpowers/sdd/task-4-brief.md`
 - Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
 
@@ -26,20 +30,27 @@ lifecycle handling, timing isolation, and the merge review gate.
 
 ## Current Decision
 
-**Code review gate: READY FOR CONTROLLER RE-REVIEW.** The prior review findings,
-the CUDA test-contract mismatch, the restored-loader read-only failure, and the
-subsequent loader-adapter identity and source-provenance findings are addressed
-in the current range. This document does not claim that the controller has
-approved the follow-up.
+**Code review gate: APPROVED.** The final reviewer found no Critical or
+Important issue. The sole Minor documentation hash typo was fixed by signed
+commit `8bb32913`.
 
-**Supported-Linux functional gate: PASS AT `61d7ff5d9`.** CW job `13568701`
-completed with `269 passed, 47 warnings in 47.25s`, using isolated
-`RAY_TMPDIR`/`TMPDIR` and an unset `RAY_ADDRESS`.
+**Supported-Linux functional gate: PASS.** CW job `13570335` ran on exclusive
+node `pool0-01583` and reported `270 passed, 47 warnings in 35.86s`; the job
+completed `0:0` in `00:02:46`.
 
-**Supported-Linux static gate: FOLLOW-UP PENDING.** CW job `13568879` passed
-Ruff, then the project-standard Pyrefly run reported 109 diagnostics. Most are
-pre-existing repository debt. The Tasks 1-4-owned diagnostics are corrected by
-the current type-only follow-up; the controller must rerun standard Pyrefly.
+**Supported-Linux static gate: PASS FOR TASK 4.** CW job `13569441` passed Ruff
+check and Ruff format `--check` for exactly seven target files. Project-standard
+Pyrefly reported 92 pre-existing diagnostics and no Task 4 changed-line
+diagnostic.
+
+For the functional harness, Python 3.13 Ray was prestarted with
+`--include-dashboard=false`. This was required because
+`tests/unit/conftest.py` calls `init_ray()`, which first uses
+`ray.init(address="auto")` and otherwise starts with `include_dashboard=True`.
+Shared-node attempts could attach to an unrelated Python 3.12 Ray cluster, as
+job `13569847` demonstrated, or fail during MetricsHead dashboard startup. No
+production code changed for this harness. Earlier passing job `13568701` on the
+parent head is superseded by `13570335`.
 
 The historical CW job `13559835` reported `177 passed, 3 warnings in 43.82s`
 at the approved Tasks 1-3 head `e8e13f5a9`; it does not cover either Task 4
@@ -200,6 +211,9 @@ still bypass TorchData metadata and use their protocol `state_dict()` directly.
 | Disabled mode remains unchanged | No auditor/collector construction and direct submission/restoration branches | Disabled-path RPC/read assertions and source inspection | Pass in CW job `13568701`; unchanged by typing fix |
 | Interfaces and unrelated backends remain scoped | Only concrete Policy method exists; PolicyInterface and unrelated backends are unchanged | Source inspection | Pass |
 
+The superseding final functional job `13570335` covers every Task 4 matrix row
+that cites the earlier passing parent-head job `13568701`.
+
 ## Verification Evidence
 
 Passed locally on the current static typing follow-up:
@@ -223,7 +237,9 @@ Blocked locally:
   `ModuleNotFoundError: No module named 'ray'`; no focused unit test runs.
 - No current Task 4 GPU/Ray/Megatron integration or full repository suite ran
   locally.
-- The project-standard CW Pyrefly rerun and post-fix review are pending.
+
+These local limitations are superseded by the final CW functional and static
+gates below.
 
 CW Linux partial result:
 
@@ -233,22 +249,33 @@ CW Linux partial result:
 - Expected: `("torch_cuda_rng_digests",)`.
 - Actual: `("torch_cuda_rng_digests.0",)`.
 - At that point, a complete rerun after the test-contract correction remained
-  pending; later job `13568701` is the passing functional gate.
+  pending; final job `13570335` is the passing functional gate.
 
 - Job `13566796`: `160 passed, 1 failed`, then stopped at `maxfail=1`.
 - Failure:
   `tests/unit/algorithms/test_sft.py::test_restart_restores_loader_and_generator_then_runs_real_validation`.
 - Gate difference: `explicit_generator_digest`.
 - At that point, a complete rerun after the read-only capture correction
-  remained pending; later job `13568701` is the passing functional gate.
+  remained pending; final job `13570335` is the passing functional gate.
 
-CW Linux final functional result:
+CW Linux final evidence:
 
-- Job `13568701` at `61d7ff5d9`: `269 passed, 47 warnings in 47.25s`, with
-  isolated `RAY_TMPDIR`/`TMPDIR` and unset `RAY_ADDRESS`.
-- Job `13568879`: Ruff passed; full project-standard Pyrefly reported 109
-  diagnostics. The current follow-up fixes only the Tasks 1-4-owned
-  diagnostics. A standard Pyrefly rerun is pending.
+- Functional job `13570335`: exclusive node `pool0-01583`, `270 passed, 47
+  warnings in 35.86s`; job `COMPLETED 0:0` in `00:02:46`.
+- Python 3.13 Ray was prestarted with `--include-dashboard=false` to prevent
+  `init_ray()` from attaching through `address="auto"` to a shared Python 3.12
+  cluster or starting the dashboard path that had failed in MetricsHead. Job
+  `13569847` records the shared-cluster attachment failure mode. This changed
+  only the test harness.
+- Static job `13569441`: Ruff check passed; Ruff format `--check` passed for
+  exactly seven target files; Pyrefly reported 92 pre-existing diagnostics.
+- Pyrefly reported no diagnostic in `sft_correctness_audit.py`,
+  `sft_validation_artifact.py`, or `examples/prepare_sft_validation_event.py`.
+  The only `sft.py` diagnostics were lines 126, 418, and 1256. Blame attributes
+  them to `fc2ccc32d4`, `f2ab62c203`, and `3105b659a0`, and the zero-context
+  Task 4 diff contains none of those expressions.
+- Earlier functional job `13568701` passed 269 tests on the parent head; final
+  job `13570335` supersedes it.
 
 ## Static Typing Follow-Up
 
@@ -273,5 +300,3 @@ successful returns remain after their corresponding `finally` blocks.
 - Precomputed artifacts omit producer-only `idx`; ordered persisted
   `input_ids` remain their sample-identity evidence. Live and CPU-cache runtime
   paths independently include `idx` when present.
-- Merge readiness still requires controller approval and a project-standard CW
-  Pyrefly rerun of the current static typing follow-up.
