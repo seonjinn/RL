@@ -11,13 +11,15 @@
 - CW contract follow-up: `175e39c9250af597e8c860d846f9be44dd39799c`
 - CW read-only capture follow-up:
   `45ca880cbaf32ec742a66934b36d3fb41420ee0f`
-- Loader identity fail-closed follow-up: the signed commit containing the final
+- Loader identity fail-closed follow-up:
+  `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
+- TorchData source-provenance follow-up: the signed commit containing the final
   section below
 - Independent code-review gate: prior findings addressed; final controller
   review remains pending
 - Supported-Linux execution gate: CW job `13566796` stopped at
   `160 passed, 1 failed` on a restored-loader audit mutation; the read-only fix
-  and subsequent identity hardening require a full CW rerun
+  and subsequent identity/provenance hardening require a full CW rerun
 
 The correctness audit is opt-in and disabled by default. The disabled path does
 not construct the auditor and adds no worker RPC, tensor reduction,
@@ -897,3 +899,151 @@ Result: exit 0 with no output after this report update.
   validated first, and `explicit_generator_digest` remains enabled.
 - Confirmed no default validation, cache, policy, worker, interface,
   configuration, or audit-disabled execution path changed.
+
+## TorchData Source-Provenance Review Fix
+
+### Finding
+
+Review of `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2` found that
+installed TorchData 0.11.0 metadata and matching runtime class names did not
+prove that the imported module came from that distribution. A shadow module
+earlier on `sys.path` could satisfy the prior name/version/class checks while
+executing different source.
+
+### Fix
+
+- Enabled audit capture requires `distribution.files` and exactly one
+  `torchdata/stateful_dataloader/stateful_dataloader.py` PackagePath.
+- The PackagePath must have a SHA-256 RECORD hash. Missing hashes, unsupported
+  algorithms, padded/non-URL-safe/non-canonical encodings, and malformed digest
+  lengths fail closed.
+- RECORD values are decoded as URL-safe base64 with the specification's omitted
+  padding restored only for decoding; canonical no-padding form is verified.
+- `PackagePath.locate()`, `runtime_module.__spec__.origin`, and
+  `runtime_module.__file__` are resolved with `strict=True`, must be regular
+  files, and must identify the same canonical path.
+- The imported source bytes are SHA-256 hashed and compared exactly with the
+  decoded RECORD digest before class/layout inspection or any loader
+  `state_dict()` call.
+- Valid TorchData fingerprint evidence now includes canonical `source_origin`
+  and hexadecimal `source_sha256` alongside class, package, and version.
+- Existing exact public/private class and module checks, field types, boundary
+  validation, pending/not-started read-only behavior, active validation, and
+  non-TorchData collision behavior remain in place.
+
+All provenance work remains inside opt-in audit capture. The default-disabled
+path performs no metadata lookup, file resolution/read/hash, loader inspection,
+RNG read, worker RPC, reduction, or synchronization.
+
+### Changed Files
+
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `tests/source_isolated/test_sft_event_batch_source.py`
+- `.superpowers/sdd/task-4-report.md`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+
+### TDD Evidence
+
+The source-provenance tests were added before production implementation:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py -k "requires_exact_torchdata_identity or rejects_unproven_torchdata_source"
+```
+
+RED result: exit 1, `1 failed, 29 deselected`; the failure was
+`AssertionError: Missing required function _decode_record_sha256`.
+
+After implementation and final coverage, the command returned
+`15 passed, 29 deselected in 0.42s`, exit 0. It covers matching success,
+missing distribution files, missing/duplicate source records, missing and
+unsupported hashes, padded RECORD encoding, unresolvable paths,
+locate/origin/file mismatches, missing origin/file, content hash mismatch, and
+public/private class module mismatch. Every rejected recognized-TorchData case
+asserts zero loader `state_dict()` calls.
+
+### Exact Local Verification
+
+Focused real restart regression attempt:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft.py -k "capture_is_read_only_at_lazy_restored_loader_boundary or restart_restores_loader_and_generator_then_runs_real_validation"
+```
+
+Result: exit 4 during conftest import; no unit test ran.
+
+```text
+tests/unit/conftest.py:24: in <module>
+    import ray
+E   ModuleNotFoundError: No module named 'ray'
+```
+
+Source-isolated suite:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `44 passed in 0.77s`, exit 0.
+
+Ruff lint:
+
+```bash
+ruff check nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Ruff format check:
+
+```bash
+ruff format --check nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `2 files already formatted`, exit 0 after applying Ruff formatting.
+
+Compilation:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 0 with no output.
+
+Focused type check:
+
+```bash
+pyright nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 1 with two missing local dependency imports only: `torch` and
+`torchdata.stateful_dataloader`. No additional type diagnostics were reported.
+
+Diff validation:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output after this report update.
+
+### Pending
+
+- The local environment cannot collect the Ray/Torch unit suite.
+- A full CW Linux rerun of the current commit range and controller review remain
+  pending. No prior partial CW job is represented as a passing gate.
+
+### Self-Review
+
+- Confirmed metadata/version/class checks alone cannot authorize a TorchData
+  adapter path; the exact loaded source must first match the distribution
+  PackagePath and RECORD digest.
+- Confirmed all provenance failures occur before private loader inspection and
+  before any recognized TorchData `state_dict()` call.
+- Confirmed strict canonical path equality covers located source, module origin,
+  and module `__file__`.
+- Confirmed URL-safe RECORD decoding accepts canonical omitted padding and
+  rejects padded or malformed forms.
+- Confirmed valid evidence records source origin/hash and retains package,
+  version, class, fields, and boundary identity.
+- Confirmed non-TorchData colliding loaders and the default-disabled path do not
+  perform TorchData metadata or source-provenance work.

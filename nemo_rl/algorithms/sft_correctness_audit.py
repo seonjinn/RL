@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import base64
+import binascii
 import hashlib
 import importlib
 from importlib import metadata as importlib_metadata
 import json
 import math
+from os import PathLike
+from pathlib import Path
 import random
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -31,6 +35,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 _TORCHDATA_DISTRIBUTION = "torchdata"
 _TORCHDATA_PACKAGE = "torchdata"
 _TORCHDATA_RUNTIME_MODULE = "torchdata.stateful_dataloader.stateful_dataloader"
+_TORCHDATA_RUNTIME_PACKAGE_PATH = "torchdata/stateful_dataloader/stateful_dataloader.py"
 _SUPPORTED_TORCHDATA_VERSION = "0.11.0"
 
 
@@ -322,7 +327,141 @@ def _normalize_distribution_name(name: str) -> str:
     return name.lower().replace("_", "-").replace(".", "-")
 
 
-def _torchdata_runtime_identity() -> tuple[str, type[Any]]:
+def _decode_record_sha256(value: object) -> bytes:
+    if type(value) is not str or not value or "=" in value:
+        raise CorrectnessAuditError(
+            "TorchData source RECORD SHA-256 is missing or non-canonical"
+        )
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise CorrectnessAuditError(
+            "TorchData source RECORD SHA-256 is not ASCII"
+        ) from error
+    urlsafe_alphabet = (
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    )
+    if any(byte not in urlsafe_alphabet for byte in encoded):
+        raise CorrectnessAuditError(
+            "TorchData source RECORD SHA-256 is not URL-safe base64"
+        )
+    padded = encoded + b"=" * (-len(encoded) % 4)
+    try:
+        decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise CorrectnessAuditError(
+            "TorchData source RECORD SHA-256 is malformed"
+        ) from error
+    canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+    if len(decoded) != hashlib.sha256().digest_size or canonical != value:
+        raise CorrectnessAuditError("TorchData source RECORD SHA-256 is malformed")
+    return decoded
+
+
+def _canonical_source_path(value: object, *, label: str) -> Path:
+    if not isinstance(value, (str, PathLike)):
+        raise CorrectnessAuditError(
+            f"Correctness audit could not resolve TorchData {label}"
+        )
+    try:
+        path = Path(value).resolve(strict=True)
+    except (OSError, RuntimeError, TypeError) as error:
+        raise CorrectnessAuditError(
+            f"Correctness audit could not resolve TorchData {label}"
+        ) from error
+    if not path.is_file():
+        raise CorrectnessAuditError(f"TorchData {label} is not a regular file")
+    return path
+
+
+def _torchdata_source_identity(
+    distribution: Any,
+    runtime_module: Any,
+) -> tuple[str, str]:
+    distribution_files = distribution.files
+    if type(distribution_files) is not list:
+        raise CorrectnessAuditError(
+            "TorchData distribution file records are unavailable"
+        )
+    source_records = []
+    for package_path in distribution_files:
+        as_posix = getattr(package_path, "as_posix", None)
+        if not callable(as_posix):
+            raise CorrectnessAuditError(
+                "TorchData distribution contains an invalid PackagePath"
+            )
+        try:
+            relative_path = as_posix()
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            raise CorrectnessAuditError(
+                "TorchData distribution contains an invalid PackagePath"
+            ) from error
+        if type(relative_path) is not str:
+            raise CorrectnessAuditError(
+                "TorchData distribution contains an invalid PackagePath"
+            )
+        if relative_path == _TORCHDATA_RUNTIME_PACKAGE_PATH:
+            source_records.append(package_path)
+    if len(source_records) != 1:
+        raise CorrectnessAuditError(
+            "TorchData distribution must contain exactly one runtime source record"
+        )
+
+    source_record = source_records[0]
+    record_hash = getattr(source_record, "hash", None)
+    if record_hash is None:
+        raise CorrectnessAuditError(
+            "TorchData runtime source RECORD hash is unavailable"
+        )
+    hash_mode = getattr(record_hash, "mode", None)
+    if hash_mode != "sha256":
+        raise CorrectnessAuditError(
+            f"Unsupported TorchData runtime source RECORD hash {hash_mode!r}"
+        )
+    expected_digest = _decode_record_sha256(getattr(record_hash, "value", None))
+
+    locate = getattr(source_record, "locate", None)
+    if not callable(locate):
+        raise CorrectnessAuditError(
+            "TorchData runtime source PackagePath cannot be located"
+        )
+    try:
+        located_value = locate()
+    except (OSError, RuntimeError) as error:
+        raise CorrectnessAuditError(
+            "TorchData runtime source PackagePath cannot be located"
+        ) from error
+    located_path = _canonical_source_path(located_value, label="PackagePath")
+
+    runtime_spec = getattr(runtime_module, "__spec__", None)
+    runtime_origin = getattr(runtime_spec, "origin", None)
+    runtime_file = getattr(runtime_module, "__file__", None)
+    if type(runtime_origin) is not str or type(runtime_file) is not str:
+        raise CorrectnessAuditError(
+            "TorchData runtime source origin or __file__ is unavailable"
+        )
+    origin_path = _canonical_source_path(runtime_origin, label="module origin")
+    file_path = _canonical_source_path(runtime_file, label="module __file__")
+    if located_path != origin_path or located_path != file_path:
+        raise CorrectnessAuditError(
+            "TorchData PackagePath, module origin, and __file__ do not match"
+        )
+
+    try:
+        source_bytes = located_path.read_bytes()
+    except OSError as error:
+        raise CorrectnessAuditError(
+            "Correctness audit could not read the TorchData runtime source"
+        ) from error
+    actual_digest = hashlib.sha256(source_bytes).digest()
+    if actual_digest != expected_digest:
+        raise CorrectnessAuditError(
+            "TorchData runtime source does not match its RECORD SHA-256"
+        )
+    return str(located_path), actual_digest.hex()
+
+
+def _torchdata_runtime_identity() -> tuple[str, type[Any], str, str]:
     try:
         distribution = importlib_metadata.distribution(_TORCHDATA_DISTRIBUTION)
     except importlib_metadata.PackageNotFoundError as error:
@@ -365,6 +504,9 @@ def _torchdata_runtime_identity() -> tuple[str, type[Any]]:
         raise CorrectnessAuditError(
             "Correctness audit could not import the locked torchdata runtime module"
         ) from error
+    source_origin, source_sha256 = _torchdata_source_identity(
+        distribution, runtime_module
+    )
     runtime_loader_class = getattr(runtime_module, "StatefulDataLoader", None)
     iterator_class = getattr(runtime_module, "_StatefulBaseDataLoaderIter", None)
     if (
@@ -376,7 +518,7 @@ def _torchdata_runtime_identity() -> tuple[str, type[Any]]:
         raise CorrectnessAuditError(
             "Correctness audit found an unexpected torchdata runtime class layout"
         )
-    return runtime_version, iterator_class
+    return runtime_version, iterator_class, source_origin, source_sha256
 
 
 def _capture_train_loader_state(train_loader: _StatefulLoader) -> object:
@@ -388,7 +530,12 @@ def _capture_train_loader_state(train_loader: _StatefulLoader) -> object:
             "Correctness audit does not support StatefulDataLoader subclasses"
         )
 
-    runtime_version, iterator_class = _torchdata_runtime_identity()
+    (
+        runtime_version,
+        iterator_class,
+        source_origin,
+        source_sha256,
+    ) = _torchdata_runtime_identity()
     try:
         loader_attributes = vars(train_loader)
     except TypeError as error:
@@ -428,6 +575,8 @@ def _capture_train_loader_state(train_loader: _StatefulLoader) -> object:
         "loader_class": f"{type(train_loader).__module__}.{type(train_loader).__qualname__}",
         "package": _TORCHDATA_PACKAGE,
         "package_version": runtime_version,
+        "source_origin": source_origin,
+        "source_sha256": source_sha256,
     }
     if iterator is None:
         if initial_iter_for_state_dict:

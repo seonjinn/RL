@@ -11,7 +11,9 @@
 - CW test-contract follow-up: `175e39c9250af597e8c860d846f9be44dd39799c`
 - CW read-only capture follow-up:
   `45ca880cbaf32ec742a66934b36d3fb41420ee0f`
-- Loader identity fail-closed follow-up: the signed commit containing this
+- Loader identity fail-closed follow-up:
+  `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
+- TorchData source-provenance follow-up: the signed commit containing this
   document
 - Requirements: `.superpowers/sdd/task-4-brief.md`
 - Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
@@ -25,8 +27,9 @@ lifecycle handling, timing isolation, and the merge review gate.
 
 **Code review gate: READY FOR CONTROLLER RE-REVIEW.** The prior review findings,
 the CUDA test-contract mismatch, the restored-loader read-only failure, and the
-subsequent loader-adapter fail-open finding are addressed in the current range.
-This document does not claim that the controller has approved the follow-up.
+subsequent loader-adapter identity and source-provenance findings are addressed
+in the current range. This document does not claim that the controller has
+approved the follow-up.
 
 **Supported-Linux execution gate: PENDING FULL RERUN.** After the CUDA contract
 fix, CW job `13566796` reached `160 passed, 1 failed` before `maxfail=1` stopped
@@ -147,6 +150,29 @@ package version. Active state calls `state_dict()` only after the complete
 layout and boundary are validated. Non-TorchData protocol loaders always use
 their own `state_dict()` even when private names collide.
 
+### TorchData Source-Provenance Follow-Up
+
+Review of `2a4c1ca8f` found that installed distribution metadata and matching
+class names did not prove that the imported runtime module came from the
+distribution. A shadow source earlier on `sys.path` could retain matching class
+metadata while executing different code.
+
+Enabled audit capture now finds exactly one
+`torchdata/stateful_dataloader/stateful_dataloader.py` entry in
+`distribution.files`, requires an available SHA-256 RECORD hash, and decodes
+its URL-safe base64 value using the RECORD no-padding convention. It resolves
+the PackagePath location, `runtime_module.__spec__.origin`, and
+`runtime_module.__file__` with `strict=True` and requires all three canonical
+paths to be identical. It then hashes the actual imported source bytes and
+requires an exact RECORD digest match before class/layout inspection or any
+loader `state_dict()` call. The canonical source origin and hexadecimal
+SHA-256 are included in valid TorchData fingerprint evidence.
+
+Missing/duplicate file records, unavailable or unsupported hashes, malformed
+RECORD encodings, unresolvable or mismatched origins, content mismatches, and
+public/private class module mismatches all fail closed. Non-TorchData loaders
+still bypass TorchData metadata and use their protocol `state_dict()` directly.
+
 ## Invariant Matrix
 
 | Invariant | Current implementation evidence | Current test/review evidence | Status |
@@ -156,7 +182,7 @@ their own `state_dict()` even when private names collide.
 | Canonical precomputed and CPU-cache payloads remain owned and immutable | Loads own CPU tensors; submissions clone canonical CPU/precomputed payloads | Clone, mutation, failed-submission, cache lifecycle tests | Covered; current Linux rerun pending |
 | Live and precomputed loss weighting use exact valid tokens | Validation weights losses with exact `sample_mask * token_mask` counts and artifact counts | Parity and invalid-loss-shape tests | Covered; current Linux rerun pending |
 | Driver Python, NumPy, Torch CPU, and Torch CUDA RNG are exact | Production snapshots hash complete states; initialized CUDA devices use `get_rng_state_all()` | Real mutation matrix plus controlled driver CUDA API side effects | Covered; current Linux rerun pending |
-| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; exact TorchData 0.11 identity/layout is verified; pending/not-started state is hashed without creating an iterator; active state is read only after validation | Real restart/control test plus identity, version, missing-field, bad-type, impossible-boundary, and colliding-loader tests | Covered locally by source contract; current Linux rerun pending |
+| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; exact TorchData 0.11 package, source origin, RECORD SHA-256, class, and layout are verified; pending/not-started state is hashed without creating an iterator; active state is read only after validation | Real restart/control test plus package/source provenance, identity, version, missing-field, bad-type, impossible-boundary, and colliding-loader tests | Covered locally by source contract; current Linux rerun pending |
 | Runtime validation payload survives exceptions | External collector exists independently of result and finalizes after restoration attempt | Mutating submission-failure, invalid-loss, and restore-failure production tests | Covered; current Linux rerun pending |
 | Ordered runtime sample identity is exact | Evidence independently hashes ordered `idx` and `input_ids` | Production path mutates only `idx` and asserts sample-identity rejection | Covered; current Linux rerun pending |
 | Runtime exact token counts are independent evidence | Counts are recomputed from current `sample_mask * token_mask` before and after submission | Production path mutates only a mask and asserts token-count rejection | Covered; current Linux rerun pending |
@@ -174,10 +200,10 @@ their own `state_dict()` even when private names collide.
 
 ## Verification Evidence
 
-Passed locally on the current read-only follow-up:
+Passed locally on the current source-provenance follow-up:
 
 - `/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py`
-  returned `30 passed`.
+  returned `44 passed`.
 - Ruff lint passed on all changed Python files.
 - Ruff format check passed on all changed Python files.
 - Python compilation passed for all changed Python files and requested focused

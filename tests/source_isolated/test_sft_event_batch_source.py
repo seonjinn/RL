@@ -1,6 +1,9 @@
 # Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 
 import ast
+import base64
+import binascii
+import hashlib
 import math
 import os
 import sys
@@ -881,6 +884,48 @@ class _FakeTorchDataLoader:
         return {"position": 5}
 
 
+_TORCHDATA_SOURCE_RECORD = "torchdata/stateful_dataloader/stateful_dataloader.py"
+_FAKE_TORCHDATA_SOURCE = (
+    REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+).resolve()
+_DEFAULT_DISTRIBUTION_FILES = object()
+_DEFAULT_RUNTIME_PATH = object()
+
+
+def _record_sha256(path: Path) -> str:
+    digest = hashlib.sha256(path.read_bytes()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+class _FakePackagePath:
+    def __init__(
+        self,
+        relative_path: str,
+        located_path: Path,
+        *,
+        hash_mode: str | None = "sha256",
+        hash_value: str | None = None,
+    ) -> None:
+        self.relative_path = relative_path
+        self.located_path = located_path
+        self.hash = (
+            None
+            if hash_mode is None
+            else SimpleNamespace(
+                mode=hash_mode,
+                value=(
+                    _record_sha256(located_path) if hash_value is None else hash_value
+                ),
+            )
+        )
+
+    def as_posix(self) -> str:
+        return self.relative_path
+
+    def locate(self) -> Path:
+        return self.located_path
+
+
 class _FakeImportlibMetadata:
     class PackageNotFoundError(Exception):
         pass
@@ -891,10 +936,22 @@ class _FakeImportlibMetadata:
         version: str = "0.11.0",
         distribution_name: str = "torchdata",
         package_owners: tuple[str, ...] = ("torchdata",),
+        files: object = _DEFAULT_DISTRIBUTION_FILES,
     ) -> None:
         self.version = version
         self.distribution_name = distribution_name
         self.package_owners = package_owners
+        self.source_path = _FAKE_TORCHDATA_SOURCE
+        self.files = (
+            [
+                _FakePackagePath(
+                    _TORCHDATA_SOURCE_RECORD,
+                    self.source_path,
+                )
+            ]
+            if files is _DEFAULT_DISTRIBUTION_FILES
+            else files
+        )
         self.distribution_calls = 0
         self.package_owner_calls = 0
 
@@ -904,6 +961,7 @@ class _FakeImportlibMetadata:
         return SimpleNamespace(
             version=self.version,
             metadata={"Name": self.distribution_name},
+            files=self.files,
         )
 
     def packages_distributions(self) -> dict[str, list[str]]:
@@ -921,16 +979,34 @@ def _load_train_loader_capture(
     *,
     runtime_loader_class: object = _FakeTorchDataLoader,
     runtime_iterator_class: object = _FakeTorchDataIterator,
+    runtime_origin: object = _DEFAULT_RUNTIME_PATH,
+    runtime_file: object = _DEFAULT_RUNTIME_PATH,
+    expected_runtime_module: str = _FakeTorchDataLoader.__module__,
 ) -> tuple[Any, Any]:
     audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    resolved_runtime_origin = (
+        str(metadata.source_path)
+        if runtime_origin is _DEFAULT_RUNTIME_PATH
+        else runtime_origin
+    )
+    resolved_runtime_file = (
+        str(metadata.source_path)
+        if runtime_file is _DEFAULT_RUNTIME_PATH
+        else runtime_file
+    )
     runtime_module = SimpleNamespace(
         StatefulDataLoader=runtime_loader_class,
         _StatefulBaseDataLoaderIter=runtime_iterator_class,
+        __spec__=SimpleNamespace(origin=resolved_runtime_origin),
+        __file__=resolved_runtime_file,
     )
     functions = _load_functions(
         audit_path,
         [
             "_normalize_distribution_name",
+            "_decode_record_sha256",
+            "_canonical_source_path",
+            "_torchdata_source_identity",
             "_torchdata_runtime_identity",
             "_capture_train_loader_state",
         ],
@@ -940,7 +1016,13 @@ def _load_train_loader_capture(
             "_SUPPORTED_TORCHDATA_VERSION": "0.11.0",
             "_TORCHDATA_DISTRIBUTION": "torchdata",
             "_TORCHDATA_PACKAGE": "torchdata",
-            "_TORCHDATA_RUNTIME_MODULE": _FakeTorchDataLoader.__module__,
+            "_TORCHDATA_RUNTIME_MODULE": expected_runtime_module,
+            "_TORCHDATA_RUNTIME_PACKAGE_PATH": _TORCHDATA_SOURCE_RECORD,
+            "Path": Path,
+            "PathLike": os.PathLike,
+            "base64": base64,
+            "binascii": binascii,
+            "hashlib": hashlib,
             "importlib": SimpleNamespace(
                 import_module=lambda name: runtime_module,
             ),
@@ -954,6 +1036,7 @@ def test_correctness_audit_requires_exact_torchdata_identity_and_version() -> No
     capture, _ = _load_train_loader_capture(_FakeImportlibMetadata())
     loader = _FakeTorchDataLoader(pending_state={"position": 3})
     pending_state = loader.next_iter_state
+    source_sha256 = hashlib.sha256(_FAKE_TORCHDATA_SOURCE.read_bytes()).hexdigest()
 
     captured = capture(loader)
 
@@ -965,6 +1048,8 @@ def test_correctness_audit_requires_exact_torchdata_identity_and_version() -> No
         ),
         "package": "torchdata",
         "package_version": "0.11.0",
+        "source_origin": str(_FAKE_TORCHDATA_SOURCE),
+        "source_sha256": source_sha256,
         "state": {"position": 3},
     }
     assert loader.state_dict_calls == 0
@@ -980,6 +1065,8 @@ def test_correctness_audit_requires_exact_torchdata_identity_and_version() -> No
         ),
         "package": "torchdata",
         "package_version": "0.11.0",
+        "source_origin": str(_FAKE_TORCHDATA_SOURCE),
+        "source_sha256": source_sha256,
         "state": None,
     }
     assert not_started_loader.state_dict_calls == 0
@@ -993,6 +1080,8 @@ def test_correctness_audit_requires_exact_torchdata_identity_and_version() -> No
         ),
         "package": "torchdata",
         "package_version": "0.11.0",
+        "source_origin": str(_FAKE_TORCHDATA_SOURCE),
+        "source_sha256": source_sha256,
         "state": {"position": 5},
     }
     assert active_loader.state_dict_calls == 1
@@ -1031,6 +1120,122 @@ def test_correctness_audit_requires_exact_torchdata_identity_and_version() -> No
     with pytest.raises(_FakeCorrectnessAuditError):
         capture(subclass_loader)
     assert subclass_loader.state_dict_calls == 0
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing-files",
+        "missing-source-record",
+        "duplicate-source-record",
+        "missing-record-hash",
+        "unsupported-record-hash",
+        "padded-record-hash",
+        "unresolvable-located-path",
+        "locate-origin-mismatch",
+        "origin-file-mismatch",
+        "missing-origin",
+        "missing-file",
+        "content-hash-mismatch",
+        "public-loader-module-mismatch",
+        "private-iterator-module-mismatch",
+    ],
+)
+def test_correctness_audit_rejects_unproven_torchdata_source_before_state_dict(
+    case: str,
+    tmp_path: Path,
+) -> None:
+    metadata = _FakeImportlibMetadata()
+    runtime_origin: object = _DEFAULT_RUNTIME_PATH
+    runtime_file: object = _DEFAULT_RUNTIME_PATH
+    expected_runtime_module = _FakeTorchDataLoader.__module__
+    runtime_iterator_class: object = _FakeTorchDataIterator
+    alternate_source = tmp_path / "shadow_stateful_dataloader.py"
+    alternate_source.write_text("shadow source")
+
+    if case == "missing-files":
+        metadata.files = None
+    elif case == "missing-source-record":
+        metadata.files = [
+            _FakePackagePath(
+                "torchdata/stateful_dataloader/other.py", metadata.source_path
+            )
+        ]
+    elif case == "duplicate-source-record":
+        metadata.files = [
+            _FakePackagePath(_TORCHDATA_SOURCE_RECORD, metadata.source_path),
+            _FakePackagePath(_TORCHDATA_SOURCE_RECORD, metadata.source_path),
+        ]
+    elif case == "missing-record-hash":
+        package_path = _FakePackagePath(_TORCHDATA_SOURCE_RECORD, metadata.source_path)
+        package_path.hash = None
+        metadata.files = [package_path]
+    elif case == "unsupported-record-hash":
+        metadata.files = [
+            _FakePackagePath(
+                _TORCHDATA_SOURCE_RECORD,
+                metadata.source_path,
+                hash_mode="sha512",
+            )
+        ]
+    elif case == "padded-record-hash":
+        metadata.files = [
+            _FakePackagePath(
+                _TORCHDATA_SOURCE_RECORD,
+                metadata.source_path,
+                hash_value=_record_sha256(metadata.source_path) + "=",
+            )
+        ]
+    elif case == "unresolvable-located-path":
+        metadata.files = [
+            _FakePackagePath(
+                _TORCHDATA_SOURCE_RECORD,
+                tmp_path / "missing.py",
+                hash_value=_record_sha256(metadata.source_path),
+            )
+        ]
+    elif case == "locate-origin-mismatch":
+        metadata.files = [_FakePackagePath(_TORCHDATA_SOURCE_RECORD, alternate_source)]
+    elif case == "origin-file-mismatch":
+        runtime_origin = str(alternate_source)
+    elif case == "missing-origin":
+        runtime_origin = None
+    elif case == "missing-file":
+        runtime_file = None
+    elif case == "content-hash-mismatch":
+        wrong_hash = base64.urlsafe_b64encode(b"\x00" * 32).rstrip(b"=").decode()
+        metadata.files = [
+            _FakePackagePath(
+                _TORCHDATA_SOURCE_RECORD,
+                metadata.source_path,
+                hash_value=wrong_hash,
+            )
+        ]
+    elif case == "public-loader-module-mismatch":
+        expected_runtime_module = "shadow.runtime"
+    elif case == "private-iterator-module-mismatch":
+        wrong_iterator_class = type(
+            "WrongIterator",
+            (),
+            {"__module__": "shadow.runtime"},
+        )
+        runtime_iterator_class = wrong_iterator_class
+    else:
+        raise AssertionError(f"Unhandled provenance case {case}")
+
+    capture, _ = _load_train_loader_capture(
+        metadata,
+        runtime_iterator_class=runtime_iterator_class,
+        runtime_origin=runtime_origin,
+        runtime_file=runtime_file,
+        expected_runtime_module=expected_runtime_module,
+    )
+    loader = _FakeTorchDataLoader(pending_state={"position": 3})
+
+    with pytest.raises(_FakeCorrectnessAuditError):
+        capture(loader)
+
+    assert loader.state_dict_calls == 0
 
 
 @pytest.mark.parametrize(
