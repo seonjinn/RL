@@ -1,126 +1,195 @@
-# Task 4: NeMo-RL Evaluation Fast Path
+# Task 4: Code-Level Correctness Audit and Review Gate
 
-## Result
+## Status
 
-- Base commit: `69c0a7110eb7d71fd57f8eca179f1a51e521c2c2`
-- Branch: `sna/sft-validation-opt-20260706`
-- Added `policy.megatron_cfg.eval_mode_fast_path`, with absent or `false`
-  preserving the legacy path. The Super V3 prepacked exemplar sets it to
-  `false`.
-- Preserved the public `Policy.train(...)` signature. Timed Megatron evaluation
-  adds an internal worker keyword only; training and DTensor worker calls retain
-  their previous kwargs.
+`DONE_WITH_CONCERNS`
 
-## Exact Fast-Path Skips
+- Approved Tasks 1-3 head: `e8e13f5a9e0694adb1a574fd4b7e35507ab3ca9b`
+- Task 4 implementation commit: `2c8bfdc5d63d8db05da34258148aea640222e311`
+- Independent code-review gate: pass, with no findings
+- Supported-Linux execution gate: pending because the local macOS environment
+  does not provide Ray, Torch, or Megatron
 
-For normal (non-MXFP8-shared-buffer) forward-only evaluation, the enabled fast
-path skips:
+The correctness audit is opt-in and disabled by default. The disabled path does
+not construct the auditor and adds no worker RPC, tensor reduction,
+synchronization, RNG read, or audit timing call.
 
-- `model.zero_grad_buffer()`
-- `optimizer.zero_grad()`
-- `_copy_main_params_to_param_buffer()`
-- the forced parameter sync caused by `disable_forward_pre_hook()`
-- `optimizer.step()`
-- the model-parallel update-success `logical_and` collective
-- the model-parallel grad-norm max reduction
-- the model-parallel zero-count max reduction
-- `scheduler.step()`
+## Changed Files
 
-The optimizer and scheduler steps were already guarded by `eval_mode`; the new
-path removes the remaining setup and statistic work.
+Implementation commit `2c8bfdc5d63d8db05da34258148aea640222e311`
+changes exactly these files:
 
-## Correctness-Preserving Work
+- `examples/configs/sft.yaml`
+- `examples/configs/sft_superv3_prepacked.yaml`
+- `nemo_rl/algorithms/sft.py`
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `nemo_rl/models/policy/lm_policy.py`
+- `nemo_rl/models/policy/workers/megatron_policy_worker.py`
+- `pyrefly.toml`
+- `tests/unit/algorithms/test_sft.py`
+- `tests/unit/algorithms/test_sft_correctness_audit.py`
+- `tests/unit/algorithms/test_sft_validation_artifact.py`
+- `tests/unit/reference_configs/sft.yaml`
 
-- The existing `total_dataset_size` data-parallel all-reduce is unchanged.
-- Forward execution, pipeline loss broadcast, context/data-parallel loss
-  aggregation, and global loss calculation are unchanged.
-- Normal overlap parameter-gather hooks stay enabled. MCore's forward pre-hook
-  finishes pending parameter synchronization when each module consumes its
-  parameters, avoiding the eager forced sync without using stale parameters.
-- MXFP8 overlap with a shared parameter/gradient buffer is an explicit
-  exception. It retains `disable_forward_pre_hook()`, the FP32-main-parameter
-  copy, shared-buffer zeroing, and the existing one-training-step hook
-  transition because MCore does not otherwise copy updated FP32 shards into
-  that buffer. It still skips optimizer zeroing/stepping and statistic
-  collectives during evaluation.
-- FP8 extra state and the model's pre-evaluation train/eval mode are restored on
-  the fast path. Tests compare parameters, extra state, grad buffers, optimizer
-  state, scheduler state, hook state, and the next training call with a direct
-  training control.
-- The review follow-up adds a source-isolated behavioral harness that extracts
-  the real worker `train`, hook-transition, buffer-copy, MXFP8 predicate,
-  extra-state, and `param_sync_func` helper method bodies into one executable
-  class. Stateful minimal DDP and optimizer objects replace only the external
-  MCore dependencies; none of the worker helpers under review are replaced by
-  lambdas.
-- Both normal and MXFP8 shared-buffer tests compare `train -> train` with
-  `train -> fast eval -> train`. They compare model weights, parameter and
-  gradient buffers, optimizer and scheduler state, hook state, first-step
-  disable state, saved `param_sync_func`, and restored `param_sync_func`.
-  MXFP8 additionally proves copy-plus-zero precedes forced sync, the next
-  training forward runs with hooks and `param_sync_func` disabled, and both are
-  restored after the optimizer step. The tests did not expose a production
-  divergence, so the follow-up requires no production-code change.
+The documentation follow-up changes:
 
-## Optional Timing
+- `.superpowers/sdd/task-4-report.md`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
 
-When validation comparison instrumentation supplies the existing `Timer`, the
-Megatron worker reports:
+## Implementation
 
-- `worker_state_transition_s`
-- `forward_s`
-- `metric_reduction_s`
-- `state_restore_s`
+- Added `CorrectnessAuditConfig(enabled=False)` and explicit disabled defaults
+  to the SFT reference and example configurations.
+- Added driver snapshots for Python, NumPy, Torch CPU and initialized driver
+  CUDA RNG, explicit generator state, train-loader state, validation payload,
+  ordered sample identity, and exact token counts.
+- Records validation-boundary snapshots and digests the next train batch only
+  after the existing training loop naturally yields it. The audit never
+  advances or prefetches the train loader.
+- Added the concrete `Policy.get_correctness_state_fingerprint()` method only.
+  `PolicyInterface` and unrelated backends remain unchanged.
+- Added per-worker fingerprints using direct named parameter, buffer, module
+  mode, optimizer-state, and exact optimizer-step inspection. Returned values
+  are small Python records; tensor moments and fixed samples are evidence, not
+  cryptographic equality proof.
+- Worker RNG inspection calls only MCore `get_all_rng_states()` plus Torch's
+  read-only CUDA RNG state API. It does not initialize trackers or advance RNG.
+- Audit code does not call state-dict/load/checkpoint paths, change model mode,
+  synchronize parameters, seed or set RNG, run forwards, or step optimizers.
+- Audit timing has separate metrics and is excluded from reported step, loop,
+  and end-to-end performance windows.
+- Default per-batch validation, CPU-cache validation, and precomputed-event
+  paths retain their existing behavior when the audit is disabled.
 
-These use `time.perf_counter()` only. They do not call CUDA synchronization or
-add a distributed collective. `Policy.train` takes the maximum observed value
-from already-returned worker results on the driver. Validation also records
-local `data_fetch_s` and `data_processing_s`. No timing fields or timer kwargs
-are added by the default validation path.
+## TDD Evidence
 
-## Verification
+The initial source-level tests failed before implementation because the audit
+module, concrete Policy method, worker method, and config block did not exist.
+Representative RED results were:
 
-RED evidence before implementation:
+```text
+AssertionError: missing required audit module: nemo_rl/algorithms/sft_correctness_audit.py
+AssertionError: nemo_rl/models/policy/lm_policy.py: missing Policy.get_correctness_state_fingerprint
+AssertionError: examples/configs/sft.yaml
+```
 
-- The source-level API check failed because the worker lacked
-  `collect_eval_timing` and validation lacked
-  `comparison_instrumentation_enabled`.
-- `uv run pytest ...` could not start because the lockfile supports Linux
-  `x86_64`/`aarch64`, not the local macOS platform.
-- `python3 -m pytest ...` could not collect because local Python lacks `ray`.
+The repository unit suite could not collect in the local environment even at
+RED because `tests/unit/conftest.py` imports Ray.
 
-Passing local checks after implementation:
+## Exact Verification
 
-- Source-isolated execution of the actual worker `train` method: fast-path
-  skips/state restore, legacy fallback, next-training equivalence, timing
-  fields, and MXFP8 required sync all passed.
-- Source-isolated execution of validation instrumentation: opt-in worker/data
-  timings and default-off behavior passed.
-- Source-isolated execution of the actual `Policy.train` method: Megatron-only
-  timing routing, DTensor isolation, driver max aggregation, and unchanged
-  public signature passed.
-- `python3 tests/unit/models/policy/test_megatron_worker_eval_state.py` executes
-  the actual extracted worker helper bodies and passes both normal-buffer and
-  MXFP8 shared-buffer state-equivalence tests.
-- Standalone Pyright with `--pythonversion 3.13` reports zero errors and zero
-  warnings for the new dependency-free state-equivalence test module.
-- `python3 -m py_compile` passed for all changed Python and test files.
-- `ruff format --check` and `ruff check` passed for all changed Python and test
-  files.
-- `git diff --check` passed.
-- Standalone Pyright cannot resolve the Linux project dependencies and exits
-  with 128 import/pre-existing diagnostics. A JSON changed-line audit found no
-  diagnostics on added lines.
+Focused Task 4 unit command:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft_validation_artifact.py tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py
+```
+
+Result: blocked during collection, exit 4.
+
+```text
+ImportError while loading conftest 'tests/unit/conftest.py'
+ModuleNotFoundError: No module named 'ray'
+```
+
+Source-isolated regression command:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `16 passed in 0.19s`.
+
+Ruff format command:
+
+```bash
+ruff format --check nemo_rl/algorithms/sft_validation_artifact.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/models/policy/lm_policy.py nemo_rl/models/policy/workers/megatron_policy_worker.py examples/prepare_sft_validation_event.py examples/run_sft.py tests/unit/algorithms/test_sft_validation_artifact.py tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py
+```
+
+Result: `10 files already formatted`, exit 0.
+
+Ruff lint command:
+
+```bash
+ruff check nemo_rl/algorithms/sft_validation_artifact.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/models/policy/lm_policy.py nemo_rl/models/policy/workers/megatron_policy_worker.py examples/prepare_sft_validation_event.py examples/run_sft.py tests/unit/algorithms/test_sft_validation_artifact.py tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Compilation command:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile nemo_rl/algorithms/sft_validation_artifact.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/models/policy/lm_policy.py nemo_rl/models/policy/workers/megatron_policy_worker.py examples/prepare_sft_validation_event.py examples/run_sft.py tests/unit/algorithms/test_sft_validation_artifact.py tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py
+```
+
+Result: exit 0 with no output.
+
+Requested Pyright command:
+
+```bash
+pyright nemo_rl/algorithms/sft_validation_artifact.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/algorithms/sft.py nemo_rl/models/policy/lm_policy.py nemo_rl/models/policy/workers/megatron_policy_worker.py examples/prepare_sft_validation_event.py examples/run_sft.py
+```
+
+Result: exit 1 with `162 errors, 1 warning, 0 informations`. The diagnostics
+are dominated by missing local Torch, Ray, Megatron, Pydantic, TorchData,
+Transformers, OmegaConf, and Safetensors dependencies plus existing repository
+diagnostics. A focused check of the new audit module and tests left only the two
+unresolved local Torch imports; the worker helper's relevant lines left only
+unresolved Torch and `megatron.core.tensor_parallel.random` imports.
+
+Diff validation command:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output.
+
+Tasks 1-3 previously passed their combined supported-Linux gate at the approved
+head: CW job `13559835`, `177 passed, 3 warnings in 43.82s`. That result does
+not replace a Linux execution of the new Task 4 tests.
+
+Not run for Task 4:
+
+- The focused unit command on a supported Linux environment with Ray, Torch,
+  and Megatron installed.
+- A Task 4 GPU/Ray/Megatron integration run.
+- The full repository test suite.
+
+## Self-Review
+
+- Re-read the brief and concrete worker/RNG API research against the final
+  implementation.
+- Inspected the disabled branch to confirm no auditor construction, worker RPC,
+  RNG read, tensor reduction, synchronization, or audit timing occurs.
+- Checked that the next train-batch digest is attached only to a naturally
+  yielded batch and that no audit-only loader iteration exists.
+- Checked that worker collection covers every worker rank, sorts records, and
+  fails on duplicate ranks or uninitialized MCore tracker state.
+- Checked that all digest inputs are canonical and mutation-sensitive while
+  worker tensor summaries remain explicitly characterized as fingerprints.
+- Checked timing placement and subtraction so audit work cannot contaminate
+  reported performance windows.
+- Checked scope: no `PolicyInterface` expansion, no unrelated backend change,
+  and no changes to default per-batch, CPU-cache, or precomputed behavior.
+- Checked the implementation diff for forbidden APIs and unrelated changes.
+- Independent read-only Codex review session
+  `019f40c6-3d07-7b20-84c5-80e0a1e30c06` reviewed commit
+  `2c8bfdc5d63d8db05da34258148aea640222e311` and returned `Findings: None`
+  and `Verdict: LGTM`.
+
+Detailed invariant evidence is recorded in
+`docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`.
 
 ## Remaining Concerns
 
-- The real Ray/Megatron/PyTorch test modules were not runnable on this macOS
-  host. Linux CI or a project container must run the focused repository tests.
-- The local worker timings intentionally avoid CUDA synchronization, so they are
-  host-observed section timings rather than exact GPU kernel completion times.
-- Full zero/copy/hook skipping is intentionally unavailable for MXFP8 overlap
-  with `reuse_grad_buf_for_mxfp8_param_ag`; removing that exception would risk
-  evaluating stale parameters.
-- This exact base does not contain the separate common-comparison-metrics task.
-  Its integration can enable the new validation instrumentation argument; the
-  default callers remain uninstrumented here.
+- The focused Ray-dependent Task 4 unit suite has not run on supported Linux.
+  It is the remaining execution gate before merge.
+- Local Pyright cannot produce a clean project result without the Linux project
+  dependencies. The focused audit diagnostics were reduced to unresolved
+  dependency imports.
+- Worker moments and deterministic samples can miss a localized tensor change;
+  they are bounded diagnostic evidence, not equality proofs.
+- Audit mode intentionally performs worker RPCs, local GPU reductions, and
+  host-visible state reads. It must remain disabled for timed performance runs.
+- The persisted precomputed artifact omits producer-only `idx` metadata, so
+  ordered `input_ids` are the persisted sample-identity evidence.
