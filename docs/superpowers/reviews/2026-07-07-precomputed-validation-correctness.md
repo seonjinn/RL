@@ -9,7 +9,10 @@
 - First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
 - Second-review fix: `8f1ca28d09ff9823f1932c0b3d21a796edb8edbc`
 - CW test-contract follow-up: `175e39c9250af597e8c860d846f9be44dd39799c`
-- CW read-only capture follow-up: the signed commit containing this document
+- CW read-only capture follow-up:
+  `45ca880cbaf32ec742a66934b36d3fb41420ee0f`
+- Loader identity fail-closed follow-up: the signed commit containing this
+  document
 - Requirements: `.superpowers/sdd/task-4-brief.md`
 - Worker/RNG research: `.superpowers/sdd/task-4-api-research.md`
 
@@ -21,9 +24,9 @@ lifecycle handling, timing isolation, and the merge review gate.
 ## Current Decision
 
 **Code review gate: READY FOR CONTROLLER RE-REVIEW.** The prior review findings,
-the CUDA test-contract mismatch, and the restored-loader read-only failure are
-addressed in the current range. This document does not claim that the
-controller has approved the follow-up.
+the CUDA test-contract mismatch, the restored-loader read-only failure, and the
+subsequent loader-adapter fail-open finding are addressed in the current range.
+This document does not claim that the controller has approved the follow-up.
 
 **Supported-Linux execution gate: PENDING FULL RERUN.** After the CUDA contract
 fix, CW job `13566796` reached `160 passed, 1 failed` before `maxfail=1` stopped
@@ -123,6 +126,27 @@ production `capture_correctness_snapshot()` and verifies that the generator,
 pending loader state, iterator boundary, and next naturally consumed batch all
 remain identical to an equivalent no-capture control.
 
+### Loader Identity Fail-Closed Follow-Up
+
+Review of `45ca880cb` found that private attribute names alone were not a safe
+TorchData adapter boundary. A custom protocol loader could be misclassified,
+while a recognized TorchData loader with missing or renamed fields could fall
+back to the mutating `state_dict()` path. The adapter also defaulted a missing
+boundary flag to false and accepted impossible field combinations.
+
+The adapter now recognizes the exact imported
+`torchdata.stateful_dataloader.StatefulDataLoader` class and verifies the
+installed top-level package owner, distribution name, and exact locked version
+`0.11.0` through `importlib.metadata`. A recognized subclass, unknown package
+identity/version or runtime class layout, missing field, wrong field type, empty
+pending state, or impossible boundary raises `CorrectnessAuditError` before
+`state_dict()`. Private runtime-class lookup occurs only inside enabled audit
+capture, after package/version validation.
+Pending and not-started evidence includes the exact loader class, package, and
+package version. Active state calls `state_dict()` only after the complete
+layout and boundary are validated. Non-TorchData protocol loaders always use
+their own `state_dict()` even when private names collide.
+
 ## Invariant Matrix
 
 | Invariant | Current implementation evidence | Current test/review evidence | Status |
@@ -132,7 +156,7 @@ remain identical to an equivalent no-capture control.
 | Canonical precomputed and CPU-cache payloads remain owned and immutable | Loads own CPU tensors; submissions clone canonical CPU/precomputed payloads | Clone, mutation, failed-submission, cache lifecycle tests | Covered; current Linux rerun pending |
 | Live and precomputed loss weighting use exact valid tokens | Validation weights losses with exact `sample_mask * token_mask` counts and artifact counts | Parity and invalid-loss-shape tests | Covered; current Linux rerun pending |
 | Driver Python, NumPy, Torch CPU, and Torch CUDA RNG are exact | Production snapshots hash complete states; initialized CUDA devices use `get_rng_state_all()` | Real mutation matrix plus controlled driver CUDA API side effects | Covered; current Linux rerun pending |
-| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; pending/not-started TorchData state is hashed without creating an iterator; active loader state is read from `state_dict()` | Real mutation tests plus restored-boundary capture and next-batch control test | Covered locally by source contract; current Linux rerun pending |
+| Explicit generator and train-loader position are exact | `Generator.get_state()` is hashed directly; exact TorchData 0.11 identity/layout is verified; pending/not-started state is hashed without creating an iterator; active state is read only after validation | Real restart/control test plus identity, version, missing-field, bad-type, impossible-boundary, and colliding-loader tests | Covered locally by source contract; current Linux rerun pending |
 | Runtime validation payload survives exceptions | External collector exists independently of result and finalizes after restoration attempt | Mutating submission-failure, invalid-loss, and restore-failure production tests | Covered; current Linux rerun pending |
 | Ordered runtime sample identity is exact | Evidence independently hashes ordered `idx` and `input_ids` | Production path mutates only `idx` and asserts sample-identity rejection | Covered; current Linux rerun pending |
 | Runtime exact token counts are independent evidence | Counts are recomputed from current `sample_mask * token_mask` before and after submission | Production path mutates only a mask and asserts token-count rejection | Covered; current Linux rerun pending |
@@ -153,7 +177,7 @@ remain identical to an equivalent no-capture control.
 Passed locally on the current read-only follow-up:
 
 - `/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py`
-  returned `20 passed`.
+  returned `30 passed`.
 - Ruff lint passed on all changed Python files.
 - Ruff format check passed on all changed Python files.
 - Python compilation passed for all changed Python files and requested focused

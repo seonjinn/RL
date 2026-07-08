@@ -9,13 +9,15 @@
 - First-review fix: `b104c8e894507644400eec38e6b8fea75196d5c6`
 - Second-review fix: `8f1ca28d09ff9823f1932c0b3d21a796edb8edbc`
 - CW contract follow-up: `175e39c9250af597e8c860d846f9be44dd39799c`
-- CW read-only capture follow-up: the signed commit containing the final section
-  below
+- CW read-only capture follow-up:
+  `45ca880cbaf32ec742a66934b36d3fb41420ee0f`
+- Loader identity fail-closed follow-up: the signed commit containing the final
+  section below
 - Independent code-review gate: prior findings addressed; final controller
   review remains pending
 - Supported-Linux execution gate: CW job `13566796` stopped at
-  `160 passed, 1 failed` on a restored-loader audit mutation; a full post-fix
-  rerun remains pending
+  `160 passed, 1 failed` on a restored-loader audit mutation; the read-only fix
+  and subsequent identity hardening require a full CW rerun
 
 The correctness audit is opt-in and disabled by default. The disabled path does
 not construct the auditor and adds no worker RPC, tensor reduction,
@@ -744,3 +746,154 @@ Result: exit 0 with no output after this report update.
 - Confirmed `explicit_generator_digest` is still captured and compared.
 - Confirmed no validation, cache, policy, worker, interface, configuration, or
   default-disabled execution path changed.
+
+## Loader Identity Fail-Closed Review Fix
+
+### Finding
+
+Review of `45ca880cbaf32ec742a66934b36d3fb41420ee0f` found that
+`_capture_train_loader_state()` identified TorchData by coincidental private
+attribute names. A recognized TorchData loader with missing or renamed fields
+could fall through to the mutating `state_dict()` path, a missing
+`_initial_iter_for_state_dict` field defaulted to false, impossible boundaries
+were accepted, and a custom protocol loader with colliding names could be
+misclassified.
+
+### Fix
+
+- The adapter now recognizes the exact imported
+  `torchdata.stateful_dataloader.StatefulDataLoader` class. Recognized
+  subclasses are unsupported and fail closed.
+- `importlib.metadata.distribution()` and `packages_distributions()` verify the
+  distribution name, top-level package owner, and exact locked runtime version
+  `0.11.0` before private layout inspection.
+- The locked runtime module and private iterator base are imported and checked
+  only inside opt-in capture; their identities must match the authoritative
+  public loader class before field inspection.
+- Recognized TorchData loaders must expose `_iterator`, `next_iter_state`, and
+  `_initial_iter_for_state_dict` with the exact expected types.
+- Missing fields, unknown package/version, wrong types, empty pending state,
+  active-plus-pending state, and no-iterator-plus-initial-flag state raise
+  `CorrectnessAuditError` before `state_dict()`.
+- Pending, not-started, and active evidence includes loader class, package, and
+  package version. Pending and not-started remain read-only. Active loaders call
+  `state_dict()` only after complete validation.
+- Non-TorchData protocol loaders always call their own `state_dict()`, even if
+  all three private names collide.
+
+The real restored-loader generator and next-natural-batch regression from the
+previous follow-up is unchanged. The metadata and layout checks run only inside
+opt-in audit snapshot capture; the default-disabled path remains unchanged.
+
+### Changed Files
+
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `tests/source_isolated/test_sft_event_batch_source.py`
+- `.superpowers/sdd/task-4-report.md`
+- `docs/superpowers/reviews/2026-07-07-precomputed-validation-correctness.md`
+
+### TDD Evidence
+
+The identity/layout tests were added before production hardening:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py -k "requires_exact_torchdata_identity or rejects_ambiguous_torchdata_layout or custom_colliding_loader"
+```
+
+RED result: exit 1; the first test failed with
+`AssertionError: Missing required function _normalize_distribution_name`.
+
+After implementation and coverage completion, the command returned
+`11 passed, 19 deselected in 0.12s`, exit 0. The passing matrix covers exact
+class/package/version identity, package-not-found, wrong distribution owner or
+name, unsupported version and subclass, all three missing/renamed fields,
+runtime class-layout mismatch, invalid boundary combinations, bad field types,
+empty pending state, valid pending/not-started/active boundaries, and a custom
+colliding protocol loader. Every ambiguous recognized-TorchData case asserts
+zero `state_dict()` calls.
+
+### Exact Local Verification
+
+Focused real restart regression attempt:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft.py -k "capture_is_read_only_at_lazy_restored_loader_boundary or restart_restores_loader_and_generator_then_runs_real_validation"
+```
+
+Result: exit 4 during conftest import; no unit test ran.
+
+```text
+tests/unit/conftest.py:24: in <module>
+    import ray
+E   ModuleNotFoundError: No module named 'ray'
+```
+
+Source-isolated suite:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `30 passed in 0.34s`, exit 0.
+
+Ruff lint:
+
+```bash
+ruff check nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Ruff format check:
+
+```bash
+ruff format --check nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `2 files already formatted`, exit 0 after applying Ruff formatting.
+
+Compilation:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 0 with no output.
+
+Focused type check:
+
+```bash
+pyright nemo_rl/algorithms/sft_correctness_audit.py tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: exit 1 with two missing local dependency imports only: `torch` and
+`torchdata.stateful_dataloader`. No additional type diagnostics were reported.
+
+Diff validation:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output after this report update.
+
+### Pending
+
+- The local environment cannot collect the Ray/Torch unit suite.
+- A full CW Linux rerun of the current commit range and controller review remain
+  pending. No prior partial CW job is represented as a passing gate.
+
+### Self-Review
+
+- Confirmed exact type identity is checked before private field inspection, so
+  name collisions on non-TorchData loaders cannot select the adapter.
+- Confirmed authoritative package identity and exact version are checked before
+  any recognized TorchData `state_dict()` call.
+- Confirmed every ambiguous recognized TorchData layout and boundary rejects
+  before `state_dict()`.
+- Confirmed loader class and package version are fingerprinted on every valid
+  TorchData boundary.
+- Confirmed pending/not-started capture remains read-only, active capture is
+  validated first, and `explicit_generator_digest` remains enabled.
+- Confirmed no default validation, cache, policy, worker, interface,
+  configuration, or audit-disabled execution path changed.

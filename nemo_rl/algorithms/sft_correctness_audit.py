@@ -13,6 +13,8 @@
 # limitations under the License.
 import dataclasses
 import hashlib
+import importlib
+from importlib import metadata as importlib_metadata
 import json
 import math
 import random
@@ -23,6 +25,13 @@ from typing import Any, Protocol, TypeVar, cast
 
 import numpy as np
 import torch
+from torchdata.stateful_dataloader import StatefulDataLoader
+
+
+_TORCHDATA_DISTRIBUTION = "torchdata"
+_TORCHDATA_PACKAGE = "torchdata"
+_TORCHDATA_RUNTIME_MODULE = "torchdata.stateful_dataloader.stateful_dataloader"
+_SUPPORTED_TORCHDATA_VERSION = "0.11.0"
 
 
 class _CorrectnessFingerprintPolicy(Protocol):
@@ -309,36 +318,138 @@ def evaluate_correctness_gate(
     return CorrectnessGateResult(ready=not differences, differences=differences)
 
 
+def _normalize_distribution_name(name: str) -> str:
+    return name.lower().replace("_", "-").replace(".", "-")
+
+
+def _torchdata_runtime_identity() -> tuple[str, type[Any]]:
+    try:
+        distribution = importlib_metadata.distribution(_TORCHDATA_DISTRIBUTION)
+    except importlib_metadata.PackageNotFoundError as error:
+        raise CorrectnessAuditError(
+            "Correctness audit requires the torchdata 0.11.0 distribution"
+        ) from error
+
+    distribution_name = distribution.metadata.get("Name")
+    package_owners = importlib_metadata.packages_distributions().get(_TORCHDATA_PACKAGE)
+    if (
+        type(distribution_name) is not str
+        or type(package_owners) is not list
+        or not all(type(owner) is str for owner in package_owners)
+    ):
+        raise CorrectnessAuditError(
+            "Correctness audit could not verify the torchdata package identity"
+        )
+    normalized_distribution = _normalize_distribution_name(distribution_name)
+    normalized_owners = tuple(
+        _normalize_distribution_name(owner) for owner in package_owners
+    )
+    if normalized_distribution != _TORCHDATA_DISTRIBUTION or normalized_owners != (
+        _TORCHDATA_DISTRIBUTION,
+    ):
+        raise CorrectnessAuditError(
+            "Correctness audit found an unexpected torchdata package identity"
+        )
+    runtime_version = distribution.version
+    if (
+        type(runtime_version) is not str
+        or runtime_version != _SUPPORTED_TORCHDATA_VERSION
+    ):
+        raise CorrectnessAuditError(
+            "Correctness audit supports only torchdata "
+            f"{_SUPPORTED_TORCHDATA_VERSION}, found {runtime_version!r}"
+        )
+    try:
+        runtime_module = importlib.import_module(_TORCHDATA_RUNTIME_MODULE)
+    except ImportError as error:
+        raise CorrectnessAuditError(
+            "Correctness audit could not import the locked torchdata runtime module"
+        ) from error
+    runtime_loader_class = getattr(runtime_module, "StatefulDataLoader", None)
+    iterator_class = getattr(runtime_module, "_StatefulBaseDataLoaderIter", None)
+    if (
+        runtime_loader_class is not StatefulDataLoader
+        or not isinstance(iterator_class, type)
+        or StatefulDataLoader.__module__ != _TORCHDATA_RUNTIME_MODULE
+        or iterator_class.__module__ != _TORCHDATA_RUNTIME_MODULE
+    ):
+        raise CorrectnessAuditError(
+            "Correctness audit found an unexpected torchdata runtime class layout"
+        )
+    return runtime_version, iterator_class
+
+
 def _capture_train_loader_state(train_loader: _StatefulLoader) -> object:
     """Read loader state without lazily creating a restored loader iterator."""
+    if not isinstance(train_loader, StatefulDataLoader):
+        return train_loader.state_dict()
+    if type(train_loader) is not StatefulDataLoader:
+        raise CorrectnessAuditError(
+            "Correctness audit does not support StatefulDataLoader subclasses"
+        )
+
+    runtime_version, iterator_class = _torchdata_runtime_identity()
     try:
         loader_attributes = vars(train_loader)
-    except TypeError:
-        return train_loader.state_dict()
-    if (
-        "_iterator" not in loader_attributes
-        or "next_iter_state" not in loader_attributes
-    ):
-        return train_loader.state_dict()
+    except TypeError as error:
+        raise CorrectnessAuditError(
+            "TorchData StatefulDataLoader has no inspectable instance layout"
+        ) from error
+    required_fields = {
+        "_iterator",
+        "next_iter_state",
+        "_initial_iter_for_state_dict",
+    }
+    missing_fields = sorted(required_fields - loader_attributes.keys())
+    if missing_fields:
+        raise CorrectnessAuditError(
+            "TorchData StatefulDataLoader is missing required private fields: "
+            + ", ".join(missing_fields)
+        )
 
     iterator = loader_attributes["_iterator"]
     pending_state = loader_attributes["next_iter_state"]
-    initial_iter_for_state_dict = loader_attributes.get(
-        "_initial_iter_for_state_dict", False
-    )
-    if not isinstance(initial_iter_for_state_dict, bool):
-        raise TypeError(
-            "Stateful train-loader iterator boundary flag must be a boolean"
+    initial_iter_for_state_dict = loader_attributes["_initial_iter_for_state_dict"]
+    if type(initial_iter_for_state_dict) is not bool:
+        raise CorrectnessAuditError(
+            "TorchData StatefulDataLoader has an unexpected initial-iterator flag type"
         )
+    if pending_state is not None and type(pending_state) is not dict:
+        raise CorrectnessAuditError(
+            "TorchData StatefulDataLoader has an unexpected pending-state type"
+        )
+    if iterator is not None and not isinstance(iterator, iterator_class):
+        raise CorrectnessAuditError(
+            "TorchData StatefulDataLoader has an unexpected iterator type"
+        )
+
+    evidence = {
+        "initial_iter_for_state_dict": initial_iter_for_state_dict,
+        "loader_class": f"{type(train_loader).__module__}.{type(train_loader).__qualname__}",
+        "package": _TORCHDATA_PACKAGE,
+        "package_version": runtime_version,
+    }
     if iterator is None:
-        return {
+        if initial_iter_for_state_dict:
+            raise CorrectnessAuditError(
+                "TorchData StatefulDataLoader with no iterator cannot have "
+                "initial-iterator flag set"
+            )
+        if pending_state == {}:
+            raise CorrectnessAuditError(
+                "TorchData StatefulDataLoader cannot have an empty pending state"
+            )
+        return evidence | {
             "boundary": "pending" if pending_state is not None else "not_started",
-            "initial_iter_for_state_dict": initial_iter_for_state_dict,
             "state": pending_state,
         }
+    if pending_state is not None:
+        raise CorrectnessAuditError(
+            "TorchData StatefulDataLoader active iterator cannot have pending state"
+        )
     return {
+        **evidence,
         "boundary": "active",
-        "initial_iter_for_state_dict": initial_iter_for_state_dict,
         "state": train_loader.state_dict(),
     }
 

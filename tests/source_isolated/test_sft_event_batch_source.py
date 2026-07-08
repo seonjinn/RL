@@ -854,60 +854,275 @@ def test_correctness_audit_finalizes_next_batch_and_captures_runtime_validation_
     assert '"input_mode"' not in train_source
 
 
-def test_correctness_audit_reads_pending_loader_state_without_initializing_iterator() -> (
-    None
-):
+class _FakeCorrectnessAuditError(RuntimeError):
+    pass
+
+
+class _FakeTorchDataIterator:
+    def state_dict(self) -> dict[str, object]:
+        return {"position": 5}
+
+
+class _FakeTorchDataLoader:
+    def __init__(
+        self,
+        *,
+        iterator: object | None = None,
+        pending_state: object = None,
+        initial_iter_for_state_dict: object = False,
+    ) -> None:
+        self._iterator = iterator
+        self.next_iter_state = pending_state
+        self._initial_iter_for_state_dict = initial_iter_for_state_dict
+        self.state_dict_calls = 0
+
+    def state_dict(self) -> dict[str, object]:
+        self.state_dict_calls += 1
+        return {"position": 5}
+
+
+class _FakeImportlibMetadata:
+    class PackageNotFoundError(Exception):
+        pass
+
+    def __init__(
+        self,
+        *,
+        version: str = "0.11.0",
+        distribution_name: str = "torchdata",
+        package_owners: tuple[str, ...] = ("torchdata",),
+    ) -> None:
+        self.version = version
+        self.distribution_name = distribution_name
+        self.package_owners = package_owners
+        self.distribution_calls = 0
+        self.package_owner_calls = 0
+
+    def distribution(self, name: str) -> SimpleNamespace:
+        assert name == "torchdata"
+        self.distribution_calls += 1
+        return SimpleNamespace(
+            version=self.version,
+            metadata={"Name": self.distribution_name},
+        )
+
+    def packages_distributions(self) -> dict[str, list[str]]:
+        self.package_owner_calls += 1
+        return {"torchdata": list(self.package_owners)}
+
+
+class _MissingTorchDataMetadata(_FakeImportlibMetadata):
+    def distribution(self, name: str) -> SimpleNamespace:
+        raise self.PackageNotFoundError(name)
+
+
+def _load_train_loader_capture(
+    metadata: _FakeImportlibMetadata,
+    *,
+    runtime_loader_class: object = _FakeTorchDataLoader,
+    runtime_iterator_class: object = _FakeTorchDataIterator,
+) -> tuple[Any, Any]:
     audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
-    functions = _load_functions(audit_path, ["_capture_train_loader_state"])
+    runtime_module = SimpleNamespace(
+        StatefulDataLoader=runtime_loader_class,
+        _StatefulBaseDataLoaderIter=runtime_iterator_class,
+    )
+    functions = _load_functions(
+        audit_path,
+        [
+            "_normalize_distribution_name",
+            "_torchdata_runtime_identity",
+            "_capture_train_loader_state",
+        ],
+        namespace={
+            "CorrectnessAuditError": _FakeCorrectnessAuditError,
+            "StatefulDataLoader": _FakeTorchDataLoader,
+            "_SUPPORTED_TORCHDATA_VERSION": "0.11.0",
+            "_TORCHDATA_DISTRIBUTION": "torchdata",
+            "_TORCHDATA_PACKAGE": "torchdata",
+            "_TORCHDATA_RUNTIME_MODULE": _FakeTorchDataLoader.__module__,
+            "importlib": SimpleNamespace(
+                import_module=lambda name: runtime_module,
+            ),
+            "importlib_metadata": metadata,
+        },
+    )
+    return functions["_capture_train_loader_state"], functions
 
-    class LazyRestoredLoader:
-        def __init__(self) -> None:
-            self._iterator = None
-            self._initial_iter_for_state_dict = False
-            self.next_iter_state = {"position": 3}
-            self.state_dict_calls = 0
 
-        def state_dict(self) -> dict[str, object]:
-            self.state_dict_calls += 1
-            self._iterator = object()
-            self.next_iter_state = None
-            return {"position": 3}
-
-    loader = LazyRestoredLoader()
+def test_correctness_audit_requires_exact_torchdata_identity_and_version() -> None:
+    capture, _ = _load_train_loader_capture(_FakeImportlibMetadata())
+    loader = _FakeTorchDataLoader(pending_state={"position": 3})
     pending_state = loader.next_iter_state
 
-    captured = functions["_capture_train_loader_state"](loader)
+    captured = capture(loader)
 
     assert captured == {
         "boundary": "pending",
         "initial_iter_for_state_dict": False,
+        "loader_class": (
+            f"{_FakeTorchDataLoader.__module__}.{_FakeTorchDataLoader.__qualname__}"
+        ),
+        "package": "torchdata",
+        "package_version": "0.11.0",
         "state": {"position": 3},
     }
     assert loader.state_dict_calls == 0
     assert loader._iterator is None
     assert loader.next_iter_state is pending_state
 
-    fresh_loader = LazyRestoredLoader()
-    fresh_loader.next_iter_state = None
-    assert functions["_capture_train_loader_state"](fresh_loader) == {
+    not_started_loader = _FakeTorchDataLoader()
+    assert capture(not_started_loader) == {
         "boundary": "not_started",
         "initial_iter_for_state_dict": False,
+        "loader_class": (
+            f"{_FakeTorchDataLoader.__module__}.{_FakeTorchDataLoader.__qualname__}"
+        ),
+        "package": "torchdata",
+        "package_version": "0.11.0",
         "state": None,
     }
-    assert fresh_loader.state_dict_calls == 0
+    assert not_started_loader.state_dict_calls == 0
 
-    class OpaqueLoader:
+    active_loader = _FakeTorchDataLoader(iterator=_FakeTorchDataIterator())
+    assert capture(active_loader) == {
+        "boundary": "active",
+        "initial_iter_for_state_dict": False,
+        "loader_class": (
+            f"{_FakeTorchDataLoader.__module__}.{_FakeTorchDataLoader.__qualname__}"
+        ),
+        "package": "torchdata",
+        "package_version": "0.11.0",
+        "state": {"position": 5},
+    }
+    assert active_loader.state_dict_calls == 1
+
+    for metadata in (
+        _MissingTorchDataMetadata(),
+        _FakeImportlibMetadata(version="0.12.0"),
+        _FakeImportlibMetadata(distribution_name="not-torchdata"),
+        _FakeImportlibMetadata(package_owners=("not-torchdata",)),
+    ):
+        capture, _ = _load_train_loader_capture(metadata)
+        ambiguous_loader = _FakeTorchDataLoader(pending_state={"position": 3})
+        with pytest.raises(_FakeCorrectnessAuditError):
+            capture(ambiguous_loader)
+        assert ambiguous_loader.state_dict_calls == 0
+
+    for runtime_loader_class, runtime_iterator_class in (
+        (object, _FakeTorchDataIterator),
+        (_FakeTorchDataLoader, None),
+    ):
+        capture, _ = _load_train_loader_capture(
+            _FakeImportlibMetadata(),
+            runtime_loader_class=runtime_loader_class,
+            runtime_iterator_class=runtime_iterator_class,
+        )
+        ambiguous_loader = _FakeTorchDataLoader(pending_state={"position": 3})
+        with pytest.raises(_FakeCorrectnessAuditError):
+            capture(ambiguous_loader)
+        assert ambiguous_loader.state_dict_calls == 0
+
+    class TorchDataSubclass(_FakeTorchDataLoader):
+        pass
+
+    capture, _ = _load_train_loader_capture(_FakeImportlibMetadata())
+    subclass_loader = TorchDataSubclass(pending_state={"position": 3})
+    with pytest.raises(_FakeCorrectnessAuditError):
+        capture(subclass_loader)
+    assert subclass_loader.state_dict_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        pytest.param(
+            lambda loader: vars(loader).pop("_iterator"),
+            "missing required private fields",
+            id="missing-iterator",
+        ),
+        pytest.param(
+            lambda loader: vars(loader).pop("next_iter_state"),
+            "missing required private fields",
+            id="renamed-pending-state",
+        ),
+        pytest.param(
+            lambda loader: vars(loader).pop("_initial_iter_for_state_dict"),
+            "missing required private fields",
+            id="missing-initial-flag",
+        ),
+        pytest.param(
+            lambda loader: setattr(loader, "_iterator", _FakeTorchDataIterator()),
+            "active iterator cannot have pending state",
+            id="active-and-pending",
+        ),
+        pytest.param(
+            lambda loader: (
+                setattr(loader, "next_iter_state", None),
+                setattr(loader, "_initial_iter_for_state_dict", True),
+            ),
+            "no iterator cannot have initial-iterator flag",
+            id="none-and-initial-true",
+        ),
+        pytest.param(
+            lambda loader: setattr(loader, "_iterator", object()),
+            "unexpected iterator type",
+            id="bad-iterator-type",
+        ),
+        pytest.param(
+            lambda loader: setattr(loader, "next_iter_state", []),
+            "unexpected pending-state type",
+            id="bad-pending-type",
+        ),
+        pytest.param(
+            lambda loader: setattr(loader, "next_iter_state", {}),
+            "empty pending state",
+            id="empty-pending-state",
+        ),
+        pytest.param(
+            lambda loader: setattr(loader, "_initial_iter_for_state_dict", 0),
+            "unexpected initial-iterator flag type",
+            id="bad-initial-flag-type",
+        ),
+    ],
+)
+def test_correctness_audit_rejects_ambiguous_torchdata_layout_before_state_dict(
+    mutation: Any,
+    expected_error: str,
+) -> None:
+    capture, _ = _load_train_loader_capture(_FakeImportlibMetadata())
+    loader = _FakeTorchDataLoader(pending_state={"position": 3})
+    mutation(loader)
+
+    with pytest.raises(_FakeCorrectnessAuditError, match=expected_error):
+        capture(loader)
+
+    assert loader.state_dict_calls == 0
+
+
+def test_correctness_audit_custom_colliding_loader_uses_protocol_state_dict() -> None:
+    metadata = _FakeImportlibMetadata()
+    capture, _ = _load_train_loader_capture(metadata)
+
+    class CollidingProtocolLoader:
         def __init__(self) -> None:
+            self._iterator = None
+            self.next_iter_state = {"position": 99}
+            self._initial_iter_for_state_dict = True
             self.state_dict_calls = 0
 
         def state_dict(self) -> dict[str, object]:
             self.state_dict_calls += 1
             return {"position": 4}
 
-    opaque_loader = OpaqueLoader()
-    assert functions["_capture_train_loader_state"](opaque_loader) == {"position": 4}
-    assert opaque_loader.state_dict_calls == 1
+    loader = CollidingProtocolLoader()
 
+    assert capture(loader) == {"position": 4}
+    assert loader.state_dict_calls == 1
+    assert metadata.distribution_calls == 0
+    assert metadata.package_owner_calls == 0
+
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
     capture_node = _function_node(audit_path, "capture_correctness_snapshot")
     assert "_capture_train_loader_state" in ast.unparse(capture_node)
 
