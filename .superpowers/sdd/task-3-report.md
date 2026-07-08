@@ -370,3 +370,29 @@ git diff --check: passed
 ```
 
 The controller will rerun the complete CW Linux suite.
+
+## Final CW Linux GREEN Gate
+
+The controller reran the complete Task 3 regression suite from commit
+`4666ca34b1d255aa901d411023230f80af2936cd` in the reviewed NeMo-RL nightly
+container on one CW H100 node:
+
+```bash
+uv run --python /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/.cache/uv-python/cpython-3.13.13-linux-x86_64-gnu/bin/python3.13 \
+  --frozen --group test pytest -q \
+  tests/unit/algorithms/test_sft.py \
+  tests/unit/algorithms/test_sft_validation_artifact.py \
+  tests/source_isolated/test_sft_event_batch_source.py
+```
+
+- SLURM job: `13559835`
+- State: `COMPLETED`, exit code `0:0`
+- Runtime: `00:02:34`
+- Result: `177 passed, 3 warnings in 43.82s`
+- The executable runner tests confirmed artifact failure precedes all runtime
+  side effects, successful precomputed startup loads exactly once, validation
+  data loading is suppressed, and the exact event is forwarded to `sft_train`.
+- Default dataloader mode, runtime CPU cache, event batching, artifact/producer,
+  CUDA rejection, and source-isolated guards all passed in the same run.
+- Log:
+  `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260708-002457-task3-r3/sna-val-runtime-task3-r3_13559835.out`
