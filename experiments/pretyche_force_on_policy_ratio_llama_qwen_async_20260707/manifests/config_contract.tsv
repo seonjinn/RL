@@ -1,0 +1,9 @@
+run_key	model	config_name	mode	force_on_policy_ratio	nodes	gpus_per_node	segment	global_batch_size	steps	time_limit
+llama_2n4g_sync_control	llama3.1-8b	grpo-llama3.1-8b-instruct-2n4g	sync	false	2	4	2	2048	20	02:00:00
+llama_2n4g_sync_force	llama3.1-8b	grpo-llama3.1-8b-instruct-2n4g	sync	true	2	4	2	2048	20	02:00:00
+llama_2n4g_async1off_control	llama3.1-8b	grpo-llama3.1-8b-instruct-2n4g-async-1off	async1off	false	2	4	2	2048	20	02:00:00
+llama_2n4g_async1off_force	llama3.1-8b	grpo-llama3.1-8b-instruct-2n4g-async-1off	async1off	true	2	4	2	2048	20	02:00:00
+q30_4n4g_async1off_control	qwen3-30ba3b	grpo-qwen3-30ba3b-4n4g-async-1off	async1off	false	4	4	4	2048	20	03:00:00
+q30_4n4g_async1off_force	qwen3-30ba3b	grpo-qwen3-30ba3b-4n4g-async-1off	async1off	true	4	4	4	2048	20	03:00:00
+q32_8n4g_async1off_control	qwen3-32b	grpo-qwen3-32b-8n4g-async-1off	async1off	false	8	4	8	2048	20	04:00:00
+q32_8n4g_async1off_force	qwen3-32b	grpo-qwen3-32b-8n4g-async-1off	async1off	true	8	4	8	2048	20	04:00:00
