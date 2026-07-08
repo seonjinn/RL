@@ -13,13 +13,19 @@
 # limitations under the License.
 """Tensor-only storage for precomputed SFT validation events."""
 
+import fcntl
 import hashlib
 import json
+import math
 import os
+import re
+import struct
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 import psutil
 import torch
@@ -28,12 +34,17 @@ from safetensors.torch import save_file as save_safetensors_file
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
-_ARTIFACT_VERSION = 1
+_ARTIFACT_VERSION = 2
 _MANIFEST_FILE_NAME = "validation.manifest.json"
-_TENSOR_FILE_NAME = "validation.safetensors"
+_WRITER_LOCK_FILE_NAME = ".validation-artifact.lock"
+_TENSOR_FILE_PATTERN = re.compile(r"validation-([0-9a-f]{64})\.safetensors")
+_LOWERCASE_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_COMMIT_ID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+_MAX_SAFETENSORS_HEADER_BYTES = 1024 * 1024
 _MANIFEST_KEYS = frozenset(
     {
         "artifact_version",
+        "eligibility",
         "fingerprint",
         "num_valid_tokens",
         "payload_digest",
@@ -42,6 +53,25 @@ _MANIFEST_KEYS = frozenset(
         "tensor_file_sha256",
         "tensors",
     }
+)
+_ELIGIBILITY = MappingProxyType(
+    {
+        "dynamic_batching": False,
+        "multimodal": False,
+        "raw_online_packing": False,
+        "schema": "prepacked_sft_validation_v1",
+        "stochastic_preprocessing": False,
+    }
+)
+_REQUIRED_SFT_TENSOR_KEYS = frozenset(
+    {"input_ids", "input_lengths", "sample_mask", "token_mask"}
+)
+_OPTIONAL_SFT_TENSOR_KEYS = frozenset({"position_ids", "target_ids"})
+_PACKED_SFT_TENSOR_KEYS = frozenset(
+    {"packed_cu_seqlens", "packed_cu_seqlens_lengths", "packed_max_seqlens"}
+)
+_ALLOWED_SFT_TENSOR_KEYS = (
+    _REQUIRED_SFT_TENSOR_KEYS | _OPTIONAL_SFT_TENSOR_KEYS | _PACKED_SFT_TENSOR_KEYS
 )
 _FINGERPRINT_KEYS = frozenset(
     {
@@ -54,6 +84,40 @@ _FINGERPRINT_KEYS = frozenset(
     }
 )
 _TENSOR_RECORD_KEYS = frozenset({"dtype", "nbytes", "sha256", "shape"})
+_TORCH_TO_SAFETENSORS_DTYPE = {
+    "torch.bool": "BOOL",
+    "torch.uint8": "U8",
+    "torch.int8": "I8",
+    "torch.int16": "I16",
+    "torch.uint16": "U16",
+    "torch.int32": "I32",
+    "torch.uint32": "U32",
+    "torch.int64": "I64",
+    "torch.uint64": "U64",
+    "torch.float16": "F16",
+    "torch.bfloat16": "BF16",
+    "torch.float32": "F32",
+    "torch.float64": "F64",
+    "torch.complex64": "C64",
+    "torch.complex128": "C128",
+}
+_SAFETENSORS_DTYPE_NBYTES = {
+    "BOOL": 1,
+    "U8": 1,
+    "I8": 1,
+    "I16": 2,
+    "U16": 2,
+    "I32": 4,
+    "U32": 4,
+    "I64": 8,
+    "U64": 8,
+    "F16": 2,
+    "BF16": 2,
+    "F32": 4,
+    "F64": 8,
+    "C64": 8,
+    "C128": 16,
+}
 
 
 @dataclass(frozen=True)
@@ -84,7 +148,7 @@ def tensor_content_sha256(tensor: torch.Tensor) -> str:
     """Return the SHA-256 hash of contiguous CPU tensor content bytes."""
     _require_cpu_tensor(tensor)
     return hashlib.sha256(
-        tensor.detach().contiguous().view(torch.uint8).numpy().tobytes()
+        tensor.detach().contiguous().reshape(-1).view(torch.uint8).numpy().tobytes()
     ).hexdigest()
 
 
@@ -95,24 +159,29 @@ def save_validation_event(
 ) -> Path:
     """Atomically persist a tensor-only validation event and its manifest."""
     artifact_directory.mkdir(parents=True, exist_ok=True)
+    _validate_fingerprint_semantics(fingerprint)
     tensors = _event_tensors(event.data)
     retained_bytes = sum(tensor.nbytes for tensor in tensors.values())
     _validate_event_metadata(event, retained_bytes)
 
-    tensor_path = artifact_directory / _TENSOR_FILE_NAME
-    _atomic_save_safetensors(tensor_path, tensors)
-    manifest: dict[str, object] = {
-        "artifact_version": _ARTIFACT_VERSION,
-        "fingerprint": _fingerprint_as_manifest(fingerprint),
-        "num_valid_tokens": list(event.num_valid_tokens),
-        "payload_digest": event.payload_digest,
-        "retained_bytes": retained_bytes,
-        "tensor_file": _TENSOR_FILE_NAME,
-        "tensor_file_sha256": _file_sha256(tensor_path),
-        "tensors": {key: _tensor_record(tensor) for key, tensor in tensors.items()},
-    }
     manifest_path = artifact_directory / _MANIFEST_FILE_NAME
-    _atomic_write(manifest_path, _canonical_json_bytes(manifest))
+    with _serialized_writer(artifact_directory):
+        tensor_file, tensor_file_sha256 = _publish_safetensors(
+            artifact_directory, tensors
+        )
+        manifest: dict[str, object] = {
+            "artifact_version": _ARTIFACT_VERSION,
+            "eligibility": dict(_ELIGIBILITY),
+            "fingerprint": _fingerprint_as_manifest(fingerprint),
+            "num_valid_tokens": list(event.num_valid_tokens),
+            "payload_digest": event.payload_digest,
+            "retained_bytes": retained_bytes,
+            "tensor_file": tensor_file,
+            "tensor_file_sha256": tensor_file_sha256,
+            "tensors": {key: _tensor_record(tensor) for key, tensor in tensors.items()},
+        }
+        _atomic_write(manifest_path, _canonical_json_bytes(manifest))
+        _fsync_directory(artifact_directory)
     return manifest_path
 
 
@@ -124,18 +193,45 @@ def load_validation_event(
     """Load a verified validation event with owning CPU tensor copies."""
     manifest = _load_manifest(manifest_path)
     _validate_fingerprint(manifest["fingerprint"], fingerprint)
-    _validate_memory_budget(
-        manifest["retained_bytes"],
-        memory_budget or MemoryBudget(psutil.virtual_memory().available),
-    )
 
-    tensor_path = manifest_path.parent / _TENSOR_FILE_NAME
+    tensor_file = manifest["tensor_file"]
+    if not isinstance(tensor_file, str):
+        raise ValueError("Validation artifact tensor_file must be a string")
+    tensor_path = manifest_path.parent / tensor_file
     if not tensor_path.is_file():
         raise ValueError(f"Validation artifact tensor file is missing: {tensor_path}")
     if _file_sha256(tensor_path) != manifest["tensor_file_sha256"]:
         raise ValueError(
             "Validation artifact tensor file SHA-256 does not match manifest"
         )
+
+    header_records, header_payload_bytes, tensor_file_bytes = _read_safetensors_header(
+        tensor_path
+    )
+    manifest_payload_bytes = _manifest_tensor_payload_bytes(manifest["tensors"])
+    retained_bytes = manifest["retained_bytes"]
+    if (
+        not isinstance(retained_bytes, int)
+        or isinstance(retained_bytes, bool)
+        or retained_bytes < 0
+    ):
+        raise ValueError("Validation artifact retained_bytes must be non-negative")
+    conservative_payload_bytes = max(
+        retained_bytes,
+        manifest_payload_bytes,
+        header_payload_bytes,
+        tensor_file_bytes,
+    )
+    _validate_memory_budget(
+        conservative_payload_bytes,
+        memory_budget or MemoryBudget(psutil.virtual_memory().available),
+    )
+    _validate_header_against_manifest(header_records, manifest["tensors"])
+    if retained_bytes != header_payload_bytes:
+        raise ValueError(
+            "Validation artifact retained_bytes does not match safetensors payload"
+        )
+
     try:
         tensors = load_safetensors_file(str(tensor_path), device="cpu")
     except Exception as error:
@@ -144,8 +240,8 @@ def load_validation_event(
         ) from error
 
     data = _validated_loaded_data(tensors, manifest["tensors"])
-    retained_bytes = sum(tensor.nbytes for tensor in data.values())
-    if retained_bytes != manifest["retained_bytes"]:
+    loaded_retained_bytes = sum(tensor.nbytes for tensor in data.values())
+    if loaded_retained_bytes != retained_bytes:
         raise ValueError(
             "Validation artifact retained_bytes does not match tensor data"
         )
@@ -159,7 +255,7 @@ def load_validation_event(
         data=data,
         num_valid_tokens=tuple(num_valid_tokens),
         payload_digest=payload_digest,
-        retained_bytes=retained_bytes,
+        retained_bytes=loaded_retained_bytes,
     )
 
 
@@ -171,6 +267,7 @@ def clone_validation_event_data(
     for key, value in data.items():
         _require_named_cpu_tensor(key, value)
         cloned[key] = _clone_tensor(value)
+    _validate_sft_tensor_schema(cloned)
     return cloned
 
 
@@ -181,19 +278,28 @@ def _event_tensors(
     for key, value in sorted(data.items()):
         _require_named_cpu_tensor(key, value)
         tensors[key] = _clone_tensor(value)
+    _validate_sft_tensor_schema(tensors)
     return tensors
 
 
 def _validate_event_metadata(
     event: PrecomputedValidationEvent, retained_bytes: int
 ) -> None:
-    if len(event.num_valid_tokens) != 4 or any(
-        not isinstance(value, int) or isinstance(value, bool)
-        for value in event.num_valid_tokens
+    if (
+        not isinstance(event.num_valid_tokens, tuple)
+        or len(event.num_valid_tokens) != 4
     ):
-        raise ValueError("num_valid_tokens must contain exactly four integer counts")
+        raise ValueError(
+            "num_valid_tokens must contain exactly four non-negative integers"
+        )
+    if any(not _is_nonnegative_int(value) for value in event.num_valid_tokens):
+        raise ValueError(
+            "num_valid_tokens must contain exactly four non-negative integers"
+        )
     if not isinstance(event.payload_digest, str):
         raise TypeError("payload_digest must be a string")
+    if not _is_nonnegative_int(event.retained_bytes):
+        raise ValueError("retained_bytes must be a non-negative integer")
     if event.retained_bytes != retained_bytes:
         raise ValueError("retained_bytes does not match tensor payload bytes")
 
@@ -224,6 +330,140 @@ def _tensor_record(tensor: torch.Tensor) -> dict[str, object]:
     }
 
 
+def _validate_sft_tensor_schema(tensors: Mapping[str, torch.Tensor]) -> None:
+    keys = set(tensors)
+    _validate_sft_tensor_keys(keys)
+    _validate_sft_tensor_shapes(
+        {key: tuple(tensor.shape) for key, tensor in tensors.items()}
+    )
+
+
+def _validate_sft_tensor_shapes(shapes: Mapping[str, tuple[int, ...]]) -> None:
+    input_ids_shape = shapes["input_ids"]
+    if len(input_ids_shape) != 2 or input_ids_shape[0] == 0:
+        raise ValueError("Validation artifact input_ids must be a nonempty 2D tensor")
+    batch_size, sequence_length = input_ids_shape
+    expected_shapes = {
+        "input_lengths": (batch_size,),
+        "sample_mask": (batch_size,),
+        "token_mask": (batch_size, sequence_length),
+    }
+    for key in _OPTIONAL_SFT_TENSOR_KEYS & shapes.keys():
+        expected_shapes[key] = (batch_size, sequence_length)
+    packed_keys = shapes.keys() & _PACKED_SFT_TENSOR_KEYS
+    if packed_keys:
+        expected_shapes["packed_cu_seqlens_lengths"] = (batch_size,)
+        expected_shapes["packed_max_seqlens"] = (batch_size,)
+        packed_cu_seqlens_shape = shapes["packed_cu_seqlens"]
+        if (
+            len(packed_cu_seqlens_shape) != 2
+            or packed_cu_seqlens_shape[0] != batch_size
+        ):
+            raise ValueError(
+                "Validation artifact packed_cu_seqlens must be a batch-aligned 2D tensor"
+            )
+    for key, expected_shape in expected_shapes.items():
+        if shapes[key] != expected_shape:
+            raise ValueError(
+                f"Validation artifact tensor {key!r} has shape "
+                f"{shapes[key]}; expected {expected_shape}"
+            )
+
+
+def _validate_sft_tensor_keys(keys: set[str]) -> None:
+    unknown_keys = sorted(keys - _ALLOWED_SFT_TENSOR_KEYS)
+    if unknown_keys:
+        raise ValueError(
+            f"Validation artifact has unknown SFT tensor keys: {unknown_keys}"
+        )
+    missing_keys = sorted(_REQUIRED_SFT_TENSOR_KEYS - keys)
+    if missing_keys:
+        raise ValueError(
+            f"Validation artifact is missing required SFT tensor keys: {missing_keys}"
+        )
+    packed_keys = keys & _PACKED_SFT_TENSOR_KEYS
+    if packed_keys and packed_keys != _PACKED_SFT_TENSOR_KEYS:
+        raise ValueError(
+            "Validation artifact packed metadata must include exactly "
+            f"{sorted(_PACKED_SFT_TENSOR_KEYS)}"
+        )
+
+
+def _validate_fingerprint_semantics(
+    fingerprint: ValidationArtifactFingerprint,
+) -> None:
+    for field_name in (
+        "dataset_sha256",
+        "tokenizer_sha256",
+        "preprocessing_sha256",
+        "container_sha256",
+    ):
+        value = getattr(fingerprint, field_name)
+        if (
+            not isinstance(value, str)
+            or _LOWERCASE_SHA256_PATTERN.fullmatch(value) is None
+        ):
+            raise ValueError(
+                f"Validation artifact fingerprint {field_name} must be a "
+                "64-character lowercase SHA-256"
+            )
+    if (
+        not isinstance(fingerprint.nemo_rl_commit, str)
+        or _COMMIT_ID_PATTERN.fullmatch(fingerprint.nemo_rl_commit) is None
+    ):
+        raise ValueError(
+            "Validation artifact fingerprint nemo_rl_commit must be a full "
+            "lowercase hexadecimal commit ID"
+        )
+    submodule_commits = fingerprint.submodule_commits
+    if not isinstance(submodule_commits, tuple) or not submodule_commits:
+        raise ValueError(
+            "Validation artifact fingerprint submodule_commits must be nonempty"
+        )
+    paths: set[str] = set()
+    for entry in submodule_commits:
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise ValueError(
+                "Validation artifact fingerprint submodule_commits entries must be pairs"
+            )
+        path, commit = entry
+        if not _is_valid_submodule_path(path):
+            raise ValueError(
+                "Validation artifact fingerprint submodule_commits contains an "
+                f"invalid path: {path!r}"
+            )
+        if path in paths:
+            raise ValueError(
+                "Validation artifact fingerprint submodule_commits paths must be unique"
+            )
+        paths.add(path)
+        if not isinstance(commit, str) or _COMMIT_ID_PATTERN.fullmatch(commit) is None:
+            raise ValueError(
+                "Validation artifact fingerprint submodule_commits contains an "
+                f"invalid commit for {path!r}"
+            )
+    if tuple(sorted(submodule_commits)) != submodule_commits:
+        raise ValueError(
+            "Validation artifact fingerprint submodule_commits must be sorted"
+        )
+
+
+def _is_valid_submodule_path(path: object) -> bool:
+    if (
+        not isinstance(path, str)
+        or path in {"", ".", ".."}
+        or "\\" in path
+        or "\x00" in path
+    ):
+        return False
+    parsed = PurePosixPath(path)
+    return (
+        not parsed.is_absolute()
+        and str(parsed) == path
+        and all(part not in {"", ".", ".."} for part in parsed.parts)
+    )
+
+
 def _fingerprint_as_manifest(
     fingerprint: ValidationArtifactFingerprint,
 ) -> dict[str, object]:
@@ -232,23 +472,47 @@ def _fingerprint_as_manifest(
         "dataset_sha256": fingerprint.dataset_sha256,
         "nemo_rl_commit": fingerprint.nemo_rl_commit,
         "preprocessing_sha256": fingerprint.preprocessing_sha256,
-        "submodule_commits": [
-            list(commit) for commit in sorted(fingerprint.submodule_commits)
-        ],
+        "submodule_commits": [list(commit) for commit in fingerprint.submodule_commits],
         "tokenizer_sha256": fingerprint.tokenizer_sha256,
     }
 
 
-def _atomic_save_safetensors(path: Path, tensors: Mapping[str, torch.Tensor]) -> None:
+@contextmanager
+def _serialized_writer(artifact_directory: Path) -> Generator[None, None, None]:
+    lock_path = artifact_directory / _WRITER_LOCK_FILE_NAME
+    with lock_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _publish_safetensors(
+    artifact_directory: Path, tensors: Mapping[str, torch.Tensor]
+) -> tuple[str, str]:
     file_descriptor, temporary_path = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        dir=artifact_directory,
+        prefix=".validation-safetensors.",
+        suffix=".tmp",
     )
     os.close(file_descriptor)
     try:
         save_safetensors_file(dict(tensors), temporary_path)
         with open(temporary_path, "rb") as file_handle:
             os.fsync(file_handle.fileno())
-        os.replace(temporary_path, path)
+        tensor_file_sha256 = _file_sha256(Path(temporary_path))
+        tensor_file = f"validation-{tensor_file_sha256}.safetensors"
+        tensor_path = artifact_directory / tensor_file
+        if tensor_path.exists():
+            if _file_sha256(tensor_path) != tensor_file_sha256:
+                raise ValueError(
+                    "Content-addressed validation tensor file has invalid content"
+                )
+        else:
+            os.replace(temporary_path, tensor_path)
+            _fsync_directory(artifact_directory)
+        return tensor_file, tensor_file_sha256
     finally:
         if os.path.exists(temporary_path):
             os.unlink(temporary_path)
@@ -269,6 +533,14 @@ def _atomic_write(path: Path, content: bytes) -> None:
             os.unlink(temporary_path)
 
 
+def _fsync_directory(directory: Path) -> None:
+    directory_descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
 def _canonical_json_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -281,6 +553,137 @@ def _file_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def _read_safetensors_header(
+    tensor_path: Path,
+) -> tuple[dict[str, dict[str, object]], int, int]:
+    tensor_file_bytes = tensor_path.stat().st_size
+    if tensor_file_bytes < 8:
+        raise ValueError("Validation artifact safetensors file is too small")
+    with tensor_path.open("rb") as file_handle:
+        header_length_bytes = file_handle.read(8)
+        header_length = struct.unpack("<Q", header_length_bytes)[0]
+        if (
+            header_length == 0
+            or header_length > _MAX_SAFETENSORS_HEADER_BYTES
+            or header_length > tensor_file_bytes - 8
+        ):
+            raise ValueError("Validation artifact safetensors header length is invalid")
+        header_bytes = file_handle.read(header_length)
+    try:
+        header = json.loads(header_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Validation artifact safetensors header is invalid") from error
+    if not isinstance(header, dict) or "__metadata__" in header:
+        raise ValueError(
+            "Validation artifact safetensors header must contain tensors only"
+        )
+
+    records: dict[str, dict[str, object]] = {}
+    intervals: list[tuple[int, int]] = []
+    for key, value in header.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            raise ValueError("Validation artifact safetensors header record is invalid")
+        _require_exact_keys(
+            value,
+            frozenset({"data_offsets", "dtype", "shape"}),
+            f"safetensors header record {key!r}",
+        )
+        dtype = value["dtype"]
+        shape = value["shape"]
+        offsets = value["data_offsets"]
+        if not isinstance(dtype, str) or dtype not in _SAFETENSORS_DTYPE_NBYTES:
+            raise ValueError(
+                f"Validation artifact safetensors header dtype for {key!r} is invalid"
+            )
+        if not isinstance(shape, list) or any(
+            not _is_nonnegative_int(dimension) for dimension in shape
+        ):
+            raise ValueError(
+                f"Validation artifact safetensors header shape for {key!r} is invalid"
+            )
+        if (
+            not isinstance(offsets, list)
+            or len(offsets) != 2
+            or any(not _is_nonnegative_int(offset) for offset in offsets)
+        ):
+            raise ValueError(
+                f"Validation artifact safetensors header offsets for {key!r} are invalid"
+            )
+        start, end = offsets
+        if end < start:
+            raise ValueError(
+                f"Validation artifact safetensors header offsets for {key!r} are invalid"
+            )
+        nbytes = end - start
+        expected_nbytes = math.prod(shape) * _SAFETENSORS_DTYPE_NBYTES[dtype]
+        if nbytes != expected_nbytes:
+            raise ValueError(
+                f"Validation artifact safetensors header nbytes for {key!r} is invalid"
+            )
+        records[key] = {"dtype": dtype, "nbytes": nbytes, "shape": shape}
+        intervals.append((start, end))
+
+    payload_bytes = tensor_file_bytes - 8 - header_length
+    previous_end = 0
+    for start, end in sorted(intervals):
+        if start != previous_end:
+            raise ValueError(
+                "Validation artifact safetensors data offsets are not contiguous"
+            )
+        previous_end = end
+    if previous_end != payload_bytes:
+        raise ValueError(
+            "Validation artifact safetensors payload size does not match its header"
+        )
+    return records, payload_bytes, tensor_file_bytes
+
+
+def _validate_header_against_manifest(
+    header_records: Mapping[str, Mapping[str, object]], tensor_records: object
+) -> None:
+    if not isinstance(tensor_records, Mapping) or set(header_records) != set(
+        tensor_records
+    ):
+        raise ValueError(
+            "Validation artifact tensor names do not match safetensors header"
+        )
+    for key, header_record in header_records.items():
+        manifest_record = tensor_records[key]
+        if not isinstance(manifest_record, Mapping):
+            raise ValueError(f"Validation artifact tensor record {key!r} is invalid")
+        manifest_dtype = manifest_record["dtype"]
+        expected_safetensors_dtype = _TORCH_TO_SAFETENSORS_DTYPE.get(manifest_dtype)
+        if expected_safetensors_dtype != header_record["dtype"]:
+            raise ValueError(
+                f"Validation artifact tensor dtype for {key!r} does not match header"
+            )
+        if manifest_record["shape"] != header_record["shape"]:
+            raise ValueError(
+                f"Validation artifact tensor shape for {key!r} does not match header"
+            )
+        if manifest_record["nbytes"] != header_record["nbytes"]:
+            raise ValueError(
+                f"Validation artifact tensor nbytes for {key!r} does not match header"
+            )
+        if not _is_nonnegative_int(header_record["nbytes"]):
+            raise ValueError(
+                f"Validation artifact tensor nbytes for {key!r} must be non-negative"
+            )
+
+
+def _manifest_tensor_payload_bytes(tensor_records: object) -> int:
+    if not isinstance(tensor_records, Mapping):
+        raise ValueError("Validation artifact tensors must be an object")
+    payload_bytes = 0
+    for key, record in tensor_records.items():
+        if not isinstance(record, Mapping) or not _is_nonnegative_int(record["nbytes"]):
+            raise ValueError(
+                f"Validation artifact tensor record {key!r} nbytes must be non-negative"
+            )
+        payload_bytes += record["nbytes"]
+    return payload_bytes
+
+
 def _load_manifest(manifest_path: Path) -> dict[str, object]:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -289,9 +692,16 @@ def _load_manifest(manifest_path: Path) -> dict[str, object]:
     if not isinstance(manifest, dict):
         raise ValueError("Validation artifact manifest must be a JSON object")
     _require_exact_keys(manifest, _MANIFEST_KEYS, "manifest")
+    if type(manifest["artifact_version"]) is not int:
+        raise ValueError("Validation artifact artifact_version must be an integer")
     if manifest["artifact_version"] != _ARTIFACT_VERSION:
         raise ValueError("Unsupported validation artifact version")
-    if manifest["tensor_file"] != _TENSOR_FILE_NAME:
+    tensor_file = manifest["tensor_file"]
+    tensor_file_sha256 = manifest["tensor_file_sha256"]
+    if not isinstance(tensor_file, str) or not isinstance(tensor_file_sha256, str):
+        raise ValueError("Validation artifact tensor file name is invalid")
+    tensor_file_match = _TENSOR_FILE_PATTERN.fullmatch(tensor_file)
+    if tensor_file_match is None or tensor_file_match.group(1) != tensor_file_sha256:
         raise ValueError("Validation artifact tensor file name is invalid")
     _validate_manifest_metadata(manifest)
     return manifest
@@ -311,58 +721,144 @@ def _require_exact_keys(
 
 
 def _validate_manifest_metadata(manifest: Mapping[str, object]) -> None:
-    fingerprint = manifest["fingerprint"]
-    if not isinstance(fingerprint, Mapping):
-        raise ValueError("Validation artifact fingerprint must be an object")
-    _require_exact_keys(fingerprint, _FINGERPRINT_KEYS, "fingerprint")
+    _fingerprint_from_manifest(manifest["fingerprint"])
+    eligibility = manifest["eligibility"]
+    if not isinstance(eligibility, Mapping):
+        raise ValueError("Validation artifact eligibility must be an object")
+    _require_exact_keys(eligibility, frozenset(_ELIGIBILITY), "eligibility")
+    for key, expected_value in _ELIGIBILITY.items():
+        actual_value = eligibility[key]
+        if (
+            type(actual_value) is not type(expected_value)
+            or actual_value != expected_value
+        ):
+            raise ValueError("Validation artifact eligibility is not supported")
     token_counts = manifest["num_valid_tokens"]
     if not isinstance(token_counts, list) or len(token_counts) != 4:
         raise ValueError(
             "Validation artifact num_valid_tokens must contain four values"
         )
-    if any(
-        not isinstance(value, int) or isinstance(value, bool) for value in token_counts
-    ):
-        raise ValueError("Validation artifact num_valid_tokens must contain integers")
+    if any(not _is_nonnegative_int(value) for value in token_counts):
+        raise ValueError(
+            "Validation artifact num_valid_tokens must contain non-negative integers"
+        )
     if not isinstance(manifest["payload_digest"], str):
         raise ValueError("Validation artifact payload_digest must be a string")
     retained_bytes = manifest["retained_bytes"]
-    if not isinstance(retained_bytes, int) or retained_bytes < 0:
+    if not _is_nonnegative_int(retained_bytes):
         raise ValueError("Validation artifact retained_bytes must be non-negative")
-    if not isinstance(manifest["tensor_file_sha256"], str):
-        raise ValueError("Validation artifact tensor_file_sha256 must be a string")
+    _require_sha256(manifest["tensor_file_sha256"], "tensor_file_sha256")
     tensor_records = manifest["tensors"]
     if not isinstance(tensor_records, Mapping):
         raise ValueError("Validation artifact tensors must be an object")
+    _validate_sft_tensor_keys(set(tensor_records))
     for key, record in tensor_records.items():
         if not isinstance(key, str) or not isinstance(record, Mapping):
             raise ValueError("Validation artifact tensor records must be named objects")
         _require_exact_keys(record, _TENSOR_RECORD_KEYS, f"tensor record {key!r}")
+        if not isinstance(record["dtype"], str) or not record["dtype"]:
+            raise ValueError(
+                f"Validation artifact tensor record {key!r} dtype must be a string"
+            )
+        if not _is_nonnegative_int(record["nbytes"]):
+            raise ValueError(
+                f"Validation artifact tensor record {key!r} nbytes must be non-negative"
+            )
+        _require_sha256(record["sha256"], f"tensor record {key!r} sha256")
+        shape = record["shape"]
+        if not isinstance(shape, list) or any(
+            not _is_nonnegative_int(dimension) for dimension in shape
+        ):
+            raise ValueError(
+                f"Validation artifact tensor record {key!r} shape must contain "
+                "non-negative integers"
+            )
+    _validate_sft_tensor_shapes(
+        {
+            key: tuple(record["shape"])
+            for key, record in tensor_records.items()
+            if isinstance(key, str) and isinstance(record, Mapping)
+        }
+    )
 
 
 def _validate_fingerprint(
     saved_fingerprint: object, expected_fingerprint: ValidationArtifactFingerprint
 ) -> None:
-    if not isinstance(saved_fingerprint, Mapping):
-        raise ValueError("Validation artifact fingerprint must be an object")
-    for key, expected_value in _fingerprint_as_manifest(expected_fingerprint).items():
-        if saved_fingerprint[key] != expected_value:
+    saved = _fingerprint_from_manifest(saved_fingerprint)
+    _validate_fingerprint_semantics(expected_fingerprint)
+    for key in _FINGERPRINT_KEYS:
+        if getattr(saved, key) != getattr(expected_fingerprint, key):
             raise ValueError(f"Validation artifact fingerprint mismatch for {key}")
+
+
+def _fingerprint_from_manifest(value: object) -> ValidationArtifactFingerprint:
+    if not isinstance(value, Mapping):
+        raise ValueError("Validation artifact fingerprint must be an object")
+    _require_exact_keys(value, _FINGERPRINT_KEYS, "fingerprint")
+    submodule_value = value["submodule_commits"]
+    if not isinstance(submodule_value, list):
+        raise ValueError(
+            "Validation artifact fingerprint submodule_commits must be a list"
+        )
+    submodule_commits: list[tuple[str, str]] = []
+    for entry in submodule_value:
+        if (
+            not isinstance(entry, list)
+            or len(entry) != 2
+            or not all(isinstance(item, str) for item in entry)
+        ):
+            raise ValueError(
+                "Validation artifact fingerprint submodule_commits entries must be pairs"
+            )
+        submodule_commits.append((entry[0], entry[1]))
+    fingerprint = ValidationArtifactFingerprint(
+        dataset_sha256=_require_string(value["dataset_sha256"], "dataset_sha256"),
+        tokenizer_sha256=_require_string(value["tokenizer_sha256"], "tokenizer_sha256"),
+        preprocessing_sha256=_require_string(
+            value["preprocessing_sha256"], "preprocessing_sha256"
+        ),
+        nemo_rl_commit=_require_string(value["nemo_rl_commit"], "nemo_rl_commit"),
+        submodule_commits=tuple(submodule_commits),
+        container_sha256=_require_string(value["container_sha256"], "container_sha256"),
+    )
+    _validate_fingerprint_semantics(fingerprint)
+    return fingerprint
+
+
+def _is_nonnegative_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _require_sha256(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or _LOWERCASE_SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            f"Validation artifact {field_name} must be a 64-character lowercase SHA-256"
+        )
+
+
+def _require_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"Validation artifact {field_name} must be a string")
+    return value
 
 
 def _validate_memory_budget(
     retained_bytes: object, memory_budget: MemoryBudget
 ) -> None:
-    if (
-        not isinstance(memory_budget.available_bytes, int)
-        or memory_budget.available_bytes < 0
-    ):
+    if not _is_nonnegative_int(memory_budget.available_bytes):
         raise ValueError("MemoryBudget.available_bytes must be a non-negative integer")
     copy_count = memory_budget.required_copy_count
-    if not isinstance(copy_count, int) or copy_count < 1:
+    if type(copy_count) is not int or copy_count < 1:
         raise ValueError("MemoryBudget.required_copy_count must be a positive integer")
-    if not isinstance(retained_bytes, int):
-        raise ValueError("Validation artifact retained_bytes must be an integer")
+    if (
+        not isinstance(retained_bytes, int)
+        or isinstance(retained_bytes, bool)
+        or retained_bytes < 0
+    ):
+        raise ValueError(
+            "Validation artifact retained_bytes must be a non-negative integer"
+        )
     required_bytes = retained_bytes * copy_count
     if memory_budget.available_bytes < required_bytes:
         label = "three" if copy_count == 3 else str(copy_count)
