@@ -277,3 +277,18 @@ present.
 - Local focused Pytest remains blocked before collection by missing Ray. The
   controller will rerun the complete CW Linux focused suite from the signed fix
   commit.
+
+### Final CW Linux GREEN Evidence
+
+The controller reran the full focused suite after the train-derived validation
+provenance fix at commit `8ac38c6134fbeb6074ba2c310916a01c411a3b2d`.
+
+- SLURM job: `13556825`
+- State: `COMPLETED`, exit code `0:0`
+- Runtime: `00:02:44` on one CW H100 node
+- Result: `91 passed, 3 warnings in 42.36s`
+- New coverage passed for train-config digest changes, explicit validation
+  requirements, rejection of train-derived validation rows, and absent/zero
+  train split acceptance for the normal Super configuration.
+- Log:
+  `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260707-230515-8ac38/sna-val-artifact-8ac38_13556825.out`
