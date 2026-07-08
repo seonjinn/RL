@@ -57,7 +57,12 @@ def parse_args():
 
 
 # TODO @yukih: move to nemo_rl/data/utils.py after data processor refactored
-def setup_data(tokenizer: AutoTokenizer, data_config: DataConfig):
+def setup_data(
+    tokenizer: AutoTokenizer,
+    data_config: DataConfig,
+    *,
+    load_validation: bool = True,
+) -> tuple[AllTaskProcessedDataset, AllTaskProcessedDataset | None]:
     assert "train" in data_config, (
         "The dataset config structure is updated. Please refer to https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/sft.md#datasets "
         "and the Migrate Guide in https://github.com/NVIDIA-NeMo/RL/pull/1649 to update the dataset config."
@@ -99,6 +104,9 @@ def setup_data(tokenizer: AutoTokenizer, data_config: DataConfig):
         max_seq_length=data_config["max_input_seq_length"],
     )
     print(f"  ✓ Training dataset loaded with {len(dataset)} samples.")
+
+    if not load_validation:
+        return dataset, None
 
     # setup validation dataset
     val_task_data_processors = {}

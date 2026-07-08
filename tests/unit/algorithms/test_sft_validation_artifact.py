@@ -3,15 +3,26 @@
 import dataclasses
 import hashlib
 import json
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 import torch
 
+from examples import run_sft
+from examples.prepare_sft_validation_event import (
+    build_precomputed_validation_event,
+    derive_validation_artifact_eligibility,
+    digest_validation_event_data,
+)
+import nemo_rl.algorithms.sft as run_sft_sft
 import nemo_rl.algorithms.sft_validation_artifact as artifact_module
 from nemo_rl.algorithms.sft_validation_artifact import (
     MemoryBudget,
@@ -24,6 +35,204 @@ from nemo_rl.algorithms.sft_validation_artifact import (
     tensor_content_sha256,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.data.megatron_sft_packed import megatron_sft_packed_preprocessor
+
+
+class _ResponseDatasetFixture:
+    def __init__(self, task_name: str) -> None:
+        self.task_name = task_name
+        self.task_spec = None
+        self.dataset = [{"task_name": task_name}]
+        self.preprocessor = None
+
+    def processor(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+        return {}
+
+
+def _data_config_fixture() -> dict[str, object]:
+    return {
+        "train": {"dataset_name": "train"},
+        "validation": {"dataset_name": "validation"},
+        "add_bos": False,
+        "add_eos": True,
+        "add_generation_prompt": False,
+        "max_input_seq_length": 16,
+    }
+
+
+def test_setup_data_skips_configured_validation_when_requested() -> None:
+    loaded_config_names: list[str] = []
+
+    def load_dataset(config: dict[str, str]) -> _ResponseDatasetFixture:
+        dataset_name = config["dataset_name"]
+        loaded_config_names.append(dataset_name)
+        return _ResponseDatasetFixture(dataset_name)
+
+    with patch.object(run_sft, "load_response_dataset", side_effect=load_dataset):
+        dataset, val_dataset = run_sft.setup_data(
+            tokenizer=object(),
+            data_config=_data_config_fixture(),
+            load_validation=False,
+        )
+
+    assert dataset is not None
+    assert val_dataset is None
+    assert loaded_config_names == ["train"]
+
+
+def test_setup_data_loads_configured_validation_by_default() -> None:
+    loaded_config_names: list[str] = []
+
+    def load_dataset(config: dict[str, str]) -> _ResponseDatasetFixture:
+        dataset_name = config["dataset_name"]
+        loaded_config_names.append(dataset_name)
+        return _ResponseDatasetFixture(dataset_name)
+
+    with patch.object(run_sft, "load_response_dataset", side_effect=load_dataset):
+        dataset, val_dataset = run_sft.setup_data(
+            tokenizer=object(),
+            data_config=_data_config_fixture(),
+        )
+
+    assert dataset is not None
+    assert val_dataset is not None
+    assert loaded_config_names == ["train", "validation"]
+
+
+def _packed_validation_batch(batch_index: int) -> BatchedDataDict:
+    row_ids = torch.arange(batch_index * 64, (batch_index + 1) * 64)
+    input_ids = torch.stack((row_ids, row_ids + 1000), dim=1)
+    return BatchedDataDict(
+        input_ids=input_ids,
+        target_ids=input_ids + 1,
+        token_mask=torch.ones((64, 2), dtype=torch.float32),
+        position_ids=torch.tensor([0, 1], dtype=torch.int64).repeat(64, 1),
+        input_lengths=torch.full((64,), 2, dtype=torch.int64),
+        processed_token_counts=torch.full((64,), 2, dtype=torch.int64),
+        sample_mask=torch.ones(64, dtype=torch.float32),
+        packed_cu_seqlens=torch.tensor([[0, 2]], dtype=torch.int32).repeat(64, 1),
+        packed_cu_seqlens_lengths=torch.full((64,), 2, dtype=torch.int64),
+        packed_max_seqlens=torch.full((64,), 2, dtype=torch.int64),
+        idx=row_ids.tolist(),
+        task_name=["megatron_sft_packed"] * 64,
+    )
+
+
+def _producer_config_fixture() -> SimpleNamespace:
+    return SimpleNamespace(
+        data={
+            "validation": {"dataset_name": "megatron_sft_packed"},
+            "shuffle": False,
+            "num_workers": 0,
+        },
+        policy={
+            "dynamic_batching": {"enabled": False},
+            "megatron_cfg": {"enabled": True, "prepacked_sft_loss_mode": "labels"},
+            "sequence_packing": {"enabled": True},
+        },
+        sft=SimpleNamespace(
+            val_batches=4,
+            val_global_batch_size=64,
+            val_micro_batch_size=1,
+        ),
+    )
+
+
+def _producer_dataset_fixture(batches: list[BatchedDataDict]) -> SimpleNamespace:
+    return SimpleNamespace(
+        batches=batches,
+        task_data_processors={
+            "megatron_sft_packed": (
+                None,
+                partial(megatron_sft_packed_preprocessor, prompt_format="identity"),
+            )
+        },
+        task_data_preprocessors={},
+    )
+
+
+class _FixtureDataLoader:
+    def __init__(self, dataset, **kwargs: object) -> None:
+        assert kwargs["batch_size"] == 64
+        assert kwargs["shuffle"] is False
+        assert kwargs["drop_last"] is True
+        self._batches = dataset.batches
+
+    def __iter__(self):
+        return iter(self._batches)
+
+
+def _producer_event(
+    batches: list[BatchedDataDict],
+) -> PrecomputedValidationEvent:
+    with patch(
+        "examples.prepare_sft_validation_event.StatefulDataLoader",
+        _FixtureDataLoader,
+    ):
+        return build_precomputed_validation_event(
+            _producer_config_fixture(),
+            SimpleNamespace(pad_token_id=0),
+            _producer_dataset_fixture(batches),
+        )
+
+
+def test_producer_matches_live_packed_event_combination() -> None:
+    batches = [_packed_validation_batch(batch_index) for batch_index in range(4)]
+    expected_token_counts = (128, 128, 128, 128)
+    live_batches = list(batches)
+
+    produced = _producer_event(batches)
+    live = run_sft_sft._combine_validation_event_batches(
+        live_batches,
+        global_batch_size=64,
+        pad_token_id=0,
+    )
+
+    assert produced.num_valid_tokens == expected_token_counts
+    assert produced.payload_digest == digest_validation_event_data(live)
+    for key, value in produced.data.items():
+        assert torch.equal(value, live[key])
+    assert produced.data["input_ids"][:, 0].tolist() == list(range(256))
+
+
+def test_producer_rejects_unknown_validation_dataset_contract() -> None:
+    config = _producer_config_fixture()
+    config.data["validation"] = {"dataset_name": "unknown"}
+
+    with pytest.raises(ValueError, match="megatron_sft_packed"):
+        derive_validation_artifact_eligibility(
+            config,
+            _producer_dataset_fixture([]),
+        )
+
+
+def test_repeated_production_preserves_rng_and_serialized_artifact(tmp_path) -> None:
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    torch_state = torch.get_rng_state()
+
+    first = _producer_event([_packed_validation_batch(index) for index in range(4)])
+    second = _producer_event([_packed_validation_batch(index) for index in range(4)])
+
+    assert random.getstate() == python_state
+    assert np.array_equal(np.random.get_state()[1], numpy_state[1])
+    assert torch.equal(torch.get_rng_state(), torch_state)
+
+    first_manifest = save_validation_event(
+        tmp_path / "first", first, _fingerprint(), _supported_eligibility()
+    )
+    second_manifest = save_validation_event(
+        tmp_path / "second", second, _fingerprint(), _supported_eligibility()
+    )
+
+    assert first_manifest.read_bytes() == second_manifest.read_bytes()
+    first_tensor = (
+        first_manifest.parent / _manifest_content(first_manifest)["tensor_file"]
+    )
+    second_tensor = (
+        second_manifest.parent / _manifest_content(second_manifest)["tensor_file"]
+    )
+    assert first_tensor.read_bytes() == second_tensor.read_bytes()
 
 
 def _fingerprint() -> ValidationArtifactFingerprint:
