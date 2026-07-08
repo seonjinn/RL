@@ -133,6 +133,7 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "logger.wandb.entity=nvidia" in output
     assert "logger.tensorboard_enabled=false" in output
     assert "WANDB_RESUME=never" in output
+    assert "NRL_FORCE_REBUILD_VENVS=false" in output
 
 
 def test_dynamicsd_launcher_pins_scheduler_budget_for_all_core_variants() -> None:

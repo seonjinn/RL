@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import fcntl
 import logging
 import os
 import shlex
@@ -28,6 +29,26 @@ git_root = os.path.abspath(os.path.join(dir_path, "../.."))
 DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 
 logger = logging.getLogger(__name__)
+
+
+def _venv_ready_file(venv_path: Path) -> Path:
+    return venv_path / "FINISHED_ENV_BUILDER"
+
+
+def _venv_python_is_usable(python_path: Path) -> bool:
+    if not python_path.exists():
+        return False
+    try:
+        subprocess.run(
+            [str(python_path), "-c", "import encodings"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    return True
 
 
 @lru_cache(maxsize=None)
@@ -98,8 +119,46 @@ def create_local_venv(
     subprocess.run(exec_cmd, env=env, check=True)
 
     # Return the path to the python executable in the virtual environment
-    python_path = os.path.join(venv_path, "bin", "python")
-    return python_path
+    venv_path_obj = Path(venv_path)
+    python_path = venv_path_obj / "bin" / "python"
+    if not _venv_python_is_usable(python_path):
+        raise RuntimeError(f"Created venv python is not usable: {python_path}")
+    _venv_ready_file(venv_path_obj).touch()
+    return str(python_path)
+
+
+def _build_or_reuse_actor_venv(
+    py_executable: str, venv_name: str, force_rebuild: bool = False
+) -> str:
+    venv_dir = Path(
+        os.path.normpath(os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR))
+    )
+    venv_dir.mkdir(parents=True, exist_ok=True)
+    venv_path = venv_dir / venv_name
+    python_path = venv_path / "bin" / "python"
+    ready_file = _venv_ready_file(venv_path)
+    lock_path = venv_dir / f".{venv_path.name}.lock"
+
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            if (
+                not force_rebuild
+                and ready_file.exists()
+                and _venv_python_is_usable(python_path)
+            ):
+                logger.info("Using existing venv at %s", venv_path)
+                return str(python_path)
+
+            if venv_path.exists():
+                logger.warning("Removing incomplete or stale venv at %s", venv_path)
+                shutil.rmtree(venv_path)
+
+            return create_local_venv(
+                py_executable, venv_name, force_rebuild=force_rebuild
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 # Ray-based helper to create a virtual environment on each Ray node
@@ -107,45 +166,10 @@ def create_local_venv(
 def _env_builder(
     py_executable: str, venv_name: str, node_idx: int, force_rebuild: bool = False
 ):
-    # Check if another node is already building
-    NEMO_RL_VENV_DIR = os.path.normpath(
-        os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR)
-    )
-    venv_path = Path(NEMO_RL_VENV_DIR) / venv_name
-    python_path = venv_path / "bin" / "python"
-    started_file = venv_path / "STARTED_ENV_BUILDER"
-
-    # Skip early return if force_rebuild is True
-    if not force_rebuild and python_path.exists():
-        logger.info(f"Using existing venv at {venv_path}")
-        return str(python_path)
-
-    # Sleep to stagger node startup
     time.sleep(1 * node_idx)
-
-    if started_file.exists():
-        # Another node is already building, wait for completion
-        logger.info(
-            f"Node {node_idx}: Another node is building {venv_name}, skipping..."
-        )
-        # Wait for the venv to be ready (check for python executable)
-        python_path = venv_path / "bin" / "python"
-        while not python_path.exists():
-            time.sleep(1)
-        return str(python_path)
-
-    # Create the venv directory if needed
-    venv_path.mkdir(parents=True, exist_ok=True)
-
-    # Touch the started file to signal we're building
-    started_file.touch()
-    try:
-        # Create the virtual environment on this node
-        return create_local_venv(py_executable, venv_name, force_rebuild=force_rebuild)
-    finally:
-        # Clean up the started file
-        if started_file.exists():
-            started_file.unlink()
+    return _build_or_reuse_actor_venv(
+        py_executable, venv_name, force_rebuild=force_rebuild
+    )
 
 
 def create_local_venv_on_each_node(py_executable: str, venv_name: str):
