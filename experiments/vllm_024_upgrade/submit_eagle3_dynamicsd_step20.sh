@@ -207,6 +207,9 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  if [[ "${model}" == "qwen235b" ]]; then
+    environment+=("NRL_DISABLE_VLLM_PORT_OVERRIDE=1")
+  fi
   local sbatch_args=(
     --account="${ACCOUNT}"
     --partition="${PARTITION}"

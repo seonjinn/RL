@@ -375,6 +375,19 @@ class TestVllmPortAssignment:
         _, env_vars, _, _ = BaseVllmGenerationWorker.configure_worker(num_gpus=1)
         assert "VLLM_PORT" not in env_vars
 
+    def test_vllm_port_override_can_be_disabled(self, monkeypatch):
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            BaseVllmGenerationWorker,
+        )
+
+        monkeypatch.setenv("NRL_DISABLE_VLLM_PORT_OVERRIDE", "1")
+        _, env_vars, _, _ = BaseVllmGenerationWorker.configure_worker(
+            num_gpus=1,
+            bundle_indices=(0, [0, 1, 2, 3, 4, 5, 6, 7], 0),
+        )
+
+        assert "VLLM_PORT" not in env_vars
+
     @pytest.mark.parametrize("engine_group_index", [0, 1, 3, 7])
     def test_global_engine_group_index_assigns_unique_port(self, engine_group_index):
         from nemo_rl.distributed.virtual_cluster import (
