@@ -203,3 +203,27 @@ Locally available checks after the fix:
 - `git diff --check` passed.
 - Local focused Pytest remains blocked before collection because Ray is absent;
   the controller will rerun the CW Linux suite from the signed fix commit.
+
+### CW Linux GREEN Evidence
+
+The controller reran the complete focused suite from signed commit
+`c5739c27612966b6174a4d7034b0ff5f927da16b` in the reviewed NeMo-RL nightly
+container on one CW H100 node:
+
+```bash
+uv run --python /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/.cache/uv-python/cpython-3.13.13-linux-x86_64-gnu/bin/python3.13 \
+  --frozen --group test pytest -q \
+  tests/unit/algorithms/test_sft_validation_artifact.py
+```
+
+- SLURM job: `13556555`
+- State: `COMPLETED`, exit code `0:0`
+- Runtime: `00:02:34` on `pool0-00014`
+- Result: `84 passed, 3 warnings in 49.02s`
+- CUDA rejection coverage executed and passed on H100.
+- Real `.jsonl.packed` dataset loading, `AllTaskProcessedDataset`, production
+  collate, `StatefulDataLoader`, exact four-batch ordering/token counts, partial
+  input rejection, CLI wiring, recursive Git provenance, RNG restoration, and
+  artifact hardening all passed.
+- Log:
+  `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260707-225238-c5739/sna-val-artifact-c5739_13556555.out`
