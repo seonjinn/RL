@@ -19,6 +19,7 @@
 import argparse
 import hashlib
 import json
+import math
 import random
 import subprocess
 from collections.abc import Iterator, Mapping
@@ -122,6 +123,7 @@ def derive_preprocessing_sha256(
         )
     provenance = {
         "data": {
+            "train": config.data.get("train"),
             "validation": config.data.get("validation"),
             "default": config.data.get("default"),
             "max_input_seq_length": config.data.get("max_input_seq_length"),
@@ -170,11 +172,48 @@ def derive_preprocessing_sha256(
     return preprocessing_sha256
 
 
+def validate_validation_source_config(config: MasterConfig) -> None:
+    """Reject validation rows that a single external dataset digest cannot prove."""
+    _validation_dataset_configs(config.data)
+    default_config = config.data.get("default")
+    if default_config is not None and not isinstance(default_config, Mapping):
+        raise ValueError("Validation artifact data.default must be a mapping")
+
+    for train_index, train_config in enumerate(_train_dataset_configs(config.data)):
+        if "split_validation_size" in train_config:
+            split_validation_size = train_config["split_validation_size"]
+        elif (
+            isinstance(default_config, Mapping)
+            and "split_validation_size" in default_config
+        ):
+            split_validation_size = default_config["split_validation_size"]
+        else:
+            if train_config.get("dataset_name") == _PACKED_DATASET_NAME:
+                continue
+            raise ValueError(
+                "Validation artifact production cannot prove train split is "
+                f"disabled for data.train[{train_index}]; set "
+                "split_validation_size=0 explicitly"
+            )
+        if (
+            not isinstance(split_validation_size, (int, float))
+            or isinstance(split_validation_size, bool)
+            or not math.isfinite(float(split_validation_size))
+            or split_validation_size != 0
+        ):
+            raise ValueError(
+                "Validation artifact production does not support train-derived "
+                "validation; "
+                f"data.train[{train_index}].split_validation_size must be absent or 0"
+            )
+
+
 def derive_validation_artifact_eligibility(
     config: MasterConfig,
     val_dataset: AllTaskProcessedDataset,
 ) -> ValidationArtifactEligibility:
     """Prove that the configured validation path is deterministic packed text SFT."""
+    validate_validation_source_config(config)
     validation_configs = _validation_dataset_configs(config.data)
     if any(
         validation_config.get("dataset_name") != _PACKED_DATASET_NAME
@@ -329,8 +368,24 @@ def _validation_dataset_configs(
     ):
         return validation
     raise ValueError(
-        "Validation artifact production requires a configured validation dataset"
+        "Validation artifact production requires an explicit configured validation "
+        "dataset"
     )
+
+
+def _train_dataset_configs(
+    data_config: Mapping[str, object],
+) -> list[Mapping[str, object]]:
+    train = data_config.get("train")
+    if isinstance(train, Mapping):
+        return [train]
+    if (
+        isinstance(train, list)
+        and train
+        and all(isinstance(item, Mapping) for item in train)
+    ):
+        return train
+    raise ValueError("Validation artifact production requires configured train data")
 
 
 def _validate_packed_processor_contract(val_dataset: AllTaskProcessedDataset) -> None:
@@ -486,6 +541,7 @@ def main() -> None:
         else str(Path(__file__).parent / "configs" / "sft.yaml")
     )
     config = load_master_config(config_path, overrides)
+    validate_validation_source_config(config)
     preprocessing_sha256 = derive_preprocessing_sha256(
         config,
         expected_sha256=args.preprocessing_sha256,

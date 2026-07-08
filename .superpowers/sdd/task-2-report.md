@@ -227,3 +227,53 @@ uv run --python /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/user
   artifact hardening all passed.
 - Log:
   `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260707-225238-c5739/sna-val-artifact-c5739_13556555.out`
+
+## Train-Derived Validation Provenance Fix
+
+### RED Evidence
+
+Regression tests were added before the implementation for:
+
+- preprocessing digest sensitivity to `data.train.split_validation_size`,
+- CLI rejection of positive train-derived validation before tokenizer loading or
+  publication,
+- acceptance of the normal Super explicit validation config with an absent or
+  explicit-zero train split,
+- rejection when no explicit validation config exists,
+- rejection when `data.default.split_validation_size` contributes a positive
+  effective train split, and
+- fail-closed rejection when an unknown train dataset omits an explicit zero and
+  its constructor default cannot be proven safe.
+
+The pre-implementation Pyright run failed on the intentionally missing
+`validate_validation_source_config` import, confirming the new contract was not
+present.
+
+### Fix
+
+- Canonical preprocessing provenance now includes the fully resolved
+  `data.train` configuration.
+- A config-only validation-source preflight runs immediately after Hydra
+  resolution and before preprocessing comparison, tokenizer construction, data
+  loading, or publication.
+- The preflight requires explicit validation data and resolves each train
+  entry's effective `split_validation_size` using the same entry-over-default
+  precedence as `setup_data`.
+- Positive, negative, non-finite, boolean, or otherwise nonzero/unproven split
+  values fail closed. The known `megatron_sft_packed` contract may omit the field
+  because its production constructor default is zero; other train contracts must
+  set zero explicitly.
+- Producer eligibility repeats the same source preflight so direct helper use
+  cannot bypass it.
+
+### Local Checks
+
+- Ruff format and lint passed for the producer and focused test file.
+- Pyright passed with zero errors for both files.
+- Python compileall passed.
+- `git diff --check` passed.
+- Local `uv run --group dev pyrefly check` remains blocked because the lockfile
+  supports Linux only.
+- Local focused Pytest remains blocked before collection by missing Ray. The
+  controller will rerun the complete CW Linux focused suite from the signed fix
+  commit.

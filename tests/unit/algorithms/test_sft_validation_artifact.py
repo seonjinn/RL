@@ -30,6 +30,7 @@ from examples.prepare_sft_validation_event import (
     digest_validation_event_data,
     load_master_config,
     main as producer_main,
+    validate_validation_source_config,
 )
 import nemo_rl.algorithms.sft as run_sft_sft
 import nemo_rl.algorithms.sft_validation_artifact as artifact_module
@@ -62,6 +63,16 @@ def test_preprocessing_digest_changes_for_relevant_hydra_override() -> None:
     changed = load_master_config(
         _SUPER_V3_CONFIG,
         ["data.max_input_seq_length=131072"],
+    )
+
+    assert derive_preprocessing_sha256(baseline) != derive_preprocessing_sha256(changed)
+
+
+def test_preprocessing_digest_changes_for_train_split_config() -> None:
+    baseline = load_master_config(_SUPER_V3_CONFIG, [])
+    changed = load_master_config(
+        _SUPER_V3_CONFIG,
+        ["++data.train.split_validation_size=0"],
     )
 
     assert derive_preprocessing_sha256(baseline) != derive_preprocessing_sha256(changed)
@@ -117,6 +128,84 @@ def test_cli_rejects_preprocessing_mismatch_before_data_or_publication(
 
     tokenizer_loader.assert_not_called()
     publisher.assert_not_called()
+
+
+def test_cli_rejects_train_derived_validation_before_data_or_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prepare_sft_validation_event.py",
+            "--config",
+            str(_SUPER_V3_CONFIG),
+            "--artifact-dir",
+            str(tmp_path / "artifact"),
+            "--dataset-sha256",
+            "a" * 64,
+            "--tokenizer-sha256",
+            "b" * 64,
+            "--container-sha256",
+            "f" * 64,
+            "++data.train.split_validation_size=0.1",
+        ],
+    )
+
+    with (
+        patch.object(producer_module, "get_tokenizer") as tokenizer_loader,
+        patch.object(producer_module, "setup_data") as data_loader,
+        patch.object(producer_module, "save_validation_event") as publisher,
+        pytest.raises(ValueError, match="train-derived validation"),
+    ):
+        producer_main()
+
+    tokenizer_loader.assert_not_called()
+    data_loader.assert_not_called()
+    publisher.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        [],
+        ["++data.train.split_validation_size=0"],
+    ],
+)
+def test_super_explicit_validation_accepts_absent_or_zero_train_split(
+    overrides: list[str],
+) -> None:
+    config = load_master_config(_SUPER_V3_CONFIG, overrides)
+
+    validate_validation_source_config(config)
+
+
+def test_validation_source_requires_explicit_validation_config() -> None:
+    config = load_master_config(_SUPER_V3_CONFIG, ["data.validation=null"])
+
+    with pytest.raises(ValueError, match="explicit configured validation dataset"):
+        validate_validation_source_config(config)
+
+
+def test_validation_source_rejects_train_split_in_default_config() -> None:
+    config = load_master_config(
+        _SUPER_V3_CONFIG,
+        ["++data.default.split_validation_size=0.1"],
+    )
+
+    with pytest.raises(ValueError, match="train-derived validation"):
+        validate_validation_source_config(config)
+
+
+def test_validation_source_rejects_unproven_train_dataset_default_split() -> None:
+    config = load_master_config(
+        _SUPER_V3_CONFIG,
+        ["data.train.dataset_name=ResponseDataset"],
+    )
+
+    with pytest.raises(ValueError, match="cannot prove train split is disabled"):
+        validate_validation_source_config(config)
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -439,6 +528,7 @@ def _real_validation_dataset(
 def _producer_config_fixture() -> run_sft_sft.MasterConfig:
     return run_sft_sft.MasterConfig.model_construct(
         data={
+            "train": {"dataset_name": "megatron_sft_packed"},
             "validation": {"dataset_name": "megatron_sft_packed"},
             "shuffle": False,
             "num_workers": 0,
