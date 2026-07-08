@@ -259,16 +259,16 @@ def _validation_config(execution_mode: str, **overrides: object) -> MasterConfig
 
 
 def _precomputed_validation_config(**overrides: object) -> MasterConfig:
-    return _validation_config(
-        "event_batch",
-        validation_input_mode="precomputed_event",
-        validation_precomputed_manifest="/tmp/validation.manifest.json",
-        validation_precomputed_dataset_sha256="a" * 64,
-        validation_precomputed_tokenizer_sha256="b" * 64,
-        validation_precomputed_container_sha256="c" * 64,
-        validation_event_cache_mode="off",
-        **overrides,
-    )
+    precomputed_config: dict[str, object] = {
+        "validation_input_mode": "precomputed_event",
+        "validation_precomputed_manifest": "/tmp/validation.manifest.json",
+        "validation_precomputed_dataset_sha256": "a" * 64,
+        "validation_precomputed_tokenizer_sha256": "b" * 64,
+        "validation_precomputed_container_sha256": "c" * 64,
+        "validation_event_cache_mode": "off",
+    }
+    precomputed_config.update(overrides)
+    return _validation_config("event_batch", **precomputed_config)
 
 
 def _precomputed_event_fixture(

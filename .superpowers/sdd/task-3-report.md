@@ -241,3 +241,66 @@ pyright tests/unit/algorithms/test_sft_validation_artifact.py
 .venv/bin/python -m py_compile tests/unit/algorithms/test_sft_validation_artifact.py
 exit 0
 ```
+
+## CW Job 13558843 Test-Helper Fix
+
+### Linux RED Evidence
+
+The controller ran the combined Task 3 suite on CW Linux. Pytest collected 177
+tests and failed first at:
+
+```text
+tests/unit/algorithms/test_sft.py::test_precomputed_mode_requires_event_batch_and_manifest[overrides1]
+TypeError: _validation_config() got multiple values for keyword argument
+'validation_precomputed_manifest'
+```
+
+Full log:
+
+```text
+/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL_worktrees/sft-validation-precomputed-20260707/logs/validation-artifact-tests/20260708-000720-task3/sna-val-runtime-task3_13558843.out
+```
+
+The failure occurred in test setup before production validation executed.
+
+### Root Cause
+
+`_precomputed_validation_config()` passed six defaults as explicit keywords and
+then expanded caller `**overrides` in the same call. Python rejects any override
+of those defaults as a duplicate call keyword. The failing manifest case was
+the first collected example; dataset, tokenizer, container, input-mode, and
+cache-mode overrides had the same helper-level risk.
+
+The exact helper body was executed in isolation before the fix and reproduced:
+
+```text
+TypeError: _validation_config() got multiple values for keyword argument
+'validation_precomputed_manifest'
+```
+
+### Fix And Coverage
+
+The helper now builds one typed defaults mapping, updates it with caller
+overrides, and expands the merged mapping once into `_validation_config()`.
+Production code is unchanged.
+
+An isolated execution of the fixed helper checked every defaulted field:
+
+```text
+6 override fields accepted
+```
+
+Locally available checks after the fix:
+
+```text
+Source-isolated pytest: 16 passed in 0.33s
+Ruff: no issues
+Ruff format: already formatted
+Python py_compile: passed
+git diff --check: passed
+```
+
+Direct Pyright remains unavailable as a clean project gate in the sparse local
+environment. It reports unresolved Torch, Pydantic, and TorchData imports plus
+pre-existing diagnostics elsewhere in `test_sft.py`; no diagnostic points to
+the corrected helper. The controller will rerun the complete CW Linux suite.
