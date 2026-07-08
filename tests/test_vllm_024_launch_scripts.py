@@ -172,6 +172,19 @@ def test_dynamicsd_launcher_all_includes_k7_and_k9() -> None:
     assert "contract-test-attempt-1-qwen30ba3b-eagle3_k9" in output
 
 
+def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
+    output = _dry_run_dynamicsd("qwen235b", "eagle3_k9")
+
+    assert "grpo-qwen3-235b-16n4g.yaml" in output
+    assert "Qwen3-235B-A22B-Eagle3" in output
+    assert "speculative_config.num_speculative_tokens=9" in output
+    assert "cluster.segment_size=16" in output
+    assert "--nodes=16" in output
+    assert "--segment=16" in output
+    assert "--gres=gpu:4" in output
+    assert "VLLM_PORT=22801" in output
+
+
 def test_dynamicsd_launcher_renders_dynamic_schedule() -> None:
     output = _dry_run_dynamicsd("qwen32b", "dynamic")
 

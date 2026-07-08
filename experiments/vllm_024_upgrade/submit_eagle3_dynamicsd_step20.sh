@@ -72,10 +72,10 @@ if [[ "${MODE}" == "submit" ]]; then
 fi
 
 case "${MODEL_SELECTION}" in
-  all) models=(qwen30ba3b qwen32b) ;;
-  qwen30ba3b|qwen32b) models=("${MODEL_SELECTION}") ;;
+  all) models=(qwen30ba3b qwen32b qwen235b) ;;
+  qwen30ba3b|qwen32b|qwen235b) models=("${MODEL_SELECTION}") ;;
   *)
-    echo "ERROR: model must be all, qwen30ba3b, or qwen32b" >&2
+    echo "ERROR: model must be all, qwen30ba3b, qwen32b, or qwen235b" >&2
     exit 2
     ;;
 esac
@@ -111,6 +111,12 @@ submit_one() {
       draft_model="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
       nodes=4
       model_port_offset=1000
+      ;;
+    qwen235b)
+      recipe="examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml"
+      draft_model="${QWEN235_DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba}"
+      nodes=16
+      model_port_offset=2000
       ;;
   esac
 
