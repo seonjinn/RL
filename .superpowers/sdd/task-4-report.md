@@ -14,7 +14,7 @@
 - Loader identity fail-closed follow-up:
   `2a4c1ca8f025dc1099e72b148dd2ac8a9b4779a2`
 - TorchData source-provenance follow-up:
-  `61d7ff5d9ee57e077ed5ccde2536bac037b9b32b`
+  `61d7ff5d912504a2eeba237d148521b9445d9b6d`
 - Static typing follow-up: the signed commit containing the final section below
 - Independent code-review gate: prior findings addressed; controller review of
   the static typing follow-up remains pending
