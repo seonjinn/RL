@@ -131,6 +131,7 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "--segment=4" in output
     assert "--gres=gpu:4" in output
     assert "logger.wandb.entity=nvidia" in output
+    assert "logger.tensorboard_enabled=false" in output
     assert "WANDB_RESUME=never" in output
 
 

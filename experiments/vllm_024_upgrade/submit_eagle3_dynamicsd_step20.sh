@@ -137,6 +137,7 @@ submit_one() {
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE"
     "cluster.segment_size=${nodes}"
     "logger.wandb_enabled=true"
+    "logger.tensorboard_enabled=false"
     "logger.wandb.project=${WANDB_PROJECT}"
     "logger.wandb.name=${wandb_name}"
     "++logger.wandb.entity=${WANDB_ENTITY}"
