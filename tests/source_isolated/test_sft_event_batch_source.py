@@ -778,3 +778,76 @@ def test_sft_exemplar_configs_document_precomputed_inputs(config_path: Path) -> 
         "validation_precomputed_container_sha256",
     ):
         assert f"{field_name}: null" in config_text
+
+
+def test_correctness_worker_covers_optimizer_parameters_and_rejects_bad_tracker_maps() -> (
+    None
+):
+    worker_path = REPO_ROOT / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+    method = _function_node(
+        worker_path,
+        "get_correctness_state_fingerprint",
+        class_name="MegatronPolicyWorkerImpl",
+    )
+    source = ast.unparse(method)
+
+    assert "optimizer_parameter_records" in source
+    assert "'parameters': optimizer_parameter_records" in source
+    assert "isinstance(tracker_states, Mapping)" in source
+    assert "not tracker_states" in source
+    assert "get_cuda_rng_tracker" not in source
+    call_attributes = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert call_attributes.isdisjoint(
+        {
+            "state_dict",
+            "load_state_dict",
+            "eval",
+            "train",
+            "set_rng_state",
+            "manual_seed",
+            "synchronize",
+        }
+    )
+
+
+def test_correctness_audit_finalizes_next_batch_and_captures_runtime_validation_data() -> (
+    None
+):
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    audit_tree = ast.parse(audit_path.read_text())
+    record = next(
+        node
+        for node in audit_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "CorrectnessAuditRecord"
+    )
+    record_fields = {
+        statement.target.id
+        for statement in record.body
+        if isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+    }
+    functions = {
+        node.name for node in audit_tree.body if isinstance(node, ast.FunctionDef)
+    }
+
+    assert "next_train_batch" in record_fields
+    assert "validation_evidence" in record_fields
+    assert "compare_next_train_batch_to_control" in functions
+
+    sft_path = REPO_ROOT / "nemo_rl/algorithms/sft.py"
+    validation_impl = _function_node(sft_path, "_validate_with_loss_availability_impl")
+    evidence_capture = _function_node(sft_path, "_capture_runtime_validation_evidence")
+    train = _function_node(sft_path, "sft_train")
+    validation_source = ast.unparse(validation_impl)
+    evidence_capture_source = ast.unparse(evidence_capture)
+    train_source = ast.unparse(train)
+
+    assert "_record_runtime_validation_evidence" in validation_source
+    assert "capture_validation_evidence" in evidence_capture_source
+    assert "correctness_audit_evidence" in validation_source
+    assert "collect_correctness_audit_evidence" in train_source
+    assert '"input_mode"' not in train_source

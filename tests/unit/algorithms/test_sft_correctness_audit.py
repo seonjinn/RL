@@ -14,11 +14,15 @@ import torch
 
 from nemo_rl.algorithms.sft_correctness_audit import (
     CorrectnessAuditRecord,
-    CorrectnessNextBatchRecord,
+    CorrectnessNextTrainBatchEvidence,
     CorrectnessSnapshot,
+    CorrectnessValidationEvidencePair,
     SFTCorrectnessAuditor,
+    capture_next_train_batch_evidence,
     capture_correctness_snapshot,
+    capture_validation_evidence,
     compare_correctness_snapshots,
+    compare_next_train_batch_to_control,
     evaluate_correctness_gate,
     snapshot_digest,
 )
@@ -260,14 +264,11 @@ def test_snapshot_matches_after_loader_and_generator_resume_or_restart() -> None
 
 
 def test_auditor_handles_repeated_validation_boundaries() -> None:
-    records: list[CorrectnessAuditRecord | CorrectnessNextBatchRecord] = []
+    records: list[CorrectnessAuditRecord] = []
     auditor = SFTCorrectnessAuditor(
         policy=MagicMock(),
         train_loader=_LoaderFixture(),
         explicit_generator=None,
-        validation_payload={"input_ids": torch.tensor([[1, 2]])},
-        validation_sample_ids=[17],
-        validation_token_counts=(2,),
         record_sink=records.append,
     )
     snapshot = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
@@ -276,32 +277,32 @@ def test_auditor_handles_repeated_validation_boundaries() -> None:
         "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
         side_effect=[snapshot, snapshot, snapshot, snapshot],
     ):
-        auditor.audit_validation(step=20, validation=lambda: None)
+        auditor.audit_validation(
+            step=20,
+            validation=lambda: None,
+            evidence_from_result=lambda _: _validation_evidence_pair(),
+        )
         auditor.record_next_train_batch({"input_ids": torch.tensor([[3, 4]])})
-        auditor.audit_validation(step=40, validation=lambda: None)
+        auditor.audit_validation(
+            step=40,
+            validation=lambda: None,
+            evidence_from_result=lambda _: _validation_evidence_pair(),
+        )
         auditor.record_next_train_batch({"input_ids": torch.tensor([[5, 6]])})
 
-    boundary_records = [
-        record for record in records if isinstance(record, CorrectnessAuditRecord)
-    ]
-    next_batch_records = [
-        record for record in records if isinstance(record, CorrectnessNextBatchRecord)
-    ]
-    assert [record.validation_step for record in boundary_records] == [20, 40]
-    assert [record.validation_step for record in next_batch_records] == [20, 40]
-    assert all(record.gate.ready for record in boundary_records)
+    assert [record.validation_step for record in records] == [20, 40]
+    assert all(record.gate.ready for record in records)
+    assert all(record.next_train_batch is not None for record in records)
+    assert all(record.status == "finalized" for record in records)
 
 
 def test_auditor_records_next_batch_only_when_caller_supplies_natural_batch() -> None:
-    records: list[CorrectnessAuditRecord | CorrectnessNextBatchRecord] = []
+    records: list[CorrectnessAuditRecord] = []
     loader = _LoaderFixture()
     auditor = SFTCorrectnessAuditor(
         policy=MagicMock(),
         train_loader=loader,
         explicit_generator=None,
-        validation_payload={"input_ids": torch.tensor([[1, 2]])},
-        validation_sample_ids=[17],
-        validation_token_counts=(2,),
         record_sink=records.append,
     )
     before = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
@@ -310,29 +311,30 @@ def test_auditor_records_next_batch_only_when_caller_supplies_natural_batch() ->
         "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
         side_effect=[before, before],
     ):
-        assert auditor.audit_validation(step=20, validation=lambda: "result") == (
-            "result"
+        assert (
+            auditor.audit_validation(
+                step=20,
+                validation=lambda: "result",
+                evidence_from_result=lambda _: _validation_evidence_pair(),
+            )
+            == "result"
         )
 
     assert loader.iteration_count == 0
-    assert len(records) == 1
-    assert isinstance(records[0], CorrectnessAuditRecord)
+    assert records == []
     auditor.record_next_train_batch({"input_ids": torch.tensor([[1, 2]]), "idx": [17]})
-    assert len(records) == 2
-    assert isinstance(records[1], CorrectnessNextBatchRecord)
-    assert records[1].validation_step == 20
-    assert records[1].batch_digest
+    assert len(records) == 1
+    assert records[0].validation_step == 20
+    assert records[0].next_train_batch is not None
+    assert records[0].next_train_batch.batch_digest
 
 
 def test_auditor_gates_failed_validation_before_reraising() -> None:
-    records: list[CorrectnessAuditRecord | CorrectnessNextBatchRecord] = []
+    records: list[CorrectnessAuditRecord] = []
     auditor = SFTCorrectnessAuditor(
         policy=MagicMock(),
         train_loader=_LoaderFixture(),
         explicit_generator=None,
-        validation_payload={"input_ids": torch.tensor([[1, 2]])},
-        validation_sample_ids=[17],
-        validation_token_counts=(2,),
         record_sink=records.append,
     )
     snapshot = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
@@ -347,7 +349,11 @@ def test_auditor_gates_failed_validation_before_reraising() -> None:
         ),
         pytest.raises(RuntimeError, match="submission failed"),
     ):
-        auditor.audit_validation(step=40, validation=fail_validation)
+        auditor.audit_validation(
+            step=40,
+            validation=fail_validation,
+            evidence_from_result=lambda _: _validation_evidence_pair(),
+        )
 
     assert len(records) == 1
     record = records[0]
@@ -444,9 +450,10 @@ def test_megatron_worker_fingerprint_is_read_only_and_returns_python_records() -
     assert fingerprint["training_mode_flags"][""] is True
     assert fingerprint["model"]["parameters"]
     assert fingerprint["model"]["buffers"]
+    assert fingerprint["optimizer"]["parameters"][0]["owner"] == (0, 0, 0)
     assert fingerprint["optimizer"]["step_counters"] == [
-        {"owner": [0, 0, 0], "state_key": "step", "value": 9},
-        {"group": [0, 0], "state_key": "step", "value": 11},
+        {"owner": (0, 0, 0), "state_key": "step", "value": 9},
+        {"group": (0, 0), "state_key": "step", "value": 11},
     ]
     assert _contains_only_python_records(fingerprint)
     assert torch.equal(torch.get_rng_state(), torch_rng_state)
@@ -461,7 +468,7 @@ def test_megatron_worker_fingerprint_is_read_only_and_returns_python_records() -
 def _contains_only_python_records(value: object) -> bool:
     if value is None or isinstance(value, (bool, int, float, str)):
         return True
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return all(_contains_only_python_records(item) for item in value)
     if isinstance(value, Mapping):
         return all(
@@ -520,3 +527,220 @@ def test_megatron_worker_fingerprint_avoids_forbidden_state_paths() -> None:
         }
     )
     assert "get_cuda_rng_tracker" not in source
+
+
+@pytest.mark.parametrize("tracker_states", [{}, [], None, "invalid"])
+def test_megatron_worker_fingerprint_rejects_empty_or_nonmapping_tracker_states(
+    tracker_states: object,
+) -> None:
+    worker = _worker_fixture()
+
+    with (
+        patch.object(torch.cuda, "current_device", return_value=0),
+        patch.object(
+            torch.cuda,
+            "get_rng_state",
+            return_value=torch.tensor([1], dtype=torch.uint8),
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.get_all_rng_states",
+            return_value=tracker_states,
+        ),
+        pytest.raises(RuntimeError, match="non-empty mapping"),
+    ):
+        worker.get_correctness_state_fingerprint()
+
+
+def _capture_worker_fingerprint(worker: MegatronPolicyWorkerImpl) -> dict[str, Any]:
+    with (
+        patch.object(torch.cuda, "current_device", return_value=0),
+        patch.object(
+            torch.cuda,
+            "get_rng_state",
+            return_value=torch.tensor([1, 2, 3], dtype=torch.uint8),
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.get_all_rng_states",
+            return_value={
+                "model-parallel-rng": torch.tensor([4, 5, 6], dtype=torch.uint8)
+            },
+        ),
+    ):
+        return worker.get_correctness_state_fingerprint(
+            content_sample_count=3,
+            reduction_chunk_numel=2,
+        )
+
+
+def test_megatron_worker_fingerprints_optimizer_main_shard_parameter() -> None:
+    worker = _worker_fixture()
+    model_parameter = next(worker.model.parameters())
+    main_shard = torch.nn.Parameter(
+        torch.arange(model_parameter.numel(), dtype=torch.float32).reshape(
+            model_parameter.shape
+        )
+        + 100
+    )
+    worker.optimizer.param_groups[0]["params"] = [main_shard]
+    worker.optimizer.state = {main_shard: {"step": torch.tensor(9)}}
+
+    before = _capture_worker_fingerprint(worker)
+    with torch.no_grad():
+        main_shard.add_(1)
+    after = _capture_worker_fingerprint(worker)
+
+    assert before["optimizer"]["parameters"][0]["owner"] == (0, 0, 0)
+    assert before["optimizer"]["parameters"][0]["tensor"]["shape"] == list(
+        main_shard.shape
+    )
+    assert before["optimizer"]["parameters"] != after["optimizer"]["parameters"]
+    assert before["model"] == after["model"]
+
+
+@pytest.mark.parametrize(
+    "state_family",
+    ["python", "numpy", "torch", "generator", "loader"],
+)
+def test_production_capture_gate_detects_real_driver_state_mutations(
+    state_family: str,
+) -> None:
+    random.seed(101)
+    np.random.seed(202)
+    torch.manual_seed(303)
+    generator = torch.Generator().manual_seed(404)
+    loader = _LoaderFixture()
+    policy = MagicMock()
+    policy.get_correctness_state_fingerprint.return_value = [_worker_state(0)]
+    kwargs: dict[str, Any] = {
+        "policy": policy,
+        "train_loader": loader,
+        "explicit_generator": generator,
+        "validation_payload": {"input_ids": torch.tensor([[1, 2]])},
+        "validation_sample_ids": [17],
+        "validation_token_counts": (2,),
+    }
+
+    with patch.object(torch.cuda, "is_initialized", return_value=False):
+        before = capture_correctness_snapshot(**kwargs)
+        if state_family == "python":
+            random.random()
+        elif state_family == "numpy":
+            np.random.random()
+        elif state_family == "torch":
+            torch.rand(1)
+        elif state_family == "generator":
+            torch.rand(1, generator=generator)
+        else:
+            loader.state["position"] = 4
+        after = capture_correctness_snapshot(**kwargs)
+
+    result = evaluate_correctness_gate(before, after)
+
+    assert result.ready is False
+    expected_field = {
+        "python": "python_rng_digest",
+        "numpy": "numpy_rng_digest",
+        "torch": "torch_cpu_rng_digest",
+        "generator": "explicit_generator_digest",
+        "loader": "train_loader_digest",
+    }[state_family]
+    assert expected_field in result.differences
+
+
+@pytest.mark.parametrize(
+    "state_family",
+    ["model", "optimizer_main_shard", "optimizer_step", "training_mode"],
+)
+def test_production_capture_gate_detects_real_worker_state_mutations(
+    state_family: str,
+) -> None:
+    worker = _worker_fixture()
+    model_parameter = next(worker.model.parameters())
+    main_shard = torch.nn.Parameter(model_parameter.detach().clone() + 50)
+    worker.optimizer.param_groups[0]["params"] = [main_shard]
+    worker.optimizer.state = {main_shard: {"step": torch.tensor(9)}}
+    policy = MagicMock()
+    policy.get_correctness_state_fingerprint.side_effect = lambda: [
+        _capture_worker_fingerprint(worker)
+    ]
+    kwargs: dict[str, Any] = {
+        "policy": policy,
+        "train_loader": _LoaderFixture(),
+        "explicit_generator": None,
+        "validation_payload": {"input_ids": torch.tensor([[1, 2]])},
+        "validation_sample_ids": [17],
+        "validation_token_counts": (2,),
+    }
+
+    with patch.object(torch.cuda, "is_initialized", return_value=False):
+        before = capture_correctness_snapshot(**kwargs)
+        with torch.no_grad():
+            if state_family == "model":
+                model_parameter.add_(1)
+            elif state_family == "optimizer_main_shard":
+                main_shard.add_(1)
+            elif state_family == "optimizer_step":
+                worker.optimizer.state[main_shard]["step"].add_(1)
+            else:
+                worker.model.train(False)
+        after = capture_correctness_snapshot(**kwargs)
+
+    result = evaluate_correctness_gate(before, after)
+
+    assert result.ready is False
+    expected_path = {
+        "model": "worker_states.7.model",
+        "optimizer_main_shard": "worker_states.7.optimizer.parameters",
+        "optimizer_step": "worker_states.7.optimizer.step_counters",
+        "training_mode": "worker_states.7.training_mode_flags",
+    }[state_family]
+    assert any(path.startswith(expected_path) for path in result.differences)
+
+
+def _validation_evidence_pair() -> CorrectnessValidationEvidencePair:
+    evidence = capture_validation_evidence(
+        validation_payload={"input_ids": torch.tensor([[11, 12]])},
+        validation_sample_ids=torch.tensor([[11, 12]]),
+        validation_token_counts=(2,),
+    )
+    return CorrectnessValidationEvidencePair(before=evidence, after=evidence)
+
+
+def test_auditor_finalizes_next_batch_and_compares_to_no_validation_control() -> None:
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=MagicMock(),
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+        record_sink=records.append,
+    )
+    snapshot = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+    control_batch = {"input_ids": torch.tensor([[3, 4]]), "idx": [19]}
+
+    with patch(
+        "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+        side_effect=[snapshot, snapshot],
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=lambda: _validation_evidence_pair(),
+            evidence_from_result=lambda result: result,
+        )
+
+    assert records == []
+    auditor.record_next_train_batch(control_batch)
+
+    assert len(records) == 1
+    assert records[0].next_train_batch is not None
+    assert records[0].status == "finalized"
+    control = capture_next_train_batch_evidence(control_batch)
+    assert compare_next_train_batch_to_control(control, records[0]).ready is True
+
+    changed_control = CorrectnessNextTrainBatchEvidence(
+        batch_digest="changed",
+        sample_ids_digest=control.sample_ids_digest,
+        token_counts_digest=control.token_counts_digest,
+    )
+    assert (
+        compare_next_train_batch_to_control(changed_control, records[0]).ready is False
+    )

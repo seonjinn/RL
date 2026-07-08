@@ -193,3 +193,159 @@ Detailed invariant evidence is recorded in
   host-visible state reads. It must remain disabled for timed performance runs.
 - The persisted precomputed artifact omits producer-only `idx` metadata, so
   ordered `input_ids` are the persisted sample-identity evidence.
+
+## Review Fixes
+
+This section records the follow-up for the six Important findings and
+supersedes the earlier pre-fix review conclusion for commit
+`2c8bfdc5d63d8db05da34258148aea640222e311`.
+
+### Changes
+
+1. Worker optimizer fingerprints now include every tensor referenced by every
+   optimizer parameter group, including distinct MCore FP32/main local shards.
+   Each record carries the stable `(optimizer_index, group_index, param_index)`
+   owner tuple and the same shape, dtype, moments, finite counts, and fixed
+   samples used for model and optimizer-state tensors.
+2. A successful validation record remains pending until the normal training
+   iterator yields the next batch. The resulting single finalized
+   `CorrectnessAuditRecord` contains that batch evidence. The explicit
+   `compare_next_train_batch_to_control()` gate compares it with a separately
+   and naturally consumed no-validation control; missing natural-batch evidence
+   fails finalization instead of producing a passing log-only record.
+3. Audit-enabled validation hashes the actual canonical runtime payload,
+   ordered `idx` plus `input_ids` identity, and exact recomputed valid-token
+   counts immediately before and after every real policy submission. This
+   covers per-batch, CPU-cache event, uncached event, and precomputed paths.
+   Missing mappings, `input_ids`, masks, counts, or evidence fail explicitly.
+4. Worker RNG collection now rejects both empty and non-mapping
+   `get_all_rng_states()` results. It still imports and calls that API directly
+   and never calls `get_cuda_rng_tracker()`.
+5. Production-capture tests now mutate real Python, NumPy, Torch CPU, explicit
+   generator, loader, model parameter, optimizer main-shard parameter,
+   optimizer step, and module training-mode state and assert the production
+   gate identifies each family.
+6. The restart test saves a real `StatefulDataLoader` and generator state,
+   recreates and restores them at the same boundary, executes the production
+   SFT validation function with exact audit evidence, then compares the next
+   naturally consumed batch with an independent no-validation control loader.
+
+Audit evidence hashing and exact-token reductions execute only when
+`collect_correctness_audit_evidence` is true. Their measured duration is
+removed from validation and step performance windows and added to the separate
+correctness-audit timing. The default audit-disabled worker and validation
+paths do not call these helpers.
+
+### Changed Files
+
+- `nemo_rl/algorithms/sft.py`
+- `nemo_rl/algorithms/sft_correctness_audit.py`
+- `nemo_rl/models/policy/workers/megatron_policy_worker.py`
+- `tests/source_isolated/test_sft_event_batch_source.py`
+- `tests/unit/algorithms/test_sft.py`
+- `tests/unit/algorithms/test_sft_correctness_audit.py`
+- `.superpowers/sdd/task-4-report.md`
+
+`tests/unit/algorithms/test_sft_validation_artifact.py` was rerun as requested
+but did not require a source change.
+
+### Exact Verification
+
+Requested focused unit command:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_validation_artifact.py
+```
+
+Result: exit 4 during collection; no unit tests ran.
+
+```text
+ImportError while loading conftest 'tests/unit/conftest.py'
+ModuleNotFoundError: No module named 'ray'
+```
+
+Requested source-isolated command:
+
+```bash
+/opt/homebrew/bin/pytest -q tests/source_isolated/test_sft_event_batch_source.py
+```
+
+Result: `18 passed in 0.20s`, exit 0.
+
+Ruff lint command:
+
+```bash
+ruff check nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/models/policy/workers/megatron_policy_worker.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: `Ruff: No issues found`, exit 0.
+
+Ruff format command:
+
+```bash
+ruff format --check nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/models/policy/workers/megatron_policy_worker.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: `6 files already formatted`, exit 0.
+
+Compilation command:
+
+```bash
+/opt/homebrew/bin/python3 -m py_compile nemo_rl/algorithms/sft.py nemo_rl/algorithms/sft_correctness_audit.py nemo_rl/models/policy/workers/megatron_policy_worker.py tests/source_isolated/test_sft_event_batch_source.py tests/unit/algorithms/test_sft.py tests/unit/algorithms/test_sft_correctness_audit.py tests/unit/algorithms/test_sft_validation_artifact.py
+```
+
+Result: exit 0 with no output.
+
+Focused Pyright command:
+
+```bash
+pyright nemo_rl/algorithms/sft_correctness_audit.py tests/unit/algorithms/test_sft_correctness_audit.py
+```
+
+Result: exit 1 with three missing-import diagnostics only: Torch in the module
+and test, plus TorchData in the test. There were no additional type
+diagnostics.
+
+Diff validation command:
+
+```bash
+git diff --check
+```
+
+Result: exit 0 with no output.
+
+Not run locally:
+
+- The focused unit tests on supported Linux with Ray, Torch, TorchData, and
+  Megatron installed.
+- A GPU/Ray/Megatron integration run.
+- The full repository test suite.
+- The controller's CW Linux gate and post-fix re-review.
+
+### Self-Review
+
+- Confirmed optimizer parameter records are independent of optimizer-state
+  presence and cover chained optimizer children with stable owner tuples.
+- Confirmed invalid tracker returns fail before `.items()` and no code path
+  imports or calls `get_cuda_rng_tracker()`.
+- Confirmed successful boundary records are not emitted until natural next
+  train-batch evidence is attached, and pending records fail closed at flush.
+- Confirmed the no-validation control uses a separate restored-equivalent
+  loader and does not pre-consume or rewind the audited loader.
+- Confirmed live validation evidence comes from the actual submitted or
+  canonical payload, not config metadata, batch dimensions, or dataset names.
+- Confirmed per-batch and event token counts are computed from the exact
+  `sample_mask * token_mask` payload and precomputed counts come from the
+  verified artifact contract.
+- Confirmed before/after runtime evidence is included in the same audit record
+  and payload mutation causes the gate to reject.
+- Confirmed all production mutation tests call the production capture and gate
+  functions rather than only replacing synthetic snapshot fields.
+- Confirmed loader/generator restart coverage uses `state_dict()`, recreates
+  the loader and generator, restores with `load_state_dict()`/`set_state()`,
+  runs production validation, and compares the natural next batch to control.
+- Confirmed audit timing is excluded from validation, step, end-to-end, and
+  loop-interval performance windows, while disabled mode makes no audit RPC,
+  RNG read, tensor reduction, synchronization, or evidence-hash call.
+- Confirmed the concrete `Policy` method remains unchanged, `PolicyInterface`
+  is not expanded, and no unrelated backend or default validation path changed.

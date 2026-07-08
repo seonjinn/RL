@@ -19,6 +19,7 @@ import re
 import time
 import warnings
 from collections import defaultdict
+from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from numbers import Number
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
@@ -317,6 +318,10 @@ class MegatronPolicyWorkerImpl(
             tracker_states = get_all_rng_states()
         except AssertionError as error:
             raise RuntimeError("MCore CUDA RNG tracker is uninitialized") from error
+        if not isinstance(tracker_states, Mapping) or not tracker_states:
+            raise RuntimeError(
+                "MCore CUDA RNG tracker states must be a non-empty mapping"
+            )
         mcore_cuda_rng = {
             name: _rng_state_fingerprint(state)
             for name, state in sorted(tracker_states.items())
@@ -343,6 +348,7 @@ class MegatronPolicyWorkerImpl(
             for name, module in sorted(self.model.named_modules())
         }
 
+        optimizer_parameter_records: list[dict[str, Any]] = []
         optimizer_records: list[dict[str, Any]] = []
         step_counters: list[dict[str, Any]] = []
         optimizers = (
@@ -355,7 +361,22 @@ class MegatronPolicyWorkerImpl(
                 continue
             for group_index, group in enumerate(optimizer.param_groups):
                 for param_index, parameter in enumerate(group["params"]):
-                    owner = [optimizer_index, group_index, param_index]
+                    owner = (optimizer_index, group_index, param_index)
+                    if not torch.is_tensor(parameter):
+                        raise TypeError(
+                            "Optimizer parameter groups must contain tensors; got "
+                            f"{type(parameter).__qualname__} at owner {owner}"
+                        )
+                    optimizer_parameter_records.append(
+                        {
+                            "owner": owner,
+                            "tensor": _local_tensor_fingerprint(
+                                parameter,
+                                content_sample_count=content_sample_count,
+                                reduction_chunk_numel=reduction_chunk_numel,
+                            ),
+                        }
+                    )
                     state = optimizer.state.get(parameter, {})
                     for state_key, value in sorted(
                         state.items(), key=lambda item: str(item[0])
@@ -398,7 +419,7 @@ class MegatronPolicyWorkerImpl(
                         raise TypeError("Optimizer group step must be scalar")
                     step_counters.append(
                         {
-                            "group": [optimizer_index, group_index],
+                            "group": (optimizer_index, group_index),
                             "state_key": "step",
                             "value": scalar,
                         }
@@ -414,6 +435,7 @@ class MegatronPolicyWorkerImpl(
         optimizer_records.sort(
             key=lambda record: (record["owner"], record["state_key"])
         )
+        optimizer_parameter_records.sort(key=lambda record: record["owner"])
         return {
             "rank": int(self.rank),
             "device": int(device),
@@ -425,6 +447,7 @@ class MegatronPolicyWorkerImpl(
                 "buffers": buffers,
             },
             "optimizer": {
+                "parameters": optimizer_parameter_records,
                 "state_tensors": optimizer_records,
                 "step_counters": step_counters,
             },

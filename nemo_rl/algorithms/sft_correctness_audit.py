@@ -62,6 +62,28 @@ class CorrectnessGateResult:
 
 
 @dataclass(frozen=True)
+class CorrectnessValidationEvidence:
+    """Exact digests of one validation execution's canonical runtime inputs."""
+
+    payload_digest: str
+    sample_ids_digest: str
+    token_counts_digest: str
+
+
+@dataclass(frozen=True)
+class CorrectnessValidationEvidencePair:
+    before: CorrectnessValidationEvidence
+    after: CorrectnessValidationEvidence
+
+
+@dataclass(frozen=True)
+class CorrectnessNextTrainBatchEvidence:
+    batch_digest: str
+    sample_ids_digest: str
+    token_counts_digest: str
+
+
+@dataclass(frozen=True)
 class CorrectnessAuditRecord:
     validation_step: int
     validation_succeeded: bool
@@ -70,15 +92,8 @@ class CorrectnessAuditRecord:
     before_digest: str
     after_digest: str
     gate: CorrectnessGateResult
-    audit_time_s: float
-
-
-@dataclass(frozen=True)
-class CorrectnessNextBatchRecord:
-    validation_step: int
-    batch_digest: str | None
-    sample_ids_digest: str | None
-    token_counts_digest: str | None
+    validation_evidence: CorrectnessValidationEvidencePair | None
+    next_train_batch: CorrectnessNextTrainBatchEvidence | None
     audit_time_s: float
     status: str
 
@@ -88,7 +103,7 @@ class CorrectnessAuditError(RuntimeError):
 
 
 _ResultT = TypeVar("_ResultT")
-_AuditRecord = CorrectnessAuditRecord | CorrectnessNextBatchRecord
+_AuditRecord = CorrectnessAuditRecord
 
 
 def _tensor_digest_record(tensor: torch.Tensor) -> dict[str, object]:
@@ -188,6 +203,37 @@ def _state_digest(value: object) -> str:
         ensure_ascii=True,
     ).encode("ascii")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def capture_validation_evidence(
+    *,
+    validation_payload: object,
+    validation_sample_ids: object,
+    validation_token_counts: object,
+) -> CorrectnessValidationEvidence:
+    """Capture exact validation payload, identity, and token-count digests."""
+    return CorrectnessValidationEvidence(
+        payload_digest=_state_digest(validation_payload),
+        sample_ids_digest=_state_digest(validation_sample_ids),
+        token_counts_digest=_state_digest(validation_token_counts),
+    )
+
+
+def combine_validation_evidence(
+    evidence: Sequence[CorrectnessValidationEvidence],
+) -> CorrectnessValidationEvidence:
+    """Combine ordered per-submission evidence into one comparable record."""
+    if not evidence:
+        raise ValueError("Validation correctness evidence cannot be empty")
+    return CorrectnessValidationEvidence(
+        payload_digest=_state_digest(tuple(item.payload_digest for item in evidence)),
+        sample_ids_digest=_state_digest(
+            tuple(item.sample_ids_digest for item in evidence)
+        ),
+        token_counts_digest=_state_digest(
+            tuple(item.token_counts_digest for item in evidence)
+        ),
+    )
 
 
 def snapshot_digest(snapshot: CorrectnessSnapshot) -> str:
@@ -333,6 +379,41 @@ def _batch_metadata(batch: object) -> tuple[object, object]:
     return sample_ids, token_counts
 
 
+def capture_next_train_batch_evidence(
+    batch: object,
+) -> CorrectnessNextTrainBatchEvidence:
+    """Digest a train batch only after the normal training iterator yields it."""
+    sample_ids, token_counts = _batch_metadata(batch)
+    return CorrectnessNextTrainBatchEvidence(
+        batch_digest=_state_digest(batch),
+        sample_ids_digest=_state_digest(sample_ids),
+        token_counts_digest=_state_digest(token_counts),
+    )
+
+
+def compare_next_train_batch_to_control(
+    control: CorrectnessNextTrainBatchEvidence,
+    audited: CorrectnessAuditRecord,
+) -> CorrectnessGateResult:
+    """Compare finalized audit evidence with an explicit no-validation control."""
+    if audited.next_train_batch is None:
+        return CorrectnessGateResult(
+            ready=False,
+            differences=("next_train_batch",),
+        )
+    differences: list[str] = []
+    _compare_values(
+        control,
+        audited.next_train_batch,
+        path="next_train_batch",
+        differences=differences,
+    )
+    return CorrectnessGateResult(
+        ready=not differences,
+        differences=tuple(differences),
+    )
+
+
 class SFTCorrectnessAuditor:
     """Own validation-boundary gates and deferred natural-batch evidence."""
 
@@ -342,19 +423,13 @@ class SFTCorrectnessAuditor:
         policy: _CorrectnessFingerprintPolicy,
         train_loader: _StatefulLoader,
         explicit_generator: torch.Generator | None,
-        validation_payload: object,
-        validation_sample_ids: object,
-        validation_token_counts: object,
         record_sink: Callable[[_AuditRecord], None] = _default_record_sink,
     ) -> None:
         self._policy = policy
         self._train_loader = train_loader
         self._explicit_generator = explicit_generator
-        self._validation_payload = validation_payload
-        self._validation_sample_ids = validation_sample_ids
-        self._validation_token_counts = validation_token_counts
         self._record_sink = record_sink
-        self._pending_validation_steps: list[int] = []
+        self._pending_records: list[CorrectnessAuditRecord] = []
         self._elapsed_seconds = 0.0
 
     def _capture(self) -> CorrectnessSnapshot:
@@ -362,27 +437,60 @@ class SFTCorrectnessAuditor:
             policy=self._policy,
             train_loader=self._train_loader,
             explicit_generator=self._explicit_generator,
-            validation_payload=self._validation_payload,
-            validation_sample_ids=self._validation_sample_ids,
-            validation_token_counts=self._validation_token_counts,
+            validation_payload=None,
+            validation_sample_ids=None,
+            validation_token_counts=None,
         )
 
     def audit_validation(
-        self, *, step: int, validation: Callable[[], _ResultT]
+        self,
+        *,
+        step: int,
+        validation: Callable[[], _ResultT],
+        evidence_from_result: Callable[[_ResultT], CorrectnessValidationEvidencePair],
     ) -> _ResultT:
         audit_start = time.perf_counter()
         before = self._capture()
         self._elapsed_seconds += time.perf_counter() - audit_start
         validation_succeeded = False
+        validation_evidence: CorrectnessValidationEvidencePair | None = None
         try:
             result = validation()
+            validation_evidence = evidence_from_result(result)
             validation_succeeded = True
             return result
         finally:
             previous_audit_time_s = self._elapsed_seconds
             audit_start = time.perf_counter()
             after = self._capture()
-            gate = evaluate_correctness_gate(before, after)
+            if validation_evidence is not None:
+                before = dataclasses.replace(
+                    before,
+                    validation_payload_digest=(
+                        validation_evidence.before.payload_digest
+                    ),
+                    validation_sample_ids_digest=(
+                        validation_evidence.before.sample_ids_digest
+                    ),
+                    validation_token_counts_digest=(
+                        validation_evidence.before.token_counts_digest
+                    ),
+                )
+                after = dataclasses.replace(
+                    after,
+                    validation_payload_digest=validation_evidence.after.payload_digest,
+                    validation_sample_ids_digest=(
+                        validation_evidence.after.sample_ids_digest
+                    ),
+                    validation_token_counts_digest=(
+                        validation_evidence.after.token_counts_digest
+                    ),
+                )
+            differences = compare_correctness_snapshots(before, after)
+            gate = CorrectnessGateResult(
+                ready=not differences,
+                differences=tuple(differences),
+            )
             before_digest = snapshot_digest(before)
             after_digest = snapshot_digest(after)
             audit_time_s = previous_audit_time_s + time.perf_counter() - audit_start
@@ -394,14 +502,24 @@ class SFTCorrectnessAuditor:
                 before_digest=before_digest,
                 after_digest=after_digest,
                 gate=gate,
+                validation_evidence=validation_evidence,
+                next_train_batch=None,
                 audit_time_s=audit_time_s,
+                status=(
+                    "pending_next_train_batch"
+                    if validation_succeeded and gate.ready
+                    else "validation_failed"
+                    if not validation_succeeded
+                    else "rejected"
+                ),
             )
-            self._record_sink(record)
             self._elapsed_seconds = (
                 previous_audit_time_s + time.perf_counter() - audit_start
             )
             if validation_succeeded and gate.ready:
-                self._pending_validation_steps.append(step)
+                self._pending_records.append(record)
+            else:
+                self._record_sink(record)
             if not gate.ready:
                 changed = ", ".join(gate.differences)
                 raise CorrectnessAuditError(
@@ -409,36 +527,54 @@ class SFTCorrectnessAuditor:
                 )
 
     def record_next_train_batch(self, batch: object) -> None:
-        if not self._pending_validation_steps:
+        if not self._pending_records:
             return
         audit_start = time.perf_counter()
-        validation_step = self._pending_validation_steps.pop(0)
-        sample_ids, token_counts = _batch_metadata(batch)
-        record = CorrectnessNextBatchRecord(
-            validation_step=validation_step,
-            batch_digest=_state_digest(batch),
-            sample_ids_digest=_state_digest(sample_ids),
-            token_counts_digest=_state_digest(token_counts),
-            audit_time_s=0.0,
-            status="consumed",
-        )
+        pending_record = self._pending_records.pop(0)
+        next_train_batch = capture_next_train_batch_evidence(batch)
         digest_elapsed = time.perf_counter() - audit_start
-        completed_record = dataclasses.replace(record, audit_time_s=digest_elapsed)
+        before = dataclasses.replace(
+            pending_record.before,
+            next_train_batch_digest=next_train_batch.batch_digest,
+        )
+        after = dataclasses.replace(
+            pending_record.after,
+            next_train_batch_digest=next_train_batch.batch_digest,
+        )
+        completed_record = dataclasses.replace(
+            pending_record,
+            before=before,
+            after=after,
+            before_digest=snapshot_digest(before),
+            after_digest=snapshot_digest(after),
+            next_train_batch=next_train_batch,
+            audit_time_s=pending_record.audit_time_s + digest_elapsed,
+            status="finalized",
+        )
         self._record_sink(completed_record)
         self._elapsed_seconds += time.perf_counter() - audit_start
 
     def flush_pending(self) -> None:
-        while self._pending_validation_steps:
-            validation_step = self._pending_validation_steps.pop(0)
+        missing_steps: list[int] = []
+        while self._pending_records:
+            pending_record = self._pending_records.pop(0)
+            missing_steps.append(pending_record.validation_step)
+            missing_gate = CorrectnessGateResult(
+                ready=False,
+                differences=(*pending_record.gate.differences, "next_train_batch"),
+            )
             self._record_sink(
-                CorrectnessNextBatchRecord(
-                    validation_step=validation_step,
-                    batch_digest=None,
-                    sample_ids_digest=None,
-                    token_counts_digest=None,
-                    audit_time_s=0.0,
+                dataclasses.replace(
+                    pending_record,
+                    gate=missing_gate,
                     status="no_naturally_consumed_batch",
                 )
+            )
+        if missing_steps:
+            steps = ", ".join(str(step) for step in missing_steps)
+            raise CorrectnessAuditError(
+                "SFT correctness audit could not finalize naturally consumed "
+                f"train-batch evidence for validation step(s): {steps}"
             )
 
     def consume_elapsed_seconds(self) -> float:

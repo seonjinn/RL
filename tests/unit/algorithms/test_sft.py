@@ -16,8 +16,10 @@ import gc
 import weakref
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -30,6 +32,7 @@ from nemo_rl.algorithms.sft import (
     CorrectnessAuditConfig,
     MasterConfig,
     SFTConfig,
+    _SFTValidationResult,
     _ValidationEventCache,
     _add_e2e_step_timing,
     _build_sft_collate_fn,
@@ -40,9 +43,20 @@ from nemo_rl.algorithms.sft import (
     _optional_float,
     _recursive_deep_payload_bytes,
     _recursive_tensor_payload_bytes,
+    _require_validation_evidence,
     _validate_event_execution_config,
+    _validate_with_loss_availability,
     sft_train,
     validate,
+)
+from nemo_rl.algorithms.sft_correctness_audit import (
+    CorrectnessAuditError,
+    CorrectnessAuditRecord,
+    SFTCorrectnessAuditor,
+    capture_next_train_batch_evidence,
+    capture_validation_evidence,
+    combine_validation_evidence,
+    compare_next_train_batch_to_control,
 )
 from nemo_rl.algorithms.sft_validation_artifact import PrecomputedValidationEvent
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -422,10 +436,12 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
         val_metrics={"val_loss": 0.5},
         timing_metrics={"total_validation_time": 1.0},
         validation_loss_available=True,
+        correctness_audit_evidence=MagicMock(),
+        correctness_audit_time_s=0.0,
     )
     auditor_instance = MagicMock()
-    auditor_instance.audit_validation.side_effect = lambda *, step, validation: (
-        validation()
+    auditor_instance.audit_validation.side_effect = (
+        lambda *, step, validation, evidence_from_result: validation()
     )
     auditor_instance.consume_elapsed_seconds.side_effect = [0.25, 0.1]
 
@@ -453,16 +469,11 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
         )
 
     auditor_class.assert_called_once()
-    assert auditor_class.call_args.kwargs["validation_payload"] is event.data
-    assert auditor_class.call_args.kwargs["validation_token_counts"] == (
-        128,
-        128,
-        128,
-        128,
-    )
+    assert "validation_payload" not in auditor_class.call_args.kwargs
     auditor_instance.audit_validation.assert_called_once()
     assert auditor_instance.audit_validation.call_args.kwargs["step"] == 0
     validation.assert_called_once()
+    assert validation.call_args.kwargs["collect_correctness_audit_evidence"] is True
     auditor_instance.record_next_train_batch.assert_called_once()
     naturally_consumed_batch = auditor_instance.record_next_train_batch.call_args.args[
         0
@@ -482,6 +493,243 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
         {"audit_time_s": 0.25},
         {"next_train_batch_digest_time_s": 0.1},
     ]
+
+
+@pytest.mark.parametrize(
+    ("execution_mode", "cache_mode"),
+    [
+        pytest.param("per_batch", "off", id="per-batch"),
+        pytest.param("event_batch", "cpu", id="cpu-cache-event"),
+    ],
+)
+def test_validation_audit_captures_actual_payload_identity_and_token_counts(
+    execution_mode: str,
+    cache_mode: str,
+) -> None:
+    batches = [_packed_validation_batch(index) for index in range(4)]
+    master_config = _validation_config(
+        execution_mode,
+        validation_event_cache_mode=cache_mode,
+    )
+    policy = _validation_policy(
+        [1.0] if execution_mode == "per_batch" else [1.0, 2.0, 3.0, 4.0]
+    )
+    cache = _ValidationEventCache() if cache_mode == "cpu" else None
+
+    result = _validate_with_loss_availability(
+        policy=policy,
+        val_dataloader=batches,
+        tokenizer=MagicMock(pad_token_id=0),
+        loss_fn=NLLLossFn(),
+        step=20,
+        master_config=master_config,
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+        validation_event_cache=cache,
+        collect_correctness_audit_evidence=True,
+    )
+
+    assert result.correctness_audit_evidence is not None
+    assert (
+        result.correctness_audit_evidence.before
+        == result.correctness_audit_evidence.after
+    )
+    if cache is None:
+        payloads = batches
+        token_counts = [(128,)] * 4
+    else:
+        assert cache.entry is not None
+        payloads = [cache.entry.combined_data]
+        token_counts = [cache.entry.num_valid_tokens]
+    expected = combine_validation_evidence(
+        [
+            capture_validation_evidence(
+                validation_payload=payload,
+                validation_sample_ids={
+                    "idx": payload.get("idx"),
+                    "input_ids": payload["input_ids"],
+                },
+                validation_token_counts=count,
+            )
+            for payload, count in zip(payloads, token_counts)
+        ]
+    )
+    assert result.correctness_audit_evidence.before == expected
+
+
+def test_validation_audit_fails_fast_without_exact_runtime_payload() -> None:
+    master_config = _validation_config("per_batch")
+    policy = _validation_policy([1.0])
+    malformed_batch = BatchedDataDict(
+        token_mask=torch.ones((64, 2)),
+        sample_mask=torch.ones(64),
+        packed_cu_seqlens=torch.tensor([[0, 2]]).repeat(64, 1),
+    )
+
+    with pytest.raises(RuntimeError, match="input_ids"):
+        _validate_with_loss_availability(
+            policy=policy,
+            val_dataloader=[malformed_batch],
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=master_config,
+            val_batches=1,
+            val_batch_size=64,
+            val_mbs=1,
+            collect_correctness_audit_evidence=True,
+        )
+
+
+def test_validation_audit_gate_rejects_real_runtime_payload_mutation() -> None:
+    policy = _validation_policy([1.0])
+    policy.get_correctness_state_fingerprint.return_value = [
+        {
+            "rank": 0,
+            "torch_cuda_rng": {"sha256": "cuda"},
+            "mcore_cuda_rng": {"model-parallel-rng": {"sha256": "mcore"}},
+            "model": {"parameters": {}, "buffers": {}},
+            "optimizer": {
+                "parameters": [],
+                "state_tensors": [],
+                "step_counters": [],
+            },
+            "training_mode_flags": {"": True},
+        }
+    ]
+    validation_result = policy.train.return_value
+
+    def mutate_validation_payload(
+        data: BatchedDataDict[Any], *_args: object, **_kwargs: object
+    ) -> Any:
+        data["input_ids"][0, 0] = -1
+        return validation_result
+
+    policy.train.side_effect = mutate_validation_payload
+    train_loader = MagicMock()
+    train_loader.state_dict.return_value = {"position": 0}
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=policy,
+        train_loader=train_loader,
+        explicit_generator=None,
+        record_sink=records.append,
+    )
+
+    def run_validation() -> _SFTValidationResult:
+        return _validate_with_loss_availability(
+            policy=policy,
+            val_dataloader=[_packed_validation_batch(0)],
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=_validation_config("per_batch"),
+            val_batches=1,
+            val_batch_size=64,
+            val_mbs=1,
+            collect_correctness_audit_evidence=True,
+        )
+
+    with (
+        patch.object(torch.cuda, "is_initialized", return_value=False),
+        pytest.raises(CorrectnessAuditError, match="validation_payload_digest"),
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=run_validation,
+            evidence_from_result=_require_validation_evidence,
+        )
+
+    assert records[0].gate.ready is False
+    assert records[0].status == "rejected"
+
+
+def _restart_train_loader(generator: torch.Generator) -> StatefulDataLoader:
+    dataset = [
+        {
+            "idx": index,
+            "input_ids": torch.tensor([index, index + 1]),
+            "processed_token_counts": 2,
+        }
+        for index in range(24)
+    ]
+    return StatefulDataLoader(
+        dataset,
+        batch_size=3,
+        shuffle=True,
+        generator=generator,
+        num_workers=0,
+    )
+
+
+def test_restart_restores_loader_and_generator_then_runs_real_validation() -> None:
+    control_generator = torch.Generator().manual_seed(606)
+    checkpoint_generator = torch.Generator().manual_seed(606)
+    control_loader = _restart_train_loader(control_generator)
+    checkpoint_loader = _restart_train_loader(checkpoint_generator)
+    control_iterator = iter(control_loader)
+    checkpoint_iterator = iter(checkpoint_loader)
+    assert capture_next_train_batch_evidence(
+        next(control_iterator)
+    ) == capture_next_train_batch_evidence(next(checkpoint_iterator))
+    loader_state = deepcopy(checkpoint_loader.state_dict())
+    generator_state = checkpoint_generator.get_state().clone()
+
+    resumed_generator = torch.Generator()
+    resumed_generator.set_state(generator_state)
+    resumed_loader = _restart_train_loader(resumed_generator)
+    resumed_loader.load_state_dict(loader_state)
+    control_next_batch = next(control_iterator)
+    policy = _validation_policy([1.0])
+    policy.get_correctness_state_fingerprint.return_value = [
+        {
+            "rank": 0,
+            "torch_cuda_rng": {"sha256": "cuda"},
+            "mcore_cuda_rng": {"model-parallel-rng": {"sha256": "mcore"}},
+            "model": {"parameters": {}, "buffers": {}},
+            "optimizer": {
+                "parameters": [],
+                "state_tensors": [],
+                "step_counters": [],
+            },
+            "training_mode_flags": {"": True},
+        }
+    ]
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=policy,
+        train_loader=resumed_loader,
+        explicit_generator=resumed_generator,
+        record_sink=records.append,
+    )
+    validation_config = _validation_config("per_batch")
+
+    def run_validation() -> _SFTValidationResult:
+        return _validate_with_loss_availability(
+            policy=policy,
+            val_dataloader=[_packed_validation_batch(0)],
+            tokenizer=MagicMock(pad_token_id=0),
+            loss_fn=NLLLossFn(),
+            step=20,
+            master_config=validation_config,
+            val_batches=1,
+            val_batch_size=64,
+            val_mbs=1,
+            collect_correctness_audit_evidence=True,
+        )
+
+    with patch.object(torch.cuda, "is_initialized", return_value=False):
+        auditor.audit_validation(
+            step=20,
+            validation=run_validation,
+            evidence_from_result=_require_validation_evidence,
+        )
+    resumed_next_batch = next(iter(resumed_loader))
+    auditor.record_next_train_batch(resumed_next_batch)
+
+    control = capture_next_train_batch_evidence(control_next_batch)
+    assert compare_next_train_batch_to_control(control, records[0]).ready is True
 
 
 def test_sft_train_excludes_audit_time_from_reported_step_window(
@@ -517,10 +765,12 @@ def test_sft_train_excludes_audit_time_from_reported_step_window(
         val_metrics={"val_loss": 0.5},
         timing_metrics={"total_validation_time": 1.0},
         validation_loss_available=True,
+        correctness_audit_evidence=MagicMock(),
+        correctness_audit_time_s=0.0,
     )
     auditor_instance = MagicMock()
-    auditor_instance.audit_validation.side_effect = lambda *, step, validation: (
-        validation()
+    auditor_instance.audit_validation.side_effect = (
+        lambda *, step, validation, evidence_from_result: validation()
     )
     auditor_instance.consume_elapsed_seconds.side_effect = [0.0, 2.0]
 
