@@ -46,6 +46,18 @@ def _get_vllm_file(relative_path: str) -> str:
     return file_path
 
 
+def _get_optional_vllm_file(relative_path: str, logger, component: str) -> str | None:
+    """Return an optional model-specific vLLM file when that feature is installed."""
+    try:
+        return _get_vllm_file(relative_path)
+    except RuntimeError:
+        logger.info(
+            "%s is not installed in this vLLM build; skipping its patch.",
+            component,
+        )
+        return None
+
+
 @contextmanager
 def _locked_file_patch(file_path: str):
     """Yield (content, writer) under an exclusive file lock."""
@@ -257,10 +269,10 @@ def _patch_vllm_v2_eagle_load_config_and_ownership(logger) -> None:
 
 def _patch_vllm_v2_dflash_load_config(logger) -> None:
     """Give Model Runner V2 DFlash an independent draft load contract."""
-    try:
-        file_to_patch = _get_vllm_file("v1/worker/gpu/spec_decode/dflash/utils.py")
-    except RuntimeError:
-        logger.info("DFlash is not installed in this vLLM build; skipping its patch.")
+    file_to_patch = _get_optional_vllm_file(
+        "v1/worker/gpu/spec_decode/dflash/utils.py", logger, "DFlash"
+    )
+    if file_to_patch is None:
         return
     old_snippet = (
         '    with set_model_tag("dflash_head"):\n'
@@ -313,16 +325,14 @@ def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
     )
 
     for relative_path, old_snippet, new_snippet in patches:
-        try:
-            file_to_patch = _get_vllm_file(relative_path)
-        except RuntimeError:
-            if relative_path.endswith("qwen3_dflash.py"):
-                logger.info(
-                    "Qwen3 DFlash is not installed in this vLLM build; "
-                    "skipping its loader patch."
-                )
-                continue
-            raise
+        component = (
+            "Qwen3 DFlash"
+            if relative_path.endswith("qwen3_dflash.py")
+            else "Qwen3 Eagle-3"
+        )
+        file_to_patch = _get_optional_vllm_file(relative_path, logger, component)
+        if file_to_patch is None:
+            continue
         with _locked_file_patch(file_to_patch) as (content, write_back):
             if new_snippet in content:
                 logger.info("Qwen3 draft loader result patch already applied.")
@@ -351,7 +361,11 @@ def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
 
 def _patch_vllm_llama_draft_loader_result(logger) -> None:
     """Return an auditable receipt from the Llama Eagle-3 loader."""
-    file_to_patch = _get_vllm_file("model_executor/models/llama_eagle3.py")
+    file_to_patch = _get_optional_vllm_file(
+        "model_executor/models/llama_eagle3.py", logger, "Llama Eagle-3"
+    )
+    if file_to_patch is None:
+        return
     old_snippet = "        loader.load_weights(model_weights.items())\n"
     new_snippet = (
         "        self.has_own_lm_head = any(\n"
