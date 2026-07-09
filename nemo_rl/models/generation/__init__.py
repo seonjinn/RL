@@ -209,6 +209,7 @@ def get_vllm_specdec_runtime_contract(
             "rejection_sample_method", "standard"
         ),
         "draft_sample_method": speculative_config.get("draft_sample_method", "greedy"),
+        "async_scheduling": config["vllm_kwargs"].get("async_scheduling"),
         "cuda_graph_enabled": not config["vllm_cfg"].get("enforce_eager", False),
         "draft_model_cudagraph_patch_requested": (
             draft_model_cudagraph_patch_requested
@@ -285,6 +286,14 @@ def configure_generation_config(
             is_eval=is_eval,
         )
         speculative_config = _get_speculative_config(config)
+        if speculative_config is not None:
+            if config["vllm_kwargs"].get("async_scheduling") is not False:
+                warnings.warn(
+                    "Disabling vLLM async_scheduling for speculative decoding "
+                    "because vLLM 0.24 can retain stale placeholder tokens after "
+                    "preemption or retry."
+                )
+            config["vllm_kwargs"]["async_scheduling"] = False
         if speculative_config is not None and has_refit_draft_weights:
             draft_load_config = speculative_config.setdefault(
                 "draft_load_config", {"load_format": "dummy"}

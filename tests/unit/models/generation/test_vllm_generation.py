@@ -31,7 +31,10 @@ from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
-from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models.generation import (
+    configure_generation_config,
+    get_vllm_specdec_runtime_contract,
+)
 from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
 )
@@ -504,6 +507,45 @@ def test_configure_generation_config_preserves_dynamic_eagle3_schedule():
     assert configured["vllm_kwargs"]["compilation_config"] == {
         "cudagraph_mode": "PIECEWISE"
     }
+
+
+def test_specdec_disables_vllm_async_scheduling():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "async_scheduling": True,
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/draft-model",
+            "num_speculative_tokens": 3,
+        },
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="async_scheduling"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_kwargs"]["async_scheduling"] is False
+    assert get_vllm_specdec_runtime_contract(configured)["async_scheduling"] is False
+
+
+def test_non_specdec_preserves_vllm_async_scheduling():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {"async_scheduling": True}
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(
+        vllm_config,
+        tokenizer,
+        is_eval=False,
+        has_refit_draft_weights=False,
+    )
+
+    assert configured["vllm_kwargs"]["async_scheduling"] is True
 
 
 def test_configure_generation_config_keeps_dummy_startup_weights_with_draft_refit():
