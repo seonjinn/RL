@@ -102,6 +102,7 @@ def test_dry_run_renders_matched_sync_jobs_from_repo_dirs() -> None:
     assert "grpo.max_num_steps=10" in output
     assert "checkpointing.enabled=false" in output
     assert "policy.generation.vllm_cfg.enforce_eager=false" in output
+    assert "cluster.segment_size=2" in output
     assert "/opt/nemo_rl_venv/bin/python" in output
     assert "uv.lock" in output
     assert "0.24." in output
@@ -186,6 +187,7 @@ def test_dry_run_resolves_commit_to_deterministic_lustre_checkout() -> None:
         f"commit-contract-control-async-1off-step20-val-recipe-r1-{commit[:12]}"
         in output
     )
+    assert "cluster.segment_size=1" in output
 
 
 def test_dry_run_supports_validation_free_replicated_steady_state() -> None:

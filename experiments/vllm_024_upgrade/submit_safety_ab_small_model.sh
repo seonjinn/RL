@@ -196,8 +196,10 @@ submit_one() {
   fi
   local short_commit="${commit:0:12}"
   local recipe_suffix=""
+  local cluster_segment_size=2
   if [[ "${recipe_mode}" == "async-1off" ]]; then
     recipe_suffix="-async-1off"
+    cluster_segment_size=1
   fi
   local recipe="examples/configs/recipes/llm/performance/grpo-llama3.1-8b-instruct-2n4g${recipe_suffix}.yaml"
   if [[ "${MODE}" != "dry-run" ]]; then
@@ -254,7 +256,7 @@ submit_one() {
     checkpointing.enabled=false
     "checkpointing.checkpoint_dir=${run_dir}/checkpoints"
     policy.generation.vllm_cfg.enforce_eager=false
-    cluster.segment_size=2
+    "cluster.segment_size=${cluster_segment_size}"
     "logger.wandb.project=${WANDB_PROJECT}"
     "logger.wandb.name=${run_name}"
     "logger.log_dir=${run_dir}/nemo_logs"
