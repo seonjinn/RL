@@ -445,6 +445,39 @@ def test_custom_environment_variables(register_test_actor, virtual_cluster):
     worker_group.shutdown(force=True)
 
 
+def test_rank_local_compile_cache_environment(register_test_actor, virtual_cluster):
+    actor_fqn = register_test_actor
+    builder = RayWorkerBuilder(actor_fqn)
+    cache_root = "/tmp/nemo-rl-compile/job-123/off-a"
+
+    worker_group = RayWorkerGroup(
+        cluster=virtual_cluster,
+        remote_worker_builder=builder,
+        workers_per_node=2,
+        env_vars={"NEMO_RL_COMPILE_CACHE_ROOT": cache_root},
+    )
+
+    expected = [
+        (
+            f"{cache_root}/rank-{rank}/torchinductor",
+            f"{cache_root}/rank-{rank}/triton",
+        )
+        for rank in range(2)
+    ]
+    actual = [
+        (
+            ray.get(worker.get_env_var.remote("TORCHINDUCTOR_CACHE_DIR")),
+            ray.get(worker.get_env_var.remote("TRITON_CACHE_DIR")),
+        )
+        for worker in worker_group.workers
+    ]
+
+    assert actual == expected
+    assert len(set(actual)) == 2
+
+    worker_group.shutdown(force=True)
+
+
 def test_custom_environment_variables_override_existing(
     register_test_actor, virtual_cluster
 ):

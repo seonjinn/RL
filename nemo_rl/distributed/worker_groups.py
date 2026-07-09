@@ -540,6 +540,24 @@ class RayWorkerGroup:
                 worker_env_vars.pop("RAY_RAYLET_PID", None)
                 worker_env_vars.pop("RAY_USAGE_STATS_ENABLED", None)
 
+                compile_cache_root = worker_env_vars.get(
+                    "NEMO_RL_COMPILE_CACHE_ROOT"
+                )
+                if compile_cache_root:
+                    if not os.path.isabs(compile_cache_root):
+                        raise ValueError(
+                            "NEMO_RL_COMPILE_CACHE_ROOT must be an absolute path"
+                        )
+                    actor_cache_root = os.path.join(
+                        compile_cache_root, f"rank-{global_rank}"
+                    )
+                    worker_env_vars["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(
+                        actor_cache_root, "torchinductor"
+                    )
+                    worker_env_vars["TRITON_CACHE_DIR"] = os.path.join(
+                        actor_cache_root, "triton"
+                    )
+
                 # Only the first worker in each group gets bundle_indices
                 # This ensures only one worker per group is the model owner
                 worker_bundle_indices = None
