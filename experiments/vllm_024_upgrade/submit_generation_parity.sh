@@ -90,7 +90,7 @@ submit_one() {
   local run_dir="${EXPERIMENT_ROOT}/${variant}/${decode_mode}"
   local output_jsonl="${run_dir}/samples.jsonl"
   local metadata_json="${run_dir}/metadata.json"
-  local ray_log_dir="${run_dir}/ray_logs"
+  local ray_log_dir="/tmp/nrp-${variant}-${decode_mode}"
   local samples_per_prompt=1
   if [[ "${decode_mode}" == "sampled" ]]; then
     samples_per_prompt="${SAMPLED_REPEATS}"

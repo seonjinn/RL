@@ -7,10 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DYNAMICSD_LAUNCHER = (
-    REPO_ROOT
-    / "experiments"
-    / "vllm_024_upgrade"
-    / "submit_eagle3_dynamicsd_step20.sh"
+    REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_eagle3_dynamicsd_step20.sh"
 )
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
@@ -71,10 +68,7 @@ def test_compat_smoke_uses_short_compute_node_tmpdir() -> None:
 
 def test_performance_launcher_uses_short_compute_node_tmpdir() -> None:
     output = _run_script(
-        REPO_ROOT
-        / "experiments"
-        / "vllm_024_upgrade"
-        / "submit_performance_step10.sh",
+        REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_performance_step10.sh",
         "dry-run",
         "qwen32b",
     )
@@ -84,10 +78,7 @@ def test_performance_launcher_uses_short_compute_node_tmpdir() -> None:
 
 def test_performance_launcher_preserves_compute_visible_workdir() -> None:
     output = _run_script(
-        REPO_ROOT
-        / "experiments"
-        / "vllm_024_upgrade"
-        / "submit_performance_step10.sh",
+        REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_performance_step10.sh",
         "dry-run",
         "qwen32b",
         REPO_DIR="/lustre/users/sna/RL",
@@ -98,10 +89,7 @@ def test_performance_launcher_preserves_compute_visible_workdir() -> None:
 
 def test_performance_launcher_imports_nemo_rl_from_the_checkout() -> None:
     output = _run_script(
-        REPO_ROOT
-        / "experiments"
-        / "vllm_024_upgrade"
-        / "submit_performance_step10.sh",
+        REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_performance_step10.sh",
         "dry-run",
         "qwen32b",
         REPO_DIR="/lustre/users/sna/RL",
@@ -112,10 +100,7 @@ def test_performance_launcher_imports_nemo_rl_from_the_checkout() -> None:
 
 def test_performance_launcher_uses_node_local_compiler_caches() -> None:
     output = _run_script(
-        REPO_ROOT
-        / "experiments"
-        / "vllm_024_upgrade"
-        / "submit_performance_step10.sh",
+        REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_performance_step10.sh",
         "dry-run",
         "qwen32b",
         RUN_TAG="cache-test",
@@ -131,7 +116,7 @@ def test_performance_launcher_uses_node_local_compiler_caches() -> None:
 def test_ray_launcher_accepts_an_explicit_container_workdir() -> None:
     source = (REPO_ROOT / "ray.sub").read_text(encoding="utf-8")
 
-    assert 'CONTAINER_WORKDIR=${CONTAINER_WORKDIR:-$SLURM_SUBMIT_DIR}' in source
+    assert "CONTAINER_WORKDIR=${CONTAINER_WORKDIR:-$SLURM_SUBMIT_DIR}" in source
     assert 'COMMON_SRUN_ARGS+=" --container-workdir=$CONTAINER_WORKDIR"' in source
 
 
@@ -234,9 +219,7 @@ def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:
         ATTEMPT_ID="attempt-1",
     )
 
-    aws_root = (
-        "/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna"
-    )
+    aws_root = "/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna"
     assert f"CONTAINER={aws_root}/containers/nemo_rl_nightly.sqsh" in output
     assert f"HF_HOME={aws_root}/hf_home" in output
     assert (
@@ -275,8 +258,8 @@ def test_dynamicsd_launcher_ignores_generated_submodule_dirt() -> None:
 def test_dynamicsd_launcher_preserves_logical_lustre_checkout_path() -> None:
     source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
 
-    assert "logical_pwd=\"$(pwd -L)\"" in source
-    assert "repo_prefix=\"$(git rev-parse --show-prefix)\"" in source
+    assert 'logical_pwd="$(pwd -L)"' in source
+    assert 'repo_prefix="$(git rev-parse --show-prefix)"' in source
 
 
 def test_generation_parity_launcher_matches_lyris_topology_and_cuda_graph() -> None:
@@ -295,6 +278,13 @@ def test_generation_parity_launcher_matches_lyris_topology_and_cuda_graph() -> N
     assert "--mode greedy" in output
     assert "--samples-per-prompt 1" in output
     assert "/lustre/users/sna/qwen32-eagle3" in output
+
+
+def test_generation_parity_launcher_uses_short_ray_socket_root() -> None:
+    output = _dry_run_parity("eagle3_k5", "greedy")
+
+    assert "--ray-log-dir /tmp/nrp-eagle3_k5-greedy" in output
+    assert "parity-contract-test/eagle3_k5/greedy/ray_logs" not in output
 
 
 def test_generation_parity_launcher_keeps_baseline_free_of_draft_model() -> None:
