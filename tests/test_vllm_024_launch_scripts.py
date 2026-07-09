@@ -243,6 +243,7 @@ def test_dynamicsd_launcher_renders_pard_with_graph_patch() -> None:
     assert "speculative_config.parallel_drafting=true" in output
     assert "models--amd--PARD-Qwen3-0.6B" in output
     assert "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true" in output
+    assert "policy.generation.vllm_kwargs.max_num_batched_tokens=32768" in output
 
 
 def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:

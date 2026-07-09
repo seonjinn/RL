@@ -9,6 +9,7 @@ VARIANT_SELECTION="${3:-all}"
 MAX_STEPS="${MAX_STEPS:-20}"
 STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-[[1,16,5],[17,32,4],[33,64,3],[65,128,1],[129,512,0]]}"
+PARD_K16_MAX_NUM_BATCHED_TOKENS="${PARD_K16_MAX_NUM_BATCHED_TOKENS:-32768}"
 ACCOUNT="${ACCOUNT:-nemotron_sw_post}"
 PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
@@ -209,6 +210,11 @@ submit_one() {
         "++policy.generation.vllm_kwargs.speculative_config.parallel_drafting=true"
         "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true"
       )
+      if [[ "${variant}" == "pard_k16" ]]; then
+        overrides+=(
+          "++policy.generation.vllm_kwargs.max_num_batched_tokens=${PARD_K16_MAX_NUM_BATCHED_TOKENS}"
+        )
+      fi
       ;;
     *)
       overrides+=(
