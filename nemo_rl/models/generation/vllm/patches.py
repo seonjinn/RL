@@ -499,7 +499,7 @@ def _patch_vllm_draft_model_cudagraph_keys(logger) -> None:
     enabled and disabled runs isolated even when they share a worker venv.
     """
     file_to_patch = _get_vllm_file("v1/worker/gpu_model_runner.py")
-    old_snippet = (
+    old_snippet_with_gemma4 = (
         "        if self.speculative_config and (\n"
         "            self.speculative_config.use_eagle()\n"
         "            or self.speculative_config.uses_extract_hidden_states()\n"
@@ -513,7 +513,7 @@ def _patch_vllm_draft_model_cudagraph_keys(logger) -> None:
         "            )\n"
         "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
     )
-    new_snippet = (
+    new_snippet_with_gemma4 = (
         "        if self.speculative_config and (\n"
         "            self.speculative_config.use_eagle()\n"
         "            or self.speculative_config.uses_extract_hidden_states()\n"
@@ -535,17 +535,55 @@ def _patch_vllm_draft_model_cudagraph_keys(logger) -> None:
         "            )\n"
         "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
     )
+    old_snippet_without_gemma4 = (
+        "        if self.speculative_config and (\n"
+        "            self.speculative_config.use_eagle()\n"
+        "            or self.speculative_config.uses_extract_hidden_states()\n"
+        "        ):\n"
+        "            assert isinstance(\n"
+        "                self.drafter,\n"
+        "                EagleProposer | DFlashProposer | ExtractHiddenStatesProposer,\n"
+        "            )\n"
+        "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
+    )
+    new_snippet_without_gemma4 = (
+        "        if self.speculative_config and (\n"
+        "            self.speculative_config.use_eagle()\n"
+        "            or self.speculative_config.uses_extract_hidden_states()\n"
+        "            or (\n"
+        "                self.speculative_config.uses_draft_model()\n"
+        "                and __import__('os').environ.get(\n"
+        "                    'NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH',\n"
+        "                    'false',\n"
+        "                ).lower() == 'true'\n"
+        "            )\n"
+        "        ):\n"
+        "            assert isinstance(\n"
+        "                self.drafter,\n"
+        "                EagleProposer\n"
+        "                | DFlashProposer\n"
+        "                | DraftModelProposer\n"
+        "                | ExtractHiddenStatesProposer,\n"
+        "            )\n"
+        "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
+    )
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
-        if new_snippet in content:
+        if "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH" in content:
             logger.info("Generic draft-model CUDA-graph patch already applied.")
             return
-        if old_snippet not in content:
+        for old_snippet, new_snippet in (
+            (old_snippet_with_gemma4, new_snippet_with_gemma4),
+            (old_snippet_without_gemma4, new_snippet_without_gemma4),
+        ):
+            if old_snippet in content:
+                write_back(content.replace(old_snippet, new_snippet, 1))
+                break
+        else:
             raise RuntimeError(
                 "Could not apply the generic draft-model CUDA-graph patch to "
                 f"{file_to_patch}; the vLLM source layout changed."
             )
-        write_back(content.replace(old_snippet, new_snippet, 1))
     logger.info("Installed runtime-guarded generic draft-model CUDA-graph keys.")
 
 
@@ -696,13 +734,19 @@ def _apply_vllm_patches(
         _patch_vllm_qwen3_draft_loader_results(patch_logger)
         _patch_vllm_llama_draft_loader_result(patch_logger)
         if (
-            speculative_config.get("rejection_sample_method", "standard")
-            == "standard"
+            speculative_config.get("rejection_sample_method", "standard") == "standard"
             and speculative_config.get("draft_sample_method", "greedy")
             == "probabilistic"
         ):
             _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
         _patch_vllm_draft_model_load_config(patch_logger)
         _patch_vllm_medusa_load_config(patch_logger)
-        _patch_vllm_draft_model_cudagraph_keys(patch_logger)
+        if (
+            speculative_config.get("method") == "draft_model"
+            and os.environ.get(
+                "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH", "false"
+            ).lower()
+            == "true"
+        ):
+            _patch_vllm_draft_model_cudagraph_keys(patch_logger)
     _patch_vllm_hermes_tool_parser_thread_safety(patch_logger)

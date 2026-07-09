@@ -355,16 +355,48 @@ def test_draft_model_cudagraph_patch_initializes_generic_proposer(
     assert "| DraftModelProposer" in patched
 
 
+def test_draft_model_cudagraph_patch_supports_nightly_without_gemma4(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_runner = tmp_path / "gpu_model_runner.py"
+    model_runner.write_text(
+        "        if self.speculative_config and (\n"
+        "            self.speculative_config.use_eagle()\n"
+        "            or self.speculative_config.uses_extract_hidden_states()\n"
+        "        ):\n"
+        "            assert isinstance(\n"
+        "                self.drafter,\n"
+        "                EagleProposer | DFlashProposer | ExtractHiddenStatesProposer,\n"
+        "            )\n"
+        "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(model_runner))
+
+    patches._patch_vllm_draft_model_cudagraph_keys(MagicMock())
+
+    patched = model_runner.read_text()
+    assert "self.speculative_config.uses_draft_model()" in patched
+    assert "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH" in patched
+    assert "DraftModelProposer" in patched
+
+
 @pytest.mark.parametrize(
-    ("speculative_config", "expect_specdec_patches", "expect_probabilistic_guard"),
+    (
+        "speculative_config",
+        "expect_specdec_patches",
+        "expect_probabilistic_guard",
+        "expect_draft_cg_patch",
+    ),
     [
-        (None, False, False),
-        ({}, False, False),
-        ({"method": "eagle3"}, True, False),
+        (None, False, False, False),
+        ({}, False, False, False),
+        ({"method": "eagle3"}, True, False, False),
         (
             {"method": "eagle3", "draft_sample_method": "probabilistic"},
             True,
             True,
+            False,
         ),
         (
             {
@@ -374,7 +406,9 @@ def test_draft_model_cudagraph_patch_initializes_generic_proposer(
             },
             True,
             False,
+            False,
         ),
+        ({"method": "draft_model"}, True, False, True),
     ],
 )
 def test_apply_patches_only_installs_required_specdec_patches(
@@ -382,6 +416,7 @@ def test_apply_patches_only_installs_required_specdec_patches(
     speculative_config: dict[str, object] | None,
     expect_specdec_patches: bool,
     expect_probabilistic_guard: bool,
+    expect_draft_cg_patch: bool,
 ) -> None:
     logger = MagicMock()
     vllm_module = ModuleType("vllm")
@@ -421,6 +456,8 @@ def test_apply_patches_only_installs_required_specdec_patches(
         draft_cg_patch,
         raising=False,
     )
+    if expect_draft_cg_patch:
+        monkeypatch.setenv("NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH", "true")
     patches._apply_vllm_patches(
         "/venv/bin/python", speculative_config=speculative_config
     )
@@ -428,15 +465,15 @@ def test_apply_patches_only_installs_required_specdec_patches(
     patch_mocks["_patch_vllm_init_workers_ray"].assert_called_once_with(
         "/venv/bin/python", None
     )
-    patch_mocks[
-        "_patch_vllm_hermes_tool_parser_thread_safety"
-    ].assert_called_once_with(logger)
+    patch_mocks["_patch_vllm_hermes_tool_parser_thread_safety"].assert_called_once_with(
+        logger
+    )
     for name in specdec_patch_names:
         if expect_specdec_patches:
             patch_mocks[name].assert_called_once_with(logger)
         else:
             patch_mocks[name].assert_not_called()
-    if expect_specdec_patches:
+    if expect_draft_cg_patch:
         draft_cg_patch.assert_called_once_with(logger)
     else:
         draft_cg_patch.assert_not_called()
