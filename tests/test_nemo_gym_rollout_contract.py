@@ -52,7 +52,54 @@ def _local_nemo_gym() -> Any:
     nemo_gym_cls = NemoGym.__ray_metadata__.modified_class
     nemo_gym = nemo_gym_cls.__new__(nemo_gym_cls)
     nemo_gym.cfg = {}
+
+    async def _get_response_json(response: _Response) -> dict[str, Any]:
+        return response.payload
+
+    async def _raise_for_status(_response: _Response) -> None:
+        return None
+
+    nemo_gym._get_response_json = _get_response_json
+    nemo_gym._is_request_debug_enabled = lambda: False
+    nemo_gym._raise_for_status = _raise_for_status
     return nemo_gym
+
+
+class _Response:
+    ok = True
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+
+class _RolloutCollectionHelper:
+    """Exercise the same proxy-task ownership boundary as Gym.run_examples."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+
+    def setup_server_client(self, _head_server_config: Any) -> Any:
+        return self.client
+
+    def run_examples(self, *, examples: list[dict[str, Any]], **_kwargs: Any) -> Any:
+        async def _run_one(
+            row: dict[str, Any],
+        ) -> tuple[dict[str, Any], dict[str, Any]]:
+            response = await self.client.post(
+                server_name=row["agent_ref"]["name"],
+                url_path="/run",
+                json=row,
+            )
+            return row, response.payload
+
+        return asyncio.as_completed([_run_one(row) for row in examples])
+
+
+def _rollout_examples(count: int) -> list[dict[str, Any]]:
+    return [
+        {"_rowidx": rowidx, "agent_ref": {"name": f"agent-{rowidx}"}}
+        for rowidx in range(count)
+    ]
 
 
 def test_postprocess_rejects_generation_token_logprob_length_mismatch() -> None:
@@ -71,24 +118,146 @@ def test_run_rollouts_rejects_nonfinite_logprobs_after_retry_exhaustion() -> Non
     nemo_gym.head_server_config = object()
     result = _gym_result(token_ids=[3], logprobs=[float("nan")])
 
-    class _RolloutCollectionHelper:
+    class _Client:
         def __init__(self) -> None:
             self.calls = 0
 
-        def run_examples(self, **_kwargs: Any) -> list[Any]:
+        async def post(self, **_kwargs: Any) -> _Response:
             self.calls += 1
+            return _Response(deepcopy(result))
 
-            async def _result() -> tuple[dict[str, int], dict[str, Any]]:
-                return {"_rowidx": 0}, deepcopy(result)
-
-            return [_result()]
-
-    nemo_gym.rch = _RolloutCollectionHelper()
+    client = _Client()
+    nemo_gym.rch = _RolloutCollectionHelper(client)
 
     with pytest.raises(RuntimeError, match="non-finite generation logprobs"):
-        asyncio.run(nemo_gym.run_rollouts([{"_rowidx": 0}], _Tokenizer(), "test"))
+        asyncio.run(nemo_gym.run_rollouts(_rollout_examples(1), _Tokenizer(), "test"))
 
-    assert nemo_gym.rch.calls == 2
+    assert client.calls == 2
+
+
+def test_run_rollouts_cancels_and_awaits_siblings_when_one_fails() -> None:
+    async def _scenario() -> None:
+        sibling_started = asyncio.Event()
+        sibling_cancelled = asyncio.Event()
+        sibling_joined = asyncio.Event()
+        release_sibling = asyncio.Event()
+
+        class _Client:
+            async def post(self, *, json: dict[str, Any], **_kwargs: Any) -> _Response:
+                if json["_rowidx"] == 0:
+                    await sibling_started.wait()
+                    raise RuntimeError("rollout failed")
+
+                sibling_started.set()
+                try:
+                    await release_sibling.wait()
+                except asyncio.CancelledError:
+                    sibling_cancelled.set()
+                    await asyncio.sleep(0)
+                    sibling_joined.set()
+                    raise
+                return _Response(_gym_result(token_ids=[4], logprobs=[-0.2]))
+
+        nemo_gym = _local_nemo_gym()
+        nemo_gym.rollout_max_attempts_to_avoid_lp_nan = 1
+        nemo_gym.head_server_config = object()
+        nemo_gym.rch = _RolloutCollectionHelper(_Client())
+
+        try:
+            with pytest.raises(RuntimeError, match="rollout failed"):
+                await nemo_gym.run_rollouts(_rollout_examples(2), _Tokenizer(), "test")
+
+            assert sibling_cancelled.is_set()
+            assert sibling_joined.is_set()
+        finally:
+            release_sibling.set()
+            await asyncio.sleep(0)
+
+    asyncio.run(_scenario())
+
+
+def test_run_rollouts_cancels_and_awaits_siblings_when_parent_is_cancelled() -> None:
+    async def _scenario() -> None:
+        all_started = asyncio.Event()
+        all_cancelled = asyncio.Event()
+        all_joined = asyncio.Event()
+        release_siblings = asyncio.Event()
+        started_count = 0
+        cancelled_count = 0
+        joined_count = 0
+
+        class _Client:
+            async def post(self, **_kwargs: Any) -> _Response:
+                nonlocal started_count, cancelled_count, joined_count
+                started_count += 1
+                if started_count == 2:
+                    all_started.set()
+                try:
+                    await release_siblings.wait()
+                except asyncio.CancelledError:
+                    cancelled_count += 1
+                    if cancelled_count == 2:
+                        all_cancelled.set()
+                    await asyncio.sleep(0)
+                    joined_count += 1
+                    if joined_count == 2:
+                        all_joined.set()
+                    raise
+                return _Response(_gym_result(token_ids=[4], logprobs=[-0.2]))
+
+        nemo_gym = _local_nemo_gym()
+        nemo_gym.rollout_max_attempts_to_avoid_lp_nan = 1
+        nemo_gym.head_server_config = object()
+        nemo_gym.rch = _RolloutCollectionHelper(_Client())
+        parent = asyncio.create_task(
+            nemo_gym.run_rollouts(_rollout_examples(2), _Tokenizer(), "test")
+        )
+
+        try:
+            await all_started.wait()
+            parent.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await parent
+
+            assert all_cancelled.is_set()
+            assert all_joined.is_set()
+        finally:
+            release_siblings.set()
+            await asyncio.sleep(0)
+
+    asyncio.run(_scenario())
+
+
+def test_run_rollouts_preserves_input_order_and_timing_metrics() -> None:
+    async def _scenario() -> None:
+        class _Client:
+            async def post(self, *, json: dict[str, Any], **_kwargs: Any) -> _Response:
+                await asyncio.sleep(0.01 if json["_rowidx"] == 0 else 0)
+                return _Response(
+                    _gym_result(
+                        token_ids=[json["_rowidx"] + 3],
+                        logprobs=[-0.1],
+                    )
+                )
+
+        nemo_gym = _local_nemo_gym()
+        nemo_gym.rollout_max_attempts_to_avoid_lp_nan = 1
+        nemo_gym.head_server_config = object()
+        nemo_gym.rch = _RolloutCollectionHelper(_Client())
+
+        results, timing_metrics = await nemo_gym.run_rollouts(
+            _rollout_examples(2), _Tokenizer(), "test"
+        )
+
+        assert [result["message_log"][1]["token_ids"].item() for result in results] == [
+            3,
+            4,
+        ]
+        assert timing_metrics["test/await_results"] >= 0
+        assert timing_metrics["test/postprocess_results"] >= 0
+        assert timing_metrics["test/postprocess_results_pct"] >= 0
+
+    asyncio.run(_scenario())
 
 
 @pytest.mark.parametrize(
@@ -143,10 +312,10 @@ def test_http_sampling_contract_rejects_unmodeled_distribution_modifiers(
     setattr(request, field, value)
 
     with pytest.raises(ValueError, match=field):
-            validate_openai_sampling_request(
-                request,
-                {"temperature": 1.0, "top_p": 0.9, "top_k": None},
-            )
+        validate_openai_sampling_request(
+            request,
+            {"temperature": 1.0, "top_p": 0.9, "top_k": None},
+        )
 
 
 def test_http_sampling_contract_error_is_an_invalid_request_response() -> None:

@@ -11,10 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
+import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, NotRequired, TypedDict
+from typing import Any, Awaitable, Callable, Dict, List, NotRequired, TypedDict
 
 import ray
 import torch
@@ -148,6 +150,9 @@ class NemoGym(EnvironmentInterface):
 
     def __init__(self, cfg: NemoGymConfig):
         self.cfg = cfg
+        self._get_response_json: Callable[[Any], Awaitable[Any]] | None = None
+        self._is_request_debug_enabled: Callable[[], bool] | None = None
+        self._raise_for_status: Callable[[Any], Awaitable[None]] | None = None
 
     def _spinup(self) -> None:
         """Start the NeMo-Gym head server and rollout collection helper.
@@ -163,7 +168,13 @@ class NemoGym(EnvironmentInterface):
 
         from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
         from nemo_gym.rollout_collection import RolloutCollectionHelper
-        from nemo_gym.server_utils import HEAD_SERVER_KEY_NAME, BaseServerConfig
+        from nemo_gym.server_utils import (
+            HEAD_SERVER_KEY_NAME,
+            BaseServerConfig,
+            get_response_json,
+            is_global_aiohttp_client_request_debug_enabled,
+            raise_for_status,
+        )
         from omegaconf import DictConfig
 
         RELATIVE_PATH = "nemo_rl/environments/nemo_gym.py"
@@ -251,6 +262,9 @@ Depending on your data shape, you may want to change these values."""
             port=self.head_server_port,
         )
         self.rch = RolloutCollectionHelper()
+        self._get_response_json = get_response_json
+        self._is_request_debug_enabled = is_global_aiohttp_client_request_debug_enabled
+        self._raise_for_status = raise_for_status
 
     async def run_rollouts(
         self,
@@ -258,29 +272,63 @@ Depending on your data shape, you may want to change these values."""
         tokenizer: PreTrainedTokenizerBase,
         timer_prefix: str,
     ) -> list[dict]:
+        assert self._get_response_json is not None
+        assert self._is_request_debug_enabled is not None
+        assert self._raise_for_status is not None
+        get_response_json = self._get_response_json
+        is_request_debug_enabled = self._is_request_debug_enabled
+        raise_for_status = self._raise_for_status
+
         timer = Timer()
 
         timer.start("_run_rollouts_total")
         max_attempts, trial = self.rollout_max_attempts_to_avoid_lp_nan, 0
         while trial < max_attempts:
             nemo_gym_num_rows = len(nemo_gym_examples)
-            nemo_gym_result_iterator = self.rch.run_examples(
-                examples=nemo_gym_examples, head_server_config=self.head_server_config
-            )
+            server_client = self.rch.setup_server_client(self.head_server_config)
+
+            async def _run_example(row: dict) -> tuple[dict, dict]:
+                response = await server_client.post(
+                    server_name=row["agent_ref"]["name"],
+                    url_path="/run",
+                    json=row,
+                )
+                try:
+                    await raise_for_status(response)
+                except Exception:
+                    if is_request_debug_enabled():
+                        print(
+                            "[rollout_collection] /run failed "
+                            f"status={getattr(response, 'status', None)} "
+                            f"row={json.dumps(row, sort_keys=True)}",
+                            flush=True,
+                        )
+                    raise
+                return row, await get_response_json(response)
+
+            rollout_tasks = [
+                asyncio.create_task(_run_example(row)) for row in nemo_gym_examples
+            ]
 
             nemo_rl_rowidxs = []
             nemo_rl_results = []
-            for task in nemo_gym_result_iterator:
-                with timer.time(label=f"{timer_prefix}/await_results"):
-                    nemo_gym_row, nemo_gym_result = await task
+            try:
+                for task in asyncio.as_completed(rollout_tasks):
+                    with timer.time(label=f"{timer_prefix}/await_results"):
+                        nemo_gym_row, nemo_gym_result = await task
 
-                with timer.time(label=f"{timer_prefix}/postprocess_results"):
-                    nemo_rl_result = self._postprocess_nemo_gym_to_nemo_rl_result(
-                        nemo_gym_result, tokenizer
-                    )
+                    with timer.time(label=f"{timer_prefix}/postprocess_results"):
+                        nemo_rl_result = self._postprocess_nemo_gym_to_nemo_rl_result(
+                            nemo_gym_result, tokenizer
+                        )
 
-                nemo_rl_rowidxs.append(nemo_gym_row["_rowidx"])
-                nemo_rl_results.append(nemo_rl_result)
+                    nemo_rl_rowidxs.append(nemo_gym_row["_rowidx"])
+                    nemo_rl_results.append(nemo_rl_result)
+            except (Exception, asyncio.CancelledError):
+                for task in rollout_tasks:
+                    task.cancel()
+                await asyncio.gather(*rollout_tasks, return_exceptions=True)
+                raise
 
             # Invalid behavior logprobs cannot be used to train the policy.
             logprob_contains_nonfinite = False
