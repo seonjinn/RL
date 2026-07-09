@@ -21,7 +21,7 @@ PUBLIC_OUT = (
 
 SNAPSHOT_LABEL = "Evidence reviewed: 2026-07-09"
 CURRENT_WORKTREE = ".worktrees/nemorl-vllm024-upgrade"
-CURRENT_WORKTREE_COMMIT = "d7efad4045656969d3327a6de2caca460900e8e4"
+CURRENT_WORKTREE_COMMIT = "4a776aa7579ea85d8be0bc7ea433138d8aa84d38"
 CURRENT_UPSTREAM_COMMIT = "9e01af64b3891e5bcc01885e10e9ca185b3e3690"
 VLLM_024_COMMIT = "ee0da84ab9e04ac7610e28580af62c365e898389"
 CURRENT_WORKTREE_PROVENANCE = (
@@ -1787,7 +1787,7 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         (ref("veRL", 5801), ref("Miles", 1512), ref("SGLang/vLLM", 46725)),
         "PATCHED LOCALLY / LINUX GPU GATE RUNNING",
         "status-gpu",
-        "Exact vLLM 0.24 source apply, compile, and idempotence pass locally. Lyris Qwen3-32B baseline job 2322955 and Eagle-3 K5 job 2322962 exercise the Linux loader and engine path at commit d7efad40; matched token/logprob parity and a known draft checksum are still required.",
+        "Exact vLLM 0.24 source apply, compile, and idempotence pass locally. Lyris Qwen3-32B baseline job 2322955 completed one full step. The unsafe Eagle job 2322962 was cancelled after its log proved async scheduling was enabled; corrected Eagle-3 K5 job 2323011 uses commit 4a776aa7. Matched token/logprob parity and a known draft checksum are still required.",
     ),
     GapRow(
         "28. Failed refit workers could be reused after partial mutation",
@@ -1834,13 +1834,17 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
     GapRow(
         "31. vLLM 0.24 async scheduling can retain stale speculative placeholder tokens",
         "critical",
-        ("https://github.com/vllm-project/vllm/pull/40768",),
-        "vLLM 0.24 can enable async scheduling for speculative methods, while the upstream fix for stale -1 placeholder tokens after preemption or retry remains open. Those placeholders can reach embedding lookup or corrupt reconstructed output state.",
+        (
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/__init__.py:209-210",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/__init__.py:286-294",
+            "https://github.com/vllm-project/vllm/pull/40768",
+        ),
+        "vLLM 0.24 enabled async scheduling in Lyris Eagle smoke 2322962 while the upstream fix for stale -1 placeholder tokens remains open. The safety patch now forces async_scheduling=false for every SpecDec config and records the resolved value in the startup contract; non-SpecDec configs retain their requested behavior.",
         "Preemption and retry state must clear every speculative placeholder before the request returns to scheduling; performance defaults cannot override an unresolved correctness invariant.",
         (ref("SGLang/vLLM", 40768),),
-        "UNRESOLVED / FORCE-OFF GATE PENDING",
-        "status-unresolved",
-        "Force async_scheduling=false for SpecDec on pinned vLLM 0.24 until the upstream fix is backported and parity-tested. Cover preemption, discard, retry, and request reordering with exact emitted-token and logprob checks before re-enabling it.",
+        "PATCHED LOCALLY / GPU GATE RUNNING",
+        "status-gpu",
+        "Two focused tests and the 77-test safety regression pass. Corrected Lyris Eagle job 2323011 must show async_scheduling=false in both the NeMo runtime contract and vLLM engine config, then complete a real optimization step. Preemption, discard, retry, and request-reordering parity remain required before any future re-enable.",
     ),
 )
 
