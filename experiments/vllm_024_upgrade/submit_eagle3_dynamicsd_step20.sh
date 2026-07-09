@@ -82,12 +82,18 @@ esac
 case "${VARIANT_SELECTION}" in
   all) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 dynamic) ;;
   aggressive) variants=(eagle3_k7 eagle3_k9) ;;
-  baseline|eagle3_k5|eagle3_k7|eagle3_k9|dynamic) variants=("${VARIANT_SELECTION}") ;;
+  compare) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 suffix_k32 pard_k5 pard_k16) ;;
+  baseline|eagle3_k5|eagle3_k7|eagle3_k9|dynamic|suffix_k32|pard_k5|pard_k16) variants=("${VARIANT_SELECTION}") ;;
   *)
-    echo "ERROR: variant must be all, aggressive, baseline, eagle3_k5, eagle3_k7, eagle3_k9, or dynamic" >&2
+    echo "ERROR: variant must be all, aggressive, compare, baseline, eagle3_k5, eagle3_k7, eagle3_k9, dynamic, suffix_k32, pard_k5, or pard_k16" >&2
     exit 2
     ;;
 esac
+
+if [[ "${VARIANT_SELECTION}" == "compare" && "${MODEL_SELECTION}" != "qwen30ba3b" ]]; then
+  echo "ERROR: compare currently supports only qwen30ba3b" >&2
+  exit 2
+fi
 
 submit_one() {
   local model="$1"
@@ -115,7 +121,21 @@ submit_one() {
       ;;
   esac
 
-  if [[ "${MODE}" != "dry-run" && "${variant}" != "baseline" && ! -d "${draft_model}" ]]; then
+  case "${variant}" in
+    suffix_k32)
+      draft_model=""
+      draft_k=32
+      ;;
+    pard_k5|pard_k16)
+      if [[ "${model}" != "qwen30ba3b" ]]; then
+        echo "ERROR: ${variant} currently supports only qwen30ba3b" >&2
+        exit 2
+      fi
+      draft_model="${QWEN30_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
+      ;;
+  esac
+
+  if [[ "${MODE}" != "dry-run" && -n "${draft_model}" && "${variant}" != "baseline" && ! -d "${draft_model}" ]]; then
     echo "ERROR: draft model directory not found: ${draft_model}" >&2
     exit 2
   fi
@@ -135,6 +155,15 @@ submit_one() {
     eagle3_k9)
       draft_k=9
       ;;
+    suffix_k32)
+      draft_k=32
+      ;;
+    pard_k5)
+      draft_k=5
+      ;;
+    pard_k16)
+      draft_k=16
+      ;;
   esac
 
   local overrides=(
@@ -153,20 +182,39 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
-  if [[ "${variant}" != "baseline" ]]; then
-    local specdec_overrides=(
-      "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
-      "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
-      "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
-      "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
-    )
-    if [[ "${variant}" == "dynamic" ]]; then
-      specdec_overrides+=(
-        "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens_per_batch_size=${DYNAMIC_SCHEDULE}"
+  case "${variant}" in
+    baseline)
+      ;;
+    suffix_k32)
+      overrides+=(
+        "++policy.generation.vllm_kwargs.speculative_config.method=suffix"
+        "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
       )
-    fi
-    overrides+=("${specdec_overrides[@]}")
-  fi
+      ;;
+    pard_k5|pard_k16)
+      overrides+=(
+        "++policy.generation.vllm_kwargs.speculative_config.method=draft_model"
+        "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
+        "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+        "++policy.generation.vllm_kwargs.speculative_config.parallel_drafting=true"
+        "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true"
+      )
+      ;;
+    *)
+      overrides+=(
+        "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
+        "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
+        "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+      )
+      if [[ "${variant}" == "dynamic" ]]; then
+        overrides+=(
+          "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens_per_batch_size=${DYNAMIC_SCHEDULE}"
+        )
+      fi
+      ;;
+  esac
 
   local command_env=(
     "WANDB_RUN_ID=${wandb_run_id}"

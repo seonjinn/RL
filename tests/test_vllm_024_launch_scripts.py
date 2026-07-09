@@ -185,6 +185,51 @@ def test_dynamicsd_launcher_all_includes_k7_and_k9() -> None:
     assert "contract-test-attempt-1-qwen30ba3b-eagle3_k9" in output
 
 
+def test_dynamicsd_launcher_qwen30_comparison_includes_all_methods() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "compare",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+    )
+
+    for variant in (
+        "baseline",
+        "eagle3_k5",
+        "eagle3_k7",
+        "eagle3_k9",
+        "suffix_k32",
+        "pard_k5",
+        "pard_k16",
+    ):
+        assert f"contract-test-attempt-1-qwen30ba3b-{variant}" in output
+
+
+def test_dynamicsd_launcher_renders_suffix_k32() -> None:
+    output = _dry_run_dynamicsd("qwen30ba3b", "suffix_k32")
+
+    assert "speculative_config.method=suffix" in output
+    assert "speculative_config.num_speculative_tokens=32" in output
+    assert "speculative_config.model=" not in output
+    assert "speculative_config.draft_tensor_parallel_size" not in output
+
+
+def test_dynamicsd_launcher_renders_pard_with_graph_patch() -> None:
+    output = _dry_run_dynamicsd("qwen30ba3b", "pard_k16")
+
+    assert "speculative_config.method=draft_model" in output
+    assert "speculative_config.num_speculative_tokens=16" in output
+    assert "speculative_config.draft_tensor_parallel_size=1" in output
+    assert "speculative_config.parallel_drafting=true" in output
+    assert "models--amd--PARD-Qwen3-0.6B" in output
+    assert "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true" in output
+
+
 def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
     output = _dry_run_dynamicsd("qwen235b", "eagle3_k9")
 
