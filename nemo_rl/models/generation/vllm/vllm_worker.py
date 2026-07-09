@@ -119,20 +119,21 @@ class BaseVllmGenerationWorker:
                 + f"_{seed}"
             )
 
-            # Give each vLLM engine a deterministic starting port for TP/DP
-            # rendezvous.  vLLM's _get_open_port() reads VLLM_PORT and
-            # auto-increments on collision, so the per-engine spacing
-            # provides headroom.  See the port layout in virtual_cluster.py.
-            if len(local_bundle_indices) == 1:
-                engine_index_on_node = local_bundle_indices[0]
-            else:
-                engine_index_on_node = local_bundle_indices[0] // len(
-                    local_bundle_indices
+            if os.environ.get("NRL_DISABLE_VLLM_PORT_OVERRIDE") != "1":
+                # Give each vLLM engine a deterministic starting port for TP/DP
+                # rendezvous. vLLM's _get_open_port() reads VLLM_PORT and
+                # auto-increments on collision, so the per-engine spacing
+                # provides headroom. See the port layout in virtual_cluster.py.
+                if len(local_bundle_indices) == 1:
+                    engine_index_on_node = local_bundle_indices[0]
+                else:
+                    engine_index_on_node = local_bundle_indices[0] // len(
+                        local_bundle_indices
+                    )
+                env_vars["VLLM_PORT"] = str(
+                    DEFAULT_VLLM_PORT_RANGE_LOW
+                    + engine_index_on_node * DEFAULT_VLLM_PORTS_PER_ENGINE
                 )
-            env_vars["VLLM_PORT"] = str(
-                DEFAULT_VLLM_PORT_RANGE_LOW
-                + engine_index_on_node * DEFAULT_VLLM_PORTS_PER_ENGINE
-            )
 
         # Check if this worker is part of a parallel group (TP or TP+PP).
         # A worker is part of a parallel group if it's a secondary member (local_bundle_indices is None)

@@ -374,3 +374,16 @@ class TestVllmPortAssignment:
 
         _, env_vars, _, _ = BaseVllmGenerationWorker.configure_worker(num_gpus=1)
         assert "VLLM_PORT" not in env_vars
+
+    def test_vllm_port_assignment_can_be_disabled(self, monkeypatch):
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            BaseVllmGenerationWorker,
+        )
+
+        monkeypatch.setenv("NRL_DISABLE_VLLM_PORT_OVERRIDE", "1")
+
+        _, env_vars, _, _ = BaseVllmGenerationWorker.configure_worker(
+            num_gpus=1, bundle_indices=(0, [0, 1, 2, 3])
+        )
+
+        assert "VLLM_PORT" not in env_vars
