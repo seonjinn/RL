@@ -20,6 +20,7 @@ import pytest
 import torch
 
 from nemo_rl.models.generation.vllm.vllm_worker import VllmGenerationWorkerImpl
+from nemo_rl.models.generation.vllm.vllm_generation import VllmGeneration
 from nemo_rl.models.generation.vllm.vllm_worker_async import (
     VllmAsyncGenerationWorkerImpl,
 )
@@ -98,6 +99,95 @@ class _AsyncLifecycleLLM:
 
     async def wake_up(self, **_kwargs: Any) -> None:
         return None
+
+
+def test_sync_prefix_reset_forwards_running_request_preemption() -> None:
+    calls: list[bool] = []
+
+    class Engine:
+        def reset_prefix_cache(self, *, reset_running_requests: bool) -> bool:
+            calls.append(reset_running_requests)
+            return False
+
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.llm = SimpleNamespace(llm_engine=Engine())
+    worker.cfg = {"vllm_cfg": {"async_engine": False}}
+
+    result = worker.reset_prefix_cache(reset_running_requests=True)
+
+    assert result is False
+    assert calls == [True]
+
+
+def test_async_prefix_reset_forwards_running_request_preemption() -> None:
+    async def exercise() -> None:
+        calls: list[bool] = []
+
+        class Engine:
+            async def reset_prefix_cache(self, *, reset_running_requests: bool) -> bool:
+                calls.append(reset_running_requests)
+                return False
+
+        worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+        worker.llm = Engine()
+        worker.cfg = {"vllm_cfg": {"async_engine": True}}
+
+        result = await worker.reset_prefix_cache_async(reset_running_requests=True)
+
+        assert result is False
+        assert calls == [True]
+
+    asyncio.run(exercise())
+
+
+def test_generation_cache_invalidation_preempts_running_requests(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class WorkerGroup:
+        def run_all_workers_single_data(self, method_name: str, **kwargs: Any):
+            calls.append((method_name, kwargs))
+            return [object()]
+
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = WorkerGroup()
+    monkeypatch.setattr("ray.get", lambda _futures: [True])
+
+    assert generation.invalidate_kv_cache() is True
+    assert calls == [
+        (
+            "reset_prefix_cache_async",
+            {
+                "run_rank_0_only_axes": ["tensor_parallel", "pipeline_parallel"],
+                "reset_running_requests": True,
+            },
+        )
+    ]
+
+
+def test_finish_generation_does_not_preempt_running_requests(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class WorkerGroup:
+        def run_all_workers_single_data(self, method_name: str, **kwargs: Any):
+            calls.append((method_name, kwargs))
+            return [object()]
+
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": False},
+        "vllm_cfg": {"async_engine": True},
+    }
+    generation.worker_group = WorkerGroup()
+    monkeypatch.setattr("ray.get", lambda _futures: [True])
+
+    assert generation.finish_generation() is True
+    assert calls == [
+        (
+            "reset_prefix_cache_async",
+            {"run_rank_0_only_axes": ["tensor_parallel", "pipeline_parallel"]},
+        )
+    ]
 
 
 def _make_sync_worker(

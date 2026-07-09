@@ -1080,6 +1080,7 @@ class VllmGeneration(GenerationInterface):
             futures = self.worker_group.run_all_workers_single_data(
                 method_name,
                 run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+                reset_running_requests=True,
             )
             results = ray.get(futures)
             return all(result for result in results if result is not None)
