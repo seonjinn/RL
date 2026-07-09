@@ -211,12 +211,27 @@ def test_dynamicsd_launcher_qwen30_comparison_includes_all_methods() -> None:
 
 
 def test_dynamicsd_launcher_renders_suffix_k32() -> None:
-    output = _dry_run_dynamicsd("qwen30ba3b", "suffix_k32")
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "suffix_k32",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        ARCTIC_OVERLAY="/lustre/users/sna/arctic-inference-0.1.1",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+    )
 
     assert "speculative_config.method=suffix" in output
     assert "speculative_config.num_speculative_tokens=32" in output
     assert "speculative_config.model=" not in output
     assert "speculative_config.draft_tensor_parallel_size" not in output
+    assert (
+        "PYTHONPATH=/lustre/users/sna/arctic-inference-0.1.1:/lustre/users/sna/RL"
+        in output
+    )
 
 
 def test_dynamicsd_launcher_renders_pard_with_graph_patch() -> None:

@@ -26,6 +26,7 @@ fi
 AWS_ROOT="${AWS_ROOT:-/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna}"
 CONTAINER="${CONTAINER:-${AWS_ROOT}/containers/nemo_rl_nightly.sqsh}"
 HF_HOME="${HF_HOME:-${AWS_ROOT}/hf_home}"
+ARCTIC_OVERLAY="${ARCTIC_OVERLAY:-${AWS_ROOT}/python_overlays/arctic-inference-0.1.1-py313-aarch64}"
 WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE:-${AWS_ROOT}/.secrets/wandb_api_key}"
 WANDB_NETRC_HOME="${WANDB_NETRC_HOME:-}"
 WANDB_ENTITY="${WANDB_ENTITY:-nvidia}"
@@ -139,10 +140,18 @@ submit_one() {
     echo "ERROR: draft model directory not found: ${draft_model}" >&2
     exit 2
   fi
+  if [[ "${MODE}" != "dry-run" && "${variant}" == "suffix_k32" && ! -f "${ARCTIC_OVERLAY}/arctic_inference/suffix_decoding/__init__.py" ]]; then
+    echo "ERROR: arctic-inference overlay not found: ${ARCTIC_OVERLAY}" >&2
+    exit 2
+  fi
 
   local run_dir="${EXPERIMENT_ROOT}/${model}/${variant}"
   local wandb_run_id="${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
   local wandb_name="${wandb_run_id}"
+  local runtime_pythonpath="${REPO_DIR}"
+  if [[ "${variant}" == "suffix_k32" ]]; then
+    runtime_pythonpath="${ARCTIC_OVERLAY}:${REPO_DIR}"
+  fi
   local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${model}-${variant}"
   local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${model}-${variant}"
   case "${variant}" in
@@ -221,7 +230,7 @@ submit_one() {
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
     # BaseVllmGenerationWorker assigns a distinct rendezvous window per engine.
-    "PYTHONPATH=${REPO_DIR}"
+    "PYTHONPATH=${runtime_pythonpath}"
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
@@ -246,7 +255,7 @@ submit_one() {
     "BASE_LOG_DIR=${run_dir}"
     "GPUS_PER_NODE=4"
     "HF_HOME=${HF_HOME}"
-    "PYTHONPATH=${REPO_DIR}"
+    "PYTHONPATH=${runtime_pythonpath}"
     "PYTHONDONTWRITEBYTECODE=1"
     "RAY_LOG_SYNC_FREQUENCY=60"
     "TMPDIR=${TMPDIR}"
