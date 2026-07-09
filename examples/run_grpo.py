@@ -24,7 +24,10 @@ from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.utils import setup_response_data
 from nemo_rl.distributed.virtual_cluster import init_ray
-from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models.generation import (
+    configure_generation_config,
+    resolve_vllm_refit_draft_flags,
+)
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
@@ -133,15 +136,9 @@ def main() -> None:
         assert config.policy["generation"] is not None, (
             "A generation config is required for GRPO"
         )
-        speculative_config = (
-            config.policy["generation"].get("vllm_kwargs", {}).get("speculative_config")
+        has_refit_draft_weights, trains_mtp = resolve_vllm_refit_draft_flags(
+            config.policy
         )
-        has_refit_draft_weights = _has_online_refit_draft_weights(
-            config.policy["draft"],
-            speculative_config,
-        )
-        megatron_cfg = config.policy.get("megatron_cfg") or {}
-        trains_mtp = bool(megatron_cfg.get("mtp_num_layers"))
         config.policy["generation"] = configure_generation_config(
             config.policy["generation"],
             tokenizer,

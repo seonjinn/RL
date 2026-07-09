@@ -35,9 +35,10 @@ def _disable_nvtx(monkeypatch: pytest.MonkeyPatch) -> None:
 class _SyncCollectiveRpc:
     def __init__(self, worker_results: list[bool | None]) -> None:
         self.worker_results = worker_results
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def collective_rpc(self, method: str, args: tuple[Any, ...]) -> list[Any]:
-        del args
+        self.calls.append((method, args))
         if method == "report_device_id":
             return ["device-0", "device-1"]
         return self.worker_results
@@ -52,9 +53,10 @@ class _AsyncCollectiveRpc:
     ) -> None:
         self.worker_results = worker_results
         self.return_nested_awaitable = return_nested_awaitable
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     async def collective_rpc(self, method: str, args: tuple[Any, ...]) -> Any:
-        del args
+        self.calls.append((method, args))
         if method == "report_device_id":
             return ["device-0", "device-1"]
         if not self.return_nested_awaitable:
@@ -212,6 +214,32 @@ def test_async_mtp_startup_accepts_complete_load() -> None:
     asyncio.run(worker.post_init_async())
 
     assert worker.vllm_device_ids == ["device-0", "device-1"]
+
+
+def test_sync_prepare_refit_forwards_mtp_draft_requirement() -> None:
+    worker = _make_sync_worker([True])
+    worker.cfg["_mtp_weights_from_refit"] = True
+    state_dict_info = {"model.weight": (torch.Size([1]), torch.float32)}
+
+    worker.prepare_refit_info(state_dict_info)
+
+    assert worker.llm.calls[-1] == (
+        "prepare_refit_info",
+        (state_dict_info, True),
+    )
+
+
+def test_async_prepare_refit_forwards_mtp_draft_requirement() -> None:
+    worker = _make_async_worker([True])
+    worker.cfg["_mtp_weights_from_refit"] = True
+    state_dict_info = {"model.weight": (torch.Size([1]), torch.float32)}
+
+    asyncio.run(worker.prepare_refit_info_async(state_dict_info))
+
+    assert worker.llm.calls[-1] == (
+        "prepare_refit_info",
+        (state_dict_info, True),
+    )
 
 
 def test_sync_sleep_wake_uses_level_one_and_preserves_drafter() -> None:

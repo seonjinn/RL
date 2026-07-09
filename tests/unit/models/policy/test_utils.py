@@ -25,6 +25,7 @@ import zmq
 
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
+    _validate_ipc_reply,
     aggregate_per_sample_handles,
     calculate_aligned_size,
     ensure_teacher_ipc_buffer,
@@ -32,6 +33,15 @@ from nemo_rl.models.policy.utils import (
     rebuild_cuda_tensor_from_ipc,
     stream_weights_via_ipc_zmq_impl,
 )
+
+
+def test_validate_ipc_reply_accepts_ack() -> None:
+    _validate_ipc_reply(IPCProtocol.ACK.value.encode(), "worker", 0)
+
+
+def test_validate_ipc_reply_rejects_generation_error() -> None:
+    with pytest.raises(RuntimeError, match="generation worker rejected"):
+        _validate_ipc_reply(b"error:RuntimeError: failed", "worker", 2)
 
 
 class TestGetMegatronCheckpointDir:
@@ -130,7 +140,7 @@ class _FakeIpcSocket:
         self.sent.append(payload)
 
     def recv(self):
-        return b""
+        return IPCProtocol.ACK.value.encode()
 
     def getsockopt(self, _option):
         return 0
@@ -305,7 +315,7 @@ def client_process(
                 offset += calculate_aligned_size(size_in_bytes)
 
             assert offset == used_bytes, f"Offset mismatch: {offset} != {used_bytes}"
-            socket.send(b"")
+            socket.send(IPCProtocol.ACK.value.encode())
 
         result_queue.put(("success", "All tensors validated"))
     except Exception as e:

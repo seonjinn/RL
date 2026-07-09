@@ -103,6 +103,21 @@ class IPCProtocol(Enum):
 
     COMPLETE = "complete"
     ACK = "ack"
+    ERROR = "error"
+
+
+def _validate_ipc_reply(reply: bytes, worker_name: str, rank: int) -> None:
+    if reply == IPCProtocol.ACK.value.encode():
+        return
+    message = reply.decode(errors="replace")
+    if message.startswith(IPCProtocol.ERROR.value):
+        raise RuntimeError(
+            f"{worker_name} (rank {rank}): generation worker rejected the "
+            f"weight update: {message}"
+        )
+    raise RuntimeError(
+        f"{worker_name} (rank {rank}): unexpected IPC weight-update reply: {message!r}"
+    )
 
 
 # TODO: Replace this hard-coded map with a generic plugin-registration
@@ -383,7 +398,7 @@ def stream_weights_via_ipc_zmq_impl(
         cuda_ipc_handle = get_handle_from_tensor(buffer)
 
         if await_recv:
-            zmq_socket.recv()
+            _validate_ipc_reply(zmq_socket.recv(), worker_name, rank)
 
         # Payload tuple: (cuda_ipc_handle, param_names, used_bytes)
         payload = (cuda_ipc_handle, param_names, used_bytes)
@@ -460,12 +475,12 @@ def stream_weights_via_ipc_zmq_impl(
 
         # Complete transmission
         if await_recv:
-            zmq_socket.recv()
+            _validate_ipc_reply(zmq_socket.recv(), worker_name, rank)
 
         # Final synchronization and completion signal
         torch.cuda.current_stream().synchronize()
         zmq_socket.send_pyobj(IPCProtocol.COMPLETE)
-        zmq_socket.recv()
+        _validate_ipc_reply(zmq_socket.recv(), worker_name, rank)
 
         if rank == 0:
             print(

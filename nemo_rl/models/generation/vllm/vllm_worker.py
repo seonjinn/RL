@@ -35,7 +35,10 @@ from nemo_rl.models.generation.interfaces import (
     GenerationOutputSpec,
     verify_right_padding,
 )
-from nemo_rl.models.generation.vllm.config import VllmConfig
+from nemo_rl.models.generation.vllm.config import (
+    MTP_SPECULATIVE_METHODS,
+    VllmConfig,
+)
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
 from nemo_rl.models.generation.vllm.utils import (
     extract_generated_token_logprobs,
@@ -343,7 +346,7 @@ class BaseVllmGenerationWorker:
         self._mtp_load_from_disk: bool = (
             load_format == "dummy"
             and spec_cfg is not None
-            and spec_cfg.get("method") in ("deepseek_mtp", "mtp")
+            and spec_cfg.get("method") in MTP_SPECULATIVE_METHODS
             and not mtp_weights_from_refit
         )
 
@@ -921,7 +924,10 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
 
     def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
         """Prepare the info for refit."""
-        self.llm.collective_rpc("prepare_refit_info", args=(state_dict_info,))
+        self.llm.collective_rpc(
+            "prepare_refit_info",
+            args=(state_dict_info, bool(self.cfg.get("_mtp_weights_from_refit"))),
+        )
 
     @wrap_with_nvtx_name("vllm_genertion_worker/update_weights_via_ipc_zmq")
     def update_weights_via_ipc_zmq(self) -> bool:

@@ -21,7 +21,10 @@ from nemo_rl.algorithms.distillation import MasterConfig, distillation_train, se
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.utils import setup_response_data
 from nemo_rl.distributed.virtual_cluster import init_ray
-from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models.generation import (
+    configure_generation_config,
+    resolve_vllm_refit_draft_flags,
+)
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
@@ -72,8 +75,14 @@ def main() -> None:
     tokenizer = get_tokenizer(config.policy["tokenizer"])
 
     if config.policy["generation"] is not None:
+        has_refit_draft_weights, trains_mtp = resolve_vllm_refit_draft_flags(
+            config.policy
+        )
         config.policy["generation"] = configure_generation_config(
-            config.policy["generation"], tokenizer
+            config.policy["generation"],
+            tokenizer,
+            has_refit_draft_weights=has_refit_draft_weights,
+            trains_mtp=trains_mtp,
         )
     else:
         print("  ⚠️ No generation config found, this may cause issues")

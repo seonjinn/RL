@@ -175,6 +175,101 @@ def _patch_vllm_llama_eagle3_own_lm_head(logger) -> None:
     logger.info("Successfully patched llama_eagle3 lm_head ownership.")
 
 
+def _patch_vllm_online_eagle_head_ownership(logger) -> None:
+    """Keep an online-refit Eagle head distinct before CUDA graph capture."""
+    file_to_patch = _get_vllm_file("v1/spec_decode/llm_base_proposer.py")
+    marker = "online_refit_uses_dummy_drafter"
+    old_snippet = "        self.model = self._get_model()\n\n"
+    new_snippet = (
+        "        self.model = self._get_model()\n\n"
+        "        draft_load_config = self.speculative_config.draft_load_config\n"
+        "        draft_load_format = getattr(draft_load_config, 'load_format', None)\n"
+        "        draft_load_format = getattr(draft_load_format, 'value', draft_load_format)\n"
+        "        online_refit_uses_dummy_drafter = (\n"
+        "            self.speculative_config.method in ('eagle', 'eagle3')\n"
+        "            and draft_load_config is not None\n"
+        "            and str(draft_load_format).lower() == 'dummy'\n"
+        "        )\n"
+        "        if online_refit_uses_dummy_drafter:\n"
+        "            self.model.has_own_lm_head = True\n"
+        "            self.model.has_own_embed_tokens = False\n\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if marker in content:
+            logger.info("Online Eagle head ownership patch already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the online Eagle head ownership patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched online Eagle head ownership.")
+
+
+def _patch_vllm_draft_model_load_config(logger) -> None:
+    """Make the generic draft-model proposer honor draft_load_config."""
+    file_to_patch = _get_vllm_file("v1/spec_decode/draft_model.py")
+    new_line = "            load_config=spec.draft_load_config or base.load_config,\n"
+    old_snippet = (
+        "        return replace(\n            base,\n            quant_config=None,\n"
+    )
+    new_snippet = (
+        "        return replace(\n"
+        "            base,\n"
+        "            load_config=spec.draft_load_config or base.load_config,\n"
+        "            quant_config=None,\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if new_line in content:
+            logger.info("Generic draft-model load-config patch already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the generic draft-model load-config patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched generic draft-model load config.")
+
+
+def _patch_vllm_medusa_load_config(logger) -> None:
+    """Make the Medusa proposer honor draft_load_config."""
+    file_to_patch = _get_vllm_file("v1/spec_decode/medusa.py")
+    new_line = (
+        "                load_config=self.spec_config.draft_load_config "
+        "or self.vllm_config.load_config,\n"
+    )
+    old_snippet = (
+        "            self.model = get_model(\n"
+        "                vllm_config=self.vllm_config,\n"
+        "                model_config=self.spec_config.draft_model_config,\n"
+        "            )\n"
+    )
+    new_snippet = (
+        "            self.model = get_model(\n"
+        "                vllm_config=self.vllm_config,\n"
+        "                model_config=self.spec_config.draft_model_config,\n"
+        "                load_config=self.spec_config.draft_load_config "
+        "or self.vllm_config.load_config,\n"
+        "            )\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if new_line in content:
+            logger.info("Medusa load-config patch already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the Medusa load-config patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched Medusa draft load config.")
+
+
 def _patch_vllm_hermes_tool_parser_thread_safety(logger) -> None:
     """Patch Hermes2ProToolParser.__init__ to cache tokenizer calls.
 
@@ -312,4 +407,7 @@ def _apply_vllm_patches(
     patch_logger.info("Successfully patched vllm _init_workers_ray.")
 
     _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
+    _patch_vllm_online_eagle_head_ownership(patch_logger)
+    _patch_vllm_draft_model_load_config(patch_logger)
+    _patch_vllm_medusa_load_config(patch_logger)
     _patch_vllm_hermes_tool_parser_thread_safety(patch_logger)

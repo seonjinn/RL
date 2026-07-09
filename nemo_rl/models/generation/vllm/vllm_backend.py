@@ -19,6 +19,7 @@ from typing import Any
 import torch
 import zmq
 
+from nemo_rl.models.generation.vllm.config import MTP_SPECULATIVE_METHODS
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
     calculate_aligned_size,
@@ -115,7 +116,9 @@ def _read_mtp_layer_weights_from_checkpoint(
     shard_to_names: dict[str, list[str]] = {}
     for name, shard in weight_map.items():
         match = layer_re.search(name)
-        if match is not None and int(match.group(1)) in mtp_layer_indices:
+        if name.startswith("mtp.") or (
+            match is not None and int(match.group(1)) in mtp_layer_indices
+        ):
             shard_to_names.setdefault(shard, []).append(name)
 
     weights: list[tuple[str, torch.Tensor]] = []
@@ -194,7 +197,11 @@ class VllmInternalWorkerExtension:
             self.zmq_socket.setsockopt(zmq.LINGER, 0)
             self.zmq_socket.connect(self.get_zmq_address())
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        require_mtp_draft_weights: bool = False,
+    ) -> None:
         """Prepare state dict metadata for weight refitting and IPC streaming.
 
         Args:
@@ -202,6 +209,92 @@ class VllmInternalWorkerExtension:
                 e.g. {tensor_name: (shape, dtype)}
         """
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
+        self.require_mtp_draft_weights = require_mtp_draft_weights
+
+    def _begin_weight_update(self) -> None:
+        if getattr(self, "_pending_draft_weights", None) is not None:
+            raise RuntimeError("A vLLM weight update is already in progress.")
+        self._pending_draft_weights: list[tuple[str, torch.Tensor]] | None = []
+        self._observed_update_weight_names: set[str] | None = set()
+        self._draft_weights_updated = False
+
+    def _abort_weight_update(self) -> None:
+        self._pending_draft_weights = None
+        self._observed_update_weight_names = None
+        self._draft_weights_updated = False
+
+    def _draft_update_requires_atomic_load(self) -> bool:
+        vllm_config = getattr(self.model_runner, "vllm_config", None)
+        speculative_config = getattr(vllm_config, "speculative_config", None)
+        return getattr(speculative_config, "method", None) in MTP_SPECULATIVE_METHODS
+
+    def _process_weights_after_update(self, *, draft_weights_updated: bool) -> None:
+        from vllm.config import set_current_vllm_config
+        from vllm.model_executor.model_loader.utils import (
+            process_weights_after_loading,
+        )
+
+        with set_current_vllm_config(self.model_runner.vllm_config):
+            process_weights_after_loading(
+                self.model_runner.model, self.model_config, self.device
+            )
+            if draft_weights_updated:
+                draft_owner = getattr(self.model_runner, "drafter", None)
+                draft_model = (
+                    getattr(draft_owner, "model", None) if draft_owner else None
+                )
+                if draft_model is None:
+                    raise RuntimeError(
+                        "Draft weights were updated but the vLLM drafter is unavailable."
+                    )
+                speculative_config = self.model_runner.vllm_config.speculative_config
+                process_weights_after_loading(
+                    draft_model,
+                    speculative_config.draft_model_config,
+                    self.device,
+                )
+
+    def _finish_weight_update(self) -> None:
+        pending_draft_weights = getattr(self, "_pending_draft_weights", None)
+        observed_names = getattr(self, "_observed_update_weight_names", None)
+        if pending_draft_weights is None or observed_names is None:
+            raise RuntimeError("No vLLM weight update is in progress.")
+
+        try:
+            expected_names = set(self.state_dict_info)
+            missing_names = expected_names - observed_names
+            unexpected_names = observed_names - expected_names
+            if missing_names:
+                raise RuntimeError(
+                    "The vLLM refit transport completed with missing weights: "
+                    f"{sorted(missing_names)}"
+                )
+            if unexpected_names:
+                raise RuntimeError(
+                    "The vLLM refit transport received unexpected weights: "
+                    f"{sorted(unexpected_names)}"
+                )
+
+            draft_weights_updated = bool(pending_draft_weights) or bool(
+                self._draft_weights_updated
+            )
+            if (
+                getattr(self, "require_mtp_draft_weights", False)
+                and self._draft_update_requires_atomic_load()
+            ):
+                from vllm.distributed.parallel_state import get_pp_group
+
+                if get_pp_group().is_last_rank and not draft_weights_updated:
+                    raise RuntimeError(
+                        "MTP refit completed without draft weights on the drafter-owner "
+                        "pipeline rank. Check the trainer export names and MTP routing."
+                    )
+            self._load_draft_weights(pending_draft_weights)
+            self._process_weights_after_update(
+                draft_weights_updated=draft_weights_updated
+            )
+        finally:
+            self._abort_weight_update()
 
     def _maybe_process_fp8_kv_cache(self) -> None:
         """Process weights after loading for FP8 KV cache (static scales)."""
@@ -234,6 +327,40 @@ class VllmInternalWorkerExtension:
                 target_device,
             )
 
+    def _get_mtp_layer_indices(self) -> set[int]:
+        draft_owner = getattr(self.model_runner, "drafter", None)
+        draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+        predictor = getattr(draft_model, "model", draft_model)
+        mtp_start_layer_idx = getattr(predictor, "mtp_start_layer_idx", None)
+        num_mtp_layers = getattr(predictor, "num_mtp_layers", None)
+        if not isinstance(mtp_start_layer_idx, int) or not isinstance(
+            num_mtp_layers, int
+        ):
+            vllm_config = getattr(self.model_runner, "vllm_config", None)
+            speculative_config = getattr(vllm_config, "speculative_config", None)
+            draft_model_config = getattr(speculative_config, "draft_model_config", None)
+            draft_hf_config = getattr(draft_model_config, "hf_config", None)
+            mtp_start_layer_idx = getattr(
+                draft_hf_config, "num_hidden_layers", mtp_start_layer_idx
+            )
+            for field in (
+                "n_predict",
+                "num_nextn_predict_layers",
+                "mtp_num_hidden_layers",
+            ):
+                value = getattr(draft_hf_config, field, None)
+                if isinstance(value, int):
+                    num_mtp_layers = value
+                    break
+
+        if (
+            not isinstance(mtp_start_layer_idx, int)
+            or not isinstance(num_mtp_layers, int)
+            or num_mtp_layers < 1
+        ):
+            return set()
+        return set(range(mtp_start_layer_idx, mtp_start_layer_idx + num_mtp_layers))
+
     def _split_policy_and_draft_weights(
         self,
         weights: list[tuple[str, torch.Tensor]],
@@ -244,24 +371,18 @@ class VllmInternalWorkerExtension:
         retain their HF layer names, so route layers owned by the vLLM MTP
         predictor, including persistent buffers, to the drafter as well.
         """
-        draft_owner = getattr(self.model_runner, "drafter", None)
-        draft_model = getattr(draft_owner, "model", None) if draft_owner else None
-        predictor = getattr(draft_model, "model", draft_model)
-        mtp_start_layer_idx = getattr(predictor, "mtp_start_layer_idx", None)
-        num_mtp_layers = getattr(predictor, "num_mtp_layers", None)
-        mtp_layer_indices = (
-            set(range(mtp_start_layer_idx, mtp_start_layer_idx + num_mtp_layers))
-            if isinstance(mtp_start_layer_idx, int)
-            and isinstance(num_mtp_layers, int)
-            and num_mtp_layers > 0
-            else set()
-        )
+        uses_mtp_specdec = self._draft_update_requires_atomic_load()
+        mtp_layer_indices = self._get_mtp_layer_indices() if uses_mtp_specdec else set()
 
         policy_weights = []
         draft_weights = []
         for key, tensor in weights:
             if key.startswith("draft."):
                 draft_weights.append((key.removeprefix("draft."), tensor))
+                continue
+
+            if uses_mtp_specdec and key.startswith("mtp."):
+                draft_weights.append((key, tensor))
                 continue
 
             layer_match = re.search(r"(?:^|\.)layers\.(\d+)\.", key)
@@ -357,19 +478,14 @@ class VllmInternalWorkerExtension:
                 "on the last pipeline rank."
             )
 
-        predictor = draft_model.model
-        mtp_layer_indices = set(
-            range(
-                predictor.mtp_start_layer_idx,
-                predictor.mtp_start_layer_idx + predictor.num_mtp_layers,
-            )
-        )
+        mtp_layer_indices = self._get_mtp_layer_indices()
         weights = _read_mtp_layer_weights_from_checkpoint(model_path, mtp_layer_indices)
         if not weights:
             raise ValueError(
-                f"No MTP layer weights for layers {sorted(mtp_layer_indices)} "
+                "No MTP draft weights "
+                f"for resolved layers {sorted(mtp_layer_indices)} "
                 f"found in checkpoint at {model_path}. The checkpoint must "
-                f"include MTP layer weights to run deepseek_mtp speculative decoding."
+                "include an mtp.* namespace or the resolved MTP layer indices."
             )
 
         self._load_draft_weights(weights)
@@ -401,6 +517,7 @@ class VllmInternalWorkerExtension:
         """
         from nemo_rl.models.generation.vllm.quantization import fp8
 
+        source_weight_names = {key for key, _ in weights}
         if (
             "Gemma3ForConditionalGeneration"
             in self.model_runner.vllm_config.model_config.architectures
@@ -409,12 +526,42 @@ class VllmInternalWorkerExtension:
                 weights[idx] = (fix_gemma3_vision_weight_name(key), weight)
 
         policy_weights, draft_weights = self._split_policy_and_draft_weights(weights)
-        if fp8.is_fp8_model(self.model_runner.vllm_config):
-            fp8.load_weights(policy_weights, self.model_runner)
-        else:
-            self.model_runner.model.load_weights(weights=policy_weights)
+        if policy_weights:
+            if fp8.is_fp8_model(self.model_runner.vllm_config):
+                fp8.load_weights(policy_weights, self.model_runner)
+            else:
+                self.model_runner.model.load_weights(weights=policy_weights)
 
-        self._load_draft_weights(draft_weights)
+        if draft_weights:
+            draft_owner = getattr(self.model_runner, "drafter", None)
+            draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+            if draft_model is None:
+                from vllm.distributed.parallel_state import get_pp_group
+
+                if get_pp_group().is_last_rank:
+                    raise RuntimeError(
+                        "Received draft weights but the vLLM drafter is unavailable "
+                        "on the last pipeline rank."
+                    )
+                draft_weights = []
+
+        observed_names = getattr(self, "_observed_update_weight_names", None)
+        pending_draft_weights = getattr(self, "_pending_draft_weights", None)
+        if observed_names is not None and pending_draft_weights is not None:
+            observed_names.update(source_weight_names)
+            if draft_weights and self._draft_update_requires_atomic_load():
+                pending_draft_weights.extend(
+                    (
+                        key,
+                        tensor.detach().to(device="cpu", copy=True),
+                    )
+                    for key, tensor in draft_weights
+                )
+            elif draft_weights:
+                self._load_draft_weights(draft_weights)
+                self._draft_weights_updated = True
+        else:
+            self._load_draft_weights(draft_weights)
 
     @wrap_with_nvtx_name("vllm_internal_worker_extension/update_weights_via_ipc_zmq")
     def update_weights_via_ipc_zmq(self) -> bool:
@@ -425,25 +572,20 @@ class VllmInternalWorkerExtension:
         """
         buffer = None
         weights = None
+        reply_pending = False
 
         try:
             self.maybe_init_zmq()
+            self._begin_weight_update()
             while True:
                 # Blocking receive with timeout (this is the main operation)
                 payload = self.zmq_socket.recv_pyobj()
+                reply_pending = True
 
                 if payload == IPCProtocol.COMPLETE:
-                    # means the update is done
-                    from vllm.config import set_current_vllm_config
-                    from vllm.model_executor.model_loader.utils import (
-                        process_weights_after_loading,
-                    )
-
-                    with set_current_vllm_config(self.model_runner.vllm_config):
-                        process_weights_after_loading(
-                            self.model_runner.model, self.model_config, self.device
-                        )
+                    self._finish_weight_update()
                     self.zmq_socket.send(IPCProtocol.ACK.value.encode())
+                    reply_pending = False
                     break
 
                 ipc_handle, list_keys, used_bytes = payload
@@ -489,14 +631,19 @@ class VllmInternalWorkerExtension:
                 weights = None
                 buffer = None
                 self.zmq_socket.send(IPCProtocol.ACK.value.encode())
-
-            # Process weights after loading for FP8 KV cache
-            self._maybe_process_fp8_kv_cache()
+                reply_pending = False
 
             gc.collect()
             torch.cuda.empty_cache()
             return True
         except Exception as e:
+            self._abort_weight_update()
+            if reply_pending:
+                try:
+                    error_message = f"{IPCProtocol.ERROR.value}:{type(e).__name__}: {e}"
+                    self.zmq_socket.send(error_message.encode()[:4096])
+                except zmq.ZMQError:
+                    pass
             print(
                 f"Error in VllmInternalWorkerExtension.update_weights_via_ipc_zmq: {e}.\n"
                 f"{traceback.format_exc()}"
@@ -516,6 +663,7 @@ class VllmInternalWorkerExtension:
         load_model_weight_func = self._load_weights
 
         try:
+            self._begin_weight_update()
             packed_broadcast_consumer(
                 iterator=iter(self.state_dict_info.items()),
                 group=self.model_update_group,
@@ -523,17 +671,11 @@ class VllmInternalWorkerExtension:
                 post_unpack_func=load_model_weight_func,
             )
 
-            # Process weights after loading
-            from vllm.model_executor.model_loader.utils import (
-                process_weights_after_loading,
-            )
-
-            process_weights_after_loading(
-                self.model_runner.model, self.model_config, self.device
-            )
-            self._maybe_process_fp8_kv_cache()
+            torch.cuda.synchronize(self.device)
+            self._finish_weight_update()
 
         except Exception as e:
+            self._abort_weight_update()
             print(
                 f"Error in VllmInternalWorkerExtension.update_weights_from_collective: {e}"
             )

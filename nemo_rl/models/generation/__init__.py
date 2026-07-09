@@ -13,17 +13,20 @@
 # limitations under the License.
 import json
 import warnings
+from collections.abc import Mapping
 from typing import Any, cast
 
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.models.generation.interfaces import GenerationConfig
-from nemo_rl.models.generation.vllm import VllmConfig
+from nemo_rl.models.generation.vllm.config import (
+    MTP_SPECULATIVE_METHODS,
+    VllmConfig,
+)
 
 TokenizerType = PreTrainedTokenizerBase
 
 _ONLINE_REFIT_SPEC_METHODS = {"eagle", "eagle3"}
-_EMBEDDED_MTP_SPEC_METHODS = {"deepseek_mtp", "mtp"}
 _MODEL_FREE_SPEC_METHODS = {"suffix", "ngram"}
 _STATIC_NEURAL_EXTERNAL_DRAFT_METHODS = {
     "draft_model",
@@ -48,13 +51,14 @@ def _uses_static_neural_external_drafter(
     if speculative_config.get("model") is None:
         return False
     method = speculative_config.get("method")
-    return method not in _EMBEDDED_MTP_SPEC_METHODS.union(_MODEL_FREE_SPEC_METHODS)
+    return method not in MTP_SPECULATIVE_METHODS.union(_MODEL_FREE_SPEC_METHODS)
 
 
 def validate_vllm_speculative_config(
     config: VllmConfig,
     *,
     has_refit_draft_weights: bool,
+    is_eval: bool,
 ) -> None:
     speculative_config = _get_speculative_config(config)
     if speculative_config is None:
@@ -81,10 +85,30 @@ def validate_vllm_speculative_config(
     if method == "pard2":
         raise ValueError("speculative_config.method='pard2' is not supported")
 
+    if (
+        method in MTP_SPECULATIVE_METHODS
+        and speculative_config.get("model")
+        and not is_eval
+    ):
+        raise ValueError(
+            "Explicit MTP methods with an external speculative_config.model are "
+            "not supported by NeMo-RL's dummy-target refit path. Omit method to "
+            "use vLLM model auto-detection or use an embedded target MTP module."
+        )
+
     if has_refit_draft_weights and method not in _ONLINE_REFIT_SPEC_METHODS:
         raise ValueError(
             "Online draft refit only supports speculative methods 'eagle' and "
             f"'eagle3'. Got method={method!r}."
+        )
+    if (
+        has_refit_draft_weights
+        and method in _ONLINE_REFIT_SPEC_METHODS
+        and config["vllm_cfg"].get("pipeline_parallel_size", 1) != 1
+    ):
+        raise ValueError(
+            "Online Eagle refit requires vLLM pipeline parallelism PP=1 because "
+            "vLLM 0.24 does not share target embeddings with the draft across PP ranks."
         )
 
     if method in _STATIC_NEURAL_EXTERNAL_DRAFT_METHODS and not speculative_config.get(
@@ -143,6 +167,37 @@ def get_vllm_specdec_runtime_contract(
     }
 
 
+def resolve_vllm_refit_draft_flags(
+    policy_config: Mapping[str, Any],
+) -> tuple[bool, bool]:
+    """Derive online-draft and MTP refit ownership from a policy config."""
+    generation_config = policy_config.get("generation") or {}
+    if generation_config.get("backend") != "vllm":
+        return False, False
+
+    draft_config = policy_config.get("draft") or {}
+    has_refit_draft_weights = bool(draft_config.get("enabled", False))
+    if has_refit_draft_weights:
+        speculative_config = generation_config.get("vllm_kwargs", {}).get(
+            "speculative_config"
+        )
+        if not speculative_config:
+            raise ValueError(
+                "policy.draft.enabled=true requires "
+                "policy.generation.vllm_kwargs.speculative_config"
+            )
+        method = speculative_config.get("method")
+        if method not in _ONLINE_REFIT_SPEC_METHODS:
+            raise ValueError(
+                "policy.draft.enabled=true only supports speculative methods "
+                f"'eagle' and 'eagle3'. Got method={method!r}."
+            )
+
+    megatron_config = policy_config.get("megatron_cfg") or {}
+    trains_mtp = bool(megatron_config.get("mtp_num_layers"))
+    return has_refit_draft_weights, trains_mtp
+
+
 def configure_generation_config(
     config: GenerationConfig,
     tokenizer: TokenizerType,
@@ -170,8 +225,19 @@ def configure_generation_config(
         validate_vllm_speculative_config(
             config,
             has_refit_draft_weights=has_refit_draft_weights,
+            is_eval=is_eval,
         )
         speculative_config = _get_speculative_config(config)
+        if speculative_config is not None and has_refit_draft_weights:
+            draft_load_config = speculative_config.setdefault(
+                "draft_load_config", {"load_format": "dummy"}
+            )
+            if draft_load_config.get("load_format") != "dummy":
+                raise ValueError(
+                    "Online Eagle refit requires draft_load_config.load_format="
+                    "'dummy' so target and draft LM-head ownership is established "
+                    "before the first refit."
+                )
         if (
             speculative_config is not None
             and not is_eval

@@ -16,6 +16,30 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from nemo_rl.models.generation.interfaces import GenerationConfig
 
+MTP_SPECULATIVE_METHODS = frozenset(
+    {
+        "deepseek_mtp",
+        "mimo_mtp",
+        "mimo_v2_mtp",
+        "glm4_moe_mtp",
+        "glm4_moe_lite_mtp",
+        "glm_ocr_mtp",
+        "ernie_mtp",
+        "nemotron_h_mtp",
+        "exaone_moe_mtp",
+        "exaone4_5_mtp",
+        "qwen3_next_mtp",
+        "qwen3_5_mtp",
+        "longcat_flash_mtp",
+        "minimax_m3_mtp",
+        "mtp",
+        "pangu_ultra_moe_mtp",
+        "step3p5_mtp",
+        "hy_v3_mtp",
+        "gemma4_mtp",
+    }
+)
+
 
 class VllmSpecificArgs(TypedDict):
     tensor_parallel_size: int

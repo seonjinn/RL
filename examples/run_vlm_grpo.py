@@ -23,7 +23,10 @@ from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.utils import setup_response_data
 from nemo_rl.distributed.virtual_cluster import init_ray
-from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models.generation import (
+    configure_generation_config,
+    resolve_vllm_refit_draft_flags,
+)
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
@@ -92,8 +95,12 @@ def main() -> None:
     assert config.policy["generation"] is not None, (
         "A generation config is required for GRPO"
     )
+    has_refit_draft_weights, trains_mtp = resolve_vllm_refit_draft_flags(config.policy)
     config.policy["generation"] = configure_generation_config(
-        config.policy["generation"], processor.tokenizer
+        config.policy["generation"],
+        processor.tokenizer,
+        has_refit_draft_weights=has_refit_draft_weights,
+        trains_mtp=trains_mtp,
     )
     if "vllm_cfg" in config.policy["generation"]:
         assert (

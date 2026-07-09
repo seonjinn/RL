@@ -526,6 +526,41 @@ def test_configure_generation_config_keeps_dummy_startup_weights_with_draft_refi
     )
 
     assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "dummy"
+    }
+
+
+def test_resolve_vllm_refit_draft_flags_from_policy_config() -> None:
+    from nemo_rl.models.generation import resolve_vllm_refit_draft_flags
+
+    policy_config = {
+        "draft": {"enabled": True},
+        "megatron_cfg": {"mtp_num_layers": 1},
+        "generation": {
+            "backend": "vllm",
+            "vllm_kwargs": {
+                "speculative_config": {
+                    "method": "eagle3",
+                    "model": "/tmp/draft-model",
+                }
+            },
+        },
+    }
+
+    assert resolve_vllm_refit_draft_flags(policy_config) == (True, True)
+
+
+def test_resolve_vllm_refit_draft_flags_rejects_missing_spec_config() -> None:
+    from nemo_rl.models.generation import resolve_vllm_refit_draft_flags
+
+    with pytest.raises(ValueError, match="policy.draft.enabled=true requires"):
+        resolve_vllm_refit_draft_flags(
+            {
+                "draft": {"enabled": True},
+                "generation": {"backend": "vllm", "vllm_kwargs": {}},
+            }
+        )
 
 
 def test_online_draft_refit_rejects_generic_draft_model_method():
@@ -553,6 +588,49 @@ def test_online_draft_refit_rejects_generic_draft_model_method():
         )
 
 
+def test_online_eagle_refit_rejects_pipeline_parallelism() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_cfg"]["pipeline_parallel_size"] = 2
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/eagle3-model",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(ValueError, match="Online Eagle refit requires.*PP=1"):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            has_refit_draft_weights=True,
+        )
+
+
+def test_online_eagle_refit_rejects_non_dummy_draft_load() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/eagle3-model",
+            "num_speculative_tokens": 3,
+            "draft_load_config": {"load_format": "auto"},
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="Online Eagle refit requires draft_load_config.load_format='dummy'",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            has_refit_draft_weights=True,
+        )
+
+
 def test_pard2_method_fails_before_vllm_startup():
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_kwargs"] = {
@@ -574,6 +652,37 @@ def test_pard2_method_fails_before_vllm_startup():
             is_eval=False,
             has_refit_draft_weights=False,
         )
+
+
+def test_explicit_external_mtp_model_fails_before_vllm_startup() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "mtp",
+            "model": "/tmp/external-mtp-model",
+            "num_speculative_tokens": 1,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(ValueError, match="Explicit MTP methods with an external"):
+        configure_generation_config(vllm_config, tokenizer, is_eval=False)
+
+
+def test_explicit_external_mtp_model_is_allowed_for_eval() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "mtp",
+            "model": "/tmp/external-mtp-model",
+            "num_speculative_tokens": 1,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(vllm_config, tokenizer, is_eval=True)
+
+    assert configured["vllm_cfg"]["load_format"] == "auto"
 
 
 @pytest.mark.parametrize("rejection_sample_method", ["probabilistic", "synthetic"])
@@ -903,7 +1012,16 @@ def test_run_grpo_only_enables_online_refit_for_eagle_methods():
     )
 
 
-@pytest.mark.parametrize("method", ["deepseek_mtp", "mtp"])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "deepseek_mtp",
+        "mimo_mtp",
+        "nemotron_h_mtp",
+        "qwen3_5_mtp",
+        "mtp",
+    ],
+)
 def test_configure_generation_config_keeps_dummy_startup_weights_for_mtp(method):
     """MTP keeps dummy startup weights even without draft refit.
 

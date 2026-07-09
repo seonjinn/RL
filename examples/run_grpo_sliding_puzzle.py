@@ -34,7 +34,10 @@ from nemo_rl.environments.games.sliding_puzzle import (
     SlidingPuzzleGameLogic,
     SlidingPuzzleMetadata,
 )
-from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models.generation import (
+    configure_generation_config,
+    resolve_vllm_refit_draft_flags,
+)
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
@@ -238,8 +241,12 @@ def main():
 
     with rl_init_timer.time("tokenizer"):
         tokenizer = get_tokenizer(config.policy["tokenizer"])
+    has_refit_draft_weights, trains_mtp = resolve_vllm_refit_draft_flags(config.policy)
     config.policy["generation"] = configure_generation_config(
-        config.policy["generation"], tokenizer
+        config.policy["generation"],
+        tokenizer,
+        has_refit_draft_weights=has_refit_draft_weights,
+        trains_mtp=trains_mtp,
     )
 
     with rl_init_timer.time("data"):

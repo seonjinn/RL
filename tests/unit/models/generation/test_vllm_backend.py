@@ -17,6 +17,7 @@
 # module collectable in the non-vllm unit lane, where these tests are deselected.
 
 import contextlib
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -29,6 +30,14 @@ import torch
 from safetensors.torch import save_file
 
 
+@pytest.fixture(autouse=True)
+def _stub_top_level_vllm_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if importlib.util.find_spec("vllm") is None:
+        monkeypatch.setitem(sys.modules, "vllm", ModuleType("vllm"))
+
+
 def _make_collective_update_extension(backend):
     ext = backend.VllmInternalWorkerExtension.__new__(
         backend.VllmInternalWorkerExtension
@@ -36,7 +45,7 @@ def _make_collective_update_extension(backend):
     state_info = object()
     ext.state_dict_info = {"model.weight": state_info}
     ext.model_update_group = object()
-    ext.model_runner = SimpleNamespace(model=object())
+    ext.model_runner = SimpleNamespace(model=object(), vllm_config=object())
     ext.model_config = object()
     ext.device = object()
     return ext, state_info
@@ -136,6 +145,9 @@ def test_split_policy_and_draft_weights_routes_mtp_layers_and_buffers() -> None:
     predictor = SimpleNamespace(mtp_start_layer_idx=2, num_mtp_layers=1)
     draft_model = SimpleNamespace(model=predictor)
     ext = _make_extension_for_draft_load(draft_model)
+    ext.model_runner.vllm_config = SimpleNamespace(
+        speculative_config=SimpleNamespace(method="mtp")
+    )
     policy_weight = torch.randn(1)
     mtp_weight = torch.randn(1)
     mtp_buffer = torch.randn(1)
@@ -169,6 +181,53 @@ def test_split_policy_and_draft_weights_keeps_eagle_prefix_contract() -> None:
 
     assert policy_weights == []
     assert draft_weights == [("fc.weight", weight)]
+
+
+@pytest.mark.vllm
+def test_split_policy_and_draft_weights_routes_qwen_mtp_namespace() -> None:
+    ext = _make_extension_for_draft_load(draft_model=SimpleNamespace())
+    ext.model_runner.vllm_config = SimpleNamespace(
+        speculative_config=SimpleNamespace(method="mtp")
+    )
+    weight = torch.randn(1)
+
+    policy_weights, draft_weights = ext._split_policy_and_draft_weights(
+        [("mtp.layers.0.self_attn.q_proj.weight", weight)]
+    )
+
+    assert policy_weights == []
+    assert draft_weights == [("mtp.layers.0.self_attn.q_proj.weight", weight)]
+
+
+@pytest.mark.vllm
+def test_split_policy_and_draft_weights_keeps_mtp_namespace_without_mtp_specdec() -> (
+    None
+):
+    ext = _make_extension_for_draft_load(draft_model=None)
+    ext.model_runner.vllm_config = SimpleNamespace(speculative_config=None)
+    weight = torch.randn(1)
+
+    policy_weights, draft_weights = ext._split_policy_and_draft_weights(
+        [("mtp.layers.0.self_attn.q_proj.weight", weight)]
+    )
+
+    assert policy_weights == [("mtp.layers.0.self_attn.q_proj.weight", weight)]
+    assert draft_weights == []
+
+
+@pytest.mark.vllm
+def test_mtp_layer_indices_fall_back_to_draft_model_config() -> None:
+    draft_model = SimpleNamespace(model=SimpleNamespace())
+    ext = _make_extension_for_draft_load(draft_model)
+    ext.model_runner.vllm_config = SimpleNamespace(
+        speculative_config=SimpleNamespace(
+            draft_model_config=SimpleNamespace(
+                hf_config=SimpleNamespace(num_hidden_layers=32, n_predict=2)
+            )
+        )
+    )
+
+    assert ext._get_mtp_layer_indices() == {32, 33}
 
 
 @pytest.mark.vllm
@@ -268,6 +327,231 @@ def test_load_draft_weights_rejects_incompatible_loader_result(
 
 
 @pytest.mark.vllm
+def test_weight_update_accumulates_draft_chunks_and_postprocesses_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(
+        load_weights=MagicMock(return_value={"layer0.weight", "layer1.weight"})
+    )
+    target_model = SimpleNamespace(load_weights=MagicMock())
+    draft_model_config = object()
+    vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(
+            method="mtp", draft_model_config=draft_model_config
+        ),
+    )
+    ext = _make_extension_for_draft_load(draft_model)
+    ext.model_runner.model = target_model
+    ext.model_runner.vllm_config = vllm_config
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {
+        "draft.layer0.weight": object(),
+        "draft.layer1.weight": object(),
+    }
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+    process_weights = _patch_vllm_postload(monkeypatch)
+
+    ext._begin_weight_update()
+    ext._load_weights([("draft.layer0.weight", torch.ones(1))])
+    ext._load_weights([("draft.layer1.weight", torch.ones(1))])
+
+    draft_model.load_weights.assert_not_called()
+    ext._finish_weight_update()
+
+    loaded_names = [
+        name for name, _ in draft_model.load_weights.call_args.kwargs["weights"]
+    ]
+    assert loaded_names == ["layer0.weight", "layer1.weight"]
+    assert all(
+        tensor.device.type == "cpu"
+        for _, tensor in draft_model.load_weights.call_args.kwargs["weights"]
+    )
+    assert process_weights.call_args_list == [
+        ((target_model, ext.model_config, ext.device),),
+        ((draft_model, draft_model_config, ext.device),),
+    ]
+
+
+@pytest.mark.vllm
+def test_weight_update_rejects_missing_transport_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=None))
+    target_model = SimpleNamespace(load_weights=MagicMock())
+    ext = _make_extension_for_draft_load(draft_model)
+    ext.model_runner.model = target_model
+    ext.model_runner.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(
+            method="mtp",
+            draft_model_config=SimpleNamespace(
+                hf_config=SimpleNamespace(num_hidden_layers=32, n_predict=1)
+            ),
+        ),
+    )
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {
+        "draft.layer0.weight": object(),
+        "draft.layer1.weight": object(),
+    }
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+
+    ext._begin_weight_update()
+    ext._load_weights([("draft.layer0.weight", torch.ones(1))])
+
+    with pytest.raises(RuntimeError, match="missing weights.*draft.layer1.weight"):
+        ext._finish_weight_update()
+    draft_model.load_weights.assert_not_called()
+
+
+@pytest.mark.vllm
+def test_mtp_refit_owner_rejects_update_without_draft_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=None))
+    target_model = SimpleNamespace(load_weights=MagicMock())
+    ext = _make_extension_for_draft_load(draft_model)
+    ext.model_runner.model = target_model
+    ext.model_runner.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(method="mtp", draft_model_config=object()),
+    )
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {"model.layers.0.self_attn.q_proj.weight": object()}
+    ext.require_mtp_draft_weights = True
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+    _patch_pp_rank(monkeypatch, is_last_rank=True)
+
+    ext._begin_weight_update()
+    ext._load_weights([("model.layers.0.self_attn.q_proj.weight", torch.ones(1))])
+
+    with pytest.raises(RuntimeError, match="MTP refit completed without draft weights"):
+        ext._finish_weight_update()
+    draft_model.load_weights.assert_not_called()
+
+
+@pytest.mark.vllm
+def test_eagle_weight_update_loads_each_chunk_without_full_draft_staging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=None))
+    ext = _make_extension_for_draft_load(draft_model)
+    ext.model_runner.model = SimpleNamespace(load_weights=MagicMock())
+    ext.model_runner.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(
+            method="eagle3", draft_model_config=object()
+        ),
+    )
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {
+        "draft.layer0.weight": object(),
+        "draft.layer1.weight": object(),
+    }
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+    _patch_vllm_postload(monkeypatch)
+
+    ext._begin_weight_update()
+    ext._load_weights([("draft.layer0.weight", torch.ones(1))])
+    ext._load_weights([("draft.layer1.weight", torch.ones(1))])
+
+    assert draft_model.load_weights.call_count == 2
+    assert ext._pending_draft_weights == []
+    ext._finish_weight_update()
+
+
+@pytest.mark.vllm
+def test_weight_update_skips_draft_load_on_non_owner_pipeline_rank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_model = SimpleNamespace(load_weights=MagicMock())
+    ext = _make_extension_for_draft_load(draft_model=None)
+    ext.model_runner.model = target_model
+    ext.model_runner.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(
+            method="mtp",
+            draft_model_config=SimpleNamespace(
+                hf_config=SimpleNamespace(num_hidden_layers=32, n_predict=1)
+            ),
+        ),
+    )
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {
+        "draft.layer0.weight": object(),
+        "model.layers.32.self_attn.q_proj.weight": object(),
+    }
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+    _patch_pp_rank(monkeypatch, is_last_rank=False)
+    process_weights = _patch_vllm_postload(monkeypatch)
+
+    ext._begin_weight_update()
+    ext._load_weights(
+        [
+            ("draft.layer0.weight", torch.ones(1)),
+            ("model.layers.32.self_attn.q_proj.weight", torch.ones(1)),
+        ]
+    )
+    ext._finish_weight_update()
+
+    process_weights.assert_called_once_with(target_model, ext.model_config, ext.device)
+    target_model.load_weights.assert_not_called()
+
+
+@pytest.mark.vllm
+def test_weight_update_rejects_missing_drafter_on_owner_pipeline_rank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ext = _make_extension_for_draft_load(draft_model=None)
+    ext.model_runner.model = SimpleNamespace(load_weights=MagicMock())
+    ext.model_runner.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(draft_model_config=object()),
+    )
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {"draft.layer0.weight": object()}
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+    _patch_pp_rank(monkeypatch, is_last_rank=True)
+
+    ext._begin_weight_update()
+    with pytest.raises(RuntimeError, match="drafter is unavailable.*last pipeline"):
+        ext._load_weights([("draft.layer0.weight", torch.ones(1))])
+
+
+@pytest.mark.vllm
 def test_update_weights_from_collective_processes_weights_after_loading(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend
 
@@ -287,6 +571,7 @@ def test_update_weights_from_collective_processes_weights_after_loading(monkeypa
     def load_weights(weights):
         call_order.append("load")
         assert weights == [("model.weight", "weight-value")]
+        ext._observed_update_weight_names.add("model.weight")
 
     def packed_broadcast_consumer(iterator, group, src, post_unpack_func):
         call_order.append("broadcast")
@@ -303,6 +588,11 @@ def test_update_weights_from_collective_processes_weights_after_loading(monkeypa
     monkeypatch.setattr(vllm_backend.gc, "collect", lambda: call_order.append("gc"))
     monkeypatch.setattr(
         vllm_backend.torch.cuda,
+        "synchronize",
+        lambda _device=None: call_order.append("sync"),
+    )
+    monkeypatch.setattr(
+        vllm_backend.torch.cuda,
         "empty_cache",
         lambda: call_order.append("empty_cache"),
     )
@@ -310,7 +600,46 @@ def test_update_weights_from_collective_processes_weights_after_loading(monkeypa
     assert ext.update_weights_from_collective() is True
 
     assert process_calls == [(ext.model_runner.model, ext.model_config, ext.device)]
-    assert call_order == ["broadcast", "load", "process", "kv", "gc", "empty_cache"]
+    assert call_order == [
+        "broadcast",
+        "load",
+        "sync",
+        "process",
+        "gc",
+        "empty_cache",
+    ]
+
+
+@pytest.mark.vllm
+def test_ipc_weight_update_replies_with_error_when_complete_validation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def recv_pyobj(self):
+            return vllm_backend.IPCProtocol.COMPLETE
+
+        def send(self, payload: bytes) -> None:
+            self.sent.append(payload)
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.state_dict_info = {"missing.weight": object()}
+    ext.zmq_socket = FakeSocket()
+    ext.maybe_init_zmq = lambda: None
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+
+    assert ext.update_weights_via_ipc_zmq() is False
+    assert len(ext.zmq_socket.sent) == 1
+    assert ext.zmq_socket.sent[0].startswith(
+        vllm_backend.IPCProtocol.ERROR.value.encode()
+    )
 
 
 @pytest.mark.vllm
@@ -349,6 +678,30 @@ def test_read_mtp_layer_weights_from_checkpoint_filters_and_reads(tmp_path):
     }
     assert torch.equal(by_name["model.layers.2.mlp.up_proj.weight"], mtp_block)
     assert torch.equal(by_name["model.layers.2.shared_head.head.weight"], mtp_head)
+
+
+@pytest.mark.vllm
+def test_read_mtp_layer_weights_from_checkpoint_includes_mtp_namespace(tmp_path):
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        _read_mtp_layer_weights_from_checkpoint,
+    )
+
+    model_dir = tmp_path / "ckpt"
+    mtp_weight = torch.randn(4, 4)
+    _write_sharded_checkpoint(
+        model_dir,
+        {
+            "model-00001-of-00001.safetensors": {
+                "mtp.layers.0.self_attn.q_proj.weight": mtp_weight,
+                "model.layers.0.self_attn.q_proj.weight": torch.randn(4, 4),
+            }
+        },
+    )
+
+    weights = _read_mtp_layer_weights_from_checkpoint(str(model_dir), {32})
+
+    assert [name for name, _ in weights] == ["mtp.layers.0.self_attn.q_proj.weight"]
+    assert torch.equal(weights[0][1], mtp_weight)
 
 
 @pytest.mark.vllm
@@ -441,6 +794,6 @@ def test_load_mtp_weights_from_disk_raises_when_mtp_weights_missing(
     ext = _make_extension_with_drafter(mtp_start_layer_idx=2, num_mtp_layers=1)
     _patch_vllm_postload(monkeypatch)
 
-    with pytest.raises(ValueError, match="No MTP layer weights"):
+    with pytest.raises(ValueError, match="No MTP draft weights"):
         ext.load_mtp_weights_from_disk(str(model_dir))
     ext._load_draft_weights.assert_not_called()
