@@ -15,6 +15,7 @@
 import os
 from contextlib import contextmanager
 from importlib.util import find_spec
+from typing import Any
 
 
 def _get_vllm_file(relative_path: str) -> str:
@@ -674,7 +675,10 @@ def _patch_vllm_hermes_tool_parser_thread_safety(logger) -> None:
 
 
 def _apply_vllm_patches(
-    py_executable: str, *, extra_env_vars: list[str] | None = None
+    py_executable: str,
+    *,
+    extra_env_vars: list[str] | None = None,
+    speculative_config: dict[str, Any] | None,
 ) -> None:
     # Import lazily so importing the worker module does not import vLLM.
     from vllm.logger import init_logger
@@ -684,14 +688,21 @@ def _apply_vllm_patches(
     _patch_vllm_init_workers_ray(py_executable, extra_env_vars)
     patch_logger.info("Successfully patched vllm _init_workers_ray.")
 
-    _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
-    _patch_vllm_online_eagle_head_ownership(patch_logger)
-    _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)
-    _patch_vllm_v2_dflash_load_config(patch_logger)
-    _patch_vllm_qwen3_draft_loader_results(patch_logger)
-    _patch_vllm_llama_draft_loader_result(patch_logger)
-    _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
-    _patch_vllm_draft_model_load_config(patch_logger)
-    _patch_vllm_medusa_load_config(patch_logger)
-    _patch_vllm_draft_model_cudagraph_keys(patch_logger)
+    if speculative_config:
+        _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
+        _patch_vllm_online_eagle_head_ownership(patch_logger)
+        _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)
+        _patch_vllm_v2_dflash_load_config(patch_logger)
+        _patch_vllm_qwen3_draft_loader_results(patch_logger)
+        _patch_vllm_llama_draft_loader_result(patch_logger)
+        if (
+            speculative_config.get("rejection_sample_method", "standard")
+            == "standard"
+            and speculative_config.get("draft_sample_method", "greedy")
+            == "probabilistic"
+        ):
+            _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
+        _patch_vllm_draft_model_load_config(patch_logger)
+        _patch_vllm_medusa_load_config(patch_logger)
+        _patch_vllm_draft_model_cudagraph_keys(patch_logger)
     _patch_vllm_hermes_tool_parser_thread_safety(patch_logger)
