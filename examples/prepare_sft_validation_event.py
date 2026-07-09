@@ -17,8 +17,6 @@
 """Produce a deterministic SFT validation event artifact."""
 
 import argparse
-import hashlib
-import json
 import random
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -44,7 +42,7 @@ from nemo_rl.algorithms.sft_validation_artifact import (
     PrecomputedValidationEvent,
     ValidationArtifactEligibility,
     save_validation_event,
-    tensor_content_sha256,
+    validation_event_payload_sha256,
 )
 from nemo_rl.algorithms.sft_validation_provenance import (
     _validation_dataset_configs,
@@ -229,20 +227,7 @@ def build_precomputed_validation_event(
 def digest_validation_event_data(data: Mapping[str, object]) -> str:
     """Return the canonical digest of the persisted artifact payload."""
     payload_data = _event_tensor_data(data, clone_tensors=False)
-    records: dict[str, object] = {}
-    for key, value in sorted(payload_data.items()):
-        if isinstance(value, torch.Tensor):
-            records[key] = {
-                "type": "tensor",
-                "dtype": str(value.dtype),
-                "sha256": tensor_content_sha256(value),
-                "shape": list(value.shape),
-            }
-        else:
-            records[key] = {"type": "list", "value": value}
-    return hashlib.sha256(
-        json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return validation_event_payload_sha256(payload_data)
 
 
 def _validate_packed_processor_contract(val_dataset: AllTaskProcessedDataset) -> None:

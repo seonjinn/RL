@@ -67,20 +67,23 @@ _ELIGIBILITY_KEYS = frozenset(
     }
 )
 _REQUIRED_SFT_TENSOR_KEYS = frozenset(
-    {"input_ids", "input_lengths", "sample_mask", "token_mask"}
+    {
+        "input_ids",
+        "input_lengths",
+        "processed_token_counts",
+        "sample_mask",
+        "token_mask",
+    }
 )
 _OPTIONAL_SFT_TENSOR_KEYS = frozenset({"position_ids", "target_ids"})
-_OPTIONAL_BATCH_SFT_TENSOR_KEYS = frozenset({"processed_token_counts"})
 _PACKED_SFT_TENSOR_KEYS = frozenset(
     {"packed_cu_seqlens", "packed_cu_seqlens_lengths", "packed_max_seqlens"}
 )
 _ALLOWED_SFT_TENSOR_KEYS = (
-    _REQUIRED_SFT_TENSOR_KEYS
-    | _OPTIONAL_SFT_TENSOR_KEYS
-    | _OPTIONAL_BATCH_SFT_TENSOR_KEYS
-    | _PACKED_SFT_TENSOR_KEYS
+    _REQUIRED_SFT_TENSOR_KEYS | _OPTIONAL_SFT_TENSOR_KEYS | _PACKED_SFT_TENSOR_KEYS
 )
-_ALLOWED_SFT_METADATA_KEYS = frozenset({"idx", "task_name"})
+_REQUIRED_SFT_METADATA_KEYS = frozenset({"idx", "task_name"})
+_ALLOWED_SFT_METADATA_KEYS = _REQUIRED_SFT_METADATA_KEYS
 _FINGERPRINT_KEYS = frozenset(
     {
         "container_sha256",
@@ -204,6 +207,34 @@ def tensor_content_sha256(tensor: torch.Tensor) -> str:
     ).hexdigest()
 
 
+def validation_event_payload_sha256(data: Mapping[str, object]) -> str:
+    """Return a canonical digest covering tensors and ordered list metadata."""
+    tensors: dict[str, torch.Tensor] = {}
+    metadata: dict[str, list[Any]] = {}
+    for key, value in sorted(data.items()):
+        if isinstance(value, torch.Tensor):
+            _require_named_cpu_tensor(key, value)
+            tensors[key] = value
+        elif key in _ALLOWED_SFT_METADATA_KEYS and isinstance(value, list):
+            metadata[key] = value
+        else:
+            _require_named_cpu_tensor(key, value)
+    _validate_sft_tensor_schema(tensors)
+    _validate_sft_metadata(metadata, tensors["input_ids"].shape[0])
+
+    records: dict[str, object] = {}
+    for key, tensor in sorted(tensors.items()):
+        records[key] = {
+            "type": "tensor",
+            "dtype": str(tensor.dtype),
+            "sha256": tensor_content_sha256(tensor),
+            "shape": list(tensor.shape),
+        }
+    for key, values in sorted(metadata.items()):
+        records[key] = {"type": "list", "value": values}
+    return hashlib.sha256(_canonical_json_bytes(records)).hexdigest()
+
+
 def save_validation_event(
     artifact_directory: Path,
     event: PrecomputedValidationEvent,
@@ -216,7 +247,9 @@ def save_validation_event(
     tensors = _event_tensors(event.data)
     metadata = _event_metadata(event.data, tensors["input_ids"].shape[0])
     retained_bytes = sum(tensor.nbytes for tensor in tensors.values())
-    _validate_event_metadata(event, retained_bytes)
+    persisted_data = BatchedDataDict[Any]({**tensors, **metadata})
+    payload_digest = validation_event_payload_sha256(persisted_data)
+    _validate_event_metadata(event, retained_bytes, payload_digest)
 
     artifact_directory.mkdir(parents=True, exist_ok=True)
     manifest_path = artifact_directory / _MANIFEST_FILE_NAME
@@ -230,7 +263,7 @@ def save_validation_event(
             "fingerprint": _fingerprint_as_manifest(fingerprint),
             "metadata": metadata,
             "num_valid_tokens": list(event.num_valid_tokens),
-            "payload_digest": event.payload_digest,
+            "payload_digest": payload_digest,
             "retained_bytes": retained_bytes,
             "tensor_file": tensor_file,
             "tensor_file_sha256": tensor_file_sha256,
@@ -309,6 +342,10 @@ def load_validation_event(
     payload_digest = manifest["payload_digest"]
     if not isinstance(payload_digest, str):
         raise ValueError("Validation artifact payload_digest must be a string")
+    if validation_event_payload_sha256(data) != payload_digest:
+        raise ValueError(
+            "Validation artifact payload digest does not match loaded data"
+        )
     return PrecomputedValidationEvent(
         data=data,
         num_valid_tokens=tuple(num_valid_tokens),
@@ -429,7 +466,9 @@ def _eligibility_from_manifest(value: object) -> ValidationArtifactEligibility:
 
 
 def _validate_event_metadata(
-    event: PrecomputedValidationEvent, retained_bytes: int
+    event: PrecomputedValidationEvent,
+    retained_bytes: int,
+    payload_digest: str,
 ) -> None:
     if (
         not isinstance(event.num_valid_tokens, tuple)
@@ -444,6 +483,8 @@ def _validate_event_metadata(
         )
     if not isinstance(event.payload_digest, str):
         raise TypeError("payload_digest must be a string")
+    if event.payload_digest != payload_digest:
+        raise ValueError("payload_digest does not match validation event data")
     if not _is_nonnegative_int(event.retained_bytes):
         raise ValueError("retained_bytes must be a non-negative integer")
     if event.retained_bytes != retained_bytes:
@@ -491,13 +532,12 @@ def _validate_sft_tensor_shapes(shapes: Mapping[str, tuple[int, ...]]) -> None:
     batch_size, sequence_length = input_ids_shape
     expected_shapes = {
         "input_lengths": (batch_size,),
+        "processed_token_counts": (batch_size,),
         "sample_mask": (batch_size,),
         "token_mask": (batch_size, sequence_length),
     }
     for key in _OPTIONAL_SFT_TENSOR_KEYS & shapes.keys():
         expected_shapes[key] = (batch_size, sequence_length)
-    for key in _OPTIONAL_BATCH_SFT_TENSOR_KEYS & shapes.keys():
-        expected_shapes[key] = (batch_size,)
     packed_keys = shapes.keys() & _PACKED_SFT_TENSOR_KEYS
     if packed_keys:
         expected_shapes["packed_cu_seqlens_lengths"] = (batch_size,)
@@ -525,6 +565,11 @@ def _validate_sft_metadata(metadata: object, batch_size: int) -> None:
     if unknown_keys:
         raise ValueError(
             f"Validation artifact has unknown SFT metadata keys: {unknown_keys}"
+        )
+    missing_keys = sorted(_REQUIRED_SFT_METADATA_KEYS - set(metadata))
+    if missing_keys:
+        raise ValueError(
+            f"Validation artifact is missing required SFT metadata keys: {missing_keys}"
         )
     for key, values in metadata.items():
         if not isinstance(key, str) or not isinstance(values, list):
@@ -865,11 +910,12 @@ def _load_manifest(manifest_path: Path) -> dict[str, object]:
         raise ValueError("Validation artifact manifest could not be read") from error
     if not isinstance(manifest, dict):
         raise ValueError("Validation artifact manifest must be a JSON object")
-    _require_exact_keys(manifest, _MANIFEST_KEYS, "manifest")
-    if type(manifest["artifact_version"]) is not int:
+    artifact_version = manifest.get("artifact_version")
+    if type(artifact_version) is not int:
         raise ValueError("Validation artifact artifact_version must be an integer")
-    if manifest["artifact_version"] != _ARTIFACT_VERSION:
+    if artifact_version != _ARTIFACT_VERSION:
         raise ValueError("Unsupported validation artifact version")
+    _require_exact_keys(manifest, _MANIFEST_KEYS, "manifest")
     tensor_file = manifest["tensor_file"]
     tensor_file_sha256 = manifest["tensor_file_sha256"]
     if not isinstance(tensor_file, str) or not isinstance(tensor_file_sha256, str):
@@ -906,8 +952,7 @@ def _validate_manifest_metadata(manifest: Mapping[str, object]) -> None:
         raise ValueError(
             "Validation artifact num_valid_tokens must contain non-negative integers"
         )
-    if not isinstance(manifest["payload_digest"], str):
-        raise ValueError("Validation artifact payload_digest must be a string")
+    _require_sha256(manifest["payload_digest"], "payload_digest")
     retained_bytes = manifest["retained_bytes"]
     if not _is_nonnegative_int(retained_bytes):
         raise ValueError("Validation artifact retained_bytes must be non-negative")

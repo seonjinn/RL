@@ -297,6 +297,7 @@ successful returns remain after their corresponding `finally` blocks.
   deterministic sample count when stronger fingerprint evidence is required.
 - Audit mode intentionally performs worker RPCs, local tensor reductions, and
   host-visible state reads. It must remain disabled in timed performance runs.
-- Precomputed artifacts omit producer-only `idx`; ordered persisted
-  `input_ids` remain their sample-identity evidence. Live and CPU-cache runtime
-  paths independently include `idx` when present.
+- Artifact schema v3 persists `idx` and `task_name` as ordered manifest metadata
+  and `processed_token_counts` as a safetensor. The canonical payload digest
+  binds those fields to the tensor payload, so load fails closed if any sample
+  identity or token-count evidence is missing or changed.
