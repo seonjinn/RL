@@ -21,7 +21,7 @@ PUBLIC_OUT = (
 
 SNAPSHOT_LABEL = "Evidence reviewed: 2026-07-09"
 CURRENT_WORKTREE = ".worktrees/nemorl-vllm024-upgrade"
-CURRENT_WORKTREE_COMMIT = "4a776aa7579ea85d8be0bc7ea433138d8aa84d38"
+CURRENT_WORKTREE_COMMIT = "259103830790d0270033f4113d1d46778ddc84e3"
 CURRENT_UPSTREAM_COMMIT = "9e01af64b3891e5bcc01885e10e9ca185b3e3690"
 VLLM_024_COMMIT = "ee0da84ab9e04ac7610e28580af62c365e898389"
 CURRENT_WORKTREE_PROVENANCE = (
@@ -1785,9 +1785,9 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         "A receipt-less loader made a complete load, a partial load, and a silent skip indistinguishable. The safety patch rejects None and patches the exact vLLM 0.24 Qwen3 Eagle-3 and DFlash loaders to return the loaded-name set after required post-load buffer construction.",
         "A drafter update is valid only when the receiver independently reports what it loaded; sender-name equality alone cannot prove packed, aliased, PP-skipped, or EP-sharded coverage.",
         (ref("veRL", 5801), ref("Miles", 1512), ref("SGLang/vLLM", 46725)),
-        "PATCHED LOCALLY / LINUX GPU GATE RUNNING",
-        "status-gpu",
-        "Exact vLLM 0.24 source apply, compile, and idempotence pass locally. Lyris Qwen3-32B baseline job 2322955 completed one full step. The unsafe Eagle job 2322962 was cancelled after its log proved async scheduling was enabled; corrected Eagle-3 K5 job 2323011 uses commit 4a776aa7. Matched token/logprob parity and a known draft checksum are still required.",
+        "PATCHED LOCALLY / GPU SMOKE VERIFIED",
+        "status-unit",
+        "Exact vLLM 0.24 source apply, compile, and idempotence pass locally. Lyris Qwen3-32B baseline job 2322955 and corrected Eagle-3 K5 job 2323011 each completed one full optimization step. Job 2323011 used CUDA graphs, async_scheduling=false, draft TP1, target TP2, and reported mean acceptance length 2.40-2.82. Matched token/logprob parity and a known draft checksum are still required before accuracy or step-20 performance claims.",
     ),
     GapRow(
         "28. Failed refit workers could be reused after partial mutation",
@@ -1842,9 +1842,39 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         "vLLM 0.24 enabled async scheduling in Lyris Eagle smoke 2322962 while the upstream fix for stale -1 placeholder tokens remains open. The safety patch now forces async_scheduling=false for every SpecDec config and records the resolved value in the startup contract; non-SpecDec configs retain their requested behavior.",
         "Preemption and retry state must clear every speculative placeholder before the request returns to scheduling; performance defaults cannot override an unresolved correctness invariant.",
         (ref("SGLang/vLLM", 40768),),
-        "PATCHED LOCALLY / GPU GATE RUNNING",
-        "status-gpu",
-        "Two focused tests and the 77-test safety regression pass. Corrected Lyris Eagle job 2323011 must show async_scheduling=false in both the NeMo runtime contract and vLLM engine config, then complete a real optimization step. Preemption, discard, retry, and request-reordering parity remain required before any future re-enable.",
+        "PATCHED LOCALLY / GPU SMOKE VERIFIED",
+        "status-unit",
+        "Two focused tests and the 77-test safety regression pass. Corrected Lyris Eagle job 2323011 showed async_scheduling=false in both the NeMo runtime contract and vLLM engine config, then completed rollout, reward, logprob, and policy training with SLURM COMPLETED 0:0. Preemption, discard, retry, and request-reordering parity remain required before any future re-enable.",
+    ),
+    GapRow(
+        "32. The Lyris nightly image is date-pinned but not digest-locked",
+        "high",
+        (
+            f"{CURRENT_WORKTREE}/experiments/vllm_024_upgrade/cluster-lyris.yaml",
+            "Lyris jobs 2322955 and 2323011: submissions.tsv container_sha256 is empty",
+        ),
+        "The current jobs identify nemo_rl_nightly_20260707.sqsh but do not record a SHA256 digest. A replaced or partially staged file with the same name would make an otherwise exact code/config result irreproducible.",
+        "Runtime provenance is part of the experiment contract: code commit, recursive submodule commits, container digest, model revisions, and materialized config must be immutable and recorded together.",
+        (),
+        "UNRESOLVED / PROVENANCE GATE",
+        "status-unresolved",
+        "Generate and verify a SHA256 sidecar for the staged image, make launchers reject an empty or mismatched digest, and record the digest in submissions.tsv and the report before step-20 performance claims.",
+    ),
+    GapRow(
+        "33. Ray runtime environments persisted the W&B API credential",
+        "critical",
+        (
+            f"{CURRENT_WORKTREE}/nemo_rl/distributed/virtual_cluster.py:33-53",
+            f"{CURRENT_WORKTREE}/nemo_rl/distributed/worker_groups.py:441-452",
+            f"{CURRENT_WORKTREE}/tests/unit/distributed/test_virtual_cluster.py:165-202",
+            f"{CURRENT_WORKTREE}/tests/unit/distributed/test_worker_groups.py:453-473",
+        ),
+        "Ray received a full copy of the driver environment, and its runtime-env agent serialized that mapping to persistent logs. The safety patch removes WANDB_API_KEY at the driver, actor-runtime, and worker-group boundaries, including explicit recipe env mappings, while preserving ordinary runtime variables.",
+        "Logging credentials belong in a node-local credential store or scoped secret channel, never in an actor runtime specification that control-plane logs can persist.",
+        (),
+        "PATCHED LOCALLY / UNIT VERIFIED; ROTATION REQUIRED",
+        "status-unit",
+        "Four Ray init/helper tests and three real worker-actor env tests pass. Rotate the historically exposed credential, then run a short cluster smoke and verify only the absence predicate without printing matching log lines. W&B authentication should use the existing node-local netrc/credential setup.",
     ),
 )
 
@@ -2280,7 +2310,9 @@ def build_html() -> str:
         esc(CURRENT_UPSTREAM_COMMIT)
     }</code>. It is not represented as merged or upstreamed.</p>
       <p>The main matrix compares veRL, slime, Miles, SGLang/vLLM, and the matching NeMo-RL action. The deep audit exposes every confirmed defect, local patch state, and remaining validation gate in table rows rather than hiding them in prose.</p>
-      <p class="security-note"><strong>Operational blocker:</strong> a W&amp;B credential was observed in persisted Ray logs during the cluster audit. Rotate the credential before long runs and stop persisting full environment dumps. The credential is intentionally not reproduced here.</p>
+      <p class="security-note"><strong>Operational blocker:</strong> a W&amp;B credential was observed in persisted Ray logs during the cluster audit. Commit <code>{
+        esc(CURRENT_WORKTREE_COMMIT[:8])
+    }</code> filters it from Ray runtime environments, but the historically exposed credential must still be rotated before long runs. The credential is intentionally not reproduced here.</p>
       <div class="legend" aria-label="Audit status legend">
         <span class="status status-unit">{
         status_counts["status-unit"]
