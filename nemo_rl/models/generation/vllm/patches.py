@@ -257,7 +257,11 @@ def _patch_vllm_v2_eagle_load_config_and_ownership(logger) -> None:
 
 def _patch_vllm_v2_dflash_load_config(logger) -> None:
     """Give Model Runner V2 DFlash an independent draft load contract."""
-    file_to_patch = _get_vllm_file("v1/worker/gpu/spec_decode/dflash/utils.py")
+    try:
+        file_to_patch = _get_vllm_file("v1/worker/gpu/spec_decode/dflash/utils.py")
+    except RuntimeError:
+        logger.info("DFlash is not installed in this vLLM build; skipping its patch.")
+        return
     old_snippet = (
         '    with set_model_tag("dflash_head"):\n'
         "        dflash_model = get_model(\n"
@@ -309,7 +313,16 @@ def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
     )
 
     for relative_path, old_snippet, new_snippet in patches:
-        file_to_patch = _get_vllm_file(relative_path)
+        try:
+            file_to_patch = _get_vllm_file(relative_path)
+        except RuntimeError:
+            if relative_path.endswith("qwen3_dflash.py"):
+                logger.info(
+                    "Qwen3 DFlash is not installed in this vLLM build; "
+                    "skipping its loader patch."
+                )
+                continue
+            raise
         with _locked_file_patch(file_to_patch) as (content, write_back):
             if new_snippet in content:
                 logger.info("Qwen3 draft loader result patch already applied.")
