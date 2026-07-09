@@ -127,6 +127,22 @@ def test_v2_dflash_patch_uses_draft_load_config(
     assert "or vllm_config.load_config" in patched
 
 
+def test_v2_dflash_patch_skips_when_dflash_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_get_vllm_file",
+        MagicMock(side_effect=RuntimeError("missing dflash module")),
+    )
+
+    patches._patch_vllm_v2_dflash_load_config(logger)
+
+    logger.info.assert_called_once()
+    assert "not installed" in logger.info.call_args.args[0]
+
+
 def test_qwen3_draft_loader_patch_returns_loaded_parameter_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -163,15 +179,36 @@ def test_qwen3_draft_loader_patch_returns_loaded_parameter_names(
     assert "return loaded_weights" in dflash_source
 
 
+def test_qwen3_draft_loader_patch_skips_missing_dflash_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eagle_model = tmp_path / "qwen3_eagle3.py"
+    eagle_model.write_text("        loader.load_weights(model_weights.items())\n")
+    logger = MagicMock()
+
+    def get_vllm_file(path: str) -> str:
+        if path.endswith("qwen3_eagle3.py"):
+            return str(eagle_model)
+        if path.endswith("qwen3_dflash.py"):
+            raise RuntimeError("missing dflash module")
+        raise AssertionError(f"Unexpected vLLM path: {path}")
+
+    monkeypatch.setattr(patches, "_get_vllm_file", get_vllm_file)
+
+    patches._patch_vllm_qwen3_draft_loader_results(logger)
+
+    assert "self.has_own_lm_head = any(" in eagle_model.read_text()
+    assert any("not installed" in call.args[0] for call in logger.info.call_args_list)
+
+
 def test_llama_draft_loader_patch_returns_loaded_parameter_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llama_model = tmp_path / "llama_eagle3.py"
     llama_model.write_text("        loader.load_weights(model_weights.items())\n")
-    monkeypatch.setattr(
-        patches, "_get_vllm_file", lambda _path: str(llama_model)
-    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(llama_model))
 
     patches._patch_vllm_llama_draft_loader_result(MagicMock())
 
