@@ -378,6 +378,7 @@ def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
     assert SFTConfig().validation_input_mode == "dataloader"
     assert SFTConfig().validation_precomputed_manifest is None
     assert SFTConfig().correctness_audit == CorrectnessAuditConfig(enabled=False)
+    assert SFTConfig().correctness_audit.enforce_unchanged is True
 
     with pytest.raises(ValidationError, match="validation_execution_mode"):
         SFTConfig(validation_execution_mode="unsupported")
@@ -431,7 +432,10 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
     sft_config.max_num_epochs = 1
     sft_config.val_at_start = True
     sft_config.val_period = 0
-    sft_config.correctness_audit = CorrectnessAuditConfig(enabled=True)
+    sft_config.correctness_audit = CorrectnessAuditConfig(
+        enabled=True,
+        enforce_unchanged=False,
+    )
     mock_components["master_config"].policy["megatron_cfg"] = {"enabled": True}
     event = _precomputed_event_fixture()
     validation_result = SimpleNamespace(
@@ -471,6 +475,7 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
         )
 
     auditor_class.assert_called_once()
+    assert auditor_class.call_args.kwargs["enforce_unchanged"] is False
     assert "validation_payload" not in auditor_class.call_args.kwargs
     auditor_instance.audit_validation.assert_called_once()
     assert auditor_instance.audit_validation.call_args.kwargs["step"] == 0

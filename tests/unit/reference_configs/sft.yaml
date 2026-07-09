@@ -23,6 +23,7 @@ sft:
   validation_event_memory_safety_multiplier: 2.0
   correctness_audit:
     enabled: false
+    enforce_unchanged: true
   val_at_end: false
   seed: 42
   only_unmask_final: false

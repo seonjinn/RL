@@ -1,6 +1,7 @@
 import ast
 import dataclasses
 import inspect
+import json
 import random
 import textwrap
 from collections.abc import Mapping
@@ -14,6 +15,7 @@ import torch
 
 from nemo_rl.algorithms.sft_correctness_audit import (
     CorrectnessAuditRecord,
+    CorrectnessAuditError,
     CorrectnessNextTrainBatchEvidence,
     CorrectnessSnapshot,
     CorrectnessValidationEvidencePair,
@@ -332,6 +334,151 @@ def test_auditor_records_next_batch_only_when_caller_supplies_natural_batch() ->
     assert records[0].validation_step == 20
     assert records[0].next_train_batch is not None
     assert records[0].next_train_batch.batch_digest
+
+
+def test_auditor_record_only_mode_retains_changed_transition() -> None:
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=MagicMock(),
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+        enforce_unchanged=False,
+        record_sink=records.append,
+    )
+    before = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+    after = dataclasses.replace(before, torch_cpu_rng_digest="changed")
+
+    with patch(
+        "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+        side_effect=[before, after],
+    ):
+        assert (
+            auditor.audit_validation(
+                step=20,
+                validation=lambda: "result",
+                validation_evidence=_validation_evidence_pair,
+            )
+            == "result"
+        )
+
+    assert records == []
+    auditor.record_next_train_batch({"input_ids": torch.tensor([[1, 2]])})
+    assert len(records) == 1
+    assert records[0].gate.ready is False
+    assert records[0].gate.differences == ("torch_cpu_rng_digest",)
+    assert records[0].status == "finalized_with_state_changes"
+
+
+def test_auditor_strict_default_rejects_changed_transition() -> None:
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=MagicMock(),
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+        record_sink=records.append,
+    )
+    before = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+    after = dataclasses.replace(before, torch_cpu_rng_digest="changed")
+
+    with (
+        patch(
+            "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+            side_effect=[before, after],
+        ),
+        pytest.raises(CorrectnessAuditError, match="torch_cpu_rng_digest"),
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=lambda: None,
+            validation_evidence=_validation_evidence_pair,
+        )
+
+    assert len(records) == 1
+    assert records[0].status == "rejected"
+
+
+def test_auditor_record_only_mode_preserves_validation_exception() -> None:
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=MagicMock(),
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+        enforce_unchanged=False,
+        record_sink=records.append,
+    )
+    before = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+    after = dataclasses.replace(before, torch_cpu_rng_digest="changed")
+
+    def fail_validation() -> None:
+        raise RuntimeError("validation submission failed")
+
+    with (
+        patch(
+            "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+            side_effect=[before, after],
+        ),
+        pytest.raises(RuntimeError, match="validation submission failed"),
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=fail_validation,
+            validation_evidence=_validation_evidence_pair,
+        )
+
+    assert len(records) == 1
+    assert records[0].status == "validation_failed"
+
+
+def test_default_record_sink_emits_compact_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    auditor = SFTCorrectnessAuditor(
+        policy=MagicMock(),
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+        enforce_unchanged=False,
+    )
+    marker = "must-not-be-serialized-" + "x" * 100_000
+    before = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+    after = dataclasses.replace(
+        before,
+        worker_states={
+            0: {
+                **before.worker_states[0],
+                "model": {
+                    **before.worker_states[0]["model"],
+                    "expanded_fingerprint": marker,
+                },
+            },
+            1: before.worker_states[1],
+        },
+    )
+
+    with patch(
+        "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+        side_effect=[before, after],
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=lambda: None,
+            validation_evidence=_validation_evidence_pair,
+        )
+    auditor.record_next_train_batch({"input_ids": torch.tensor([[1, 2]])})
+
+    output = capsys.readouterr().out
+    assert output.startswith("SFT_CORRECTNESS_AUDIT_SUMMARY ")
+    assert marker not in output
+    assert len(output) < 20_000
+    payload = json.loads(output.removeprefix("SFT_CORRECTNESS_AUDIT_SUMMARY "))
+    assert payload["gate"]["ready"] is False
+    assert payload["gate"]["difference_count"] == 1
+    assert payload["gate"]["differences_sha256"]
+    assert payload["before"]["worker_states"]["0"]["state_digest"]
+    assert payload["after"]["worker_states"]["0"]["state_digest"]
+    before_categories = payload["before"]["worker_states"]["0"]["category_digests"]
+    after_categories = payload["after"]["worker_states"]["0"]["category_digests"]
+    assert before_categories["model"] != after_categories["model"]
+    assert before_categories["optimizer"] == after_categories["optimizer"]
 
 
 def test_auditor_gates_failed_validation_before_reraising() -> None:

@@ -655,9 +655,61 @@ def capture_correctness_snapshot(
 
 
 def _default_record_sink(record: _AuditRecord) -> None:
-    payload = dataclasses.asdict(record)
+    def summarize_snapshot(snapshot: CorrectnessSnapshot) -> dict[str, object]:
+        worker_states: dict[str, object] = {}
+        for rank, state in snapshot.worker_states.items():
+            category_digests = {
+                key: _state_digest(value)
+                for key, value in sorted(state.items())
+                if key not in {"rank", "device", "coordinates"}
+            }
+            worker_states[str(rank)] = {
+                "state_digest": _state_digest(state),
+                "category_digests": category_digests,
+            }
+        return {
+            "python_rng_digest": snapshot.python_rng_digest,
+            "numpy_rng_digest": snapshot.numpy_rng_digest,
+            "torch_cpu_rng_digest": snapshot.torch_cpu_rng_digest,
+            "torch_cuda_rng_digests": snapshot.torch_cuda_rng_digests,
+            "explicit_generator_digest": snapshot.explicit_generator_digest,
+            "train_loader_digest": snapshot.train_loader_digest,
+            "next_train_batch_digest": snapshot.next_train_batch_digest,
+            "validation_payload_digest": snapshot.validation_payload_digest,
+            "validation_sample_ids_digest": snapshot.validation_sample_ids_digest,
+            "validation_token_counts_digest": snapshot.validation_token_counts_digest,
+            "worker_states": worker_states,
+        }
+
+    payload = {
+        "schema_version": 1,
+        "validation_step": record.validation_step,
+        "validation_succeeded": record.validation_succeeded,
+        "before_digest": record.before_digest,
+        "after_digest": record.after_digest,
+        "before": summarize_snapshot(record.before),
+        "after": summarize_snapshot(record.after),
+        "gate": {
+            "ready": record.gate.ready,
+            "difference_count": len(record.gate.differences),
+            "differences_sha256": _state_digest(record.gate.differences),
+            "difference_examples": record.gate.differences[:32],
+        },
+        "validation_evidence": (
+            dataclasses.asdict(record.validation_evidence)
+            if record.validation_evidence is not None
+            else None
+        ),
+        "next_train_batch": (
+            dataclasses.asdict(record.next_train_batch)
+            if record.next_train_batch is not None
+            else None
+        ),
+        "audit_time_s": record.audit_time_s,
+        "status": record.status,
+    }
     print(
-        "SFT_CORRECTNESS_AUDIT "
+        "SFT_CORRECTNESS_AUDIT_SUMMARY "
         + json.dumps(payload, sort_keys=True, separators=(",", ":")),
         flush=True,
     )
@@ -720,11 +772,13 @@ class SFTCorrectnessAuditor:
         policy: _CorrectnessFingerprintPolicy,
         train_loader: _StatefulLoader,
         explicit_generator: torch.Generator | None,
+        enforce_unchanged: bool = True,
         record_sink: Callable[[_AuditRecord], None] = _default_record_sink,
     ) -> None:
         self._policy = policy
         self._train_loader = train_loader
         self._explicit_generator = explicit_generator
+        self._enforce_unchanged = enforce_unchanged
         self._record_sink = record_sink
         self._pending_records: list[CorrectnessAuditRecord] = []
         self._elapsed_seconds = 0.0
@@ -804,7 +858,8 @@ class SFTCorrectnessAuditor:
                 audit_time_s=audit_time_s,
                 status=(
                     "pending_next_train_batch"
-                    if validation_succeeded and gate.ready
+                    if validation_succeeded
+                    and (gate.ready or not self._enforce_unchanged)
                     else "validation_failed"
                     if not validation_succeeded
                     else "rejected"
@@ -813,11 +868,13 @@ class SFTCorrectnessAuditor:
             self._elapsed_seconds = (
                 previous_audit_time_s + time.perf_counter() - audit_start
             )
-            if validation_succeeded and gate.ready:
+            if validation_succeeded and (
+                gate.ready or not self._enforce_unchanged
+            ):
                 self._pending_records.append(record)
             else:
                 self._record_sink(record)
-            if not gate.ready:
+            if self._enforce_unchanged and not gate.ready:
                 changed = ", ".join(gate.differences)
                 raise CorrectnessAuditError(
                     f"SFT correctness audit rejected validation step {step}: {changed}"
@@ -847,7 +904,11 @@ class SFTCorrectnessAuditor:
             after_digest=snapshot_digest(after),
             next_train_batch=next_train_batch,
             audit_time_s=pending_record.audit_time_s + digest_elapsed,
-            status="finalized",
+            status=(
+                "finalized"
+                if pending_record.gate.ready
+                else "finalized_with_state_changes"
+            ),
         )
         self._record_sink(completed_record)
         self._elapsed_seconds += time.perf_counter() - audit_start

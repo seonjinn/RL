@@ -225,6 +225,8 @@ def _maybe_reorder_megatron_sft_dp_stride(
 class CorrectnessAuditConfig(BaseModel, extra="allow"):
     # Disabled audits perform no state reads, worker RPCs, reductions, or timing.
     enabled: bool = False
+    # Equivalence experiments can record the legacy transition for cross-run comparison.
+    enforce_unchanged: bool = True
 
 
 class SFTConfig(BaseModel, extra="allow"):
@@ -1755,6 +1757,7 @@ def sft_train(
             policy=policy,
             train_loader=train_dataloader,
             explicit_generator=explicit_generator,
+            enforce_unchanged=sft_config.correctness_audit.enforce_unchanged,
         )
 
     def run_validation_with_audit(
