@@ -2,7 +2,7 @@
 cluster: lyris
 ssh_host: login-lyris
 user: sna
-remote_cwd: /lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm024-dynamicsd-20260708
+remote_cwd: /lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm024-upgrade-20260707
 account: coreai_dlalgo_llm
 subproject: nemorl-specdec-safety
 partition: gb200
