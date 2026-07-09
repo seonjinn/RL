@@ -21,7 +21,7 @@ PUBLIC_OUT = (
 
 SNAPSHOT_LABEL = "Evidence reviewed: 2026-07-09"
 CURRENT_WORKTREE = ".worktrees/nemorl-vllm024-upgrade"
-CURRENT_WORKTREE_COMMIT = "0d25e38345fa60232e9768a233e0037f5e0d958d"
+CURRENT_WORKTREE_COMMIT = "d7efad4045656969d3327a6de2caca460900e8e4"
 CURRENT_UPSTREAM_COMMIT = "9e01af64b3891e5bcc01885e10e9ca185b3e3690"
 VLLM_024_COMMIT = "ee0da84ab9e04ac7610e28580af62c365e898389"
 CURRENT_WORKTREE_PROVENANCE = (
@@ -1082,7 +1082,7 @@ MATRIX_ROWS: tuple[MatrixRow, ...] = (
                 ),
             ),
             "NeMo-RL gap": MatrixCell(
-                "The safety branch separates target and draft loading, supports V1 drafter and V2 speculator owners, rejects empty refit manifests, and keeps online Eagle ownership explicit. Per-version target/draft checksums and a target/draft/all update selector remain unresolved.",
+                "The safety branch separates target and draft loading, supports V1 drafter and V2 speculator owners, rejects empty refit manifests, requires a loader receipt, and keeps online Eagle ownership explicit. Per-version target/draft checksums and a target/draft/all update selector remain unresolved.",
                 (),
             ),
         },
@@ -1177,7 +1177,7 @@ MATRIX_ROWS: tuple[MatrixRow, ...] = (
                 ),
             ),
             "NeMo-RL gap": MatrixCell(
-                "Sync and async paths require one finite chosen-token logprob per generated token, and a partial probabilistic-draft cache now fails closed. Stop-boundary, discarded-row, streaming, and preemption parity remain GPU gates.",
+                "Sync and async paths require one finite chosen-token logprob per generated token, and a partial probabilistic-draft cache now fails closed. Per-sample stop strings are still merged into one shared SamplingParams object, while stop-boundary, discarded-row, streaming, and preemption parity remain GPU gates.",
                 (),
             ),
         },
@@ -1311,7 +1311,7 @@ MATRIX_ROWS: tuple[MatrixRow, ...] = (
                 ),
             ),
             "NeMo-RL gap": MatrixCell(
-                "Empty or partial collective results and missing drafters now fail instead of reporting success. PP rank translation is corrected, but MCore/GB200 topology and resume gates remain pending.",
+                "Empty or partial collective results, missing drafters, failed wake-up calls, and generation exceptions now fail instead of reporting success. A worker that sees a failed refit cannot generate again without restart. Transaction rollback, PP rank translation validation, and MCore/GB200 resume gates remain pending.",
                 (),
             ),
         },
@@ -1773,6 +1773,75 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         "status-unresolved",
         "Define target, draft, and all update modes; record pre/post checksums and loaded/skipped aliases per owner; inject one-owner failure; and prove the version remains uncommitted until every required owner returns success across TP, PP, and EP.",
     ),
+    GapRow(
+        "27. Qwen3 Eagle-3 and DFlash loaders did not return an auditable load receipt",
+        "critical",
+        (
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_backend.py:65-82",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/patches.py:290-320",
+            "https://github.com/vllm-project/vllm/blob/v0.24.0/vllm/model_executor/models/qwen3_eagle3.py",
+            "https://github.com/vllm-project/vllm/blob/v0.24.0/vllm/model_executor/models/qwen3_dflash.py",
+        ),
+        "A receipt-less loader made a complete load, a partial load, and a silent skip indistinguishable. The safety patch rejects None and patches the exact vLLM 0.24 Qwen3 Eagle-3 and DFlash loaders to return the loaded-name set after required post-load buffer construction.",
+        "A drafter update is valid only when the receiver independently reports what it loaded; sender-name equality alone cannot prove packed, aliased, PP-skipped, or EP-sharded coverage.",
+        (ref("veRL", 5801), ref("Miles", 1512), ref("SGLang/vLLM", 46725)),
+        "PATCHED LOCALLY / LINUX GPU GATE RUNNING",
+        "status-gpu",
+        "Exact vLLM 0.24 source apply, compile, and idempotence pass locally. Lyris Qwen3-32B baseline job 2322955 and Eagle-3 K5 job 2322962 exercise the Linux loader and engine path at commit d7efad40; matched token/logprob parity and a known draft checksum are still required.",
+    ),
+    GapRow(
+        "28. Failed refit workers could be reused after partial mutation",
+        "critical",
+        (
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker.py:77-95",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker.py:962-1016",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker_async.py:1428-1491",
+            f"{CURRENT_WORKTREE}/nemo_rl/algorithms/grpo.py:2030-2034",
+            f"{CURRENT_WORKTREE}/nemo_rl/algorithms/grpo.py:2120-2124",
+        ),
+        "A rank-local load or wake failure could leave target or draft storage partially changed and still allow later generation. Sync and async workers now enter a terminal invalid state after any failed refit result or exception, and explicit false wake results abort the refit.",
+        "A failed distributed update cannot be repaired by retrying through the same process state unless rollback is proven; restart is the minimum fail-closed boundary.",
+        (ref("veRL", 5801), ref("veRL", 6661), ref("Miles", 1512)),
+        "PATCHED LOCALLY / UNIT VERIFIED",
+        "status-unit",
+        "Focused sync and async IPC/collective tests prove generation is rejected after failure, and weights/kv-cache wake failures abort. Full rollback is intentionally not claimed; inject a late-rank GB200 failure and verify every actor exits rather than hanging or emitting a trajectory.",
+    ),
+    GapRow(
+        "29. Async rollout generation exceptions could still produce a successful SLURM job",
+        "critical",
+        (f"{CURRENT_WORKTREE}/nemo_rl/experience/rollouts.py:1010-1013",),
+        "The sample loop printed an EngineCore or RPC failure and broke out, which could convert an empty or truncated trajectory into a nominally completed batch and let SLURM report COMPLETED. The exception now carries sample and turn context and aborts the run.",
+        "Failure recovery must preserve failure semantics through the RL orchestration layer; logging an exception is not equivalent to failing the transaction.",
+        (ref("SGLang/vLLM", 40768),),
+        "PATCHED LOCALLY / UNIT VERIFIED",
+        "status-unit",
+        "A TimeoutError regression test proves the rollout raises instead of returning a partial sample. The Lyris smoke must now report FAILED if EngineCore dies; success requires an actual completed optimization step, not only SLURM exit code zero.",
+    ),
+    GapRow(
+        "30. Runtime stop strings are merged across samples and can be ignored without tokenizer initialization",
+        "critical",
+        (
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker.py:498-534",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker_async.py:1041-1076",
+        ),
+        "NeMo-RL currently unions disjoint sample stop strings into one shared SamplingParams object, so one sample can terminate on another sample's marker. Runtime stop strings can also be accepted while tokenizer initialization remains skipped, leaving the engine unable to enforce them correctly.",
+        "Speculative verification must preserve each request's semantic stopping boundary; vLLM supports per-prompt SamplingParams and the RL adapter must not collapse them into a batch-wide union.",
+        (ref("SGLang/vLLM", 47616),),
+        "UNRESOLVED / PARITY BLOCKER",
+        "status-unresolved",
+        "Add disjoint per-sample SamplingParams and require tokenizer support whenever string stops are present. Test accepted bursts with K at least 3 where a stop occurs at every draft position, then compare emitted token IDs and chosen-token logprobs against autoregressive decoding.",
+    ),
+    GapRow(
+        "31. vLLM 0.24 async scheduling can retain stale speculative placeholder tokens",
+        "critical",
+        ("https://github.com/vllm-project/vllm/pull/40768",),
+        "vLLM 0.24 can enable async scheduling for speculative methods, while the upstream fix for stale -1 placeholder tokens after preemption or retry remains open. Those placeholders can reach embedding lookup or corrupt reconstructed output state.",
+        "Preemption and retry state must clear every speculative placeholder before the request returns to scheduling; performance defaults cannot override an unresolved correctness invariant.",
+        (ref("SGLang/vLLM", 40768),),
+        "UNRESOLVED / FORCE-OFF GATE PENDING",
+        "status-unresolved",
+        "Force async_scheduling=false for SpecDec on pinned vLLM 0.24 until the upstream fix is backported and parity-tested. Cover preemption, discard, retry, and request reordering with exact emitted-token and logprob checks before re-enabling it.",
+    ),
 )
 
 PERFORMANCE_HYPOTHESES: tuple[GapRow, ...] = (
@@ -1813,7 +1882,7 @@ PERFORMANCE_HYPOTHESES: tuple[GapRow, ...] = (
             "https://github.com/vllm-project/vllm/pull/47460",
             "https://github.com/vllm-project/vllm/pull/46324",
         ),
-        "The target may replay CUDA graphs while the generic PARD drafter remains eager, and verification at approximately B times K+1 can exceed every configured capture size. CUDA graph enabled is therefore not proof that either speculative subpath hit a graph.",
+        "The target may replay CUDA graphs while the generic PARD drafter remains eager, and verification at approximately B times K+1 can exceed every configured capture size. For 128 requests, K5, K7, and K9 require 768, 1024, and 1280 verification tokens; for 256 requests they require 1536, 2048, and 2560. Those shapes exceed a default capture ceiling near 512, so CUDA graph enabled is not proof that either speculative subpath hit a graph.",
         "Graph-key initialization and capture-shape coverage are independent. Dynamic K can look better partly because it moves execution back under a capture threshold.",
         (ref("SGLang/vLLM", 47460), ref("SGLang/vLLM", 46324)),
         "PATCHED LOCALLY / MEASUREMENT PENDING",
@@ -2170,6 +2239,14 @@ def build_html() -> str:
       padding: 12px 0 0;
       border-top: 1px solid var(--line);
     }}
+    .security-note {{
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-left: 4px solid var(--bad);
+      background: #fef3f2;
+      color: #7a271a;
+      font-size: 13px;
+    }}
     @media (max-width: 1024px) {{
       html, body, main {{
         max-width: 100vw;
@@ -2199,6 +2276,7 @@ def build_html() -> str:
         esc(CURRENT_UPSTREAM_COMMIT)
     }</code>. It is not represented as merged or upstreamed.</p>
       <p>The main matrix compares veRL, slime, Miles, SGLang/vLLM, and the matching NeMo-RL action. The deep audit exposes every confirmed defect, local patch state, and remaining validation gate in table rows rather than hiding them in prose.</p>
+      <p class="security-note"><strong>Operational blocker:</strong> a W&amp;B credential was observed in persisted Ray logs during the cluster audit. Rotate the credential before long runs and stop persisting full environment dumps. The credential is intentionally not reproduced here.</p>
       <div class="legend" aria-label="Audit status legend">
         <span class="status status-unit">{
         status_counts["status-unit"]
