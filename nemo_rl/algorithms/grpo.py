@@ -2317,6 +2317,10 @@ def compute_and_apply_seq_logprob_error_masking(
 # ===============================================================================
 
 
+def _sum_training_metric(value: np.ndarray | list | float | int) -> float | int:
+    return np.sum(value).item()
+
+
 def grpo_train(
     policy: ColocatablePolicyInterface,
     policy_generation: Optional[GenerationInterface],
@@ -3045,8 +3049,8 @@ def grpo_train(
                         "mean_prompt_length",
                     }:
                         metrics[k] = np.mean(v).item()
-                    elif isinstance(v, (np.ndarray, list)):
-                        metrics[k] = np.sum(v).item()
+                    elif isinstance(v, (np.ndarray, list, float, int)):
+                        metrics[k] = _sum_training_metric(v)
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
 

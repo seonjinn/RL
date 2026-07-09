@@ -35,6 +35,7 @@ from nemo_rl.algorithms.grpo import (
     _raise_if_reward_penalties_enabled_without_nemo_gym,
     _resolve_message_level_advantage_penalties,
     _should_use_async_rollouts,
+    _sum_training_metric,
     _validate_async_specdec_weight_update_safety,
     aggregate_rollout_metrics,
     async_grpo_train,
@@ -3612,3 +3613,18 @@ class TestAggregateRolloutMetrics:
         assert result["total_turns"] == 45
         assert result["accuracy"] == pytest.approx(0.8)
         assert result["min_accuracy_rate"] == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.625, 0.625),
+        (17, 17),
+        ([0.25, 0.75], 1.0),
+    ],
+)
+def test_specdec_metrics_are_summed_to_native_scalars(value, expected):
+    result = _sum_training_metric(value)
+
+    assert result == expected
+    assert isinstance(result, (float, int))
