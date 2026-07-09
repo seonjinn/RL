@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -19,6 +20,7 @@ import sys
 import types
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -584,6 +586,211 @@ def test_non_specdec_preserves_vllm_async_scheduling():
     )
 
     assert configured["vllm_kwargs"]["async_scheduling"] is True
+
+
+@pytest.mark.parametrize("temperature", [0.0, 1e-6])
+def test_vllm_training_rejects_effectively_greedy_temperature(
+    temperature: float,
+) -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["temperature"] = temperature
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(ValueError, match="temperature >= 1e-5"):
+        configure_generation_config(vllm_config, tokenizer, is_eval=False)
+
+
+def test_vllm_eval_allows_greedy_temperature() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["temperature"] = 0.0
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(vllm_config, tokenizer, is_eval=True)
+
+    assert configured["temperature"] == 0.0
+
+
+def test_ignore_eos_does_not_auto_insert_eos_stop_token() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["ignore_eos"] = True
+    vllm_config["stop_token_ids"] = None
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(vllm_config, tokenizer, is_eval=True)
+
+    assert configured["stop_token_ids"] == []
+
+
+def test_async_worker_first_yield_timeout_cancels_remote_generator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_generator = None
+
+    class _WorkerGroup:
+        dp_size = 1
+
+        @staticmethod
+        def get_dp_leader_worker_idx(_index: int) -> int:
+            return 0
+
+        @staticmethod
+        def run_single_worker_single_data(**_kwargs):
+            async def never_yields():
+                await asyncio.sleep(60)
+                yield None
+
+            nonlocal worker_generator
+            worker_generator = never_yields()
+            return worker_generator
+
+        @staticmethod
+        def shutdown(**_kwargs) -> None:
+            return None
+
+    generation: Any = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = _WorkerGroup()
+    generation.current_generate_dp_shard_idx = 0
+    data = BatchedDataDict({"input_ids": torch.tensor([[1]])})
+    monkeypatch.setenv("NRL_VLLM_ASYNC_TIMEOUT_SECONDS", "0.01")
+    cancel = MagicMock()
+    monkeypatch.setattr(ray, "cancel", cancel)
+
+    async def exercise() -> None:
+        stream = generation._async_generate_base(
+            data,
+            "generate_async",
+            lambda _data: True,
+        )
+        with pytest.raises(RuntimeError, match="before yielding"):
+            await asyncio.wait_for(anext(stream), timeout=0.25)
+
+    asyncio.run(exercise())
+    cancel.assert_called_once_with(worker_generator)
+
+
+def test_async_worker_result_timeout_cancels_remote_generator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_generator = None
+
+    class _WorkerGroup:
+        dp_size = 1
+
+        @staticmethod
+        def get_dp_leader_worker_idx(_index: int) -> int:
+            return 0
+
+        @staticmethod
+        def run_single_worker_single_data(**_kwargs):
+            async def yields_unresolved_result():
+                yield asyncio.get_running_loop().create_future()
+
+            nonlocal worker_generator
+            worker_generator = yields_unresolved_result()
+            return worker_generator
+
+        @staticmethod
+        def shutdown(**_kwargs) -> None:
+            return None
+
+    generation: Any = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = _WorkerGroup()
+    generation.current_generate_dp_shard_idx = 0
+    data = BatchedDataDict({"input_ids": torch.tensor([[1]])})
+    monkeypatch.setenv("NRL_VLLM_ASYNC_TIMEOUT_SECONDS", "0.01")
+    cancel = MagicMock()
+    monkeypatch.setattr(ray, "cancel", cancel)
+
+    async def exercise() -> None:
+        stream = generation._async_generate_base(
+            data,
+            "generate_async",
+            lambda _data: True,
+        )
+        with pytest.raises(RuntimeError, match="waiting for worker results"):
+            await asyncio.wait_for(anext(stream), timeout=0.25)
+
+    asyncio.run(exercise())
+    cancel.assert_called_once_with(worker_generator)
+
+
+def test_async_worker_timeout_cancels_real_ray_generator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @ray.remote(max_concurrency=2)
+    class _CancellationProbe:
+        def __init__(self) -> None:
+            self.started = False
+            self.cancelled = False
+
+        async def generate_async(self, **_kwargs):
+            self.started = True
+            try:
+                await asyncio.sleep(60)
+                yield None
+            finally:
+                self.cancelled = True
+
+        async def is_started(self) -> bool:
+            return self.started
+
+        async def is_cancelled(self) -> bool:
+            return self.cancelled
+
+    actor = _CancellationProbe.remote()
+
+    class _WorkerGroup:
+        dp_size = 1
+        generator = None
+
+        @staticmethod
+        def get_dp_leader_worker_idx(_index: int) -> int:
+            return 0
+
+        def run_single_worker_single_data(self, **_kwargs):
+            self.generator = actor.generate_async.remote()
+            return self.generator
+
+        @staticmethod
+        def shutdown(**_kwargs) -> None:
+            return None
+
+    generation: Any = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = _WorkerGroup()
+    generation.current_generate_dp_shard_idx = 0
+    data = BatchedDataDict({"input_ids": torch.tensor([[1]])})
+    monkeypatch.setenv("NRL_VLLM_ASYNC_TIMEOUT_SECONDS", "1.0")
+
+    async def exercise() -> None:
+        stream = generation._async_generate_base(
+            data,
+            "generate_async",
+            lambda _data: True,
+        )
+        next_result = asyncio.create_task(anext(stream))
+        for _ in range(40):
+            if await actor.is_started.remote():
+                break
+            await asyncio.sleep(0.05)
+        assert await actor.is_started.remote()
+
+        with pytest.raises(RuntimeError, match="before yielding"):
+            await asyncio.wait_for(next_result, timeout=2.0)
+
+        assert isinstance(generation.worker_group.generator, ray.ObjectRefGenerator)
+        for _ in range(40):
+            if await actor.is_cancelled.remote():
+                break
+            await asyncio.sleep(0.05)
+        assert await actor.is_cancelled.remote()
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        ray.kill(actor)
 
 
 def test_configure_generation_config_keeps_dummy_startup_weights_with_draft_refit():

@@ -295,6 +295,31 @@ class MasterConfig(BaseModel, extra="allow"):
     on_policy_distillation: Optional[OnPolicyDistillationConfig] = None
 
 
+def _validate_async_specdec_weight_update_safety(
+    master_config: MasterConfig,
+) -> None:
+    async_config = master_config.grpo.get("async_grpo") or {}
+    if not (
+        async_config.get("enabled", False)
+        and async_config.get("in_flight_weight_updates", False)
+    ):
+        return
+
+    generation_config = cast(dict[str, Any], master_config.policy["generation"])
+    if generation_config.get("backend") != "vllm":
+        return
+    speculative_config = generation_config.get("vllm_kwargs", {}).get(
+        "speculative_config"
+    )
+    if speculative_config:
+        raise ValueError(
+            "Async GRPO with speculative decoding requires "
+            "grpo.async_grpo.in_flight_weight_updates=false. NeMo-RL cannot "
+            "currently preserve one target/draft weight version across an active "
+            "request while refitting both models."
+        )
+
+
 # ===============================================================================
 # Setup & Initialization
 # ===============================================================================
@@ -333,6 +358,7 @@ def setup(
     """
     # Start timing the entire setup process
     setup_start_time = time.perf_counter()
+    _validate_async_specdec_weight_update_safety(master_config)
 
     # Extract individual configs for easier access
     policy_config = master_config.policy
@@ -3526,6 +3552,8 @@ def async_grpo_train(
         master_config: Master configuration
         max_trajectory_age_steps: Maximum age (in training steps) for trajectories to be used in training
     """
+    _validate_async_specdec_weight_update_safety(master_config)
+
     # Ensure we are running with a compatible async generation backend.
     # Async GRPO (with in-flight weight updates) supports vLLM and Megatron;
     # SGLang async rollouts do not support the async GRPO replay path.
@@ -3705,14 +3733,6 @@ def async_grpo_train(
         on_policy_distillation_cfg=opd_module._opd_cfg(master_config),
     )
 
-    # Start trajectory collection in background
-    collection_task = trajectory_collector.start_collection.remote(dataloader)
-
-    # Ensure collector knows initial weight version
-    trajectory_collector.set_weight_version.remote(weight_version)
-
-    print("📦 Started continuous background trajectory collection")
-
     print(
         f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, max_age={max_trajectory_age_steps} steps"
     )
@@ -3747,8 +3767,6 @@ def async_grpo_train(
     # Run validation at start if configured
     if val_at_start and step == 0:
         print("\n🔍 Running initial validation...")
-        # Pause trajectory collection during initial validation
-        trajectory_collector.pause.remote()
 
         try:
             val_metrics, validation_timings = validate(
@@ -3760,7 +3778,6 @@ def async_grpo_train(
                 master_config=master_config,
                 logger=logger,
             )
-            policy_generation.finish_generation()
             logger.log_metrics(val_metrics, step, prefix="validation")
             logger.log_metrics(validation_timings, step, prefix="timing/validation")
             print("✅ Initial validation completed successfully")
@@ -3771,8 +3788,18 @@ def async_grpo_train(
             traceback.print_exc()
             # Continue anyway since validation is optional
         finally:
-            # Resume trajectory collection after initial validation
-            trajectory_collector.resume.remote()
+            if not policy_generation.finish_generation():
+                raise RuntimeError(
+                    "Policy generation cleanup failed after initial validation."
+                )
+            if not policy_generation.prepare_for_generation():
+                raise RuntimeError(
+                    "Policy generation could not be prepared after initial validation."
+                )
+
+    trajectory_collector.set_weight_version.remote(weight_version)
+    trajectory_collector.start_collection.remote(dataloader)
+    print("📦 Started continuous background trajectory collection")
 
     print("✅ All setup complete, starting buffer wait...")
     # Clear logger metrics at start of training

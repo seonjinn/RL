@@ -775,7 +775,15 @@ class VllmGeneration(GenerationInterface):
         )  # Default 15 minutes
 
         try:
-            sample_result_ref = await anext(worker_gen_proxy)
+            sample_result_ref = await asyncio.wait_for(
+                anext(worker_gen_proxy), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            ray.cancel(worker_gen_proxy)
+            raise RuntimeError(
+                f"Timeout before yielding a worker result after {timeout_seconds}s. "
+                "The worker may be stuck in preemption, retry, or engine recovery."
+            )
         except StopAsyncIteration:
             raise RuntimeError(
                 f"Worker produced no output for the given sample {data}."
@@ -791,6 +799,7 @@ class VllmGeneration(GenerationInterface):
                 sample_result_ref, timeout=timeout_seconds
             )
         except asyncio.TimeoutError:
+            ray.cancel(worker_gen_proxy)
             raise RuntimeError(
                 f"Timeout waiting for worker results after {timeout_seconds}s. "
                 f"For longer sequences, increase timeout by setting: "

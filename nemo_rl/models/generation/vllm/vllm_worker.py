@@ -525,6 +525,12 @@ class BaseVllmGenerationWorker:
                             stop_strings.append(stop_string)
                             seen.add(stop_string)
 
+        if stop_strings and self.cfg["vllm_cfg"].get("skip_tokenizer_init", False):
+            raise ValueError(
+                "String stop conditions require "
+                "policy.generation.vllm_cfg.skip_tokenizer_init=false."
+            )
+
         return stop_strings or None
 
     def _build_sampling_params(

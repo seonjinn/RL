@@ -97,3 +97,12 @@ def test_stop_string_merge_is_stable_and_deduplicated() -> None:
         "ALPHA",
         "BETA",
     ]
+
+
+def test_runtime_stop_strings_require_initialized_tokenizer() -> None:
+    worker = _make_worker()
+    worker.cfg["stop_strings"] = None
+    worker.cfg["vllm_cfg"]["skip_tokenizer_init"] = True
+
+    with pytest.raises(ValueError, match="skip_tokenizer_init=false"):
+        worker._merge_stop_strings([["ALPHA"]])

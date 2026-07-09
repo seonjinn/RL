@@ -293,6 +293,9 @@ def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
         (
             "model_executor/models/qwen3_eagle3.py",
             "        loader.load_weights(model_weights.items())\n",
+            "        self.has_own_lm_head = any(\n"
+            '            name.startswith("lm_head.") for name in model_weights\n'
+            "        )\n"
             "        return loader.load_weights(model_weights.items())\n",
         ),
         (
@@ -311,6 +314,19 @@ def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
             if new_snippet in content:
                 logger.info("Qwen3 draft loader result patch already applied.")
                 continue
+            legacy_receipt_snippet = (
+                "        return loader.load_weights(model_weights.items())\n"
+            )
+            if (
+                relative_path.endswith("qwen3_eagle3.py")
+                and content.count(legacy_receipt_snippet) == 1
+            ):
+                write_back(content.replace(legacy_receipt_snippet, new_snippet, 1))
+                logger.info(
+                    "Upgraded legacy Qwen3 Eagle-3 loader receipt patch with "
+                    "LM-head ownership reporting."
+                )
+                continue
             if content.count(old_snippet) != 1:
                 raise RuntimeError(
                     "Could not apply the Qwen3 draft loader result patch to "
@@ -318,6 +334,30 @@ def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
                 )
             write_back(content.replace(old_snippet, new_snippet, 1))
         logger.info("Successfully patched Qwen3 draft loader result reporting.")
+
+
+def _patch_vllm_llama_draft_loader_result(logger) -> None:
+    """Return an auditable receipt from the Llama Eagle-3 loader."""
+    file_to_patch = _get_vllm_file("model_executor/models/llama_eagle3.py")
+    old_snippet = "        loader.load_weights(model_weights.items())\n"
+    new_snippet = (
+        "        self.has_own_lm_head = any(\n"
+        '            name.startswith("lm_head.") for name in model_weights\n'
+        "        )\n"
+        "        return loader.load_weights(model_weights.items())\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if new_snippet in content:
+            logger.info("Llama draft loader result patch already applied.")
+            return
+        if content.count(old_snippet) != 1:
+            raise RuntimeError(
+                "Could not apply the Llama draft loader result patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched Llama draft loader result reporting.")
 
 
 def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
@@ -622,6 +662,7 @@ def _apply_vllm_patches(
     _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)
     _patch_vllm_v2_dflash_load_config(patch_logger)
     _patch_vllm_qwen3_draft_loader_results(patch_logger)
+    _patch_vllm_llama_draft_loader_result(patch_logger)
     _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
     _patch_vllm_draft_model_load_config(patch_logger)
     _patch_vllm_medusa_load_config(patch_logger)

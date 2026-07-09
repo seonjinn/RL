@@ -35,6 +35,7 @@ from nemo_rl.algorithms.grpo import (
     _raise_if_reward_penalties_enabled_without_nemo_gym,
     _resolve_message_level_advantage_penalties,
     _should_use_async_rollouts,
+    _validate_async_specdec_weight_update_safety,
     aggregate_rollout_metrics,
     async_grpo_train,
     compute_and_apply_seq_logprob_error_masking,
@@ -949,6 +950,165 @@ def test_should_use_async_rollouts_selects_backend_specific_config(
     master_config.policy = {"generation": generation_config}
 
     assert _should_use_async_rollouts(master_config) is expected
+
+
+def test_async_specdec_rejects_in_flight_weight_updates() -> None:
+    master_config = MagicMock()
+    master_config.grpo = {
+        "async_grpo": {"enabled": True, "in_flight_weight_updates": True}
+    }
+    master_config.policy = {
+        "generation": {
+            "backend": "vllm",
+            "vllm_kwargs": {
+                "speculative_config": {
+                    "method": "eagle3",
+                    "model": "/tmp/draft",
+                }
+            },
+        }
+    }
+
+    with pytest.raises(ValueError, match="in_flight_weight_updates=false"):
+        _validate_async_specdec_weight_update_safety(master_config)
+
+
+@pytest.mark.parametrize(
+    ("speculative_config", "in_flight_weight_updates"),
+    [(None, True), ({"method": "eagle3"}, False)],
+)
+def test_async_weight_update_safety_allows_non_overlapping_modes(
+    speculative_config: dict[str, Any] | None,
+    in_flight_weight_updates: bool,
+) -> None:
+    master_config = MagicMock()
+    master_config.grpo = {
+        "async_grpo": {
+            "enabled": True,
+            "in_flight_weight_updates": in_flight_weight_updates,
+        }
+    }
+    master_config.policy = {
+        "generation": {
+            "backend": "vllm",
+            "vllm_kwargs": {"speculative_config": speculative_config},
+        }
+    }
+
+    _validate_async_specdec_weight_update_safety(master_config)
+
+
+@pytest.mark.parametrize(
+    ("val_at_start", "validation_fails", "expected_before_collection"),
+    [
+        (False, False, ["refit", "set_weight_version", "start_collection"]),
+        (
+            True,
+            False,
+            [
+                "refit",
+                "validate",
+                "finish_generation",
+                "prepare_for_generation",
+                "set_weight_version",
+                "start_collection",
+            ],
+        ),
+        (
+            True,
+            True,
+            [
+                "refit",
+                "validate",
+                "finish_generation",
+                "prepare_for_generation",
+                "set_weight_version",
+                "start_collection",
+            ],
+        ),
+    ],
+    ids=["validation-off", "validation-on", "validation-fails"],
+)
+def test_async_grpo_prepares_generation_before_starting_collection(
+    mock_grpo_components,
+    val_at_start: bool,
+    validation_fails: bool,
+    expected_before_collection: list[str],
+) -> None:
+    events: list[str] = []
+
+    class _RemoteMethod:
+        def __init__(self, event: str, result: Any = None) -> None:
+            self.event = event
+            self.result = result
+
+        def remote(self, *_args, **_kwargs):
+            events.append(self.event)
+            return self.result
+
+    class _RecordingCollector:
+        set_weight_version = _RemoteMethod("set_weight_version")
+        start_collection = _RemoteMethod("start_collection", MagicMock())
+        stop = _RemoteMethod("stop")
+        wait_for_stop = _RemoteMethod("wait_for_stop")
+        get_efficiency_metrics = _RemoteMethod("get_efficiency_metrics", {})
+
+    collector_class = MagicMock()
+    collector_class.options.return_value.remote.return_value = _RecordingCollector()
+    policy_generation = _mock_policy_generation()
+    policy_generation.finish_generation.side_effect = (
+        lambda: events.append("finish_generation") or True
+    )
+    policy_generation.prepare_for_generation.side_effect = (
+        lambda: events.append("prepare_for_generation") or True
+    )
+
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo["max_num_steps"] = 0
+    master_config.grpo["max_num_epochs"] = 1
+    master_config.grpo["val_at_start"] = val_at_start
+    master_config.grpo["val_period"] = 0
+    master_config.policy["generation"]["colocated"]["enabled"] = False
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+
+    def record_validation(*_args, **_kwargs):
+        events.append("validate")
+        if validation_fails:
+            raise RuntimeError("validation failed")
+        return {}, {}
+
+    with (
+        mock_async_grpo_infrastructure(mock_batch, {}),
+        patch(
+            "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
+            collector_class,
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.refit_policy_generation",
+            side_effect=lambda *_args, **_kwargs: events.append("refit"),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.validate",
+            side_effect=record_validation,
+        ),
+    ):
+        async_grpo_train(
+            mock_grpo_components["policy"],
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+    start_index = events.index("start_collection")
+    assert events[: start_index + 1] == expected_before_collection
 
 
 @contextmanager

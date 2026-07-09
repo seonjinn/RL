@@ -153,12 +153,61 @@ def test_qwen3_draft_loader_patch_returns_loaded_parameter_names(
     assert (
         "return loader.load_weights(model_weights.items())" in eagle_model.read_text()
     )
+    assert "self.has_own_lm_head = any(" in eagle_model.read_text()
+    assert 'name.startswith("lm_head.")' in eagle_model.read_text()
     dflash_source = dflash_model.read_text()
     assert (
         "loaded_weights = loader.load_weights(model_weights.items())" in dflash_source
     )
     assert "self.model._build_fused_kv_buffers()" in dflash_source
     assert "return loaded_weights" in dflash_source
+
+
+def test_llama_draft_loader_patch_returns_loaded_parameter_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama_model = tmp_path / "llama_eagle3.py"
+    llama_model.write_text("        loader.load_weights(model_weights.items())\n")
+    monkeypatch.setattr(
+        patches, "_get_vllm_file", lambda _path: str(llama_model)
+    )
+
+    patches._patch_vllm_llama_draft_loader_result(MagicMock())
+
+    patched = llama_model.read_text()
+    assert "self.has_own_lm_head = any(" in patched
+    assert 'name.startswith("lm_head.")' in patched
+    assert "return loader.load_weights(model_weights.items())" in patched
+
+
+def test_qwen3_draft_loader_patch_upgrades_legacy_receipt_only_patch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eagle_model = tmp_path / "qwen3_eagle3.py"
+    eagle_model.write_text(
+        "        return loader.load_weights(model_weights.items())\n"
+    )
+    dflash_model = tmp_path / "qwen3_dflash.py"
+    dflash_model.write_text(
+        "        loaded_weights = loader.load_weights(model_weights.items())\n"
+        "        self.model._build_fused_kv_buffers()\n"
+        "        return loaded_weights\n"
+    )
+
+    def get_vllm_file(path: str) -> str:
+        if path.endswith("qwen3_eagle3.py"):
+            return str(eagle_model)
+        if path.endswith("qwen3_dflash.py"):
+            return str(dflash_model)
+        raise AssertionError(f"Unexpected vLLM path: {path}")
+
+    monkeypatch.setattr(patches, "_get_vllm_file", get_vllm_file)
+
+    patches._patch_vllm_qwen3_draft_loader_results(MagicMock())
+
+    assert "self.has_own_lm_head = any(" in eagle_model.read_text()
 
 
 def test_missing_probabilistic_draft_row_patch_fails_closed(
@@ -253,6 +302,7 @@ def test_apply_patches_installs_runtime_guarded_draft_model_cudagraph_patch(
         "_patch_vllm_v2_eagle_load_config_and_ownership",
         "_patch_vllm_v2_dflash_load_config",
         "_patch_vllm_qwen3_draft_loader_results",
+        "_patch_vllm_llama_draft_loader_result",
         "_patch_vllm_missing_draft_probs_fail_closed",
         "_patch_vllm_medusa_load_config",
         "_patch_vllm_hermes_tool_parser_thread_safety",

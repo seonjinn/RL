@@ -298,11 +298,19 @@ def configure_generation_config(
         )
     config["_pad_token_id"] = tokenizer.pad_token_id
     if config["stop_token_ids"] is None:
-        config["stop_token_ids"] = [tokenizer.eos_token_id]
+        config["stop_token_ids"] = (
+            [] if config.get("ignore_eos", False) else [tokenizer.eos_token_id]
+        )
 
     # vllm setting
     if config["backend"] == "vllm":
         config = cast(VllmConfig, config)
+        if not is_eval and config["temperature"] < 1e-5:
+            raise ValueError(
+                "vLLM policy training requires temperature >= 1e-5 so rollout "
+                "and recomputed policy logprobs use the same sampling semantics. "
+                "Use the greedy=True generation path for deterministic decoding."
+            )
         # set load_format
         config["vllm_cfg"]["load_format"] = "auto" if is_eval else "dummy"
         validate_vllm_speculative_config(
