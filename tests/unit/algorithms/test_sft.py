@@ -60,7 +60,10 @@ from nemo_rl.algorithms.sft_correctness_audit import (
     combine_validation_evidence,
     compare_next_train_batch_to_control,
 )
-from nemo_rl.algorithms.sft_validation_artifact import PrecomputedValidationEvent
+from nemo_rl.algorithms.sft_validation_artifact import (
+    PrecomputedValidationEvent,
+    validation_event_payload_sha256,
+)
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.utils.timer import Timer
 
@@ -295,14 +298,19 @@ def _precomputed_event_fixture(
     data = BatchedDataDict(
         input_ids=torch.zeros((256, 2), dtype=torch.int64),
         input_lengths=torch.full((256,), 2, dtype=torch.int64),
+        processed_token_counts=torch.full((256,), 2, dtype=torch.int64),
         sample_mask=torch.ones(256, dtype=torch.float32),
         token_mask=torch.ones((256, 2), dtype=torch.float32),
+        idx=list(range(256)),
+        task_name=["megatron_sft_packed"] * 256,
     )
     return PrecomputedValidationEvent(
         data=data,
         num_valid_tokens=num_valid_tokens,
-        payload_digest="d" * 64,
-        retained_bytes=sum(tensor.nbytes for tensor in data.values()),
+        payload_digest=validation_event_payload_sha256(data),
+        retained_bytes=sum(
+            value.nbytes for value in data.values() if torch.is_tensor(value)
+        ),
     )
 
 
