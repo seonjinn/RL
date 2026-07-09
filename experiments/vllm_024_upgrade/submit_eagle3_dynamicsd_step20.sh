@@ -78,7 +78,8 @@ if [[ "${MODE}" == "submit" ]]; then
   fi
 fi
 
-if [[ -n "${NUM_PROMPTS_PER_STEP}" || -n "${NUM_GENERATIONS_PER_PROMPT}" ]]; then
+if [[ -n "${NUM_PROMPTS_PER_STEP}" || -n "${NUM_GENERATIONS_PER_PROMPT}" \
+  || -n "${TRAIN_GLOBAL_BATCH_SIZE}" ]]; then
   if [[ ! "${NUM_PROMPTS_PER_STEP}" =~ ^[1-9][0-9]*$ \
     || ! "${NUM_GENERATIONS_PER_PROMPT}" =~ ^[1-9][0-9]*$ \
     || ! "${TRAIN_GLOBAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then

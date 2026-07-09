@@ -369,6 +369,26 @@ def test_dynamicsd_launcher_validates_selected_recipe_and_batch_geometry() -> No
     assert "TRAIN_GLOBAL_BATCH_SIZE > total_trajectories" in source
 
 
+def test_dynamicsd_launcher_rejects_partial_batch_geometry() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            str(DYNAMICSD_LAUNCHER),
+            "dry-run",
+            "qwen30ba3b",
+            "baseline",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "TRAIN_GLOBAL_BATCH_SIZE": "256"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "require positive NUM_PROMPTS_PER_STEP" in result.stderr
+
+
 def test_dynamicsd_launcher_ignores_generated_submodule_dirt() -> None:
     source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
 
