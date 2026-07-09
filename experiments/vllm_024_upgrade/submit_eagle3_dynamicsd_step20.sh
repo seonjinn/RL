@@ -13,7 +13,12 @@ PARD_K16_MAX_NUM_BATCHED_TOKENS="${PARD_K16_MAX_NUM_BATCHED_TOKENS:-32768}"
 ACCOUNT="${ACCOUNT:-nemotron_sw_post}"
 PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
+GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-dynamicsd-aws-dfw}"
+NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-}"
+NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
+MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -107,9 +112,9 @@ submit_one() {
 
   case "${model}" in
     qwen30ba3b)
-      recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+      recipe="${QWEN30_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml}"
       draft_model="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
-      nodes=4
+      nodes="${QWEN30_NODES:-4}"
       ;;
     qwen32b)
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml"
@@ -184,6 +189,8 @@ submit_one() {
     "policy.generation.temperature=1.0"
     "policy.generation.top_p=1.0"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE"
+    "cluster.gpus_per_node=${GPUS_PER_NODE}"
+    "cluster.num_nodes=${nodes}"
     "cluster.segment_size=${nodes}"
     "logger.wandb_enabled=true"
     "logger.tensorboard_enabled=false"
@@ -192,6 +199,18 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
+  if [[ -n "${NUM_PROMPTS_PER_STEP}" ]]; then
+    overrides+=("grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP}")
+  fi
+  if [[ -n "${NUM_GENERATIONS_PER_PROMPT}" ]]; then
+    overrides+=("grpo.num_generations_per_prompt=${NUM_GENERATIONS_PER_PROMPT}")
+  fi
+  if [[ -n "${MAX_TOTAL_SEQUENCE_LENGTH}" ]]; then
+    overrides+=("policy.max_total_sequence_length=${MAX_TOTAL_SEQUENCE_LENGTH}")
+  fi
+  if [[ -n "${MAX_NEW_TOKENS}" ]]; then
+    overrides+=("policy.generation.max_new_tokens=${MAX_NEW_TOKENS}")
+  fi
   case "${variant}" in
     baseline)
       ;;
@@ -235,6 +254,8 @@ submit_one() {
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
+    "NEMO_RL_VENV_DIR=${run_dir}/venvs"
+    "NRL_FORCE_REBUILD_VENVS=true"
     # BaseVllmGenerationWorker assigns a distinct rendezvous window per engine.
     "PYTHONPATH=${runtime_pythonpath}"
     "TRITON_CACHE_DIR=${triton_cache_dir}"
@@ -259,7 +280,7 @@ submit_one() {
     "CONTAINER_WORKDIR=${REPO_DIR}"
     "COMMAND=${command}"
     "BASE_LOG_DIR=${run_dir}"
-    "GPUS_PER_NODE=4"
+    "GPUS_PER_NODE=${GPUS_PER_NODE}"
     "HF_HOME=${HF_HOME}"
     "PYTHONPATH=${runtime_pythonpath}"
     "PYTHONDONTWRITEBYTECODE=1"
@@ -284,7 +305,7 @@ submit_one() {
     --comment=metrics
   )
   if [[ "${USE_GRES}" == "true" ]]; then
-    sbatch_args+=(--gres=gpu:4)
+    sbatch_args+=(--gres="gpu:${GPUS_PER_NODE}")
   fi
 
   case "${MODE}" in

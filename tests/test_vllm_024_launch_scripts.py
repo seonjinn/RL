@@ -139,13 +139,51 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "WANDB_RESUME=never" in output
 
 
-def test_dynamicsd_launcher_uses_the_container_managed_runtime() -> None:
+def test_dynamicsd_launcher_rebuilds_the_vllm_024_worker_runtime() -> None:
     output = _dry_run_dynamicsd("qwen235b", "eagle3_k5")
 
     assert "/opt/nemo_rl_venv/bin/python" in output
-    assert "NEMO_RL_VENV_DIR" not in output
-    assert "NRL_FORCE_REBUILD_VENVS" not in output
+    assert (
+        "NEMO_RL_VENV_DIR=/lustre/users/sna/RL/experiments/vllm_024_upgrade/"
+        "runs/contract-test/qwen235b/eagle3_k5/venvs"
+    ) in output
+    assert "NRL_FORCE_REBUILD_VENVS=true" in output
     assert "uv run" not in output
+
+
+def test_dynamicsd_launcher_renders_qwen30_long_context_topology() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "dynamic",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="long-context-contract-test",
+        ATTEMPT_ID="attempt-1",
+        QWEN30_RECIPE=(
+            "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-40K.yaml"
+        ),
+        QWEN30_NODES="8",
+        NUM_PROMPTS_PER_STEP="16",
+        NUM_GENERATIONS_PER_PROMPT="16",
+        MAX_TOTAL_SEQUENCE_LENGTH="40960",
+        MAX_NEW_TOKENS="32768",
+        DYNAMIC_SCHEDULE="[[1,2,5],[3,4,4],[5,8,3],[9,16,1],[17,512,0]]",
+    )
+
+    assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
+    assert "grpo.num_prompts_per_step=16" in output
+    assert "grpo.num_generations_per_prompt=16" in output
+    assert "policy.max_total_sequence_length=40960" in output
+    assert "policy.generation.max_new_tokens=32768" in output
+    assert "cluster.gpus_per_node=4" in output
+    assert "cluster.num_nodes=8" in output
+    assert "cluster.segment_size=8" in output
+    assert "--nodes=8" in output
+    assert "--segment=8" in output
+    assert "--gres=gpu:4" in output
 
 
 def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:
