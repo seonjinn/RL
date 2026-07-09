@@ -531,6 +531,23 @@ def test_dynamic_specdec_rejects_fixed_k_proposers(method: str) -> None:
         configure_generation_config(vllm_config, tokenizer)
 
 
+def test_dynamic_specdec_rejects_parallel_generic_draft_model() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "draft_model",
+            "model": "/tmp/pard-model",
+            "num_speculative_tokens": 5,
+            "parallel_drafting": True,
+            "num_speculative_tokens_per_batch_size": [[1, 32, 5], [33, 256, 1]],
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(ValueError, match="parallel draft_model"):
+        configure_generation_config(vllm_config, tokenizer)
+
+
 def test_dynamic_specdec_rejects_internal_vllm_data_parallelism() -> None:
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
@@ -588,7 +605,7 @@ def test_non_specdec_preserves_vllm_async_scheduling():
     assert configured["vllm_kwargs"]["async_scheduling"] is True
 
 
-@pytest.mark.parametrize("temperature", [0.0, 1e-6])
+@pytest.mark.parametrize("temperature", [0.0, 1e-6, 1e-5, 0.0099])
 def test_vllm_training_rejects_effectively_greedy_temperature(
     temperature: float,
 ) -> None:
@@ -596,7 +613,7 @@ def test_vllm_training_rejects_effectively_greedy_temperature(
     vllm_config["temperature"] = temperature
     tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
 
-    with pytest.raises(ValueError, match="temperature >= 1e-5"):
+    with pytest.raises(ValueError, match="temperature >= 0.01"):
         configure_generation_config(vllm_config, tokenizer, is_eval=False)
 
 

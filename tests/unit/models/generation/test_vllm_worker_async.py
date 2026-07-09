@@ -33,9 +33,7 @@ class _BlockingLLM:
 
 
 def _make_async_worker(llm: _BlockingLLM) -> Any:
-    worker: Any = VllmAsyncGenerationWorkerImpl.__new__(
-        VllmAsyncGenerationWorkerImpl
-    )
+    worker: Any = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
     worker._refit_failure_reason = None
     worker.cfg = {
         "_pad_token_id": 0,
@@ -87,6 +85,7 @@ def test_generate_text_async_cancellation_stops_child_request_task() -> None:
 
         await asyncio.wait_for(llm.started.wait(), timeout=0.5)
         assert llm.sampling_params["ignore_eos"] is True
+        assert llm.sampling_params["logprobs"] is None
         next_result.cancel()
         with pytest.raises(asyncio.CancelledError):
             await next_result

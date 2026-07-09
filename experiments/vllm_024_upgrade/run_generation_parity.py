@@ -8,6 +8,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -101,6 +102,7 @@ def extract_generated_sample(
     token_logprobs: Sequence[float],
     input_length: int,
     generation_length: int,
+    truncated: bool,
 ) -> dict[str, Any]:
     if input_length < 0 or generation_length <= 0:
         raise ValueError(
@@ -128,6 +130,7 @@ def extract_generated_sample(
         "sample_id": sample_id,
         "token_ids": generated_ids,
         "token_logprobs": generated_logprobs,
+        "truncated": bool(truncated),
     }
 
 
@@ -138,6 +141,7 @@ def extract_batch_samples(
     generation_lengths: Sequence[int],
     output_ids: Sequence[Sequence[int]],
     token_logprobs: Sequence[Sequence[float]],
+    truncated: Sequence[bool],
 ) -> list[dict[str, Any]]:
     row_counts = {
         len(requests),
@@ -145,6 +149,7 @@ def extract_batch_samples(
         len(generation_lengths),
         len(output_ids),
         len(token_logprobs),
+        len(truncated),
     }
     if len(row_counts) != 1:
         raise ValueError(
@@ -159,6 +164,7 @@ def extract_batch_samples(
             token_logprobs=token_logprobs[index],
             input_length=int(input_lengths[index]),
             generation_length=int(generation_lengths[index]),
+            truncated=bool(truncated[index]),
         )
         for index, request in enumerate(requests)
     ]
@@ -189,6 +195,7 @@ def run_generation_batches(
             generation_lengths=generated["generation_lengths"],
             output_ids=generated["output_ids"],
             token_logprobs=generated["logprobs"],
+            truncated=generated["truncated"],
         )
         for sample in samples:
             output_file.write(json.dumps(sample, sort_keys=True) + "\n")
@@ -226,6 +233,19 @@ def cleanup_runtime(policy: Any, cluster: Any, ray_module: Any) -> list[str]:
         except BaseException as error:
             errors.append(f"ray shutdown: {type(error).__name__}: {error}")
     return errors
+
+
+def _apply_cleanup_outcome(
+    metadata: dict[str, Any], cleanup_errors: Sequence[str]
+) -> int:
+    if not cleanup_errors:
+        return int(metadata.get("status") != "passed")
+
+    metadata["cleanup_errors"] = list(cleanup_errors)
+    if metadata.get("status") == "passed":
+        metadata["status"] = "failed"
+        metadata["failure_stage"] = "cleanup"
+    return 1
 
 
 def build_generation_config(settings: GenerationSettings) -> dict[str, Any]:
@@ -522,16 +542,20 @@ def main() -> int:
             metadata["finished_at_unix"] - metadata["started_at_unix"]
         )
         cleanup_errors = cleanup_runtime(policy, cluster, ray_module)
+        cleanup_exit_code = _apply_cleanup_outcome(metadata, cleanup_errors)
         if cleanup_errors:
-            metadata["cleanup_errors"] = cleanup_errors
             for cleanup_error in cleanup_errors:
-                print(f"WARNING: {cleanup_error}", flush=True)
+                print(f"ERROR: {cleanup_error}", flush=True)
         try:
             _write_metadata(metadata_path, metadata)
         except Exception as metadata_error:
             print(f"ERROR: metadata write failed: {metadata_error}", flush=True)
             if metadata["status"] != "failed":
                 raise
+        if cleanup_exit_code and sys.exc_info()[0] is None:
+            raise RuntimeError(
+                "Generation parity runtime cleanup failed: " + "; ".join(cleanup_errors)
+            )
 
 
 if __name__ == "__main__":

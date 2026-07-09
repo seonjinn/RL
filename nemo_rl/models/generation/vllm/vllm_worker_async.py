@@ -26,6 +26,7 @@ import ray
 import torch
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import (
@@ -46,6 +47,7 @@ from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     model_dump_chat_response_with_routed_experts,
     pad_and_align_routed_expert_indices,
+    validate_openai_sampling_request,
 )
 from nemo_rl.models.generation.vllm.vllm_worker import (
     BaseVllmGenerationWorker,
@@ -54,6 +56,19 @@ from nemo_rl.models.generation.vllm.vllm_worker import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _openai_invalid_request_response(error: Exception) -> JSONResponse:
+    return JSONResponse(
+        content={
+            "error": {
+                "message": str(error),
+                "type": "invalid_request_error",
+                "code": 400,
+            }
+        },
+        status_code=400,
+    )
 
 
 def _replace_prefix_tokens(
@@ -461,7 +476,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         from typing import List, Optional, Union
 
         from fastapi import Request
-        from fastapi.responses import JSONResponse, StreamingResponse
+        from fastapi.responses import StreamingResponse
         from vllm.entrypoints.openai.chat_completion.protocol import (
             ChatCompletionRequest,
             ChatCompletionResponse,
@@ -776,37 +791,19 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         async def create_chat_completion(
             request: NeMoRLChatCompletionRequest, raw_request: Request
         ):
-            # This needs to match the behavior in nemo_rl/models/generation/vllm/vllm_worker.py::BaseVllmGenerationWorker::_build_sampling_params
-            # Right now we explicitly assert set this to -1.
-            assert request.top_k in (None, -1), (
-                f"Top k sampling parameter must be unset, empty, or -1. Got `{request.top_k}`"
-            )
-            request.top_k = -1
-
             # The request sampling params need to exactly match those as are set in NeMo RL.
             # If they do not match, the inference will be off policy and destroy training stability.
-            assert request.temperature == generation_config["temperature"]
-            assert request.top_p == generation_config["top_p"]
-
             try:
+                validate_openai_sampling_request(request, generation_config)
                 generator = await openai_serving_chat.create_chat_completion(
                     request, raw_request
                 )
-            except VLLMValidationError as e:
+            except (ValueError, VLLMValidationError) as e:
                 # vLLM 0.20 raises VLLMValidationError for prompts exceeding
                 # max_model_len during tokenization, instead of returning an
                 # ErrorResponse. Convert to HTTP 400 so the Gym proxy can
                 # detect context-length overflow and handle it gracefully.
-                return JSONResponse(
-                    content={
-                        "error": {
-                            "message": str(e),
-                            "type": "invalid_request_error",
-                            "code": 400,
-                        }
-                    },
-                    status_code=400,
-                )
+                return _openai_invalid_request_response(e)
 
             if isinstance(generator, ErrorResponse):
                 return JSONResponse(
@@ -1328,6 +1325,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             sampling_params = self._build_sampling_params(
                 greedy=greedy,
                 stop_strings=final_stop_strings,
+                include_logprobs=False,
             )
 
             request_id = str(uuid.uuid4())

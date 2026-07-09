@@ -123,7 +123,11 @@ def _empty_summary(
 
 
 def _is_finite_number(value: object) -> TypeGuard[int | float]:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 def summarize_history(
@@ -133,14 +137,21 @@ def summarize_history(
     records_by_step: dict[int, Mapping[str, object]] = {}
     for record in history:
         step = record.get("_step")
-        if isinstance(step, int) and not isinstance(step, bool) and step in EXPECTED_STEPS:
+        if (
+            isinstance(step, int)
+            and not isinstance(step, bool)
+            and step in EXPECTED_STEPS
+        ):
             records_by_step[step] = record
 
     measured_steps = sorted(records_by_step)
     missing_steps = sorted(EXPECTED_STEPS - records_by_step.keys())
     if missing_steps:
         return _empty_summary(
-            model, variant, f"missing_steps:{','.join(map(str, missing_steps))}", measured_steps
+            model,
+            variant,
+            f"missing_steps:{','.join(map(str, missing_steps))}",
+            measured_steps,
         )
 
     required_metrics = set(METRIC_KEYS) - SPECDEC_METRICS
@@ -155,7 +166,10 @@ def summarize_history(
             value = record.get(wandb_key)
             if not _is_finite_number(value):
                 return _empty_summary(
-                    model, variant, f"non_finite_metrics:{metric_name}:{step}", measured_steps
+                    model,
+                    variant,
+                    f"non_finite_metrics:{metric_name}:{step}",
+                    measured_steps,
                 )
             values[metric_name].append(float(value))
         if variant in SPECDEC_VARIANTS:
@@ -163,7 +177,10 @@ def summarize_history(
                 value = record.get(wandb_key)
                 if not _is_finite_number(value):
                     return _empty_summary(
-                        model, variant, f"non_finite_metrics:{metric_name}:{step}", measured_steps
+                        model,
+                        variant,
+                        f"non_finite_metrics:{metric_name}:{step}",
+                        measured_steps,
                     )
                 counter_values[metric_name].append(float(value))
 
@@ -181,8 +198,14 @@ def summarize_history(
         total_drafts = sum(counter_values["num_drafts"])
         total_draft_tokens = sum(counter_values["num_draft_tokens"])
         total_accepted_tokens = sum(counter_values["num_accepted_tokens"])
-        if total_drafts <= 0.0 or total_draft_tokens <= 0.0 or total_accepted_tokens <= 0.0:
-            return _empty_summary(model, variant, "missing_specdec_evidence", measured_steps)
+        if (
+            total_drafts <= 0.0
+            or total_draft_tokens <= 0.0
+            or total_accepted_tokens <= 0.0
+        ):
+            return _empty_summary(
+                model, variant, "missing_specdec_evidence", measured_steps
+            )
         averages["acceptance_rate"] = total_accepted_tokens / total_draft_tokens
         averages["mean_acceptance_length"] = 1.0 + total_accepted_tokens / total_drafts
 
@@ -270,14 +293,20 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
         variants = [summary.variant for summary in model_summaries]
         if len(variants) != len(set(variants)):
             raise ValueError(f"duplicate variants for model {model_summaries[0].model}")
-        baselines = [summary for summary in model_summaries if summary.variant == "baseline"]
+        baselines = [
+            summary for summary in model_summaries if summary.variant == "baseline"
+        ]
         if not baselines:
             raise ValueError(f"missing baseline for model {model_summaries[0].model}")
         if len(baselines) != 1:
-            raise ValueError(f"expected one baseline for model {model_summaries[0].model}")
+            raise ValueError(
+                f"expected one baseline for model {model_summaries[0].model}"
+            )
         baseline = baselines[0]
         if not baseline.complete:
-            raise ValueError(f"incomplete baseline for model {baseline.model}: {baseline.reason}")
+            raise ValueError(
+                f"incomplete baseline for model {baseline.model}: {baseline.reason}"
+            )
 
         fixed_runs = [
             summary
@@ -306,6 +335,8 @@ def _read_manifest(path: Path) -> list[dict[str, str]]:
 
 
 def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
+    if not rows:
+        return "empty manifest"
     seen: set[tuple[str, str]] = set()
     setup_by_model: dict[str, tuple[str, ...]] = {}
     for row in rows:
@@ -364,7 +395,9 @@ def _history_keys(variant: str) -> list[str]:
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Summarize Eagle-3 DynamicSD W&B runs.")
+    parser = argparse.ArgumentParser(
+        description="Summarize Eagle-3 DynamicSD W&B runs."
+    )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--entity", default="nvidia")
     parser.add_argument("--project", default="nemorl-vllm024-dynamicsd-aws-dfw")
@@ -390,7 +423,9 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
         variant = manifest_row.get("variant", "")
         run_id = manifest_row.get("wandb_run_id", "")
         if not model or not variant or not run_id:
-            summaries.append(_empty_summary(model, variant, "missing_manifest_fields", []))
+            summaries.append(
+                _empty_summary(model, variant, "missing_manifest_fields", [])
+            )
             metadata.append(manifest_row)
             continue
         try:
@@ -403,7 +438,9 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
             if not manifest_row.get("wandb_url"):
                 manifest_row = {**manifest_row, "wandb_url": run.url}
         except Exception as error:  # W&B errors are converted into an incomplete row.
-            summary = _empty_summary(model, variant, f"wandb_fetch_failed:{type(error).__name__}", [])
+            summary = _empty_summary(
+                model, variant, f"wandb_fetch_failed:{type(error).__name__}", []
+            )
         summaries.append(summary)
         metadata.append(manifest_row)
 
@@ -416,9 +453,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
             (summary.model, summary.variant): manifest_row
             for summary, manifest_row in zip(summaries, metadata, strict=True)
         }
-        row_metadata = [
-            metadata_by_run[(row["model"], row["variant"])] for row in rows
-        ]
+        row_metadata = [metadata_by_run[(row["model"], row["variant"])] for row in rows]
     except ValueError as error:
         comparison_error = error
         rows = [_unmatched_row(summary) for summary in summaries]
@@ -437,6 +472,10 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     return int(
         comparison_error is not None
         or any(not bool(row.get("complete")) for row in rows)
+        or any(
+            row.get("variant") != "baseline" and row.get("health_gate_passed") is False
+            for row in rows
+        )
     )
 
 

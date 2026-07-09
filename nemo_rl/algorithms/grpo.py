@@ -152,6 +152,8 @@ class AsyncGRPOConfig(TypedDict):
     in_flight_weight_updates: NotRequired[bool]
     # Recomputes the KV cache after the in-flight weight updates.
     recompute_kv_cache_after_weight_updates: NotRequired[bool]
+    # Maximum time to drain prompt-group workers at validation/refit barriers.
+    pending_generation_timeout_s: float
 
 
 class AdvEstimatorConfig(TypedDict):
@@ -3749,7 +3751,7 @@ def async_grpo_train(
             import traceback
 
             traceback.print_exc()
-            return
+            raise
     else:
         print("🔄 Preparing policy generation for inference...")
         try:
@@ -3760,7 +3762,7 @@ def async_grpo_train(
             import traceback
 
             traceback.print_exc()
-            return
+            raise
 
     print("✅ Policy generation setup complete, proceeding to validation...")
 
@@ -3786,7 +3788,7 @@ def async_grpo_train(
             import traceback
 
             traceback.print_exc()
-            # Continue anyway since validation is optional
+            raise
         finally:
             if not policy_generation.finish_generation():
                 raise RuntimeError(
@@ -3798,7 +3800,7 @@ def async_grpo_train(
                 )
 
     ray.get(trajectory_collector.set_weight_version.remote(weight_version))
-    trajectory_collector.start_collection.remote(dataloader)
+    ray.get(trajectory_collector.start_collection.remote(dataloader))
     print("📦 Started continuous background trajectory collection")
 
     print("✅ All setup complete, starting buffer wait...")
@@ -3813,6 +3815,7 @@ def async_grpo_train(
     timer.start("init/total")
     wait_iterations = 0
     while True:
+        ray.get(trajectory_collector.check_health.remote())
         buffer_size_current = ray.get(replay_buffer.size.remote())
         current_step_ready = ray.get(
             replay_buffer.has_complete_batch.remote(
@@ -3856,6 +3859,7 @@ def async_grpo_train(
                 maybe_gpu_profile_step(policy_generation, step + 1)
 
             with timer.time("total_step_time"):
+                ray.get(trajectory_collector.check_health.remote())
                 # Sample trajectories from replay buffer
                 print("📦 Sampling from replay buffer...")
                 with timer.time("exposed_generation"):
@@ -4198,8 +4202,9 @@ def async_grpo_train(
 
                         # Update weight version before resuming trajectory collection so that all trajectories are updated with the new correct weight version
                         weight_version += 1
-                        trajectory_collector.set_weight_version.remote(weight_version)
-                        trajectory_collector.resume_after_refit.remote()
+                        ray.get(
+                            trajectory_collector.complete_refit.remote(weight_version)
+                        )
 
                     timer.stop("idle/refit_bubble")
 
@@ -4217,38 +4222,73 @@ def async_grpo_train(
                 ):
                     with timer.time("idle/validation"):
                         # Pause trajectory collection during validation to reduce memory pressure
-                        trajectory_collector.pause.remote()
-
-                        if NEED_REFIT and POLICY_GENERATION_STALE:
-                            refit_policy_generation(
-                                policy, policy_generation, colocated_inference
+                        ray.get(
+                            trajectory_collector.pause.remote(
+                                wait_for_pending_generations=True
                             )
-                            POLICY_GENERATION_STALE = False
-                        else:
-                            policy_generation.prepare_for_generation()
-                        val_metrics, validation_timings = validate(
-                            policy_generation,
-                            val_dataloader,
-                            tokenizer,
-                            val_task_to_env,
-                            step=step + 1,
-                            master_config=master_config,
-                            logger=logger,
                         )
-                        policy_generation.finish_generation()
-                        logger.log_metrics(
-                            validation_timings, step + 1, prefix="timing/validation"
-                        )
-                        logger.log_metrics(val_metrics, step + 1, prefix="validation")
+                        validation_error: Exception | None = None
+                        cleanup_error: Exception | None = None
+                        generation_ready = False
+                        try:
+                            if NEED_REFIT and POLICY_GENERATION_STALE:
+                                refit_policy_generation(
+                                    policy, policy_generation, colocated_inference
+                                )
+                                POLICY_GENERATION_STALE = False
+                                generation_ready = True
+                            else:
+                                if not policy_generation.prepare_for_generation():
+                                    raise RuntimeError(
+                                        "Policy generation could not be prepared "
+                                        "for async validation."
+                                    )
+                                generation_ready = True
+                            val_metrics, validation_timings = validate(
+                                policy_generation,
+                                val_dataloader,
+                                tokenizer,
+                                val_task_to_env,
+                                step=step + 1,
+                                master_config=master_config,
+                                logger=logger,
+                            )
+                            logger.log_metrics(
+                                validation_timings,
+                                step + 1,
+                                prefix="timing/validation",
+                            )
+                            logger.log_metrics(
+                                val_metrics, step + 1, prefix="validation"
+                            )
+                        except Exception as error:
+                            validation_error = error
+                        finally:
+                            if generation_ready:
+                                try:
+                                    if not policy_generation.finish_generation():
+                                        raise RuntimeError(
+                                            "Policy generation cleanup failed after "
+                                            "async validation."
+                                        )
+                                except Exception as error:
+                                    cleanup_error = error
 
-                        # Explicit GPU memory cleanup after validation in async mode
-                        import gc
+                            gc.collect()
+                            torch.cuda.empty_cache()
 
-                        gc.collect()
-                        torch.cuda.empty_cache()
+                            if generation_ready and cleanup_error is None:
+                                try:
+                                    ray.get(trajectory_collector.resume.remote())
+                                except Exception as error:
+                                    cleanup_error = error
 
-                        # Resume trajectory collection after validation
-                        trajectory_collector.resume.remote()
+                        if validation_error is not None:
+                            if cleanup_error is not None:
+                                raise cleanup_error from validation_error
+                            raise validation_error
+                        if cleanup_error is not None:
+                            raise cleanup_error
                 # Get flat advantages and token mask for masked metrics computation
                 flat_advantages = train_data["advantages"]
                 flat_token_mask = flat_messages["token_loss_mask"]
@@ -4564,6 +4604,7 @@ def async_grpo_train(
         import traceback
 
         traceback.print_exc()
+        raise
 
     finally:
         # Clean up

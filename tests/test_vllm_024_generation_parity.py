@@ -9,6 +9,7 @@ import pytest
 from experiments.vllm_024_upgrade.run_generation_parity import (
     GenerationSettings,
     PromptRecord,
+    _apply_cleanup_outcome,
     _tokenize_prompt,
     build_generation_config,
     cleanup_runtime,
@@ -66,6 +67,7 @@ def test_extract_generated_sample_slices_only_generated_tokens_and_logprobs() ->
         token_logprobs=[0.0, 0.0, -0.25, -0.5, 0.0],
         input_length=2,
         generation_length=2,
+        truncated=True,
     )
 
     assert sample == {
@@ -73,6 +75,7 @@ def test_extract_generated_sample_slices_only_generated_tokens_and_logprobs() ->
         "sample_id": "0000",
         "token_ids": [201, 202],
         "token_logprobs": [-0.25, -0.5],
+        "truncated": True,
     }
 
 
@@ -88,6 +91,7 @@ def test_extract_batch_samples_preserves_request_identity() -> None:
         generation_lengths=[2, 2],
         output_ids=[[101, 102, 201, 202], [111, 211, 212, 0]],
         token_logprobs=[[0.0, 0.0, -0.2, -0.3], [0.0, -0.4, -0.5, 0.0]],
+        truncated=[False, True],
     )
 
     assert samples == [
@@ -96,12 +100,14 @@ def test_extract_batch_samples_preserves_request_identity() -> None:
             "sample_id": "0000",
             "token_ids": [201, 202],
             "token_logprobs": [-0.2, -0.3],
+            "truncated": False,
         },
         {
             "prompt_id": "math-0",
             "sample_id": "0001",
             "token_ids": [211, 212],
             "token_logprobs": [-0.4, -0.5],
+            "truncated": True,
         },
     ]
 
@@ -124,6 +130,7 @@ def test_extract_generated_sample_rejects_invalid_behavior_data(
             token_logprobs=token_logprobs,
             input_length=2,
             generation_length=2,
+            truncated=False,
         )
 
 
@@ -221,6 +228,7 @@ def test_run_generation_batches_streams_usable_jsonl_rows() -> None:
                 "generation_lengths": [1, 1],
                 "output_ids": [[101, 201], [101, 202]],
                 "logprobs": [[0.0, -0.2], [0.0, -0.3]],
+                "truncated": [False, True],
             }
 
     output = StringIO()
@@ -238,6 +246,7 @@ def test_run_generation_batches_streams_usable_jsonl_rows() -> None:
     rows = [json.loads(line) for line in output.getvalue().splitlines()]
     assert policy.greedy_values == [True]
     assert [row["sample_id"] for row in rows] == ["0000", "0001"]
+    assert [row["truncated"] for row in rows] == [False, True]
     assert summary["completed_samples"] == 2
     assert summary["generated_tokens"] == 2
 
@@ -269,3 +278,19 @@ def test_cleanup_runtime_attempts_every_resource_without_masking_failure() -> No
         "cluster shutdown: RuntimeError: cluster cleanup failed",
         "ray shutdown: RuntimeError: ray cleanup failed",
     ]
+
+
+def test_cleanup_failure_invalidates_an_otherwise_passed_run() -> None:
+    metadata = {"status": "passed"}
+
+    exit_code = _apply_cleanup_outcome(
+        metadata,
+        ["VllmGeneration shutdown returned false"],
+    )
+
+    assert exit_code == 1
+    assert metadata == {
+        "status": "failed",
+        "failure_stage": "cleanup",
+        "cleanup_errors": ["VllmGeneration shutdown returned false"],
+    }

@@ -97,7 +97,9 @@ def test_summarize_history_weights_specdec_ratios_by_counters() -> None:
     summary = summarize_history("qwen32b", "dynamic", history)
 
     expected_accepted = 5.0 + 18 * 150.0
-    assert summary.acceptance_rate == pytest.approx(expected_accepted / (10.0 + 18 * 300.0))
+    assert summary.acceptance_rate == pytest.approx(
+        expected_accepted / (10.0 + 18 * 300.0)
+    )
     assert summary.mean_acceptance_length == pytest.approx(
         1.0 + expected_accepted / (1.0 + 18 * 100.0)
     )
@@ -135,7 +137,9 @@ def test_build_comparison_rows_fails_health_gate_outside_ten_percent() -> None:
     dynamic = summarize_history("qwen32b", "dynamic", dynamic_history)
     fixed = summarize_history("qwen32b", "eagle3_k5", _history(1.1))
 
-    rows = {row.variant: row for row in build_comparison_rows([baseline, fixed, dynamic])}
+    rows = {
+        row.variant: row for row in build_comparison_rows([baseline, fixed, dynamic])
+    }
 
     assert not rows["dynamic"].health_gate_passed
     assert not rows["dynamic"].reward_health_passed
@@ -162,7 +166,9 @@ def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
     assert _validate_manifest_rows(rows) == "mismatched setup for model qwen32b"
 
     rows[1] = {"model": "qwen32b", "variant": "baseline", "commit": "aaa", "nodes": "4"}
-    assert _validate_manifest_rows(rows) == "duplicate variant baseline for model qwen32b"
+    assert (
+        _validate_manifest_rows(rows) == "duplicate variant baseline for model qwen32b"
+    )
 
 
 class _FakeRun:
@@ -197,12 +203,38 @@ class _MatrixRun:
 class _MatrixApi:
     def run(self, path: str) -> _MatrixRun:
         run_id = path.rsplit("/", maxsplit=1)[-1]
-        scale = {"one-base": 1.0, "one-fixed": 1.2, "one-dynamic": 1.5,
-                 "two-base": 1.0, "two-fixed": 1.1, "two-dynamic": 1.3}[run_id]
-        variant = "baseline" if run_id.endswith("base") else (
-            "eagle3_k5" if run_id.endswith("fixed") else "dynamic"
+        scale = {
+            "one-base": 1.0,
+            "one-fixed": 1.2,
+            "one-dynamic": 1.5,
+            "two-base": 1.0,
+            "two-fixed": 1.1,
+            "two-dynamic": 1.3,
+        }[run_id]
+        variant = (
+            "baseline"
+            if run_id.endswith("base")
+            else ("eagle3_k5" if run_id.endswith("fixed") else "dynamic")
         )
         return _MatrixRun(scale, variant)
+
+
+class _UnhealthyRun(_MatrixRun):
+    def scan_history(self, *, keys: list[str]):
+        history = _history(self._scale)
+        if self._variant == "dynamic":
+            for row in history:
+                row["train/reward"] = 0.0
+        return iter({key: row[key] for key in keys} for row in history)
+
+
+class _UnhealthyApi:
+    def run(self, path: str) -> _UnhealthyRun:
+        run_id = path.rsplit("/", maxsplit=1)[-1]
+        if run_id == "base":
+            return _UnhealthyRun(1.0, "baseline")
+        assert run_id == "dynamic"
+        return _UnhealthyRun(1.2, "dynamic")
 
 
 def test_main_writes_manifest_metadata_and_explicit_csv(tmp_path: Path) -> None:
@@ -270,9 +302,61 @@ def test_main_keeps_metadata_attached_to_interleaved_models(tmp_path: Path) -> N
             )
 
     output_dir = tmp_path / "summary"
-    assert main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=_MatrixApi()) == 0
+    assert (
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=_MatrixApi(),
+        )
+        == 0
+    )
 
     payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     dynamic_rows = {row["model"]: row for row in payload if row["variant"] == "dynamic"}
     assert dynamic_rows["qwen30ba3b"]["job_id"] == "one-dynamic-job"
     assert dynamic_rows["qwen32b"]["job_id"] == "two-dynamic-job"
+
+
+def test_main_returns_nonzero_when_accuracy_health_gate_fails(tmp_path: Path) -> None:
+    manifest = tmp_path / "submissions.tsv"
+    with manifest.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(
+            stream,
+            delimiter="\t",
+            fieldnames=["model", "variant", "wandb_run_id"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {"model": "qwen32b", "variant": "baseline", "wandb_run_id": "base"}
+        )
+        writer.writerow(
+            {
+                "model": "qwen32b",
+                "variant": "dynamic",
+                "wandb_run_id": "dynamic",
+            }
+        )
+
+    output_dir = tmp_path / "summary"
+    exit_code = main(
+        ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+        api=_UnhealthyApi(),
+    )
+
+    assert exit_code == 1
+    payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    dynamic = next(row for row in payload if row["variant"] == "dynamic")
+    assert dynamic["complete"]
+    assert dynamic["health_gate_passed"] is False
+
+
+def test_main_rejects_empty_manifest(tmp_path: Path) -> None:
+    manifest = tmp_path / "submissions.tsv"
+    manifest.write_text("model\tvariant\twandb_run_id\n", encoding="utf-8")
+
+    output_dir = tmp_path / "summary"
+    exit_code = main(
+        ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+        api=_UnhealthyApi(),
+    )
+
+    assert exit_code == 1

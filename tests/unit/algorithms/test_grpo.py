@@ -797,6 +797,13 @@ class StubAsyncTrajectoryCollector:
         return mock
 
     @property
+    def complete_refit(self):
+        """Complete refit - returns a remote-callable mock"""
+        mock = MagicMock()
+        mock.remote = MagicMock(return_value=MagicMock())
+        return mock
+
+    @property
     def stop(self):
         """Stop collection - returns a remote-callable mock"""
         mock = MagicMock()
@@ -819,6 +826,13 @@ class StubAsyncTrajectoryCollector:
         """
         mock = MagicMock()
         mock.remote = MagicMock(return_value={})
+        return mock
+
+    @property
+    def check_health(self):
+        """Check collector health - returns a remote-callable mock."""
+        mock = MagicMock()
+        mock.remote = MagicMock(return_value=None)
         return mock
 
 
@@ -999,7 +1013,12 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
 
 
 @pytest.mark.parametrize(
-    ("val_at_start", "validation_fails", "expected_before_collection"),
+    (
+        "val_at_start",
+        "validation_fails",
+        "expected_before_collection",
+        "expects_failure",
+    ),
     [
         (
             False,
@@ -1009,7 +1028,9 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
                 "set_weight_version",
                 "weight_version_ready",
                 "start_collection",
+                "collection_started",
             ],
+            False,
         ),
         (
             True,
@@ -1022,7 +1043,9 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
                 "set_weight_version",
                 "weight_version_ready",
                 "start_collection",
+                "collection_started",
             ],
+            False,
         ),
         (
             True,
@@ -1032,10 +1055,8 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
                 "validate",
                 "finish_generation",
                 "prepare_for_generation",
-                "set_weight_version",
-                "weight_version_ready",
-                "start_collection",
             ],
+            True,
         ),
     ],
     ids=["validation-off", "validation-on", "validation-fails"],
@@ -1045,9 +1066,11 @@ def test_async_grpo_prepares_generation_before_starting_collection(
     val_at_start: bool,
     validation_fails: bool,
     expected_before_collection: list[str],
+    expects_failure: bool,
 ) -> None:
     events: list[str] = []
     weight_version_ref = object()
+    start_collection_ref = object()
 
     class _RemoteMethod:
         def __init__(self, event: str, result: Any = None) -> None:
@@ -1060,7 +1083,8 @@ def test_async_grpo_prepares_generation_before_starting_collection(
 
     class _RecordingCollector:
         set_weight_version = _RemoteMethod("set_weight_version", weight_version_ref)
-        start_collection = _RemoteMethod("start_collection", MagicMock())
+        start_collection = _RemoteMethod("start_collection", start_collection_ref)
+        check_health = _RemoteMethod("check_health")
         stop = _RemoteMethod("stop")
         wait_for_stop = _RemoteMethod("wait_for_stop")
         get_efficiency_metrics = _RemoteMethod("get_efficiency_metrics", {})
@@ -1068,11 +1092,11 @@ def test_async_grpo_prepares_generation_before_starting_collection(
     collector_class = MagicMock()
     collector_class.options.return_value.remote.return_value = _RecordingCollector()
     policy_generation = _mock_policy_generation()
-    policy_generation.finish_generation.side_effect = (
-        lambda: events.append("finish_generation") or True
+    policy_generation.finish_generation.side_effect = lambda: (
+        events.append("finish_generation") or True
     )
-    policy_generation.prepare_for_generation.side_effect = (
-        lambda: events.append("prepare_for_generation") or True
+    policy_generation.prepare_for_generation.side_effect = lambda: (
+        events.append("prepare_for_generation") or True
     )
 
     master_config = mock_grpo_components["master_config"]
@@ -1092,6 +1116,9 @@ def test_async_grpo_prepares_generation_before_starting_collection(
     def record_ray_get(ref):
         if ref is weight_version_ref:
             events.append("weight_version_ready")
+            return None
+        if ref is start_collection_ref:
+            events.append("collection_started")
             return None
         if isinstance(ref, (int, str, dict, list)):
             return ref
@@ -1113,23 +1140,44 @@ def test_async_grpo_prepares_generation_before_starting_collection(
         ),
         patch("ray.get", side_effect=record_ray_get),
     ):
-        async_grpo_train(
-            mock_grpo_components["policy"],
-            policy_generation,
-            mock_grpo_components["train_dataloader"],
-            mock_grpo_components["val_dataloader"],
-            mock_grpo_components["tokenizer"],
-            mock_grpo_components["loss_fn"],
-            mock_grpo_components["task_to_env"],
-            mock_grpo_components["val_task_to_env"],
-            mock_grpo_components["logger"],
-            mock_grpo_components["checkpointer"],
-            _default_grpo_save_state(),
-            master_config,
-        )
+        if expects_failure:
+            with pytest.raises(RuntimeError, match="validation failed"):
+                async_grpo_train(
+                    mock_grpo_components["policy"],
+                    policy_generation,
+                    mock_grpo_components["train_dataloader"],
+                    mock_grpo_components["val_dataloader"],
+                    mock_grpo_components["tokenizer"],
+                    mock_grpo_components["loss_fn"],
+                    mock_grpo_components["task_to_env"],
+                    mock_grpo_components["val_task_to_env"],
+                    mock_grpo_components["logger"],
+                    mock_grpo_components["checkpointer"],
+                    _default_grpo_save_state(),
+                    master_config,
+                )
+        else:
+            async_grpo_train(
+                mock_grpo_components["policy"],
+                policy_generation,
+                mock_grpo_components["train_dataloader"],
+                mock_grpo_components["val_dataloader"],
+                mock_grpo_components["tokenizer"],
+                mock_grpo_components["loss_fn"],
+                mock_grpo_components["task_to_env"],
+                mock_grpo_components["val_task_to_env"],
+                mock_grpo_components["logger"],
+                mock_grpo_components["checkpointer"],
+                _default_grpo_save_state(),
+                master_config,
+            )
 
-    start_index = events.index("start_collection")
-    assert events[: start_index + 1] == expected_before_collection
+    if expects_failure:
+        assert "start_collection" not in events
+        assert events == expected_before_collection
+    else:
+        collection_started_index = events.index("collection_started")
+        assert events[: collection_started_index + 1] == expected_before_collection
 
 
 @contextmanager

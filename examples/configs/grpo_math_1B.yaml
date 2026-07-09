@@ -51,6 +51,7 @@ grpo:
     max_trajectory_age_steps: 1
     in_flight_weight_updates: false # Set to true to enable in-flight weight updates
     recompute_kv_cache_after_weight_updates: false # Set to true to recompute kv cache after in-flight-weight-updates
+    pending_generation_timeout_s: 600.0 # Fail the job if validation/refit cannot drain rollout workers within this time
 
 # Reward-zeroing penalties applied to NeMo-Gym rollout results.
 reward_penalties:

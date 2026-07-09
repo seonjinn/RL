@@ -1103,7 +1103,10 @@ class TestAsyncTrajectoryCollector:
                 "num_prompts_per_step": 2,
                 "num_generations_per_prompt": 3,
                 "max_rollout_turns": 1,
-                "async_grpo": {"max_trajectory_age_steps": 2},
+                "async_grpo": {
+                    "max_trajectory_age_steps": 2,
+                    "pending_generation_timeout_s": 600.0,
+                },
             },
             "policy": {
                 "max_total_sequence_length": 512,
@@ -1235,6 +1238,31 @@ class TestAsyncTrajectoryCollector:
         ray.kill(collector)
         ray.kill(buffer)
         ray.kill(mock_env)
+
+    def test_resume_after_refit_keeps_collection_paused_when_cache_reset_fails(
+        self,
+    ):
+        """A requested KV recompute must fail closed after an unsuccessful reset."""
+        collector = self.create_local_collector()
+        collector.master_config.grpo["async_grpo"].update(
+            {
+                "in_flight_weight_updates": True,
+                "recompute_kv_cache_after_weight_updates": True,
+            }
+        )
+        collector.master_config.policy["generation"] = {
+            "backend": "vllm",
+            "vllm_cfg": {},
+        }
+        collector._refit_pause_cleared.clear()
+        collector.policy_generation.invalidate_kv_cache = mock.MagicMock(
+            return_value=False
+        )
+
+        with pytest.raises(RuntimeError, match="cache invalidation failed"):
+            collector.resume_after_refit()
+
+        assert not collector._refit_pause_cleared.is_set()
 
     def test_calculate_target_weights(self):
         """Test target weight calculation logic."""

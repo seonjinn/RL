@@ -165,6 +165,30 @@ def test_generation_cache_invalidation_preempts_running_requests(monkeypatch) ->
     ]
 
 
+@pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([], False),
+        ([None], False),
+        ([True, None], True),
+        ([False, None], False),
+    ],
+)
+def test_generation_cache_invalidation_requires_a_successful_owner_result(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_results: list[bool | None],
+    expected: bool,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = SimpleNamespace(
+        run_all_workers_single_data=lambda *_args, **_kwargs: [object()]
+    )
+    monkeypatch.setattr("ray.get", lambda _futures: worker_results)
+
+    assert generation.invalidate_kv_cache() is expected
+
+
 def test_finish_generation_does_not_preempt_running_requests(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
 

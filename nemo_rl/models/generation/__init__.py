@@ -94,14 +94,20 @@ def validate_vllm_speculative_config(
             f"'probabilistic'. Got {draft_sample_method!r}."
         )
 
-    dynamic_schedule = speculative_config.get(
-        "num_speculative_tokens_per_batch_size"
-    )
+    dynamic_schedule = speculative_config.get("num_speculative_tokens_per_batch_size")
     if dynamic_schedule is not None:
         if method in _FIXED_K_DYNAMIC_UNSUPPORTED_METHODS:
             raise ValueError(
                 "Dynamic speculative decoding cannot use the fixed-K proposer "
                 f"for method={method!r} with vLLM 0.24."
+            )
+        if method == "draft_model" and speculative_config.get(
+            "parallel_drafting", False
+        ):
+            raise ValueError(
+                "Dynamic speculative decoding cannot use parallel draft_model "
+                "with vLLM 0.24 because runtime K does not resize the fixed-width "
+                "parallel draft buffers. Use a static num_speculative_tokens value."
             )
         target_tp = config["vllm_cfg"]["tensor_parallel_size"]
         expert_parallel_size = config["vllm_cfg"].get("expert_parallel_size", 1)
@@ -305,9 +311,9 @@ def configure_generation_config(
     # vllm setting
     if config["backend"] == "vllm":
         config = cast(VllmConfig, config)
-        if not is_eval and config["temperature"] < 1e-5:
+        if not is_eval and config["temperature"] < 0.01:
             raise ValueError(
-                "vLLM policy training requires temperature >= 1e-5 so rollout "
+                "vLLM policy training requires temperature >= 0.01 so rollout "
                 "and recomputed policy logprobs use the same sampling semantics. "
                 "Use the greedy=True generation path for deterministic decoding."
             )

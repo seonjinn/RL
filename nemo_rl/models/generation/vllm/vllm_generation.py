@@ -1083,7 +1083,10 @@ class VllmGeneration(GenerationInterface):
                 reset_running_requests=True,
             )
             results = ray.get(futures)
-            return all(result for result in results if result is not None)
+            owner_results = [result for result in results if result is not None]
+            return bool(owner_results) and all(
+                result is True for result in owner_results
+            )
         except Exception as e:
             print(f"Error invalidating vLLM caches: {e}")
             return False

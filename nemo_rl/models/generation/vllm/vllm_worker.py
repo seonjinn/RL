@@ -539,6 +539,7 @@ class BaseVllmGenerationWorker:
         greedy: bool,
         stop_strings,
         max_new_tokens: Optional[int] = None,
+        include_logprobs: bool = True,
     ):
         top_k_cfg = self.cfg["top_k"]
         top_k_val = 1 if greedy else (top_k_cfg if top_k_cfg is not None else -1)
@@ -554,7 +555,7 @@ class BaseVllmGenerationWorker:
             top_p=self.cfg["top_p"],
             top_k=top_k_val,
             max_tokens=max_tokens,
-            logprobs=0,
+            logprobs=0 if include_logprobs else None,
             stop_token_ids=self.cfg["stop_token_ids"],
             stop=stop_strings,
             include_stop_str_in_output=True,

@@ -25,6 +25,77 @@ from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 R3_MISSING_ROUTE_SENTINEL = -1
 
 
+def validate_openai_sampling_request(
+    request: Any, generation_config: dict[str, Any]
+) -> None:
+    """Reject HTTP sampling modifiers that training logprob replay cannot model.
+
+    NeMo-RL recomputes the rollout distribution with temperature, top-p, and
+    top-k only. Letting the OpenAI endpoint apply another logits processor makes
+    the captured behavior policy inconsistent with training-side logprobs.
+    """
+    configured_top_k = generation_config["top_k"]
+    effective_top_k = -1 if configured_top_k is None else configured_top_k
+    if request.top_k not in (None, -1, effective_top_k):
+        raise ValueError(
+            "top_k must be unset or match the NeMo-RL generation config; "
+            f"got {request.top_k!r}, expected {effective_top_k!r}."
+        )
+    if request.temperature != generation_config["temperature"]:
+        raise ValueError(
+            "temperature must match the NeMo-RL generation config; "
+            f"got {request.temperature!r}, expected "
+            f"{generation_config['temperature']!r}."
+        )
+    if request.top_p != generation_config["top_p"]:
+        raise ValueError(
+            "top_p must match the NeMo-RL generation config; "
+            f"got {request.top_p!r}, expected {generation_config['top_p']!r}."
+        )
+
+    neutral_values = {
+        "presence_penalty": (None, 0.0),
+        "frequency_penalty": (None, 0.0),
+        "repetition_penalty": (None, 1.0),
+        "min_p": (None, 0.0),
+        "logit_bias": (None, {}),
+        "allowed_token_ids": (None,),
+        "bad_words": (None, []),
+        "use_beam_search": (None, False),
+        "min_tokens": (None, 0),
+        "thinking_token_budget": (None,),
+        "structured_outputs": (None,),
+        "response_format": (None,),
+        "stop": (None, []),
+        "stop_token_ids": (None, []),
+        "include_stop_str_in_output": (None, False),
+        "ignore_eos": (None, False),
+        "repetition_detection": (None,),
+        "vllm_xargs": (None, {}),
+        "truncate_prompt_tokens": (None,),
+        "truncation_side": (None,),
+        "add_generation_prompt": (None, True),
+        "continue_final_message": (None, False),
+        "add_special_tokens": (None, False),
+        "chat_template": (None,),
+        "documents": (None, []),
+        "media_io_kwargs": (None, {}),
+        "mm_processor_kwargs": (None, {}),
+    }
+    for field, allowed in neutral_values.items():
+        value = getattr(request, field, None)
+        if value not in allowed:
+            raise ValueError(
+                f"{field}={value!r} changes the rollout distribution, but "
+                "NeMo-RL training logprob replay does not model this modifier."
+            )
+
+    # Avoid model-level generation_config defaults silently enabling processors.
+    request.top_k = effective_top_k
+    request.repetition_penalty = 1.0
+    request.min_p = 0.0
+
+
 def extract_generated_token_logprobs(
     generated_token_ids: Sequence[int],
     token_logprobs: Sequence[Mapping[int, Any] | None] | None,

@@ -282,21 +282,27 @@ Depending on your data shape, you may want to change these values."""
                 nemo_rl_rowidxs.append(nemo_gym_row["_rowidx"])
                 nemo_rl_results.append(nemo_rl_result)
 
-            # determine if generation_logprobs contain NaN; if not, break;
-            logprob_contains_nan = False
+            # Invalid behavior logprobs cannot be used to train the policy.
+            logprob_contains_nonfinite = False
             for nemo_rl_result in nemo_rl_results:
                 for message in nemo_rl_result["message_log"]:
                     if (
                         "generation_logprobs" in message
                         and message["generation_logprobs"] is not None
                     ):
-                        if torch.isnan(message["generation_logprobs"]).any():
-                            logprob_contains_nan = True
+                        if not torch.isfinite(message["generation_logprobs"]).all():
+                            logprob_contains_nonfinite = True
                             break
-            if logprob_contains_nan:
+            if logprob_contains_nonfinite:
                 trial += 1
+                if trial >= max_attempts:
+                    raise RuntimeError(
+                        "NeMo Gym returned non-finite generation logprobs after "
+                        f"{max_attempts} attempts."
+                    )
                 print(
-                    f"Generation logprobs contain NaN; retrying... (trial {trial}/{max_attempts})"
+                    "Generation logprobs contain non-finite values; retrying... "
+                    f"(trial {trial}/{max_attempts})"
                 )
                 continue
             else:
@@ -346,6 +352,12 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
             prompt_token_ids = output_item_dict.pop("prompt_token_ids")
             generation_token_ids = output_item_dict.pop("generation_token_ids")
             generation_log_probs = output_item_dict.pop("generation_log_probs")
+            if len(generation_token_ids) != len(generation_log_probs):
+                raise ValueError(
+                    "NeMo Gym generation token/logprob length mismatch: "
+                    f"tokens={len(generation_token_ids)}, "
+                    f"logprobs={len(generation_log_probs)}."
+                )
             routed_experts_raw = output_item_dict.pop("routed_experts", None)
             new_prompt_token_ids = prompt_token_ids[len(seen_token_ids) :]
 
@@ -481,6 +493,21 @@ def setup_nemo_gym_config(config, tokenizer) -> None:
     generation_config["vllm_cfg"]["async_engine"] = True
     generation_config["vllm_cfg"]["expose_http_server"] = True
 
-    # Stop strings or token ids are not supported
+    # configure_generation_config inserts the tokenizer EOS id when no user
+    # stop ids were supplied. That canonical default is safe; every other
+    # request-level stop criterion changes the Gym rollout contract.
+    stop_token_ids = generation_config["stop_token_ids"]
+    if stop_token_ids not in (None, [], [tokenizer.eos_token_id]):
+        raise ValueError(
+            "NeMo Gym does not support policy.generation.stop_token_ids; "
+            "remove the configured stop criteria instead of silently "
+            "changing rollout termination."
+        )
+    if generation_config["stop_strings"] not in (None, []):
+        raise ValueError(
+            "NeMo Gym does not support policy.generation.stop_strings; "
+            "remove the configured stop criteria instead of silently "
+            "changing rollout termination."
+        )
     generation_config["stop_strings"] = None
     generation_config["stop_token_ids"] = None
