@@ -1325,16 +1325,9 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 [per_prompt_stop_strings] if per_prompt_stop_strings else None
             )
 
-            # Create sampling parameters
-            top_k = self.cfg["top_k"] if self.cfg["top_k"] is not None else -1
-            sampling_params = self.SamplingParams(
-                temperature=self.cfg["temperature"] if not greedy else 0,
-                top_p=self.cfg["top_p"],
-                top_k=top_k if not greedy else 1,
-                max_tokens=self.cfg["max_new_tokens"],
-                stop_token_ids=self.cfg["stop_token_ids"],
-                stop=final_stop_strings,
-                include_stop_str_in_output=True,  # returning stop strings like hf
+            sampling_params = self._build_sampling_params(
+                greedy=greedy,
+                stop_strings=final_stop_strings,
             )
 
             request_id = str(uuid.uuid4())

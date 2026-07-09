@@ -3797,7 +3797,7 @@ def async_grpo_train(
                     "Policy generation could not be prepared after initial validation."
                 )
 
-    trajectory_collector.set_weight_version.remote(weight_version)
+    ray.get(trajectory_collector.set_weight_version.remote(weight_version))
     trajectory_collector.start_collection.remote(dataloader)
     print("📦 Started continuous background trajectory collection")
 

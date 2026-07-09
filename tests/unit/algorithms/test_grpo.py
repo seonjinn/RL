@@ -1001,7 +1001,16 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
 @pytest.mark.parametrize(
     ("val_at_start", "validation_fails", "expected_before_collection"),
     [
-        (False, False, ["refit", "set_weight_version", "start_collection"]),
+        (
+            False,
+            False,
+            [
+                "refit",
+                "set_weight_version",
+                "weight_version_ready",
+                "start_collection",
+            ],
+        ),
         (
             True,
             False,
@@ -1011,6 +1020,7 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
                 "finish_generation",
                 "prepare_for_generation",
                 "set_weight_version",
+                "weight_version_ready",
                 "start_collection",
             ],
         ),
@@ -1023,6 +1033,7 @@ def test_async_weight_update_safety_allows_non_overlapping_modes(
                 "finish_generation",
                 "prepare_for_generation",
                 "set_weight_version",
+                "weight_version_ready",
                 "start_collection",
             ],
         ),
@@ -1036,6 +1047,7 @@ def test_async_grpo_prepares_generation_before_starting_collection(
     expected_before_collection: list[str],
 ) -> None:
     events: list[str] = []
+    weight_version_ref = object()
 
     class _RemoteMethod:
         def __init__(self, event: str, result: Any = None) -> None:
@@ -1047,7 +1059,7 @@ def test_async_grpo_prepares_generation_before_starting_collection(
             return self.result
 
     class _RecordingCollector:
-        set_weight_version = _RemoteMethod("set_weight_version")
+        set_weight_version = _RemoteMethod("set_weight_version", weight_version_ref)
         start_collection = _RemoteMethod("start_collection", MagicMock())
         stop = _RemoteMethod("stop")
         wait_for_stop = _RemoteMethod("wait_for_stop")
@@ -1077,6 +1089,14 @@ def test_async_grpo_prepares_generation_before_starting_collection(
             raise RuntimeError("validation failed")
         return {}, {}
 
+    def record_ray_get(ref):
+        if ref is weight_version_ref:
+            events.append("weight_version_ready")
+            return None
+        if isinstance(ref, (int, str, dict, list)):
+            return ref
+        return None
+
     with (
         mock_async_grpo_infrastructure(mock_batch, {}),
         patch(
@@ -1091,6 +1111,7 @@ def test_async_grpo_prepares_generation_before_starting_collection(
             "nemo_rl.algorithms.grpo.validate",
             side_effect=record_validation,
         ),
+        patch("ray.get", side_effect=record_ray_get),
     ):
         async_grpo_train(
             mock_grpo_components["policy"],

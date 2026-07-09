@@ -16,8 +16,11 @@ class _BlockingLLM:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.cancelled = asyncio.Event()
+        self.sampling_params: Any = None
 
-    def generate(self, **_kwargs: Any):
+    def generate(self, *, sampling_params: Any, **_kwargs: Any):
+        self.sampling_params = sampling_params
+
         async def stream():
             self.started.set()
             try:
@@ -77,11 +80,13 @@ def test_generate_text_async_cancellation_stops_child_request_task() -> None:
     async def exercise() -> None:
         llm = _BlockingLLM()
         worker = _make_async_worker(llm)
+        worker.cfg["ignore_eos"] = True
         data = BatchedDataDict({"prompts": ["hello"]})
         generation = worker.generate_text_async(data)
         next_result = asyncio.create_task(anext(generation))
 
         await asyncio.wait_for(llm.started.wait(), timeout=0.5)
+        assert llm.sampling_params["ignore_eos"] is True
         next_result.cancel()
         with pytest.raises(asyncio.CancelledError):
             await next_result

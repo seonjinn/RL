@@ -775,42 +775,44 @@ class VllmGeneration(GenerationInterface):
         )  # Default 15 minutes
 
         try:
-            sample_result_ref = await asyncio.wait_for(
-                anext(worker_gen_proxy), timeout=timeout_seconds
-            )
-        except asyncio.TimeoutError:
-            ray.cancel(worker_gen_proxy)
-            raise RuntimeError(
-                f"Timeout before yielding a worker result after {timeout_seconds}s. "
-                "The worker may be stuck in preemption, retry, or engine recovery."
-            )
-        except StopAsyncIteration:
-            raise RuntimeError(
-                f"Worker produced no output for the given sample {data}."
-            )
+            try:
+                sample_result_ref = await asyncio.wait_for(
+                    anext(worker_gen_proxy), timeout=timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    "Timeout before yielding a worker result after "
+                    f"{timeout_seconds}s. The worker may be stuck in preemption, "
+                    "retry, or engine recovery."
+                )
+            except StopAsyncIteration:
+                raise RuntimeError(
+                    f"Worker produced no output for the given sample {data}."
+                )
 
-        # Materialize the result from Ray's object store. ``anext`` above
-        # resolves when the worker yields, but the object bytes have not yet
-        # crossed the network to the driver — this is where that happens, and
-        # where a Ray deadlock / unreachable worker would manifest, hence the
-        # timeout.
-        try:
-            sample_result = await asyncio.wait_for(
-                sample_result_ref, timeout=timeout_seconds
-            )
-        except asyncio.TimeoutError:
-            ray.cancel(worker_gen_proxy)
-            raise RuntimeError(
-                f"Timeout waiting for worker results after {timeout_seconds}s. "
-                f"For longer sequences, increase timeout by setting: "
-                f"export NRL_VLLM_ASYNC_TIMEOUT_SECONDS="
-                f"{int(timeout_seconds * 2)}"
-            )
+            # Materialize the result from Ray's object store. ``anext`` above
+            # resolves when the worker yields, but the object bytes have not yet
+            # crossed the network to the driver — this is where that happens, and
+            # where a Ray deadlock / unreachable worker would manifest, hence the
+            # timeout.
+            try:
+                sample_result = await asyncio.wait_for(
+                    sample_result_ref, timeout=timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"Timeout waiting for worker results after {timeout_seconds}s. "
+                    f"For longer sequences, increase timeout by setting: "
+                    f"export NRL_VLLM_ASYNC_TIMEOUT_SECONDS="
+                    f"{int(timeout_seconds * 2)}"
+                )
 
-        # sample_result is a tuple: (original_idx, BatchedDataDict).
-        original_idx, result_batch = sample_result
-        result_batch["gen_leader_worker_idx"] = [int(leader_worker_idx)]
-        yield (original_idx, result_batch)
+            # sample_result is a tuple: (original_idx, BatchedDataDict).
+            original_idx, result_batch = sample_result
+            result_batch["gen_leader_worker_idx"] = [int(leader_worker_idx)]
+            yield (original_idx, result_batch)
+        finally:
+            ray.cancel(worker_gen_proxy)
 
     async def generate_text_async(
         self, data: BatchedDataDict[GenerationDatumSpec], greedy: bool = False
