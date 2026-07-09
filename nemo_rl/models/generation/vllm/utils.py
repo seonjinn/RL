@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
 import torch
@@ -21,6 +23,44 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 
 R3_MISSING_ROUTE_SENTINEL = -1
+
+
+def extract_generated_token_logprobs(
+    generated_token_ids: Sequence[int],
+    token_logprobs: Sequence[Mapping[int, Any] | None] | None,
+) -> list[float]:
+    """Return one finite processed logprob for every generated token."""
+    if not generated_token_ids:
+        return []
+    if not token_logprobs:
+        raise RuntimeError(
+            "vLLM did not return processed logprobs for generated tokens."
+        )
+    if len(token_logprobs) != len(generated_token_ids):
+        raise RuntimeError(
+            "vLLM generated-token logprob count does not match the generated "
+            f"token count: logprobs={len(token_logprobs)}, "
+            f"tokens={len(generated_token_ids)}."
+        )
+
+    values: list[float] = []
+    for position, (token_id, candidates) in enumerate(
+        zip(generated_token_ids, token_logprobs, strict=True)
+    ):
+        record = candidates.get(token_id) if candidates is not None else None
+        if record is None:
+            raise RuntimeError(
+                "vLLM processed logprobs do not contain the chosen token "
+                f"{token_id} at generated position {position}."
+            )
+        value = float(record.logprob)
+        if not math.isfinite(value):
+            raise RuntimeError(
+                "vLLM returned a non-finite processed logprob for chosen token "
+                f"{token_id} at generated position {position}: {value}."
+            )
+        values.append(value)
+    return values
 
 
 def format_prompt_for_vllm_generation(

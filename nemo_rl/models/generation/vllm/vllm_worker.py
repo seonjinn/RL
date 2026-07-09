@@ -17,6 +17,7 @@ import gc
 import logging
 import os
 import sys
+from collections.abc import Sequence
 from typing import Any, Optional, cast
 
 import ray
@@ -37,6 +38,7 @@ from nemo_rl.models.generation.interfaces import (
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
 from nemo_rl.models.generation.vllm.utils import (
+    extract_generated_token_logprobs,
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
 )
@@ -46,6 +48,19 @@ from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 
 logger = logging.getLogger(__name__)
+
+
+def _all_worker_results_succeeded(
+    worker_results: Optional[Sequence[Any]],
+) -> bool:
+    return bool(worker_results) and all(bool(result) for result in worker_results)
+
+
+def _mtp_load_results_succeeded(
+    worker_results: Optional[Sequence[Any]],
+) -> bool:
+    owner_results = [result for result in worker_results or () if result is not None]
+    return bool(owner_results) and all(bool(result) for result in owner_results)
 
 
 def _resolve_enable_prefix_caching(vllm_cfg: dict[str, Any]) -> bool:
@@ -128,9 +143,7 @@ class BaseVllmGenerationWorker:
                 elif len(local_bundle_indices) == 1:
                     engine_index = local_bundle_indices[0]
                 else:
-                    engine_index = local_bundle_indices[0] // len(
-                        local_bundle_indices
-                    )
+                    engine_index = local_bundle_indices[0] // len(local_bundle_indices)
                 port_base = int(
                     os.environ.get("VLLM_PORT", DEFAULT_VLLM_PORT_RANGE_LOW)
                 )
@@ -595,9 +608,14 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
     def post_init(self):
         self.vllm_device_ids = self.report_device_id()
         if self._mtp_load_from_disk:
-            self.llm.collective_rpc(
+            worker_results = self.llm.collective_rpc(
                 "load_mtp_weights_from_disk", args=(self.model_name,)
             )
+            if not _mtp_load_results_succeeded(worker_results):
+                raise RuntimeError(
+                    "MTP draft weight loading failed on one or more vLLM workers. "
+                    f"Results: {worker_results}"
+                )
 
     def init_collective(
         self,
@@ -714,18 +732,14 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
 
             output_ids_list.append(full_output)
             full_logprobs = torch.zeros(total_length, dtype=torch.float32)
-            if hasattr(generation, "logprobs") and generation.logprobs:
-                try:
-                    for idx, logprob_dict in enumerate(generation.logprobs):
-                        if logprob_dict:
-                            position = sequence_length + idx
-                            full_logprobs[position] = next(iter(logprob_dict.items()))[
-                                1
-                            ].logprob
-                except Exception:
-                    import traceback
-
-                    traceback.print_exc()
+            generated_logprobs = extract_generated_token_logprobs(
+                generated_tokens,
+                getattr(generation, "logprobs", None),
+            )
+            if generated_logprobs:
+                full_logprobs[
+                    sequence_length : sequence_length + len(generated_logprobs)
+                ] = torch.tensor(generated_logprobs, dtype=torch.float32)
 
             logprobs_list.append(full_logprobs)
 
@@ -911,11 +925,11 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "update_weights_via_ipc_zmq",
                 args=tuple(),
             )
-            worker_result = result_or_coro[0]
 
-            if not worker_result:
+            if not _all_worker_results_succeeded(result_or_coro):
                 print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
+                    "Error: One or more workers failed to update weights. "
+                    f"Results: {result_or_coro}"
                 )
                 return False
             return True
@@ -942,11 +956,11 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             result_or_coro = self.llm.collective_rpc(
                 "update_weights_from_collective", args=tuple()
             )
-            worker_result = result_or_coro[0]
 
-            if not worker_result:
+            if not _all_worker_results_succeeded(result_or_coro):
                 print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
+                    "Error: One or more workers failed to update weights. "
+                    f"Results: {result_or_coro}"
                 )
                 return False
             return True

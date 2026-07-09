@@ -1263,6 +1263,61 @@ class TestValidateTrainingConfig:
         assert model_cfg.calculate_per_token_loss is True
         assert model_cfg.perform_initialization is True
 
+    @pytest.mark.parametrize(
+        ("config_update", "match"),
+        [
+            (
+                {"draft": {"enabled": True}, "sequence_packing": {"enabled": True}},
+                "Online draft training does not support sequence packing",
+            ),
+            (
+                {
+                    "megatron_cfg": {
+                        "mtp_num_layers": 1,
+                        "use_fused_linear_logprobs": True,
+                    }
+                },
+                "MTP training does not support use_fused_linear_logprobs",
+            ),
+            (
+                {"megatron_cfg": {"mtp_num_layers": 1, "mtp_detach_heads": False}},
+                "MTP training requires mtp_detach_heads=true",
+            ),
+        ],
+    )
+    def test_training_config_rejects_unsafe_specdec_combinations(
+        self, config_update, match
+    ):
+        from nemo_rl.models.megatron.setup import _validate_training_config
+
+        config = {
+            "draft": {"enabled": False},
+            "sequence_packing": {"enabled": False},
+            "megatron_cfg": {"train_iters": 1000},
+        }
+        for key, value in config_update.items():
+            if key == "megatron_cfg":
+                config[key].update(value)
+            else:
+                config[key] = value
+
+        with pytest.raises(ValueError, match=match):
+            _validate_training_config(config, MagicMock())
+
+    def test_training_config_defaults_mtp_detach_heads_to_true(self):
+        from nemo_rl.models.megatron.setup import _validate_training_config
+
+        config = {
+            "draft": {"enabled": False},
+            "sequence_packing": {"enabled": False},
+            "megatron_cfg": {"train_iters": 1000, "mtp_num_layers": 1},
+        }
+        model_cfg = MagicMock()
+
+        _validate_training_config(config, model_cfg)
+
+        assert model_cfg.mtp_detach_heads is True
+
     def test_moe_aux_loss_now_supported(self):
         """Test that MoE aux loss with a non-zero coefficient is now allowed.
 
@@ -2340,6 +2395,45 @@ class TestDraftSetup:
             draft_model=draft_model,
             policy_model_chunk=policy_model_chunk,
         )
+
+    @patch("nemo_rl.models.megatron.draft.utils.load_hf_weights_to_eagle")
+    @patch("nemo_rl.models.megatron.draft.eagle.EagleModel")
+    @patch("transformers.AutoConfig.from_pretrained")
+    def test_build_draft_model_rejects_partial_checkpoint(
+        self,
+        mock_auto_config,
+        mock_eagle_model,
+        mock_load_hf_weights,
+    ):
+        from nemo_rl.models.megatron.setup import build_draft_model
+
+        mock_auto_config.return_value.to_dict.return_value = {
+            "num_hidden_layers": 2,
+            "intermediate_size": 16,
+            "num_attention_heads": 2,
+            "head_dim": 4,
+            "num_key_value_heads": 2,
+            "rms_norm_eps": 1e-5,
+            "attention_dropout": 0.0,
+            "hidden_size": 8,
+            "vocab_size": 8,
+            "eagle_aux_hidden_state_layer_ids": [0, 2],
+        }
+        draft_model = MagicMock()
+        draft_model.modules.return_value = []
+        mock_eagle_model.return_value = draft_model
+        mock_load_hf_weights.return_value = (
+            ["eagle_module.decoder.layers.0.self_attention.linear_qkv.weight"],
+            [],
+        )
+
+        with pytest.raises(RuntimeError, match="Draft checkpoint is incomplete"):
+            build_draft_model(
+                model_provider=self._build_model_provider(),
+                draft_config={"enabled": True, "model_name": "partial-draft"},
+                pg_collection=SimpleNamespace(tp=None),
+                policy_model_chunk=MagicMock(),
+            )
 
     @patch("nemo_rl.models.megatron.draft.utils.unwrap_model")
     def test_copy_policy_lm_head_to_draft_raises_on_shape_mismatch(

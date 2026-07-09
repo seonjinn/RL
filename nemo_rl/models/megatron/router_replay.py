@@ -123,6 +123,8 @@ def _router_replay_instances_for_model(model: Any) -> list[tuple[Any, int]]:
     instances: list[tuple[Any, int]] = []
     seen: set[int] = set()
     for module in _iter_model_modules(model):
+        if getattr(module, "is_mtp_layer", False):
+            continue
         replay = getattr(module, "router_replay", None)
         layer_number = getattr(module, "layer_number", None)
         if replay is None or layer_number is None:
@@ -137,6 +139,8 @@ def _router_replay_instances_for_model(model: Any) -> list[tuple[Any, int]]:
 def _local_layer_numbers_for_model(model: Any) -> set[int]:
     layer_numbers: set[int] = set()
     for module in _iter_model_modules(model):
+        if getattr(module, "is_mtp_layer", False):
+            continue
         layer_number = getattr(module, "layer_number", None)
         if layer_number is None:
             continue

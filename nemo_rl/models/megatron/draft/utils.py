@@ -1337,9 +1337,15 @@ def build_draft_model(
                 "initialized draft LM head from the policy output layer."
             )
         if missing_keys:
-            print(f"[draft] Missing keys after draft load: {missing_keys}")
+            raise RuntimeError(
+                "[draft] Draft checkpoint is incomplete; missing required keys: "
+                f"{missing_keys}"
+            )
         if unexpected_keys:
-            print(f"[draft] Unexpected keys after draft load: {unexpected_keys}")
+            raise RuntimeError(
+                "[draft] Draft checkpoint contains unexpected mapped keys: "
+                f"{unexpected_keys}"
+            )
     else:
         copy_policy_lm_head_to_draft(
             draft_model=draft_model,

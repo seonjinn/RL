@@ -231,6 +231,48 @@ def test_router_replay_assignments_use_layer_numbers_for_model_chunks():
 
 
 @pytest.mark.mcore
+def test_router_replay_assignments_exclude_mtp_routers():
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron.router_replay import build_router_replay_assignments
+
+    RouterReplay.clear_global_router_replay_instances()
+
+    class DummyRouter(torch.nn.Module):
+        def __init__(self, *, layer_number, is_mtp_layer):
+            super().__init__()
+            self.router_replay = RouterReplay()
+            self.layer_number = layer_number
+            self.is_mtp_layer = is_mtp_layer
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(num_layers=2, moe_layer_freq=[1, 1])
+            self.base_router = DummyRouter(
+                layer_number=1,
+                is_mtp_layer=False,
+            )
+            self.mtp_router = DummyRouter(
+                layer_number=1,
+                is_mtp_layer=True,
+            )
+
+    try:
+        model = DummyModel()
+        routed_experts = torch.tensor([[[3, 4], [5, 6]]], dtype=torch.int32)
+
+        assignments = build_router_replay_assignments(model, routed_experts)
+
+        assert len(assignments) == 1
+        replay, replay_tensor = assignments[0]
+        assert replay is model.base_router.router_replay
+        assert torch.equal(replay_tensor, routed_experts[:, 0, :].to(torch.long))
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
 def test_build_router_replay_tensors_rejects_partial_padded_layer_payload():
     from megatron.core.transformer.moe.router_replay import RouterReplay
 

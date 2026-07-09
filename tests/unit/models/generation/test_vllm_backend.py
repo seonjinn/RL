@@ -18,7 +18,10 @@
 
 import contextlib
 import json
-from types import SimpleNamespace
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -61,17 +64,194 @@ def _make_extension_with_drafter(mtp_start_layer_idx, num_mtp_layers):
     return ext
 
 
-def _patch_vllm_postload(monkeypatch):
+def _patch_vllm_postload(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Stub the vLLM post-load helpers imported inside load_mtp_weights_from_disk."""
-    monkeypatch.setattr(
-        "vllm.config.set_current_vllm_config", lambda cfg: contextlib.nullcontext()
-    )
+
+    def set_current_vllm_config(
+        _config: object,
+    ) -> contextlib.AbstractContextManager[None]:
+        return contextlib.nullcontext()
+
+    config_module = ModuleType("vllm.config")
+    setattr(config_module, "set_current_vllm_config", set_current_vllm_config)
     process_weights = MagicMock()
-    monkeypatch.setattr(
-        "vllm.model_executor.model_loader.utils.process_weights_after_loading",
-        process_weights,
+    model_executor_module = ModuleType("vllm.model_executor")
+    model_loader_module = ModuleType("vllm.model_executor.model_loader")
+    model_loader_utils_module = ModuleType("vllm.model_executor.model_loader.utils")
+    setattr(model_loader_utils_module, "process_weights_after_loading", process_weights)
+    monkeypatch.setitem(sys.modules, "vllm.config", config_module)
+    monkeypatch.setitem(sys.modules, "vllm.model_executor", model_executor_module)
+    monkeypatch.setitem(
+        sys.modules, "vllm.model_executor.model_loader", model_loader_module
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.model_executor.model_loader.utils",
+        model_loader_utils_module,
     )
     return process_weights
+
+
+def _patch_pp_rank(monkeypatch: pytest.MonkeyPatch, *, is_last_rank: bool) -> None:
+    parallel_state_module = ModuleType("vllm.distributed.parallel_state")
+    setattr(
+        parallel_state_module,
+        "get_pp_group",
+        lambda: SimpleNamespace(is_last_rank=is_last_rank),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.distributed.parallel_state",
+        parallel_state_module,
+    )
+
+
+def _make_extension_for_draft_load(draft_model: object | None) -> Any:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext: Any = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext.model_runner = SimpleNamespace(
+        drafter=None if draft_model is None else SimpleNamespace(model=draft_model)
+    )
+    return ext
+
+
+@pytest.mark.vllm
+def test_split_policy_and_draft_weights_routes_mtp_layers_and_buffers() -> None:
+    predictor = SimpleNamespace(mtp_start_layer_idx=2, num_mtp_layers=1)
+    draft_model = SimpleNamespace(model=predictor)
+    ext = _make_extension_for_draft_load(draft_model)
+    policy_weight = torch.randn(1)
+    mtp_weight = torch.randn(1)
+    mtp_buffer = torch.randn(1)
+
+    policy_weights, draft_weights = ext._split_policy_and_draft_weights(
+        [
+            ("model.layers.0.self_attn.q_proj.weight", policy_weight),
+            ("model.layers.2.self_attn.q_proj.weight", mtp_weight),
+            (
+                "model.layers.2.mlp.gate.e_score_correction_bias",
+                mtp_buffer,
+            ),
+        ]
+    )
+
+    assert policy_weights == [("model.layers.0.self_attn.q_proj.weight", policy_weight)]
+    assert draft_weights == [
+        ("model.layers.2.self_attn.q_proj.weight", mtp_weight),
+        ("model.layers.2.mlp.gate.e_score_correction_bias", mtp_buffer),
+    ]
+
+
+@pytest.mark.vllm
+def test_split_policy_and_draft_weights_keeps_eagle_prefix_contract() -> None:
+    ext = _make_extension_for_draft_load(draft_model=SimpleNamespace())
+    weight = torch.randn(1)
+
+    policy_weights, draft_weights = ext._split_policy_and_draft_weights(
+        [("draft.fc.weight", weight)]
+    )
+
+    assert policy_weights == []
+    assert draft_weights == [("fc.weight", weight)]
+
+
+@pytest.mark.vllm
+def test_load_draft_weights_is_noop_for_empty_input_without_drafter() -> None:
+    ext = _make_extension_for_draft_load(draft_model=None)
+
+    ext._load_draft_weights([])
+
+
+@pytest.mark.vllm
+def test_load_draft_weights_raises_for_nonempty_input_without_drafter() -> None:
+    ext = _make_extension_for_draft_load(draft_model=None)
+
+    with pytest.raises(RuntimeError, match="draft weights.*drafter is unavailable"):
+        ext._load_draft_weights([("model.layers.0.weight", torch.randn(1))])
+
+
+@pytest.mark.vllm
+def test_load_draft_weights_calls_loader_once_with_trimmed_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=None))
+    ext = _make_extension_for_draft_load(draft_model)
+    trimmed_weights = [("model.layers.0.weight", torch.randn(1))]
+    trim_vocab_padding = MagicMock(return_value=trimmed_weights)
+    monkeypatch.setattr(ext, "_trim_vocab_padding", trim_vocab_padding)
+    weights = [("model.layers.0.weight", torch.randn(2))]
+
+    ext._load_draft_weights(weights)
+
+    trim_vocab_padding.assert_called_once_with(draft_model, weights)
+    draft_model.load_weights.assert_called_once_with(weights=trimmed_weights)
+
+
+@pytest.mark.vllm
+def test_load_draft_weights_accepts_nonempty_loaded_name_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(
+        load_weights=MagicMock(return_value={"model.layers.0.weight"})
+    )
+    ext = _make_extension_for_draft_load(draft_model)
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+
+    ext._load_draft_weights([("model.layers.0.weight", torch.randn(1))])
+
+
+@pytest.mark.vllm
+def test_load_draft_weights_rejects_empty_loaded_name_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=set()))
+    ext = _make_extension_for_draft_load(draft_model)
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+
+    with pytest.raises(RuntimeError, match="reported no loaded weights"):
+        ext._load_draft_weights([("model.layers.0.weight", torch.randn(1))])
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("load_result", [False, object()])
+def test_load_draft_weights_rejects_unknown_or_failed_loader_result(
+    monkeypatch: pytest.MonkeyPatch,
+    load_result: object,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=load_result))
+    ext = _make_extension_for_draft_load(draft_model)
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+
+    with pytest.raises(RuntimeError, match="drafter loader returned"):
+        ext._load_draft_weights([("model.layers.0.weight", torch.randn(1))])
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("load_result", "message"),
+    [
+        (
+            SimpleNamespace(missing_keys=["model.layers.0.weight"], unexpected_keys=[]),
+            "missing.*model.layers.0.weight",
+        ),
+        (
+            SimpleNamespace(missing_keys=[], unexpected_keys=["unknown.weight"]),
+            "unexpected.*unknown.weight",
+        ),
+    ],
+)
+def test_load_draft_weights_rejects_incompatible_loader_result(
+    monkeypatch: pytest.MonkeyPatch, load_result: object, message: str
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=load_result))
+    ext = _make_extension_for_draft_load(draft_model)
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+
+    with pytest.raises(RuntimeError, match=message):
+        ext._load_draft_weights([("model.layers.0.weight", torch.randn(1))])
 
 
 @pytest.mark.vllm
@@ -143,8 +323,11 @@ def test_load_mtp_weights_from_disk_loads_only_mtp_layer(tmp_path, monkeypatch):
 
 
 @pytest.mark.vllm
-def test_load_mtp_weights_from_disk_returns_false_without_drafter(tmp_path):
-    """When vLLM has not built a drafter, the load is skipped (no exception)."""
+def test_load_mtp_weights_from_disk_raises_without_drafter_on_owner_rank(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing vLLM drafter fails before reading MTP checkpoint weights."""
     from nemo_rl.models.generation.vllm.vllm_backend import (
         VllmInternalWorkerExtension,
     )
@@ -154,8 +337,30 @@ def test_load_mtp_weights_from_disk_returns_false_without_drafter(tmp_path):
     ext.model_runner = MagicMock()
     ext.model_runner.drafter = None
     ext._load_draft_weights = MagicMock()
+    _patch_pp_rank(monkeypatch, is_last_rank=True)
 
-    assert ext.load_mtp_weights_from_disk(str(tmp_path)) is False
+    with pytest.raises(RuntimeError, match="MTP weights.*last pipeline rank"):
+        ext.load_mtp_weights_from_disk(str(tmp_path))
+    ext._load_draft_weights.assert_not_called()
+
+
+@pytest.mark.vllm
+def test_load_mtp_weights_from_disk_skips_non_owner_pipeline_rank(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext.device = torch.device("cpu")
+    ext.model_runner = MagicMock()
+    ext.model_runner.drafter = None
+    ext._load_draft_weights = MagicMock()
+    _patch_pp_rank(monkeypatch, is_last_rank=False)
+
+    assert ext.load_mtp_weights_from_disk(str(tmp_path)) is None
     ext._load_draft_weights.assert_not_called()
 
 

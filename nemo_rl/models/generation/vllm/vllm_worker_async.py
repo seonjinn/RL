@@ -42,11 +42,16 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm.utils import (
     attach_routed_experts_to_chat_response_choices,
+    extract_generated_token_logprobs,
     format_prompt_for_vllm_generation,
     model_dump_chat_response_with_routed_experts,
     pad_and_align_routed_expert_indices,
 )
-from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
+from nemo_rl.models.generation.vllm.vllm_worker import (
+    BaseVllmGenerationWorker,
+    _all_worker_results_succeeded,
+    _mtp_load_results_succeeded,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -424,9 +429,18 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
     async def post_init_async(self):
         self.vllm_device_ids = await self.report_device_id_async()
         if self._mtp_load_from_disk:
-            await self.llm.collective_rpc(
+            result_or_coro = await self.llm.collective_rpc(
                 "load_mtp_weights_from_disk", args=(self.model_name,)
             )
+            if asyncio.iscoroutine(result_or_coro):
+                worker_results = await result_or_coro
+            else:
+                worker_results = result_or_coro
+            if not _mtp_load_results_succeeded(worker_results):
+                raise RuntimeError(
+                    "MTP draft weight loading failed on one or more vLLM workers. "
+                    f"Results: {worker_results}"
+                )
 
     async def get_reserved_url(self) -> Optional[str]:
         """Return the URL from the reserved socket, available before model loading."""
@@ -1152,23 +1166,20 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 dtype=torch.float32,
                 device=original_input_ids_single_row.device,
             )
-            if hasattr(generation_details, "logprobs") and generation_details.logprobs:
-                for idx, logprob_dict_per_token in enumerate(
-                    generation_details.logprobs
-                ):
-                    if logprob_dict_per_token and idx < len(generated_token_ids):
-                        token_id_at_idx = generated_token_ids[idx]
-                        if token_id_at_idx in logprob_dict_per_token:
-                            logprob_value = logprob_dict_per_token[
-                                token_id_at_idx
-                            ].logprob
-                            position_in_output_tensor = (
-                                current_input_actual_length + idx
-                            )
-                            if position_in_output_tensor < final_output_tensor_len:
-                                logprobs_single_item[0, position_in_output_tensor] = (
-                                    logprob_value
-                                )
+            generated_logprobs = extract_generated_token_logprobs(
+                generated_token_ids,
+                getattr(generation_details, "logprobs", None),
+            )
+            if generated_logprobs:
+                logprobs_single_item[
+                    0,
+                    current_input_actual_length : current_input_actual_length
+                    + len(generated_logprobs),
+                ] = torch.tensor(
+                    generated_logprobs,
+                    dtype=torch.float32,
+                    device=original_input_ids_single_row.device,
+                )
 
             # Generation lengths
             generation_lengths_tensor = torch.tensor(
@@ -1415,11 +1426,10 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
+            if not _all_worker_results_succeeded(worker_results):
                 print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
+                    "Error: One or more workers failed to update weights. "
+                    f"Results: {worker_results}"
                 )
                 return False
             return True
@@ -1451,11 +1461,10 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
+            if not _all_worker_results_succeeded(worker_results):
                 print(
-                    f"Error: Worker failed to update weights. Result: {worker_result}"
+                    "Error: One or more workers failed to update weights. "
+                    f"Results: {worker_results}"
                 )
                 return False
             return True

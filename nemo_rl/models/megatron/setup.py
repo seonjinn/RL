@@ -932,6 +932,31 @@ def _validate_training_config(config: PolicyConfig, model_cfg: Any) -> None:
         "https://github.com/NVIDIA-NeMo/RL/blob/bccbc377705a81a1f4b3c31ad9767bcc15f735a8/nemo_rl/algorithms/sft.py#L175-L179."
     )
 
+    draft_enabled = bool((config.get("draft") or {}).get("enabled", False))
+    sequence_packing_enabled = bool(
+        (config.get("sequence_packing") or {}).get("enabled", False)
+    )
+    if draft_enabled and sequence_packing_enabled:
+        raise ValueError(
+            "Online draft training does not support sequence packing; the packed "
+            "loss path does not apply DraftLossWrapper."
+        )
+
+    megatron_cfg = config["megatron_cfg"]
+    mtp_num_layers = int(megatron_cfg.get("mtp_num_layers", 0) or 0)
+    if mtp_num_layers > 0:
+        if megatron_cfg.get("use_fused_linear_logprobs", False):
+            raise ValueError(
+                "MTP training does not support use_fused_linear_logprobs; the "
+                "fused forward bypasses MTP post-processing and loss."
+            )
+        if not megatron_cfg.get("mtp_detach_heads", True):
+            raise ValueError(
+                "MTP training requires mtp_detach_heads=true so draft loss does "
+                "not update the base policy."
+            )
+        model_cfg.mtp_detach_heads = True
+
     ## These settings are required for correct gradient computations in mcore
     ## when calculate_per_token_loss is True, there is no scaling of the gradient in mcore,
     ## so we handle the scaling in nemo-rl.

@@ -438,8 +438,8 @@ def test_nano_v3_reasoning_parser_swaps_reasoning_when_thinking_disabled(
     )
 
 
-def test_configure_generation_config_uses_real_startup_weights_without_draft_refit():
-    """Speculative training should not start the drafter from dummy weights without refit."""
+def test_configure_generation_config_uses_draft_load_config_without_draft_refit():
+    """Static neural drafters should keep the target on dummy weights during training."""
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_kwargs"] = {
         "speculative_config": {
@@ -458,7 +458,10 @@ def test_configure_generation_config_uses_real_startup_weights_without_draft_ref
             has_refit_draft_weights=False,
         )
 
-    assert configured["vllm_cfg"]["load_format"] == "auto"
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "auto"
+    }
 
 
 def test_configure_generation_config_preserves_dynamic_eagle3_schedule():
@@ -496,6 +499,7 @@ def test_configure_generation_config_preserves_dynamic_eagle3_schedule():
         "num_speculative_tokens": 5,
         "draft_tensor_parallel_size": 1,
         "num_speculative_tokens_per_batch_size": schedule,
+        "draft_load_config": {"load_format": "auto"},
     }
     assert configured["vllm_kwargs"]["compilation_config"] == {
         "cudagraph_mode": "PIECEWISE"
@@ -522,6 +526,381 @@ def test_configure_generation_config_keeps_dummy_startup_weights_with_draft_refi
     )
 
     assert configured["vllm_cfg"]["load_format"] == "dummy"
+
+
+def test_online_draft_refit_rejects_generic_draft_model_method():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "draft_model",
+            "model": "/tmp/pard-model",
+            "num_speculative_tokens": 3,
+            "draft_tensor_parallel_size": 1,
+            "parallel_drafting": True,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="Online draft refit only supports speculative methods 'eagle' and 'eagle3'",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=True,
+        )
+
+
+def test_pard2_method_fails_before_vllm_startup():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "pard2",
+            "model": "/tmp/pard2-model",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="speculative_config.method='pard2' is not supported",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+
+@pytest.mark.parametrize("rejection_sample_method", ["probabilistic", "synthetic"])
+def test_nonstandard_rejection_sampling_fails_before_vllm_startup(
+    rejection_sample_method,
+):
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "suffix",
+            "num_speculative_tokens": 3,
+            "rejection_sample_method": rejection_sample_method,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="rejection_sample_method='standard'",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+
+def test_generic_pard_uses_auto_load_format_without_online_draft_refit():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "draft_model",
+            "model": "/tmp/pard-model",
+            "num_speculative_tokens": 3,
+            "draft_tensor_parallel_size": 1,
+            "parallel_drafting": True,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "auto"
+    }
+
+
+def test_dflash_uses_draft_load_config_without_online_draft_refit():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "dflash",
+            "model": "/tmp/dflash-model",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "auto"
+    }
+
+
+def test_model_autodetect_uses_draft_load_config_without_online_draft_refit():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "model": "/tmp/autodetect-draft-model",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "auto"
+    }
+
+
+def test_online_eagle_refit_keeps_dummy_load_format():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "eagle",
+            "model": "/tmp/eagle-model",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(
+        vllm_config,
+        tokenizer,
+        is_eval=False,
+        has_refit_draft_weights=True,
+    )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+
+
+def test_suffix_method_keeps_target_dummy_without_draft_load_config():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "suffix",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(
+        vllm_config,
+        tokenizer,
+        is_eval=False,
+        has_refit_draft_weights=False,
+    )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert "draft_load_config" not in configured["vllm_kwargs"]["speculative_config"]
+
+
+def test_generic_draft_tp_must_match_target_tp():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "draft_model",
+            "model": "/tmp/pard-model",
+            "num_speculative_tokens": 3,
+            "draft_tensor_parallel_size": 1,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="draft_model requires draft_tensor_parallel_size to match the target tensor_parallel_size",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+
+def test_generic_draft_null_tp_resolves_to_target_tp():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "draft_model",
+            "model": "/tmp/pard-model",
+            "num_speculative_tokens": 3,
+            "draft_tensor_parallel_size": None,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "auto"
+    }
+    assert (
+        configured["vllm_kwargs"]["speculative_config"]["draft_tensor_parallel_size"]
+        == 2
+    )
+
+
+def test_explicit_draft_load_config_is_preserved():
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "draft_model",
+            "model": "/tmp/pard-model",
+            "num_speculative_tokens": 3,
+            "draft_tensor_parallel_size": 1,
+            "draft_load_config": {"load_format": "safetensors"},
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "safetensors"
+    }
+
+
+def test_specdec_runtime_contract_records_resolved_sampling_tp_and_load_format():
+    from nemo_rl.models.generation import get_vllm_specdec_runtime_contract
+
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["temperature"] = 1.0
+    vllm_config["top_p"] = 1.0
+    vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
+    vllm_config["vllm_cfg"]["load_format"] = "dummy"
+    vllm_config["vllm_cfg"]["enforce_eager"] = False
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/eagle3-model",
+            "num_speculative_tokens": 7,
+            "draft_load_config": {"load_format": "auto"},
+            "draft_sample_method": "probabilistic",
+        }
+    }
+
+    contract = get_vllm_specdec_runtime_contract(vllm_config)
+
+    assert contract == {
+        "method": "eagle3",
+        "model": "/tmp/eagle3-model",
+        "num_speculative_tokens": 7,
+        "target_tp": 2,
+        "draft_tp": 2,
+        "target_load_format": "dummy",
+        "draft_load_format": "auto",
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": vllm_config["top_k"],
+        "rejection_sample_method": "standard",
+        "draft_sample_method": "probabilistic",
+        "cuda_graph_enabled": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("speculative_config", "match"),
+    [
+        (
+            None,
+            "policy.draft.enabled=true requires policy.generation.vllm_kwargs.speculative_config",
+        ),
+        (
+            {
+                "method": "draft_model",
+                "model": "/tmp/pard-model",
+                "parallel_drafting": True,
+            },
+            "policy.draft.enabled=true only supports speculative methods 'eagle' and 'eagle3'",
+        ),
+        (
+            {
+                "method": "pard2",
+                "model": "/tmp/pard2-model",
+            },
+            "policy.draft.enabled=true only supports speculative methods 'eagle' and 'eagle3'",
+        ),
+        (
+            {
+                "model": "/tmp/autodetect-draft-model",
+            },
+            "policy.draft.enabled=true only supports speculative methods 'eagle' and 'eagle3'",
+        ),
+    ],
+)
+def test_run_grpo_rejects_invalid_online_refit_methods(speculative_config, match):
+    repo_root = Path(__file__).resolve().parents[4]
+    sys.path.insert(0, str(repo_root / "examples"))
+    try:
+        from run_grpo import _has_online_refit_draft_weights
+    finally:
+        sys.path.pop(0)
+
+    with pytest.raises(ValueError, match=match):
+        _has_online_refit_draft_weights(
+            {"enabled": True},
+            speculative_config,
+        )
+
+
+def test_run_grpo_only_enables_online_refit_for_eagle_methods():
+    repo_root = Path(__file__).resolve().parents[4]
+    sys.path.insert(0, str(repo_root / "examples"))
+    try:
+        from run_grpo import _has_online_refit_draft_weights
+    finally:
+        sys.path.pop(0)
+
+    assert (
+        _has_online_refit_draft_weights(
+            {"enabled": True},
+            {"method": "eagle3", "model": "/tmp/eagle3-model"},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize("method", ["deepseek_mtp", "mtp"])

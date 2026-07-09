@@ -25,10 +25,58 @@ from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
     attach_routed_experts_to_chat_response_choices,
     compute_spec_decode_metrics,
+    extract_generated_token_logprobs,
     format_prompt_for_vllm_generation,
     model_dump_chat_response_with_routed_experts,
     pad_and_align_routed_expert_indices,
 )
+
+
+def _logprob(value: float) -> SimpleNamespace:
+    return SimpleNamespace(logprob=value)
+
+
+def test_extract_generated_token_logprobs_returns_chosen_token_values():
+    values = extract_generated_token_logprobs(
+        [11, 12],
+        [{11: _logprob(-0.25)}, {12: _logprob(-0.5)}],
+    )
+
+    assert values == [-0.25, -0.5]
+
+
+def test_extract_generated_token_logprobs_allows_empty_generation():
+    assert extract_generated_token_logprobs([], None) == []
+
+
+@pytest.mark.parametrize("token_logprobs", [None, []])
+def test_extract_generated_token_logprobs_rejects_missing_values(token_logprobs):
+    with pytest.raises(RuntimeError, match="did not return processed logprobs"):
+        extract_generated_token_logprobs([11], token_logprobs)
+
+
+def test_extract_generated_token_logprobs_rejects_length_mismatch():
+    with pytest.raises(RuntimeError, match="count does not match"):
+        extract_generated_token_logprobs(
+            [11, 12],
+            [{11: _logprob(-0.25)}],
+        )
+
+
+def test_extract_generated_token_logprobs_rejects_missing_chosen_token():
+    with pytest.raises(RuntimeError, match="chosen token 11"):
+        extract_generated_token_logprobs(
+            [11],
+            [{99: _logprob(-0.25)}],
+        )
+
+
+def test_extract_generated_token_logprobs_rejects_nonfinite_value():
+    with pytest.raises(RuntimeError, match="non-finite"):
+        extract_generated_token_logprobs(
+            [11],
+            [{11: _logprob(float("nan"))}],
+        )
 
 
 def _mk_inputs(batch_size: int = 2, seq_len: int = 5):

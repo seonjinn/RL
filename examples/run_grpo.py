@@ -15,6 +15,7 @@
 import argparse
 import os
 import pprint
+from typing import Any
 
 from omegaconf import OmegaConf
 
@@ -60,6 +61,27 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     return args, overrides
 
 
+def _has_online_refit_draft_weights(
+    draft_config: dict[str, Any] | None,
+    speculative_config: dict[str, Any] | None,
+) -> bool:
+    if not draft_config or not draft_config["enabled"]:
+        return False
+    if not speculative_config:
+        raise ValueError(
+            "policy.draft.enabled=true requires "
+            "policy.generation.vllm_kwargs.speculative_config"
+        )
+
+    method = speculative_config.get("method")
+    if method not in ("eagle", "eagle3"):
+        raise ValueError(
+            "policy.draft.enabled=true only supports speculative methods "
+            f"'eagle' and 'eagle3'. Got method={method!r}."
+        )
+    return True
+
+
 def main() -> None:
     """Main entry point."""
     # Parse arguments
@@ -101,7 +123,13 @@ def main() -> None:
     assert config.policy["generation"] is not None, (
         "A generation config is required for GRPO"
     )
-    has_refit_draft_weights = bool(config.policy["draft"]["enabled"])
+    speculative_config = (
+        config.policy["generation"].get("vllm_kwargs", {}).get("speculative_config")
+    )
+    has_refit_draft_weights = _has_online_refit_draft_weights(
+        config.policy["draft"],
+        speculative_config,
+    )
     megatron_cfg = config.policy.get("megatron_cfg") or {}
     trains_mtp = bool(megatron_cfg.get("mtp_num_layers"))
     config.policy["generation"] = configure_generation_config(

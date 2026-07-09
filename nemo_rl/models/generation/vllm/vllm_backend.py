@@ -48,6 +48,43 @@ def fix_gemma3_vision_weight_name(key: str) -> str:
     )
 
 
+def _validate_draft_weight_load_result(load_result: object) -> None:
+    """Fail when a vLLM loader reports that required draft weights were not loaded."""
+    if load_result is None:
+        return
+
+    if isinstance(load_result, (set, frozenset)):
+        if not load_result:
+            raise RuntimeError("The vLLM drafter loader reported no loaded weights.")
+        return
+
+    if isinstance(load_result, bool):
+        if load_result:
+            return
+        raise RuntimeError("The vLLM drafter loader returned failure.")
+
+    if not hasattr(load_result, "missing_keys") or not hasattr(
+        load_result, "unexpected_keys"
+    ):
+        raise RuntimeError(
+            "The vLLM drafter loader returned an unsupported result type: "
+            f"{type(load_result).__name__}."
+        )
+
+    missing_keys = load_result.missing_keys
+    unexpected_keys = load_result.unexpected_keys
+
+    if missing_keys:
+        raise RuntimeError(
+            f"The vLLM drafter loader reported missing weights: {sorted(missing_keys)}"
+        )
+    if unexpected_keys:
+        raise RuntimeError(
+            "The vLLM drafter loader reported unexpected weights: "
+            f"{sorted(unexpected_keys)}"
+        )
+
+
 def _read_mtp_layer_weights_from_checkpoint(
     model_path: str, mtp_layer_indices: set[int]
 ) -> list[tuple[str, torch.Tensor]]:
@@ -178,26 +215,45 @@ class VllmInternalWorkerExtension:
                 target_device,
             )
 
-    @staticmethod
     def _split_policy_and_draft_weights(
+        self,
         weights: list[tuple[str, torch.Tensor]],
     ) -> tuple[list[tuple[str, torch.Tensor]], list[tuple[str, torch.Tensor]]]:
         """Split trainer-owned draft weights from policy weights.
 
-        This path is only used for the Eagle3 online-training flow, where the
-        trainer exports draft parameters under a `draft.` prefix before sending
-        them to vLLM.
-        This implementation is specific to the eagle model. For MTP, we can add
-        similar logic to this function to split weights and send it to the drafter.
-        The "draft." prefix is added here https://github.com/isomap/RL/blob/d3a5e1396d00f82fb888d9ec6800687a23bb4017/nemo_rl/models/policy/workers/megatron_policy_worker.py#L967-L997
+        Eagle exports draft parameters under a ``draft.`` prefix. MTP weights
+        retain their HF layer names, so route layers owned by the vLLM MTP
+        predictor, including persistent buffers, to the drafter as well.
         """
+        draft_owner = getattr(self.model_runner, "drafter", None)
+        draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+        predictor = getattr(draft_model, "model", draft_model)
+        mtp_start_layer_idx = getattr(predictor, "mtp_start_layer_idx", None)
+        num_mtp_layers = getattr(predictor, "num_mtp_layers", None)
+        mtp_layer_indices = (
+            set(range(mtp_start_layer_idx, mtp_start_layer_idx + num_mtp_layers))
+            if isinstance(mtp_start_layer_idx, int)
+            and isinstance(num_mtp_layers, int)
+            and num_mtp_layers > 0
+            else set()
+        )
+
         policy_weights = []
         draft_weights = []
         for key, tensor in weights:
             if key.startswith("draft."):
                 draft_weights.append((key.removeprefix("draft."), tensor))
-            else:
-                policy_weights.append((key, tensor))
+                continue
+
+            layer_match = re.search(r"(?:^|\.)layers\.(\d+)\.", key)
+            if (
+                layer_match is not None
+                and int(layer_match.group(1)) in mtp_layer_indices
+            ):
+                draft_weights.append((key, tensor))
+                continue
+
+            policy_weights.append((key, tensor))
         return policy_weights, draft_weights
 
     @staticmethod
@@ -246,14 +302,14 @@ class VllmInternalWorkerExtension:
         draft_model = getattr(draft_owner, "model", None) if draft_owner else None
 
         if draft_model is None:
-            print(
-                "[draft] Received draft weights but vLLM drafter is unavailable; skipping draft update."
+            raise RuntimeError(
+                "Received draft weights but the vLLM drafter is unavailable."
             )
-            return
         draft_weights = self._trim_vocab_padding(draft_model, draft_weights)
-        draft_model.load_weights(weights=draft_weights)
+        load_result = draft_model.load_weights(weights=draft_weights)
+        _validate_draft_weight_load_result(load_result)
 
-    def load_mtp_weights_from_disk(self, model_path: str) -> bool:
+    def load_mtp_weights_from_disk(self, model_path: str) -> bool | None:
         """Load only the MTP (multi-token-prediction) draft weights from disk.
 
         Used when an MTP speculative-decoding policy runs with
@@ -267,13 +323,20 @@ class VllmInternalWorkerExtension:
             model_path: Path to the HF checkpoint directory.
 
         Returns:
-            bool: True if MTP weights were loaded.
+            ``True`` on drafter-owner ranks after loading, and ``None`` on
+            non-owner pipeline ranks.
         """
         draft_owner = getattr(self.model_runner, "drafter", None)
         draft_model = getattr(draft_owner, "model", None) if draft_owner else None
         if draft_model is None:
-            print("[mtp] Drafter unavailable; cannot load MTP weights from disk.")
-            return False
+            from vllm.distributed.parallel_state import get_pp_group
+
+            if not get_pp_group().is_last_rank:
+                return None
+            raise RuntimeError(
+                "Cannot load MTP weights because the vLLM drafter is unavailable "
+                "on the last pipeline rank."
+            )
 
         predictor = draft_model.model
         mtp_layer_indices = set(

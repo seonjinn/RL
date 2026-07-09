@@ -202,8 +202,9 @@ class HiddenStateCapture:
             dtype=torch.int64,
             device=tensor.device,
         )
-        dist.send(metadata, dst=dst_rank, group=group)
-        dist.send(tensor.contiguous(), dst=dst_rank, group=group)
+        global_dst_rank = dist.get_global_rank(group, dst_rank)
+        dist.send(metadata, dst=global_dst_rank, group=group)
+        dist.send(tensor.contiguous(), dst=global_dst_rank, group=group)
 
     @staticmethod
     def _recv_tensor(
@@ -211,8 +212,9 @@ class HiddenStateCapture:
         group: dist.ProcessGroup,
         device: torch.device,
     ) -> Tensor:
+        global_src_rank = dist.get_global_rank(group, src_rank)
         metadata = torch.empty(4, dtype=torch.int64, device=device)
-        dist.recv(metadata, src=src_rank, group=group)
+        dist.recv(metadata, src=global_src_rank, group=group)
         seq_len, batch_size, hidden_size, dtype_code = [
             int(x) for x in metadata.tolist()
         ]
@@ -229,7 +231,7 @@ class HiddenStateCapture:
             dtype=dtype,
             device=device,
         )
-        dist.recv(received, src=src_rank, group=group)
+        dist.recv(received, src=global_src_rank, group=group)
         return received
 
     def _gather_distributed(self) -> CapturedStates:
