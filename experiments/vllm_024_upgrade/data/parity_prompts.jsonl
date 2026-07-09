@@ -1,0 +1,4 @@
+{"id":"math-arithmetic","prompt":"Compute 37 * 48 and show the calculation before giving the final answer."}
+{"id":"math-algebra","prompt":"Solve 3x + 7 = 31 for x. Explain each algebraic step."}
+{"id":"swe-parser","prompt":"A JSONL parser silently skips malformed lines. Describe a minimal code change that reports the line number and preserves the original exception as the cause."}
+{"id":"swe-concurrency","prompt":"A parent asyncio task creates child request tasks and is then cancelled. Explain the cleanup pattern needed to ensure every child is cancelled and awaited."}

@@ -79,3 +79,32 @@ with the same model, recipe, graph mode, sampling, topology, container, and
 commit. The summary reports generation and E2E time/throughput speedups,
 acceptance rate, mean accepted length, job IDs, W&B links, and reward/response
 length/KL health gates.
+
+## Baseline/SpecDec Token and Logprob Parity on Lyris
+
+The parity gate runs Qwen3-32B target-only and Eagle-3 K5 through the NeMo-RL
+`VllmGeneration` adapter with vLLM 0.24, standard rejection sampling, PIECEWISE
+CUDA Graphs, target TP2, draft TP1, chunked prefill enabled, prefix caching
+disabled, and a 16,384-token scheduler budget. Greedy jobs use one sample per
+prompt. Sampled jobs use 64 independent samples per prompt at temperature 1.0
+and top-p 1.0. Both variants use NeMo-RL's deterministic topology-derived
+worker seed; the runner does not inject a second vLLM seed keyword.
+
+Render or validate the four-job matrix before submission:
+
+```bash
+experiments/vllm_024_upgrade/submit_generation_parity.sh dry-run all all
+experiments/vllm_024_upgrade/submit_generation_parity.sh test-only all all
+```
+
+Submit after the launcher commit is present on a remote branch:
+
+```bash
+experiments/vllm_024_upgrade/submit_generation_parity.sh submit all all
+```
+
+Each batch appends and flushes generated token IDs and chosen-token logprobs to
+`samples.jsonl`, so a timeout still leaves valid completed rows. `metadata.json`
+records the resolved generation contract, commit, SLURM job ID, throughput, and
+SpecDec counters. Reward parity remains a separate matched GRPO smoke gate; the
+standalone parity producer intentionally does not synthesize an RL reward.

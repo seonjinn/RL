@@ -12,6 +12,9 @@ DYNAMICSD_LAUNCHER = (
     / "vllm_024_upgrade"
     / "submit_eagle3_dynamicsd_step20.sh"
 )
+PARITY_LAUNCHER = (
+    REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
+)
 
 
 def _run_script(path: Path, *args: str, **environment: str) -> str:
@@ -37,6 +40,21 @@ def _dry_run_dynamicsd(model: str, variant: str) -> str:
         CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
         RUN_TAG="contract-test",
         ATTEMPT_ID="attempt-1",
+    )
+
+
+def _dry_run_parity(variant: str, mode: str) -> str:
+    return _run_script(
+        PARITY_LAUNCHER,
+        "dry-run",
+        variant,
+        mode,
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="parity-contract-test",
+        TARGET_MODEL="/lustre/users/sna/qwen32",
+        DRAFT_MODEL="/lustre/users/sna/qwen32-eagle3",
     )
 
 
@@ -259,3 +277,41 @@ def test_dynamicsd_launcher_preserves_logical_lustre_checkout_path() -> None:
 
     assert "logical_pwd=\"$(pwd -L)\"" in source
     assert "repo_prefix=\"$(git rev-parse --show-prefix)\"" in source
+
+
+def test_generation_parity_launcher_matches_lyris_topology_and_cuda_graph() -> None:
+    output = _dry_run_parity("eagle3_k5", "greedy")
+
+    assert "--account=coreai_dlalgo_llm" in output
+    assert "--partition=gb200" in output
+    assert "--nodes=1" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
+    assert "--target-tp 2" in output
+    assert "--draft-tp 1" in output
+    assert "--gpus-per-node 2" in output
+    assert "--max-model-len 4096" in output
+    assert "--max-num-batched-tokens 16384" in output
+    assert "--mode greedy" in output
+    assert "--samples-per-prompt 1" in output
+    assert "/lustre/users/sna/qwen32-eagle3" in output
+
+
+def test_generation_parity_launcher_keeps_baseline_free_of_draft_model() -> None:
+    output = _dry_run_parity("baseline", "sampled")
+
+    assert "--mode sampled" in output
+    assert "--samples-per-prompt 64" in output
+    assert "--draft-model" not in output
+
+
+def test_generation_parity_launcher_all_renders_four_independent_jobs() -> None:
+    output = _dry_run_parity("all", "all")
+
+    for label in (
+        "baseline-greedy",
+        "baseline-sampled",
+        "eagle3_k5-greedy",
+        "eagle3_k5-sampled",
+    ):
+        assert f"parity-contract-test-{label}" in output
