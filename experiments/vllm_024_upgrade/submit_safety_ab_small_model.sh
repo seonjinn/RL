@@ -271,7 +271,7 @@ submit_one() {
   printf -v workload_command '%q ' "${command_parts[@]}"
   workload_command="${workload_command% }"
   local preflight_code
-  preflight_code="import sys, vllm; print(f'NeMo-RL safety A/B runtime: python={sys.executable} vllm={vllm.__version__}'); assert vllm.__version__.startswith('${EXPECTED_VLLM_VERSION_PREFIX}'), f'expected vLLM ${EXPECTED_VLLM_VERSION_PREFIX}*, got {vllm.__version__}'"
+  preflight_code="import sys, tomllib; from pathlib import Path; packages=tomllib.loads(Path('uv.lock').read_text())['package']; versions=sorted({p['version'] for p in packages if p['name']=='vllm'}); print(f'NeMo-RL safety A/B runtime: python={sys.executable} uv.lock vllm={versions}'); assert versions and all(v.startswith('${EXPECTED_VLLM_VERSION_PREFIX}') for v in versions), f'expected uv.lock vLLM ${EXPECTED_VLLM_VERSION_PREFIX}*, got {versions}'"
   local preflight_parts=(
     /opt/nemo_rl_venv/bin/python
     -c

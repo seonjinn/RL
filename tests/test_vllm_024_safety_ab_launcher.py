@@ -103,7 +103,7 @@ def test_dry_run_renders_matched_sync_jobs_from_repo_dirs() -> None:
     assert "checkpointing.enabled=false" in output
     assert "policy.generation.vllm_cfg.enforce_eager=false" in output
     assert "/opt/nemo_rl_venv/bin/python" in output
-    assert "vllm.__version__" in output
+    assert "uv.lock" in output
     assert "0.24." in output
     assert "NRL_FORCE_REBUILD_VENVS" not in output
     assert "NEMO_RL_VENV_DIR" not in output
