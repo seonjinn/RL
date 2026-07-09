@@ -47,6 +47,7 @@ def _dry_run_parity(variant: str, mode: str) -> str:
         variant,
         mode,
         REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
         HF_HOME="/lustre/users/sna/hf_home",
         CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
         RUN_TAG="parity-contract-test",
@@ -285,6 +286,17 @@ def test_generation_parity_launcher_uses_short_ray_socket_root() -> None:
 
     assert "--ray-log-dir /tmp/nrp-eagle3_k5-greedy" in output
     assert "parity-contract-test/eagle3_k5/greedy/ray_logs" not in output
+
+
+def test_generation_parity_launcher_rebuilds_worker_venv_from_branch_lock() -> None:
+    output = _dry_run_parity("eagle3_k5", "greedy")
+
+    assert "NRL_FORCE_REBUILD_VENVS=true" in output
+    assert (
+        "NEMO_RL_VENV_DIR=/lustre/users/sna/experiments/"
+        "vllm024-generation-parity/parity-contract-test/"
+        "eagle3_k5/greedy/venvs"
+    ) in output
 
 
 def test_generation_parity_launcher_keeps_baseline_free_of_draft_model() -> None:
