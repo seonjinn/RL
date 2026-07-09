@@ -42,6 +42,12 @@ _STATIC_NEURAL_EXTERNAL_DRAFT_METHODS = {
     "medusa",
     "mlp_speculator",
 }
+_FIXED_K_DYNAMIC_UNSUPPORTED_METHODS = {
+    "extract_hidden_states",
+    "medusa",
+    "ngram_gpu",
+    "suffix",
+}
 
 
 def _get_speculative_config(config: VllmConfig) -> dict[str, Any] | None:
@@ -87,6 +93,25 @@ def validate_vllm_speculative_config(
             "speculative_config.draft_sample_method must be 'greedy' or "
             f"'probabilistic'. Got {draft_sample_method!r}."
         )
+
+    dynamic_schedule = speculative_config.get(
+        "num_speculative_tokens_per_batch_size"
+    )
+    if dynamic_schedule is not None:
+        if method in _FIXED_K_DYNAMIC_UNSUPPORTED_METHODS:
+            raise ValueError(
+                "Dynamic speculative decoding cannot use the fixed-K proposer "
+                f"for method={method!r} with vLLM 0.24."
+            )
+        target_tp = config["vllm_cfg"]["tensor_parallel_size"]
+        expert_parallel_size = config["vllm_cfg"].get("expert_parallel_size", 1)
+        if expert_parallel_size > target_tp:
+            raise ValueError(
+                "Dynamic speculative decoding cannot use internal vLLM data "
+                "parallelism because each scheduler rank can select a different "
+                "K. Use expert_parallel_size <= tensor_parallel_size or a "
+                "static num_speculative_tokens value."
+            )
 
     if method == "pard2":
         raise ValueError("speculative_config.method='pard2' is not supported")

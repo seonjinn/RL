@@ -509,6 +509,44 @@ def test_configure_generation_config_preserves_dynamic_eagle3_schedule():
     }
 
 
+@pytest.mark.parametrize(
+    "method",
+    ["ngram_gpu", "suffix", "medusa", "extract_hidden_states"],
+)
+def test_dynamic_specdec_rejects_fixed_k_proposers(method: str) -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": method,
+            "model": method,
+            "num_speculative_tokens": 5,
+            "num_speculative_tokens_per_batch_size": [[1, 32, 5], [33, 256, 1]],
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(ValueError, match="fixed-K proposer"):
+        configure_generation_config(vllm_config, tokenizer)
+
+
+def test_dynamic_specdec_rejects_internal_vllm_data_parallelism() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
+    vllm_config["vllm_cfg"]["expert_parallel_size"] = 4
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/draft-model",
+            "num_speculative_tokens": 5,
+            "num_speculative_tokens_per_batch_size": [[1, 32, 5], [33, 256, 1]],
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(ValueError, match="internal vLLM data parallelism"):
+        configure_generation_config(vllm_config, tokenizer)
+
+
 def test_specdec_disables_vllm_async_scheduling():
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_kwargs"] = {
@@ -1128,6 +1166,7 @@ def test_specdec_runtime_contract_records_resolved_sampling_tp_and_load_format()
         "top_k": vllm_config["top_k"],
         "rejection_sample_method": "standard",
         "draft_sample_method": "probabilistic",
+        "async_scheduling": None,
         "cuda_graph_enabled": True,
         "draft_model_cudagraph_patch_requested": True,
     }
