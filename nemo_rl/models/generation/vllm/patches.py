@@ -76,21 +76,17 @@ def _patch_vllm_init_workers_ray(
 
     1. Pass custom runtime_env in _init_workers_ray call.
         - This allows passing custom py_executable to worker initialization.
-    2. Add NCCL_CUMEM_ENABLE and NCCL_NVLS_ENABLE to vLLM ADDITIONAL_ENV_VARS.
-        - This is a workaround to fix async vllm in some scenarios.
-        - See https://github.com/NVIDIA-NeMo/RL/pull/898 for more details.
+    2. Register required variables through vLLM's additive Ray env-copy API.
     """
     file_to_patch = _get_vllm_file("v1/executor/ray_executor.py")
 
-    old_lines = [
-        "self._init_workers_ray(placement_group)",
-        'ADDITIONAL_ENV_VARS = {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}',
-    ]
+    old_lines = ["self._init_workers_ray(placement_group)"]
     additional_env_vars = [
         "HF_TOKEN",
         "HUGGING_FACE_HUB_TOKEN",
         "NCCL_CUMEM_ENABLE",
         "NCCL_NVLS_ENABLE",
+        "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH",
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
         *(extra_env_vars or []),
     ]
@@ -102,22 +98,24 @@ def _patch_vllm_init_workers_ray(
     os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"] = ",".join(
         sorted(existing_extra_env_vars | set(additional_env_vars))
     )
-    additional_env_str = ", ".join(f'"{env_var}"' for env_var in additional_env_vars)
-
     new_lines = [
         (
             "self._init_workers_ray(placement_group, "
             f'runtime_env={{"py_executable": "{py_executable}"}})'
         ),
-        f"ADDITIONAL_ENV_VARS = {{{additional_env_str}}}",
     ]
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
         need_replace = False
         for old_line, new_line in zip(old_lines, new_lines):
-            if new_line in content or old_line not in content:
+            if new_line in content:
                 continue
-            content = content.replace(old_line, new_line)
+            if content.count(old_line) != 1:
+                raise RuntimeError(
+                    "Could not apply the Ray worker environment patch to "
+                    f"{file_to_patch}; the vLLM source layout changed."
+                )
+            content = content.replace(old_line, new_line, 1)
             need_replace = True
 
         if need_replace:
@@ -208,6 +206,123 @@ def _patch_vllm_online_eagle_head_ownership(logger) -> None:
     logger.info("Successfully patched online Eagle head ownership.")
 
 
+def _patch_vllm_v2_eagle_load_config_and_ownership(logger) -> None:
+    """Give Model Runner V2 Eagle/MTP an independent draft load contract."""
+    file_to_patch = _get_vllm_file("v1/worker/gpu/spec_decode/eagle/utils.py")
+    old_snippet = (
+        "    speculative_config = vllm_config.speculative_config\n"
+        "    assert speculative_config is not None\n"
+        "    draft_model_config = speculative_config.draft_model_config\n"
+        '    with set_model_tag("eagle_head"):\n'
+        "        eagle_model = get_model(\n"
+        "            vllm_config=vllm_config, model_config=draft_model_config\n"
+        "        )\n"
+    )
+    new_snippet = (
+        "    speculative_config = vllm_config.speculative_config\n"
+        "    assert speculative_config is not None\n"
+        "    draft_model_config = speculative_config.draft_model_config\n"
+        "    draft_load_config = speculative_config.draft_load_config\n"
+        '    with set_model_tag("eagle_head"):\n'
+        "        eagle_model = get_model(\n"
+        "            vllm_config=vllm_config,\n"
+        "            model_config=draft_model_config,\n"
+        "            load_config=draft_load_config or vllm_config.load_config,\n"
+        "        )\n"
+        "\n"
+        "    draft_load_format = getattr(draft_load_config, 'load_format', None)\n"
+        "    draft_load_format = getattr(draft_load_format, 'value', draft_load_format)\n"
+        "    online_refit_uses_dummy_drafter = (\n"
+        "        speculative_config.method in ('eagle', 'eagle3')\n"
+        "        and draft_load_config is not None\n"
+        "        and str(draft_load_format).lower() == 'dummy'\n"
+        "    )\n"
+        "    if online_refit_uses_dummy_drafter:\n"
+        "        eagle_model.has_own_lm_head = True\n"
+        "        eagle_model.has_own_embed_tokens = False\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if "online_refit_uses_dummy_drafter" in content:
+            logger.info("Model Runner V2 Eagle load/ownership patch already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the Model Runner V2 Eagle load/ownership patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched Model Runner V2 Eagle load/ownership.")
+
+
+def _patch_vllm_v2_dflash_load_config(logger) -> None:
+    """Give Model Runner V2 DFlash an independent draft load contract."""
+    file_to_patch = _get_vllm_file("v1/worker/gpu/spec_decode/dflash/utils.py")
+    old_snippet = (
+        '    with set_model_tag("dflash_head"):\n'
+        "        dflash_model = get_model(\n"
+        "            vllm_config=draft_vllm_config, model_config=draft_model_config\n"
+        "        )\n"
+    )
+    new_snippet = (
+        '    with set_model_tag("dflash_head"):\n'
+        "        dflash_model = get_model(\n"
+        "            vllm_config=draft_vllm_config,\n"
+        "            model_config=draft_model_config,\n"
+        "            load_config=speculative_config.draft_load_config\n"
+        "            or vllm_config.load_config,\n"
+        "        )\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if "load_config=speculative_config.draft_load_config" in content:
+            logger.info("Model Runner V2 DFlash load-config patch already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the Model Runner V2 DFlash load-config patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched Model Runner V2 DFlash draft load config.")
+
+
+def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
+    """Reject a partial probabilistic-draft cache instead of changing sampling."""
+    file_to_patch = _get_vllm_file("v1/worker/gpu_model_runner.py")
+    old_snippet = (
+        "            if row_idx is None:\n"
+        "                logger.warning(\n"
+        '                    "Missing cached draft probabilities for request %s; "\n'
+        '                    "falling back to legacy speculative rejection behavior.",\n'
+        "                    req_id,\n"
+        "                )\n"
+        "                return None\n"
+    )
+    new_snippet = (
+        "            if row_idx is None:\n"
+        "                raise RuntimeError(\n"
+        '                    "Probabilistic speculative decoding is missing q(token) "\n'
+        '                    f"for request {req_id}; refusing to fall back to legacy "\n'
+        '                    "rejection behavior because it changes the sampling contract."\n'
+        "                )\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if "missing q(token)" in content:
+            logger.info(
+                "Missing probabilistic draft-row fail-closed patch already applied."
+            )
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the missing probabilistic draft-row fail-closed "
+                f"patch to {file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched missing probabilistic draft rows to fail closed.")
+
+
 def _patch_vllm_draft_model_load_config(logger) -> None:
     """Make the generic draft-model proposer honor draft_load_config."""
     file_to_patch = _get_vllm_file("v1/spec_decode/draft_model.py")
@@ -268,6 +383,69 @@ def _patch_vllm_medusa_load_config(logger) -> None:
             )
         write_back(content.replace(old_snippet, new_snippet, 1))
     logger.info("Successfully patched Medusa draft load config.")
+
+
+def _patch_vllm_draft_model_cudagraph_keys(logger) -> None:
+    """Initialize CUDA-graph keys for generic draft-model proposers.
+
+    vLLM 0.24 initializes the draft proposer attention backend for both Eagle
+    and generic draft models, but only initializes the proposer's CUDA-graph
+    dispatcher for Eagle/extract-hidden-state methods. Parallel draft models
+    such as PARD therefore miss their captured dispatcher path.
+
+    The source mutation is installed once, but the inserted branch checks
+    ``NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH`` at runtime. This keeps
+    enabled and disabled runs isolated even when they share a worker venv.
+    """
+    file_to_patch = _get_vllm_file("v1/worker/gpu_model_runner.py")
+    old_snippet = (
+        "        if self.speculative_config and (\n"
+        "            self.speculative_config.use_eagle()\n"
+        "            or self.speculative_config.uses_extract_hidden_states()\n"
+        "        ):\n"
+        "            assert isinstance(\n"
+        "                self.drafter,\n"
+        "                EagleProposer\n"
+        "                | DFlashProposer\n"
+        "                | ExtractHiddenStatesProposer\n"
+        "                | Gemma4Proposer,\n"
+        "            )\n"
+        "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
+    )
+    new_snippet = (
+        "        if self.speculative_config and (\n"
+        "            self.speculative_config.use_eagle()\n"
+        "            or self.speculative_config.uses_extract_hidden_states()\n"
+        "            or (\n"
+        "                self.speculative_config.uses_draft_model()\n"
+        "                and __import__('os').environ.get(\n"
+        "                    'NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH',\n"
+        "                    'false',\n"
+        "                ).lower() == 'true'\n"
+        "            )\n"
+        "        ):\n"
+        "            assert isinstance(\n"
+        "                self.drafter,\n"
+        "                EagleProposer\n"
+        "                | DFlashProposer\n"
+        "                | DraftModelProposer\n"
+        "                | ExtractHiddenStatesProposer\n"
+        "                | Gemma4Proposer,\n"
+        "            )\n"
+        "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if new_snippet in content:
+            logger.info("Generic draft-model CUDA-graph patch already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the generic draft-model CUDA-graph patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Installed runtime-guarded generic draft-model CUDA-graph keys.")
 
 
 def _patch_vllm_hermes_tool_parser_thread_safety(logger) -> None:
@@ -408,6 +586,10 @@ def _apply_vllm_patches(
 
     _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
     _patch_vllm_online_eagle_head_ownership(patch_logger)
+    _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)
+    _patch_vllm_v2_dflash_load_config(patch_logger)
+    _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
     _patch_vllm_draft_model_load_config(patch_logger)
     _patch_vllm_medusa_load_config(patch_logger)
+    _patch_vllm_draft_model_cudagraph_keys(patch_logger)
     _patch_vllm_hermes_tool_parser_thread_safety(patch_logger)

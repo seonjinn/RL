@@ -14,7 +14,8 @@
 import gc
 import re
 import traceback
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, Protocol, cast
 
 import torch
 import zmq
@@ -37,6 +38,18 @@ except ImportError:
         "This error can also happen if the venv creation was aborted or errored out in the middle. In that case, "
         "please run at least once with the environment variable NRL_FORCE_REBUILD_VENVS=true set to force the rebuild of the environment."
     )
+
+
+class _DraftModel(Protocol):
+    """vLLM draft-model operations used by the refit extension."""
+
+    def load_weights(
+        self,
+        *,
+        weights: Iterable[tuple[str, torch.Tensor]],
+    ) -> object: ...
+
+    def named_modules(self) -> Iterable[tuple[str, torch.nn.Module]]: ...
 
 
 def fix_gemma3_vision_weight_name(key: str) -> str:
@@ -89,11 +102,11 @@ def _validate_draft_weight_load_result(load_result: object) -> None:
 def _read_mtp_layer_weights_from_checkpoint(
     model_path: str, mtp_layer_indices: set[int]
 ) -> list[tuple[str, torch.Tensor]]:
-    """Read only the MTP draft layer weights from a sharded HF safetensors checkpoint.
+    """Read only MTP draft weights from a local HF safetensors checkpoint.
 
-    Uses the checkpoint's ``model.safetensors.index.json`` to open only the
-    shards that contain the requested transformer layer indices, so the
-    multi-terabyte base-model weights are never read from disk.
+    For sharded checkpoints, only shards containing MTP weights are opened.
+    Explicit ``mtp`` and ``mtp_layers`` namespaces are model-owned draft
+    modules; otherwise, only the resolved transformer layer indices are read.
 
     Args:
         model_path: Path to the HF checkpoint directory.
@@ -108,17 +121,45 @@ def _read_mtp_layer_weights_from_checkpoint(
 
     from safetensors import safe_open
 
+    layer_re = re.compile(r"(?:^|\.)layers\.(\d+)\.")
+    mtp_namespace_re = re.compile(r"(?:^|\.)mtp_layers\.\d+\.")
+
+    def is_mtp_weight(name: str) -> bool:
+        layer_match = layer_re.search(name)
+        return (
+            name.startswith("mtp.")
+            or mtp_namespace_re.search(name) is not None
+            or (
+                layer_match is not None
+                and int(layer_match.group(1)) in mtp_layer_indices
+            )
+        )
+
     index_path = os.path.join(model_path, "model.safetensors.index.json")
+    single_path = (
+        model_path
+        if os.path.isfile(model_path)
+        else os.path.join(model_path, "model.safetensors")
+    )
+    if not os.path.exists(index_path):
+        if not os.path.exists(single_path):
+            raise FileNotFoundError(
+                "Expected model.safetensors.index.json or model.safetensors "
+                f"under local checkpoint {model_path}."
+            )
+        weights: list[tuple[str, torch.Tensor]] = []
+        with safe_open(single_path, framework="pt", device="cpu") as reader:
+            for name in reader.keys():
+                if is_mtp_weight(name):
+                    weights.append((name, reader.get_tensor(name)))
+        return weights
+
     with open(index_path) as f:
         weight_map = json.load(f)["weight_map"]
 
-    layer_re = re.compile(r"(?:^|\.)layers\.(\d+)\.")
     shard_to_names: dict[str, list[str]] = {}
     for name, shard in weight_map.items():
-        match = layer_re.search(name)
-        if name.startswith("mtp.") or (
-            match is not None and int(match.group(1)) in mtp_layer_indices
-        ):
+        if is_mtp_weight(name):
             shard_to_names.setdefault(shard, []).append(name)
 
     weights: list[tuple[str, torch.Tensor]] = []
@@ -132,6 +173,12 @@ def _read_mtp_layer_weights_from_checkpoint(
 
 
 class VllmInternalWorkerExtension:
+    state_dict_info: dict[str, Any]
+    require_mtp_draft_weights: bool
+    _pending_draft_weights: list[tuple[str, torch.Tensor]] | None
+    _observed_update_weight_names: set[str] | None
+    _draft_weights_updated: bool
+
     def bind_numa(self) -> bool:
         """Pin this TP worker to its GPU's NUMA-local CPUs/memory.
 
@@ -208,10 +255,20 @@ class VllmInternalWorkerExtension:
             state_dict_info (dict): A dictionary containing the info for refit.
                 e.g. {tensor_name: (shape, dtype)}
         """
+        if not state_dict_info:
+            raise ValueError(
+                "The vLLM refit weight manifest is empty; refusing to run an "
+                "update that cannot prove target-weight coverage."
+            )
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
         self.require_mtp_draft_weights = require_mtp_draft_weights
 
     def _begin_weight_update(self) -> None:
+        if not getattr(self, "state_dict_info", None):
+            raise RuntimeError(
+                "The vLLM refit weight manifest is empty; refusing to begin the "
+                "weight update."
+            )
         if getattr(self, "_pending_draft_weights", None) is not None:
             raise RuntimeError("A vLLM weight update is already in progress.")
         self._pending_draft_weights: list[tuple[str, torch.Tensor]] | None = []
@@ -228,6 +285,15 @@ class VllmInternalWorkerExtension:
         speculative_config = getattr(vllm_config, "speculative_config", None)
         return getattr(speculative_config, "method", None) in MTP_SPECULATIVE_METHODS
 
+    def _get_draft_model(self) -> _DraftModel | None:
+        """Resolve the draft model from either vLLM model-runner generation."""
+        draft_owner = getattr(self.model_runner, "drafter", None)
+        if draft_owner is None:
+            draft_owner = getattr(self.model_runner, "speculator", None)
+        if draft_owner is None:
+            return None
+        return cast(_DraftModel | None, getattr(draft_owner, "model", None))
+
     def _process_weights_after_update(self, *, draft_weights_updated: bool) -> None:
         from vllm.config import set_current_vllm_config
         from vllm.model_executor.model_loader.utils import (
@@ -239,10 +305,7 @@ class VllmInternalWorkerExtension:
                 self.model_runner.model, self.model_config, self.device
             )
             if draft_weights_updated:
-                draft_owner = getattr(self.model_runner, "drafter", None)
-                draft_model = (
-                    getattr(draft_owner, "model", None) if draft_owner else None
-                )
+                draft_model = self._get_draft_model()
                 if draft_model is None:
                     raise RuntimeError(
                         "Draft weights were updated but the vLLM drafter is unavailable."
@@ -328,8 +391,7 @@ class VllmInternalWorkerExtension:
             )
 
     def _get_mtp_layer_indices(self) -> set[int]:
-        draft_owner = getattr(self.model_runner, "drafter", None)
-        draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+        draft_model = self._get_draft_model()
         predictor = getattr(draft_model, "model", draft_model)
         mtp_start_layer_idx = getattr(predictor, "mtp_start_layer_idx", None)
         num_mtp_layers = getattr(predictor, "num_mtp_layers", None)
@@ -385,6 +447,10 @@ class VllmInternalWorkerExtension:
                 draft_weights.append((key, tensor))
                 continue
 
+            if uses_mtp_specdec and re.search(r"(?:^|\.)mtp_layers\.\d+\.", key):
+                draft_weights.append((key, tensor))
+                continue
+
             layer_match = re.search(r"(?:^|\.)layers\.(\d+)\.", key)
             if (
                 layer_match is not None
@@ -398,7 +464,7 @@ class VllmInternalWorkerExtension:
 
     @staticmethod
     def _trim_vocab_padding(
-        draft_model: torch.nn.Module,
+        draft_model: _DraftModel,
         draft_weights: list[tuple[str, torch.Tensor]],
     ) -> list[tuple[str, torch.Tensor]]:
         """Trim padded vocab dimensions from draft weights.
@@ -438,8 +504,7 @@ class VllmInternalWorkerExtension:
         if not draft_weights:
             return
 
-        draft_owner = getattr(self.model_runner, "drafter", None)
-        draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+        draft_model = self._get_draft_model()
 
         if draft_model is None:
             raise RuntimeError(
@@ -466,8 +531,7 @@ class VllmInternalWorkerExtension:
             ``True`` on drafter-owner ranks after loading, and ``None`` on
             non-owner pipeline ranks.
         """
-        draft_owner = getattr(self.model_runner, "drafter", None)
-        draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+        draft_model = self._get_draft_model()
         if draft_model is None:
             from vllm.distributed.parallel_state import get_pp_group
 
@@ -533,8 +597,7 @@ class VllmInternalWorkerExtension:
                 self.model_runner.model.load_weights(weights=policy_weights)
 
         if draft_weights:
-            draft_owner = getattr(self.model_runner, "drafter", None)
-            draft_model = getattr(draft_owner, "model", None) if draft_owner else None
+            draft_model = self._get_draft_model()
             if draft_model is None:
                 from vllm.distributed.parallel_state import get_pp_group
 

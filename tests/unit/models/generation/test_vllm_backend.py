@@ -51,6 +51,31 @@ def _make_collective_update_extension(backend):
     return ext, state_info
 
 
+@pytest.mark.vllm
+def test_prepare_refit_info_rejects_empty_weight_manifest() -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+
+    with pytest.raises(ValueError, match="refit weight manifest is empty"):
+        ext.prepare_refit_info({})
+
+
+@pytest.mark.vllm
+def test_begin_weight_update_rejects_empty_weight_manifest() -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext.state_dict_info = {}
+
+    with pytest.raises(RuntimeError, match="refit weight manifest is empty"):
+        ext._begin_weight_update()
+
+
 def _write_sharded_checkpoint(model_dir, shards):
     """Write safetensors shards plus a model.safetensors.index.json.
 
@@ -141,6 +166,22 @@ def _make_extension_for_draft_load(draft_model: object | None) -> Any:
 
 
 @pytest.mark.vllm
+def test_get_draft_model_supports_v2_speculator_owner() -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    draft_model = object()
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext.model_runner = SimpleNamespace(
+        drafter=None,
+        speculator=SimpleNamespace(model=draft_model),
+    )
+
+    assert ext._get_draft_model() is draft_model
+
+
+@pytest.mark.vllm
 def test_split_policy_and_draft_weights_routes_mtp_layers_and_buffers() -> None:
     predictor = SimpleNamespace(mtp_start_layer_idx=2, num_mtp_layers=1)
     draft_model = SimpleNamespace(model=predictor)
@@ -197,6 +238,22 @@ def test_split_policy_and_draft_weights_routes_qwen_mtp_namespace() -> None:
 
     assert policy_weights == []
     assert draft_weights == [("mtp.layers.0.self_attn.q_proj.weight", weight)]
+
+
+@pytest.mark.vllm
+def test_split_policy_and_draft_weights_routes_mimo_mtp_namespace() -> None:
+    ext = _make_extension_for_draft_load(draft_model=SimpleNamespace())
+    ext.model_runner.vllm_config = SimpleNamespace(
+        speculative_config=SimpleNamespace(method="mimo_mtp")
+    )
+    weight = torch.randn(1)
+
+    policy_weights, draft_weights = ext._split_policy_and_draft_weights(
+        [("model.mtp_layers.0.self_attn.q_proj.weight", weight)]
+    )
+
+    assert policy_weights == []
+    assert draft_weights == [("model.mtp_layers.0.self_attn.q_proj.weight", weight)]
 
 
 @pytest.mark.vllm
@@ -705,6 +762,57 @@ def test_read_mtp_layer_weights_from_checkpoint_includes_mtp_namespace(tmp_path)
 
 
 @pytest.mark.vllm
+def test_read_mtp_layer_weights_from_checkpoint_includes_mimo_namespace(tmp_path):
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        _read_mtp_layer_weights_from_checkpoint,
+    )
+
+    model_dir = tmp_path / "ckpt"
+    mtp_weight = torch.randn(4, 4)
+    _write_sharded_checkpoint(
+        model_dir,
+        {
+            "model-00001-of-00001.safetensors": {
+                "model.mtp_layers.0.self_attn.q_proj.weight": mtp_weight,
+                "model.layers.0.self_attn.q_proj.weight": torch.randn(4, 4),
+            }
+        },
+    )
+
+    weights = _read_mtp_layer_weights_from_checkpoint(str(model_dir), {32})
+
+    assert [name for name, _ in weights] == [
+        "model.mtp_layers.0.self_attn.q_proj.weight"
+    ]
+    assert torch.equal(weights[0][1], mtp_weight)
+
+
+@pytest.mark.vllm
+def test_read_mtp_layer_weights_from_single_safetensors(tmp_path):
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        _read_mtp_layer_weights_from_checkpoint,
+    )
+
+    model_dir = tmp_path / "ckpt"
+    model_dir.mkdir()
+    mtp_weight = torch.randn(4, 4)
+    save_file(
+        {
+            "model.mtp_layers.0.self_attn.q_proj.weight": mtp_weight,
+            "model.layers.0.self_attn.q_proj.weight": torch.randn(4, 4),
+        },
+        str(model_dir / "model.safetensors"),
+    )
+
+    weights = _read_mtp_layer_weights_from_checkpoint(str(model_dir), {32})
+
+    assert [name for name, _ in weights] == [
+        "model.mtp_layers.0.self_attn.q_proj.weight"
+    ]
+    assert torch.equal(weights[0][1], mtp_weight)
+
+
+@pytest.mark.vllm
 def test_load_mtp_weights_from_disk_loads_only_mtp_layer(tmp_path, monkeypatch):
     """Success path: only MTP-layer weights are handed to the drafter, then post-loaded."""
     model_dir = tmp_path / "ckpt"
@@ -748,6 +856,7 @@ def test_load_mtp_weights_from_disk_raises_without_drafter_on_owner_rank(
     ext.device = torch.device("cpu")
     ext.model_runner = MagicMock()
     ext.model_runner.drafter = None
+    ext.model_runner.speculator = None
     ext._load_draft_weights = MagicMock()
     _patch_pp_rank(monkeypatch, is_last_rank=True)
 
@@ -769,6 +878,7 @@ def test_load_mtp_weights_from_disk_skips_non_owner_pipeline_rank(
     ext.device = torch.device("cpu")
     ext.model_runner = MagicMock()
     ext.model_runner.drafter = None
+    ext.model_runner.speculator = None
     ext._load_draft_weights = MagicMock()
     _patch_pp_rank(monkeypatch, is_last_rank=False)
 

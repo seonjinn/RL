@@ -1,6 +1,8 @@
 # Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 
+import sys
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,6 +32,37 @@ def test_online_eagle_patch_marks_dummy_refit_head_as_owned(
     assert "self.model.has_own_embed_tokens = False" in patched
 
 
+def test_ray_worker_patch_rejects_unknown_vllm_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ray_executor = tmp_path / "ray_executor.py"
+    ray_executor.write_text("class RayDistributedExecutor: pass\n")
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(ray_executor))
+
+    with pytest.raises(RuntimeError, match="vLLM source layout changed"):
+        patches._patch_vllm_init_workers_ray("/venv/bin/python", None)
+
+
+def test_ray_worker_patch_forwards_draft_cudagraph_runtime_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ray_executor = tmp_path / "ray_executor.py"
+    ray_executor.write_text("        self._init_workers_ray(placement_group)\n")
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(ray_executor))
+    monkeypatch.delenv("VLLM_RAY_EXTRA_ENV_VARS_TO_COPY", raising=False)
+
+    patches._patch_vllm_init_workers_ray("/venv/bin/python", None)
+
+    copied_names = set(
+        name
+        for name in patches.os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"].split(",")
+        if name
+    )
+    assert "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH" in copied_names
+
+
 def test_static_draft_loader_patch_uses_draft_load_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -49,6 +82,75 @@ def test_static_draft_loader_patch_uses_draft_load_config(
     assert "load_config=spec.draft_load_config or base.load_config" in patched
 
 
+def test_v2_eagle_patch_uses_draft_load_config_and_preserves_online_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eagle_utils = tmp_path / "utils.py"
+    eagle_utils.write_text(
+        "    speculative_config = vllm_config.speculative_config\n"
+        "    assert speculative_config is not None\n"
+        "    draft_model_config = speculative_config.draft_model_config\n"
+        '    with set_model_tag("eagle_head"):\n'
+        "        eagle_model = get_model(\n"
+        "            vllm_config=vllm_config, model_config=draft_model_config\n"
+        "        )\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(eagle_utils))
+
+    patches._patch_vllm_v2_eagle_load_config_and_ownership(MagicMock())
+
+    patched = eagle_utils.read_text()
+    assert "load_config=draft_load_config or vllm_config.load_config" in patched
+    assert "online_refit_uses_dummy_drafter" in patched
+    assert "eagle_model.has_own_lm_head = True" in patched
+    assert "eagle_model.has_own_embed_tokens = False" in patched
+
+
+def test_v2_dflash_patch_uses_draft_load_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dflash_utils = tmp_path / "utils.py"
+    dflash_utils.write_text(
+        '    with set_model_tag("dflash_head"):\n'
+        "        dflash_model = get_model(\n"
+        "            vllm_config=draft_vllm_config, model_config=draft_model_config\n"
+        "        )\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(dflash_utils))
+
+    patches._patch_vllm_v2_dflash_load_config(MagicMock())
+
+    patched = dflash_utils.read_text()
+    assert "load_config=speculative_config.draft_load_config" in patched
+    assert "or vllm_config.load_config" in patched
+
+
+def test_missing_probabilistic_draft_row_patch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_runner = tmp_path / "gpu_model_runner.py"
+    model_runner.write_text(
+        "            if row_idx is None:\n"
+        "                logger.warning(\n"
+        '                    "Missing cached draft probabilities for request %s; "\n'
+        '                    "falling back to legacy speculative rejection behavior.",\n'
+        "                    req_id,\n"
+        "                )\n"
+        "                return None\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(model_runner))
+
+    patches._patch_vllm_missing_draft_probs_fail_closed(MagicMock())
+
+    patched = model_runner.read_text()
+    assert "raise RuntimeError(" in patched
+    assert "missing q(token)" in patched
+    assert "falling back to legacy" not in patched
+
+
 def test_medusa_loader_patch_uses_draft_load_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -66,3 +168,70 @@ def test_medusa_loader_patch_uses_draft_load_config(
 
     patched = medusa.read_text()
     assert "load_config=self.spec_config.draft_load_config" in patched
+
+
+def test_draft_model_cudagraph_patch_initializes_generic_proposer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_runner = tmp_path / "gpu_model_runner.py"
+    model_runner.write_text(
+        "        if self.speculative_config and (\n"
+        "            self.speculative_config.use_eagle()\n"
+        "            or self.speculative_config.uses_extract_hidden_states()\n"
+        "        ):\n"
+        "            assert isinstance(\n"
+        "                self.drafter,\n"
+        "                EagleProposer\n"
+        "                | DFlashProposer\n"
+        "                | ExtractHiddenStatesProposer\n"
+        "                | Gemma4Proposer,\n"
+        "            )\n"
+        "            self.drafter.initialize_cudagraph_keys(cudagraph_mode)\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(model_runner))
+
+    patches._patch_vllm_draft_model_cudagraph_keys(MagicMock())
+
+    patched = model_runner.read_text()
+    assert "self.speculative_config.uses_draft_model()" in patched
+    assert "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH" in patched
+    assert "| DraftModelProposer" in patched
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_apply_patches_installs_runtime_guarded_draft_model_cudagraph_patch(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: str,
+) -> None:
+    logger = MagicMock()
+    vllm_module = ModuleType("vllm")
+    logger_module = ModuleType("vllm.logger")
+    logger_module.init_logger = lambda _name: logger
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.setitem(sys.modules, "vllm.logger", logger_module)
+
+    for name in (
+        "_patch_vllm_init_workers_ray",
+        "_patch_vllm_llama_eagle3_own_lm_head",
+        "_patch_vllm_online_eagle_head_ownership",
+        "_patch_vllm_draft_model_load_config",
+        "_patch_vllm_v2_eagle_load_config_and_ownership",
+        "_patch_vllm_v2_dflash_load_config",
+        "_patch_vllm_missing_draft_probs_fail_closed",
+        "_patch_vllm_medusa_load_config",
+        "_patch_vllm_hermes_tool_parser_thread_safety",
+    ):
+        monkeypatch.setattr(patches, name, MagicMock())
+    draft_cg_patch = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_patch_vllm_draft_model_cudagraph_keys",
+        draft_cg_patch,
+        raising=False,
+    )
+    monkeypatch.setenv("NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH", enabled)
+
+    patches._apply_vllm_patches("/venv/bin/python")
+
+    draft_cg_patch.assert_called_once_with(logger)

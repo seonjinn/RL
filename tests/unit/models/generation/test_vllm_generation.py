@@ -563,6 +563,27 @@ def test_resolve_vllm_refit_draft_flags_rejects_missing_spec_config() -> None:
         )
 
 
+def test_resolve_vllm_refit_draft_flags_rejects_policy_pipeline_parallelism() -> None:
+    from nemo_rl.models.generation import resolve_vllm_refit_draft_flags
+
+    with pytest.raises(ValueError, match="online Eagle refit requires policy PP=1"):
+        resolve_vllm_refit_draft_flags(
+            {
+                "draft": {"enabled": True},
+                "megatron_cfg": {"pipeline_model_parallel_size": 2},
+                "generation": {
+                    "backend": "vllm",
+                    "vllm_kwargs": {
+                        "speculative_config": {
+                            "method": "eagle3",
+                            "model": "/tmp/draft-model",
+                        }
+                    },
+                },
+            }
+        )
+
+
 def test_online_draft_refit_rejects_generic_draft_model_method():
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_kwargs"] = {
@@ -787,6 +808,46 @@ def test_model_autodetect_uses_draft_load_config_without_online_draft_refit():
     }
 
 
+def test_model_autodetect_requires_explicit_method_with_pipeline_parallelism() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_cfg"]["pipeline_parallel_size"] = 2
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "model": "/tmp/autodetect-draft-model",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="Auto-detected speculative models require PP=1",
+    ):
+        configure_generation_config(vllm_config, tokenizer, is_eval=False)
+
+
+@pytest.mark.parametrize(
+    "method", ["custom_class", "ngram_gpu", "extract_hidden_states"]
+)
+def test_model_free_proposer_does_not_require_external_draft_weights(
+    method: str,
+) -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": method,
+            "model": "pkg.Proposer" if method == "custom_class" else method,
+            "num_speculative_tokens": 3,
+            "draft_load_config": {"load_format": "dummy"},
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    configured = configure_generation_config(vllm_config, tokenizer, is_eval=False)
+
+    assert configured["vllm_cfg"]["load_format"] == "dummy"
+
+
 def test_online_eagle_refit_keeps_dummy_load_format():
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_kwargs"] = {
@@ -885,6 +946,29 @@ def test_generic_draft_null_tp_resolves_to_target_tp():
     )
 
 
+def test_mtp_specdec_rejects_pipeline_parallelism_on_vllm_024() -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_cfg"]["pipeline_parallel_size"] = 2
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "mtp",
+            "num_speculative_tokens": 3,
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="MTP speculative decoding requires vLLM pipeline parallelism PP=1",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+
 def test_explicit_draft_load_config_is_preserved():
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_kwargs"] = {
@@ -912,6 +996,33 @@ def test_explicit_draft_load_config_is_preserved():
     }
 
 
+@pytest.mark.parametrize("is_eval", [False, True])
+def test_static_external_drafter_rejects_dummy_load_without_refit(
+    is_eval: bool,
+) -> None:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    vllm_config["vllm_kwargs"] = {
+        "speculative_config": {
+            "method": "eagle3",
+            "model": "/tmp/eagle3-model",
+            "num_speculative_tokens": 3,
+            "draft_load_config": {"load_format": "dummy"},
+        }
+    }
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.raises(
+        ValueError,
+        match="Static external speculative drafter cannot use.*load_format='dummy'",
+    ):
+        configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=is_eval,
+            has_refit_draft_weights=False,
+        )
+
+
 def test_specdec_runtime_contract_records_resolved_sampling_tp_and_load_format():
     from nemo_rl.models.generation import get_vllm_specdec_runtime_contract
 
@@ -921,6 +1032,9 @@ def test_specdec_runtime_contract_records_resolved_sampling_tp_and_load_format()
     vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
     vllm_config["vllm_cfg"]["load_format"] = "dummy"
     vllm_config["vllm_cfg"]["enforce_eager"] = False
+    vllm_config["vllm_cfg"]["env_vars"] = {
+        "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH": "true"
+    }
     vllm_config["vllm_kwargs"] = {
         "speculative_config": {
             "method": "eagle3",
@@ -947,6 +1061,7 @@ def test_specdec_runtime_contract_records_resolved_sampling_tp_and_load_format()
         "rejection_sample_method": "standard",
         "draft_sample_method": "probabilistic",
         "cuda_graph_enabled": True,
+        "draft_model_cudagraph_patch_requested": True,
     }
 
 

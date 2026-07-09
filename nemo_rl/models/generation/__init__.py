@@ -27,7 +27,13 @@ from nemo_rl.models.generation.vllm.config import (
 TokenizerType = PreTrainedTokenizerBase
 
 _ONLINE_REFIT_SPEC_METHODS = {"eagle", "eagle3"}
-_MODEL_FREE_SPEC_METHODS = {"suffix", "ngram"}
+_MODEL_FREE_SPEC_METHODS = {
+    "suffix",
+    "ngram",
+    "ngram_gpu",
+    "custom_class",
+    "extract_hidden_states",
+}
 _STATIC_NEURAL_EXTERNAL_DRAFT_METHODS = {
     "draft_model",
     "eagle",
@@ -85,6 +91,18 @@ def validate_vllm_speculative_config(
     if method == "pard2":
         raise ValueError("speculative_config.method='pard2' is not supported")
 
+    draft_load_config = speculative_config.get("draft_load_config") or {}
+    if (
+        not has_refit_draft_weights
+        and _uses_static_neural_external_drafter(speculative_config)
+        and str(draft_load_config.get("load_format", "auto")).lower() == "dummy"
+    ):
+        raise ValueError(
+            "Static external speculative drafter cannot use "
+            "draft_load_config.load_format='dummy' without online draft refit; "
+            "load real draft checkpoint weights instead."
+        )
+
     if (
         method in MTP_SPECULATIVE_METHODS
         and speculative_config.get("model")
@@ -109,6 +127,24 @@ def validate_vllm_speculative_config(
         raise ValueError(
             "Online Eagle refit requires vLLM pipeline parallelism PP=1 because "
             "vLLM 0.24 does not share target embeddings with the draft across PP ranks."
+        )
+    if (
+        method in MTP_SPECULATIVE_METHODS
+        and config["vllm_cfg"].get("pipeline_parallel_size", 1) != 1
+    ):
+        raise ValueError(
+            "MTP speculative decoding requires vLLM pipeline parallelism PP=1 "
+            "until sampler-count, draft-token broadcast, and rollback fixes land."
+        )
+    if (
+        method is None
+        and speculative_config.get("model") is not None
+        and config["vllm_cfg"].get("pipeline_parallel_size", 1) != 1
+    ):
+        raise ValueError(
+            "Auto-detected speculative models require PP=1 in NeMo-RL. Set an "
+            "explicit speculative_config.method so method-specific PP safety can "
+            "be validated before engine construction."
         )
 
     if method in _STATIC_NEURAL_EXTERNAL_DRAFT_METHODS and not speculative_config.get(
@@ -146,6 +182,16 @@ def get_vllm_specdec_runtime_contract(
         draft_tp = "vllm_auto" if method in (None, "mlp_speculator") else target_tp
 
     draft_load_config = speculative_config.get("draft_load_config") or {}
+    worker_env = config["vllm_cfg"].get("env_vars", {})
+    draft_model_cudagraph_patch_requested = (
+        str(
+            worker_env.get(
+                "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH",
+                "false",
+            )
+        ).lower()
+        == "true"
+    )
     return {
         "method": method or "vllm_auto",
         "model": speculative_config.get("model"),
@@ -164,6 +210,9 @@ def get_vllm_specdec_runtime_contract(
         ),
         "draft_sample_method": speculative_config.get("draft_sample_method", "greedy"),
         "cuda_graph_enabled": not config["vllm_cfg"].get("enforce_eager", False),
+        "draft_model_cudagraph_patch_requested": (
+            draft_model_cudagraph_patch_requested
+        ),
     }
 
 
@@ -194,6 +243,14 @@ def resolve_vllm_refit_draft_flags(
             )
 
     megatron_config = policy_config.get("megatron_cfg") or {}
+    if has_refit_draft_weights and (
+        megatron_config.get("pipeline_model_parallel_size", 1) != 1
+    ):
+        raise ValueError(
+            "NeMo-RL online Eagle refit requires policy PP=1 because draft "
+            "parameters and hidden-state ownership are not distributed safely "
+            "across Megatron pipeline stages."
+        )
     trains_mtp = bool(megatron_config.get("mtp_num_layers"))
     return has_refit_draft_weights, trains_mtp
 
