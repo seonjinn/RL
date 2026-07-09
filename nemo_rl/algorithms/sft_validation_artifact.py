@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tensor-only storage for precomputed SFT validation events."""
+"""Storage for deterministic precomputed SFT validation events."""
 
 import fcntl
 import hashlib
@@ -25,6 +25,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from typing_extensions import Self
 
@@ -35,7 +36,7 @@ from safetensors.torch import save_file as save_safetensors_file
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
-_ARTIFACT_VERSION = 2
+_ARTIFACT_VERSION = 3
 _MANIFEST_FILE_NAME = "validation.manifest.json"
 _WRITER_LOCK_FILE_NAME = ".validation-artifact.lock"
 _TENSOR_FILE_PATTERN = re.compile(r"validation-([0-9a-f]{64})\.safetensors")
@@ -47,6 +48,7 @@ _MANIFEST_KEYS = frozenset(
         "artifact_version",
         "eligibility",
         "fingerprint",
+        "metadata",
         "num_valid_tokens",
         "payload_digest",
         "retained_bytes",
@@ -68,12 +70,17 @@ _REQUIRED_SFT_TENSOR_KEYS = frozenset(
     {"input_ids", "input_lengths", "sample_mask", "token_mask"}
 )
 _OPTIONAL_SFT_TENSOR_KEYS = frozenset({"position_ids", "target_ids"})
+_OPTIONAL_BATCH_SFT_TENSOR_KEYS = frozenset({"processed_token_counts"})
 _PACKED_SFT_TENSOR_KEYS = frozenset(
     {"packed_cu_seqlens", "packed_cu_seqlens_lengths", "packed_max_seqlens"}
 )
 _ALLOWED_SFT_TENSOR_KEYS = (
-    _REQUIRED_SFT_TENSOR_KEYS | _OPTIONAL_SFT_TENSOR_KEYS | _PACKED_SFT_TENSOR_KEYS
+    _REQUIRED_SFT_TENSOR_KEYS
+    | _OPTIONAL_SFT_TENSOR_KEYS
+    | _OPTIONAL_BATCH_SFT_TENSOR_KEYS
+    | _PACKED_SFT_TENSOR_KEYS
 )
+_ALLOWED_SFT_METADATA_KEYS = frozenset({"idx", "task_name"})
 _FINGERPRINT_KEYS = frozenset(
     {
         "container_sha256",
@@ -177,7 +184,7 @@ class ValidationArtifactFingerprint:
 
 @dataclass(frozen=True)
 class PrecomputedValidationEvent:
-    data: BatchedDataDict[Mapping[str, torch.Tensor]]
+    data: BatchedDataDict[Any]
     num_valid_tokens: tuple[int, int, int, int]
     payload_digest: str
     retained_bytes: int
@@ -203,10 +210,11 @@ def save_validation_event(
     fingerprint: ValidationArtifactFingerprint,
     eligibility: ValidationArtifactEligibility,
 ) -> Path:
-    """Atomically persist a tensor-only validation event and its manifest."""
+    """Atomically persist a validation event and its manifest."""
     _validate_producer_eligibility(eligibility)
     _validate_fingerprint_semantics(fingerprint)
     tensors = _event_tensors(event.data)
+    metadata = _event_metadata(event.data, tensors["input_ids"].shape[0])
     retained_bytes = sum(tensor.nbytes for tensor in tensors.values())
     _validate_event_metadata(event, retained_bytes)
 
@@ -220,6 +228,7 @@ def save_validation_event(
             "artifact_version": _ARTIFACT_VERSION,
             "eligibility": _eligibility_as_manifest(eligibility),
             "fingerprint": _fingerprint_as_manifest(fingerprint),
+            "metadata": metadata,
             "num_valid_tokens": list(event.num_valid_tokens),
             "payload_digest": event.payload_digest,
             "retained_bytes": retained_bytes,
@@ -286,8 +295,10 @@ def load_validation_event(
             "Validation artifact tensor file could not be loaded"
         ) from error
 
-    data = _validated_loaded_data(tensors, manifest["tensors"])
-    loaded_retained_bytes = sum(tensor.nbytes for tensor in data.values())
+    data = _validated_loaded_data(tensors, manifest["tensors"], manifest["metadata"])
+    loaded_retained_bytes = sum(
+        value.nbytes for value in data.values() if isinstance(value, torch.Tensor)
+    )
     if loaded_retained_bytes != retained_bytes:
         raise ValueError(
             "Validation artifact retained_bytes does not match tensor data"
@@ -307,26 +318,61 @@ def load_validation_event(
 
 
 def clone_validation_event_data(
-    data: BatchedDataDict[Mapping[str, torch.Tensor]],
-) -> BatchedDataDict[Mapping[str, torch.Tensor]]:
+    data: BatchedDataDict[Any],
+) -> BatchedDataDict[Any]:
     """Clone event data so validation submission cannot mutate its canonical cache."""
-    cloned = BatchedDataDict[Mapping[str, torch.Tensor]]()
+    cloned = BatchedDataDict[Any]()
     for key, value in data.items():
-        _require_named_cpu_tensor(key, value)
-        cloned[key] = _clone_tensor(value)
-    _validate_sft_tensor_schema(cloned)
+        if isinstance(value, torch.Tensor):
+            _require_named_cpu_tensor(key, value)
+            cloned[key] = _clone_tensor(value)
+        elif key in _ALLOWED_SFT_METADATA_KEYS and isinstance(value, list):
+            cloned[key] = list(value)
+        else:
+            _require_named_cpu_tensor(key, value)
+    tensors = {key: value for key, value in cloned.items() if torch.is_tensor(value)}
+    _validate_sft_tensor_schema(tensors)
+    _validate_sft_metadata(
+        {key: value for key, value in cloned.items() if isinstance(value, list)},
+        tensors["input_ids"].shape[0],
+    )
     return cloned
 
 
 def _event_tensors(
-    data: BatchedDataDict[Mapping[str, torch.Tensor]],
+    data: BatchedDataDict[Any],
 ) -> dict[str, torch.Tensor]:
     tensors: dict[str, torch.Tensor] = {}
     for key, value in sorted(data.items()):
-        _require_named_cpu_tensor(key, value)
-        tensors[key] = _clone_tensor(value)
+        if isinstance(value, torch.Tensor):
+            _require_named_cpu_tensor(key, value)
+            tensors[key] = _clone_tensor(value)
+        elif key not in _ALLOWED_SFT_METADATA_KEYS:
+            _require_named_cpu_tensor(key, value)
     _validate_sft_tensor_schema(tensors)
     return tensors
+
+
+def _event_metadata(
+    data: BatchedDataDict[Any], batch_size: int
+) -> dict[str, list[Any]]:
+    metadata = {
+        key: list(value)
+        for key, value in sorted(data.items())
+        if key in _ALLOWED_SFT_METADATA_KEYS and isinstance(value, list)
+    }
+    missing_or_invalid = [
+        key
+        for key in _ALLOWED_SFT_METADATA_KEYS & data.keys()
+        if not isinstance(data[key], list)
+    ]
+    if missing_or_invalid:
+        raise TypeError(
+            "Validation artifact list metadata must use lists: "
+            f"{sorted(missing_or_invalid)}"
+        )
+    _validate_sft_metadata(metadata, batch_size)
+    return metadata
 
 
 def _validate_producer_eligibility(eligibility: object) -> None:
@@ -450,6 +496,8 @@ def _validate_sft_tensor_shapes(shapes: Mapping[str, tuple[int, ...]]) -> None:
     }
     for key in _OPTIONAL_SFT_TENSOR_KEYS & shapes.keys():
         expected_shapes[key] = (batch_size, sequence_length)
+    for key in _OPTIONAL_BATCH_SFT_TENSOR_KEYS & shapes.keys():
+        expected_shapes[key] = (batch_size,)
     packed_keys = shapes.keys() & _PACKED_SFT_TENSOR_KEYS
     if packed_keys:
         expected_shapes["packed_cu_seqlens_lengths"] = (batch_size,)
@@ -467,6 +515,32 @@ def _validate_sft_tensor_shapes(shapes: Mapping[str, tuple[int, ...]]) -> None:
             raise ValueError(
                 f"Validation artifact tensor {key!r} has shape "
                 f"{shapes[key]}; expected {expected_shape}"
+            )
+
+
+def _validate_sft_metadata(metadata: object, batch_size: int) -> None:
+    if not isinstance(metadata, Mapping):
+        raise ValueError("Validation artifact metadata must be an object")
+    unknown_keys = sorted(set(metadata) - _ALLOWED_SFT_METADATA_KEYS)
+    if unknown_keys:
+        raise ValueError(
+            f"Validation artifact has unknown SFT metadata keys: {unknown_keys}"
+        )
+    for key, values in metadata.items():
+        if not isinstance(key, str) or not isinstance(values, list):
+            raise ValueError("Validation artifact metadata entries must be named lists")
+        if len(values) != batch_size:
+            raise ValueError(
+                f"Validation artifact metadata {key!r} has length {len(values)}; "
+                f"expected {batch_size}"
+            )
+        if key == "idx" and any(type(value) is not int for value in values):
+            raise ValueError("Validation artifact idx metadata must contain integers")
+        if key == "task_name" and any(
+            value is not None and not isinstance(value, str) for value in values
+        ):
+            raise ValueError(
+                "Validation artifact task_name metadata must contain strings or nulls"
             )
 
 
@@ -870,6 +944,13 @@ def _validate_manifest_metadata(manifest: Mapping[str, object]) -> None:
             if isinstance(key, str) and isinstance(record, Mapping)
         }
     )
+    input_ids_record = tensor_records["input_ids"]
+    if not isinstance(input_ids_record, Mapping):
+        raise ValueError("Validation artifact input_ids tensor record is invalid")
+    input_ids_shape = input_ids_record["shape"]
+    if not isinstance(input_ids_shape, list) or not input_ids_shape:
+        raise ValueError("Validation artifact input_ids tensor shape is invalid")
+    _validate_sft_metadata(manifest["metadata"], input_ids_shape[0])
 
 
 def _validate_fingerprint(
@@ -959,13 +1040,15 @@ def _validate_memory_budget(
 
 
 def _validated_loaded_data(
-    loaded_tensors: Mapping[str, torch.Tensor], tensor_records: object
-) -> BatchedDataDict[Mapping[str, torch.Tensor]]:
+    loaded_tensors: Mapping[str, torch.Tensor],
+    tensor_records: object,
+    metadata: object,
+) -> BatchedDataDict[Any]:
     if not isinstance(tensor_records, Mapping) or set(loaded_tensors) != set(
         tensor_records
     ):
         raise ValueError("Validation artifact tensor names do not match manifest")
-    data = BatchedDataDict[Mapping[str, torch.Tensor]]()
+    data = BatchedDataDict[Any]()
     for key in sorted(loaded_tensors):
         tensor = loaded_tensors[key]
         _require_cpu_tensor(tensor)
@@ -983,4 +1066,12 @@ def _validated_loaded_data(
         if record["sha256"] != tensor_content_sha256(tensor):
             raise ValueError(f"Validation artifact tensor SHA-256 mismatch for {key!r}")
         data[key] = _clone_tensor(tensor)
+    batch_size = data["input_ids"].shape[0]
+    _validate_sft_metadata(metadata, batch_size)
+    if not isinstance(metadata, Mapping):
+        raise ValueError("Validation artifact metadata must be an object")
+    for key, values in sorted(metadata.items()):
+        if not isinstance(key, str) or not isinstance(values, list):
+            raise ValueError("Validation artifact metadata entries must be named lists")
+        data[key] = list(values)
     return data

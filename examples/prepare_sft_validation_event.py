@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Produce a deterministic, tensor-only SFT validation event artifact."""
+"""Produce a deterministic SFT validation event artifact."""
 
 import argparse
 import hashlib
@@ -68,6 +68,7 @@ _PERSISTED_TENSOR_KEYS = frozenset(
     {
         "input_ids",
         "input_lengths",
+        "processed_token_counts",
         "sample_mask",
         "token_mask",
         "position_ids",
@@ -77,7 +78,7 @@ _PERSISTED_TENSOR_KEYS = frozenset(
         "packed_max_seqlens",
     }
 )
-_RUNTIME_ONLY_KEYS = frozenset({"idx", "processed_token_counts", "task_name"})
+_PERSISTED_LIST_KEYS = frozenset({"idx", "task_name"})
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -219,21 +220,26 @@ def build_precomputed_validation_event(
         data=event_data,
         num_valid_tokens=num_valid_tokens,
         payload_digest=digest_validation_event_data(event_data),
-        retained_bytes=sum(tensor.nbytes for tensor in event_data.values()),
+        retained_bytes=sum(
+            value.nbytes for value in event_data.values() if torch.is_tensor(value)
+        ),
     )
 
 
 def digest_validation_event_data(data: Mapping[str, object]) -> str:
-    """Return the canonical digest of the tensor-only artifact payload."""
-    tensor_data = _event_tensor_data(data, clone_tensors=False)
-    records = {
-        key: {
-            "dtype": str(tensor.dtype),
-            "sha256": tensor_content_sha256(tensor),
-            "shape": list(tensor.shape),
-        }
-        for key, tensor in sorted(tensor_data.items())
-    }
+    """Return the canonical digest of the persisted artifact payload."""
+    payload_data = _event_tensor_data(data, clone_tensors=False)
+    records: dict[str, object] = {}
+    for key, value in sorted(payload_data.items()):
+        if isinstance(value, torch.Tensor):
+            records[key] = {
+                "type": "tensor",
+                "dtype": str(value.dtype),
+                "sha256": tensor_content_sha256(value),
+                "shape": list(value.shape),
+            }
+        else:
+            records[key] = {"type": "list", "value": value}
     return hashlib.sha256(
         json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -289,7 +295,7 @@ def _event_tensor_data(
     *,
     clone_tensors: bool = True,
 ) -> BatchedDataDict[Any]:
-    tensors = BatchedDataDict[Any]()
+    payload = BatchedDataDict[Any]()
     for key, value in data.items():
         if key in _PERSISTED_TENSOR_KEYS:
             if not isinstance(value, torch.Tensor):
@@ -301,14 +307,18 @@ def _event_tensor_data(
                 raise ValueError(
                     "Validation artifact production supports CPU tensors only"
                 )
-            tensors[key] = (
+            payload[key] = (
                 tensor.detach().contiguous().clone() if clone_tensors else tensor
             )
-        elif key not in _RUNTIME_ONLY_KEYS:
+        elif key in _PERSISTED_LIST_KEYS:
+            if not isinstance(value, list):
+                raise TypeError(f"Validation artifact metadata {key!r} must be a list")
+            payload[key] = list(value)
+        else:
             raise ValueError(
                 f"Validation artifact production cannot persist unknown batch key {key!r}"
             )
-    return tensors
+    return payload
 
 
 @contextmanager
