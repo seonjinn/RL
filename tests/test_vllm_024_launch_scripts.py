@@ -144,9 +144,10 @@ def test_dynamicsd_launcher_rebuilds_the_vllm_024_worker_runtime() -> None:
 
     assert "/opt/nemo_rl_venv/bin/python" in output
     assert (
-        "NEMO_RL_VENV_DIR=/lustre/users/sna/RL/experiments/vllm_024_upgrade/"
-        "runs/contract-test/qwen235b/eagle3_k5/venvs"
+        "NEMO_RL_VENV_DIR=/tmp/nemorl-vllm024-venvs-contract-test-attempt-1-"
+        "qwen235b-eagle3_k5"
     ) in output
+    assert "NEMO_RL_VENV_DIR=/lustre" not in output
     assert "NRL_FORCE_REBUILD_VENVS=true" in output
     assert "uv run" not in output
 
@@ -168,6 +169,7 @@ def test_dynamicsd_launcher_renders_qwen30_long_context_topology() -> None:
         QWEN30_NODES="8",
         NUM_PROMPTS_PER_STEP="16",
         NUM_GENERATIONS_PER_PROMPT="16",
+        TRAIN_GLOBAL_BATCH_SIZE="256",
         MAX_TOTAL_SEQUENCE_LENGTH="40960",
         MAX_NEW_TOKENS="32768",
         DYNAMIC_SCHEDULE="[[1,2,5],[3,4,4],[5,8,3],[9,16,1],[17,512,0]]",
@@ -176,6 +178,7 @@ def test_dynamicsd_launcher_renders_qwen30_long_context_topology() -> None:
     assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
     assert "grpo.num_prompts_per_step=16" in output
     assert "grpo.num_generations_per_prompt=16" in output
+    assert "policy.train_global_batch_size=256" in output
     assert "policy.max_total_sequence_length=40960" in output
     assert "policy.generation.max_new_tokens=32768" in output
     assert "cluster.gpus_per_node=4" in output
@@ -356,6 +359,14 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "command",
     ):
         assert field in source
+
+
+def test_dynamicsd_launcher_validates_selected_recipe_and_batch_geometry() -> None:
+    source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'git -C "${REPO_DIR}" ls-files --error-unmatch "${recipe}"' in source
+    assert "total_trajectories % TRAIN_GLOBAL_BATCH_SIZE" in source
+    assert "TRAIN_GLOBAL_BATCH_SIZE > total_trajectories" in source
 
 
 def test_dynamicsd_launcher_ignores_generated_submodule_dirt() -> None:

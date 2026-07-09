@@ -17,6 +17,7 @@ GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-dynamicsd-aws-dfw}"
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-}"
 NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
+TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-}"
 MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
 
@@ -77,6 +78,24 @@ if [[ "${MODE}" == "submit" ]]; then
   fi
 fi
 
+if [[ -n "${NUM_PROMPTS_PER_STEP}" || -n "${NUM_GENERATIONS_PER_PROMPT}" ]]; then
+  if [[ ! "${NUM_PROMPTS_PER_STEP}" =~ ^[1-9][0-9]*$ \
+    || ! "${NUM_GENERATIONS_PER_PROMPT}" =~ ^[1-9][0-9]*$ \
+    || ! "${TRAIN_GLOBAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: prompt/generation overrides require positive NUM_PROMPTS_PER_STEP, NUM_GENERATIONS_PER_PROMPT, and TRAIN_GLOBAL_BATCH_SIZE" >&2
+    exit 2
+  fi
+  total_trajectories=$((NUM_PROMPTS_PER_STEP * NUM_GENERATIONS_PER_PROMPT))
+  if ((TRAIN_GLOBAL_BATCH_SIZE > total_trajectories)); then
+    echo "ERROR: TRAIN_GLOBAL_BATCH_SIZE cannot exceed ${total_trajectories} trajectories" >&2
+    exit 2
+  fi
+  if ((total_trajectories % TRAIN_GLOBAL_BATCH_SIZE != 0)); then
+    echo "ERROR: ${total_trajectories} trajectories must be divisible by TRAIN_GLOBAL_BATCH_SIZE" >&2
+    exit 2
+  fi
+fi
+
 case "${MODEL_SELECTION}" in
   all) models=(qwen30ba3b qwen32b qwen235b) ;;
   qwen30ba3b|qwen32b|qwen235b) models=("${MODEL_SELECTION}") ;;
@@ -128,6 +147,16 @@ submit_one() {
       ;;
   esac
 
+  if [[ "${MODE}" != "dry-run" && ! -f "${REPO_DIR}/${recipe}" ]]; then
+    echo "ERROR: recipe not found: ${REPO_DIR}/${recipe}" >&2
+    exit 2
+  fi
+  if [[ "${MODE}" == "submit" ]] \
+    && ! git -C "${REPO_DIR}" ls-files --error-unmatch "${recipe}" >/dev/null 2>&1; then
+    echo "ERROR: recipe must be tracked before submit: ${recipe}" >&2
+    exit 2
+  fi
+
   case "${variant}" in
     suffix_k32)
       draft_model=""
@@ -160,6 +189,7 @@ submit_one() {
   fi
   local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${model}-${variant}"
   local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${model}-${variant}"
+  local venv_dir="/tmp/nemorl-vllm024-venvs-${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
   case "${variant}" in
     eagle3_k5)
       draft_k=5
@@ -204,6 +234,9 @@ submit_one() {
   fi
   if [[ -n "${NUM_GENERATIONS_PER_PROMPT}" ]]; then
     overrides+=("grpo.num_generations_per_prompt=${NUM_GENERATIONS_PER_PROMPT}")
+  fi
+  if [[ -n "${TRAIN_GLOBAL_BATCH_SIZE}" ]]; then
+    overrides+=("policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}")
   fi
   if [[ -n "${MAX_TOTAL_SEQUENCE_LENGTH}" ]]; then
     overrides+=("policy.max_total_sequence_length=${MAX_TOTAL_SEQUENCE_LENGTH}")
@@ -254,7 +287,7 @@ submit_one() {
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
-    "NEMO_RL_VENV_DIR=${run_dir}/venvs"
+    "NEMO_RL_VENV_DIR=${venv_dir}"
     "NRL_FORCE_REBUILD_VENVS=true"
     # BaseVllmGenerationWorker assigns a distinct rendezvous window per engine.
     "PYTHONPATH=${runtime_pythonpath}"
