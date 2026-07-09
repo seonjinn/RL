@@ -832,8 +832,12 @@ def test_producer_unit_combination_matches_runtime_helper() -> None:
 
     assert produced.num_valid_tokens == expected_token_counts
     assert produced.payload_digest == digest_validation_event_data(live)
-    for key, value in produced.data.items():
-        assert torch.equal(value, live[key])
+    assert set(produced.data) == set(live)
+    for key, value in live.items():
+        if torch.is_tensor(value):
+            assert torch.equal(produced.data[key], value)
+        else:
+            assert produced.data[key] == value
     assert produced.data["input_ids"][:, 0].tolist() == list(range(256))
 
 
@@ -1065,6 +1069,35 @@ def test_validation_artifact_round_trip_preserves_tensor_contract(tmp_path) -> N
     assert content["tensor_file"].endswith(".safetensors")
 
 
+def test_validation_artifact_round_trip_preserves_runtime_metadata(tmp_path) -> None:
+    event = _event_fixture()
+    event.data["processed_token_counts"] = torch.tensor([2, 1], dtype=torch.int64)
+    event.data["idx"] = [17, 23]
+    event.data["task_name"] = ["megatron_sft_packed", "megatron_sft_packed"]
+    event = dataclasses.replace(
+        event,
+        retained_bytes=sum(
+            value.nbytes for value in event.data.values() if torch.is_tensor(value)
+        ),
+    )
+
+    manifest = save_validation_event(
+        tmp_path, event, _fingerprint(), _supported_eligibility()
+    )
+    loaded = load_validation_event(manifest, _fingerprint(), _memory_budget())
+
+    assert set(loaded.data) == set(event.data)
+    assert torch.equal(
+        loaded.data["processed_token_counts"], event.data["processed_token_counts"]
+    )
+    assert loaded.data["idx"] == event.data["idx"]
+    assert loaded.data["task_name"] == event.data["task_name"]
+    assert _manifest_content(manifest)["metadata"] == {
+        "idx": [17, 23],
+        "task_name": ["megatron_sft_packed", "megatron_sft_packed"],
+    }
+
+
 def test_validation_artifact_load_preserves_driver_rng_and_generator(tmp_path) -> None:
     manifest = save_validation_event(
         tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
@@ -1152,10 +1185,19 @@ def test_load_enforces_three_copy_memory_headroom(tmp_path) -> None:
 
 def test_submission_clone_cannot_mutate_canonical_event() -> None:
     canonical = _event_fixture()
+    canonical.data["idx"] = [17, 23]
+    canonical.data["task_name"] = ["megatron_sft_packed", "megatron_sft_packed"]
     submitted = clone_validation_event_data(canonical.data)
     submitted["input_ids"][0, 0] = -1
+    submitted["idx"][0] = -1
+    submitted["task_name"][0] = "mutated"
 
     assert canonical.data["input_ids"][0, 0].item() == 0
+    assert canonical.data["idx"] == [17, 23]
+    assert canonical.data["task_name"] == [
+        "megatron_sft_packed",
+        "megatron_sft_packed",
+    ]
 
 
 def test_submission_clone_rejects_unknown_sft_tensor_key() -> None:
