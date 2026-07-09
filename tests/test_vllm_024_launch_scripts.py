@@ -139,6 +139,15 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "WANDB_RESUME=never" in output
 
 
+def test_dynamicsd_launcher_uses_the_container_managed_runtime() -> None:
+    output = _dry_run_dynamicsd("qwen235b", "eagle3_k5")
+
+    assert "/opt/nemo_rl_venv/bin/python" in output
+    assert "NEMO_RL_VENV_DIR" not in output
+    assert "NRL_FORCE_REBUILD_VENVS" not in output
+    assert "uv run" not in output
+
+
 def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:
     output = _dry_run_dynamicsd("qwen30ba3b", "eagle3_k5")
 
