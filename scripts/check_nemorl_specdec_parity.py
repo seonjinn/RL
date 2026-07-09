@@ -143,7 +143,10 @@ def compare_samples(
         metrics["token_mismatches"] = token_mismatches
         metrics["max_token_logprob_delta"] = max_logprob_delta
         checks["exact_tokens"] = token_mismatches == 0
-        checks["token_logprobs"] = max_logprob_delta <= max_token_logprob_delta
+        checks["token_logprobs"] = (
+            token_mismatches == 0
+            and max_logprob_delta <= max_token_logprob_delta
+        )
     elif mode == "sampled":
         baseline_first_tokens: dict[str, Counter[int]] = defaultdict(Counter)
         specdec_first_tokens: dict[str, Counter[int]] = defaultdict(Counter)

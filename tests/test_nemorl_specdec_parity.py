@@ -78,6 +78,41 @@ class SpecDecParityTest(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertFalse(result["checks"]["first_token_distribution"])
 
+    def test_greedy_token_mismatch_cannot_pass_logprob_parity(self):
+        baseline = self._load(
+            [
+                {
+                    "prompt_id": "p0",
+                    "sample_id": "s0",
+                    "token_ids": [1, 2],
+                    "token_logprobs": [-0.2, -0.3],
+                }
+            ]
+        )
+        specdec = self._load(
+            [
+                {
+                    "prompt_id": "p0",
+                    "sample_id": "s0",
+                    "token_ids": [1, 3],
+                    "token_logprobs": [-0.2, -0.3],
+                }
+            ]
+        )
+
+        result = compare_samples(
+            baseline,
+            specdec,
+            mode="greedy",
+            max_token_logprob_delta=1e-3,
+            max_mean_logprob_delta=1e-3,
+            max_first_token_tv=0.1,
+            max_reward_delta=0.0,
+        )
+
+        self.assertFalse(result["checks"]["exact_tokens"])
+        self.assertFalse(result["checks"]["token_logprobs"])
+
     def test_missing_chosen_token_logprob_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "bad.jsonl"
