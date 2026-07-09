@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nemo_rl.models.generation.vllm import patches
+from nemo_rl.models.generation.vllm import patches, vllm_worker
 
 
 def test_online_eagle_patch_marks_dummy_refit_head_as_owned(
@@ -302,6 +302,10 @@ def test_missing_probabilistic_draft_row_patch_fails_closed(
     assert "missing q(token)" in patched
     assert "falling back to legacy" not in patched
 
+    patches._patch_vllm_missing_draft_probs_fail_closed(MagicMock())
+
+    assert model_runner.read_text() == patched
+
 
 def test_medusa_loader_patch_uses_draft_load_config(
     tmp_path: Path,
@@ -351,10 +355,33 @@ def test_draft_model_cudagraph_patch_initializes_generic_proposer(
     assert "| DraftModelProposer" in patched
 
 
-@pytest.mark.parametrize("enabled", ["true", "false"])
-def test_apply_patches_installs_runtime_guarded_draft_model_cudagraph_patch(
+@pytest.mark.parametrize(
+    ("speculative_config", "expect_specdec_patches", "expect_probabilistic_guard"),
+    [
+        (None, False, False),
+        ({}, False, False),
+        ({"method": "eagle3"}, True, False),
+        (
+            {"method": "eagle3", "draft_sample_method": "probabilistic"},
+            True,
+            True,
+        ),
+        (
+            {
+                "method": "eagle3",
+                "rejection_sample_method": "synthetic",
+                "draft_sample_method": "probabilistic",
+            },
+            True,
+            False,
+        ),
+    ],
+)
+def test_apply_patches_only_installs_required_specdec_patches(
     monkeypatch: pytest.MonkeyPatch,
-    enabled: str,
+    speculative_config: dict[str, object] | None,
+    expect_specdec_patches: bool,
+    expect_probabilistic_guard: bool,
 ) -> None:
     logger = MagicMock()
     vllm_module = ModuleType("vllm")
@@ -363,8 +390,11 @@ def test_apply_patches_installs_runtime_guarded_draft_model_cudagraph_patch(
     monkeypatch.setitem(sys.modules, "vllm", vllm_module)
     monkeypatch.setitem(sys.modules, "vllm.logger", logger_module)
 
-    for name in (
+    always_patch_names = (
         "_patch_vllm_init_workers_ray",
+        "_patch_vllm_hermes_tool_parser_thread_safety",
+    )
+    specdec_patch_names = (
         "_patch_vllm_llama_eagle3_own_lm_head",
         "_patch_vllm_online_eagle_head_ownership",
         "_patch_vllm_draft_model_load_config",
@@ -372,11 +402,18 @@ def test_apply_patches_installs_runtime_guarded_draft_model_cudagraph_patch(
         "_patch_vllm_v2_dflash_load_config",
         "_patch_vllm_qwen3_draft_loader_results",
         "_patch_vllm_llama_draft_loader_result",
-        "_patch_vllm_missing_draft_probs_fail_closed",
         "_patch_vllm_medusa_load_config",
-        "_patch_vllm_hermes_tool_parser_thread_safety",
-    ):
-        monkeypatch.setattr(patches, name, MagicMock())
+    )
+    patch_mocks = {}
+    for name in (*always_patch_names, *specdec_patch_names):
+        patch_mocks[name] = MagicMock()
+        monkeypatch.setattr(patches, name, patch_mocks[name])
+    probabilistic_guard = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_patch_vllm_missing_draft_probs_fail_closed",
+        probabilistic_guard,
+    )
     draft_cg_patch = MagicMock()
     monkeypatch.setattr(
         patches,
@@ -384,8 +421,59 @@ def test_apply_patches_installs_runtime_guarded_draft_model_cudagraph_patch(
         draft_cg_patch,
         raising=False,
     )
-    monkeypatch.setenv("NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH", enabled)
+    patches._apply_vllm_patches(
+        "/venv/bin/python", speculative_config=speculative_config
+    )
 
-    patches._apply_vllm_patches("/venv/bin/python")
+    patch_mocks["_patch_vllm_init_workers_ray"].assert_called_once_with(
+        "/venv/bin/python", None
+    )
+    patch_mocks[
+        "_patch_vllm_hermes_tool_parser_thread_safety"
+    ].assert_called_once_with(logger)
+    for name in specdec_patch_names:
+        if expect_specdec_patches:
+            patch_mocks[name].assert_called_once_with(logger)
+        else:
+            patch_mocks[name].assert_not_called()
+    if expect_specdec_patches:
+        draft_cg_patch.assert_called_once_with(logger)
+    else:
+        draft_cg_patch.assert_not_called()
+    if expect_probabilistic_guard:
+        probabilistic_guard.assert_called_once_with(logger)
+    else:
+        probabilistic_guard.assert_not_called()
 
-    draft_cg_patch.assert_called_once_with(logger)
+
+@pytest.mark.parametrize(
+    "speculative_config",
+    [None, {}, {"method": "eagle3", "num_speculative_tokens": 3}],
+)
+def test_worker_forwards_speculative_config_to_patch_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    speculative_config: dict[str, object] | None,
+) -> None:
+    config = {
+        "model_name": "test-model",
+        "vllm_cfg": {
+            "tensor_parallel_size": 1,
+            "pipeline_parallel_size": 1,
+            "expert_parallel_size": 1,
+            "gpu_memory_utilization": 0.8,
+            "precision": "bfloat16",
+        },
+    }
+    if speculative_config is not None:
+        config["vllm_kwargs"] = {"speculative_config": speculative_config}
+    apply_patches = MagicMock()
+    monkeypatch.setattr(vllm_worker, "_apply_vllm_patches", apply_patches)
+    worker = object.__new__(vllm_worker.BaseVllmGenerationWorker)
+
+    worker._init_config(config, None, 1.0, None, None)
+
+    apply_patches.assert_called_once_with(
+        worker.py_executable,
+        extra_env_vars=None,
+        speculative_config=speculative_config,
+    )
