@@ -29,6 +29,7 @@ from nemo_rl.distributed.virtual_cluster import (
     _bind_socket_in_range,
     _get_free_port_local,
     _get_node_ip_and_free_port,
+    sanitize_ray_runtime_env_vars,
 )
 from nemo_rl.utils.venvs import create_local_venv
 from tests.unit.conftest import TEST_ASSETS_DIR
@@ -162,6 +163,43 @@ def test_ray_reinit_on_cuda_devices_change():
         second_init_call = mock_ray_init.call_args_list[1]
         assert "resources" in second_init_call[1]
         assert "nrl_tag_1" in second_init_call[1]["resources"]
+
+
+def test_init_ray_does_not_forward_wandb_api_key():
+    with (
+        patch("ray.init") as mock_ray_init,
+        patch("ray.shutdown"),
+        patch("ray.cluster_resources", return_value={"GPU": 1, "nrl_tag_0": 1}),
+        patch.dict(
+            os.environ,
+            {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "SAFE_RUNTIME_VALUE": "preserved",
+                "WANDB_API_KEY": "must-not-be-serialized",
+            },
+            clear=True,
+        ),
+    ):
+        from nemo_rl.distributed.virtual_cluster import init_ray
+
+        init_ray()
+
+        runtime_env = mock_ray_init.call_args.kwargs["runtime_env"]
+        assert runtime_env["env_vars"]["SAFE_RUNTIME_VALUE"] == "preserved"
+        assert "WANDB_API_KEY" not in runtime_env["env_vars"]
+        assert os.environ["WANDB_API_KEY"] == "must-not-be-serialized"
+
+
+def test_sanitize_ray_runtime_env_vars_filters_explicit_credentials():
+    env_vars = {
+        "SAFE_RUNTIME_VALUE": "preserved",
+        "WANDB_API_KEY": "must-not-be-serialized",
+    }
+
+    sanitized = sanitize_ray_runtime_env_vars(env_vars)
+
+    assert sanitized == {"SAFE_RUNTIME_VALUE": "preserved"}
+    assert "WANDB_API_KEY" in env_vars
 
 
 def test_ray_uses_same_cluster_for_permuted_cuda_devices():

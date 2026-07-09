@@ -28,7 +28,11 @@ from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.distributed.ray_actor_environment_registry import (
     get_actor_python_env,
 )
-from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
+from nemo_rl.distributed.virtual_cluster import (
+    RayVirtualCluster,
+    get_ray_runtime_env_vars,
+    sanitize_ray_runtime_env_vars,
+)
 from nemo_rl.distributed.worker_group_utils import recursive_merge_options
 from nemo_rl.utils.venvs import (
     create_local_venv_on_each_node,
@@ -437,12 +441,13 @@ class RayWorkerGroup:
                                 specifies a tied group with its node and local bundle indices. If the local_bundle_indices
                                 spans multiple nodes, the node_idx will be the first node's index in the tied group.
         """
+        env_vars = sanitize_ray_runtime_env_vars(env_vars)
         self.master_address, self.master_port = (
             self.cluster.get_master_address_and_port()
         )
 
         # Update env_vars with the current environment variables
-        for k, v in os.environ.items():
+        for k, v in get_ray_runtime_env_vars().items():
             if k not in env_vars:
                 env_vars[k] = v
 

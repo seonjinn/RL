@@ -17,6 +17,7 @@ from typing import Any, Dict, NotRequired, TypedDict
 from hydra.utils import get_object
 
 from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_env
+from nemo_rl.distributed.virtual_cluster import get_ray_runtime_env_vars
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
 
@@ -126,7 +127,7 @@ def create_env(env_name: str, env_config: dict) -> EnvironmentInterface:
     env = actor_class.options(  # type: ignore # it's wrapped with ray.remote
         runtime_env={
             "py_executable": actor_py_exec,
-            "env_vars": {**dict(os.environ), **extra_env_vars},
+            "env_vars": {**get_ray_runtime_env_vars(), **extra_env_vars},
         }
     ).remote(env_config)
     return env

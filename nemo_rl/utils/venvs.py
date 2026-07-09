@@ -23,6 +23,8 @@ from pathlib import Path
 import ray
 from ray.util import placement_group
 
+from nemo_rl.distributed.virtual_cluster import get_ray_runtime_env_vars
+
 dir_path = os.path.dirname(os.path.abspath(__file__))
 git_root = os.path.abspath(os.path.join(dir_path, "../.."))
 DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
@@ -218,7 +220,7 @@ def make_actor_runtime_env(actor_class_fqn: str) -> dict:
     return {
         "py_executable": py_exec,
         "env_vars": {
-            **os.environ,
+            **get_ray_runtime_env_vars(),
             "VIRTUAL_ENV": venv,
             "UV_PROJECT_ENVIRONMENT": venv,
         },

@@ -450,6 +450,27 @@ def test_custom_environment_variables(register_test_actor, virtual_cluster):
     worker_group.shutdown(force=True)
 
 
+def test_worker_group_does_not_forward_wandb_api_key(
+    register_test_actor, virtual_cluster
+):
+    builder = RayWorkerBuilder(register_test_actor)
+    worker_group = RayWorkerGroup(
+        cluster=virtual_cluster,
+        remote_worker_builder=builder,
+        workers_per_node=1,
+        env_vars={
+            "SAFE_RUNTIME_VALUE": "preserved",
+            "WANDB_API_KEY": "must-not-be-serialized",
+        },
+    )
+
+    worker = worker_group.workers[0]
+    assert ray.get(worker.get_env_var.remote("SAFE_RUNTIME_VALUE")) == "preserved"
+    assert ray.get(worker.get_env_var.remote("WANDB_API_KEY")) is None
+
+    worker_group.shutdown(force=True)
+
+
 def test_engine_group_index_metadata(register_test_actor, virtual_cluster):
     actor_fqn = register_test_actor
     builder = RayWorkerBuilder(actor_fqn)

@@ -16,6 +16,7 @@ import os
 import socket
 import sys
 import time
+from collections.abc import Mapping
 from typing import NamedTuple, NotRequired, Optional, TypedDict
 
 import ray
@@ -29,6 +30,22 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_RAY_RUNTIME_ENV_EXCLUDED_VARS = frozenset({"WANDB_API_KEY"})
+
+
+def sanitize_ray_runtime_env_vars(env_vars: Mapping[str, str]) -> dict[str, str]:
+    """Remove credentials that Ray would persist in runtime-env logs."""
+    return {
+        key: value
+        for key, value in env_vars.items()
+        if key not in _RAY_RUNTIME_ENV_EXCLUDED_VARS
+    }
+
+
+def get_ray_runtime_env_vars() -> dict[str, str]:
+    """Copy the driver environment without logging-only credentials."""
+    return sanitize_ray_runtime_env_vars(os.environ)
 
 
 class ClusterConfig(TypedDict):
@@ -194,7 +211,7 @@ def init_ray(log_dir: Optional[str] = None) -> None:
         log_dir: Optional directory to store Ray logs and temp files.
     """
     # Set up runtime environment
-    env_vars = dict(os.environ)
+    env_vars = get_ray_runtime_env_vars()
     env_vars.pop("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", None)
     runtime_env = {
         "env_vars": env_vars,  # Pass thru all user environment variables

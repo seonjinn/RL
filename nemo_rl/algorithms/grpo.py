@@ -77,6 +77,7 @@ from nemo_rl.distributed.virtual_cluster import (
     ClusterConfig,
     RayVirtualCluster,
     get_ray_cluster_topology,
+    get_ray_runtime_env_vars,
     prepare_segment_topology,
 )
 from nemo_rl.environments.interfaces import EnvironmentInterface
@@ -599,7 +600,7 @@ def setup(
         nemo_gym_opts["runtime_env"] = {
             "py_executable": nemo_gym_py_exec,
             "env_vars": {
-                **os.environ,
+                **get_ray_runtime_env_vars(),
                 "VIRTUAL_ENV": nemo_gym_py_exec,
                 "UV_PROJECT_ENVIRONMENT": nemo_gym_py_exec,
             },
@@ -3625,7 +3626,7 @@ def async_grpo_train(
     _replay_runtime_env = {
         "py_executable": _replay_py_exec,
         "env_vars": {
-            **os.environ,
+            **get_ray_runtime_env_vars(),
             "VIRTUAL_ENV": _replay_py_venv,
             "UV_PROJECT_ENVIRONMENT": _replay_py_venv,
         },
@@ -3683,7 +3684,7 @@ def async_grpo_train(
     _tc_runtime_env = {
         "py_executable": _tc_py_exec,
         "env_vars": {
-            **os.environ,
+            **get_ray_runtime_env_vars(),
             "VIRTUAL_ENV": _tc_py_venv,
             "UV_PROJECT_ENVIRONMENT": _tc_py_venv,
         },
