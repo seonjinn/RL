@@ -1020,13 +1020,18 @@ def _event_fixture(*, offset: int = 0) -> PrecomputedValidationEvent:
             "input_lengths": torch.tensor([3, 2], dtype=torch.int64),
             "token_mask": torch.tensor([[True, True, False], [True, False, False]]),
             "sample_mask": torch.ones(2, dtype=torch.float32),
+            "processed_token_counts": torch.tensor([2, 1], dtype=torch.int64),
+            "idx": [17, 23],
+            "task_name": ["megatron_sft_packed", "validation_aux"],
         }
     )
     return PrecomputedValidationEvent(
         data=data,
         num_valid_tokens=(2, 1, 0, 3),
-        payload_digest=hashlib.sha256(b"fixture").hexdigest(),
-        retained_bytes=sum(tensor.nbytes for tensor in data.values()),
+        payload_digest=digest_validation_event_data(data),
+        retained_bytes=sum(
+            value.nbytes for value in data.values() if torch.is_tensor(value)
+        ),
     )
 
 
@@ -1062,8 +1067,11 @@ def test_validation_artifact_round_trip_preserves_tensor_contract(tmp_path) -> N
 
     assert loaded.num_valid_tokens == event.num_valid_tokens
     assert loaded.payload_digest == event.payload_digest
-    for key in event.data:
-        assert torch.equal(loaded.data[key], event.data[key])
+    for key, value in event.data.items():
+        if torch.is_tensor(value):
+            assert torch.equal(loaded.data[key], value)
+        else:
+            assert loaded.data[key] == value
     content = _manifest_content(manifest)
     assert content["tensor_file"].startswith("validation-")
     assert content["tensor_file"].endswith(".safetensors")
@@ -1076,6 +1084,7 @@ def test_validation_artifact_round_trip_preserves_runtime_metadata(tmp_path) -> 
     event.data["task_name"] = ["megatron_sft_packed", "megatron_sft_packed"]
     event = dataclasses.replace(
         event,
+        payload_digest=digest_validation_event_data(event.data),
         retained_bytes=sum(
             value.nbytes for value in event.data.values() if torch.is_tensor(value)
         ),
@@ -1096,6 +1105,58 @@ def test_validation_artifact_round_trip_preserves_runtime_metadata(tmp_path) -> 
         "idx": [17, 23],
         "task_name": ["megatron_sft_packed", "megatron_sft_packed"],
     }
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["processed_token_counts", "idx", "task_name"],
+)
+def test_validation_artifact_requires_runtime_metadata(
+    tmp_path: Path, field: str
+) -> None:
+    event = _event_fixture()
+    del event.data[field]
+    event = dataclasses.replace(
+        event,
+        retained_bytes=sum(
+            value.nbytes for value in event.data.values() if torch.is_tensor(value)
+        ),
+    )
+
+    with pytest.raises(ValueError, match=f"missing required.*{field}"):
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
+
+
+def test_validation_artifact_load_rejects_metadata_digest_mismatch(
+    tmp_path: Path,
+) -> None:
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
+    content = _manifest_content(manifest)
+    content["metadata"]["idx"][0] += 1
+    _write_manifest(manifest, content)
+
+    with pytest.raises(ValueError, match="payload digest"):
+        load_validation_event(manifest, _fingerprint(), _memory_budget())
+
+
+def test_validation_event_digest_includes_ordered_list_metadata() -> None:
+    event = _event_fixture()
+    baseline = digest_validation_event_data(event.data)
+    changed = clone_validation_event_data(event.data)
+    changed["task_name"] = list(reversed(changed["task_name"]))
+
+    assert digest_validation_event_data(changed) != baseline
+
+
+def test_validation_event_digest_ignores_mapping_insertion_order() -> None:
+    event = _event_fixture()
+    reversed_data = BatchedDataDict(reversed(list(event.data.items())))
+
+    assert digest_validation_event_data(reversed_data) == digest_validation_event_data(
+        event.data
+    )
 
 
 def test_validation_artifact_load_preserves_driver_rng_and_generator(tmp_path) -> None:
@@ -1225,6 +1286,19 @@ def test_load_rejects_unknown_manifest_key(tmp_path) -> None:
     _write_manifest(manifest, content)
 
     with pytest.raises(ValueError, match="unknown keys"):
+        load_validation_event(manifest, _fingerprint(), _memory_budget())
+
+
+def test_load_rejects_v2_before_applying_v3_schema(tmp_path) -> None:
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
+    content = _manifest_content(manifest)
+    content["artifact_version"] = 2
+    del content["metadata"]
+    _write_manifest(manifest, content)
+
+    with pytest.raises(ValueError, match="Unsupported validation artifact version"):
         load_validation_event(manifest, _fingerprint(), _memory_budget())
 
 
