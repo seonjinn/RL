@@ -57,6 +57,37 @@ def test_sampled_gate_accepts_equal_unpaired_sequence_distributions() -> None:
     assert report["checks"]["sequence_distribution"]["passed"] is True
 
 
+def test_sampled_gate_rejects_material_selected_logprob_shift() -> None:
+    baseline = [
+        _row("math-0", f"b-{index}", [1, 2 if index % 2 == 0 else 3])
+        for index in range(64)
+    ]
+    candidate = [
+        _row("math-0", f"c-{index}", [1, 3 if index % 2 == 0 else 2])
+        for index in range(64)
+    ]
+    for row in baseline:
+        row["token_logprobs"] = [-0.1, -0.1]
+    for row in candidate:
+        row["token_logprobs"] = [-20.0, -20.0]
+
+    report = analyze_parity_rows(
+        baseline,
+        candidate,
+        mode="sampled",
+        permutations=199,
+        min_samples_per_prompt=32,
+        seed=23,
+    )
+
+    assert report["status"] == "failed"
+    logprob_check = report["checks"]["selected_token_logprob_equivalence"]
+    assert logprob_check["passed"] is False
+    assert logprob_check["detected_shift"] is True
+    assert logprob_check["p_value"] < logprob_check["alpha"]
+    assert logprob_check["max_absolute_mean_delta"] == pytest.approx(19.9)
+
+
 def test_sampled_gate_detects_a_later_token_distribution_shift() -> None:
     baseline = [
         _row("math-0", f"b-{index}", [1, 2 if index % 2 == 0 else 3])

@@ -322,6 +322,82 @@ def _max_prompt_relative_delta(
     return max(absolute_deltas, default=0.0), max(relative_deltas, default=0.0)
 
 
+def _mean_selected_token_logprob(row: Mapping[str, Any]) -> float:
+    values = [float(value) for value in row["token_logprobs"]]
+    return sum(values) / len(values)
+
+
+def _max_prompt_logprob_mean_delta(
+    baseline: Mapping[str, Sequence[Mapping[str, Any]]],
+    candidate: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> float:
+    return _max_prompt_delta(baseline, candidate, _mean_selected_token_logprob)
+
+
+def _logprob_permutation_p_value(
+    baseline: Mapping[str, Sequence[Mapping[str, Any]]],
+    candidate: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    permutations: int,
+    seed: int,
+) -> tuple[float, float]:
+    if permutations <= 0:
+        raise ValueError(f"permutations must be positive, got {permutations}")
+
+    observed = _max_prompt_logprob_mean_delta(baseline, candidate)
+    rng = random.Random(seed)
+    exceedances = 0
+    for _ in range(permutations):
+        permuted_baseline: dict[str, list[Mapping[str, Any]]] = {}
+        permuted_candidate: dict[str, list[Mapping[str, Any]]] = {}
+        for prompt_id in sorted(baseline):
+            baseline_rows = list(baseline[prompt_id])
+            combined = baseline_rows + list(candidate[prompt_id])
+            rng.shuffle(combined)
+            split = len(baseline_rows)
+            permuted_baseline[prompt_id] = combined[:split]
+            permuted_candidate[prompt_id] = combined[split:]
+        permuted = _max_prompt_logprob_mean_delta(permuted_baseline, permuted_candidate)
+        if permuted >= observed - 1e-15:
+            exceedances += 1
+    return observed, (exceedances + 1) / (permutations + 1)
+
+
+def _bootstrap_logprob_delta_upper_bound(
+    baseline: Mapping[str, Sequence[Mapping[str, Any]]],
+    candidate: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    replicates: int,
+    confidence: float,
+    seed: int,
+) -> float:
+    if replicates <= 0:
+        raise ValueError(f"bootstrap replicates must be positive, got {replicates}")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"bootstrap confidence must be in (0, 1), got {confidence}")
+
+    rng = random.Random(seed)
+    deltas: list[float] = []
+    for _ in range(replicates):
+        sampled_baseline: dict[str, list[Mapping[str, Any]]] = {}
+        sampled_candidate: dict[str, list[Mapping[str, Any]]] = {}
+        for prompt_id in sorted(baseline):
+            baseline_rows = baseline[prompt_id]
+            candidate_rows = candidate[prompt_id]
+            sampled_baseline[prompt_id] = [
+                rng.choice(baseline_rows) for _ in baseline_rows
+            ]
+            sampled_candidate[prompt_id] = [
+                rng.choice(candidate_rows) for _ in candidate_rows
+            ]
+        deltas.append(
+            _max_prompt_logprob_mean_delta(sampled_baseline, sampled_candidate)
+        )
+    deltas.sort()
+    index = min(math.ceil(confidence * len(deltas)) - 1, len(deltas) - 1)
+    return deltas[max(index, 0)]
+
+
 def _analyze_greedy(
     baseline_rows: Sequence[Mapping[str, Any]],
     candidate_rows: Sequence[Mapping[str, Any]],
@@ -395,6 +471,7 @@ def analyze_parity_rows(
     length_relative_margin: float = 0.05,
     truncation_rate_margin: float = 0.05,
     logprob_atol: float = 0.05,
+    sampled_logprob_mean_margin: float = 0.1,
     max_positions: int = 64,
     seed: int = 20260709,
 ) -> dict[str, Any]:
@@ -402,6 +479,11 @@ def analyze_parity_rows(
     _validate_rows(candidate_rows, label="candidate")
     if mode not in {"greedy", "sampled"}:
         raise ValueError(f"unsupported mode {mode!r}")
+    if sampled_logprob_mean_margin < 0.0:
+        raise ValueError(
+            "sampled logprob mean margin must be non-negative, got "
+            f"{sampled_logprob_mean_margin}"
+        )
 
     if mode == "greedy":
         checks = _analyze_greedy(
@@ -459,6 +541,19 @@ def analyze_parity_rows(
     max_truncation_rate_delta = _max_prompt_delta(
         baseline, candidate, lambda row: bool(row.get("truncated", False))
     )
+    max_logprob_mean_delta, logprob_p_value = _logprob_permutation_p_value(
+        baseline,
+        candidate,
+        permutations=permutations,
+        seed=seed + 2,
+    )
+    logprob_delta_upper_bound = _bootstrap_logprob_delta_upper_bound(
+        baseline,
+        candidate,
+        replicates=bootstrap_replicates,
+        confidence=equivalence_confidence,
+        seed=seed + 3,
+    )
 
     checks = {
         "sequence_distribution": {
@@ -486,12 +581,28 @@ def analyze_parity_rows(
             "max_absolute_rate_delta": max_truncation_rate_delta,
             "margin": truncation_rate_margin,
         },
+        "selected_token_logprob_equivalence": {
+            "passed": logprob_p_value >= alpha
+            and logprob_delta_upper_bound <= sampled_logprob_mean_margin,
+            "detected_shift": logprob_p_value < alpha,
+            "equivalent": logprob_delta_upper_bound <= sampled_logprob_mean_margin,
+            "statistic": "max_prompt_delta_of_sequence_mean_selected_logprob",
+            "max_absolute_mean_delta": max_logprob_mean_delta,
+            "bootstrap_upper_mean_delta": logprob_delta_upper_bound,
+            "mean_delta_margin": sampled_logprob_mean_margin,
+            "equivalence_confidence": equivalence_confidence,
+            "bootstrap_replicates": bootstrap_replicates,
+            "p_value": logprob_p_value,
+            "alpha": alpha,
+            "permutations": permutations,
+        },
     }
     passed = all(bool(check["passed"]) for check in checks.values())
     detected_failure = (
         bool(checks["sequence_distribution"]["detected_shift"])
         or not bool(checks["length_equivalence"]["passed"])
         or not bool(checks["truncation_rate_equivalence"]["passed"])
+        or bool(checks["selected_token_logprob_equivalence"]["detected_shift"])
     )
     return {
         "mode": mode,
@@ -536,6 +647,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--permutations", type=int, default=9999)
     parser.add_argument("--min-samples-per-prompt", type=int, default=64)
+    parser.add_argument("--alpha", type=float, default=0.01)
+    parser.add_argument("--sampled-logprob-mean-margin", type=float, default=0.1)
+    parser.add_argument("--equivalence-confidence", type=float, default=0.99)
+    parser.add_argument("--bootstrap-replicates", type=int, default=499)
     parser.add_argument("--seed", type=int, default=20260709)
     return parser.parse_args()
 
@@ -567,6 +682,10 @@ def main() -> int:
         mode=args.mode,
         permutations=args.permutations,
         min_samples_per_prompt=args.min_samples_per_prompt,
+        alpha=args.alpha,
+        sampled_logprob_mean_margin=args.sampled_logprob_mean_margin,
+        equivalence_confidence=args.equivalence_confidence,
+        bootstrap_replicates=args.bootstrap_replicates,
         seed=args.seed,
     )
     report["metadata_contract"] = {
