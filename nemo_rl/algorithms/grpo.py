@@ -2027,7 +2027,11 @@ def refit_policy_generation(
     # Colocated inference needs to prepare for generation.
     # Megatron non-colocated inference needs to enter inference mode after refit.
     if colocated_inference or isinstance(policy_generation, MegatronGeneration):
-        policy_generation.prepare_for_generation(tags=["weights"])
+        prepare_result = policy_generation.prepare_for_generation(tags=["weights"])
+        if prepare_result is False:
+            raise RuntimeError(
+                "Failed to prepare generation backend for weights during refit."
+            )
 
     if (
         not colocated_inference
@@ -2113,7 +2117,11 @@ def refit_policy_generation(
     # Colocated inference needs to prepare for generation.
     # Megatron non-colocated inference needs to enter inference mode after refit.
     if colocated_inference or isinstance(policy_generation, MegatronGeneration):
-        policy_generation.prepare_for_generation(tags=["kv_cache"])
+        prepare_result = policy_generation.prepare_for_generation(tags=["kv_cache"])
+        if prepare_result is False:
+            raise RuntimeError(
+                "Failed to prepare generation backend for kv_cache after refit."
+            )
 
     if isinstance(policy_generation, MegatronGeneration):
         policy_generation.resume_after_refit()

@@ -301,7 +301,7 @@ def configure_generation_config(
             and not has_refit_draft_weights
             and _uses_static_neural_external_drafter(speculative_config)
         ):
-            if "draft_load_config" not in speculative_config:
+            if not speculative_config.get("draft_load_config"):
                 warnings.warn(
                     "Speculative decoding is enabled without draft refit sync. "
                     "Keeping vllm_cfg['load_format'] at 'dummy' and setting "

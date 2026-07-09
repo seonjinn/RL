@@ -1022,6 +1022,8 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "generate_async can only be used when async_engine is enabled in vLLM config."
             )
 
+        self._ensure_refit_healthy()
+
         # Handle empty input case
         if len(data["input_ids"]) == 0:
             return
@@ -1296,6 +1298,8 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "generate_text_async can only be used when async_engine is enabled in vLLM config."
             )
 
+        self._ensure_refit_healthy()
+
         # Handle empty input case
         if len(data["prompts"]) == 0:
             return
@@ -1432,13 +1436,16 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 worker_results = result_or_coro
 
             if not _all_worker_results_succeeded(worker_results):
-                print(
-                    "Error: One or more workers failed to update weights. "
+                reason = (
+                    "One or more workers failed to update weights. "
                     f"Results: {worker_results}"
                 )
+                self._mark_refit_failed(reason)
+                print(f"Error: {reason}")
                 return False
             return True
         except Exception as e:
+            self._mark_refit_failed(f"{type(e).__name__}: {e}")
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
 
@@ -1467,13 +1474,16 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 worker_results = result_or_coro
 
             if not _all_worker_results_succeeded(worker_results):
-                print(
-                    "Error: One or more workers failed to update weights. "
+                reason = (
+                    "One or more workers failed to update weights. "
                     f"Results: {worker_results}"
                 )
+                self._mark_refit_failed(reason)
+                print(f"Error: {reason}")
                 return False
             return True
         except Exception as e:
+            self._mark_refit_failed(f"{type(e).__name__}: {e}")
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
 

@@ -287,6 +287,39 @@ def _patch_vllm_v2_dflash_load_config(logger) -> None:
     logger.info("Successfully patched Model Runner V2 DFlash draft load config.")
 
 
+def _patch_vllm_qwen3_draft_loader_results(logger) -> None:
+    """Return loaded parameter names from Qwen3 Eagle-3 and DFlash loaders."""
+    patches = (
+        (
+            "model_executor/models/qwen3_eagle3.py",
+            "        loader.load_weights(model_weights.items())\n",
+            "        return loader.load_weights(model_weights.items())\n",
+        ),
+        (
+            "model_executor/models/qwen3_dflash.py",
+            "        loader.load_weights(model_weights.items())\n"
+            "        self.model._build_fused_kv_buffers()\n",
+            "        loaded_weights = loader.load_weights(model_weights.items())\n"
+            "        self.model._build_fused_kv_buffers()\n"
+            "        return loaded_weights\n",
+        ),
+    )
+
+    for relative_path, old_snippet, new_snippet in patches:
+        file_to_patch = _get_vllm_file(relative_path)
+        with _locked_file_patch(file_to_patch) as (content, write_back):
+            if new_snippet in content:
+                logger.info("Qwen3 draft loader result patch already applied.")
+                continue
+            if content.count(old_snippet) != 1:
+                raise RuntimeError(
+                    "Could not apply the Qwen3 draft loader result patch to "
+                    f"{file_to_patch}; the vLLM source layout changed."
+                )
+            write_back(content.replace(old_snippet, new_snippet, 1))
+        logger.info("Successfully patched Qwen3 draft loader result reporting.")
+
+
 def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
     """Reject a partial probabilistic-draft cache instead of changing sampling."""
     file_to_patch = _get_vllm_file("v1/worker/gpu_model_runner.py")
@@ -588,6 +621,7 @@ def _apply_vllm_patches(
     _patch_vllm_online_eagle_head_ownership(patch_logger)
     _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)
     _patch_vllm_v2_dflash_load_config(patch_logger)
+    _patch_vllm_qwen3_draft_loader_results(patch_logger)
     _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
     _patch_vllm_draft_model_load_config(patch_logger)
     _patch_vllm_medusa_load_config(patch_logger)

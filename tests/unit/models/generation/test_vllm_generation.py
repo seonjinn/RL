@@ -808,6 +808,32 @@ def test_model_autodetect_uses_draft_load_config_without_online_draft_refit():
     }
 
 
+@pytest.mark.parametrize("method", ["eagle3", "draft_model", "dflash", None])
+def test_static_drafter_null_load_config_is_normalized_to_auto(method: str | None):
+    vllm_config = deepcopy(basic_vllm_test_config)
+    speculative_config = {
+        "model": "/tmp/static-draft-model",
+        "num_speculative_tokens": 3,
+        "draft_load_config": None,
+    }
+    if method is not None:
+        speculative_config["method"] = method
+    vllm_config["vllm_kwargs"] = {"speculative_config": speculative_config}
+    tokenizer = MagicMock(pad_token_id=0, eos_token_id=1)
+
+    with pytest.warns(UserWarning, match="Speculative decoding is enabled"):
+        configured = configure_generation_config(
+            vllm_config,
+            tokenizer,
+            is_eval=False,
+            has_refit_draft_weights=False,
+        )
+
+    assert configured["vllm_kwargs"]["speculative_config"]["draft_load_config"] == {
+        "load_format": "auto"
+    }
+
+
 def test_model_autodetect_requires_explicit_method_with_pipeline_parallelism() -> None:
     vllm_config = deepcopy(basic_vllm_test_config)
     vllm_config["vllm_cfg"]["pipeline_parallel_size"] = 2

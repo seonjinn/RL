@@ -40,6 +40,7 @@ from nemo_rl.algorithms.grpo import (
     compute_and_apply_seq_logprob_error_masking,
     dynamic_sampling,
     grpo_train,
+    refit_policy_generation,
     validate,
 )
 from nemo_rl.algorithms.loss import ClippedPGLossConfig, ClippedPGLossFn
@@ -68,6 +69,38 @@ def _mock_policy_generation() -> MagicMock:
     policy_generation.requires_kv_scale_sync = False
     policy_generation.get_logger_metrics.return_value = {}
     return policy_generation
+
+
+def _mock_colocated_refit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[MagicMock, MagicMock]:
+    monkeypatch.setattr(ray, "get", lambda value: value)
+    policy = MagicMock()
+    policy.get_free_memory_bytes.return_value = 1024
+    policy.stream_weights_via_ipc_zmq.return_value = []
+    policy_generation = MagicMock()
+    policy_generation.update_weights_via_ipc_zmq.return_value = [True]
+    return policy, policy_generation
+
+
+def test_refit_rejects_failed_weights_wake(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy, policy_generation = _mock_colocated_refit(monkeypatch)
+    policy_generation.prepare_for_generation.side_effect = [False, True]
+
+    with pytest.raises(RuntimeError, match="prepare.*weights"):
+        refit_policy_generation(policy, policy_generation, colocated_inference=True)
+
+    policy.stream_weights_via_ipc_zmq.assert_not_called()
+
+
+def test_refit_rejects_failed_kv_cache_wake(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy, policy_generation = _mock_colocated_refit(monkeypatch)
+    policy_generation.prepare_for_generation.side_effect = [True, False]
+
+    with pytest.raises(RuntimeError, match="prepare.*kv_cache"):
+        refit_policy_generation(policy, policy_generation, colocated_inference=True)
+
+    policy.offload_after_refit.assert_called_once_with()
 
 
 @pytest.fixture
@@ -707,8 +740,9 @@ class StubReplayBuffer:
         """Return a mock that reports whether the current step can train."""
         mock = MagicMock()
         mock.remote = MagicMock(
-            side_effect=lambda _target_step, num_prompts_per_step, *_args: self._size
-            >= num_prompts_per_step
+            side_effect=lambda _target_step, num_prompts_per_step, *_args: (
+                self._size >= num_prompts_per_step
+            )
         )
         return mock
 

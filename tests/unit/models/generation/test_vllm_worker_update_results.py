@@ -107,6 +107,7 @@ def _make_sync_worker(
     worker.llm = _SyncCollectiveRpc(worker_results)
     worker.cfg = {"vllm_cfg": {"async_engine": False}}
     worker._mtp_load_from_disk = load_mtp_from_disk
+    worker._refit_failure_reason = None
     worker.model_name = "test-model"
     return worker
 
@@ -123,8 +124,20 @@ def _make_async_worker(
     )
     worker.cfg = {"vllm_cfg": {"async_engine": True}}
     worker._mtp_load_from_disk = load_mtp_from_disk
+    worker._refit_failure_reason = None
     worker.model_name = "test-model"
     return worker
+
+
+def _empty_generation_batch() -> Any:
+    from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+    return BatchedDataDict(
+        {
+            "input_ids": torch.empty((0, 0), dtype=torch.long),
+            "input_lengths": torch.empty(0, dtype=torch.long),
+        }
+    )
 
 
 @pytest.mark.parametrize(
@@ -178,6 +191,38 @@ def test_async_weight_update_requires_every_worker_to_succeed(
     )
 
     assert asyncio.run(getattr(worker, method_name)()) is expected
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    ["update_weights_via_ipc_zmq", "update_weights_from_collective"],
+)
+def test_sync_failed_weight_update_prevents_worker_reuse(method_name: str) -> None:
+    worker = _make_sync_worker([True, False])
+
+    assert getattr(worker, method_name)() is False
+    with pytest.raises(RuntimeError, match="weight refit failed.*restart"):
+        worker.generate(_empty_generation_batch())
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "update_weights_via_ipc_zmq_async",
+        "update_weights_from_collective_async",
+    ],
+)
+def test_async_failed_weight_update_prevents_worker_reuse(method_name: str) -> None:
+    worker = _make_async_worker([True, False])
+
+    assert asyncio.run(getattr(worker, method_name)()) is False
+
+    async def consume_generation() -> None:
+        async for _ in worker.generate_async(_empty_generation_batch()):
+            pass
+
+    with pytest.raises(RuntimeError, match="weight refit failed.*restart"):
+        asyncio.run(consume_generation())
 
 
 @pytest.mark.parametrize("worker_results", [[None, True, False], [None, None], []])

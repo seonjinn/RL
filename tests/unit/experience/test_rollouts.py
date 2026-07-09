@@ -45,6 +45,7 @@ from nemo_rl.experience.rollouts import (
     run_async_multi_turn_rollout,
     run_async_nemo_gym_rollout,
     run_multi_turn_rollout,
+    run_sample_multi_turn_rollout,
 )
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
@@ -176,6 +177,37 @@ def test_generate_responses_async_allows_sglang_opt_in():
     assert updated_batch["message_log"][0][-1]["content"] == "ok"
     assert generated_ids[0].tolist() == [2]
     assert gen_metrics["total_generated_tokens"] == 1
+
+
+def test_sample_rollout_propagates_generation_failure(monkeypatch):
+    async def fail_generation(*args, **kwargs):
+        raise TimeoutError("sample_tokens RPC timed out")
+
+    monkeypatch.setattr(
+        "nemo_rl.experience.rollouts.async_generate_response_for_sample_turn",
+        fail_generation,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Generation failed for sample 7 on turn 1.*sample_tokens RPC timed out",
+    ):
+        asyncio.run(
+            run_sample_multi_turn_rollout(
+                sample_idx=7,
+                initial_sample_state={
+                    "message_log": [],
+                    "extra_env_info": {},
+                    "stop_strings": None,
+                    "task_name": "test",
+                },
+                policy_generation=object(),
+                tokenizer=_DummyTokenizer(),
+                task_to_env={},
+                max_seq_len=128,
+                max_rollout_turns=1,
+            )
+        )
 
 
 @pytest.fixture(scope="function")

@@ -123,8 +123,7 @@ def test_tokenization_service_constructor_does_not_receive_engine_client() -> No
         for node in ast.walk(load_tree())
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name)
-            and target.id == "serving_tokenization_kwargs"
+            isinstance(target, ast.Name) and target.id == "serving_tokenization_kwargs"
             for target in node.targets
         )
     )
@@ -159,16 +158,17 @@ def test_ray_patch_uses_vllm_024_extra_env_contract(
     )
 
     patched = ray_executor.read_text(encoding="utf-8")
-    assert '_init_workers_ray(placement_group, runtime_env={"py_executable": ' in patched
-    assert set(
-        patches.os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"].split(",")
-    ) == {
+    assert (
+        '_init_workers_ray(placement_group, runtime_env={"py_executable": ' in patched
+    )
+    assert set(patches.os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"].split(",")) == {
         "CUSTOM_ENV",
         "EXISTING_ENV",
         "HF_TOKEN",
         "HUGGING_FACE_HUB_TOKEN",
         "NCCL_CUMEM_ENABLE",
         "NCCL_NVLS_ENABLE",
+        "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH",
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
     }
 

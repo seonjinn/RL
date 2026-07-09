@@ -75,12 +75,24 @@ def _resolve_enable_prefix_caching(vllm_cfg: dict[str, Any]) -> bool:
 
 # Use a base class to share some functions to avoid code duplication.
 class BaseVllmGenerationWorker:
+    _refit_failure_reason: str | None
+
     def __repr__(self) -> str:
         """Customizes the actor's prefix in the Ray logs.
 
         This makes it easier to identify which worker is producing specific log messages.
         """
         return f"{self.__class__.__name__}"
+
+    def _mark_refit_failed(self, reason: str) -> None:
+        self._refit_failure_reason = reason
+
+    def _ensure_refit_healthy(self) -> None:
+        if self._refit_failure_reason is not None:
+            raise RuntimeError(
+                "vLLM weight refit failed; restart this generation worker before "
+                f"further generation. Cause: {self._refit_failure_reason}"
+            )
 
     @staticmethod
     def configure_worker(
@@ -235,6 +247,7 @@ class BaseVllmGenerationWorker:
     ):
         """Lightweight config setup. No model loading, no heavy imports."""
         self.cfg = config
+        self._refit_failure_reason = None
         self.model_name = self.cfg["model_name"]
         self.tensor_parallel_size = self.cfg["vllm_cfg"]["tensor_parallel_size"]
         self.pipeline_parallel_size = self.cfg["vllm_cfg"]["pipeline_parallel_size"]
@@ -671,6 +684,8 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 - ``generation_lengths``: Lengths of each response
                 - ``unpadded_sequence_lengths``: Lengths of each input + generated sequence
         """
+        self._ensure_refit_healthy()
+
         # Handle empty input case
         if len(data["input_ids"]) == 0:
             # Return empty BatchedDataDict with all required fields
@@ -893,6 +908,8 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         )
 
         # Generate outputs
+        self._ensure_refit_healthy()
+
         assert self.llm is not None, (
             "Attempting to generate with either an uninitialized vLLM or non-model-owner"
         )
@@ -948,13 +965,16 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             )
 
             if not _all_worker_results_succeeded(result_or_coro):
-                print(
-                    "Error: One or more workers failed to update weights. "
+                reason = (
+                    "One or more workers failed to update weights. "
                     f"Results: {result_or_coro}"
                 )
+                self._mark_refit_failed(reason)
+                print(f"Error: {reason}")
                 return False
             return True
         except Exception as e:
+            self._mark_refit_failed(f"{type(e).__name__}: {e}")
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
 
@@ -979,13 +999,16 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             )
 
             if not _all_worker_results_succeeded(result_or_coro):
-                print(
-                    "Error: One or more workers failed to update weights. "
+                reason = (
+                    "One or more workers failed to update weights. "
                     f"Results: {result_or_coro}"
                 )
+                self._mark_refit_failed(reason)
+                print(f"Error: {reason}")
                 return False
             return True
         except Exception as e:
+            self._mark_refit_failed(f"{type(e).__name__}: {e}")
             print(f"Exception during collective_rpc for weight update: {e}")
             import traceback
 

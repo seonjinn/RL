@@ -65,7 +65,10 @@ def fix_gemma3_vision_weight_name(key: str) -> str:
 def _validate_draft_weight_load_result(load_result: object) -> None:
     """Fail when a vLLM loader reports that required draft weights were not loaded."""
     if load_result is None:
-        return
+        raise RuntimeError(
+            "vLLM drafter loader returned no load receipt; draft weight "
+            "completeness cannot be verified."
+        )
 
     if isinstance(load_result, (set, frozenset)):
         if not load_result:

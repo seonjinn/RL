@@ -306,7 +306,9 @@ def test_load_draft_weights_raises_for_nonempty_input_without_drafter() -> None:
 def test_load_draft_weights_calls_loader_once_with_trimmed_weights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=None))
+    draft_model = SimpleNamespace(
+        load_weights=MagicMock(return_value={"model.layers.0.weight"})
+    )
     ext = _make_extension_for_draft_load(draft_model)
     trimmed_weights = [("model.layers.0.weight", torch.randn(1))]
     trim_vocab_padding = MagicMock(return_value=trimmed_weights)
@@ -317,6 +319,18 @@ def test_load_draft_weights_calls_loader_once_with_trimmed_weights(
 
     trim_vocab_padding.assert_called_once_with(draft_model, weights)
     draft_model.load_weights.assert_called_once_with(weights=trimmed_weights)
+
+
+@pytest.mark.vllm
+def test_load_draft_weights_rejects_missing_loader_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_model = SimpleNamespace(load_weights=MagicMock(return_value=None))
+    ext = _make_extension_for_draft_load(draft_model)
+    monkeypatch.setattr(ext, "_trim_vocab_padding", lambda _model, weights: weights)
+
+    with pytest.raises(RuntimeError, match="returned no load receipt"):
+        ext._load_draft_weights([("model.layers.0.weight", torch.randn(1))])
 
 
 @pytest.mark.vllm
