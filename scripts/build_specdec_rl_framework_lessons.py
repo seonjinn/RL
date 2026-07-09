@@ -21,7 +21,7 @@ PUBLIC_OUT = (
 
 SNAPSHOT_LABEL = "Evidence reviewed: 2026-07-09"
 CURRENT_WORKTREE = ".worktrees/nemorl-vllm024-upgrade"
-CURRENT_WORKTREE_COMMIT = "564bfc973a3e94d4b9d4ea4d8fb2276f9c143bcb"
+CURRENT_WORKTREE_COMMIT = "fcf7408d3059047051e60b00d018cb83d7d77320"
 CREDENTIAL_FILTER_COMMIT = "259103830790d0270033f4113d1d46778ddc84e3"
 CURRENT_UPSTREAM_COMMIT = "9e01af64b3891e5bcc01885e10e9ca185b3e3690"
 VLLM_024_COMMIT = "ee0da84ab9e04ac7610e28580af62c365e898389"
@@ -1390,7 +1390,7 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         (ref("veRL", 6432),),
         "PATCHED LOCALLY / UNIT VERIFIED",
         "status-unit",
-        "Focused extraction unit coverage handles exact values, absent values, short lists, missing chosen tokens, and non-finite values. Run scripts/check_nemorl_specdec_parity.py for the GPU gate: greedy exact tokens/logprobs and sampled first-token TV plus mean logprob/reward. Its unit file tests/test_nemorl_specdec_parity.py passes 3 tests.",
+        "Focused extraction coverage handles exact values, absent values, short lists, missing chosen tokens, and non-finite values. The host comparator now has 4 passing tests and cannot report logprob parity when greedy tokens differ. Lyris Qwen3-32B jobs 2324043/2324044 completed with CUDA Graph PIECEWISE, but both prompts diverged at generated-token positions 26 or 35, so greedy exact parity remains failed. Sampled jobs 2324084/2324085 completed 64 samples per prompt with max first-token TV 0.0 and mean-logprob delta 0.00976; that smoke passes the current threshold, but the deterministic Qwen prefix makes first-token TV a weak gate, so later-position distribution and reward parity remain required.",
     ),
     GapRow(
         "2. Refit and MTP startup trusted worker zero or ignored worker results",
@@ -1600,7 +1600,7 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         (ref("veRL", 6432), ref("SGLang/vLLM", 15726)),
         "PATCHED ON PUSHED BRANCH / GPU GATE PENDING",
         "status-gpu",
-        "The final focused config, worker, lifecycle, and launcher regression passed 36 tests, with broader earlier safety suites retained. scripts/check_nemorl_specdec_parity.py is a host-side JSONL comparator for greedy exact tokens/logprobs and sampled first-token TV plus mean logprob/reward; a GPU artifact producer and matched SpecDec on/off parity run are still pending.",
+        "The current branch passed 50 focused worker/refit lifecycle tests, 23 launcher-contract tests, and 10 parity-producer tests. The GB200 artifact producer now completes baseline and Eagle3 K5 with vLLM 0.24 and CUDA Graph PIECEWISE. Greedy exact-token parity is not yet satisfied; the sampled 64-per-prompt smoke passes its current first-token-TV and mean-logprob thresholds, but stronger later-position distribution, stop-boundary, reward, and matched GRPO gates remain pending.",
     ),
     GapRow(
         "16. Online Eagle dummy startup shared the target LM head",
@@ -1926,6 +1926,22 @@ NEMO_AUDIT_GAPS: tuple[GapRow, ...] = (
         "UNRESOLVED / EXPERIMENT ISOLATED",
         "status-unresolved",
         "Require an explicit nonnegative mtp_num_layers contract, derive ownership from it, and compare that decision with the finalized provider before workers start. Until then, keep online MTP performance runs isolated from accuracy claims.",
+    ),
+    GapRow(
+        "37. Refit cache invalidation did not preempt active vLLM requests",
+        "critical",
+        (
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_generation.py:1069-1087",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker.py:1028-1047",
+            f"{CURRENT_WORKTREE}/nemo_rl/models/generation/vllm/vllm_worker_async.py:1479-1504",
+            "https://github.com/vllm-project/vllm/blob/v0.24.0/vllm/v1/engine/async_llm.py#L921-L932",
+        ),
+        "After a target or draft refit, NeMo-RL called vLLM prefix-cache reset without reset_running_requests and discarded its Boolean result. An active request could therefore make reset fail while the caller reported success, allowing KV state computed from an older weight version to survive. The pushed fix forwards reset_running_requests=true only for post-refit invalidation, preserves the vLLM Boolean result, and leaves normal finish_generation cleanup on the non-preempting default.",
+        "Weight publication and cache invalidation are one transaction: no request may reuse KV state from a prior target or draft version after refit commits.",
+        (ref("SGLang/vLLM", 40768), ref("SGLang/vLLM", 27718)),
+        "PATCHED ON PUSHED BRANCH / GPU FAILURE-INJECTION GATE PENDING",
+        "status-gpu",
+        "Fifty focused worker/refit lifecycle tests pass, including sync and async forwarding, false-result propagation, and a guard proving finish_generation does not preempt normal requests. A GB200 gate must hold a request across refit, verify forced preemption and cache-reset success, then prove the resumed request uses only the committed weight version.",
     ),
 )
 
