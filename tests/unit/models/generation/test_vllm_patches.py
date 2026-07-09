@@ -10,6 +10,47 @@ import pytest
 from nemo_rl.models.generation.vllm import patches, vllm_worker
 
 
+def _llama_draft_loader_source(load_statement: str) -> str:
+    return (
+        "class DraftModel:\n"
+        "    def __init__(self, loader):\n"
+        "        self.loader = loader\n"
+        "\n"
+        "    def load_weights(self, weights):\n"
+        "        model_weights = dict(weights)\n"
+        "        includes_draft_id_mapping = (\n"
+        "            'draft_id_to_target_id' in model_weights\n"
+        "        )\n"
+        "        includes_embed_tokens = any(\n"
+        "            'embed_tokens' in name for name in model_weights\n"
+        "        )\n"
+        "        skip_substrs = []\n"
+        "        if not includes_draft_id_mapping:\n"
+        "            skip_substrs.append('draft_id_to_target_id')\n"
+        "        if not includes_embed_tokens:\n"
+        "            skip_substrs.append('embed_tokens')\n"
+        "        loader = self.loader\n"
+        f"{load_statement}"
+    )
+
+
+def _run_patched_llama_loader(
+    source: str,
+    loaded_weights: set[str],
+    checkpoint_weights: set[str],
+) -> tuple[set[str], object]:
+    namespace: dict[str, object] = {}
+    exec(source, namespace)
+
+    class Loader:
+        def load_weights(self, _weights) -> set[str]:
+            return set(loaded_weights)
+
+    model = namespace["DraftModel"](Loader())
+    receipt = model.load_weights((name, object()) for name in checkpoint_weights)
+    return receipt, model
+
+
 def test_online_eagle_patch_marks_dummy_refit_head_as_owned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -229,9 +270,111 @@ def test_llama_draft_loader_patch_returns_loaded_parameter_names(
     patches._patch_vllm_llama_draft_loader_result(MagicMock())
 
     patched = llama_model.read_text()
+    assert "self.has_own_embed_tokens = includes_embed_tokens" in patched
     assert "self.has_own_lm_head = any(" in patched
     assert 'name.startswith("lm_head.")' in patched
-    assert "return loader.load_weights(model_weights.items())" in patched
+    assert "loaded_weights = loader.load_weights(model_weights.items())" in patched
+    assert "return loaded_weights | intentional_default_params" in patched
+
+
+def test_llama_draft_loader_patch_tracks_only_intentional_sparse_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama_model = tmp_path / "llama_eagle3.py"
+    llama_model.write_text(
+        _llama_draft_loader_source(
+            "        loader.load_weights(model_weights.items())\n"
+        )
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(llama_model))
+
+    patches._patch_vllm_llama_draft_loader_result(MagicMock())
+
+    loaded, model = _run_patched_llama_loader(
+        llama_model.read_text(),
+        loaded_weights={"model.layers.0.weight"},
+        checkpoint_weights={"model.layers.0.weight"},
+    )
+    assert loaded == {
+        "draft_id_to_target_id",
+        "lm_head.weight",
+        "model.embed_tokens.weight",
+        "model.layers.0.weight",
+    }
+    assert model.has_own_embed_tokens is False
+    assert model.has_own_lm_head is False
+
+    model_parameters = loaded | {"model.layers.1.weight"}
+    assert model_parameters - loaded == {"model.layers.1.weight"}
+
+
+def test_llama_draft_loader_patch_does_not_mask_failed_owned_weight_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama_model = tmp_path / "llama_eagle3.py"
+    llama_model.write_text(
+        _llama_draft_loader_source(
+            "        loader.load_weights(model_weights.items())\n"
+        )
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(llama_model))
+
+    patches._patch_vllm_llama_draft_loader_result(MagicMock())
+
+    loaded, model = _run_patched_llama_loader(
+        llama_model.read_text(),
+        loaded_weights={"model.layers.0.weight"},
+        checkpoint_weights={
+            "draft_id_to_target_id",
+            "lm_head.weight",
+            "model.embed_tokens.weight",
+            "model.layers.0.weight",
+        },
+    )
+    assert model.has_own_embed_tokens is True
+    assert model.has_own_lm_head is True
+    assert {
+        "draft_id_to_target_id",
+        "lm_head.weight",
+        "model.embed_tokens.weight",
+    }.isdisjoint(loaded)
+
+
+def test_llama_draft_loader_patch_upgrades_legacy_receipt_and_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama_model = tmp_path / "llama_eagle3.py"
+    llama_model.write_text(
+        _llama_draft_loader_source(
+            "        self.has_own_lm_head = any(\n"
+            '            name.startswith("lm_head.") for name in model_weights\n'
+            "        )\n"
+            "        return loader.load_weights(model_weights.items())\n"
+        )
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(llama_model))
+
+    patches._patch_vllm_llama_draft_loader_result(MagicMock())
+    patched = llama_model.read_text()
+    patches._patch_vllm_llama_draft_loader_result(MagicMock())
+
+    assert "intentional_default_params" in patched
+    assert llama_model.read_text() == patched
+
+
+def test_llama_draft_loader_patch_rejects_unknown_source_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama_model = tmp_path / "llama_eagle3.py"
+    llama_model.write_text("class DraftModel: pass\n")
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(llama_model))
+
+    with pytest.raises(RuntimeError, match="vLLM source layout changed"):
+        patches._patch_vllm_llama_draft_loader_result(MagicMock())
 
 
 def test_llama_draft_loader_patch_skips_when_model_is_not_installed(

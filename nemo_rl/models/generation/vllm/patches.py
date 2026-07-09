@@ -368,23 +368,64 @@ def _patch_vllm_llama_draft_loader_result(logger) -> None:
     if file_to_patch is None:
         return
     old_snippet = "        loader.load_weights(model_weights.items())\n"
-    new_snippet = (
+    legacy_snippet = (
         "        self.has_own_lm_head = any(\n"
         '            name.startswith("lm_head.") for name in model_weights\n'
         "        )\n"
         "        return loader.load_weights(model_weights.items())\n"
+    )
+    legacy_receipt_snippet = (
+        "        return loader.load_weights(model_weights.items())\n"
+    )
+    new_snippet = (
+        "        self.has_own_embed_tokens = includes_embed_tokens\n"
+        "        self.has_own_lm_head = any(\n"
+        '            name.startswith("lm_head.") for name in model_weights\n'
+        "        )\n"
+        "        loaded_weights = loader.load_weights(model_weights.items())\n"
+        "        intentional_default_params = set()\n"
+        "        if (\n"
+        "            not includes_draft_id_mapping\n"
+        '            and "draft_id_to_target_id" in skip_substrs\n'
+        "        ):\n"
+        '            intentional_default_params.add("draft_id_to_target_id")\n'
+        "        if (\n"
+        "            not self.has_own_embed_tokens\n"
+        '            and "embed_tokens" in skip_substrs\n'
+        "        ):\n"
+        '            intentional_default_params.add("model.embed_tokens.weight")\n'
+        "        if not self.has_own_lm_head:\n"
+        '            intentional_default_params.add("lm_head.weight")\n'
+        "        return loaded_weights | intentional_default_params\n"
     )
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
         if new_snippet in content:
             logger.info("Llama draft loader result patch already applied.")
             return
-        if content.count(old_snippet) != 1:
+        if "intentional_default_params" in content:
+            raise RuntimeError(
+                "Found an incomplete Llama draft loader result patch in "
+                f"{file_to_patch}; refusing to continue."
+            )
+        if content.count("loader.load_weights(model_weights.items())") != 1:
             raise RuntimeError(
                 "Could not apply the Llama draft loader result patch to "
                 f"{file_to_patch}; the vLLM source layout changed."
             )
-        write_back(content.replace(old_snippet, new_snippet, 1))
+
+        if content.count(legacy_snippet) == 1:
+            matched_snippet = legacy_snippet
+        elif content.count(legacy_receipt_snippet) == 1:
+            matched_snippet = legacy_receipt_snippet
+        elif content.count(old_snippet) == 1:
+            matched_snippet = old_snippet
+        else:
+            raise RuntimeError(
+                "Could not apply the Llama draft loader result patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(matched_snippet, new_snippet, 1))
     logger.info("Successfully patched Llama draft loader result reporting.")
 
 
