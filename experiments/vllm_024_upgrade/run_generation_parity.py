@@ -9,6 +9,7 @@ import math
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
@@ -344,7 +345,7 @@ def _tokenize_prompt(tokenizer: Any, text: str) -> list[int]:
         tokenize=True,
         add_generation_prompt=True,
     )
-    if isinstance(token_ids, dict):
+    if isinstance(token_ids, Mapping):
         token_ids = token_ids["input_ids"]
     if hasattr(token_ids, "tolist"):
         token_ids = token_ids.tolist()

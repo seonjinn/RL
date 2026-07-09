@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import UserDict
 from io import StringIO
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from experiments.vllm_024_upgrade.run_generation_parity import (
     GenerationSettings,
     PromptRecord,
+    _tokenize_prompt,
     build_generation_config,
     cleanup_runtime,
     expand_prompt_records,
@@ -16,6 +18,14 @@ from experiments.vllm_024_upgrade.run_generation_parity import (
     load_prompt_records,
     run_generation_batches,
 )
+
+
+def test_tokenize_prompt_accepts_mapping_style_batch_encoding() -> None:
+    class Tokenizer:
+        def apply_chat_template(self, *_args, **_kwargs):
+            return UserDict({"input_ids": [101, 102]})
+
+    assert _tokenize_prompt(Tokenizer(), "hello") == [101, 102]
 
 
 def test_load_and_expand_prompt_records_preserves_stable_sample_ids(tmp_path) -> None:
