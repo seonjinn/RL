@@ -2111,7 +2111,9 @@ def refit_policy_generation(
                 # wait for all futures to complete
                 ray.get(futures_train)
                 results = ray.get(futures_inference)
-                update_success = all(result for result in results if result is not None)
+                update_success = bool(results) and all(
+                    result is True for result in results
+                )
         else:
             # update weights through nccl (vLLM) or megatron reshard
             # SGLang haven't implemented non-colocated inference mode.
@@ -2129,7 +2131,7 @@ def refit_policy_generation(
             # wait for all futures to complete
             ray.get(futures_train)
             results = ray.get(futures_inference)
-            update_success = all(result for result in results if result is not None)
+            update_success = bool(results) and all(result is True for result in results)
 
         # check if update is successful
         if not update_success:

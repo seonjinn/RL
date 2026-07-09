@@ -214,6 +214,39 @@ def test_finish_generation_does_not_preempt_running_requests(monkeypatch) -> Non
     ]
 
 
+@pytest.mark.parametrize("method_name", ["prepare_for_generation", "finish_generation"])
+@pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([True], True),
+        ([True, True], True),
+        ([], False),
+        ([None], False),
+        ([False], False),
+        ([1], False),
+        ([True, None], False),
+        ([True, False], False),
+    ],
+)
+def test_generation_lifecycle_requires_strict_true_results(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    worker_results: list[Any],
+    expected: bool,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": True},
+    }
+    generation.worker_group = SimpleNamespace(
+        run_all_workers_single_data=lambda *_args, **_kwargs: [object()]
+    )
+    monkeypatch.setattr("ray.get", lambda _futures: worker_results)
+
+    assert getattr(generation, method_name)() is expected
+
+
 def _make_sync_worker(
     worker_results: list[bool | None], *, load_mtp_from_disk: bool = False
 ) -> VllmGenerationWorkerImpl:
@@ -261,7 +294,11 @@ def _empty_generation_batch() -> Any:
 @pytest.mark.parametrize(
     ("worker_results", "expected"),
     [
+        ([True], True),
         ([True, True], True),
+        ([None], False),
+        ([1], False),
+        ([True, None], False),
         ([True, False], False),
         ([False, True], False),
         ([False], False),
@@ -269,7 +306,7 @@ def _empty_generation_batch() -> Any:
     ],
 )
 def test_sync_weight_update_requires_every_worker_to_succeed(
-    method_name: str, worker_results: list[bool], expected: bool
+    method_name: str, worker_results: list[Any], expected: bool
 ) -> None:
     worker = _make_sync_worker(worker_results)
 
@@ -287,7 +324,11 @@ def test_sync_weight_update_requires_every_worker_to_succeed(
 @pytest.mark.parametrize(
     ("worker_results", "expected"),
     [
+        ([True], True),
         ([True, True], True),
+        ([None], False),
+        ([1], False),
+        ([True, None], False),
         ([True, False], False),
         ([False, True], False),
         ([False], False),
@@ -297,7 +338,7 @@ def test_sync_weight_update_requires_every_worker_to_succeed(
 def test_async_weight_update_requires_every_worker_to_succeed(
     method_name: str,
     return_nested_awaitable: bool,
-    worker_results: list[bool],
+    worker_results: list[Any],
     expected: bool,
 ) -> None:
     worker = _make_async_worker(
@@ -407,8 +448,8 @@ def test_sync_sleep_wake_uses_level_one_and_preserves_drafter() -> None:
     worker.llm = llm
     original_draft_weight = llm.draft_weight
 
-    worker.sleep()
-    worker.wake_up()
+    assert worker.sleep() is True
+    assert worker.wake_up() is True
 
     assert llm.sleep_levels == [1]
     assert llm.draft_weight is original_draft_weight
@@ -420,8 +461,8 @@ def test_async_sleep_wake_uses_level_one_and_preserves_drafter() -> None:
     worker.llm = llm
     original_draft_weight = llm.draft_weight
 
-    asyncio.run(worker.sleep_async())
-    asyncio.run(worker.wake_up_async())
+    assert asyncio.run(worker.sleep_async()) is True
+    assert asyncio.run(worker.wake_up_async()) is True
 
     assert llm.sleep_levels == [1]
     assert llm.draft_weight is original_draft_weight

@@ -56,14 +56,14 @@ logger = logging.getLogger(__name__)
 def _all_worker_results_succeeded(
     worker_results: Optional[Sequence[Any]],
 ) -> bool:
-    return bool(worker_results) and all(bool(result) for result in worker_results)
+    return bool(worker_results) and all(result is True for result in worker_results)
 
 
 def _mtp_load_results_succeeded(
     worker_results: Optional[Sequence[Any]],
 ) -> bool:
     owner_results = [result for result in worker_results or () if result is not None]
-    return bool(owner_results) and all(bool(result) for result in owner_results)
+    return bool(owner_results) and all(result is True for result in owner_results)
 
 
 def _resolve_enable_prefix_caching(vllm_cfg: dict[str, Any]) -> bool:
@@ -262,9 +262,7 @@ class BaseVllmGenerationWorker:
         # Store the Python executable being used by this worker
         self.py_executable = sys.executable
 
-        speculative_config = self.cfg.get("vllm_kwargs", {}).get(
-            "speculative_config"
-        )
+        speculative_config = self.cfg.get("vllm_kwargs", {}).get("speculative_config")
         _apply_vllm_patches(
             self.py_executable,
             extra_env_vars=extra_env_vars,
@@ -1054,7 +1052,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         torch.cuda.empty_cache()
         return reset_succeeded
 
-    def sleep(self):
+    def sleep(self) -> bool:
         """Put the vLLM engine to sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -1081,8 +1079,9 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
 
         gc.collect()
         torch.cuda.empty_cache()
+        return True
 
-    def wake_up(self, **kwargs):
+    def wake_up(self, **kwargs: Any) -> bool:
         """Wake up the vLLM engine."""
         assert self.llm is not None, (
             "Attempting to wake up with either an uninitialized vLLM or non-model-owner"
@@ -1100,6 +1099,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             wake_up_args["tags"] = tags
 
         self.llm.wake_up(**wake_up_args)
+        return True
 
     def shutdown(self) -> bool:
         """Clean up vLLM resources."""

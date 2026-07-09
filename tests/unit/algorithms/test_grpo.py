@@ -104,6 +104,73 @@ def test_refit_rejects_failed_kv_cache_wake(monkeypatch: pytest.MonkeyPatch) -> 
     policy.offload_after_refit.assert_called_once_with()
 
 
+@pytest.mark.parametrize(
+    "update_results",
+    [
+        [],
+        [None],
+        [False],
+        [1],
+        [True, None],
+        [True, False],
+    ],
+)
+def test_refit_rejects_non_strict_ipc_weight_update_results(
+    monkeypatch: pytest.MonkeyPatch, update_results: list[Any]
+) -> None:
+    policy, policy_generation = _mock_colocated_refit(monkeypatch)
+    policy_generation.prepare_for_generation.return_value = True
+    policy.offload_after_refit.reset_mock()
+
+    marker = object()
+    futures = [marker]
+    policy_generation.update_weights_via_ipc_zmq.return_value = futures
+    monkeypatch.setattr(
+        ray,
+        "get",
+        lambda value: update_results if value is futures else value,
+    )
+
+    with pytest.raises(RuntimeError, match="Updating weights.*failed during refit"):
+        refit_policy_generation(policy, policy_generation, colocated_inference=True)
+
+    policy.offload_after_refit.assert_not_called()
+    assert policy_generation.prepare_for_generation.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "update_results",
+    [
+        [],
+        [None],
+        [False],
+        [1],
+        [True, None],
+        [True, False],
+    ],
+)
+def test_refit_rejects_non_strict_collective_weight_update_results(
+    monkeypatch: pytest.MonkeyPatch, update_results: list[Any]
+) -> None:
+    monkeypatch.setattr(ray, "get", lambda value: value)
+    policy = MagicMock()
+    policy_generation = MagicMock()
+    marker = object()
+    futures = [marker]
+    policy.broadcast_weights_for_collective.return_value = []
+    policy_generation.update_weights_from_collective.return_value = futures
+    monkeypatch.setattr(
+        ray,
+        "get",
+        lambda value: update_results if value is futures else value,
+    )
+
+    with pytest.raises(RuntimeError, match="Updating weights.*failed during refit"):
+        refit_policy_generation(policy, policy_generation, colocated_inference=False)
+
+    policy_generation.prepare_for_generation.assert_not_called()
+
+
 @pytest.fixture
 def mock_grpo_components():
     # Create mock components

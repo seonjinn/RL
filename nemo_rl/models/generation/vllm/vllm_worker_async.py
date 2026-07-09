@@ -1497,7 +1497,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         torch.cuda.empty_cache()
         return reset_succeeded
 
-    async def sleep_async(self):
+    async def sleep_async(self) -> bool:
         """Async version of sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -1520,8 +1520,9 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
 
         gc.collect()
         torch.cuda.empty_cache()
+        return True
 
-    async def wake_up_async(self, **kwargs):
+    async def wake_up_async(self, **kwargs: Any) -> bool:
         """Async version of wake_up."""
         assert self.llm is not None, (
             "Attempting to wake up with either an uninitialized vLLM or non-model-owner"
@@ -1539,6 +1540,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             wake_up_args["tags"] = tags
 
         await self.llm.wake_up(**wake_up_args)
+        return True
 
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""
