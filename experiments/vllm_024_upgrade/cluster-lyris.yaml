@@ -1,0 +1,19 @@
+---
+cluster: lyris
+ssh_host: login-lyris
+user: sna
+remote_cwd: /lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm024-dynamicsd-20260708
+account: coreai_dlalgo_llm
+subproject: nemorl-specdec-safety
+partition: gb200
+container_image: /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260707.sqsh
+mounts:
+  - /lustre:/lustre
+packages: []
+---
+
+# Cluster Notes
+
+- Lyris allocates all four GB200 GPUs on each node; do not pass `--gres`.
+- Set `--segment` to a divisor of the requested node count and at most 18.
+- Run experiments and write outputs under `/lustre`, not `/home`.
