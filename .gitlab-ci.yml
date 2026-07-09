@@ -23,6 +23,7 @@ pages:
     - test -f public/reports/vllm_standalone_results_20260619.html
     - test -f public/reports/vllm_standalone_temp0_temp1_trends_20260616.html
     - test -f public/reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html
+    - test -f public/reports/specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html
     - test -f public/reports/qwen235b_specdec_swe_math_status_20260613.html
     - test -f public/reports/specdec_benchmark_metrics_dashboard_20260616.html
     - ls -lah public

@@ -1,9 +1,26 @@
+import re
 import unittest
 
 from scripts import build_pages_index as report
 
 
 class PagesIndexNavigationTest(unittest.TestCase):
+    def test_framework_lessons_report_is_primary(self) -> None:
+        filename = "specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html"
+
+        primary_links = report.primary_links_html()
+        report_hub = report.report_hub_html()
+        archive_blocks = re.findall(
+            r'<details class="archive-links">.*?</details>',
+            report_hub,
+            flags=re.DOTALL,
+        )
+
+        self.assertIn(f'href="reports/{filename}"', primary_links)
+        self.assertIn(f'href="reports/{filename}"', report_hub)
+        for archive_block in archive_blocks:
+            self.assertNotIn(f'href="reports/{filename}"', archive_block)
+
     def test_619_batch_matrix_is_prominent(self) -> None:
         filename = "vllm_standalone_results_20260619.html"
 

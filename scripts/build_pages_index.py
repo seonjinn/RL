@@ -83,6 +83,11 @@ REPORT_GROUPS = [
         "title": "NeMo-RL",
         "summary": "NeMo-RL performance recipe and SpecDec integration pages, including live Lyris and OCI-HSG status snapshots.",
         "items": [
+            (
+                "Cross-framework lessons and NeMo-RL gaps",
+                "specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",
+                "Primary upstream lessons matrix covering veRL, slime, Miles, SGLang/vLLM, and current NeMo-RL gaps.",
+            ),
             ("Latest NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_latest.html", "Current performance-config SpecDec status."),
             ("6/22 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260622.html", "Dated latest NeMo-RL page."),
             ("6/21 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260621.html", "Previous Lyris status snapshot."),
@@ -106,10 +111,15 @@ REPORT_GROUPS = [
 ]
 
 PINNED_REPORT_FILES = {
+    "specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",
     "vllm_standalone_results_20260619.html",
 }
 
 PRIMARY_LINKS = [
+    (
+        "Cross-framework lessons",
+        "reports/specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",
+    ),
     ("vLLM standalone latest", "reports/vllm_standalone_results_latest.html"),
     (
         "DFlare result-table design",
