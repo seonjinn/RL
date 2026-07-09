@@ -509,17 +509,23 @@ class BaseVllmGenerationWorker:
         return True
 
     def _merge_stop_strings(self, batch_stop_strings):
-        stop_set: set[str] = set()
+        stop_strings: list[str] = []
+        seen: set[str] = set()
 
-        if self.cfg.get("stop_strings"):
-            stop_set.update(self.cfg["stop_strings"])
+        for stop_string in self.cfg.get("stop_strings") or []:
+            if stop_string not in seen:
+                stop_strings.append(stop_string)
+                seen.add(stop_string)
 
         if batch_stop_strings is not None:
             for sample_ss in batch_stop_strings:
                 if sample_ss:
-                    stop_set.update(sample_ss)
+                    for stop_string in sample_ss:
+                        if stop_string not in seen:
+                            stop_strings.append(stop_string)
+                            seen.add(stop_string)
 
-        return list(stop_set) if stop_set else None
+        return stop_strings or None
 
     def _build_sampling_params(
         self,
@@ -702,11 +708,17 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         input_ids = data["input_ids"]
         input_lengths = data["input_lengths"]
         batch_stop_strings: list[list[str]] = data.get("stop_strings", [])
-        stop_strings = self._merge_stop_strings(batch_stop_strings)
-        sampling_params = self._build_sampling_params(
-            greedy=greedy,
-            stop_strings=stop_strings,
-        )
+        sampling_params = [
+            self._build_sampling_params(
+                greedy=greedy,
+                stop_strings=self._merge_stop_strings(
+                    [batch_stop_strings[index]]
+                    if index < len(batch_stop_strings)
+                    else None
+                ),
+            )
+            for index in range(len(input_ids))
+        ]
 
         # verify inputs have correct padding
         verify_right_padding(data, pad_value=self.cfg["_pad_token_id"])
@@ -883,29 +895,24 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             "stop_strings", [self.cfg.get("stop_strings")] * len(data["prompts"])
         )
 
-        # This function requires all generations have the same stop strings, so we collect all here
-        stop_strings: set[str] = set()
-        for sample_stop_strings in batch_stop_strings:
-            if sample_stop_strings:
-                stop_strings.update(sample_stop_strings)
-
-        # Add default stop strings from config
-        if self.cfg.get("stop_strings", None):
-            stop_strings.update(self.cfg["stop_strings"])
-
-        stop_strings = list(stop_strings) if len(stop_strings) > 0 else None
-
         # Read generation parameters from config
         top_k = self.cfg["top_k"] if self.cfg["top_k"] is not None else -1
-        sampling_params = self.SamplingParams(
-            temperature=self.cfg["temperature"] if not greedy else 0,
-            top_p=self.cfg["top_p"],
-            top_k=top_k if not greedy else 1,
-            max_tokens=self.cfg["max_new_tokens"],
-            stop_token_ids=self.cfg["stop_token_ids"],
-            stop=stop_strings,
-            include_stop_str_in_output=True,  # returning stop strings like hf
-        )
+        sampling_params = [
+            self.SamplingParams(
+                temperature=self.cfg["temperature"] if not greedy else 0,
+                top_p=self.cfg["top_p"],
+                top_k=top_k if not greedy else 1,
+                max_tokens=self.cfg["max_new_tokens"],
+                stop_token_ids=self.cfg["stop_token_ids"],
+                stop=self._merge_stop_strings(
+                    [batch_stop_strings[index]]
+                    if index < len(batch_stop_strings)
+                    else None
+                ),
+                include_stop_str_in_output=True,  # returning stop strings like hf
+            )
+            for index in range(len(data["prompts"]))
+        ]
 
         # Generate outputs
         self._ensure_refit_healthy()
