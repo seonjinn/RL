@@ -202,6 +202,22 @@ def test_qwen3_draft_loader_patch_skips_missing_dflash_model(
     assert any("not installed" in call.args[0] for call in logger.info.call_args_list)
 
 
+def test_qwen3_draft_loader_patch_skips_when_models_are_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_get_vllm_file",
+        MagicMock(side_effect=RuntimeError("missing optional model")),
+    )
+
+    patches._patch_vllm_qwen3_draft_loader_results(logger)
+
+    assert logger.info.call_count == 2
+    assert all("not installed" in call.args[0] for call in logger.info.call_args_list)
+
+
 def test_llama_draft_loader_patch_returns_loaded_parameter_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -216,6 +232,22 @@ def test_llama_draft_loader_patch_returns_loaded_parameter_names(
     assert "self.has_own_lm_head = any(" in patched
     assert 'name.startswith("lm_head.")' in patched
     assert "return loader.load_weights(model_weights.items())" in patched
+
+
+def test_llama_draft_loader_patch_skips_when_model_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_get_vllm_file",
+        MagicMock(side_effect=RuntimeError("missing optional model")),
+    )
+
+    patches._patch_vllm_llama_draft_loader_result(logger)
+
+    logger.info.assert_called_once()
+    assert "not installed" in logger.info.call_args.args[0]
 
 
 def test_qwen3_draft_loader_patch_upgrades_legacy_receipt_only_patch(
