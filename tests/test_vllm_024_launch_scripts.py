@@ -173,6 +173,7 @@ def test_dynamicsd_launcher_renders_qwen30_long_context_topology() -> None:
         MAX_TOTAL_SEQUENCE_LENGTH="40960",
         MAX_NEW_TOKENS="32768",
         DYNAMIC_SCHEDULE="[[1,2,5],[3,4,4],[5,8,3],[9,16,1],[17,512,0]]",
+        NRL_IGNORE_TP_ACCURACY_CHECK="1",
     )
 
     assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
@@ -187,6 +188,7 @@ def test_dynamicsd_launcher_renders_qwen30_long_context_topology() -> None:
     assert "--nodes=8" in output
     assert "--segment=8" in output
     assert "--gres=gpu:4" in output
+    assert "NRL_IGNORE_TP_ACCURACY_CHECK=1" in output
 
 
 def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:

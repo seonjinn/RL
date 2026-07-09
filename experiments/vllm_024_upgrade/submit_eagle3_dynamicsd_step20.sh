@@ -295,6 +295,9 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  if [[ "${NRL_IGNORE_TP_ACCURACY_CHECK:-0}" == "1" ]]; then
+    command_env+=("NRL_IGNORE_TP_ACCURACY_CHECK=1")
+  fi
   local command_parts=(
     env
     "${command_env[@]}"
