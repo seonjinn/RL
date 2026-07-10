@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import copy
 import math
+import os
 import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -27,10 +28,14 @@ import pytest
 import torch
 
 from nemo_rl.models.generation.vllm import patches
-from nemo_rl.models.generation.vllm.utils import compute_spec_decode_metrics
+from nemo_rl.models.generation.vllm.utils import (
+    aggregate_spec_decode_counters,
+    compute_spec_decode_metrics,
+)
 
 
 _FIXTURE_ROOT = Path(__file__).with_name("fixtures") / "vllm_v0_24_0"
+_VLLM_MODULE_ROOT = Path(patches.__file__).parent
 _RUNTIME_PATHS = (
     "config/speculative.py",
     "v1/core/sched/output.py",
@@ -401,9 +406,54 @@ def _snapshot(
     return {key: value + delta.get(key, 0.0) for key, value in baseline.items()}
 
 
+def _collect_spec_decode_counters(
+    telemetry_runner: object,
+    runtime_spec_counters: dict[str, float],
+) -> dict[_CounterKey, float]:
+    export_metrics = _load_method(
+        _VLLM_MODULE_ROOT / "vllm_backend.py",
+        "VllmInternalWorkerExtension",
+        "get_cudagraph_dispatch_metrics",
+        {},
+    )
+    exported_metrics = cast(
+        dict[str, float | list[float]],
+        export_metrics(SimpleNamespace(model_runner=telemetry_runner)),
+    )
+
+    def collective_rpc(method: str, args: tuple[object, ...]) -> list[dict[str, float]]:
+        assert method == "get_cudagraph_dispatch_metrics"
+        assert args == ()
+        return [cast(dict[str, float], exported_metrics)]
+
+    collect_metrics = _load_method(
+        _VLLM_MODULE_ROOT / "vllm_worker.py",
+        "BaseVllmGenerationWorker",
+        "_get_raw_spec_counters",
+        {"os": os},
+    )
+    worker_report = cast(
+        dict[str, float | list[float]],
+        collect_metrics(
+            SimpleNamespace(
+                llm=SimpleNamespace(
+                    get_metrics=lambda: [
+                        SimpleNamespace(name=name, value=value)
+                        for name, value in runtime_spec_counters.items()
+                    ],
+                    collective_rpc=collective_rpc,
+                )
+            )
+        ),
+    )
+    return aggregate_spec_decode_counters([worker_report])
+
+
 def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
     patched_runtime_sources: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "true")
     telemetry_runners, runners_and_methods = _telemetry_runners(patched_runtime_sources)
     (
         sampling_runner,
@@ -413,11 +463,9 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
         eagle_advances,
         decode_steps,
     ) = _sampling_harness(patched_runtime_sources)
-    runtime_spec_counters: dict[_CounterKey, float] = {
-        cast(_CounterKey, key): 0.0 for key in _SPEC_COUNTERS
-    }
+    runtime_spec_counters = {key: 0.0 for key in _SPEC_COUNTERS}
     cache_snapshots: list[list[list[int]]] = []
-    pre_activation_telemetry: dict[_CounterKey, float] = {}
+    pre_activation_counters: dict[_CounterKey, float] = {}
 
     for scheduler_output in _scheduler_outputs():
         _observe_runtime_k(runners_and_methods, scheduler_output)
@@ -446,8 +494,8 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
             sampling_runner.req_states.draft_tokens.detach().cpu().tolist()
         )
         if scheduler_output.tail_gate_tick == 2:
-            pre_activation_telemetry = dict(
-                telemetry_runners["v2"]._nrl_tail_gate_metrics
+            pre_activation_counters = _collect_spec_decode_counters(
+                telemetry_runners["v2"], runtime_spec_counters
             )
 
     final_telemetry = {
@@ -456,12 +504,11 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
         }
         for name, runner in telemetry_runners.items()
     }
-    final_delta: dict[_CounterKey, float] = dict(
-        telemetry_runners["v2"]._nrl_tail_gate_metrics
+    final_counters = _collect_spec_decode_counters(
+        telemetry_runners["v2"], runtime_spec_counters
     )
-    final_delta.update(runtime_spec_counters)
     all_keys: set[_CounterKey] = (
-        set(final_delta) | set(pre_activation_telemetry) | set(_SPEC_COUNTERS)
+        set(final_counters) | set(pre_activation_counters) | set(_SPEC_COUNTERS)
     )
     baseline: dict[_CounterKey, float] = {key: 100.0 for key in all_keys}
     start_snapshot: dict[_CounterKey, float] = {
@@ -469,11 +516,11 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
     }
     pre_activation_metrics = compute_spec_decode_metrics(
         start_snapshot,
-        _snapshot(baseline, pre_activation_telemetry),
+        _snapshot(baseline, pre_activation_counters),
     )
     final_metrics = compute_spec_decode_metrics(
         start_snapshot,
-        _snapshot(baseline, final_delta),
+        _snapshot(baseline, final_counters),
     )
     zero_safe_metric_names = (
         "vllm/spec_acceptance_rate",
@@ -490,12 +537,10 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
             "published_widths": [
                 proposal.shape[1] for proposal in draft_tokens_handler.published
             ],
-            "active_cache_first_values": [
-                [snapshot[index][0] for index in (0, 2)] for snapshot in cache_snapshots
+            "active_cache_rows": [
+                [snapshot[index] for index in (0, 2)] for snapshot in cache_snapshots
             ],
-            "inactive_cache_first_values": [
-                snapshot[1][0] for snapshot in cache_snapshots
-            ],
+            "inactive_cache_rows": [snapshot[1] for snapshot in cache_snapshots],
             "eagle_advance_ticks": eagle_advances,
             "decode_steps": decode_steps,
         },
@@ -555,8 +600,18 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
         "telemetry": {"v1": expected_telemetry, "v2": expected_telemetry},
         "proposal_lifecycle": {
             "published_widths": [0, 0, 5, 5],
-            "active_cache_first_values": [[0, 0], [0, 0], [3, 3], [4, 4]],
-            "inactive_cache_first_values": [-7, -7, -7, -7],
+            "active_cache_rows": [
+                [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
+                [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
+                [[3, 3, 3, 3, 3], [3, 3, 3, 3, 3]],
+                [[4, 4, 4, 4, 4], [4, 4, 4, 4, 4]],
+            ],
+            "inactive_cache_rows": [
+                [-7, -7, -7, -7, -7],
+                [-7, -7, -7, -7, -7],
+                [-7, -7, -7, -7, -7],
+                [-7, -7, -7, -7, -7],
+            ],
             "eagle_advance_ticks": [1, 2, 3, 4],
             "decode_steps": [1, 2],
         },
