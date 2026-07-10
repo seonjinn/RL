@@ -169,12 +169,16 @@ failure.
 
 ### Model Runner V2 Contract
 
-Model Runner V2 must read runtime K from `SchedulerOutput`.
+Model Runner V2 must read runtime K from the existing
+`SchedulerOutput.num_spec_tokens_to_schedule` field, validate it before the
+target forward, and carry it through `ExecuteModelState` to the proposal call.
 
 - At K `0` in advance-only mode, run ordinary target sampling and the minimum
   first drafter forward required to advance the external Eagle-3 KV state, but
   return no draft token IDs and execute none of the `K-1` serial draft-decode
-  iterations.
+  iterations. Clear the corresponding fixed-width request-state rows and
+  publish a zero-width proposal tensor to the draft-token handler; publishing
+  the fixed backing tensor would leak stale draft IDs.
 - At configured fixed K, preserve official vLLM 0.24 behavior.
 - Binary gate phase rejects intermediate K values rather than silently running
   the maximum K.

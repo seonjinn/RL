@@ -285,10 +285,14 @@ Build temporary vLLM source fixtures for:
 - `v1/worker/gpu/spec_decode/autoregressive/speculator.py`; and
 - `v1/worker/gpu_model_runner.py`.
 
-Assert the patch adds tail-gate config fields, output telemetry fields, V2
-runtime K consumption, advance-only K0 behavior, and telemetry recording in V1
-and V2. Reapplying the patch must be idempotent. A changed upstream snippet must
-raise `RuntimeError` rather than partially patching.
+Assert the patch adds tail-gate config fields and output telemetry fields,
+reuses vLLM 0.24's existing `SchedulerOutput.num_spec_tokens_to_schedule`,
+passes runtime K through V2 `ExecuteModelState`, implements advance-only K0,
+clears the fixed-width request rows before publishing a zero-width proposal,
+and records telemetry in V1 and V2. Reapplying the patch must be idempotent.
+Every old/new anchor across all five files must be validated before the first
+write, so a changed upstream snippet raises `RuntimeError` without leaving a
+partially patched installation.
 
 - [ ] **Step 2: Patch config and scheduler output**
 
@@ -304,20 +308,26 @@ sd_tail_gate_off_mode: str = "advance_only"
 ```
 
 Add cumulative/instantaneous telemetry to `SchedulerOutput` with scalar defaults
-so stock schedulers remain compatible.
+so stock schedulers remain compatible. Do not add or rename
+`num_spec_tokens_to_schedule`; it is already an official vLLM 0.24 field.
 
 - [ ] **Step 3: Patch Model Runner V2 runtime K**
 
-At the proposal call, read `scheduler_output.num_spec_tokens_to_schedule`.
-`AutoRegressiveSpeculator.propose()` accepts an optional runtime K constrained to
-`0` or the configured static maximum during the binary phase.
+In `execute_model()`, validate
+`scheduler_output.num_spec_tokens_to_schedule` before the target forward and
+store it in an extended `ExecuteModelState`. At the proposal call, read runtime
+K from that state. `AutoRegressiveSpeculator.propose()` accepts an optional
+runtime K constrained to `0` or the configured static maximum during the binary
+phase.
 
 For K0 external Eagle/Eagle-3:
 
 1. execute the first drafter state-advance pass;
 2. do not execute the remaining `K-1` serial draft-decode iterations;
 3. return a zero-width draft tensor;
-4. clear consumable draft IDs for scheduled requests.
+4. clear the corresponding rows of the fixed-width request-state buffer; and
+5. publish the zero-width tensor to `DraftTokensHandler` instead of the fixed
+   backing tensor, so no stale IDs remain consumable.
 
 Reject unsupported speculators and intermediate K values before executing a
 model forward. Preserve official fixed-K behavior when gate mode is `off`.
