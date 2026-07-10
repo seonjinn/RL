@@ -494,9 +494,11 @@ def compute_spec_decode_metrics(
         enabled_steps = delta.get(f"{tail_gate_prefix}enabled_steps", 0.0)
         disabled_steps = delta.get(f"{tail_gate_prefix}disabled_steps", 0.0)
         activations = delta.get(f"{tail_gate_prefix}activations", 0.0)
-        activation_batch_sum = delta.get(f"{tail_gate_prefix}active_requests_sum", 0.0)
+        activation_batch_sum = delta.get(
+            f"{tail_gate_prefix}activation_batch_sum", 0.0
+        )
         activation_seq_len_sum = delta.get(
-            f"{tail_gate_prefix}mean_sequence_length_sum", 0.0
+            f"{tail_gate_prefix}activation_sequence_length_sum", 0.0
         )
         predicted_speedup_sum = delta.get(
             f"{tail_gate_prefix}predicted_speedup_sum", 0.0

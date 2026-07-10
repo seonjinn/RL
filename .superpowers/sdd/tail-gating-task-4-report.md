@@ -90,3 +90,58 @@ exercises all Task 4 cases.
   counter-test annotations avoid adding a distinct typing issue.
 - Concurrent edits to `patches.py`, `tail_gate_scheduler.py`, launcher files,
   and `tests/unit/unit_results` remain outside this task and are not staged.
+
+## Review Follow-Up
+
+### Changes
+
+- `compute_spec_decode_metrics()` now derives activation means only from the
+  cumulative `tail_gate_activation_batch_sum` and
+  `tail_gate_activation_sequence_length_sum` counters.
+- Producer-shaped snapshots include four decision-level observations and one
+  activation, proving the activation metrics remain `16` and `8192` rather
+  than using the decision-level totals.
+- K histogram tests use the exact cumulative
+  `tail_gate_k_<effective_k>_steps` producer names and verify both counts and
+  ratios.
+- `test_vllm_generation.py` no longer installs a process-global fake `vllm`.
+  Extension tests use a function-scoped module with a valid `ModuleSpec` and
+  remove the imported backend module during fixture cleanup.
+
+### Review RED
+
+```bash
+uv run --no-sync pytest --noconftest -o addopts='' \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_utils.py \
+  -k 'tail_gate_worker or derives_tail_gate or tail_gate_zero' -q
+```
+
+Result: `1 failed, 3 passed`. The producer-shaped snapshot returned activation
+batch `80.0` instead of `16.0`, proving the consumer used the every-decision
+sum.
+
+### Review GREEN
+
+The same focused command passed: `4 passed, 165 deselected`.
+
+Both collection orders below passed with `7 passed, 200 deselected`:
+
+```bash
+uv run --no-sync pytest --noconftest -o addopts='' \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_backend.py \
+  tests/unit/models/generation/test_vllm_utils.py \
+  -k 'tail_gate_worker or get_cudagraph_dispatch_metrics or derives_tail_gate or tail_gate_zero' -q
+
+uv run --no-sync pytest --noconftest -o addopts='' \
+  tests/unit/models/generation/test_vllm_backend.py \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_utils.py \
+  -k 'tail_gate_worker or get_cudagraph_dispatch_metrics or derives_tail_gate or tail_gate_zero' -q
+```
+
+Ruff, Python compilation, and scoped `git diff --check` passed. Pyrefly is not
+installed in the local environment. The Pyright fallback still reports the
+files' existing type-check debt (`336 errors`), but no new activation-consumer
+or fixture-loader diagnostics remain.

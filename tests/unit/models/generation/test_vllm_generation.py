@@ -42,11 +42,6 @@ from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
 )
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
-
-if importlib.util.find_spec("vllm") is None:
-    sys.modules["vllm"] = types.ModuleType("vllm")
-
-from nemo_rl.models.generation.vllm.vllm_backend import VllmInternalWorkerExtension
 from nemo_rl.models.generation.vllm.vllm_worker import (
     _resolve_enable_prefix_caching,
 )
@@ -239,8 +234,31 @@ def test_specdec_step_metrics_collect_worker_counters() -> None:
     assert generation._get_raw_spec_counters.call_count == 2
 
 
-def test_tail_gate_worker_counters_are_reported_and_derived() -> None:
-    extension = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+@pytest.fixture
+def vllm_internal_worker_extension(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> type[Any]:
+    backend_module_name = "nemo_rl.models.generation.vllm.vllm_backend"
+    backend_module = sys.modules.get(backend_module_name)
+    if backend_module is None:
+        if importlib.util.find_spec("vllm") is None:
+            vllm_spec = importlib.util.spec_from_loader("vllm", loader=None)
+            assert vllm_spec is not None
+            monkeypatch.setitem(
+                sys.modules,
+                "vllm",
+                importlib.util.module_from_spec(vllm_spec),
+            )
+        backend_module = importlib.import_module(backend_module_name)
+        request.addfinalizer(lambda: sys.modules.pop(backend_module_name, None))
+    return backend_module.VllmInternalWorkerExtension
+
+
+def test_tail_gate_worker_counters_are_reported_and_derived(
+    vllm_internal_worker_extension: type[Any],
+) -> None:
+    extension = object.__new__(vllm_internal_worker_extension)
     extension.model_runner = types.SimpleNamespace(
         cudagraph_dispatcher=types.SimpleNamespace(
             _nrl_cudagraph_dispatch_metrics={"calls_none": 2.0}
@@ -249,6 +267,10 @@ def test_tail_gate_worker_counters_are_reported_and_derived() -> None:
             "vllm:spec_decode_tail_gate_decisions": 4.0,
             "vllm:spec_decode_tail_gate_enabled_steps": 1.0,
             "vllm:spec_decode_tail_gate_disabled_steps": 3.0,
+            "vllm:spec_decode_tail_gate_activation_batch_sum": 16.0,
+            "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 8192.0,
+            "vllm:spec_decode_tail_gate_k_0_steps": 3.0,
+            "vllm:spec_decode_tail_gate_k_5_steps": 1.0,
         },
     )
 
@@ -256,6 +278,8 @@ def test_tail_gate_worker_counters_are_reported_and_derived() -> None:
 
     assert counters["vllm:spec_decode_cudagraph_target_calls_none"] == 2.0
     assert counters["vllm:spec_decode_tail_gate_decisions"] == 4.0
+    assert counters["vllm:spec_decode_tail_gate_activation_batch_sum"] == 16.0
+    assert counters["vllm:spec_decode_tail_gate_k_5_steps"] == 1.0
 
     generation = VllmGeneration.__new__(VllmGeneration)
     generation.cfg = {"vllm_kwargs": {"speculative_config": {"method": "eagle3"}}}
@@ -282,8 +306,10 @@ def test_tail_gate_worker_counters_are_reported_and_derived() -> None:
     assert metrics["vllm/tail_gate_advance_only_step_ratio"] == pytest.approx(0.75)
 
 
-def test_tail_gate_worker_counters_reject_list_values() -> None:
-    extension = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+def test_tail_gate_worker_counters_reject_list_values(
+    vllm_internal_worker_extension: type[Any],
+) -> None:
+    extension = object.__new__(vllm_internal_worker_extension)
     extension.model_runner = types.SimpleNamespace(
         _nrl_tail_gate_metrics={
             "vllm:spec_decode_tail_gate_decisions": [1.0],
