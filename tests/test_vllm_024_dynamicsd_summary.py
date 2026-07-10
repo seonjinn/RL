@@ -119,6 +119,32 @@ def test_build_comparison_rows_matches_model_baseline() -> None:
     assert rows["dynamic"].generation_throughput_speedup_vs_fixed == 1.2
 
 
+def test_build_comparison_rows_distinguishes_draft_sampling_methods() -> None:
+    summaries = [
+        summarize_history("qwen30ba3b", "baseline", _history()),
+        summarize_history(
+            "qwen30ba3b",
+            "eagle3_k5",
+            _history(1.2),
+            draft_sample_method="greedy",
+        ),
+        summarize_history(
+            "qwen30ba3b",
+            "eagle3_k5",
+            _history(1.3),
+            draft_sample_method="probabilistic",
+        ),
+    ]
+
+    rows = build_comparison_rows(summaries)
+
+    assert {(row.variant, row.draft_sample_method) for row in rows} == {
+        ("baseline", "not_applicable"),
+        ("eagle3_k5", "greedy"),
+        ("eagle3_k5", "probabilistic"),
+    }
+
+
 def test_build_comparison_rows_rejects_incomplete_or_missing_baselines() -> None:
     incomplete_baseline = summarize_history("qwen32b", "baseline", _history()[:-1])
 
@@ -169,6 +195,22 @@ def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
     assert (
         _validate_manifest_rows(rows) == "duplicate variant baseline for model qwen32b"
     )
+
+
+def test_validate_manifest_rows_allows_sampling_specific_variants() -> None:
+    common = {
+        "model": "qwen30ba3b",
+        "variant": "eagle3_k5",
+        "commit": "aaa",
+        "nodes": "4",
+        "rejection_sample_method": "standard",
+    }
+    rows = [
+        {**common, "draft_sample_method": "greedy"},
+        {**common, "draft_sample_method": "probabilistic"},
+    ]
+
+    assert _validate_manifest_rows(rows) is None
 
 
 class _FakeRun:
@@ -235,6 +277,14 @@ class _UnhealthyApi:
             return _UnhealthyRun(1.0, "baseline")
         assert run_id == "dynamic"
         return _UnhealthyRun(1.2, "dynamic")
+
+
+class _SamplingMatrixApi:
+    def run(self, path: str) -> _MatrixRun:
+        run_id = path.rsplit("/", maxsplit=1)[-1]
+        scale = {"base": 1.0, "greedy": 1.2, "probabilistic": 1.3}[run_id]
+        variant = "baseline" if run_id == "base" else "eagle3_k5"
+        return _MatrixRun(scale, variant)
 
 
 def test_main_writes_manifest_metadata_and_explicit_csv(tmp_path: Path) -> None:
@@ -314,6 +364,64 @@ def test_main_keeps_metadata_attached_to_interleaved_models(tmp_path: Path) -> N
     dynamic_rows = {row["model"]: row for row in payload if row["variant"] == "dynamic"}
     assert dynamic_rows["qwen30ba3b"]["job_id"] == "one-dynamic-job"
     assert dynamic_rows["qwen32b"]["job_id"] == "two-dynamic-job"
+
+
+def test_main_keeps_sampling_specific_fixed_runs_distinct(tmp_path: Path) -> None:
+    manifest = tmp_path / "submissions.tsv"
+    rows = [
+        ("baseline", "base", "base-job", "not_applicable", "not_applicable"),
+        ("eagle3_k5", "greedy", "greedy-job", "standard", "greedy"),
+        (
+            "eagle3_k5",
+            "probabilistic",
+            "probabilistic-job",
+            "standard",
+            "probabilistic",
+        ),
+    ]
+    with manifest.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(
+            stream,
+            delimiter="\t",
+            fieldnames=[
+                "model",
+                "variant",
+                "job_id",
+                "wandb_run_id",
+                "rejection_sample_method",
+                "draft_sample_method",
+            ],
+        )
+        writer.writeheader()
+        for variant, run_id, job_id, rejection_method, draft_method in rows:
+            writer.writerow(
+                {
+                    "model": "qwen30ba3b",
+                    "variant": variant,
+                    "job_id": job_id,
+                    "wandb_run_id": run_id,
+                    "rejection_sample_method": rejection_method,
+                    "draft_sample_method": draft_method,
+                }
+            )
+
+    output_dir = tmp_path / "summary"
+    assert (
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=_SamplingMatrixApi(),
+        )
+        == 0
+    )
+
+    payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    fixed_rows = {
+        row["draft_sample_method"]: row
+        for row in payload
+        if row["variant"] == "eagle3_k5"
+    }
+    assert fixed_rows["greedy"]["job_id"] == "greedy-job"
+    assert fixed_rows["probabilistic"]["job_id"] == "probabilistic-job"
 
 
 def test_main_returns_nonzero_when_accuracy_health_gate_fails(tmp_path: Path) -> None:

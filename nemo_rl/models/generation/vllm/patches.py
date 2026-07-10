@@ -430,9 +430,27 @@ def _patch_vllm_llama_draft_loader_result(logger) -> None:
 
 
 def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
-    """Reject a partial probabilistic-draft cache instead of changing sampling."""
+    """Reject missing probabilistic-draft probabilities instead of changing sampling."""
     file_to_patch = _get_vllm_file("v1/worker/gpu_model_runner.py")
-    old_snippet = (
+    old_cache_snippet = (
+        "        if self._draft_probs is None or self._draft_prob_req_ids is None:\n"
+        "            return None\n"
+    )
+    new_cache_snippet = (
+        "        if self._draft_probs is None or self._draft_prob_req_ids is None:\n"
+        "            if (\n"
+        "                any(spec_decode_metadata.num_draft_tokens)\n"
+        "                and not self.input_batch.sampling_metadata.all_greedy\n"
+        "            ):\n"
+        "                raise RuntimeError(\n"
+        '                    "Probabilistic speculative decoding has no cached q(token) "\n'
+        '                    "for a batch with draft tokens; refusing to fall back to "\n'
+        '                    "legacy rejection behavior because it changes the sampling "\n'
+        '                    "contract."\n'
+        "                )\n"
+        "            return None\n"
+    )
+    old_row_snippet = (
         "            if row_idx is None:\n"
         "                logger.warning(\n"
         '                    "Missing cached draft probabilities for request %s; "\n'
@@ -441,7 +459,7 @@ def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
         "                )\n"
         "                return None\n"
     )
-    new_snippet = (
+    new_row_snippet = (
         "            if row_idx is None:\n"
         "                raise RuntimeError(\n"
         '                    "Probabilistic speculative decoding is missing q(token) "\n'
@@ -451,18 +469,27 @@ def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
     )
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
-        if "missing q(token)" in content:
+        if (
+            content.count(new_cache_snippet) == 1
+            and content.count(new_row_snippet) == 1
+        ):
             logger.info(
-                "Missing probabilistic draft-row fail-closed patch already applied."
+                "Missing probabilistic draft-probability fail-closed patch already applied."
             )
             return
-        if old_snippet not in content:
+        if "has no cached q(token)" in content or "missing q(token)" in content:
             raise RuntimeError(
-                "Could not apply the missing probabilistic draft-row fail-closed "
+                "Found an incomplete probabilistic draft-probability fail-closed "
+                f"patch in {file_to_patch}; refusing to continue."
+            )
+        if content.count(old_cache_snippet) != 1 or content.count(old_row_snippet) != 1:
+            raise RuntimeError(
+                "Could not apply the missing probabilistic draft-probability fail-closed "
                 f"patch to {file_to_patch}; the vLLM source layout changed."
             )
-        write_back(content.replace(old_snippet, new_snippet, 1))
-    logger.info("Successfully patched missing probabilistic draft rows to fail closed.")
+        content = content.replace(old_cache_snippet, new_cache_snippet, 1)
+        write_back(content.replace(old_row_snippet, new_row_snippet, 1))
+    logger.info("Successfully patched missing probabilistic draft probabilities.")
 
 
 def _patch_vllm_parallel_probabilistic_draft_temperature(logger) -> None:

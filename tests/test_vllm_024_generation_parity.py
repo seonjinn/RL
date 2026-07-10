@@ -188,7 +188,7 @@ def test_build_generation_config_keeps_cuda_graph_and_exact_rejection() -> None:
         "num_speculative_tokens": 5,
         "draft_tensor_parallel_size": 1,
         "rejection_sample_method": "standard",
-        "draft_sample_method": "greedy",
+        "draft_sample_method": "probabilistic",
     }
 
 

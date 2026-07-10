@@ -44,7 +44,7 @@ class GenerationSettings:
     num_nodes: int = 1
     gpus_per_node: int = 4
     gpu_memory_utilization: float = 0.8
-    draft_sample_method: str = "greedy"
+    draft_sample_method: str = "probabilistic"
     enable_chunked_prefill: bool = True
     enable_prefix_caching: bool = False
     max_num_batched_tokens: int = 16384
@@ -323,7 +323,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument(
-        "--draft-sample-method", choices=("greedy", "probabilistic"), default="greedy"
+        "--draft-sample-method",
+        choices=("greedy", "probabilistic"),
+        default="probabilistic",
     )
     parser.add_argument(
         "--enable-chunked-prefill",

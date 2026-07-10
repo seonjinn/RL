@@ -51,7 +51,8 @@ def _prepare_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     tracked_files = (
-        checkout / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+        checkout
+        / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
         checkout / "experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh",
         checkout / "ray.sub",
     )
@@ -623,6 +624,7 @@ def test_generation_parity_launcher_matches_lyris_topology_and_cuda_graph() -> N
     assert "--max-model-len 4096" in output
     assert "--max-num-batched-tokens 16384" in output
     assert "--mode greedy" in output
+    assert "--draft-sample-method probabilistic" in output
     assert "--samples-per-prompt 1" in output
     assert "/lustre/users/sna/qwen32-eagle3" in output
 

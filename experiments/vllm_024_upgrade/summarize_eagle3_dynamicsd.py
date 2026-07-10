@@ -55,6 +55,8 @@ MATCHED_SETUP_FIELDS = (
 class RunSummary:
     model: str
     variant: str
+    rejection_sample_method: str
+    draft_sample_method: str
     complete: bool
     reason: str
     measured_steps: list[int]
@@ -73,6 +75,8 @@ class RunSummary:
 class ComparisonRow:
     model: str
     variant: str
+    rejection_sample_method: str
+    draft_sample_method: str
     complete: bool
     reason: str
     measured_steps: list[int]
@@ -110,11 +114,19 @@ class WandbApi(Protocol):
 
 
 def _empty_summary(
-    model: str, variant: str, reason: str, measured_steps: list[int]
+    model: str,
+    variant: str,
+    reason: str,
+    measured_steps: list[int],
+    *,
+    rejection_sample_method: str = "not_applicable",
+    draft_sample_method: str = "not_applicable",
 ) -> RunSummary:
     return RunSummary(
         model=model,
         variant=variant,
+        rejection_sample_method=rejection_sample_method,
+        draft_sample_method=draft_sample_method,
         complete=False,
         reason=reason,
         measured_steps=measured_steps,
@@ -131,7 +143,12 @@ def _is_finite_number(value: object) -> TypeGuard[int | float]:
 
 
 def summarize_history(
-    model: str, variant: str, history: Iterable[Mapping[str, object]]
+    model: str,
+    variant: str,
+    history: Iterable[Mapping[str, object]],
+    *,
+    rejection_sample_method: str = "not_applicable",
+    draft_sample_method: str = "not_applicable",
 ) -> RunSummary:
     """Aggregate the steady-state W&B records for one submitted variant."""
     records_by_step: dict[int, Mapping[str, object]] = {}
@@ -152,6 +169,8 @@ def summarize_history(
             variant,
             f"missing_steps:{','.join(map(str, missing_steps))}",
             measured_steps,
+            rejection_sample_method=rejection_sample_method,
+            draft_sample_method=draft_sample_method,
         )
 
     required_metrics = set(METRIC_KEYS) - SPECDEC_METRICS
@@ -170,6 +189,8 @@ def summarize_history(
                     variant,
                     f"non_finite_metrics:{metric_name}:{step}",
                     measured_steps,
+                    rejection_sample_method=rejection_sample_method,
+                    draft_sample_method=draft_sample_method,
                 )
             values[metric_name].append(float(value))
         if variant in SPECDEC_VARIANTS:
@@ -181,6 +202,8 @@ def summarize_history(
                         variant,
                         f"non_finite_metrics:{metric_name}:{step}",
                         measured_steps,
+                        rejection_sample_method=rejection_sample_method,
+                        draft_sample_method=draft_sample_method,
                     )
                 counter_values[metric_name].append(float(value))
 
@@ -192,7 +215,12 @@ def summarize_history(
         value = averages[metric_name]
         if value is None or value <= 0.0:
             return _empty_summary(
-                model, variant, f"non_positive_metric:{metric_name}", measured_steps
+                model,
+                variant,
+                f"non_positive_metric:{metric_name}",
+                measured_steps,
+                rejection_sample_method=rejection_sample_method,
+                draft_sample_method=draft_sample_method,
             )
     if variant in SPECDEC_VARIANTS:
         total_drafts = sum(counter_values["num_drafts"])
@@ -204,7 +232,12 @@ def summarize_history(
             or total_accepted_tokens <= 0.0
         ):
             return _empty_summary(
-                model, variant, "missing_specdec_evidence", measured_steps
+                model,
+                variant,
+                "missing_specdec_evidence",
+                measured_steps,
+                rejection_sample_method=rejection_sample_method,
+                draft_sample_method=draft_sample_method,
             )
         averages["acceptance_rate"] = total_accepted_tokens / total_draft_tokens
         averages["mean_acceptance_length"] = 1.0 + total_accepted_tokens / total_drafts
@@ -212,6 +245,8 @@ def summarize_history(
     return RunSummary(
         model=model,
         variant=variant,
+        rejection_sample_method=rejection_sample_method,
+        draft_sample_method=draft_sample_method,
         complete=True,
         reason="",
         measured_steps=measured_steps,
@@ -290,8 +325,15 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
 
     comparison_rows: list[ComparisonRow] = []
     for model_summaries in grouped.values():
-        variants = [summary.variant for summary in model_summaries]
-        if len(variants) != len(set(variants)):
+        identities = [
+            (
+                summary.variant,
+                summary.rejection_sample_method,
+                summary.draft_sample_method,
+            )
+            for summary in model_summaries
+        ]
+        if len(identities) != len(set(identities)):
             raise ValueError(f"duplicate variants for model {model_summaries[0].model}")
         baselines = [
             summary for summary in model_summaries if summary.variant == "baseline"
@@ -308,16 +350,23 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
                 f"incomplete baseline for model {baseline.model}: {baseline.reason}"
             )
 
-        fixed_runs = [
-            summary
+        fixed_by_sampling = {
+            (summary.rejection_sample_method, summary.draft_sample_method): summary
             for summary in model_summaries
             if summary.variant == "eagle3_k5" and summary.complete
-        ]
-        if len(fixed_runs) > 1:
-            raise ValueError(f"expected one fixed-K run for model {baseline.model}")
-        fixed = fixed_runs[0] if fixed_runs else None
+        }
         comparison_rows.extend(
-            _comparison_row(summary, baseline, fixed) for summary in model_summaries
+            _comparison_row(
+                summary,
+                baseline,
+                fixed_by_sampling.get(
+                    (
+                        summary.rejection_sample_method,
+                        summary.draft_sample_method,
+                    )
+                ),
+            )
+            for summary in model_summaries
         )
     return comparison_rows
 
@@ -337,12 +386,14 @@ def _read_manifest(path: Path) -> list[dict[str, str]]:
 def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
     if not rows:
         return "empty manifest"
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     setup_by_model: dict[str, tuple[str, ...]] = {}
     for row in rows:
         model = row.get("model", "")
         variant = row.get("variant", "")
-        key = (model, variant)
+        rejection_sample_method = row.get("rejection_sample_method", "")
+        draft_sample_method = row.get("draft_sample_method", "")
+        key = (model, variant, rejection_sample_method, draft_sample_method)
         if key in seen:
             return f"duplicate variant {variant} for model {model}"
         seen.add(key)
@@ -421,10 +472,23 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     for manifest_row in manifest_rows:
         model = manifest_row.get("model", "")
         variant = manifest_row.get("variant", "")
+        rejection_sample_method = (
+            manifest_row.get("rejection_sample_method", "") or "not_applicable"
+        )
+        draft_sample_method = (
+            manifest_row.get("draft_sample_method", "") or "not_applicable"
+        )
         run_id = manifest_row.get("wandb_run_id", "")
         if not model or not variant or not run_id:
             summaries.append(
-                _empty_summary(model, variant, "missing_manifest_fields", [])
+                _empty_summary(
+                    model,
+                    variant,
+                    "missing_manifest_fields",
+                    [],
+                    rejection_sample_method=rejection_sample_method,
+                    draft_sample_method=draft_sample_method,
+                )
             )
             metadata.append(manifest_row)
             continue
@@ -434,12 +498,19 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
                 model,
                 variant,
                 run.scan_history(keys=_history_keys(variant)),
+                rejection_sample_method=rejection_sample_method,
+                draft_sample_method=draft_sample_method,
             )
             if not manifest_row.get("wandb_url"):
                 manifest_row = {**manifest_row, "wandb_url": run.url}
         except Exception as error:  # W&B errors are converted into an incomplete row.
             summary = _empty_summary(
-                model, variant, f"wandb_fetch_failed:{type(error).__name__}", []
+                model,
+                variant,
+                f"wandb_fetch_failed:{type(error).__name__}",
+                [],
+                rejection_sample_method=rejection_sample_method,
+                draft_sample_method=draft_sample_method,
             )
         summaries.append(summary)
         metadata.append(manifest_row)
@@ -450,10 +521,25 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
             raise ValueError(manifest_error)
         rows = [asdict(row) for row in build_comparison_rows(summaries)]
         metadata_by_run = {
-            (summary.model, summary.variant): manifest_row
+            (
+                summary.model,
+                summary.variant,
+                summary.rejection_sample_method,
+                summary.draft_sample_method,
+            ): manifest_row
             for summary, manifest_row in zip(summaries, metadata, strict=True)
         }
-        row_metadata = [metadata_by_run[(row["model"], row["variant"])] for row in rows]
+        row_metadata = [
+            metadata_by_run[
+                (
+                    row["model"],
+                    row["variant"],
+                    row["rejection_sample_method"],
+                    row["draft_sample_method"],
+                )
+            ]
+            for row in rows
+        ]
     except ValueError as error:
         comparison_error = error
         rows = [_unmatched_row(summary) for summary in summaries]

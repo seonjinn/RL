@@ -37,7 +37,17 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 PROMPT_LIMIT="${PROMPT_LIMIT:-4}"
 SAMPLED_REPEATS="${SAMPLED_REPEATS:-64}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
+DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 TMPDIR="${TMPDIR_OVERRIDE:-/tmp}"
+
+case "${DRAFT_SAMPLE_METHOD}" in
+  greedy|probabilistic)
+    ;;
+  *)
+    echo "ERROR: DRAFT_SAMPLE_METHOD must be greedy or probabilistic" >&2
+    exit 2
+    ;;
+esac
 
 case "${VARIANT_SELECTION}" in
   all) variants=(baseline eagle3_k5) ;;
@@ -123,6 +133,7 @@ submit_one() {
     --mode "${decode_mode}"
     --temperature "$([[ "${decode_mode}" == "greedy" ]] && printf '0.0' || printf '1.0')"
     --top-p 1.0
+    --draft-sample-method "${DRAFT_SAMPLE_METHOD}"
     --output-jsonl "${output_jsonl}"
     --metadata-json "${metadata_json}"
     --ray-log-dir "${ray_log_dir}"

@@ -71,9 +71,7 @@ def _run_patched_parallel_probabilistic_draft_temperature(
 ) -> None:
     namespace: dict[str, object] = {"_SAMPLING_EPS": 1e-5}
     exec(
-        "def sample(logits, sampling_metadata):\n"
-        f"{source}"
-        "    return None\n",
+        f"def sample(logits, sampling_metadata):\n{source}    return None\n",
         namespace,
     )
 
@@ -104,9 +102,7 @@ def test_parallel_probabilistic_draft_temperature_patch_expands_temperatures(
     patched = proposer.read_text()
     assert "temperature_count = temperature.numel()" in patched
     assert "logits_count % temperature_count != 0" in patched
-    assert (
-        "temperature.repeat_interleave(logits_count // temperature_count)" in patched
-    )
+    assert "temperature.repeat_interleave(logits_count // temperature_count)" in patched
     assert "if logits_count <= 0 or temperature_count <= 0:" in patched
     assert patched.index("if logits_count <= 0") < patched.index(
         "if temperature_count != logits_count"
@@ -115,6 +111,73 @@ def test_parallel_probabilistic_draft_temperature_patch_expands_temperatures(
     patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
 
     assert proposer.read_text() == patched
+
+
+def test_parallel_probabilistic_draft_temperature_patch_preserves_request_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    proposer = tmp_path / "llm_base_proposer.py"
+    proposer.write_text(_probabilistic_draft_temperature_source())
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(proposer))
+
+    patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
+
+    namespace: dict[str, object] = {"_SAMPLING_EPS": 1e-5, "torch": torch}
+    exec(
+        "def sample(logits, sampling_metadata):\n"
+        f"{proposer.read_text()}"
+        "    return logits.softmax(dim=-1, dtype=torch.float32)\n",
+        namespace,
+    )
+
+    class SamplingMetadata:
+        temperature = torch.tensor([0.0, 2.0])
+        all_random = False
+
+    logits = torch.tensor(
+        [[1.0, 2.0], [2.0, 4.0], [3.0, 6.0], [1.0, 2.0], [2.0, 4.0], [3.0, 6.0]]
+    )
+    expected_temperature = torch.tensor([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])
+    expected = (logits / expected_temperature.view(-1, 1)).softmax(
+        dim=-1, dtype=torch.float32
+    )
+
+    actual = namespace["sample"](logits.clone(), SamplingMetadata())
+
+    torch.testing.assert_close(actual, expected)
+
+    class EqualShapeSamplingMetadata:
+        temperature = torch.tensor([0.5, 2.0])
+        all_random = True
+
+    equal_shape_logits = torch.tensor([[1.0, 2.0], [2.0, 4.0]])
+    equal_shape_expected = (
+        equal_shape_logits / EqualShapeSamplingMetadata.temperature.view(-1, 1)
+    ).softmax(dim=-1, dtype=torch.float32)
+
+    equal_shape_actual = namespace["sample"](
+        equal_shape_logits.clone(), EqualShapeSamplingMetadata()
+    )
+
+    torch.testing.assert_close(equal_shape_actual, equal_shape_expected)
+
+
+def test_parallel_probabilistic_draft_temperature_patch_rejects_non_divisible_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposer = tmp_path / "llm_base_proposer.py"
+    proposer.write_text(_probabilistic_draft_temperature_source())
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(proposer))
+
+    patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
+
+    with pytest.raises(RuntimeError, match="not divisible"):
+        _run_patched_parallel_probabilistic_draft_temperature(
+            proposer.read_text(), logits_count=5, temperature_count=2
+        )
 
 
 @pytest.mark.parametrize(
@@ -543,6 +606,9 @@ def test_missing_probabilistic_draft_row_patch_fails_closed(
 ) -> None:
     model_runner = tmp_path / "gpu_model_runner.py"
     model_runner.write_text(
+        "        if self._draft_probs is None or self._draft_prob_req_ids is None:\n"
+        "            return None\n"
+        "\n"
         "            if row_idx is None:\n"
         "                logger.warning(\n"
         '                    "Missing cached draft probabilities for request %s; "\n'
@@ -558,11 +624,62 @@ def test_missing_probabilistic_draft_row_patch_fails_closed(
     patched = model_runner.read_text()
     assert "raise RuntimeError(" in patched
     assert "missing q(token)" in patched
+    assert "has no cached q(token)" in patched
+    assert "if any(spec_decode_metadata.num_draft_tokens):" in patched
     assert "falling back to legacy" not in patched
 
     patches._patch_vllm_missing_draft_probs_fail_closed(MagicMock())
 
     assert model_runner.read_text() == patched
+
+
+def test_missing_probabilistic_draft_cache_patch_executes_fail_closed_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_runner = tmp_path / "gpu_model_runner.py"
+    model_runner.write_text(
+        "class Runner:\n"
+        "    def get_draft_probs(self, spec_decode_metadata):\n"
+        "        if self._draft_probs is None or self._draft_prob_req_ids is None:\n"
+        "            return None\n"
+        "\n"
+        "        for req_id in ():\n"
+        "            if row_idx is None:\n"
+        "                logger.warning(\n"
+        '                    "Missing cached draft probabilities for request %s; "\n'
+        '                    "falling back to legacy speculative rejection behavior.",\n'
+        "                    req_id,\n"
+        "                )\n"
+        "                return None\n"
+        "        return object()\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(model_runner))
+
+    patches._patch_vllm_missing_draft_probs_fail_closed(MagicMock())
+
+    namespace: dict[str, object] = {}
+    exec(model_runner.read_text(), namespace)
+
+    class SamplingMetadata:
+        all_greedy = False
+
+    class InputBatch:
+        sampling_metadata = SamplingMetadata()
+
+    class SpecDecodeMetadata:
+        num_draft_tokens = [1, 0]
+
+    runner = namespace["Runner"]()
+    runner._draft_probs = None
+    runner._draft_prob_req_ids = None
+    runner.input_batch = InputBatch()
+
+    with pytest.raises(RuntimeError, match="has no cached q\(token\)"):
+        runner.get_draft_probs(SpecDecodeMetadata())
+
+    runner.input_batch.sampling_metadata.all_greedy = True
+    assert runner.get_draft_probs(SpecDecodeMetadata()) is None
 
 
 def test_medusa_loader_patch_uses_draft_load_config(
