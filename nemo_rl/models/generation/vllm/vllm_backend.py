@@ -193,21 +193,27 @@ class VllmInternalWorkerExtension:
         draft_prefill_manager = getattr(speculator, "prefill_cudagraph_manager", None)
         draft_decode_manager = getattr(speculator, "decode_cudagraph_manager", None)
         draft_query_manager = getattr(speculator, "query_cudagraph_manager", None)
+        draft_decode_multiplier = max(
+            int(getattr(speculator, "num_speculative_steps", 2)) - 1,
+            1,
+        )
 
-        for role, dispatcher in (
-            ("target", target_dispatcher),
-            ("target", target_manager),
-            ("draft", draft_dispatcher),
-            ("draft_prefill", draft_prefill_manager),
-            ("draft_decode", draft_decode_manager),
-            ("draft_query", draft_query_manager),
+        for role, dispatcher, multiplier in (
+            ("target", target_dispatcher, 1),
+            ("target", target_manager, 1),
+            ("draft", draft_dispatcher, 1),
+            ("draft_prefill", draft_prefill_manager, 1),
+            ("draft_decode", draft_decode_manager, draft_decode_multiplier),
+            ("draft_query", draft_query_manager, 1),
         ):
             counters = getattr(dispatcher, "_nrl_cudagraph_dispatch_metrics", None)
             if not counters:
                 continue
             for name, value in counters.items():
                 metric_name = f"vllm:spec_decode_cudagraph_{role}_{name}"
-                metrics[metric_name] = metrics.get(metric_name, 0.0) + float(value)
+                metrics[metric_name] = metrics.get(metric_name, 0.0) + float(
+                    value * multiplier
+                )
         return metrics
 
     def bind_numa(self) -> bool:

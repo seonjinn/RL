@@ -484,13 +484,21 @@ def compute_spec_decode_metrics(
         "vllm/spec_acceptance_rate": acceptance_rate,
     }
 
-    for role in (
+    cudagraph_roles = (
         "target",
         "draft",
         "draft_prefill",
         "draft_decode",
         "draft_query",
-    ):
+    )
+    all_eager_calls = 0.0
+    all_graph_calls = 0.0
+    all_eager_tokens = 0.0
+    all_graph_tokens = 0.0
+    all_padded_graph_tokens = 0.0
+    all_fallbacks: dict[str, float] = defaultdict(float)
+
+    for role in cudagraph_roles:
         counter_prefix = f"vllm:spec_decode_cudagraph_{role}_"
         eager_calls = delta.get(f"{counter_prefix}calls_none", 0.0)
         piecewise_calls = delta.get(f"{counter_prefix}calls_piecewise", 0.0)
@@ -508,6 +516,11 @@ def compute_spec_decode_metrics(
             f"{counter_prefix}padded_tokens_piecewise", 0.0
         ) + delta.get(f"{counter_prefix}padded_tokens_full", 0.0)
         total_tokens = eager_tokens + graph_tokens
+        all_eager_calls += eager_calls
+        all_graph_calls += graph_calls
+        all_eager_tokens += eager_tokens
+        all_graph_tokens += graph_tokens
+        all_padded_graph_tokens += padded_graph_tokens
 
         spec_metrics.update(
             {
@@ -542,6 +555,35 @@ def compute_spec_decode_metrics(
             key = f"{counter_prefix}fallback_{reason}"
             if key in delta:
                 spec_metrics[f"vllm/cudagraph_{role}_fallback_{reason}"] = delta[key]
+                all_fallbacks[reason] += delta[key]
+
+    all_total_calls = all_eager_calls + all_graph_calls
+    all_total_tokens = all_eager_tokens + all_graph_tokens
+    if all_total_calls > 0:
+        spec_metrics.update(
+            {
+                "vllm/cudagraph_all_total_calls": all_total_calls,
+                "vllm/cudagraph_all_graph_calls": all_graph_calls,
+                "vllm/cudagraph_all_eager_calls": all_eager_calls,
+                "vllm/cudagraph_all_graph_call_ratio": all_graph_calls
+                / all_total_calls,
+                "vllm/cudagraph_all_eager_call_ratio": all_eager_calls
+                / all_total_calls,
+                "vllm/cudagraph_all_graph_token_ratio": (
+                    all_graph_tokens / all_total_tokens if all_total_tokens > 0 else 0.0
+                ),
+                "vllm/cudagraph_all_eager_token_ratio": (
+                    all_eager_tokens / all_total_tokens if all_total_tokens > 0 else 0.0
+                ),
+                "vllm/cudagraph_all_padding_overhead_ratio": (
+                    (all_padded_graph_tokens - all_graph_tokens) / all_graph_tokens
+                    if all_graph_tokens > 0
+                    else 0.0
+                ),
+            }
+        )
+        for reason, value in all_fallbacks.items():
+            spec_metrics[f"vllm/cudagraph_all_fallback_{reason}"] = value
 
     # Add per-position metrics for detailed analysis
     for key, value in delta.items():

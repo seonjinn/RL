@@ -114,6 +114,7 @@ def test_get_cudagraph_dispatch_metrics_supports_v2_speculator_managers() -> Non
             _nrl_cudagraph_dispatch_metrics={"calls_piecewise": 8}
         ),
         speculator=SimpleNamespace(
+            num_speculative_steps=5,
             prefill_cudagraph_manager=SimpleNamespace(
                 _nrl_cudagraph_dispatch_metrics={"calls_piecewise": 5}
             ),
@@ -126,7 +127,7 @@ def test_get_cudagraph_dispatch_metrics_supports_v2_speculator_managers() -> Non
     assert ext.get_cudagraph_dispatch_metrics() == {
         "vllm:spec_decode_cudagraph_target_calls_piecewise": 8.0,
         "vllm:spec_decode_cudagraph_draft_prefill_calls_piecewise": 5.0,
-        "vllm:spec_decode_cudagraph_draft_decode_calls_none": 20.0,
+        "vllm:spec_decode_cudagraph_draft_decode_calls_none": 80.0,
     }
 
 

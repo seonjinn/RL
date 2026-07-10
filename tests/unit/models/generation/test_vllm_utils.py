@@ -693,3 +693,6 @@ def test_compute_spec_decode_metrics_includes_cudagraph_coverage() -> None:
     assert metrics["vllm/cudagraph_target_fallback_missing_key"] == 2.0
     assert metrics["vllm/cudagraph_draft_graph_call_ratio"] == 1.0
     assert metrics["vllm/cudagraph_draft_decode_eager_call_ratio"] == 1.0
+    assert metrics["vllm/cudagraph_all_total_calls"] == 100.0
+    assert math.isclose(metrics["vllm/cudagraph_all_eager_call_ratio"], 0.82)
+    assert math.isclose(metrics["vllm/cudagraph_all_graph_call_ratio"], 0.18)
