@@ -83,6 +83,35 @@ def _locked_file_patch(file_path: str):
         lock_fd.close()
 
 
+@contextmanager
+def _locked_file_patches(file_paths: list[str]):
+    """Yield file contents and a writer while holding every file lock."""
+    import fcntl
+
+    ordered_paths = list(dict.fromkeys(sorted(file_paths)))
+    lock_fds = []
+    try:
+        for file_path in ordered_paths:
+            lock_fd = open(file_path + ".patch_lock", "w")
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            lock_fds.append(lock_fd)
+
+        contents = {}
+        for file_path in ordered_paths:
+            with open(file_path, "r") as f:
+                contents[file_path] = f.read()
+
+        def write_back(file_path: str, new_content: str):
+            with open(file_path, "w") as f:
+                f.write(new_content)
+
+        yield contents, write_back
+    finally:
+        for lock_fd in reversed(lock_fds):
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+
+
 def _patch_vllm_init_workers_ray(
     py_executable: str, extra_env_vars: list[str] | None
 ) -> None:
@@ -758,6 +787,599 @@ def _patch_vllm_piecewise_specdec_cudagraph_alignment(logger) -> None:
     logger.info("Successfully aligned PIECEWISE SpecDec CUDA-graph sizes.")
 
 
+def _patch_vllm_runtime_tail_gating(logger) -> None:
+    """Patch the pinned vLLM 0.24 binary runtime-K tail-gating contract."""
+    config_old = (
+        "    # dynamic speculative decoding control\n"
+        "    num_speculative_tokens_per_batch_size: list[tuple[int, int, int]] | None = None\n"
+        '    """Batch-size schedule used to dynamically choose speculative-token count.\n'
+        "\n"
+        "    Each entry is ``(range_start, range_end, num_speculative_tokens)`` with an\n"
+        "    inclusive batch-size range.\n"
+        '    """\n'
+        "\n"
+        "    # params generated in the post-init stage\n"
+    )
+    config_new = (
+        "    # dynamic speculative decoding control\n"
+        "    num_speculative_tokens_per_batch_size: list[tuple[int, int, int]] | None = None\n"
+        '    """Batch-size schedule used to dynamically choose speculative-token count.\n'
+        "\n"
+        "    Each entry is ``(range_start, range_end, num_speculative_tokens)`` with an\n"
+        "    inclusive batch-size range.\n"
+        '    """\n'
+        "\n"
+        "    # NeMo-RL binary tail-gate runtime control.\n"
+        '    sd_tail_gate_mode: str = "off"\n'
+        "    sd_tail_gate_threshold: int | None = None\n"
+        "    sd_tail_gate_consecutive_checks: int = 10\n"
+        "    sd_tail_gate_margin: float = 0.05\n"
+        "    sd_tail_gate_config_path: str | None = None\n"
+        '    sd_tail_gate_off_mode: str = "advance_only"\n'
+        "\n"
+        "    # params generated in the post-init stage\n"
+    )
+
+    scheduler_output_old = (
+        "    # Dynamic speculative decoding: optimal K chosen by scheduler.\n"
+        "    # Number of spec tokens to schedule for the next step.\n"
+        "    num_spec_tokens_to_schedule: int = 0\n"
+        "\n"
+        "    @classmethod\n"
+        '    def make_empty(cls) -> "SchedulerOutput":\n'
+    )
+    scheduler_output_new = (
+        "    # Dynamic speculative decoding: optimal K chosen by scheduler.\n"
+        "    # Number of spec tokens to schedule for the next step.\n"
+        "    num_spec_tokens_to_schedule: int = 0\n"
+        "\n"
+        "    # NeMo-RL tail-gate scheduler telemetry.\n"
+        '    tail_gate_state: str = "OFF"\n'
+        "    tail_gate_tick: int = 0\n"
+        "    tail_gate_active_requests: int = 0\n"
+        "    tail_gate_decode_active_requests: int = 0\n"
+        "    tail_gate_mean_sequence_length: float = 0.0\n"
+        "    tail_gate_predicted_speedup_sum: float = 0.0\n"
+        "    tail_gate_predicted_speedup_count: int = 0\n"
+        "    tail_gate_expected_accept_length: float = 0.0\n"
+        "    tail_gate_just_activated: bool = False\n"
+        "\n"
+        "    @classmethod\n"
+        '    def make_empty(cls) -> "SchedulerOutput":\n'
+    )
+
+    v2_execute_old = (
+        "    @torch.inference_mode()\n"
+        "    def execute_model(\n"
+        "        self,\n"
+        "        scheduler_output: SchedulerOutput,\n"
+        "        intermediate_tensors: IntermediateTensors | None = None,\n"
+        "        dummy_run: bool = False,\n"
+        "        skip_attn_for_dummy_run: bool = False,\n"
+        "        is_profile: bool = False,\n"
+        "    ) -> ModelRunnerOutput | IntermediateTensors | None:\n"
+        "        if not dummy_run:\n"
+    )
+    v2_execute_new = (
+        "    @torch.inference_mode()\n"
+        "    def execute_model(\n"
+        "        self,\n"
+        "        scheduler_output: SchedulerOutput,\n"
+        "        intermediate_tensors: IntermediateTensors | None = None,\n"
+        "        dummy_run: bool = False,\n"
+        "        skip_attn_for_dummy_run: bool = False,\n"
+        "        is_profile: bool = False,\n"
+        "    ) -> ModelRunnerOutput | IntermediateTensors | None:\n"
+        "        runtime_num_spec_tokens = None\n"
+        "        tail_gate_mode = getattr(\n"
+        '            self.speculative_config, "sd_tail_gate_mode", "off"\n'
+        "        )\n"
+        '        if tail_gate_mode != "off" and not dummy_run:\n'
+        "            runtime_num_spec_tokens = (\n"
+        "                scheduler_output.num_spec_tokens_to_schedule\n"
+        "            )\n"
+        "            if runtime_num_spec_tokens is not None and (\n"
+        "                isinstance(runtime_num_spec_tokens, bool)\n"
+        "                or runtime_num_spec_tokens not in (0, self.num_speculative_steps)\n"
+        "            ):\n"
+        "                raise ValueError(\n"
+        '                    "Tail-gated Model Runner V2 runtime K must be None, 0, "\n'
+        '                    f"or the configured maximum {self.num_speculative_steps}; "\n'
+        '                    f"got {runtime_num_spec_tokens}."\n'
+        "                )\n"
+        "            if (\n"
+        "                self.speculative_config is None\n"
+        '                or self.speculative_config.method not in ("eagle", "eagle3")\n'
+        "            ):\n"
+        "                raise ValueError(\n"
+        '                    "Tail-gated Model Runner V2 requires an external "\n'
+        '                    "Eagle or Eagle-3 speculator."\n'
+        "                )\n"
+        "            if (\n"
+        "                getattr(\n"
+        "                    self.speculative_config,\n"
+        '                    "sd_tail_gate_off_mode",\n'
+        '                    "advance_only",\n'
+        "                )\n"
+        '                != "advance_only"\n'
+        "            ):\n"
+        "                raise ValueError(\n"
+        '                    "Model Runner V2 binary tail gating only supports "\n'
+        '                    "sd_tail_gate_off_mode=advance_only."\n'
+        "                )\n"
+        "\n"
+        "            tail_gate_metrics = getattr(\n"
+        '                self, "_nrl_tail_gate_metrics", None\n'
+        "            )\n"
+        "            if tail_gate_metrics is None:\n"
+        "                tail_gate_metrics = {}\n"
+        "                self._nrl_tail_gate_metrics = tail_gate_metrics\n"
+        "            effective_runtime_k = (\n"
+        "                self.num_speculative_steps\n"
+        "                if runtime_num_spec_tokens is None\n"
+        "                else runtime_num_spec_tokens\n"
+        "            )\n"
+        "            tail_gate_updates = {\n"
+        '                "vllm:spec_decode_tail_gate_decisions": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_enabled_steps": float(\n'
+        "                    effective_runtime_k > 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
+        "                    effective_runtime_k == 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_activations": float(\n'
+        "                    scheduler_output.tail_gate_just_activated\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_decode_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_mean_sequence_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_mean_sequence_length\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_count": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_expected_accept_length\n"
+        "                ),\n"
+        "            }\n"
+        "            tail_gate_state = scheduler_output.tail_gate_state.lower()\n"
+        "            if tail_gate_state in (\n"
+        '                "ramping_off",\n'
+        '                "armed_off",\n'
+        '                "on_latched",\n'
+        "            ):\n"
+        "                tail_gate_updates[\n"
+        '                    f"vllm:spec_decode_tail_gate_{tail_gate_state}_steps"\n'
+        "                ] = 1.0\n"
+        "            for metric_name, metric_value in tail_gate_updates.items():\n"
+        "                tail_gate_metrics[metric_name] = (\n"
+        "                    tail_gate_metrics.get(metric_name, 0.0) + metric_value\n"
+        "                )\n"
+        "\n"
+        "        if not dummy_run:\n"
+    )
+
+    v2_state_old = (
+        "        finished_req_ids = scheduler_output.finished_req_ids\n"
+        "        self.execute_model_state = ExecuteModelState(\n"
+        "            input_batch=input_batch,\n"
+        "            attn_metadata=attn_metadata,\n"
+        "            slot_mappings_by_layer=slot_mappings_by_layer,\n"
+        "            hidden_states=hidden_states,\n"
+        "            aux_hidden_states=aux_hidden_states,\n"
+        "            finished_req_ids=finished_req_ids,\n"
+        "        )\n"
+    )
+    v2_state_new = (
+        "        finished_req_ids = scheduler_output.finished_req_ids\n"
+        "        self.execute_model_state = ExecuteModelState(\n"
+        "            input_batch=input_batch,\n"
+        "            attn_metadata=attn_metadata,\n"
+        "            slot_mappings_by_layer=slot_mappings_by_layer,\n"
+        "            hidden_states=hidden_states,\n"
+        "            aux_hidden_states=aux_hidden_states,\n"
+        "            num_spec_tokens_to_schedule=runtime_num_spec_tokens,\n"
+        "            finished_req_ids=finished_req_ids,\n"
+        "        )\n"
+    )
+
+    v2_sample_state_old = (
+        "        input_batch = self.execute_model_state.input_batch\n"
+        "        attn_metadata = self.execute_model_state.attn_metadata\n"
+        "        slot_mappings_by_layer = self.execute_model_state.slot_mappings_by_layer\n"
+        "        hidden_states = self.execute_model_state.hidden_states\n"
+        "        aux_hidden_states = self.execute_model_state.aux_hidden_states\n"
+        "        finished_req_ids = self.execute_model_state.finished_req_ids\n"
+        "        self.execute_model_state = None\n"
+    )
+    v2_sample_state_new = (
+        "        input_batch = self.execute_model_state.input_batch\n"
+        "        attn_metadata = self.execute_model_state.attn_metadata\n"
+        "        slot_mappings_by_layer = self.execute_model_state.slot_mappings_by_layer\n"
+        "        hidden_states = self.execute_model_state.hidden_states\n"
+        "        aux_hidden_states = self.execute_model_state.aux_hidden_states\n"
+        "        finished_req_ids = self.execute_model_state.finished_req_ids\n"
+        "        runtime_num_spec_tokens = (\n"
+        "            self.execute_model_state.num_spec_tokens_to_schedule\n"
+        "        )\n"
+        "        self.execute_model_state = None\n"
+    )
+
+    v2_proposal_old = (
+        "            draft_tokens = self.speculator.propose(\n"
+        "                input_batch,\n"
+        "                attn_metadata,\n"
+        "                slot_mappings_by_layer,\n"
+        "                spec_hidden_states,\n"
+        "                aux_hidden_states,\n"
+        "                num_sampled,\n"
+        "                num_rejected,\n"
+        "                self.req_states.last_sampled_tokens,\n"
+        "                self.req_states.next_prefill_tokens,\n"
+        "                self.sampler.sampling_states.temperature.gpu,\n"
+        "                self.sampler.sampling_states.seeds.gpu,\n"
+        "                mm_inputs=mm_inputs,\n"
+        "            )\n"
+        "            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens\n"
+        "\n"
+        "        if self.num_speculative_steps > 0:\n"
+        "            # Spec-decode and diffusion LLMs both use draft tokens but the latter does\n"
+        "            # not have a speculator (i.e. self.speculator is None)\n"
+        "            self.draft_tokens_handler.set_draft_tokens(\n"
+        "                input_batch,\n"
+        "                self.req_states.draft_tokens[input_batch.idx_mapping],\n"
+        "            )\n"
+    )
+    v2_proposal_new = (
+        "            if runtime_num_spec_tokens is None:\n"
+        "                draft_tokens = self.speculator.propose(\n"
+        "                    input_batch,\n"
+        "                    attn_metadata,\n"
+        "                    slot_mappings_by_layer,\n"
+        "                    spec_hidden_states,\n"
+        "                    aux_hidden_states,\n"
+        "                    num_sampled,\n"
+        "                    num_rejected,\n"
+        "                    self.req_states.last_sampled_tokens,\n"
+        "                    self.req_states.next_prefill_tokens,\n"
+        "                    self.sampler.sampling_states.temperature.gpu,\n"
+        "                    self.sampler.sampling_states.seeds.gpu,\n"
+        "                    mm_inputs=mm_inputs,\n"
+        "                )\n"
+        "            else:\n"
+        "                draft_tokens = self.speculator.propose(\n"
+        "                    input_batch,\n"
+        "                    attn_metadata,\n"
+        "                    slot_mappings_by_layer,\n"
+        "                    spec_hidden_states,\n"
+        "                    aux_hidden_states,\n"
+        "                    num_sampled,\n"
+        "                    num_rejected,\n"
+        "                    self.req_states.last_sampled_tokens,\n"
+        "                    self.req_states.next_prefill_tokens,\n"
+        "                    self.sampler.sampling_states.temperature.gpu,\n"
+        "                    self.sampler.sampling_states.seeds.gpu,\n"
+        "                    num_speculative_tokens=runtime_num_spec_tokens,\n"
+        "                    mm_inputs=mm_inputs,\n"
+        "                )\n"
+        "            draft_tokens_for_handler = None\n"
+        "            if runtime_num_spec_tokens == 0:\n"
+        "                self.req_states.draft_tokens[input_batch.idx_mapping] = 0\n"
+        "                draft_tokens_for_handler = draft_tokens\n"
+        "            else:\n"
+        "                self.req_states.draft_tokens[input_batch.idx_mapping] = (\n"
+        "                    draft_tokens\n"
+        "                )\n"
+        "\n"
+        "        if self.num_speculative_steps > 0:\n"
+        "            # Spec-decode and diffusion LLMs both use draft tokens but the latter does\n"
+        "            # not have a speculator (i.e. self.speculator is None)\n"
+        "            if self.speculator is None or draft_tokens_for_handler is None:\n"
+        "                draft_tokens_for_handler = self.req_states.draft_tokens[\n"
+        "                    input_batch.idx_mapping\n"
+        "                ]\n"
+        "            self.draft_tokens_handler.set_draft_tokens(\n"
+        "                input_batch,\n"
+        "                draft_tokens_for_handler,\n"
+        "            )\n"
+    )
+
+    v2_execute_state_old = (
+        "class ExecuteModelState(NamedTuple):\n"
+        "    input_batch: InputBatch\n"
+        "    attn_metadata: dict[str, Any] | None\n"
+        "    slot_mappings_by_layer: dict[str, torch.Tensor] | None\n"
+        "    hidden_states: torch.Tensor | None\n"
+        "    aux_hidden_states: list[torch.Tensor] | None\n"
+        "    finished_req_ids: set[str]\n"
+    )
+    v2_execute_state_new = (
+        "class ExecuteModelState(NamedTuple):\n"
+        "    input_batch: InputBatch\n"
+        "    attn_metadata: dict[str, Any] | None\n"
+        "    slot_mappings_by_layer: dict[str, torch.Tensor] | None\n"
+        "    hidden_states: torch.Tensor | None\n"
+        "    aux_hidden_states: list[torch.Tensor] | None\n"
+        "    num_spec_tokens_to_schedule: int | None\n"
+        "    finished_req_ids: set[str]\n"
+    )
+
+    speculator_signature_old = (
+        "    def propose(\n"
+        "        self,\n"
+        "        input_batch: InputBatch,\n"
+        "        attn_metadata: dict[str, Any],\n"
+        "        slot_mappings: dict[str, torch.Tensor],\n"
+        "        # [num_tokens, hidden_size]\n"
+        "        last_hidden_states: torch.Tensor,\n"
+        "        # num_layers x [num_tokens, hidden_size]\n"
+        "        aux_hidden_states: list[torch.Tensor] | None,\n"
+        "        # [num_reqs]\n"
+        "        num_sampled: torch.Tensor,\n"
+        "        # [num_reqs]\n"
+        "        num_rejected: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        last_sampled: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        next_prefill_tokens: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        temperature: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        seeds: torch.Tensor,\n"
+        "        num_tokens_across_dp: torch.Tensor | None = None,\n"
+        "        dummy_run: bool = False,\n"
+        "        skip_attn_for_dummy_run: bool = False,\n"
+        "        mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,\n"
+        "        is_profile: bool = False,\n"
+        "    ) -> torch.Tensor:\n"
+        "        num_tokens = input_batch.num_tokens_after_padding\n"
+    )
+    speculator_signature_new = (
+        "    def propose(\n"
+        "        self,\n"
+        "        input_batch: InputBatch,\n"
+        "        attn_metadata: dict[str, Any],\n"
+        "        slot_mappings: dict[str, torch.Tensor],\n"
+        "        # [num_tokens, hidden_size]\n"
+        "        last_hidden_states: torch.Tensor,\n"
+        "        # num_layers x [num_tokens, hidden_size]\n"
+        "        aux_hidden_states: list[torch.Tensor] | None,\n"
+        "        # [num_reqs]\n"
+        "        num_sampled: torch.Tensor,\n"
+        "        # [num_reqs]\n"
+        "        num_rejected: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        last_sampled: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        next_prefill_tokens: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        temperature: torch.Tensor,\n"
+        "        # [max_num_reqs]\n"
+        "        seeds: torch.Tensor,\n"
+        "        num_tokens_across_dp: torch.Tensor | None = None,\n"
+        "        dummy_run: bool = False,\n"
+        "        skip_attn_for_dummy_run: bool = False,\n"
+        "        mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,\n"
+        "        is_profile: bool = False,\n"
+        "        num_speculative_tokens: int | None = None,\n"
+        "    ) -> torch.Tensor:\n"
+        "        runtime_num_spec_tokens = (\n"
+        "            self.num_speculative_steps\n"
+        "            if num_speculative_tokens is None\n"
+        "            else num_speculative_tokens\n"
+        "        )\n"
+        "        if isinstance(runtime_num_spec_tokens, bool) or (\n"
+        "            runtime_num_spec_tokens not in (0, self.num_speculative_steps)\n"
+        "        ):\n"
+        "            raise ValueError(\n"
+        '                "Autoregressive speculator runtime K must be 0 or the "\n'
+        '                f"configured maximum {self.num_speculative_steps}; "\n'
+        '                f"got {runtime_num_spec_tokens}."\n'
+        "            )\n"
+        "\n"
+        "        num_tokens = input_batch.num_tokens_after_padding\n"
+    )
+
+    speculator_k0_old = (
+        "            self._prefill(\n"
+        "                num_reqs,\n"
+        "                prefill_batch_desc.num_tokens,\n"
+        "                attn_metadata,\n"
+        "                slot_mappings,\n"
+        "                num_tokens_across_dp=num_tokens_across_dp,\n"
+        "                cudagraph_runtime_mode=prefill_batch_desc.cg_mode,\n"
+        "                mm_inputs=mm_inputs,\n"
+        "            )\n"
+        "\n"
+        "        if self.num_speculative_steps == 1:\n"
+        "            # Early exit.\n"
+        "            return self.draft_tokens[:num_reqs, :1]\n"
+        "\n"
+        "        # Prepare the inputs for the decode steps.\n"
+        "        prepare_decode_inputs(\n"
+    )
+    speculator_k0_new = (
+        "            self._prefill(\n"
+        "                num_reqs,\n"
+        "                prefill_batch_desc.num_tokens,\n"
+        "                attn_metadata,\n"
+        "                slot_mappings,\n"
+        "                num_tokens_across_dp=num_tokens_across_dp,\n"
+        "                cudagraph_runtime_mode=prefill_batch_desc.cg_mode,\n"
+        "                mm_inputs=mm_inputs,\n"
+        "            )\n"
+        "\n"
+        "        if runtime_num_spec_tokens == 0:\n"
+        "            # The first pass advances external Eagle state; publish no drafts.\n"
+        "            return self.draft_tokens[:num_reqs, :0]\n"
+        "\n"
+        "        if self.num_speculative_steps == 1:\n"
+        "            # Early exit.\n"
+        "            return self.draft_tokens[:num_reqs, :1]\n"
+        "\n"
+        "        # Prepare the inputs for the decode steps.\n"
+        "        prepare_decode_inputs(\n"
+    )
+
+    v1_execute_old = (
+        "    @torch.inference_mode()\n"
+        "    def execute_model(\n"
+        "        self,\n"
+        '        scheduler_output: "SchedulerOutput",\n'
+        "        intermediate_tensors: IntermediateTensors | None = None,\n"
+        "    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:\n"
+        "        if self.execute_model_state is not None:\n"
+        "            raise RuntimeError(\n"
+        '                "State error: sample_tokens() must be called "\n'
+        '                "after execute_model() returns None."\n'
+        "            )\n"
+        "\n"
+        "        if self.routed_experts_initialized:\n"
+    )
+    v1_execute_new = (
+        "    @torch.inference_mode()\n"
+        "    def execute_model(\n"
+        "        self,\n"
+        '        scheduler_output: "SchedulerOutput",\n'
+        "        intermediate_tensors: IntermediateTensors | None = None,\n"
+        "    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:\n"
+        "        if self.execute_model_state is not None:\n"
+        "            raise RuntimeError(\n"
+        '                "State error: sample_tokens() must be called "\n'
+        '                "after execute_model() returns None."\n'
+        "            )\n"
+        "\n"
+        "        tail_gate_mode = getattr(\n"
+        '            self.speculative_config, "sd_tail_gate_mode", "off"\n'
+        "        )\n"
+        '        if tail_gate_mode != "off":\n'
+        "            runtime_num_spec_tokens = (\n"
+        "                scheduler_output.num_spec_tokens_to_schedule\n"
+        "            )\n"
+        "            tail_gate_metrics = getattr(\n"
+        '                self, "_nrl_tail_gate_metrics", None\n'
+        "            )\n"
+        "            if tail_gate_metrics is None:\n"
+        "                tail_gate_metrics = {}\n"
+        "                self._nrl_tail_gate_metrics = tail_gate_metrics\n"
+        "            effective_runtime_k = (\n"
+        "                self.num_spec_tokens\n"
+        "                if runtime_num_spec_tokens is None\n"
+        "                else runtime_num_spec_tokens\n"
+        "            )\n"
+        "            tail_gate_updates = {\n"
+        '                "vllm:spec_decode_tail_gate_decisions": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_enabled_steps": float(\n'
+        "                    effective_runtime_k > 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
+        "                    effective_runtime_k == 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_activations": float(\n'
+        "                    scheduler_output.tail_gate_just_activated\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_decode_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_mean_sequence_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_mean_sequence_length\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_count": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_expected_accept_length\n"
+        "                ),\n"
+        "            }\n"
+        "            tail_gate_state = scheduler_output.tail_gate_state.lower()\n"
+        "            if tail_gate_state in (\n"
+        '                "ramping_off",\n'
+        '                "armed_off",\n'
+        '                "on_latched",\n'
+        "            ):\n"
+        "                tail_gate_updates[\n"
+        '                    f"vllm:spec_decode_tail_gate_{tail_gate_state}_steps"\n'
+        "                ] = 1.0\n"
+        "            for metric_name, metric_value in tail_gate_updates.items():\n"
+        "                tail_gate_metrics[metric_name] = (\n"
+        "                    tail_gate_metrics.get(metric_name, 0.0) + metric_value\n"
+        "                )\n"
+        "\n"
+        "        if self.routed_experts_initialized:\n"
+    )
+
+    patch_specs = (
+        ("config/speculative.py", ((config_old, config_new),)),
+        (
+            "v1/core/sched/output.py",
+            ((scheduler_output_old, scheduler_output_new),),
+        ),
+        (
+            "v1/worker/gpu/model_runner.py",
+            (
+                (v2_execute_old, v2_execute_new),
+                (v2_state_old, v2_state_new),
+                (v2_sample_state_old, v2_sample_state_new),
+                (v2_proposal_old, v2_proposal_new),
+                (v2_execute_state_old, v2_execute_state_new),
+            ),
+        ),
+        (
+            "v1/worker/gpu/spec_decode/autoregressive/speculator.py",
+            (
+                (speculator_signature_old, speculator_signature_new),
+                (speculator_k0_old, speculator_k0_new),
+            ),
+        ),
+        ("v1/worker/gpu_model_runner.py", ((v1_execute_old, v1_execute_new),)),
+    )
+    file_paths = {
+        relative_path: _get_vllm_file(relative_path) for relative_path, _ in patch_specs
+    }
+
+    with _locked_file_patches(list(file_paths.values())) as (contents, write_back):
+        patched_contents = {}
+        changed_paths = set()
+        for relative_path, replacements in patch_specs:
+            file_path = file_paths[relative_path]
+            content = contents[file_path]
+            for old_snippet, new_snippet in replacements:
+                old_count = content.count(old_snippet)
+                new_count = content.count(new_snippet)
+                if old_count == 1 and new_count == 0:
+                    content = content.replace(old_snippet, new_snippet, 1)
+                    changed_paths.add(file_path)
+                elif old_count == 0 and new_count == 1:
+                    continue
+                else:
+                    raise RuntimeError(
+                        "Could not apply the runtime tail-gating patch to "
+                        f"{file_path}; the vLLM 0.24 source layout changed."
+                    )
+            patched_contents[file_path] = content
+
+        for file_path in sorted(changed_paths):
+            write_back(file_path, patched_contents[file_path])
+
+    if changed_paths:
+        logger.info("Successfully patched vLLM 0.24 runtime tail gating.")
+    else:
+        logger.info("vLLM 0.24 runtime tail-gating patch already applied.")
+
+
 def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
     """Wrap a vLLM CUDA-graph dispatcher with cumulative coverage counters."""
     if getattr(dispatcher_cls, "_nrl_cudagraph_dispatch_metrics_installed", False):
@@ -1062,6 +1684,8 @@ def _apply_vllm_patches(
         _patch_vllm_cudagraph_dispatch_metrics(patch_logger)
 
     if speculative_config:
+        if speculative_config.get("sd_tail_gate_mode", "off") != "off":
+            _patch_vllm_runtime_tail_gating(patch_logger)
         _patch_vllm_piecewise_specdec_cudagraph_alignment(patch_logger)
         _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
         _patch_vllm_online_eagle_head_ownership(patch_logger)

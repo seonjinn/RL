@@ -3,6 +3,7 @@
 import sys
 from enum import Enum
 from pathlib import Path
+from textwrap import dedent, indent
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -924,21 +925,382 @@ def test_cudagraph_dispatch_metrics_source_patch_is_idempotent(
     assert manager.read_text() == manager_patched
 
 
+def _write_vllm_024_tail_gate_sources(tmp_path: Path) -> dict[str, Path]:
+    sources = {
+        "config/speculative.py": dedent(
+            '''\
+                # dynamic speculative decoding control
+                num_speculative_tokens_per_batch_size: list[tuple[int, int, int]] | None = None
+                """Batch-size schedule used to dynamically choose speculative-token count.
+
+                Each entry is ``(range_start, range_end, num_speculative_tokens)`` with an
+                inclusive batch-size range.
+                """
+
+                # params generated in the post-init stage
+            '''
+        ),
+        "v1/core/sched/output.py": dedent(
+            """\
+                # Dynamic speculative decoding: optimal K chosen by scheduler.
+                # Number of spec tokens to schedule for the next step.
+                num_spec_tokens_to_schedule: int = 0
+
+                @classmethod
+                def make_empty(cls) -> "SchedulerOutput":
+            """
+        ),
+        "v1/worker/gpu/model_runner.py": dedent(
+            """\
+                @torch.inference_mode()
+                def execute_model(
+                    self,
+                    scheduler_output: SchedulerOutput,
+                    intermediate_tensors: IntermediateTensors | None = None,
+                    dummy_run: bool = False,
+                    skip_attn_for_dummy_run: bool = False,
+                    is_profile: bool = False,
+                ) -> ModelRunnerOutput | IntermediateTensors | None:
+                    if not dummy_run:
+            """
+        )
+        + dedent(
+            """\
+                    finished_req_ids = scheduler_output.finished_req_ids
+                    self.execute_model_state = ExecuteModelState(
+                        input_batch=input_batch,
+                        attn_metadata=attn_metadata,
+                        slot_mappings_by_layer=slot_mappings_by_layer,
+                        hidden_states=hidden_states,
+                        aux_hidden_states=aux_hidden_states,
+                        finished_req_ids=finished_req_ids,
+                    )
+            """
+        )
+        + dedent(
+            """\
+                    input_batch = self.execute_model_state.input_batch
+                    attn_metadata = self.execute_model_state.attn_metadata
+                    slot_mappings_by_layer = self.execute_model_state.slot_mappings_by_layer
+                    hidden_states = self.execute_model_state.hidden_states
+                    aux_hidden_states = self.execute_model_state.aux_hidden_states
+                    finished_req_ids = self.execute_model_state.finished_req_ids
+                    self.execute_model_state = None
+            """
+        )
+        + dedent(
+            """\
+                        draft_tokens = self.speculator.propose(
+                            input_batch,
+                            attn_metadata,
+                            slot_mappings_by_layer,
+                            spec_hidden_states,
+                            aux_hidden_states,
+                            num_sampled,
+                            num_rejected,
+                            self.req_states.last_sampled_tokens,
+                            self.req_states.next_prefill_tokens,
+                            self.sampler.sampling_states.temperature.gpu,
+                            self.sampler.sampling_states.seeds.gpu,
+                            mm_inputs=mm_inputs,
+                        )
+                        self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
+
+                    if self.num_speculative_steps > 0:
+                        # Spec-decode and diffusion LLMs both use draft tokens but the latter does
+                        # not have a speculator (i.e. self.speculator is None)
+                        self.draft_tokens_handler.set_draft_tokens(
+                            input_batch,
+                            self.req_states.draft_tokens[input_batch.idx_mapping],
+                        )
+            """
+        )
+        + dedent(
+            """\
+                class ExecuteModelState(NamedTuple):
+                    input_batch: InputBatch
+                    attn_metadata: dict[str, Any] | None
+                    slot_mappings_by_layer: dict[str, torch.Tensor] | None
+                    hidden_states: torch.Tensor | None
+                    aux_hidden_states: list[torch.Tensor] | None
+                    finished_req_ids: set[str]
+            """
+        ),
+        "v1/worker/gpu/spec_decode/autoregressive/speculator.py": dedent(
+            """\
+                def propose(
+                    self,
+                    input_batch: InputBatch,
+                    attn_metadata: dict[str, Any],
+                    slot_mappings: dict[str, torch.Tensor],
+                    # [num_tokens, hidden_size]
+                    last_hidden_states: torch.Tensor,
+                    # num_layers x [num_tokens, hidden_size]
+                    aux_hidden_states: list[torch.Tensor] | None,
+                    # [num_reqs]
+                    num_sampled: torch.Tensor,
+                    # [num_reqs]
+                    num_rejected: torch.Tensor,
+                    # [max_num_reqs]
+                    last_sampled: torch.Tensor,
+                    # [max_num_reqs]
+                    next_prefill_tokens: torch.Tensor,
+                    # [max_num_reqs]
+                    temperature: torch.Tensor,
+                    # [max_num_reqs]
+                    seeds: torch.Tensor,
+                    num_tokens_across_dp: torch.Tensor | None = None,
+                    dummy_run: bool = False,
+                    skip_attn_for_dummy_run: bool = False,
+                    mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+                    is_profile: bool = False,
+                ) -> torch.Tensor:
+                    num_tokens = input_batch.num_tokens_after_padding
+            """
+        )
+        + dedent(
+            """\
+                    self.draft_max_seq_len = min(
+                        max_seq_len + self.num_speculative_steps, self.max_model_len
+                    )
+            """
+        )
+        + dedent(
+            """\
+                        self._prefill(
+                            num_reqs,
+                            prefill_batch_desc.num_tokens,
+                            attn_metadata,
+                            slot_mappings,
+                            num_tokens_across_dp=num_tokens_across_dp,
+                            cudagraph_runtime_mode=prefill_batch_desc.cg_mode,
+                            mm_inputs=mm_inputs,
+                        )
+
+                    if self.num_speculative_steps == 1:
+                        # Early exit.
+                        return self.draft_tokens[:num_reqs, :1]
+
+                    # Prepare the inputs for the decode steps.
+                    prepare_decode_inputs(
+            """
+        )
+        + dedent(
+            """\
+                    # Generate the remaining num_speculative_steps - 1 draft tokens.
+                    self._multi_step_decode(
+                        num_reqs,
+                        dummy_run and skip_attn_for_dummy_run,
+                        decode_batch_desc,
+                        num_tokens_across_dp,
+                    )
+
+                    return self.draft_tokens[:num_reqs]
+            """
+        ),
+        "v1/worker/gpu_model_runner.py": dedent(
+            """\
+                @torch.inference_mode()
+                def execute_model(
+                    self,
+                    scheduler_output: "SchedulerOutput",
+                    intermediate_tensors: IntermediateTensors | None = None,
+                ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:
+                    if self.execute_model_state is not None:
+                        raise RuntimeError(
+                            "State error: sample_tokens() must be called "
+                            "after execute_model() returns None."
+                        )
+
+                    if self.routed_experts_initialized:
+            """
+        ),
+    }
+    for relative_path in (
+        "config/speculative.py",
+        "v1/core/sched/output.py",
+        "v1/worker/gpu_model_runner.py",
+    ):
+        sources[relative_path] = indent(sources[relative_path], "    ")
+    v2_source, execute_state = sources["v1/worker/gpu/model_runner.py"].split(
+        "class ExecuteModelState", 1
+    )
+    v2_execute, v2_body = v2_source.split(
+        "finished_req_ids = scheduler_output.finished_req_ids", 1
+    )
+    sources["v1/worker/gpu/model_runner.py"] = (
+        indent(v2_execute, "    ")
+        + indent(
+            "finished_req_ids = scheduler_output.finished_req_ids" + v2_body,
+            "        ",
+        )
+        + "class ExecuteModelState"
+        + execute_state
+    )
+    speculator_source = sources[
+        "v1/worker/gpu/spec_decode/autoregressive/speculator.py"
+    ]
+    speculator_signature, speculator_body = speculator_source.split(
+        "self.draft_max_seq_len", 1
+    )
+    sources["v1/worker/gpu/spec_decode/autoregressive/speculator.py"] = indent(
+        speculator_signature, "    "
+    ) + indent("self.draft_max_seq_len" + speculator_body, "        ")
+    paths = {}
+    for relative_path, source in sources.items():
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+        paths[relative_path] = path
+    return paths
+
+
+def _install_tail_gate_source_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Path]:
+    paths = _write_vllm_024_tail_gate_sources(tmp_path)
+    monkeypatch.setattr(
+        patches, "_get_vllm_file", lambda relative_path: str(paths[relative_path])
+    )
+    return paths
+
+
+def test_runtime_tail_gate_patch_applies_vllm_024_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    config = paths["config/speculative.py"].read_text()
+    assert 'sd_tail_gate_mode: str = "off"' in config
+    assert "sd_tail_gate_threshold: int | None = None" in config
+    assert "sd_tail_gate_consecutive_checks: int = 10" in config
+    assert "sd_tail_gate_margin: float = 0.05" in config
+    assert "sd_tail_gate_config_path: str | None = None" in config
+    assert 'sd_tail_gate_off_mode: str = "advance_only"' in config
+
+    scheduler_output = paths["v1/core/sched/output.py"].read_text()
+    assert scheduler_output.count("num_spec_tokens_to_schedule: int = 0") == 1
+    for field in (
+        "tail_gate_state",
+        "tail_gate_tick",
+        "tail_gate_active_requests",
+        "tail_gate_decode_active_requests",
+        "tail_gate_mean_sequence_length",
+        "tail_gate_predicted_speedup_sum",
+        "tail_gate_predicted_speedup_count",
+        "tail_gate_expected_accept_length",
+        "tail_gate_just_activated",
+    ):
+        assert field in scheduler_output
+
+    model_runner = paths["v1/worker/gpu/model_runner.py"].read_text()
+    assert model_runner.index("runtime_num_spec_tokens") < model_runner.index(
+        "if not dummy_run:"
+    )
+    assert "runtime_num_spec_tokens not in" in model_runner
+    assert 'self.speculative_config.method not in ("eagle", "eagle3")' in model_runner
+    assert "self.speculative_config.use_eagle()" not in model_runner
+    assert "num_spec_tokens_to_schedule=runtime_num_spec_tokens" in model_runner
+    assert "self.execute_model_state.num_spec_tokens_to_schedule" in model_runner
+    assert "num_speculative_tokens=runtime_num_spec_tokens" in model_runner
+    assert "self.req_states.draft_tokens[input_batch.idx_mapping] = 0" in model_runner
+    assert "draft_tokens_for_handler" in model_runner
+    assert "_nrl_tail_gate_metrics" in model_runner
+    assert "vllm:spec_decode_tail_gate_decode_active_requests_sum" in model_runner
+
+    speculator = paths[
+        "v1/worker/gpu/spec_decode/autoregressive/speculator.py"
+    ].read_text()
+    assert "num_speculative_tokens: int | None = None" in speculator
+    assert "runtime_num_spec_tokens not in" in speculator
+    k0_branch = speculator.index("if runtime_num_spec_tokens == 0:")
+    assert speculator.index("self._prefill(") < k0_branch
+    assert k0_branch < speculator.index("prepare_decode_inputs(")
+    assert k0_branch < speculator.index("self._multi_step_decode(")
+    assert "return self.draft_tokens[:num_reqs, :0]" in speculator
+
+    v1_model_runner = paths["v1/worker/gpu_model_runner.py"].read_text()
+    assert "_nrl_tail_gate_metrics" in v1_model_runner
+    assert "vllm:spec_decode_tail_gate_decode_active_requests_sum" in v1_model_runner
+    assert "num_spec_tokens_to_schedule" in v1_model_runner
+    assert "propose_draft_token_ids" not in v1_model_runner
+
+
+def test_runtime_tail_gate_patch_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+    patched = {relative_path: path.read_text() for relative_path, path in paths.items()}
+
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    assert {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    } == (patched)
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "old_anchor"),
+    [
+        ("config/speculative.py", "# params generated in the post-init stage"),
+        (
+            "v1/core/sched/output.py",
+            '@classmethod\n    def make_empty(cls) -> "SchedulerOutput":',
+        ),
+        ("v1/worker/gpu/model_runner.py", "if not dummy_run:"),
+        (
+            "v1/worker/gpu/spec_decode/autoregressive/speculator.py",
+            "if self.num_speculative_steps == 1:",
+        ),
+        ("v1/worker/gpu_model_runner.py", "if self.routed_experts_initialized:"),
+    ],
+)
+def test_runtime_tail_gate_patch_validates_all_sources_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_path: str,
+    old_anchor: str,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    changed_source = (
+        paths[changed_path].read_text().replace(old_anchor, f"changed {old_anchor}", 1)
+    )
+    assert changed_source != paths[changed_path].read_text()
+    paths[changed_path].write_text(changed_source)
+    original = {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    }
+
+    with pytest.raises(RuntimeError, match="vLLM 0.24 source layout changed"):
+        patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    assert {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    } == (original)
+
+
 @pytest.mark.parametrize(
     (
         "speculative_config",
         "expect_specdec_patches",
         "expect_probabilistic_patches",
         "expect_draft_cg_patch",
+        "expect_tail_gate_patch",
     ),
     [
-        (None, False, False, False),
-        ({}, False, False, False),
-        ({"method": "eagle3"}, True, False, False),
+        (None, False, False, False, False),
+        ({}, False, False, False, False),
+        ({"method": "eagle3"}, True, False, False, False),
         (
             {"method": "eagle3", "draft_sample_method": "probabilistic"},
             True,
             True,
+            False,
             False,
         ),
         (
@@ -950,8 +1312,16 @@ def test_cudagraph_dispatch_metrics_source_patch_is_idempotent(
             True,
             False,
             False,
+            False,
         ),
-        ({"method": "draft_model"}, True, False, True),
+        ({"method": "draft_model"}, True, False, True, False),
+        (
+            {"method": "eagle3", "sd_tail_gate_mode": "threshold"},
+            True,
+            False,
+            False,
+            True,
+        ),
     ],
 )
 def test_apply_patches_only_installs_required_specdec_patches(
@@ -960,6 +1330,7 @@ def test_apply_patches_only_installs_required_specdec_patches(
     expect_specdec_patches: bool,
     expect_probabilistic_patches: bool,
     expect_draft_cg_patch: bool,
+    expect_tail_gate_patch: bool,
 ) -> None:
     logger = MagicMock()
     vllm_module = ModuleType("vllm")
@@ -1007,6 +1378,13 @@ def test_apply_patches_only_installs_required_specdec_patches(
         draft_cg_patch,
         raising=False,
     )
+    tail_gate_patch = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_patch_vllm_runtime_tail_gating",
+        tail_gate_patch,
+        raising=False,
+    )
     if expect_draft_cg_patch:
         monkeypatch.setenv("NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH", "true")
     patches._apply_vllm_patches(
@@ -1028,6 +1406,10 @@ def test_apply_patches_only_installs_required_specdec_patches(
         draft_cg_patch.assert_called_once_with(logger)
     else:
         draft_cg_patch.assert_not_called()
+    if expect_tail_gate_patch:
+        tail_gate_patch.assert_called_once_with(logger)
+    else:
+        tail_gate_patch.assert_not_called()
     if expect_probabilistic_patches:
         probabilistic_guard.assert_called_once_with(logger)
         parallel_probabilistic_temperature_patch.assert_called_once_with(logger)
