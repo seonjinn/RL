@@ -1111,6 +1111,10 @@ def test_runtime_tail_gate_patch_applies_vllm_024_contract(
     assert "_nrl_tail_gate_metrics" in model_runner
     assert "vllm:spec_decode_tail_gate_activation_batch_sum" in model_runner
     assert "vllm:spec_decode_tail_gate_activation_sequence_length_sum" in model_runner
+    assert "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum" in model_runner
+    assert (
+        "vllm:spec_decode_tail_gate_activation_predicted_speedup_count" in model_runner
+    )
     assert "vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps" in model_runner
     assert "vllm:spec_decode_tail_gate_decode_active_requests_sum" in model_runner
 
@@ -1130,6 +1134,13 @@ def test_runtime_tail_gate_patch_applies_vllm_024_contract(
     assert "vllm:spec_decode_tail_gate_activation_batch_sum" in v1_model_runner
     assert (
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum" in v1_model_runner
+    )
+    assert (
+        "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum" in v1_model_runner
+    )
+    assert (
+        "vllm:spec_decode_tail_gate_activation_predicted_speedup_count"
+        in v1_model_runner
     )
     assert "vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps" in v1_model_runner
     assert "vllm:spec_decode_tail_gate_decode_active_requests_sum" in v1_model_runner
@@ -1213,6 +1224,21 @@ def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_events_and_runtime_k(
             )
             == 0.0
         )
+        assert (
+            metrics.get(
+                "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum", 0.0
+            )
+            == 0.0
+        )
+        assert (
+            metrics.get(
+                "vllm:spec_decode_tail_gate_activation_predicted_speedup_count",
+                0.0,
+            )
+            == 0.0
+        )
+        assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_sum"] == 1.25
+        assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_count"] == 1.0
         assert metrics["vllm:spec_decode_tail_gate_k_0_steps"] == 1.0
 
         with pytest.raises(StopAfterTelemetry):
@@ -1223,6 +1249,16 @@ def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_events_and_runtime_k(
         assert (
             metrics["vllm:spec_decode_tail_gate_activation_sequence_length_sum"] == 41.5
         )
+        assert (
+            metrics["vllm:spec_decode_tail_gate_activation_predicted_speedup_sum"]
+            == 1.25
+        )
+        assert (
+            metrics["vllm:spec_decode_tail_gate_activation_predicted_speedup_count"]
+            == 1.0
+        )
+        assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_sum"] == 2.5
+        assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_count"] == 2.0
         assert metrics["vllm:spec_decode_tail_gate_k_0_steps"] == 1.0
         assert metrics["vllm:spec_decode_tail_gate_k_5_steps"] == 1.0
 
@@ -1234,6 +1270,16 @@ def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_events_and_runtime_k(
         assert (
             metrics["vllm:spec_decode_tail_gate_activation_sequence_length_sum"] == 41.5
         )
+        assert (
+            metrics["vllm:spec_decode_tail_gate_activation_predicted_speedup_sum"]
+            == 1.25
+        )
+        assert (
+            metrics["vllm:spec_decode_tail_gate_activation_predicted_speedup_count"]
+            == 1.0
+        )
+        assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_sum"] == 3.75
+        assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_count"] == 3.0
         assert metrics["vllm:spec_decode_tail_gate_k_5_steps"] == 2.0
 
 
