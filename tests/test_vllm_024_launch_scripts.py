@@ -11,6 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DYNAMICSD_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_eagle3_dynamicsd_step20.sh"
 )
+HF_PREWARM_LAUNCHER = (
+    REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_hf_snapshot_prewarm.sh"
+)
 SUBMISSIONS_HEADER = (
     "timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\t"
     "wandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\t"
@@ -184,6 +187,23 @@ def test_performance_launcher_uses_short_compute_node_tmpdir() -> None:
     )
 
     assert "TMPDIR=/tmp" in output
+
+
+def test_hf_snapshot_prewarm_matches_lyris_topology_and_dflash_checkpoint() -> None:
+    output = _run_script(
+        HF_PREWARM_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        EXPERIMENT_ROOT="/lustre/users/sna/experiments/dflash-prewarm",
+    )
+
+    assert "RedHatAI/Qwen3-30B-A3B-speculator.dflash" in output
+    assert "cache_dir=/lustre/users/sna/hf_home/hub" in output
+    assert "--nodes=1" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
 
 
 def test_performance_launcher_preserves_compute_visible_workdir() -> None:
@@ -457,12 +477,13 @@ def test_dynamicsd_launcher_qwen30_comparison_includes_all_methods() -> None:
         "suffix_k32",
         "pard_k5",
         "pard_k16",
+        "dflash_k15",
     ):
         assert f"contract-test-attempt-1-qwen30ba3b-{variant}" in output
     commands = [
         line for line in output.splitlines() if line.startswith("[DRY-RUN] command ")
     ]
-    assert len(commands) == 7
+    assert len(commands) == 8
     assert all(
         "policy.generation.vllm_kwargs.max_num_batched_tokens=32768" in command
         for command in commands
@@ -493,7 +514,7 @@ def test_dynamicsd_launcher_renders_suffix_k32() -> None:
     )
 
 
-@pytest.mark.parametrize("variant", ["eagle3_k5", "pard_k5"])
+@pytest.mark.parametrize("variant", ["eagle3_k5", "pard_k5", "dflash_k15"])
 def test_dynamicsd_launcher_renders_probabilistic_sampling_for_model_based_specdec(
     variant: str,
 ) -> None:
@@ -633,9 +654,38 @@ def test_dynamicsd_launcher_renders_qwen32_pard_with_target_recipe_topology() ->
     assert "grpo-qwen3-32b-4n4g.yaml" in output
     assert "speculative_config.method=draft_model" in output
     assert "speculative_config.num_speculative_tokens=5" in output
-    assert "speculative_config.draft_tensor_parallel_size=1" in output
+    assert "speculative_config.draft_tensor_parallel_size=2" in output
     assert "models--amd--PARD-Qwen3-0.6B" in output
     assert "cluster.segment_size=4" in output
+
+
+def test_dynamicsd_launcher_renders_qwen30_dflash_k15() -> None:
+    output = _dry_run_dynamicsd("qwen30ba3b", "dflash_k15")
+
+    assert "speculative_config.method=dflash" in output
+    assert "speculative_config.num_speculative_tokens=15" in output
+    assert "speculative_config.draft_tensor_parallel_size=1" in output
+    assert "speculative_config.attention_backend=FLASH_ATTN" in output
+    assert "models--RedHatAI--Qwen3-30B-A3B-speculator.dflash" in output
+    assert "snapshots/RESOLVED_FROM_REFS_MAIN" in output
+    assert "speculative_config.rejection_sample_method=standard" in output
+    assert "speculative_config.draft_sample_method=probabilistic" in output
+
+
+@pytest.mark.parametrize("model", ["qwen32b", "qwen235b", "all"])
+def test_dynamicsd_launcher_rejects_dflash_without_exact_checkpoint(
+    model: str,
+) -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        model,
+        "dflash_k15",
+    )
+
+    assert result.returncode == 2
+    assert "dflash_k15 only supports qwen30ba3b" in result.stderr
+    assert "qwen30ba3b-dflash_k15" not in result.stdout
 
 
 def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:

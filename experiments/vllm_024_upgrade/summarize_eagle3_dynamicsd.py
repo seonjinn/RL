@@ -36,6 +36,7 @@ SPECDEC_VARIANTS = frozenset(
         "pard_k5",
         "pard_k16",
         "suffix_k32",
+        "dflash_k15",
     }
 )
 SPECDEC_METRICS = frozenset({"acceptance_rate", "mean_acceptance_length"})

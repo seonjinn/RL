@@ -155,16 +155,20 @@ case "${VARIANT_SELECTION}" in
   all) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 dynamic) ;;
   low-k) variants=(eagle3_k1 eagle3_k2) ;;
   aggressive) variants=(eagle3_k7 eagle3_k9) ;;
-  compare) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 suffix_k32 pard_k5 pard_k16) ;;
-  baseline|eagle3_k1|eagle3_k2|eagle3_k5|eagle3_k7|eagle3_k9|dynamic|suffix_k32|pard_k5|pard_k16) variants=("${VARIANT_SELECTION}") ;;
+  compare) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 suffix_k32 pard_k5 pard_k16 dflash_k15) ;;
+  baseline|eagle3_k1|eagle3_k2|eagle3_k5|eagle3_k7|eagle3_k9|dynamic|suffix_k32|pard_k5|pard_k16|dflash_k15) variants=("${VARIANT_SELECTION}") ;;
   *)
-    echo "ERROR: variant must be all, low-k, aggressive, compare, baseline, eagle3_k1, eagle3_k2, eagle3_k5, eagle3_k7, eagle3_k9, dynamic, suffix_k32, pard_k5, or pard_k16" >&2
+    echo "ERROR: variant must be all, low-k, aggressive, compare, baseline, eagle3_k1, eagle3_k2, eagle3_k5, eagle3_k7, eagle3_k9, dynamic, suffix_k32, pard_k5, pard_k16, or dflash_k15" >&2
     exit 2
     ;;
 esac
 
 if [[ "${VARIANT_SELECTION}" == "compare" && "${MODEL_SELECTION}" != "qwen30ba3b" ]]; then
   echo "ERROR: compare currently supports only qwen30ba3b" >&2
+  exit 2
+fi
+if [[ "${VARIANT_SELECTION}" == "dflash_k15" && "${MODEL_SELECTION}" != "qwen30ba3b" ]]; then
+  echo "ERROR: dflash_k15 only supports qwen30ba3b" >&2
   exit 2
 fi
 
@@ -174,6 +178,9 @@ submit_one() {
   local recipe
   local draft_model
   local draft_k="${STATIC_K}"
+  local draft_tp=1
+  local dflash_cache
+  local dflash_revision
   local manifest_rejection_sample_method="not_applicable"
   local manifest_draft_sample_method="not_applicable"
   local resolved_max_num_batched_tokens="${MAX_NUM_BATCHED_TOKENS}"
@@ -219,9 +226,30 @@ submit_one() {
           ;;
         qwen32b)
           draft_model="${QWEN32_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
+          draft_tp=2
           ;;
         *)
           echo "ERROR: ${variant} does not have a qualified PARD checkpoint for ${model}" >&2
+          exit 2
+          ;;
+      esac
+      ;;
+    dflash_k15)
+      case "${model}" in
+        qwen30ba3b)
+          if [[ -n "${QWEN30_DFLASH_MODEL:-}" ]]; then
+            draft_model="${QWEN30_DFLASH_MODEL}"
+          else
+            dflash_cache="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-speculator.dflash"
+            dflash_revision="RESOLVED_FROM_REFS_MAIN"
+            if [[ -r "${dflash_cache}/refs/main" ]]; then
+              dflash_revision="$(<"${dflash_cache}/refs/main")"
+            fi
+            draft_model="${dflash_cache}/snapshots/${dflash_revision}"
+          fi
+          ;;
+        *)
+          echo "ERROR: ${variant} does not have a qualified DFlash checkpoint for ${model}" >&2
           exit 2
           ;;
       esac
@@ -275,6 +303,9 @@ submit_one() {
       ;;
     pard_k16)
       draft_k=16
+      ;;
+    dflash_k15)
+      draft_k=15
       ;;
   esac
 
@@ -354,11 +385,24 @@ submit_one() {
         "++policy.generation.vllm_kwargs.speculative_config.method=draft_model"
         "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
         "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
-        "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${draft_tp}"
         "++policy.generation.vllm_kwargs.speculative_config.parallel_drafting=true"
         "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${REJECTION_SAMPLE_METHOD}"
         "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
         "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true"
+      )
+      ;;
+    dflash_k15)
+      manifest_rejection_sample_method="${REJECTION_SAMPLE_METHOD}"
+      manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
+      overrides+=(
+        "++policy.generation.vllm_kwargs.speculative_config.method=dflash"
+        "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
+        "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+        "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN"
+        "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${REJECTION_SAMPLE_METHOD}"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
       )
       ;;
     *)
