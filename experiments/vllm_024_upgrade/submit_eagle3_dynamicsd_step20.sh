@@ -22,6 +22,7 @@ NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
 TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-}"
 MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
+MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -35,6 +36,11 @@ case "${DRAFT_SAMPLE_METHOD}" in
     exit 2
     ;;
 esac
+if [[ -n "${MAX_CUDAGRAPH_CAPTURE_SIZE}" \
+  && ! "${MAX_CUDAGRAPH_CAPTURE_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: MAX_CUDAGRAPH_CAPTURE_SIZE must be a positive integer" >&2
+  exit 2
+fi
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -247,6 +253,11 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
+  if [[ -n "${MAX_CUDAGRAPH_CAPTURE_SIZE}" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${MAX_CUDAGRAPH_CAPTURE_SIZE}"
+    )
+  fi
   if [[ -n "${NUM_PROMPTS_PER_STEP}" ]]; then
     overrides+=("grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP}")
   fi
@@ -391,7 +402,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_cudagraph_capture_size\tcommand'
       if [[ -f "${manifest}" ]]; then
         local existing_manifest_header
         existing_manifest_header="$(head -n 1 "${manifest}")"
@@ -407,14 +418,14 @@ submit_one() {
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
         "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" \
         "${manifest_rejection_sample_method}" "${manifest_draft_sample_method}" \
-        "${command}" >> "${manifest}"
+        "${MAX_CUDAGRAPH_CAPTURE_SIZE}" "${command}" >> "${manifest}"
       ;;
     *)
       echo "ERROR: mode must be dry-run, test-only, or submit" >&2

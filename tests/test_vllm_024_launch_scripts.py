@@ -15,7 +15,8 @@ SUBMISSIONS_HEADER = (
     "timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\t"
     "wandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\t"
     "container_sha256\tmax_steps\tstatic_k\tdynamic_schedule\t"
-    "rejection_sample_method\tdraft_sample_method\tcommand"
+    "rejection_sample_method\tdraft_sample_method\tmax_cudagraph_capture_size\t"
+    "command"
 )
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
@@ -306,6 +307,36 @@ def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:
     assert "Qwen3-30B-A3B-Thinking-2507-speculator.eagle3" in output
 
 
+def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_limit() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "eagle3_k5",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="capture-coverage-test",
+        ATTEMPT_ID="attempt-1",
+        MAX_CUDAGRAPH_CAPTURE_SIZE="768",
+    )
+
+    assert "compilation_config.max_cudagraph_capture_size=768" in output
+
+
+def test_dynamicsd_launcher_rejects_invalid_cudagraph_capture_limit() -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "eagle3_k5",
+        MAX_CUDAGRAPH_CAPTURE_SIZE="not-an-integer",
+    )
+
+    assert result.returncode != 0
+    assert "MAX_CUDAGRAPH_CAPTURE_SIZE must be a positive integer" in result.stderr
+
+
 def test_dynamicsd_launcher_renders_aggressive_fixed_k_values() -> None:
     k7_output = _dry_run_dynamicsd("qwen32b", "eagle3_k7")
     k9_output = _dry_run_dynamicsd("qwen32b", "eagle3_k9")
@@ -454,7 +485,7 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     lines = manifest.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert lines[0].split("\t") == SUBMISSIONS_HEADER.split("\t")
-    assert all(len(line.split("\t")) == 19 for line in lines)
+    assert all(len(line.split("\t")) == 20 for line in lines)
     assert lines[1].split("\t")[16:18] == ["standard", "probabilistic"]
 
 
@@ -564,6 +595,7 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "max_steps",
         "static_k",
         "dynamic_schedule",
+        "max_cudagraph_capture_size",
         "command",
     ):
         assert field in source
