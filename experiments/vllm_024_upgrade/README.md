@@ -179,11 +179,24 @@ command and submission manifest. The validator and activation chart must read
 the local threshold from each manifest row rather than assume a global rollout
 count or a fixed threshold.
 
-The manifest also records `run_dir`, the resolved outer Slurm log, the
+The manifest also records `run_dir`, the resolved outer Slurm log, the initial
 `<job-id>-logs/ray-driver.log` path, the recursively synchronized Ray log
-directory, and the serialized `sbatch` launcher command. Mini validation
-requires all three log locations after W&B completion and scans the driver and
-Ray text logs recursively; the outer Slurm log alone is not sufficient.
+directory, and the serialized `sbatch` launcher command. `run_dir` is the log
+attempt root: validation discovers both `<job-id>-logs` and numeric requeue
+attempts named `<job-id>-<restart-count>-logs`, scans every attempt in numeric
+order, and requires driver and Ray evidence plus
+`.ray_logs_final_sync_complete` in the final attempt. `ray.sub` writes that
+marker only after the head and every worker acknowledge a synchronous final
+log copy. The outer Slurm log alone is not sufficient.
+
+Mini manifests use the strict extended schema, including
+`draft_sample_method`, all log paths, `launcher_command`, and the exact
+`env ... uv run examples/run_grpo.py ...` command. The production collector's
+base schema remains compatible with historical manifests that predate those
+mini-only fields. Missing historical draft-method provenance is rendered as
+`not_applicable` for baselines and `legacy_unspecified` for SpecDec; it is never
+silently mixed with newly recorded greedy or probabilistic cohorts. New mini
+submissions must use the current extended header and remain fail-closed.
 
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 

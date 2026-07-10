@@ -524,32 +524,49 @@ monitor-sidecar() {
 }
 monitor-sidecar &
 
-# Background process to sync ray logs every $RAY_LOG_SYNC_FREQUENCY seconds
+# Background process to sync Ray logs periodically and once more on driver exit.
+sync-ray-logs-once() {
+  local sync_status=0
+  mkdir -p "$LOG_DIR/ray" || return 1
+  if compgen -G "/tmp/ray/session_[0-9]*" > /dev/null; then
+    for session_dir in /tmp/ray/session_[0-9]*/; do
+      if [[ -d "\$session_dir/logs" ]]; then
+        session_name=\$(basename "\$session_dir")
+        mkdir -p "$LOG_DIR/ray/\$session_name/logs" || sync_status=1
+        if command -v rsync > /dev/null 2>&1; then
+          rsync -ah "\$session_dir/logs/" "$LOG_DIR/ray/\$session_name/logs/" || sync_status=1
+        else
+          cp -a "\$session_dir/logs/." "$LOG_DIR/ray/\$session_name/logs/" || sync_status=1
+        fi
+      fi
+    done
+  fi
+  return \$sync_status
+}
+
 log-sync-sidecar() {
   set +x
-  if [[ -z "$RAY_LOG_SYNC_FREQUENCY" ]]; then
-    echo "RAY_LOG_SYNC_FREQUENCY is not set, skipping log sync sidecar"
-    return
-  fi
-  mkdir -p $LOG_DIR/ray
+  elapsed=0
   while true; do
-    sleep $RAY_LOG_SYNC_FREQUENCY
-    if ls /tmp/ray/session_[0-9]* > /dev/null 2>&1; then
-      for session_dir in /tmp/ray/session_[0-9]*/; do
-        if [[ -d "\$session_dir/logs" ]]; then
-          session_name=\$(basename "\$session_dir")
-          mkdir -p "$LOG_DIR/ray/\$session_name"
-          if command -v rsync > /dev/null 2>&1; then
-            rsync -ahP "\$session_dir/logs/" "$LOG_DIR/ray/\$session_name/logs/" 2>/dev/null || true
-          else
-            cp -r "\$session_dir/logs" "$LOG_DIR/ray/\$session_name/"
-          fi
-        fi
-      done
+    if [[ -f "$LOG_DIR/.ray_logs_final_sync_requested" ]]; then
+      if sync-ray-logs-once; then
+        touch "$LOG_DIR/.ray_logs_final_sync_ack.head"
+      else
+        touch "$LOG_DIR/.ray_logs_final_sync_failed.head"
+      fi
+      break
     fi
     if [[ -f "$LOG_DIR/ENDED" ]]; then
       echo "Log sync sidecar terminating..."
       break
+    fi
+    sleep 1
+    elapsed=\$((elapsed + 1))
+    if [[ -n "$RAY_LOG_SYNC_FREQUENCY" ]] \
+      && [[ "$RAY_LOG_SYNC_FREQUENCY" =~ ^[1-9][0-9]*$ ]] \
+      && (( elapsed >= $RAY_LOG_SYNC_FREQUENCY )); then
+      sync-ray-logs-once || echo "[WARN] Periodic Ray log sync failed on head" >&2
+      elapsed=0
     fi
   done
 }
@@ -679,9 +696,28 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
 
   set +e
   bash "$DRIVER_COMMAND_FILE" > "$LOG_DIR/ray-driver.log" 2>&1
-  exit_code=\$?
-  set -e
-  exit \$exit_code
+  driver_exit_code=\$?
+  touch "$LOG_DIR/.ray_logs_final_sync_requested"
+  expected_sync_acks="$SLURM_JOB_NUM_NODES"
+  sync_deadline=\$((SECONDS + 180))
+  final_sync_complete=0
+  while (( SECONDS <= sync_deadline )); do
+    sync_acks=\$(find "$LOG_DIR" -maxdepth 1 -type f -name '.ray_logs_final_sync_ack.*' | wc -l)
+    if [[ "\$sync_acks" -eq "\$expected_sync_acks" ]]; then
+      final_sync_complete=1
+      break
+    fi
+    if compgen -G "$LOG_DIR/.ray_logs_final_sync_failed.*" > /dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ "\$final_sync_complete" -eq 1 ]]; then
+    touch "$LOG_DIR/.ray_logs_final_sync_complete"
+  else
+    echo "[ERROR] Final Ray log sync incomplete: \$sync_acks/\$expected_sync_acks acknowledgements" >&2
+  fi
+  exit "\$driver_exit_code"
 else
   # Interactive: keep the head container alive for user attachment via the attach
   # helper (a separate overlapping srun). sleep infinity is invisible to the
@@ -727,32 +763,50 @@ monitor-sidecar() {
 }
 monitor-sidecar &
 
-# Background process to sync ray logs every $RAY_LOG_SYNC_FREQUENCY seconds
+# Background process to sync Ray logs periodically and acknowledge final sync.
+sync-ray-logs-once() {
+  local sync_status=0
+  mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME" || return 1
+  if compgen -G "/tmp/ray/session_[0-9]*" > /dev/null; then
+    for session_dir in /tmp/ray/session_[0-9]*/; do
+      if [[ -d "\$session_dir/logs" ]]; then
+        session_name=\$(basename "\$session_dir")
+        destination="$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/logs"
+        mkdir -p "\$destination" || sync_status=1
+        if command -v rsync > /dev/null 2>&1; then
+          rsync -ah "\$session_dir/logs/" "\$destination/" || sync_status=1
+        else
+          cp -a "\$session_dir/logs/." "\$destination/" || sync_status=1
+        fi
+      fi
+    done
+  fi
+  return \$sync_status
+}
+
 log-sync-sidecar() {
   set +x
-  if [[ -z "$RAY_LOG_SYNC_FREQUENCY" ]]; then
-    echo "RAY_LOG_SYNC_FREQUENCY is not set, skipping log sync sidecar"
-    return
-  fi
-  mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME"
+  elapsed=0
   while true; do
-    sleep $RAY_LOG_SYNC_FREQUENCY
-    if ls /tmp/ray/session_[0-9]* > /dev/null 2>&1; then
-      for session_dir in /tmp/ray/session_[0-9]*/; do
-        if [[ -d "\$session_dir/logs" ]]; then
-          session_name=\$(basename "\$session_dir")
-          mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name"
-          if command -v rsync > /dev/null 2>&1; then
-            rsync -ahP "\$session_dir/logs/" "$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/logs/" 2>/dev/null || true
-          else
-            cp -r "\$session_dir/logs" "$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/"
-          fi
-        fi
-      done
+    if [[ -f "$LOG_DIR/.ray_logs_final_sync_requested" ]]; then
+      if sync-ray-logs-once; then
+        touch "$LOG_DIR/.ray_logs_final_sync_ack.worker-\$SLURM_PROCID"
+      else
+        touch "$LOG_DIR/.ray_logs_final_sync_failed.worker-\$SLURM_PROCID"
+      fi
+      break
     fi
     if [[ -f "$LOG_DIR/ENDED" ]]; then
       echo "Log sync sidecar terminating..."
       break
+    fi
+    sleep 1
+    elapsed=\$((elapsed + 1))
+    if [[ -n "$RAY_LOG_SYNC_FREQUENCY" ]] \
+      && [[ "$RAY_LOG_SYNC_FREQUENCY" =~ ^[1-9][0-9]*$ ]] \
+      && (( elapsed >= $RAY_LOG_SYNC_FREQUENCY )); then
+      sync-ray-logs-once || echo "[WARN] Periodic Ray log sync failed on worker \$SLURM_PROCID" >&2
+      elapsed=0
     fi
   done
 }

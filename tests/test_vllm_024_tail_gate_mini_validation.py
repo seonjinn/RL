@@ -20,12 +20,12 @@ import math
 import shutil
 import shlex
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import pytest
 
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
-    REQUIRED_MANIFEST_FIELDS,
+    MINI_REQUIRED_MANIFEST_FIELDS,
 )
 from experiments.vllm_024_upgrade.validate_mini_sync_grpo_tail_gate import main
 from experiments.vllm_024_upgrade.validate_mini_sync_grpo_tail_gate import (
@@ -55,10 +55,22 @@ class _FakeApi:
 
 
 def _mini_command(variant: str) -> str:
+    run_dir = f"qwen32b/{variant}"
+    wandb_run_id = f"run-{variant}"
     tokens = [
         "env",
         "VLLM_USE_V2_MODEL_RUNNER=1",
-        "/opt/nemo_rl_venv/bin/python",
+        "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true",
+        f"WANDB_RUN_ID={wandb_run_id}",
+        "WANDB_RUN_GROUP=mini-test",
+        "WANDB_RESUME=never",
+        f"NEMO_RL_VENV_DIR=/tmp/venvs/{variant}",
+        "NRL_FORCE_REBUILD_VENVS=true",
+        "PYTHONPATH=/repo",
+        f"TRITON_CACHE_DIR=/tmp/triton/{variant}",
+        f"TORCHINDUCTOR_CACHE_DIR=/tmp/inductor/{variant}",
+        "uv",
+        "run",
         "examples/run_grpo.py",
         "--config",
         "examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
@@ -66,14 +78,20 @@ def _mini_command(variant: str) -> str:
         "grpo.num_prompts_per_step=16",
         "grpo.num_generations_per_prompt=4",
         "checkpointing.enabled=false",
+        f"checkpointing.checkpoint_dir={run_dir}/checkpoints",
         "policy.train_global_batch_size=64",
         "policy.max_total_sequence_length=1024",
         "policy.generation.max_new_tokens=1024",
         "policy.generation.temperature=1.0",
         "policy.generation.top_p=1.0",
+        "policy.generation._output_max_model_len=1024",
+        "policy.generation.vllm_cfg.max_model_len=1056",
         "policy.generation.vllm_cfg.tensor_parallel_size=2",
         "policy.generation.vllm_cfg.expert_parallel_size=1",
         "policy.generation.vllm_cfg.enforce_eager=false",
+        "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true",
+        "policy.generation.vllm_cfg.vllm_metrics_logger_interval=0.5",
+        "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true",
         "++policy.generation.vllm_kwargs.max_num_batched_tokens=16384",
         "++policy.generation.vllm_kwargs.max_num_seqs=1024",
         "++policy.generation.vllm_kwargs.moe_backend=triton",
@@ -81,6 +99,12 @@ def _mini_command(variant: str) -> str:
         "cluster.gpus_per_node=4",
         "cluster.num_nodes=4",
         "cluster.segment_size=4",
+        "logger.wandb_enabled=true",
+        "logger.tensorboard_enabled=false",
+        "logger.wandb.project=nemorl-vllm024-tail-gated-mini-sync-grpo-pre-tyche",
+        f"logger.wandb.name={wandb_run_id}",
+        "++logger.wandb.entity=nvidia",
+        f"logger.log_dir={run_dir}/nemo_logs",
     ]
     if variant != "baseline_v2":
         tokens.extend(
@@ -111,16 +135,30 @@ def _mini_launcher_command(variant: str) -> str:
     return " ".join(
         [
             "env",
-            f"BASE_LOG_DIR={run_dir}",
+            "CONTAINER=/containers/nemo.sqsh",
+            "MOUNTS=/lustre:/lustre",
+            "CONTAINER_WORKDIR=/repo",
             shlex.quote(f"COMMAND={_mini_command(variant)}"),
+            f"BASE_LOG_DIR={run_dir}",
             "GPUS_PER_NODE=4",
+            "HF_HOME=/lustre/hf_home",
+            "PYTHONPATH=/repo",
+            "PYTHONDONTWRITEBYTECODE=1",
             "RAY_LOG_SYNC_FREQUENCY=60",
+            "TMPDIR=/tmp",
+            f"TRITON_CACHE_DIR=/tmp/triton/{variant}",
+            f"TORCHINDUCTOR_CACHE_DIR=/tmp/inductor/{variant}",
             "sbatch",
+            "--account=account",
+            "--partition=batch_block1",
             "--nodes=4",
             "--ntasks-per-node=1",
             "--exclusive",
+            "--time=02:00:00",
             "--segment=4",
+            f"--job-name=account-nemorl.tail-gate-qwen32b-{variant}",
             f"--output={run_dir}/slurm-%j.out",
+            "--comment=metrics",
             "/repo/ray.sub",
         ]
     )
@@ -179,7 +217,7 @@ def _metadata(variant: str) -> dict[str, str]:
         "launcher_command": _mini_launcher_command(variant),
         "command": _mini_command(variant),
     }
-    assert set(REQUIRED_MANIFEST_FIELDS).issubset(values)
+    assert set(MINI_REQUIRED_MANIFEST_FIELDS).issubset(values)
     return values
 
 
@@ -272,6 +310,7 @@ def _write_manifest(path: Path, rows: Iterable[dict[str, str]]) -> None:
             log_path.write_text(
                 "Training completed through policy step 2.\n", encoding="utf-8"
             )
+        (ray_driver_log.parent / ".ray_logs_final_sync_complete").touch()
 
 
 def _run_validator(
@@ -291,6 +330,14 @@ def _run_validator(
 
 def _manifest_path(manifest: Path, row: Mapping[str, str], field: str) -> Path:
     return manifest.parent / row[field]
+
+
+def _move_override_before_entrypoint(command: str) -> str:
+    tokens = shlex.split(command)
+    override = "grpo.max_num_steps=2"
+    tokens.remove(override)
+    tokens.insert(tokens.index("uv"), override)
+    return shlex.join(tokens)
 
 
 def test_mini_validator_exports_main() -> None:
@@ -566,6 +613,43 @@ def test_mini_validator_rejects_command_contract_mismatch_before_wandb_query(
     assert not output_dir.exists()
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda command: command.replace("uv run", "/usr/bin/true", 1),
+        lambda command: f"{command} unknown.override=true",
+        lambda command: f"{command} grpo.max_num_steps=2",
+        _move_override_before_entrypoint,
+    ],
+    ids=[
+        "wrong-executable",
+        "unknown-override",
+        "duplicate-override",
+        "malformed-order",
+    ],
+)
+def test_mini_validator_rejects_command_structure_bypasses_before_wandb_query(
+    tmp_path: Path, mutate: Callable[[str], str]
+) -> None:
+    rows = _cohort()
+    row = rows[0]
+    row["command"] = mutate(row["command"])
+    row["launcher_command"] = _mini_launcher_command(row["variant"]).replace(
+        shlex.quote(f"COMMAND={_mini_command(row['variant'])}"),
+        shlex.quote(f"COMMAND={row['command']}"),
+    )
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi({})
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="invalid mini command:baseline_v2"):
+        main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=api)
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
 def test_mini_validator_requires_nonempty_command_for_every_arm(tmp_path: Path) -> None:
     rows = _cohort()
     rows[1]["command"] = ""
@@ -575,7 +659,7 @@ def test_mini_validator_requires_nonempty_command_for_every_arm(tmp_path: Path) 
     api = _FakeApi(histories)
     _write_manifest(manifest, rows)
 
-    with pytest.raises(ValueError, match="missing manifest fields:command"):
+    with pytest.raises(ValueError, match="missing mini manifest fields:command"):
         main(
             ["--manifest", str(manifest), "--output-dir", str(output_dir)],
             api=api,
@@ -604,6 +688,71 @@ def test_mini_validator_rejects_launcher_command_mismatch_before_wandb_query(
     row = rows[0]
     assert old in row["launcher_command"]
     row["launcher_command"] = row["launcher_command"].replace(old, new)
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi({})
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="invalid mini launcher command:baseline_v2"):
+        main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=api)
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        " --nodes=8 --nodes=4",
+        " --account=other",
+        " unexpected-positional",
+    ],
+    ids=["options-after-ray-sub", "option-after-ray-sub", "positional-after-ray-sub"],
+)
+def test_mini_validator_rejects_tokens_after_ray_sub_before_wandb_query(
+    tmp_path: Path, suffix: str
+) -> None:
+    rows = _cohort()
+    rows[0]["launcher_command"] += suffix
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi({})
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="invalid mini launcher command:baseline_v2"):
+        main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=api)
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+def test_mini_validator_rejects_duplicate_or_unknown_sbatch_options_before_query(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    rows[0]["launcher_command"] = rows[0]["launcher_command"].replace(
+        "--nodes=4", "--nodes=8 --nodes=4 --unknown=value", 1
+    )
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi({})
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="invalid mini launcher command:baseline_v2"):
+        main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=api)
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+def test_mini_validator_rejects_conflicting_sbatch_option_after_ray_sub(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    rows[0]["launcher_command"] = rows[0]["launcher_command"].replace(
+        "--nodes=4", "--nodes=8", 1
+    )
+    rows[0]["launcher_command"] += " --nodes=4"
     manifest = tmp_path / "submissions.tsv"
     output_dir = tmp_path / "output"
     api = _FakeApi({})
@@ -675,9 +824,25 @@ def test_mini_validator_rejects_non_contract_or_capacity_threshold_before_query(
 def test_mini_validator_uses_manifest_wandb_url_for_each_run(tmp_path: Path) -> None:
     rows = _cohort()
     for row in rows:
+        old_command = row["command"]
         row["wandb_url"] = (
             "https://wandb.ai/manifest-entity/manifest-project/runs/"
             f"{row['wandb_run_id']}"
+        )
+        row["command"] = (
+            row["command"]
+            .replace(
+                "logger.wandb.project=nemorl-vllm024-tail-gated-mini-sync-grpo-pre-tyche",
+                "logger.wandb.project=manifest-project",
+            )
+            .replace(
+                "++logger.wandb.entity=nvidia",
+                "++logger.wandb.entity=manifest-entity",
+            )
+        )
+        row["launcher_command"] = row["launcher_command"].replace(
+            shlex.quote(f"COMMAND={old_command}"),
+            shlex.quote(f"COMMAND={row['command']}"),
         )
     histories = {row["wandb_run_id"]: _history(row) for row in rows}
     manifest = tmp_path / "submissions.tsv"
@@ -841,6 +1006,11 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
         ),
         (
             "ray_driver_log_path",
+            "RuntimeError: NCCL error: unhandled system error\n",
+            "nccl",
+        ),
+        (
+            "ray_driver_log_path",
             "ERROR: q-cache mismatch detected during replay\n",
             "q_cache",
         ),
@@ -912,6 +1082,11 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
         (
             "ray_log_dir",
             "CUDA graph fallback count: 2\n",
+            "cuda_graph_fallback",
+        ),
+        (
+            "ray_driver_log_path",
+            "RuntimeError: CUDA graph capture failed\n",
             "cuda_graph_fallback",
         ),
     ],
@@ -995,6 +1170,96 @@ def test_mini_validator_requires_at_least_one_recursive_ray_text_log(
     )
     assert result == 1
     assert threshold_row["reason"] == "mini_health_failed:log_empty:ray_log_dir"
+
+
+def test_mini_validator_scans_every_restart_attempt(tmp_path: Path) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    run_dir = manifest.parent / threshold["run_dir"]
+    restart_dir = run_dir / f"{threshold['job_id']}-1-logs"
+    restart_driver = restart_dir / "ray-driver.log"
+    restart_worker = restart_dir / "ray/session_2/logs/worker-2.err"
+    for log_path in (restart_driver, restart_worker):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("Training completed through policy step 2.\n")
+    (restart_dir / ".ray_logs_final_sync_complete").touch()
+    _manifest_path(manifest, threshold, "ray_driver_log_path").write_text(
+        "RuntimeError: NCCL error: unhandled system error\n", encoding="utf-8"
+    )
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == "mini_health_failed:logs:nccl"
+
+
+def test_mini_validator_requires_completion_marker_on_final_restart(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    run_dir = manifest.parent / threshold["run_dir"]
+    restart_dir = run_dir / f"{threshold['job_id']}-2-logs"
+    restart_driver = restart_dir / "ray-driver.log"
+    restart_worker = restart_dir / "ray/session_3/logs/worker-3.err"
+    for log_path in (restart_driver, restart_worker):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("Training completed through policy step 2.\n")
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == (
+        "mini_health_failed:log_missing:final_sync_marker"
+    )
+
+
+def test_mini_validator_requires_final_attempt_driver_and_ray_evidence(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    run_dir = manifest.parent / threshold["run_dir"]
+    restart_dir = run_dir / f"{threshold['job_id']}-3-logs"
+    restart_dir.mkdir(parents=True)
+    (restart_dir / ".ray_logs_final_sync_complete").touch()
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == (
+        "mini_health_failed:log_missing:ray_driver_log_path"
+    )
 
 
 def test_mini_validator_ignores_benign_log_mentions(tmp_path: Path) -> None:

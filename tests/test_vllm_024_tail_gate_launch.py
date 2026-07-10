@@ -346,7 +346,7 @@ def test_all_cohorts_enable_cuda_graph_and_vllm_metric_collection(
     assert "env VLLM_USE_V2_MODEL_RUNNER=" in output
     assert (
         "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
-        in output.split("/opt/nemo_rl_venv/bin/python", maxsplit=1)[0]
+        in output.split("uv run examples/run_grpo.py", maxsplit=1)[0]
     )
 
 
@@ -726,6 +726,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         assert expected in manifest_row["launcher_command"]
     assert "--gres" not in manifest_row["launcher_command"]
     assert manifest_row["command"]
+    assert "uv run examples/run_grpo.py" in manifest_row["command"]
     assert (
         manifest_row["roofline_config_sha256"]
         == hashlib.sha256(roofline.read_bytes()).hexdigest()

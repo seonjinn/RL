@@ -29,6 +29,7 @@ from typing import Iterable, Mapping, cast
 from urllib.parse import unquote, urlparse
 
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
+    MINI_REQUIRED_MANIFEST_FIELDS,
     REQUIRED_ROW_FIELDS,
     ComparisonRow,
     RunSummary,
@@ -107,8 +108,19 @@ MINI_ROW_FIELDS = (
     "mini_health_passed",
     *MINI_METRIC_KEYS,
 )
-MINI_COMMAND_ASSIGNMENTS = {
+MINI_COMMAND_ENV_ASSIGNMENTS: dict[str, str | None] = {
     "VLLM_USE_V2_MODEL_RUNNER": "1",
+    "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS": "true",
+    "WANDB_RUN_ID": None,
+    "WANDB_RUN_GROUP": None,
+    "WANDB_RESUME": "never",
+    "NEMO_RL_VENV_DIR": None,
+    "NRL_FORCE_REBUILD_VENVS": "true",
+    "PYTHONPATH": None,
+    "TRITON_CACHE_DIR": None,
+    "TORCHINDUCTOR_CACHE_DIR": None,
+}
+MINI_COMMAND_ASSIGNMENTS = {
     "grpo.max_num_steps": "2",
     "grpo.num_prompts_per_step": "16",
     "grpo.num_generations_per_prompt": "4",
@@ -118,44 +130,86 @@ MINI_COMMAND_ASSIGNMENTS = {
     "policy.generation.max_new_tokens": "1024",
     "policy.generation.temperature": "1.0",
     "policy.generation.top_p": "1.0",
+    "policy.generation._output_max_model_len": "1024",
+    "policy.generation.vllm_cfg.max_model_len": "1056",
     "policy.generation.vllm_cfg.tensor_parallel_size": "2",
     "policy.generation.vllm_cfg.expert_parallel_size": "1",
     "policy.generation.vllm_cfg.enforce_eager": "false",
-    "policy.generation.vllm_kwargs.max_num_batched_tokens": "16384",
-    "policy.generation.vllm_kwargs.max_num_seqs": "1024",
-    "policy.generation.vllm_kwargs.moe_backend": "triton",
-    "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode": (
+    "policy.generation.vllm_cfg.enable_vllm_metrics_logger": "true",
+    "policy.generation.vllm_cfg.vllm_metrics_logger_interval": "0.5",
+    "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS": (  # noqa: E501
+        "true"
+    ),
+    "++policy.generation.vllm_kwargs.max_num_batched_tokens": "16384",
+    "++policy.generation.vllm_kwargs.max_num_seqs": "1024",
+    "++policy.generation.vllm_kwargs.moe_backend": "triton",
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode": (
         "FULL_AND_PIECEWISE"
     ),
     "cluster.gpus_per_node": "4",
     "cluster.num_nodes": "4",
     "cluster.segment_size": "4",
+    "logger.wandb_enabled": "true",
+    "logger.tensorboard_enabled": "false",
+    "logger.wandb.project": None,
+    "logger.wandb.name": None,
+    "++logger.wandb.entity": None,
 }
 SPECDEC_COMMAND_ASSIGNMENTS = {
-    "policy.generation.vllm_kwargs.speculative_config.method": "eagle3",
-    "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens": "5",
-    "policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size": (
+    "++policy.generation.vllm_kwargs.speculative_config.method": "eagle3",
+    "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens": "5",
+    "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size": (  # noqa: E501
         "1"
     ),
-    "policy.generation.vllm_kwargs.speculative_config.rejection_sample_method": (
+    "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method": (
         "standard"
     ),
-    "policy.generation.vllm_kwargs.speculative_config.draft_sample_method": (
+    "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method": (
         "probabilistic"
     ),
 }
 THRESHOLD_COMMAND_ASSIGNMENTS = {
-    "policy.generation.vllm_kwargs.scheduler_cls": (
+    "++policy.generation.vllm_kwargs.scheduler_cls": (
         "nemo_rl.models.generation.vllm.tail_gate_scheduler.TailGatedScheduler"
     ),
-    "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_mode": ("threshold"),
-    "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_consecutive_checks": (
+    "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_mode": (
+        "threshold"
+    ),
+    "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_consecutive_checks": (  # noqa: E501
         "10"
     ),
-    "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_off_mode": (
+    "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_off_mode": (
         "advance_only"
     ),
 }
+MINI_LAUNCHER_ENV_ASSIGNMENTS: dict[str, str | None] = {
+    "CONTAINER": None,
+    "MOUNTS": "/lustre:/lustre",
+    "CONTAINER_WORKDIR": None,
+    "COMMAND": None,
+    "BASE_LOG_DIR": None,
+    "GPUS_PER_NODE": "4",
+    "HF_HOME": None,
+    "PYTHONPATH": None,
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RAY_LOG_SYNC_FREQUENCY": "60",
+    "TMPDIR": "/tmp",
+    "TRITON_CACHE_DIR": None,
+    "TORCHINDUCTOR_CACHE_DIR": None,
+}
+MINI_SBATCH_OPTIONS: dict[str, str | None] = {
+    "--account": None,
+    "--partition": None,
+    "--nodes": "4",
+    "--ntasks-per-node": "1",
+    "--exclusive": "",
+    "--time": None,
+    "--segment": "4",
+    "--job-name": None,
+    "--output": None,
+    "--comment": "metrics",
+}
+FINAL_SYNC_MARKER = ".ray_logs_final_sync_complete"
 TEXT_LOG_SUFFIXES = {".err", ".log", ".out", ".txt"}
 LOG_FAILURE_PATTERNS = (
     (
@@ -209,6 +263,8 @@ LOG_FAILURE_PATTERNS = (
         re.compile(
             r"(?:\bdistbackenderror\s*:.*\bnccl\b.*"
             r"\b(?:error|timed out|timeout|hang|hung|aborted)\b|"
+            r"^\s*runtimeerror\s*:\s*nccl error\s*:.*\b"
+            r"(?:unhandled system error|timed out|timeout|hang|hung|aborted)\b|"
             r"\bnccl\b.*\b(?:watchdog\s+timed out|timeout detected|"
             r"hang detected|hung|aborted)\b|\bwatchdog caught collective "
             r"operation timeout\b.*\bworknccl\b)",
@@ -227,7 +283,8 @@ LOG_FAILURE_PATTERNS = (
     (
         "cuda_graph_fallback",
         re.compile(
-            r"(?:\bcuda[ _]?graphs?\s+fallback\s+"
+            r"(?:^\s*runtimeerror\s*:\s*cuda[ _]?graph capture failed\b|"
+            r"\bcuda[ _]?graphs?\s+fallback\s+"
             r"(?:to eager|detected|used|occurred)\b|"
             r"\bcuda[ _]?graphs?\s+fallback count\s*[:=]\s*[1-9]\d*\b|"
             r"\buncaptured cuda[ _]?graphs?\b|"
@@ -273,14 +330,66 @@ def _wandb_run_path_from_url(url: str, *, variant: str, expected_run_id: str) ->
     return f"{entity}/{project}/{run_id}"
 
 
-def _command_assignment_values(tokens: list[str], key: str) -> list[str]:
-    return [
-        value
-        for token in tokens
-        if (normalized := token.removeprefix("++")).startswith(f"{key}=")
-        and normalized.split("=", maxsplit=1)[0] == key
-        for value in [normalized.split("=", maxsplit=1)[1]]
-    ]
+def _split_assignment(
+    token: str, *, allow_hydra_prefix: bool
+) -> tuple[str, str] | None:
+    candidate = token
+    if allow_hydra_prefix and candidate.startswith("++"):
+        candidate = candidate[2:]
+    if "=" not in candidate:
+        return None
+    name, value = candidate.split("=", maxsplit=1)
+    if not name or (not allow_hydra_prefix and not re.fullmatch(r"[A-Za-z_]\w*", name)):
+        return None
+    return name, value
+
+
+def _assignment_error(
+    assignments: Mapping[str, str],
+    expected: Mapping[str, str | None],
+) -> str | None:
+    if unknown := sorted(assignments.keys() - expected.keys()):
+        return f"unknown:{unknown[0]}"
+    if missing := sorted(expected.keys() - assignments.keys()):
+        return f"missing:{missing[0]}"
+    for name, expected_value in expected.items():
+        actual = assignments[name]
+        if (expected_value is None and not actual) or (
+            expected_value is not None and actual != expected_value
+        ):
+            return name
+    return None
+
+
+def _wandb_identity(row: Mapping[str, str]) -> tuple[str, str]:
+    url = row.get("wandb_url", "")
+    if not url:
+        return DEFAULT_WANDB_ENTITY, DEFAULT_WANDB_PROJECT
+    parts = [unquote(part) for part in urlparse(url).path.split("/") if part]
+    if len(parts) == 4 and parts[2] == "runs":
+        return parts[0], parts[1]
+    return "", ""
+
+
+def _expected_command_assignments(row: Mapping[str, str]) -> dict[str, str | None]:
+    wandb_entity, wandb_project = _wandb_identity(row)
+    expected: dict[str, str | None] = {
+        **MINI_COMMAND_ASSIGNMENTS,
+        "checkpointing.checkpoint_dir": f"{row['run_dir']}/checkpoints",
+        "logger.wandb.project": wandb_project,
+        "logger.wandb.name": row["wandb_run_id"],
+        "++logger.wandb.entity": wandb_entity,
+        "logger.log_dir": f"{row['run_dir']}/nemo_logs",
+    }
+    if row["variant"] != "baseline_v2":
+        expected.update(SPECDEC_COMMAND_ASSIGNMENTS)
+        expected["++policy.generation.vllm_kwargs.speculative_config.model"] = None
+    if row["variant"] == "fastrl_threshold_v2_k5":
+        expected.update(THRESHOLD_COMMAND_ASSIGNMENTS)
+        expected[
+            "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_threshold"
+        ] = row["threshold"]
+    return expected
 
 
 def _mini_command_error(row: Mapping[str, str]) -> str | None:
@@ -289,65 +398,49 @@ def _mini_command_error(row: Mapping[str, str]) -> str | None:
         tokens = shlex.split(row["command"])
     except ValueError:
         return f"invalid mini command:{variant}:shell syntax"
-    if not tokens:
-        return f"invalid mini command:{variant}:empty"
-    for key, expected in MINI_COMMAND_ASSIGNMENTS.items():
-        if _command_assignment_values(tokens, key) != [expected]:
-            return f"invalid mini command:{variant}:{key}"
-    configs = [
-        tokens[index + 1]
-        for index, token in enumerate(tokens[:-1])
-        if token == "--config"
-    ]
-    if configs != [REQUIRED_COMMON_CONFIG["recipe"]]:
-        return f"invalid mini command:{variant}:recipe"
-    if tokens.count("examples/run_grpo.py") != 1:
+    if not tokens or tokens[0] != "env":
+        return f"invalid mini command:{variant}:shape"
+
+    environment: dict[str, str] = {}
+    index = 1
+    while index < len(tokens) and tokens[index] != "uv":
+        assignment = _split_assignment(tokens[index], allow_hydra_prefix=False)
+        if assignment is None:
+            return f"invalid mini command:{variant}:entrypoint"
+        name, value = assignment
+        if name in environment:
+            return f"invalid mini command:{variant}:duplicate:{name}"
+        environment[name] = value
+        index += 1
+    expected_environment = {
+        **MINI_COMMAND_ENV_ASSIGNMENTS,
+        "WANDB_RUN_ID": row["wandb_run_id"],
+    }
+    if error := _assignment_error(environment, expected_environment):
+        return f"invalid mini command:{variant}:environment:{error}"
+
+    executable = ["uv", "run", "examples/run_grpo.py"]
+    if tokens[index : index + len(executable)] != executable:
         return f"invalid mini command:{variant}:entrypoint"
-    if any(token == "--gres" or token.startswith("--gres=") for token in tokens):
-        return f"invalid mini command:{variant}:gres"
+    index += len(executable)
+    if tokens[index : index + 2] != ["--config", row["recipe"]]:
+        return f"invalid mini command:{variant}:recipe"
+    index += 2
 
-    speculative_tokens = [
-        token
-        for token in tokens
-        if token.removeprefix("++").startswith(
-            "policy.generation.vllm_kwargs.speculative_config."
-        )
-    ]
-    if variant == "baseline_v2":
-        if speculative_tokens:
-            return f"invalid mini command:{variant}:speculative_config"
-        if _command_assignment_values(
-            tokens, "policy.generation.vllm_kwargs.scheduler_cls"
-        ):
-            return f"invalid mini command:{variant}:scheduler_cls"
-        return None
-
-    for key, expected in SPECDEC_COMMAND_ASSIGNMENTS.items():
-        if _command_assignment_values(tokens, key) != [expected]:
-            return f"invalid mini command:{variant}:{key}"
-    draft_models = _command_assignment_values(
-        tokens, "policy.generation.vllm_kwargs.speculative_config.model"
-    )
-    if len(draft_models) != 1 or not draft_models[0]:
-        return f"invalid mini command:{variant}:draft_model"
-
-    if variant == "always_on_v2_k5":
-        if any("sd_tail_gate_" in token for token in speculative_tokens):
-            return f"invalid mini command:{variant}:tail_gate"
-        if _command_assignment_values(
-            tokens, "policy.generation.vllm_kwargs.scheduler_cls"
-        ):
-            return f"invalid mini command:{variant}:scheduler_cls"
-        return None
-
-    for key, expected in THRESHOLD_COMMAND_ASSIGNMENTS.items():
-        if _command_assignment_values(tokens, key) != [expected]:
-            return f"invalid mini command:{variant}:{key}"
-    if _command_assignment_values(
-        tokens,
-        "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_threshold",
-    ) != [row["threshold"]]:
-        return f"invalid mini command:{variant}:threshold"
+    assignments: dict[str, str] = {}
+    normalized_names: set[str] = set()
+    for token in tokens[index:]:
+        assignment = _split_assignment(token, allow_hydra_prefix=True)
+        if assignment is None:
+            return f"invalid mini command:{variant}:override:{token}"
+        normalized_name, value = assignment
+        if normalized_name in normalized_names:
+            return f"invalid mini command:{variant}:duplicate:{normalized_name}"
+        normalized_names.add(normalized_name)
+        key = f"++{normalized_name}" if token.startswith("++") else normalized_name
+        assignments[key] = value
+    if error := _assignment_error(assignments, _expected_command_assignments(row)):
+        return f"invalid mini command:{variant}:override:{error}"
     return None
 
 
@@ -357,31 +450,53 @@ def _mini_launcher_command_error(row: Mapping[str, str]) -> str | None:
         tokens = shlex.split(row["launcher_command"])
     except ValueError:
         return f"invalid mini launcher command:{variant}:shell syntax"
-    if not tokens or tokens[0] != "env" or tokens.count("sbatch") != 1:
+    if not tokens or tokens[0] != "env":
         return f"invalid mini launcher command:{variant}:shape"
-    expected_assignments = {
+
+    environment: dict[str, str] = {}
+    index = 1
+    while index < len(tokens) and tokens[index] != "sbatch":
+        assignment = _split_assignment(tokens[index], allow_hydra_prefix=False)
+        if assignment is None:
+            return f"invalid mini launcher command:{variant}:shape"
+        name, value = assignment
+        if name in environment:
+            return f"invalid mini launcher command:{variant}:duplicate:{name}"
+        environment[name] = value
+        index += 1
+    if index >= len(tokens) or tokens[index] != "sbatch":
+        return f"invalid mini launcher command:{variant}:shape"
+    expected_environment = {
+        **MINI_LAUNCHER_ENV_ASSIGNMENTS,
         "BASE_LOG_DIR": row["run_dir"],
         "COMMAND": row["command"],
-        "GPUS_PER_NODE": "4",
-        "RAY_LOG_SYNC_FREQUENCY": "60",
     }
-    for key, expected in expected_assignments.items():
-        if _command_assignment_values(tokens, key) != [expected]:
-            return f"invalid mini launcher command:{variant}:{key}"
-    expected_options = {
-        "--nodes=4",
-        "--ntasks-per-node=1",
-        "--exclusive",
-        "--segment=4",
-        f"--output={row['run_dir']}/slurm-%j.out",
-    }
-    if not expected_options.issubset(tokens):
-        return f"invalid mini launcher command:{variant}:sbatch options"
-    if any(token == "--gres" or token.startswith("--gres=") for token in tokens):
-        return f"invalid mini launcher command:{variant}:gres"
-    ray_sub_paths = [token for token in tokens if Path(token).name == "ray.sub"]
-    if len(ray_sub_paths) != 1:
+    if error := _assignment_error(environment, expected_environment):
+        return f"invalid mini launcher command:{variant}:environment:{error}"
+
+    index += 1
+    if index >= len(tokens) or Path(tokens[-1]).name != "ray.sub":
         return f"invalid mini launcher command:{variant}:ray.sub"
+    if not Path(tokens[-1]).is_absolute():
+        return f"invalid mini launcher command:{variant}:ray.sub"
+    option_tokens = tokens[index:-1]
+    options: dict[str, str] = {}
+    for token in option_tokens:
+        if not token.startswith("--"):
+            return f"invalid mini launcher command:{variant}:sbatch options"
+        if "=" in token:
+            name, value = token.split("=", maxsplit=1)
+        else:
+            name, value = token, ""
+        if name in options:
+            return f"invalid mini launcher command:{variant}:duplicate:{name}"
+        options[name] = value
+    expected_options = {
+        **MINI_SBATCH_OPTIONS,
+        "--output": f"{row['run_dir']}/slurm-%j.out",
+    }
+    if error := _assignment_error(options, expected_options):
+        return f"invalid mini launcher command:{variant}:sbatch options:{error}"
     return None
 
 
@@ -458,6 +573,12 @@ def _mini_capacity_error(rows: Iterable[Mapping[str, str]]) -> str | None:
 def _validate_mini_manifest_rows(
     rows: list[dict[str, str]], *, manifest: Path
 ) -> str | None:
+    for row in rows:
+        missing = [
+            field for field in MINI_REQUIRED_MANIFEST_FIELDS if not row.get(field)
+        ]
+        if missing:
+            return f"missing mini manifest fields:{','.join(missing)}"
     variants = sorted(row.get("variant", "") for row in rows)
     required_variants = sorted(REQUIRED_VARIANT_CONFIG)
     if variants != required_variants:
@@ -484,12 +605,6 @@ def _validate_mini_manifest_rows(
         checkpointing_enabled = row.get("checkpointing_enabled", "")
         if checkpointing_enabled and checkpointing_enabled.lower() != "false":
             return f"invalid mini manifest provenance:{variant}:checkpointing_enabled"
-        if command_error := _mini_command_error(row):
-            return command_error
-        if launcher_error := _mini_launcher_command_error(row):
-            return launcher_error
-        if log_error := _mini_log_provenance_error(manifest, row):
-            return log_error
         if row.get("wandb_url"):
             try:
                 _wandb_run_path_from_url(
@@ -499,6 +614,12 @@ def _validate_mini_manifest_rows(
                 )
             except ValueError as error:
                 return str(error)
+        if command_error := _mini_command_error(row):
+            return command_error
+        if launcher_error := _mini_launcher_command_error(row):
+            return launcher_error
+        if log_error := _mini_log_provenance_error(manifest, row):
+            return log_error
     return None
 
 
@@ -551,36 +672,57 @@ def _scan_log(path: Path) -> str | None:
     return None
 
 
-def _log_health_failure(manifest: Path, metadata: Mapping[str, str]) -> str | None:
-    direct_logs = (
-        (
-            "slurm_log_path",
-            _resolved_manifest_path(manifest, metadata["slurm_log_path"]),
-        ),
-        (
-            "ray_driver_log_path",
-            _resolved_manifest_path(manifest, metadata["ray_driver_log_path"]),
-        ),
-    )
-    for field, path in direct_logs:
-        if not path.is_file():
-            return f"log_missing:{field}"
+def _ray_attempt_dirs(run_dir: Path, job_id: str) -> list[Path]:
+    pattern = re.compile(rf"^{re.escape(job_id)}(?:-(\d+))?-logs$")
+    attempts: list[tuple[int, str, Path]] = []
+    try:
+        children = list(run_dir.iterdir())
+    except OSError:
+        return []
+    for path in children:
+        match = pattern.fullmatch(path.name)
+        if match and path.is_dir():
+            restart = int(match.group(1)) if match.group(1) is not None else -1
+            attempts.append((restart, path.name, path))
+    return [path for _, _, path in sorted(attempts)]
 
-    ray_log_dir = _resolved_manifest_path(manifest, metadata["ray_log_dir"])
-    if not ray_log_dir.is_dir():
+
+def _log_health_failure(manifest: Path, metadata: Mapping[str, str]) -> str | None:
+    slurm_log = _resolved_manifest_path(manifest, metadata["slurm_log_path"])
+    if not slurm_log.is_file():
+        return "log_missing:slurm_log_path"
+
+    run_dir = _resolved_manifest_path(manifest, metadata["run_dir"])
+    attempts = _ray_attempt_dirs(run_dir, metadata["job_id"])
+    if not attempts:
         return "log_missing:ray_log_dir"
-    ray_logs = sorted(
+    final_attempt = attempts[-1]
+    final_driver = final_attempt / "ray-driver.log"
+    if not final_driver.is_file():
+        return "log_missing:ray_driver_log_path"
+    final_ray_dir = final_attempt / "ray"
+    if not final_ray_dir.is_dir():
+        return "log_missing:ray_log_dir"
+    final_ray_logs = sorted(
         path
-        for path in ray_log_dir.rglob("*")
+        for path in final_ray_dir.rglob("*")
         if path.is_file() and path.suffix.lower() in TEXT_LOG_SUFFIXES
     )
-    if not ray_logs:
+    if not final_ray_logs:
         return "log_empty:ray_log_dir"
+    if not (final_attempt / FINAL_SYNC_MARKER).is_file():
+        return "log_missing:final_sync_marker"
 
-    for _, path in direct_logs:
-        if failure := _scan_log(path):
-            return failure
-    for path in ray_logs:
+    text_logs = [slurm_log]
+    for attempt in attempts:
+        text_logs.extend(
+            sorted(
+                path
+                for path in attempt.rglob("*")
+                if path.is_file() and path.suffix.lower() in TEXT_LOG_SUFFIXES
+            )
+        )
+    for path in text_logs:
         if failure := _scan_log(path):
             return failure
     return None

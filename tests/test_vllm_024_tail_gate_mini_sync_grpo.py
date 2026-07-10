@@ -85,6 +85,7 @@ def test_mini_wrapper_renders_exact_three_arm_sync_grpo_smoke() -> None:
         "policy.generation.max_new_tokens=1024",
         "policy.generation.vllm_cfg.max_model_len=1056",
         "checkpointing.enabled=false",
+        "uv run examples/run_grpo.py",
         "cudagraph_mode=FULL_AND_PIECEWISE",
         "--nodes=4",
         "--segment=4",

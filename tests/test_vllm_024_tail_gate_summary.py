@@ -459,7 +459,7 @@ def test_cross_cohort_speedups_are_rejected(field: str) -> None:
 def test_manifest_rejects_every_missing_cohort_dimension() -> None:
     row = _metadata()
 
-    for field in COHORT_FIELDS:
+    for field in REQUIRED_MANIFEST_FIELDS:
         incomplete = {**row, field: ""}
         assert (
             _validate_manifest_rows([incomplete]) == f"missing manifest fields:{field}"
@@ -477,12 +477,57 @@ def test_manifest_rejects_every_missing_cohort_dimension() -> None:
         "command",
     ],
 )
-def test_manifest_requires_log_and_command_provenance(field: str) -> None:
+def test_legacy_manifest_allows_missing_mini_log_and_command_provenance(
+    field: str,
+) -> None:
     row = _metadata()
-    row[field] = ""
+    del row[field]
 
-    assert field in REQUIRED_MANIFEST_FIELDS
-    assert _validate_manifest_rows([row]) == f"missing manifest fields:{field}"
+    assert field not in REQUIRED_MANIFEST_FIELDS
+    assert _validate_manifest_rows([row]) is None
+
+
+def test_legacy_manifest_allows_missing_draft_sample_method() -> None:
+    rows = _cohort()
+    for row in rows:
+        del row["draft_sample_method"]
+
+    assert "draft_sample_method" not in REQUIRED_MANIFEST_FIELDS
+    assert _validate_manifest_rows(rows) is None
+
+
+def test_historical_manifest_without_mini_fields_remains_collectible(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    mini_only_fields = (
+        "draft_sample_method",
+        "run_dir",
+        "slurm_log_path",
+        "ray_driver_log_path",
+        "ray_log_dir",
+        "launcher_command",
+        "command",
+    )
+    for row in rows:
+        for field in mini_only_fields:
+            del row[field]
+    manifest = tmp_path / "historical-submissions.tsv"
+    _write_manifest(manifest, rows)
+    output_dir = tmp_path / "output"
+
+    assert (
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=_api_for(rows),
+        )
+        == 0
+    )
+    payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    baseline = next(row for row in payload if row["variant"] == "baseline_v2")
+    always_on = next(row for row in payload if row["variant"] == "always_on_v2_k5")
+    assert baseline["draft_sample_method"] == "not_applicable"
+    assert always_on["draft_sample_method"] == "legacy_unspecified"
 
 
 @pytest.mark.parametrize("field", ["wandb_run_id", "job_id"])

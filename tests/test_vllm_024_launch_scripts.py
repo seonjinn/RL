@@ -264,6 +264,37 @@ def test_ray_launcher_accepts_an_explicit_container_workdir() -> None:
     assert 'COMMON_SRUN_ARGS+=" --container-workdir=$CONTAINER_WORKDIR"' in source
 
 
+def test_ray_launcher_completes_final_distributed_log_sync_before_driver_exit() -> None:
+    source = (REPO_ROOT / "ray.sub").read_text(encoding="utf-8")
+
+    driver_exit = source.index("driver_exit_code=\\$?")
+    request = source.index(".ray_logs_final_sync_requested", driver_exit)
+    completion = source.index(".ray_logs_final_sync_complete", request)
+    preserved_exit = source.index('exit "\\$driver_exit_code"', completion)
+    assert driver_exit < request < completion < preserved_exit
+    assert ".ray_logs_final_sync_ack.head" in source
+    assert ".ray_logs_final_sync_ack.worker-\\$SLURM_PROCID" in source
+    assert 'expected_sync_acks="$SLURM_JOB_NUM_NODES"' in source
+
+
+@pytest.mark.parametrize("assignment", ["head_cmd", "worker_cmd"])
+def test_ray_launcher_generated_scripts_remain_valid_bash(assignment: str) -> None:
+    source = (REPO_ROOT / "ray.sub").read_text(encoding="utf-8")
+    start_marker = f"{assignment}=$(cat <<EOF\n"
+    start = source.index(start_marker) + len(start_marker)
+    generated_script = source[start : source.index("\nEOF\n)", start)].replace(
+        "\\$", "$"
+    )
+
+    subprocess.run(
+        ["bash", "-n"],
+        input=generated_script,
+        text=True,
+        check=True,
+        capture_output=True,
+    )
+
+
 def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     output = _dry_run_dynamicsd("qwen32b", "dynamic")
 

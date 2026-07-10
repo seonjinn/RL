@@ -538,7 +538,8 @@ submit_one() {
     "PYTHONPATH=${REPO_DIR}"
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
-    /opt/nemo_rl_venv/bin/python
+    uv
+    run
     examples/run_grpo.py
     --config "${recipe}"
     "${overrides[@]}"

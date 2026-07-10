@@ -118,6 +118,9 @@ COHORT_FIELDS = (
     "sampling",
     "draft_sample_method",
 )
+LEGACY_COHORT_FIELDS = tuple(
+    field for field in COHORT_FIELDS if field != "draft_sample_method"
+)
 LOG_PROVENANCE_FIELDS = (
     "run_dir",
     "slurm_log_path",
@@ -125,6 +128,14 @@ LOG_PROVENANCE_FIELDS = (
     "ray_log_dir",
 )
 REQUIRED_MANIFEST_FIELDS = (
+    *LEGACY_COHORT_FIELDS,
+    "variant",
+    "gate_mode",
+    "k",
+    "job_id",
+    "wandb_run_id",
+)
+MINI_REQUIRED_MANIFEST_FIELDS = (
     *COHORT_FIELDS,
     *LOG_PROVENANCE_FIELDS,
     "variant",
@@ -324,6 +335,15 @@ def _provenance(metadata: Mapping[str, str]) -> str:
     )
 
 
+def _draft_sample_method(metadata: Mapping[str, str]) -> str:
+    recorded = metadata.get("draft_sample_method", "")
+    if recorded:
+        return recorded
+    if metadata.get("variant", "").startswith("baseline_"):
+        return "not_applicable"
+    return "legacy_unspecified"
+
+
 def _make_summary(
     metadata: Mapping[str, str],
     steps: list[int],
@@ -396,7 +416,7 @@ def _make_summary(
         container_sha256=metadata.get("container_sha256", ""),
         graph_mode=metadata.get("graph_mode", ""),
         sampling=metadata.get("sampling", ""),
-        draft_sample_method=metadata.get("draft_sample_method", ""),
+        draft_sample_method=_draft_sample_method(metadata),
         wandb_run_id=metadata.get("wandb_run_id", ""),
         run_dir=metadata.get("run_dir", ""),
         slurm_log_path=metadata.get("slurm_log_path", ""),
@@ -694,11 +714,14 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         if row["wandb_run_id"] in seen_wandb_run_ids:
             return f"duplicate wandb_run_id:{row['wandb_run_id']}"
         seen_wandb_run_ids.add(row["wandb_run_id"])
-        draft_sample_method = row["draft_sample_method"]
+        draft_sample_method = _draft_sample_method(row)
         if row["variant"].startswith("baseline_"):
             if draft_sample_method != "not_applicable":
                 return f"invalid baseline draft_sample_method:{draft_sample_method}"
-        elif draft_sample_method not in {"greedy", "probabilistic"}:
+        elif row.get("draft_sample_method") and draft_sample_method not in {
+            "greedy",
+            "probabilistic",
+        }:
             return f"invalid SpecDec draft_sample_method:{draft_sample_method}"
         runner = row["runner"]
         if runner not in {"v1", "v2"}:
