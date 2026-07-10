@@ -83,9 +83,9 @@ def _validate_tail_gate_speculative_config(
             "speculative_config.sd_tail_gate_mode must be one of 'off', "
             "'threshold', or 'roofline'."
         )
-    if speculative_config.get("method") not in _ONLINE_REFIT_SPEC_METHODS or not speculative_config.get(
-        "model"
-    ):
+    if speculative_config.get(
+        "method"
+    ) not in _ONLINE_REFIT_SPEC_METHODS or not speculative_config.get("model"):
         raise ValueError(
             "Tail-gated speculative decoding requires an external Eagle or "
             "Eagle-3 drafter with speculative_config.model."
@@ -263,9 +263,7 @@ def validate_vllm_speculative_config(
     if tail_gate_enabled:
         vllm_kwargs = config.get("vllm_kwargs")
         if vllm_kwargs is None:
-            raise ValueError(
-                "Tail-gated speculative decoding requires vllm_kwargs."
-            )
+            raise ValueError("Tail-gated speculative decoding requires vllm_kwargs.")
         scheduler_cls = vllm_kwargs.get("scheduler_cls")
         if scheduler_cls is not None and scheduler_cls != _TAIL_GATE_SCHEDULER_CLASS:
             raise ValueError(

@@ -742,7 +742,9 @@ def test_tail_gate_validation_rejects_internal_vllm_data_parallelism() -> None:
         )
 
 
-def test_tail_gate_validation_configures_scheduler_without_mutating_speculative_config() -> None:
+def test_tail_gate_validation_configures_scheduler_without_mutating_speculative_config() -> (
+    None
+):
     vllm_config = _tail_gate_config()
     speculative_config = deepcopy(vllm_config["vllm_kwargs"]["speculative_config"])
 

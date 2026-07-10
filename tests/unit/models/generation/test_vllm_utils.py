@@ -692,9 +692,7 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
     assert metrics["vllm/tail_gate_activation_batch"] == pytest.approx(16.0)
     assert metrics["vllm/tail_gate_activation_seq_len"] == pytest.approx(8192.0)
     assert metrics["vllm/tail_gate_predicted_speedup"] == pytest.approx(1.12)
-    assert metrics["vllm/tail_gate_activation_predicted_speedup"] == pytest.approx(
-        1.5
-    )
+    assert metrics["vllm/tail_gate_activation_predicted_speedup"] == pytest.approx(1.5)
     assert metrics["vllm/tail_gate_advance_only_step_ratio"] == pytest.approx(0.75)
     assert metrics["vllm/tail_gate_k_0_steps"] == pytest.approx(3.0)
     assert metrics["vllm/tail_gate_k_5_steps"] == pytest.approx(1.0)
