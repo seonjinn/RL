@@ -66,7 +66,8 @@ Runner versions are separate cohorts. Speedups must never cross a cohort.
 |---|---|---|
 | `baseline_v2` | never | 0 |
 | `always_on_v2_k5` | from first decode | fixed 5 |
-| `fastrl_threshold_v2_k5` | threshold plus consecutive checks | fixed 5 |
+| `fastrl_threshold_v2_k5` | threshold plus consecutive checks, advance-only while off | fixed 5 |
+| `fastrl_rebuild_v2_k5` | threshold plus consecutive checks, rebuild drafter at activation | fixed 5 |
 | `efficient_roofline_v2_k5` | predicted speedup exceeds margin | fixed 5 |
 
 After these variants pass, add a FastRL-inspired adaptive-strategy cohort with
@@ -158,7 +159,7 @@ It fires only when predicted speedup is at least
 The scheduler reserves lookahead capacity for the configured maximum K so the
 transition cannot fail for lack of KV slots. While the gate is off it emits
 runtime K `0`; after activation it emits the configured K. Previously generated
-draft tokens are not consumed while the gate is off.
+draft tokens drain before the first fully autoregressive step.
 
 The first target decode after activation may produce drafts for the following
 scheduler step. This one-step delay is recorded and is not treated as a
@@ -168,11 +169,20 @@ failure.
 
 Model Runner V2 must read runtime K from `SchedulerOutput`.
 
-- At K `0`, run ordinary target sampling, do not call the speculator, clear
-  draft state for scheduled requests, and return no draft token IDs.
+- At K `0` in advance-only mode, run ordinary target sampling and the minimum
+  first drafter forward required to advance the external Eagle-3 KV state, but
+  return no draft token IDs and execute none of the `K-1` serial draft-decode
+  iterations.
 - At configured fixed K, preserve official vLLM 0.24 behavior.
 - Binary gate phase rejects intermediate K values rather than silently running
   the maximum K.
+
+External Eagle-3 does not share target KV state. Completely skipping its
+proposer while the gate is off makes later reactivation incorrect. A second
+FastRL-style rebuild mode may skip all decode-time drafter work while off, but
+must requeue or extend every still-active request to reconstruct drafter KV
+before producing drafts. Advance-only and rebuild modes are separate result
+rows; no silent fallback between them is allowed.
 
 Variable K `1/3/5` is implemented only after the binary path passes parity and
 performance gates. Every supported K needs an explicit graph-coverage test.
@@ -254,7 +264,10 @@ config hash.
 - Threshold mode requires the exact configured consecutive-check count.
 - Roofline mode respects the configured margin and rejects non-finite output.
 - Activation is monotone within a rollout and resets at the next wake-up.
-- V2 K0 performs no proposal call and leaves no consumable draft tokens.
+- V2 advance-only K0 performs exactly the state-advance drafter pass, performs
+  no serial draft-decode iterations, and leaves no consumable draft tokens.
+- V2 rebuild mode performs no drafter decode while off and cannot produce a
+  draft until every active request has rebuilt drafter state.
 - Fixed-K V2 behavior is unchanged when gate mode is `off`.
 - V1 stock DynamicSD remains unmodified and uses official scheduler behavior.
 - Metrics accurately distinguish disabled, not-yet-activated, and activated
