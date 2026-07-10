@@ -17,7 +17,9 @@ SUBMISSIONS_HEADER = (
     "container_sha256\tmax_steps\tstatic_k\tdynamic_schedule\t"
     "rejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\t"
     "max_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\t"
-    "max_cudagraph_capture_size\tcommand"
+    "max_cudagraph_capture_size\tnum_prompts_per_step\t"
+    "num_generations_per_prompt\ttrain_global_batch_size\t"
+    "max_total_sequence_length\tmax_new_tokens\tcommand"
 )
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
@@ -434,6 +436,14 @@ def test_dynamicsd_launcher_qwen30_comparison_includes_all_methods() -> None:
         "pard_k16",
     ):
         assert f"contract-test-attempt-1-qwen30ba3b-{variant}" in output
+    commands = [
+        line for line in output.splitlines() if line.startswith("[DRY-RUN] command ")
+    ]
+    assert len(commands) == 7
+    assert all(
+        "policy.generation.vllm_kwargs.max_num_batched_tokens=32768" in command
+        for command in commands
+    )
 
 
 def test_dynamicsd_launcher_renders_suffix_k32() -> None:
@@ -519,6 +529,15 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     tmp_path: Path,
 ) -> None:
     environment, manifest = _prepare_submit_environment(tmp_path)
+    environment.update(
+        {
+            "NUM_PROMPTS_PER_STEP": "16",
+            "NUM_GENERATIONS_PER_PROMPT": "16",
+            "TRAIN_GLOBAL_BATCH_SIZE": "256",
+            "MAX_TOTAL_SEQUENCE_LENGTH": "40960",
+            "MAX_NEW_TOKENS": "32768",
+        }
+    )
 
     result = _run_script_unchecked(
         DYNAMICSD_LAUNCHER,
@@ -532,8 +551,20 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     lines = manifest.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert lines[0].split("\t") == SUBMISSIONS_HEADER.split("\t")
-    assert all(len(line.split("\t")) == 24 for line in lines)
+    assert all(len(line.split("\t")) == 29 for line in lines)
     assert lines[1].split("\t")[16:18] == ["standard", "probabilistic"]
+    manifest_row = dict(
+        zip(
+            SUBMISSIONS_HEADER.split("\t"),
+            lines[1].split("\t"),
+            strict=True,
+        )
+    )
+    assert manifest_row["num_prompts_per_step"] == "16"
+    assert manifest_row["num_generations_per_prompt"] == "16"
+    assert manifest_row["train_global_batch_size"] == "256"
+    assert manifest_row["max_total_sequence_length"] == "40960"
+    assert manifest_row["max_new_tokens"] == "32768"
 
 
 def test_dynamicsd_launcher_submit_rejects_a_legacy_manifest_header(

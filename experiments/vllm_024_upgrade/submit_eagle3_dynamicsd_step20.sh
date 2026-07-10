@@ -214,7 +214,8 @@ submit_one() {
       draft_model="${QWEN30_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
       ;;
   esac
-  if [[ "${variant}" == "pard_k16" && -z "${resolved_max_num_batched_tokens}" ]]; then
+  if [[ -z "${resolved_max_num_batched_tokens}" ]] \
+    && [[ "${variant}" == "pard_k16" || "${VARIANT_SELECTION}" == "compare" ]]; then
     resolved_max_num_batched_tokens="${PARD_K16_MAX_NUM_BATCHED_TOKENS}"
   fi
 
@@ -441,7 +442,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\tmax_cudagraph_capture_size\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\tmax_cudagraph_capture_size\tnum_prompts_per_step\tnum_generations_per_prompt\ttrain_global_batch_size\tmax_total_sequence_length\tmax_new_tokens\tcommand'
       if [[ -f "${manifest}" ]]; then
         local existing_manifest_header
         existing_manifest_header="$(head -n 1 "${manifest}")"
@@ -457,7 +458,7 @@ submit_one() {
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
@@ -466,7 +467,10 @@ submit_one() {
         "${manifest_rejection_sample_method}" "${manifest_draft_sample_method}" \
         "${resolved_max_num_batched_tokens}" "${MAX_NUM_SEQS}" \
         "${OUTPUT_MAX_MODEL_LEN}" "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" \
-        "${MAX_CUDAGRAPH_CAPTURE_SIZE}" "${command}" >> "${manifest}"
+        "${MAX_CUDAGRAPH_CAPTURE_SIZE}" "${NUM_PROMPTS_PER_STEP}" \
+        "${NUM_GENERATIONS_PER_PROMPT}" "${TRAIN_GLOBAL_BATCH_SIZE}" \
+        "${MAX_TOTAL_SEQUENCE_LENGTH}" "${MAX_NEW_TOKENS}" \
+        "${command}" >> "${manifest}"
       ;;
     *)
       echo "ERROR: mode must be dry-run, test-only, or submit" >&2

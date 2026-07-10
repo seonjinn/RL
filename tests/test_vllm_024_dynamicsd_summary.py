@@ -77,15 +77,17 @@ def test_summarize_history_rejects_non_finite_required_metric() -> None:
     assert summary.reason == "non_finite_metrics:reward:2"
 
 
-def test_summarize_history_requires_positive_specdec_evidence() -> None:
+def test_summarize_history_reports_valid_zero_acceptance() -> None:
     history = _history(1.2)
     for row in history:
         row["train/vllm/spec_num_accepted_tokens"] = 0.0
 
     summary = summarize_history("qwen32b", "eagle3_k5", history)
 
-    assert not summary.complete
-    assert summary.reason == "missing_specdec_evidence"
+    assert summary.complete
+    assert summary.reason == ""
+    assert summary.acceptance_rate == 0.0
+    assert summary.mean_acceptance_length == 1.0
 
 
 @pytest.mark.parametrize(
@@ -227,6 +229,34 @@ def test_validate_manifest_rows_matches_scheduler_and_graph_limits() -> None:
     rows = [
         {**common, "variant": "baseline", "max_num_batched_tokens": "16384"},
         {**common, "variant": "pard_k16", "max_num_batched_tokens": "32768"},
+    ]
+
+    assert _validate_manifest_rows(rows) == "mismatched setup for model qwen30ba3b"
+
+
+@pytest.mark.parametrize(
+    ("field", "baseline_value", "candidate_value"),
+    [
+        ("num_prompts_per_step", "64", "16"),
+        ("num_generations_per_prompt", "32", "16"),
+        ("train_global_batch_size", "512", "256"),
+        ("max_total_sequence_length", "4096", "40960"),
+        ("max_new_tokens", "4096", "32768"),
+    ],
+)
+def test_validate_manifest_rows_rejects_generation_geometry_mismatch(
+    field: str,
+    baseline_value: str,
+    candidate_value: str,
+) -> None:
+    common = {
+        "model": "qwen30ba3b",
+        "commit": "aaa",
+        "nodes": "4",
+    }
+    rows = [
+        {**common, "variant": "baseline", field: baseline_value},
+        {**common, "variant": "eagle3_k5", field: candidate_value},
     ]
 
     assert _validate_manifest_rows(rows) == "mismatched setup for model qwen30ba3b"

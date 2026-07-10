@@ -65,6 +65,11 @@ MATCHED_SETUP_FIELDS = (
     "output_max_model_len",
     "specdec_context_headroom_tokens",
     "max_cudagraph_capture_size",
+    "num_prompts_per_step",
+    "num_generations_per_prompt",
+    "train_global_batch_size",
+    "max_total_sequence_length",
+    "max_new_tokens",
 )
 
 
@@ -246,7 +251,7 @@ def summarize_history(
         if (
             total_drafts <= 0.0
             or total_draft_tokens <= 0.0
-            or total_accepted_tokens <= 0.0
+            or total_accepted_tokens < 0.0
         ):
             return _empty_summary(
                 model,
