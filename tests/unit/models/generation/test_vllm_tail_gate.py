@@ -56,9 +56,15 @@ def test_threshold_gate_requires_ramp_and_consecutive_checks():
 
 def test_gate_reset_keeps_previous_rollout_acceptance():
     gate = TailGateController(make_roofline_gate())
-    gate.finish_rollout(accepted_tokens=40, num_drafts=20, validation=False)
-    assert gate.expected_accept_length == 3.0
+    gate.finish_rollout(accepted_tokens=60, num_drafts=20, validation=False)
+    assert gate.expected_accept_length == 4.0
     assert not gate.enabled
+
+
+def test_zero_cycle_does_not_replace_acceptance():
+    gate = TailGateController(make_roofline_gate(expected_accept_length=2.5))
+    gate.finish_rollout(accepted_tokens=0, num_drafts=0, validation=False)
+    assert gate.expected_accept_length == 2.5
 
 
 def test_validation_rollout_does_not_replace_acceptance():

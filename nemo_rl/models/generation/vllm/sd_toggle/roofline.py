@@ -34,7 +34,11 @@ def predict_T_T(
     """Predicts target decode latency in seconds."""
     memory_time = _divide(W_t + kappa_eff * B * S, BW_eff)
     compute_time = _divide(B * C_dense + B * S * C_attn, F_eff)
-    return max(memory_time, compute_time) + c_T * B * 1e-6 + c_comm
+    return _combine_times(
+        memory_time=memory_time,
+        compute_time=compute_time,
+        overhead_time=c_T * B * 1e-6 + c_comm,
+    )
 
 
 def predict_T_D(
@@ -53,7 +57,11 @@ def predict_T_D(
     """Predicts one drafter decode latency in seconds."""
     memory_time = _divide(eta_d * W_d + kappa_eff * B * S, BW_eff)
     compute_time = _divide(B * C_dense + B * S * C_attn, F_eff)
-    return max(memory_time, compute_time) + c_D * B * 1e-6 + c_comm
+    return _combine_times(
+        memory_time=memory_time,
+        compute_time=compute_time,
+        overhead_time=c_D * B * 1e-6 + c_comm,
+    )
 
 
 def predict_T_V(
@@ -76,7 +84,11 @@ def predict_T_V(
         B * (gamma + 1) * C_dense + B * S * (gamma + 1) * C_attn,
         F_eff,
     )
-    return max(memory_time, compute_time) + c_V * B * 1e-6 + c_comm
+    return _combine_times(
+        memory_time=memory_time,
+        compute_time=compute_time,
+        overhead_time=c_V * B * 1e-6 + c_comm,
+    )
 
 
 def compute_r(B: int, S: int, gamma: int, config: SDToggleConfig) -> float:
@@ -176,3 +188,14 @@ def _divide(numerator: float, denominator: float) -> float:
     ):
         return math.nan
     return numerator / denominator
+
+
+def _combine_times(
+    *, memory_time: float, compute_time: float, overhead_time: float
+) -> float:
+    if not all(math.isfinite(value) for value in (memory_time, compute_time)):
+        raise ValueError("roofline component times must be finite")
+    combined_time = max(memory_time, compute_time) + overhead_time
+    if not math.isfinite(combined_time):
+        raise ValueError("roofline combined time must be finite")
+    return combined_time
