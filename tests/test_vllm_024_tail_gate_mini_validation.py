@@ -27,8 +27,10 @@ class _FakeRun:
 class _FakeApi:
     def __init__(self, histories: dict[str, list[dict[str, object]]]) -> None:
         self._histories = histories
+        self.calls: list[str] = []
 
     def run(self, path: str) -> _FakeRun:
+        self.calls.append(path)
         run_id = path.rsplit("/", maxsplit=1)[-1]
         return _FakeRun(self._histories[run_id], f"https://wandb.example/{run_id}")
 
@@ -195,6 +197,146 @@ def test_mini_validator_accepts_completed_matched_threshold_smoke(
     assert threshold["activation_tick"] == 17.0
     assert threshold["tail_gate_k0_steps"] == 75.0
     assert threshold["tail_gate_k5_steps"] == 25.0
+
+
+def test_mini_validator_rejects_incomplete_matrix_before_wandb_query(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()[:2]
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="mini manifest variants must be exactly"):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("variant", "field", "invalid_value"),
+    [
+        ("baseline_v2", "gate_mode", "threshold"),
+        ("baseline_v2", "k", "5"),
+        ("baseline_v2", "threshold", "32"),
+        ("baseline_v2", "consecutive_checks", "10"),
+        ("always_on_v2_k5", "gate_mode", "threshold"),
+        ("always_on_v2_k5", "k", "0"),
+        ("always_on_v2_k5", "threshold", "32"),
+        ("always_on_v2_k5", "consecutive_checks", "10"),
+        ("fastrl_threshold_v2_k5", "gate_mode", "off"),
+        ("fastrl_threshold_v2_k5", "k", "0"),
+        ("fastrl_threshold_v2_k5", "threshold", "31"),
+        ("fastrl_threshold_v2_k5", "consecutive_checks", "9"),
+    ],
+)
+def test_mini_validator_rejects_invalid_variant_mapping_before_wandb_query(
+    tmp_path: Path, variant: str, field: str, invalid_value: str
+) -> None:
+    rows = _cohort()
+    target = next(row for row in rows if row["variant"] == variant)
+    target[field] = invalid_value
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"invalid mini manifest field:{variant}:{field}",
+    ):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+def test_mini_validator_uses_manifest_wandb_url_for_each_run(tmp_path: Path) -> None:
+    rows = _cohort()
+    for row in rows:
+        row["wandb_url"] = (
+            "https://wandb.ai/manifest-entity/manifest-project/runs/"
+            f"{row['wandb_run_id']}"
+        )
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    result = main(
+        [
+            "--manifest",
+            str(manifest),
+            "--entity",
+            "wrong-entity",
+            "--project",
+            "wrong-project",
+            "--output-dir",
+            str(output_dir),
+        ],
+        api=api,
+    )
+
+    assert result == 0
+    assert api.calls == [
+        f"manifest-entity/manifest-project/{row['wandb_run_id']}" for row in rows
+    ]
+    payload = json.loads((output_dir / "mini_summary.json").read_text())
+    urls_by_variant = {row["variant"]: row["wandb_url"] for row in payload}
+    assert urls_by_variant == {row["variant"]: row["wandb_url"] for row in rows}
+
+
+def test_mini_validator_fallback_matches_mini_launcher_project(tmp_path: Path) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+        api=api,
+    )
+
+    assert result == 0
+    assert api.calls == [
+        "nvidia/nemorl-vllm024-tail-gated-mini-sync-grpo-pre-tyche/"
+        f"{row['wandb_run_id']}"
+        for row in rows
+    ]
+
+
+def test_mini_validator_rejects_wandb_url_run_id_mismatch_before_query(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    rows[0]["wandb_url"] = "https://wandb.ai/nvidia/project/runs/different-run"
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="wandb_url run ID mismatch:baseline_v2"):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == []
+    assert not output_dir.exists()
 
 
 @pytest.mark.parametrize(

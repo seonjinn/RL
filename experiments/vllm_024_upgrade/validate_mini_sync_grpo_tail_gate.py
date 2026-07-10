@@ -24,6 +24,7 @@ import statistics
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Mapping, cast
+from urllib.parse import unquote, urlparse
 
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     REQUIRED_ROW_FIELDS,
@@ -46,6 +47,28 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
 
 MINI_STEPS = {1, 2}
 MINI_THRESHOLD = 32
+DEFAULT_WANDB_ENTITY = "nvidia"
+DEFAULT_WANDB_PROJECT = "nemorl-vllm024-tail-gated-mini-sync-grpo-pre-tyche"
+REQUIRED_VARIANT_CONFIG = {
+    "baseline_v2": {
+        "gate_mode": "off",
+        "k": "0",
+        "threshold": "",
+        "consecutive_checks": "",
+    },
+    "always_on_v2_k5": {
+        "gate_mode": "off",
+        "k": "5",
+        "threshold": "",
+        "consecutive_checks": "",
+    },
+    "fastrl_threshold_v2_k5": {
+        "gate_mode": "threshold",
+        "k": "5",
+        "threshold": "32",
+        "consecutive_checks": "10",
+    },
+}
 MINI_METRIC_KEYS = {
     "tail_gate_k0_steps": "train/vllm/tail_gate_k_0_steps",
     "tail_gate_k5_steps": "train/vllm/tail_gate_k_5_steps",
@@ -60,8 +83,8 @@ MINI_ROW_FIELDS = (
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--entity", default="nvidia")
-    parser.add_argument("--project", default="nemorl-vllm024-mini-sync-grpo")
+    parser.add_argument("--entity", default=DEFAULT_WANDB_ENTITY)
+    parser.add_argument("--project", default=DEFAULT_WANDB_PROJECT)
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -69,6 +92,68 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def _create_wandb_api() -> WandbApi:
     wandb = importlib.import_module("wandb")
     return cast(WandbApi, wandb.Api())
+
+
+def _wandb_run_path_from_url(url: str, *, variant: str, expected_run_id: str) -> str:
+    parsed = urlparse(url)
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or len(parts) != 4
+        or parts[2] != "runs"
+        or not parts[0]
+        or not parts[1]
+        or not parts[3]
+    ):
+        raise ValueError(f"invalid wandb_url:{variant}:{url}")
+    entity, project, _, run_id = parts
+    if run_id != expected_run_id:
+        raise ValueError(
+            f"wandb_url run ID mismatch:{variant}:{run_id}:{expected_run_id}"
+        )
+    return f"{entity}/{project}/{run_id}"
+
+
+def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
+    variants = sorted(row.get("variant", "") for row in rows)
+    required_variants = sorted(REQUIRED_VARIANT_CONFIG)
+    if variants != required_variants:
+        return (
+            "mini manifest variants must be exactly:"
+            f"{','.join(required_variants)}:got:{','.join(variants)}"
+        )
+    for row in rows:
+        variant = row["variant"]
+        for field, expected in REQUIRED_VARIANT_CONFIG[variant].items():
+            actual = row.get(field, "")
+            if actual != expected:
+                return (
+                    f"invalid mini manifest field:{variant}:{field}:{actual}:{expected}"
+                )
+        if row.get("wandb_url"):
+            try:
+                _wandb_run_path_from_url(
+                    row["wandb_url"],
+                    variant=variant,
+                    expected_run_id=row["wandb_run_id"],
+                )
+            except ValueError as error:
+                return str(error)
+    return None
+
+
+def _wandb_run_path(
+    metadata: Mapping[str, str], *, fallback_entity: str, fallback_project: str
+) -> str:
+    url = metadata.get("wandb_url", "")
+    if url:
+        return _wandb_run_path_from_url(
+            url,
+            variant=metadata["variant"],
+            expected_run_id=metadata["wandb_run_id"],
+        )
+    return f"{fallback_entity}/{fallback_project}/{metadata['wandb_run_id']}"
 
 
 def _records_by_step(
@@ -277,6 +362,9 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     manifest_error = _validate_manifest_rows(manifest_rows)
     if manifest_error:
         raise ValueError(manifest_error)
+    mini_manifest_error = _validate_mini_manifest_rows(manifest_rows)
+    if mini_manifest_error:
+        raise ValueError(mini_manifest_error)
     _claim_output_directory(args.output_dir)
 
     client = api if api is not None else _create_wandb_api()
@@ -291,7 +379,13 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
         }
         job_id = metadata["job_id"]
         try:
-            run = client.run(f"{args.entity}/{args.project}/{metadata['wandb_run_id']}")
+            run = client.run(
+                _wandb_run_path(
+                    metadata,
+                    fallback_entity=args.entity,
+                    fallback_project=args.project,
+                )
+            )
             if not metadata.get("wandb_url"):
                 metadata["wandb_url"] = run.url
             history = list(
