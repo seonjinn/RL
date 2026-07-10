@@ -1059,7 +1059,11 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             )
 
             remaining_ctx = (
-                self.cfg["vllm_cfg"]["max_model_len"] - current_input_actual_length
+                self.cfg.get(
+                    "_output_max_model_len",
+                    self.cfg["vllm_cfg"]["max_model_len"],
+                )
+                - current_input_actual_length
             )
             allowed_new_tokens = max(0, min(self.cfg["max_new_tokens"], remaining_ctx))
 

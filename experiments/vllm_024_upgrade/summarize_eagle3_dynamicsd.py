@@ -60,6 +60,8 @@ MATCHED_SETUP_FIELDS = (
     "max_steps",
     "max_num_batched_tokens",
     "max_num_seqs",
+    "output_max_model_len",
+    "specdec_context_headroom_tokens",
     "max_cudagraph_capture_size",
 )
 

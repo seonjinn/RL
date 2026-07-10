@@ -719,6 +719,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
 
         input_ids = data["input_ids"]
         input_lengths = data["input_lengths"]
+        output_max_model_len = self.cfg.get("_output_max_model_len")
         batch_stop_strings: list[list[str]] = data.get("stop_strings", [])
         sampling_params = [
             self._build_sampling_params(
@@ -726,6 +727,14 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 stop_strings=self._merge_stop_strings(
                     [batch_stop_strings[index]]
                     if index < len(batch_stop_strings)
+                    else None
+                ),
+                max_new_tokens=(
+                    min(
+                        self.cfg["max_new_tokens"],
+                        max(0, int(output_max_model_len) - int(input_lengths[index])),
+                    )
+                    if output_max_model_len is not None
                     else None
                 ),
             )

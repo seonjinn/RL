@@ -217,6 +217,8 @@ def test_validate_manifest_rows_matches_scheduler_and_graph_limits() -> None:
         "commit": "aaa",
         "nodes": "4",
         "max_num_seqs": "128",
+        "output_max_model_len": "4096",
+        "specdec_context_headroom_tokens": "32",
         "max_cudagraph_capture_size": "768",
     }
     rows = [

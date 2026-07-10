@@ -65,6 +65,32 @@ def test_sync_generate_preserves_per_sample_stop_strings(
     assert set(sampling_params[1]["stop"]) == {"GLOBAL", "BETA"}
 
 
+def test_sync_generate_caps_outputs_below_specdec_context_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+    worker = _make_worker()
+    worker.cfg["_output_max_model_len"] = 10
+    worker.cfg["vllm_cfg"]["max_model_len"] = 15
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor(
+                [[1, 2, 3, 4, 5, 6, 7, 8], [1, 2, 3, 4, 5, 6, 0, 0]],
+                dtype=torch.long,
+            ),
+            "input_lengths": torch.tensor([8, 6], dtype=torch.long),
+            "stop_strings": [None, None],
+        }
+    )
+
+    with pytest.raises(_GenerationCaptured):
+        worker.generate(data)
+
+    sampling_params = worker.llm.sampling_params
+    assert [params["max_tokens"] for params in sampling_params] == [2, 4]
+
+
 def test_sync_generate_text_preserves_per_prompt_stop_strings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
