@@ -158,6 +158,7 @@ def _mini_launcher_command(variant: str) -> str:
             "--segment=4",
             f"--job-name=account-nemorl.tail-gate-qwen32b-{variant}",
             f"--output={run_dir}/slurm-%j.out",
+            "--open-mode=append",
             "--comment=metrics",
             "/repo/ray.sub",
         ]
@@ -169,6 +170,8 @@ def _metadata(variant: str) -> dict[str, str]:
     job_id = f"job-{variant}"
     run_dir = f"qwen32b/{variant}"
     ray_log_root = f"{run_dir}/{job_id}-logs"
+    command = _mini_command(variant)
+    launcher_command = _mini_launcher_command(variant)
     values = {
         "timestamp": "2026-07-10T12:00:00Z",
         "model": "qwen32b",
@@ -214,8 +217,15 @@ def _metadata(variant: str) -> dict[str, str]:
         "slurm_log_path": f"{run_dir}/slurm-{job_id}.out",
         "ray_driver_log_path": f"{ray_log_root}/ray-driver.log",
         "ray_log_dir": f"{ray_log_root}/ray",
-        "launcher_command": _mini_launcher_command(variant),
-        "command": _mini_command(variant),
+        "launcher_command": launcher_command,
+        "command": command,
+        "checkout_path": "/repo",
+        "ray_sub_path": "/repo/ray.sub",
+        "draft_checkpoint": (
+            "not_applicable" if variant == "baseline_v2" else "/models/draft"
+        ),
+        "command_argv_json": json.dumps(shlex.split(command)),
+        "launcher_argv_json": json.dumps(shlex.split(launcher_command)),
     }
     assert set(MINI_REQUIRED_MANIFEST_FIELDS).issubset(values)
     return values
@@ -311,6 +321,10 @@ def _write_manifest(path: Path, rows: Iterable[dict[str, str]]) -> None:
                 "Training completed through policy step 2.\n", encoding="utf-8"
             )
         (ray_driver_log.parent / ".ray_logs_final_sync_complete").touch()
+        evidence_dir = ray_driver_log.parent / ".ray_logs_final_sync_evidence"
+        evidence_dir.mkdir()
+        for node in range(4):
+            (evidence_dir / f"node-{node}").touch()
 
 
 def _run_validator(
@@ -342,6 +356,93 @@ def _move_override_before_entrypoint(command: str) -> str:
 
 def test_mini_validator_exports_main() -> None:
     assert callable(main)
+
+
+@pytest.mark.parametrize(
+    "active_token",
+    [
+        "$(touch /tmp/command-substitution)",
+        "`touch /tmp/backtick`",
+        ">/tmp/redirected.log",
+        "&&",
+        "|",
+        ";",
+    ],
+)
+def test_mini_validator_rejects_shell_active_structured_argv_before_wandb_query(
+    tmp_path: Path, active_token: str
+) -> None:
+    rows = _cohort()
+    row = rows[0]
+    command_argv = json.loads(row["command_argv_json"])
+    command_argv.append(active_token)
+    row["command_argv_json"] = json.dumps(command_argv)
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi({})
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="invalid mini command:baseline_v2:argv"):
+        main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=api)
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("argv_field", "token_prefix", "replacement"),
+    [
+        ("launcher_argv_json", "CONTAINER=", "/containers/other.sqsh"),
+        (
+            "command_argv_json",
+            "++policy.generation.vllm_kwargs.speculative_config.model=",
+            "/models/other-draft",
+        ),
+        ("launcher_argv_json", "CONTAINER_WORKDIR=", "/other/repo"),
+        ("launcher_argv_json", "/repo/ray.sub", "/other/repo/ray.sub"),
+    ],
+)
+def test_mini_validator_rejects_structured_provenance_mismatch_before_wandb_query(
+    tmp_path: Path,
+    argv_field: str,
+    token_prefix: str,
+    replacement: str,
+) -> None:
+    rows = _cohort()
+    row = rows[1]
+    argv = json.loads(row[argv_field])
+    for index, token in enumerate(argv):
+        if token == token_prefix or token.startswith(token_prefix):
+            argv[index] = (
+                replacement if token == token_prefix else f"{token_prefix}{replacement}"
+            )
+            break
+    else:
+        raise AssertionError(f"token not found: {token_prefix}")
+    row[argv_field] = json.dumps(argv)
+    if argv_field == "command_argv_json":
+        row["command"] = shlex.join(argv)
+        launcher_argv = json.loads(row["launcher_argv_json"])
+        command_index = next(
+            index
+            for index, token in enumerate(launcher_argv)
+            if token.startswith("COMMAND=")
+        )
+        launcher_argv[command_index] = f"COMMAND={row['command']}"
+        row["launcher_argv_json"] = json.dumps(launcher_argv)
+        row["launcher_command"] = shlex.join(launcher_argv)
+    else:
+        row["launcher_command"] = shlex.join(argv)
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi({})
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match="invalid mini .*provenance"):
+        main(["--manifest", str(manifest), "--output-dir", str(output_dir)], api=api)
+
+    assert api.calls == []
+    assert not output_dir.exists()
 
 
 def test_mini_validator_accepts_completed_matched_threshold_smoke(
@@ -844,6 +945,8 @@ def test_mini_validator_uses_manifest_wandb_url_for_each_run(tmp_path: Path) -> 
             shlex.quote(f"COMMAND={old_command}"),
             shlex.quote(f"COMMAND={row['command']}"),
         )
+        row["command_argv_json"] = json.dumps(shlex.split(row["command"]))
+        row["launcher_argv_json"] = json.dumps(shlex.split(row["launcher_command"]))
     histories = {row["wandb_run_id"]: _history(row) for row in rows}
     manifest = tmp_path / "submissions.tsv"
     output_dir = tmp_path / "output"
@@ -877,8 +980,6 @@ def test_mini_validator_rejects_conflicting_checkpoint_provenance(
     tmp_path: Path,
 ) -> None:
     rows = _cohort()
-    for row in rows:
-        row["checkpointing_enabled"] = "false"
     rows[0]["command"] = "run checkpointing.enabled=true"
     histories = {row["wandb_run_id"]: _history(row) for row in rows}
     manifest = tmp_path / "submissions.tsv"
@@ -1089,6 +1190,21 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
             "RuntimeError: CUDA graph capture failed\n",
             "cuda_graph_fallback",
         ),
+        (
+            "ray_log_dir",
+            "vllm:cudagraph_target_fallback_count=1\n",
+            "cuda_graph_fallback",
+        ),
+        (
+            "ray_driver_log_path",
+            "[rank3]: RuntimeError: CUDA graph capture failed\n",
+            "cuda_graph_fallback",
+        ),
+        (
+            "ray_log_dir",
+            "(RayWorker pid=42) IndexError: CUDA graph replay failed\n",
+            "cuda_graph_fallback",
+        ),
     ],
 )
 def test_mini_validator_recursively_rejects_explicit_log_failure_signatures(
@@ -1186,6 +1302,10 @@ def test_mini_validator_scans_every_restart_attempt(tmp_path: Path) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("Training completed through policy step 2.\n")
     (restart_dir / ".ray_logs_final_sync_complete").touch()
+    evidence_dir = restart_dir / ".ray_logs_final_sync_evidence"
+    evidence_dir.mkdir()
+    for node in range(4):
+        (evidence_dir / f"node-{node}").touch()
     _manifest_path(manifest, threshold, "ray_driver_log_path").write_text(
         "RuntimeError: NCCL error: unhandled system error\n", encoding="utf-8"
     )
@@ -1231,6 +1351,32 @@ def test_mini_validator_requires_completion_marker_on_final_restart(
     assert result == 1
     assert threshold_row["reason"] == (
         "mini_health_failed:log_missing:final_sync_marker"
+    )
+
+
+def test_mini_validator_requires_per_node_final_sync_evidence(tmp_path: Path) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    evidence_dir = (
+        manifest.parent / threshold["ray_driver_log_path"]
+    ).parent / ".ray_logs_final_sync_evidence"
+    (evidence_dir / "node-3").unlink()
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == (
+        "mini_health_failed:log_missing:final_sync_node_evidence"
     )
 
 

@@ -207,9 +207,11 @@ MINI_SBATCH_OPTIONS: dict[str, str | None] = {
     "--segment": "4",
     "--job-name": None,
     "--output": None,
+    "--open-mode": "append",
     "--comment": "metrics",
 }
 FINAL_SYNC_MARKER = ".ray_logs_final_sync_complete"
+FINAL_SYNC_EVIDENCE_DIR = ".ray_logs_final_sync_evidence"
 TEXT_LOG_SUFFIXES = {".err", ".log", ".out", ".txt"}
 LOG_FAILURE_PATTERNS = (
     (
@@ -283,10 +285,15 @@ LOG_FAILURE_PATTERNS = (
     (
         "cuda_graph_fallback",
         re.compile(
-            r"(?:^\s*runtimeerror\s*:\s*cuda[ _]?graph capture failed\b|"
+            r"(?:^\s*(?:(?:\[[^\]\n]*(?:rank|ray)[^\]\n]*\]|"
+            r"\([^\)\n]*(?:ray|rank)[^\)\n]*\)|ray::[^\s:]+)\s*:?\s*)*"
+            r"(?:runtimeerror|indexerror)\s*:.*\bcuda[ _]?graphs?\b.*"
+            r"\b(?:fallback|capture|replay|execution|failed)\b|"
             r"\bcuda[ _]?graphs?\s+fallback\s+"
             r"(?:to eager|detected|used|occurred)\b|"
             r"\bcuda[ _]?graphs?\s+fallback count\s*[:=]\s*[1-9]\d*\b|"
+            r"\b(?:vllm:)?cudagraph(?:_[a-z0-9]+)*_"
+            r"(?:eager_)?fallback(?:_count)?\s*[:=]\s*[1-9]\d*(?:\.0+)?\b|"
             r"\buncaptured cuda[ _]?graphs?\b|"
             r"\beager[ _-]?fallback(?:[ _]?count)?\s*[:=]\s*[1-9]\d*\b)",
             re.IGNORECASE,
@@ -383,7 +390,9 @@ def _expected_command_assignments(row: Mapping[str, str]) -> dict[str, str | Non
     }
     if row["variant"] != "baseline_v2":
         expected.update(SPECDEC_COMMAND_ASSIGNMENTS)
-        expected["++policy.generation.vllm_kwargs.speculative_config.model"] = None
+        expected["++policy.generation.vllm_kwargs.speculative_config.model"] = row[
+            "draft_checkpoint"
+        ]
     if row["variant"] == "fastrl_threshold_v2_k5":
         expected.update(THRESHOLD_COMMAND_ASSIGNMENTS)
         expected[
@@ -392,12 +401,48 @@ def _expected_command_assignments(row: Mapping[str, str]) -> dict[str, str | Non
     return expected
 
 
-def _mini_command_error(row: Mapping[str, str]) -> str | None:
+def _contains_shell_active_syntax(value: str) -> bool:
+    return any(token in value for token in ("$(", "`", ";", "&&", "||", "|", "<", ">"))
+
+
+def _structured_argv(
+    row: Mapping[str, str], *, display_field: str, argv_field: str, label: str
+) -> tuple[list[str] | None, str | None]:
     variant = row["variant"]
     try:
-        tokens = shlex.split(row["command"])
+        raw_argv = json.loads(row[argv_field])
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return None, f"invalid mini {label}:{variant}:argv"
+    if not isinstance(raw_argv, list) or not all(
+        isinstance(token, str) for token in raw_argv
+    ):
+        return None, f"invalid mini {label}:{variant}:argv"
+    tokens = cast(list[str], raw_argv)
+    display = row.get(display_field, "")
+    if _contains_shell_active_syntax(display) or any(
+        _contains_shell_active_syntax(token) for token in tokens
+    ):
+        return None, f"invalid mini {label}:{variant}:argv"
+    try:
+        display_tokens = shlex.split(display)
     except ValueError:
-        return f"invalid mini command:{variant}:shell syntax"
+        return None, f"invalid mini {label}:{variant}:argv"
+    if display_tokens != tokens:
+        return None, f"invalid mini {label}:{variant}:argv"
+    return tokens, None
+
+
+def _mini_command_error(row: Mapping[str, str]) -> str | None:
+    variant = row["variant"]
+    tokens, argv_error = _structured_argv(
+        row,
+        display_field="command",
+        argv_field="command_argv_json",
+        label="command",
+    )
+    if argv_error:
+        return argv_error
+    assert tokens is not None
     if not tokens or tokens[0] != "env":
         return f"invalid mini command:{variant}:shape"
 
@@ -415,6 +460,7 @@ def _mini_command_error(row: Mapping[str, str]) -> str | None:
     expected_environment = {
         **MINI_COMMAND_ENV_ASSIGNMENTS,
         "WANDB_RUN_ID": row["wandb_run_id"],
+        "PYTHONPATH": row["checkout_path"],
     }
     if error := _assignment_error(environment, expected_environment):
         return f"invalid mini command:{variant}:environment:{error}"
@@ -440,16 +486,23 @@ def _mini_command_error(row: Mapping[str, str]) -> str | None:
         key = f"++{normalized_name}" if token.startswith("++") else normalized_name
         assignments[key] = value
     if error := _assignment_error(assignments, _expected_command_assignments(row)):
+        if error == "++policy.generation.vllm_kwargs.speculative_config.model":
+            return f"invalid mini command:{variant}:provenance:draft_checkpoint"
         return f"invalid mini command:{variant}:override:{error}"
     return None
 
 
 def _mini_launcher_command_error(row: Mapping[str, str]) -> str | None:
     variant = row["variant"]
-    try:
-        tokens = shlex.split(row["launcher_command"])
-    except ValueError:
-        return f"invalid mini launcher command:{variant}:shell syntax"
+    tokens, argv_error = _structured_argv(
+        row,
+        display_field="launcher_command",
+        argv_field="launcher_argv_json",
+        label="launcher command",
+    )
+    if argv_error:
+        return argv_error
+    assert tokens is not None
     if not tokens or tokens[0] != "env":
         return f"invalid mini launcher command:{variant}:shape"
 
@@ -468,17 +521,27 @@ def _mini_launcher_command_error(row: Mapping[str, str]) -> str | None:
         return f"invalid mini launcher command:{variant}:shape"
     expected_environment = {
         **MINI_LAUNCHER_ENV_ASSIGNMENTS,
+        "CONTAINER": row["container"],
+        "CONTAINER_WORKDIR": row["checkout_path"],
         "BASE_LOG_DIR": row["run_dir"],
         "COMMAND": row["command"],
+        "PYTHONPATH": row["checkout_path"],
     }
     if error := _assignment_error(environment, expected_environment):
+        provenance_field = {
+            "CONTAINER": "container",
+            "CONTAINER_WORKDIR": "checkout_path",
+            "PYTHONPATH": "checkout_path",
+        }.get(error)
+        if provenance_field:
+            return (
+                f"invalid mini launcher command:{variant}:provenance:{provenance_field}"
+            )
         return f"invalid mini launcher command:{variant}:environment:{error}"
 
     index += 1
-    if index >= len(tokens) or Path(tokens[-1]).name != "ray.sub":
-        return f"invalid mini launcher command:{variant}:ray.sub"
-    if not Path(tokens[-1]).is_absolute():
-        return f"invalid mini launcher command:{variant}:ray.sub"
+    if index >= len(tokens) or tokens[-1] != row["ray_sub_path"]:
+        return f"invalid mini launcher command:{variant}:provenance:ray_sub_path"
     option_tokens = tokens[index:-1]
     options: dict[str, str] = {}
     for token in option_tokens:
@@ -497,6 +560,25 @@ def _mini_launcher_command_error(row: Mapping[str, str]) -> str | None:
     }
     if error := _assignment_error(options, expected_options):
         return f"invalid mini launcher command:{variant}:sbatch options:{error}"
+    return None
+
+
+def _mini_execution_provenance_error(row: Mapping[str, str]) -> str | None:
+    variant = row["variant"]
+    checkout_path = Path(row["checkout_path"])
+    ray_sub_path = Path(row["ray_sub_path"])
+    container_path = Path(row["container"])
+    if not checkout_path.is_absolute() or not container_path.is_absolute():
+        return f"invalid mini provenance:{variant}:absolute_paths"
+    if ray_sub_path != checkout_path / "ray.sub":
+        return f"invalid mini provenance:{variant}:ray_sub_path"
+    if not ray_sub_path.is_absolute():
+        return f"invalid mini provenance:{variant}:ray_sub_path"
+    if row["variant"] == "baseline_v2":
+        if row["draft_checkpoint"] != "not_applicable":
+            return f"invalid mini provenance:{variant}:draft_checkpoint"
+    elif not Path(row["draft_checkpoint"]).is_absolute():
+        return f"invalid mini provenance:{variant}:draft_checkpoint"
     return None
 
 
@@ -618,6 +700,8 @@ def _validate_mini_manifest_rows(
             return command_error
         if launcher_error := _mini_launcher_command_error(row):
             return launcher_error
+        if provenance_error := _mini_execution_provenance_error(row):
+            return provenance_error
         if log_error := _mini_log_provenance_error(manifest, row):
             return log_error
     return None
@@ -712,6 +796,9 @@ def _log_health_failure(manifest: Path, metadata: Mapping[str, str]) -> str | No
         return "log_empty:ray_log_dir"
     if not (final_attempt / FINAL_SYNC_MARKER).is_file():
         return "log_missing:final_sync_marker"
+    evidence_dir = final_attempt / FINAL_SYNC_EVIDENCE_DIR
+    if not evidence_dir.is_dir() or len(list(evidence_dir.iterdir())) != 4:
+        return "log_missing:final_sync_node_evidence"
 
     text_logs = [slurm_log]
     for attempt in attempts:
@@ -916,7 +1003,7 @@ def _mini_row(
 def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     """Validate all mini-smoke manifest rows and render deterministic artifacts."""
     args = _parse_args(argv)
-    manifest_rows = _read_manifest(args.manifest)
+    _, manifest_rows = _read_manifest(args.manifest)
     manifest_error = _validate_manifest_rows(manifest_rows)
     if manifest_error:
         raise ValueError(manifest_error)

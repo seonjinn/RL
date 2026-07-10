@@ -674,6 +674,11 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "ray_log_dir",
         "launcher_command",
         "command",
+        "checkout_path",
+        "ray_sub_path",
+        "draft_checkpoint",
+        "command_argv_json",
+        "launcher_argv_json",
     }.issubset(manifest_row)
     expected_run_dir = experiment_root / "qwen32b" / "efficient_roofline_v2_k5"
     expected_manifest_values = {
@@ -714,6 +719,18 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "ray_log_dir": str(expected_run_dir / "4242-logs" / "ray"),
     }
     assert expected_manifest_values.items() <= manifest_row.items()
+    command_argv = json.loads(manifest_row["command_argv_json"])
+    launcher_argv = json.loads(manifest_row["launcher_argv_json"])
+    assert command_argv[:3] == [
+        "env",
+        "VLLM_USE_V2_MODEL_RUNNER=1",
+        "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true",
+    ]
+    assert launcher_argv[0] == "env"
+    assert "--open-mode=append" in launcher_argv
+    assert manifest_row["checkout_path"] == str(repo.resolve())
+    assert manifest_row["ray_sub_path"] == str((repo / "ray.sub").resolve())
+    assert manifest_row["draft_checkpoint"] == str(draft_model.resolve())
     for expected in (
         "GPUS_PER_NODE=4",
         "RAY_LOG_SYNC_FREQUENCY=60",

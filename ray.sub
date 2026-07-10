@@ -24,6 +24,21 @@
 
 set -eoux pipefail
 
+FINAL_SYNC_FAILURE_EXIT_CODE=86
+
+final_sync_exit_status() {
+  local driver_status="$1"
+  local sync_complete="$2"
+
+  if [[ "${driver_status}" -ne 0 ]]; then
+    return "${driver_status}"
+  fi
+  if [[ "${sync_complete}" -ne 1 ]]; then
+    return "${FINAL_SYNC_FAILURE_EXIT_CODE}"
+  fi
+  return 0
+}
+
 # Record job-start epoch so Python can measure pre-Python overhead
 export NRL_JOB_START_EPOCH=$(date +%s.%N)
 
@@ -171,6 +186,7 @@ else
   LOG_DIR="$BASE_LOG_DIR/$SLURM_JOB_ID-logs"
 fi
 mkdir -p $LOG_DIR
+mkdir -p "$LOG_DIR/.ray_logs_final_sync_evidence"
 
 # LOG_DIR must be shared across all nodes. Write a canary the head and worker
 # containers check at startup: a node that can't see it isn't on the shared FS, so
@@ -494,6 +510,19 @@ fi
 # exit codes to stay non-fatal.
 set -o pipefail
 
+final_sync_exit_status() {
+  local driver_status="\$1"
+  local sync_complete="\$2"
+
+  if [[ "\$driver_status" -ne 0 ]]; then
+    return "\$driver_status"
+  fi
+  if [[ "\$sync_complete" -ne 1 ]]; then
+    return $FINAL_SYNC_FAILURE_EXIT_CODE
+  fi
+  return 0
+}
+
 # If this node can't see the canary, LOG_DIR is not shared. Fail now instead of
 # waiting forever for signal files the submit host writes but this node can't read.
 if [[ ! -f "$LOG_DIR/.shared_fs_canary" ]]; then
@@ -527,10 +556,12 @@ monitor-sidecar &
 # Background process to sync Ray logs periodically and once more on driver exit.
 sync-ray-logs-once() {
   local sync_status=0
+  local found_ray_logs=0
   mkdir -p "$LOG_DIR/ray" || return 1
   if compgen -G "/tmp/ray/session_[0-9]*" > /dev/null; then
     for session_dir in /tmp/ray/session_[0-9]*/; do
       if [[ -d "\$session_dir/logs" ]]; then
+        found_ray_logs=1
         session_name=\$(basename "\$session_dir")
         mkdir -p "$LOG_DIR/ray/\$session_name/logs" || sync_status=1
         if command -v rsync > /dev/null 2>&1; then
@@ -541,6 +572,9 @@ sync-ray-logs-once() {
       fi
     done
   fi
+  if [[ "\$found_ray_logs" -eq 0 ]]; then
+    return 1
+  fi
   return \$sync_status
 }
 
@@ -550,9 +584,11 @@ log-sync-sidecar() {
   while true; do
     if [[ -f "$LOG_DIR/.ray_logs_final_sync_requested" ]]; then
       if sync-ray-logs-once; then
-        touch "$LOG_DIR/.ray_logs_final_sync_ack.head"
+        sync_node="\${SLURMD_NODENAME:-$head_node}"
+        touch "$LOG_DIR/.ray_logs_final_sync_evidence/\$sync_node"
+        touch "$LOG_DIR/.ray_logs_final_sync_ack.\$sync_node"
       else
-        touch "$LOG_DIR/.ray_logs_final_sync_failed.head"
+        touch "$LOG_DIR/.ray_logs_final_sync_failed.\${SLURMD_NODENAME:-$head_node}"
       fi
       break
     fi
@@ -698,12 +734,22 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
   bash "$DRIVER_COMMAND_FILE" > "$LOG_DIR/ray-driver.log" 2>&1
   driver_exit_code=\$?
   touch "$LOG_DIR/.ray_logs_final_sync_requested"
-  expected_sync_acks="$SLURM_JOB_NUM_NODES"
+  expected_sync_acks="${#nodes_array[@]}"
   sync_deadline=\$((SECONDS + 180))
   final_sync_complete=0
   while (( SECONDS <= sync_deadline )); do
-    sync_acks=\$(find "$LOG_DIR" -maxdepth 1 -type f -name '.ray_logs_final_sync_ack.*' | wc -l)
-    if [[ "\$sync_acks" -eq "\$expected_sync_acks" ]]; then
+    sync_acks=0
+    missing_sync_evidence=0
+    for sync_node in "${nodes_array[@]}"; do
+      if [[ -f "$LOG_DIR/.ray_logs_final_sync_ack.\$sync_node" ]] \
+        && [[ -f "$LOG_DIR/.ray_logs_final_sync_evidence/\$sync_node" ]]; then
+        sync_acks=\$((sync_acks + 1))
+      else
+        missing_sync_evidence=1
+      fi
+    done
+    if [[ "\$missing_sync_evidence" -eq 0 ]] \
+      && [[ "\$sync_acks" -eq "\$expected_sync_acks" ]]; then
       final_sync_complete=1
       break
     fi
@@ -717,7 +763,8 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
   else
     echo "[ERROR] Final Ray log sync incomplete: \$sync_acks/\$expected_sync_acks acknowledgements" >&2
   fi
-  exit "\$driver_exit_code"
+  final_sync_exit_status "\$driver_exit_code" "\$final_sync_complete"
+  exit \$?
 else
   # Interactive: keep the head container alive for user attachment via the attach
   # helper (a separate overlapping srun). sleep infinity is invisible to the
@@ -766,10 +813,12 @@ monitor-sidecar &
 # Background process to sync Ray logs periodically and acknowledge final sync.
 sync-ray-logs-once() {
   local sync_status=0
+  local found_ray_logs=0
   mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME" || return 1
   if compgen -G "/tmp/ray/session_[0-9]*" > /dev/null; then
     for session_dir in /tmp/ray/session_[0-9]*/; do
       if [[ -d "\$session_dir/logs" ]]; then
+        found_ray_logs=1
         session_name=\$(basename "\$session_dir")
         destination="$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/logs"
         mkdir -p "\$destination" || sync_status=1
@@ -781,6 +830,9 @@ sync-ray-logs-once() {
       fi
     done
   fi
+  if [[ "\$found_ray_logs" -eq 0 ]]; then
+    return 1
+  fi
   return \$sync_status
 }
 
@@ -790,9 +842,10 @@ log-sync-sidecar() {
   while true; do
     if [[ -f "$LOG_DIR/.ray_logs_final_sync_requested" ]]; then
       if sync-ray-logs-once; then
-        touch "$LOG_DIR/.ray_logs_final_sync_ack.worker-\$SLURM_PROCID"
+        touch "$LOG_DIR/.ray_logs_final_sync_evidence/\$SLURMD_NODENAME"
+        touch "$LOG_DIR/.ray_logs_final_sync_ack.\$SLURMD_NODENAME"
       else
-        touch "$LOG_DIR/.ray_logs_final_sync_failed.worker-\$SLURM_PROCID"
+        touch "$LOG_DIR/.ray_logs_final_sync_failed.\$SLURMD_NODENAME"
       fi
       break
     fi

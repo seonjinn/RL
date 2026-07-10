@@ -98,6 +98,9 @@ if [[ -z "${REPO_DIR:-}" ]]; then
     REPO_DIR="${logical_pwd}"
   fi
 fi
+if [[ -d "${REPO_DIR}" ]]; then
+  REPO_DIR="$(readlink -f "${REPO_DIR}")"
+fi
 
 case "${MODE}" in
   dry-run|test-only|submit)
@@ -155,6 +158,15 @@ fi
 
 sha256_file() {
   shasum -a 256 "$1" | awk '{print $1}'
+}
+
+json_argv() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1:], ensure_ascii=True, separators=(",", ":")))
+PY
 }
 
 validate_roofline_config() {
@@ -340,6 +352,8 @@ submit_one() {
   local consecutive_checks=""
   local roofline_hash=""
   local manifest_draft_sample_method="not_applicable"
+  local manifest_draft_checkpoint="not_applicable"
+  local container_path="${CONTAINER}"
   local run_dir="${EXPERIMENT_ROOT}/${model}/${variant}"
   local wandb_run_id="${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
   local triton_cache_dir="/tmp/nemorl-tail-gate-triton-${RUN_TAG}-${model}-${variant}"
@@ -496,6 +510,10 @@ submit_one() {
 
   if [[ "${draft_k}" != "0" ]]; then
     manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
+    manifest_draft_checkpoint="${draft_model}"
+    if [[ -d "${draft_model}" ]]; then
+      manifest_draft_checkpoint="$(readlink -f "${draft_model}")"
+    fi
     overrides+=(
       "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
       "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
@@ -547,9 +565,15 @@ submit_one() {
   local command
   printf -v command '%q ' "${command_parts[@]}"
   command="${command% }"
+  local command_argv_json
+  command_argv_json="$(json_argv "${command_parts[@]}")"
+
+  if [[ -f "${CONTAINER}" ]]; then
+    container_path="$(readlink -f "${CONTAINER}")"
+  fi
 
   local environment=(
-    "CONTAINER=${CONTAINER}"
+    "CONTAINER=${container_path}"
     "MOUNTS=/lustre:/lustre"
     "CONTAINER_WORKDIR=${REPO_DIR}"
     "COMMAND=${command}"
@@ -573,6 +597,7 @@ submit_one() {
     --segment="${CLUSTER_GPUS_PER_NODE}"
     --job-name="${ACCOUNT}-nemorl.tail-gate-${model}-${variant}"
     --output="${run_dir}/slurm-%j.out"
+    --open-mode=append
     --comment=metrics
   )
   local launcher_command_parts=(
@@ -585,6 +610,8 @@ submit_one() {
   local launcher_command
   printf -v launcher_command '%q ' "${launcher_command_parts[@]}"
   launcher_command="${launcher_command% }"
+  local launcher_argv_json
+  launcher_argv_json="$(json_argv "${launcher_command_parts[@]}")"
 
   case "${MODE}" in
     dry-run)
@@ -604,7 +631,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -663,6 +690,11 @@ submit_one() {
         "${job_log_dir}/ray"
         "${launcher_command}"
         "${command}"
+        "${REPO_DIR}"
+        "${REPO_DIR}/ray.sub"
+        "${manifest_draft_checkpoint}"
+        "${command_argv_json}"
+        "${launcher_argv_json}"
       )
       (
         IFS=$'\t'

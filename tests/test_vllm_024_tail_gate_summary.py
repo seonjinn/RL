@@ -24,6 +24,7 @@ import pytest
 
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     COHORT_FIELDS,
+    LEGACY_C78A93C8_MANIFEST_HEADER,
     METRIC_KEYS,
     REQUIRED_MANIFEST_FIELDS,
     REQUIRED_ROW_FIELDS,
@@ -502,12 +503,12 @@ def test_historical_manifest_without_mini_fields_remains_collectible(
     rows = _cohort()
     mini_only_fields = (
         "draft_sample_method",
+        "max_model_len",
         "run_dir",
         "slurm_log_path",
         "ray_driver_log_path",
         "ray_log_dir",
         "launcher_command",
-        "command",
     )
     for row in rows:
         for field in mini_only_fields:
@@ -528,6 +529,37 @@ def test_historical_manifest_without_mini_fields_remains_collectible(
     always_on = next(row for row in payload if row["variant"] == "always_on_v2_k5")
     assert baseline["draft_sample_method"] == "not_applicable"
     assert always_on["draft_sample_method"] == "legacy_unspecified"
+
+
+def test_c78a93c8_header_fixture_uses_explicit_legacy_sentinels(tmp_path: Path) -> None:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "vllm_024_tail_gate"
+        / "c78a93c8_submissions.tsv"
+    )
+    manifest = tmp_path / "submissions.tsv"
+    manifest.write_bytes(fixture.read_bytes())
+    output_dir = tmp_path / "output"
+
+    assert fixture.read_text(encoding="utf-8").splitlines()[0].split("\t") == list(
+        LEGACY_C78A93C8_MANIFEST_HEADER
+    )
+    assert (
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=_api_for(_cohort()),
+        )
+        == 0
+    )
+    payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert {row["max_model_len"] for row in payload} == {"legacy_unrecorded"}
+    assert (
+        next(row for row in payload if row["variant"] == "baseline_v2")[
+            "draft_sample_method"
+        ]
+        == "not_applicable"
+    )
 
 
 @pytest.mark.parametrize("field", ["wandb_run_id", "job_id"])

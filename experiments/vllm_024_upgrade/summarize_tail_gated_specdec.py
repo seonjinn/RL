@@ -127,6 +127,100 @@ LOG_PROVENANCE_FIELDS = (
     "ray_driver_log_path",
     "ray_log_dir",
 )
+LEGACY_UNRECORDED_MAX_MODEL_LEN = "legacy_unrecorded"
+LEGACY_C78A93C8_MANIFEST_HEADER = (
+    "timestamp",
+    "model",
+    "variant",
+    "gate_mode",
+    "k",
+    "threshold",
+    "consecutive_checks",
+    "roofline_config_sha256",
+    "cluster",
+    "runtime",
+    "runtime_version",
+    "runtime_commit",
+    "vllm_version",
+    "vllm_commit",
+    "target_tp",
+    "draft_tp",
+    "dp",
+    "ep",
+    "temperature",
+    "top_p",
+    "max_osl",
+    "max_sequence_length",
+    "num_prompts",
+    "num_generations",
+    "train_gbs",
+    "max_num_batched_tokens",
+    "max_num_seqs",
+    "recipe",
+    "container",
+    "container_sha256",
+    "runner",
+    "graph_mode",
+    "sampling",
+    "job_id",
+    "wandb_run_id",
+    "wandb_url",
+    "command",
+)
+MINI_PROVENANCE_MANIFEST_HEADER = (
+    "timestamp",
+    "model",
+    "variant",
+    "gate_mode",
+    "k",
+    "threshold",
+    "consecutive_checks",
+    "roofline_config_sha256",
+    "cluster",
+    "runtime",
+    "runtime_version",
+    "runtime_commit",
+    "vllm_version",
+    "vllm_commit",
+    "target_tp",
+    "draft_tp",
+    "dp",
+    "ep",
+    "temperature",
+    "top_p",
+    "max_osl",
+    "max_model_len",
+    "max_sequence_length",
+    "num_prompts",
+    "num_generations",
+    "train_gbs",
+    "max_num_batched_tokens",
+    "max_num_seqs",
+    "recipe",
+    "container",
+    "container_sha256",
+    "runner",
+    "graph_mode",
+    "sampling",
+    "draft_sample_method",
+    "job_id",
+    "wandb_run_id",
+    "wandb_url",
+    "run_dir",
+    "slurm_log_path",
+    "ray_driver_log_path",
+    "ray_log_dir",
+    "launcher_command",
+    "command",
+)
+STRUCTURED_PROVENANCE_MANIFEST_HEADER = (
+    *MINI_PROVENANCE_MANIFEST_HEADER,
+    "checkout_path",
+    "ray_sub_path",
+    "draft_checkpoint",
+    "command_argv_json",
+    "launcher_argv_json",
+)
 REQUIRED_MANIFEST_FIELDS = (
     *LEGACY_COHORT_FIELDS,
     "variant",
@@ -145,7 +239,37 @@ MINI_REQUIRED_MANIFEST_FIELDS = (
     "wandb_run_id",
     "launcher_command",
     "command",
+    "checkout_path",
+    "ray_sub_path",
+    "draft_checkpoint",
+    "command_argv_json",
+    "launcher_argv_json",
 )
+
+
+@dataclass(frozen=True)
+class ManifestSchema:
+    name: str
+    header: tuple[str, ...]
+    legacy_defaults: Mapping[str, str]
+
+
+MANIFEST_SCHEMAS = {
+    LEGACY_C78A93C8_MANIFEST_HEADER: ManifestSchema(
+        "c78a93c8",
+        LEGACY_C78A93C8_MANIFEST_HEADER,
+        {
+            "max_model_len": LEGACY_UNRECORDED_MAX_MODEL_LEN,
+            "draft_sample_method": "",
+        },
+    ),
+    MINI_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
+        "mini_provenance_v1", MINI_PROVENANCE_MANIFEST_HEADER, {}
+    ),
+    STRUCTURED_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
+        "structured_provenance_v1", STRUCTURED_PROVENANCE_MANIFEST_HEADER, {}
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -693,9 +817,14 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
     )
 
 
-def _read_manifest(path: Path) -> list[dict[str, str]]:
+def _read_manifest(path: Path) -> tuple[ManifestSchema, list[dict[str, str]]]:
     with path.open(encoding="utf-8", newline="") as stream:
-        return list(csv.DictReader(stream, delimiter="\t"))
+        reader = csv.DictReader(stream, delimiter="\t")
+        header = tuple(reader.fieldnames or ())
+        schema = MANIFEST_SCHEMAS.get(header)
+        if schema is None:
+            raise ValueError(f"unsupported manifest header:{','.join(header)}")
+        return schema, [{**schema.legacy_defaults, **row} for row in reader]
 
 
 def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
@@ -737,13 +866,16 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         seen.add(key)
         try:
             max_osl = int(row["max_osl"])
-            max_model_len = int(row["max_model_len"])
+            max_model_len = row["max_model_len"]
+            if max_model_len == LEGACY_UNRECORDED_MAX_MODEL_LEN:
+                continue
+            max_model_len_int = int(max_model_len)
         except ValueError:
             return "max_osl and max_model_len must be integers"
-        if max_model_len < max_osl + MIN_SPECDEC_HEADROOM_TOKENS:
+        if max_model_len_int < max_osl + MIN_SPECDEC_HEADROOM_TOKENS:
             return (
                 "max_model_len must be at least max_osl plus "
-                f"{MIN_SPECDEC_HEADROOM_TOKENS}:{max_model_len}:{max_osl}"
+                f"{MIN_SPECDEC_HEADROOM_TOKENS}:{max_model_len_int}:{max_osl}"
             )
     return None
 
@@ -870,7 +1002,7 @@ def _claim_output_directory(path: Path) -> None:
 
 def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     args = _parse_args(argv)
-    manifest_rows = _read_manifest(args.manifest)
+    _, manifest_rows = _read_manifest(args.manifest)
     manifest_error = _validate_manifest_rows(manifest_rows)
     if manifest_error:
         raise ValueError(manifest_error)
