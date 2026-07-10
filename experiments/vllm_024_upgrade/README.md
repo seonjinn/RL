@@ -104,6 +104,12 @@ commit, recipe, and Slurm provenance in the Lustre `submissions.tsv` manifest.
 `submit` runs Slurm validation before `sbatch`, requires a clean and already
 pushed `sna/` branch, and never pushes a remote itself.
 
+Set `QWEN30_ROOFLINE_CONFIG` and `QWEN32_ROOFLINE_CONFIG` to separate fitted
+JSON files. Before submitting a roofline arm, the launcher verifies the JSON's
+model, target TP, draft TP, container path, and container SHA256 metadata. It
+also validates or creates the exact manifest header before asking Slurm to
+create a job.
+
 Create a roofline input from measured component latencies before running the
 roofline arm. The CSV must carry a single model/TP/cluster/container identity,
 the EfficientRollout constants, and `B,S,K,T_T,T_D,T_V` columns:
@@ -114,8 +120,12 @@ uv run --no-sync python experiments/vllm_024_upgrade/calibrate_tail_gate.py \
   --output-dir /lustre/.../tail_gate_calibrations
 ```
 
-The converter writes a deterministic EfficientRollout-compatible JSON and a
-SHA256 sidecar for each calibration identity.
+The CSV also requires immutable `target_checkpoint_revision` and
+`draft_checkpoint_revision` commit hashes plus a caller-supplied, timezone-aware
+`calibration_timestamp`. The converter preserves that timestamp, writes
+deterministic output, fits additive timing residuals independently for every K,
+and emits an EfficientRollout-compatible JSON plus SHA256 sidecar for each
+calibration identity.
 
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 

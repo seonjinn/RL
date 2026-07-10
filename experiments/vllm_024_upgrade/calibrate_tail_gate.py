@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Convert measured tail-gate component latencies into a roofline JSON file."""
 
 from __future__ import annotations
@@ -12,6 +26,7 @@ import re
 import statistics
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +39,9 @@ IDENTITY_FIELDS = (
     "container",
     "container_sha256",
     "vllm_commit",
+    "target_checkpoint_revision",
+    "draft_checkpoint_revision",
+    "calibration_timestamp",
     "gpu",
 )
 CONSTANT_FIELDS = (
@@ -92,7 +110,28 @@ def _parse_positive(
 
 
 def _validated_values(rows: list[dict[str, str]]) -> dict[str, Any]:
-    identity = {field: _require_single_value(rows, field) for field in IDENTITY_FIELDS}
+    identity: dict[str, Any] = {
+        field: _require_single_value(rows, field) for field in IDENTITY_FIELDS
+    }
+    for field in ("target_tp", "draft_tp"):
+        value = identity[field]
+        if not value.isdigit() or int(value) <= 0:
+            raise ValueError(f"{field} must be a positive integer")
+        identity[field] = int(value)
+    for field in ("target_checkpoint_revision", "draft_checkpoint_revision"):
+        if re.fullmatch(r"[0-9a-fA-F]{40}", identity[field]) is None:
+            raise ValueError(
+                f"{field} must be an exact 40-character hexadecimal revision"
+            )
+    timestamp = identity["calibration_timestamp"]
+    try:
+        parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(
+            "calibration_timestamp must be an ISO-8601 timestamp"
+        ) from error
+    if parsed_timestamp.utcoffset() is None:
+        raise ValueError("calibration_timestamp must include a timezone")
     constants: dict[str, float | int] = {}
     for field in CONSTANT_FIELDS:
         values = {
@@ -108,44 +147,188 @@ def _validated_values(rows: list[dict[str, str]]) -> dict[str, Any]:
     return {**identity, **constants}
 
 
-def _estimate_kappa_eff(
-    rows: list[dict[str, str]], bandwidth: float, maximum: int
-) -> float:
-    points = sorted(
-        (int(row["B"]) * int(row["S"]), float(row["T_T"]) * 1e-3) for row in rows
-    )
-    slopes = [
-        (right_time - left_time) / (right_tokens - left_tokens)
-        for (left_tokens, left_time), (right_tokens, right_time) in zip(
-            points, points[1:]
-        )
-        if right_tokens > left_tokens and right_time > left_time
+def _solve_linear_system(matrix: list[list[float]], values: list[float]) -> list[float]:
+    size = len(values)
+    augmented = [row[:] + [value] for row, value in zip(matrix, values)]
+    for column in range(size):
+        pivot = max(range(column, size), key=lambda row: abs(augmented[row][column]))
+        if abs(augmented[pivot][column]) < 1e-18:
+            raise ValueError("calibration measurements do not span a fit-able grid")
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        divisor = augmented[column][column]
+        augmented[column] = [value / divisor for value in augmented[column]]
+        for row in range(size):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            augmented[row] = [
+                current - factor * reference
+                for current, reference in zip(augmented[row], augmented[column])
+            ]
+    return [augmented[row][-1] for row in range(size)]
+
+
+def _least_squares(
+    features: list[list[float]], observations: list[float]
+) -> list[float]:
+    width = len(features[0])
+    normal_matrix = [
+        [sum(row[left] * row[right] for row in features) for right in range(width)]
+        for left in range(width)
     ]
-    if not slopes:
-        return max(1.0, maximum / 2.0)
-    return min(float(maximum), max(1.0, statistics.median(slopes) * bandwidth))
+    normal_values = [
+        sum(row[column] * value for row, value in zip(features, observations))
+        for column in range(width)
+    ]
+    return _solve_linear_system(normal_matrix, normal_values)
+
+
+def _fit_target_parameters(
+    rows: list[dict[str, str]], values: dict[str, Any]
+) -> tuple[float, float]:
+    unique_measurements = sorted(
+        {(int(row["B"]), int(row["S"]), float(row["T_T"])) for row in rows}
+    )
+    c_comm = float(values["c_comm"])
+    features = [
+        [1.0, float(batch * sequence), float(batch)]
+        for batch, sequence, _timing in unique_measurements
+    ]
+    observations = [
+        timing_ms * 1e-3 - c_comm
+        for _batch, _sequence, timing_ms in unique_measurements
+    ]
+    intercept, kv_slope, _batch_overhead = _least_squares(features, observations)
+    if intercept <= 0.0 or kv_slope <= 0.0:
+        raise ValueError("target timing fit produced non-positive roofline parameters")
+    bandwidth = min(float(values["BW_peak"]), float(values["W_t"]) / intercept)
+    kappa_eff = kv_slope * bandwidth
+    if bandwidth <= 0.0 or kappa_eff <= 0.0:
+        raise ValueError("target timing fit produced non-positive roofline parameters")
+    return bandwidth, kappa_eff
+
+
+def _target_base_seconds(
+    row: dict[str, str], values: dict[str, Any], bandwidth: float, kappa_eff: float
+) -> float:
+    batch = int(row["B"])
+    sequence = int(row["S"])
+    memory = (float(values["W_t"]) + kappa_eff * batch * sequence) / bandwidth
+    compute = (
+        batch * float(values["C_dense"]) + batch * sequence * float(values["C_attn"])
+    ) / float(values["F_eff"])
+    return max(memory, compute) + float(values["c_comm"])
+
+
+def _fit_eta_d(
+    rows: list[dict[str, str]],
+    values: dict[str, Any],
+    bandwidth: float,
+    kappa_eff: float,
+) -> float:
+    k_values = sorted({int(row["K"]) for row in rows})
+    features: list[list[float]] = []
+    observations: list[float] = []
+    for row in rows:
+        batch = int(row["B"])
+        sequence = int(row["S"])
+        gamma = int(row["K"])
+        gamma_features = [float(batch) if gamma == value else 0.0 for value in k_values]
+        features.append([1.0, *gamma_features])
+        observations.append(
+            float(row["T_D"]) * 1e-3
+            - float(values["c_comm"])
+            - kappa_eff * batch * sequence / bandwidth
+        )
+    intercept, *_per_gamma_slopes = _least_squares(features, observations)
+    eta_d = intercept * bandwidth / float(values["W_d"])
+    return max(1.0, eta_d)
+
+
+def _draft_base_seconds(
+    row: dict[str, str],
+    values: dict[str, Any],
+    bandwidth: float,
+    kappa_eff: float,
+    eta_d: float,
+) -> float:
+    batch = int(row["B"])
+    sequence = int(row["S"])
+    memory = (eta_d * float(values["W_d"]) + kappa_eff * batch * sequence) / bandwidth
+    compute = (
+        batch * float(values["C_dense"]) + batch * sequence * float(values["C_attn"])
+    ) / float(values["F_eff"])
+    return max(memory, compute) + float(values["c_comm"])
+
+
+def _verify_base_seconds(
+    row: dict[str, str], values: dict[str, Any], bandwidth: float, kappa_eff: float
+) -> float:
+    batch = int(row["B"])
+    sequence = int(row["S"])
+    gamma = int(row["K"])
+    memory = (float(values["W_t"]) + kappa_eff * batch * sequence) / bandwidth
+    compute = (
+        batch * (gamma + 1) * float(values["C_dense"])
+        + batch * sequence * (gamma + 1) * float(values["C_attn"])
+    ) / float(values["F_eff"])
+    return max(memory, compute) + float(values["c_comm"])
+
+
+def _residual_overhead_us(
+    rows: list[dict[str, str]], measured_field: str, base_seconds: Sequence[float]
+) -> float:
+    residuals = [
+        max(0.0, (float(row[measured_field]) * 1e-3 - base) / (int(row["B"]) * 1e-6))
+        for row, base in zip(rows, base_seconds)
+    ]
+    return statistics.median(residuals)
+
+
+def _fit_per_gamma(
+    rows: list[dict[str, str]],
+    values: dict[str, Any],
+    bandwidth: float,
+    kappa_eff: float,
+    eta_d: float,
+) -> dict[str, dict[str, float]]:
+    result: dict[str, dict[str, float]] = {}
+    for gamma in sorted({int(row["K"]) for row in rows}):
+        gamma_rows = [row for row in rows if int(row["K"]) == gamma]
+        c_t = _residual_overhead_us(
+            gamma_rows,
+            "T_T",
+            [
+                _target_base_seconds(row, values, bandwidth, kappa_eff)
+                for row in gamma_rows
+            ],
+        )
+        c_d = _residual_overhead_us(
+            gamma_rows,
+            "T_D",
+            [
+                _draft_base_seconds(row, values, bandwidth, kappa_eff, eta_d)
+                for row in gamma_rows
+            ],
+        )
+        c_v = _residual_overhead_us(
+            gamma_rows,
+            "T_V",
+            [
+                _verify_base_seconds(row, values, bandwidth, kappa_eff)
+                for row in gamma_rows
+            ],
+        )
+        result[str(gamma)] = {"R2": 0.0, "c_D": c_d, "c_T": c_t, "c_V": c_v}
+    return result
 
 
 def _fit_payload(
     rows: list[dict[str, str]], values: dict[str, Any], input_sha256: str
 ) -> dict[str, Any]:
-    target_timings = [float(row["T_T"]) for row in rows]
-    draft_timings = [float(row["T_D"]) for row in rows]
-    verify_timings = [float(row["T_V"]) for row in rows]
-    batches = [int(row["B"]) for row in rows]
-    bandwidth = min(
-        float(values["BW_peak"]),
-        max(1.0, float(values["W_t"]) / (statistics.median(target_timings) * 1e-3)),
-    )
-    kappa_eff = _estimate_kappa_eff(rows, bandwidth, int(values["kappa_theoretical"]))
-    eta_d = max(
-        1.0,
-        statistics.median(draft_timings)
-        / statistics.median(target_timings)
-        * float(values["W_t"])
-        / float(values["W_d"]),
-    )
-    median_batch = statistics.median(batches)
+    bandwidth, kappa_eff = _fit_target_parameters(rows, values)
+    eta_d = _fit_eta_d(rows, values, bandwidth, kappa_eff)
+    per_gamma = _fit_per_gamma(rows, values, bandwidth, kappa_eff, eta_d)
     k_values = sorted({int(row["K"]) for row in rows})
     metadata = {
         "calibration_schema": "efficientrollout-sd-toggle-v1",
@@ -153,11 +336,14 @@ def _fit_payload(
         "container": values["container"],
         "container_sha256": values["container_sha256"],
         "draft_tp": int(values["draft_tp"]),
+        "draft_checkpoint_revision": values["draft_checkpoint_revision"],
+        "calibration_timestamp": values["calibration_timestamp"],
         "input_sha256": input_sha256,
         "k_values": k_values,
         "measurement_rows": len(rows),
         "model": values["model"],
         "target_tp": int(values["target_tp"]),
+        "target_checkpoint_revision": values["target_checkpoint_revision"],
         "vllm_commit": values["vllm_commit"],
     }
     return {
@@ -182,12 +368,12 @@ def _fit_payload(
         "calibration": {
             "F_eff": float(values["F_eff"]),
             "beta": 0.0,
-            "c_D": statistics.median(draft_timings) * 1000.0 / median_batch,
-            "c_T": statistics.median(target_timings) * 1000.0 / median_batch,
-            "c_V": statistics.median(verify_timings) * 1000.0 / median_batch,
+            "c_D": 0.0,
+            "c_T": 0.0,
+            "c_V": 0.0,
             "eta_d": eta_d,
             "kappa_eff": kappa_eff,
-            "per_gamma": {},
+            "per_gamma": per_gamma,
         },
         "metadata": metadata,
     }

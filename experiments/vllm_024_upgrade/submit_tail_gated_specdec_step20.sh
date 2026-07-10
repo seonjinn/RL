@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 set -euo pipefail
 
@@ -18,7 +30,8 @@ WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE:-${LYRIS_ROOT}/.secrets/wandb_api_key}"
 RUN_TAG="${RUN_TAG:-vllm024-tail-gated-step20-20260710}"
 ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/${RUN_TAG}}"
-ROOFLINE_CONFIG="${ROOFLINE_CONFIG:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/calibrations/qwen3-32b-tp2-dtp1-lyris-gb200-k5.json}"
+QWEN30_ROOFLINE_CONFIG="${QWEN30_ROOFLINE_CONFIG:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/calibrations/qwen-qwen3-30b-a3b-tp1-dtp1-lyris-gb200-k1-3-5.json}"
+QWEN32_ROOFLINE_CONFIG="${QWEN32_ROOFLINE_CONFIG:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/calibrations/qwen-qwen3-32b-tp2-dtp1-lyris-gb200-k1-3-5.json}"
 WALLTIME="${WALLTIME:-04:00:00}"
 TMPDIR="${TMPDIR_OVERRIDE:-/tmp}"
 PERSONAL_BRANCH_PREFIX="${PERSONAL_BRANCH_PREFIX:-sna/}"
@@ -92,18 +105,80 @@ sha256_file() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
+validate_roofline_config() {
+  local config_path="$1"
+  local expected_model="$2"
+  local expected_target_tp="$3"
+  local expected_draft_tp="$4"
+  local expected_container="$5"
+  local expected_container_sha256="$6"
+
+  python3 - \
+    "${config_path}" \
+    "${expected_model}" \
+    "${expected_target_tp}" \
+    "${expected_draft_tp}" \
+    "${expected_container}" \
+    "${expected_container_sha256}" <<'PY'
+import json
+import sys
+
+(
+    config_path,
+    expected_model,
+    expected_target_tp,
+    expected_draft_tp,
+    expected_container,
+    expected_container_sha256,
+) = sys.argv[1:]
+
+try:
+    with open(config_path, encoding="utf-8") as config_file:
+        payload = json.load(config_file)
+    metadata = payload["metadata"]
+except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+    print(f"ERROR: invalid roofline config: {config_path}: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+expected = {
+    "model": expected_model,
+    "target_tp": int(expected_target_tp),
+    "draft_tp": int(expected_draft_tp),
+    "container": expected_container,
+    "container_sha256": expected_container_sha256,
+}
+for field, expected_value in expected.items():
+    actual_value = metadata.get(field)
+    if actual_value != expected_value:
+        print(
+            f"ERROR: roofline metadata mismatch: {field}: "
+            f"expected {expected_value!r}, got {actual_value!r}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+if payload.get("model", {}).get("name") != expected_model:
+    print("ERROR: roofline metadata mismatch: model", file=sys.stderr)
+    raise SystemExit(2)
+if payload.get("hardware", {}).get("tp") != int(expected_target_tp):
+    print("ERROR: roofline metadata mismatch: target_tp", file=sys.stderr)
+    raise SystemExit(2)
+PY
+}
+
 require_submit_checkout() {
   local branch
   local untracked
 
-  if ! git -C "${REPO_DIR}" diff --quiet --ignore-submodules=dirty \
-    || ! git -C "${REPO_DIR}" diff --cached --quiet --ignore-submodules=dirty; then
+  if ! git -C "${REPO_DIR}" diff --quiet --ignore-submodules=none \
+    || ! git -C "${REPO_DIR}" diff --cached --quiet --ignore-submodules=none; then
     echo "ERROR: submit requires a clean tracked checkout" >&2
     exit 2
   fi
-  untracked="$(git -C "${REPO_DIR}" status --porcelain --untracked-files=all \
+  untracked="$(git -C "${REPO_DIR}" status --porcelain=v1 \
+    --untracked-files=all --ignore-submodules=none \
     | awk '$1 == "??" {print $2}' \
-    | grep -Ev '^tests/unit/unit_results(\.json|/)' || true)"
+    | grep -Ev '^(tests/unit/unit_results\.json|tests/unit/unit_results/.+)$' || true)"
   if [[ -n "${untracked}" ]]; then
     echo "ERROR: submit rejects untracked files (except tests/unit/unit_results artifacts)" >&2
     printf '%s\n' "${untracked}" >&2
@@ -136,6 +211,8 @@ submit_one() {
   local target_tp
   local draft_tp=1
   local draft_model
+  local expected_model
+  local roofline_config
   local runner
   local use_v2_runner
   local graph_mode
@@ -154,12 +231,16 @@ submit_one() {
     qwen30ba3b)
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
       target_tp=1
+      expected_model="Qwen/Qwen3-30B-A3B"
       draft_model="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
+      roofline_config="${QWEN30_ROOFLINE_CONFIG}"
       ;;
     qwen32b)
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml"
       target_tp=2
+      expected_model="Qwen/Qwen3-32B"
       draft_model="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
+      roofline_config="${QWEN32_ROOFLINE_CONFIG}"
       ;;
   esac
 
@@ -209,12 +290,21 @@ submit_one() {
       draft_k=5
       threshold=32
       consecutive_checks=10
-      if [[ "${MODE}" != "dry-run" && ! -f "${ROOFLINE_CONFIG}" ]]; then
-        echo "ERROR: roofline config not found: ${ROOFLINE_CONFIG}" >&2
+      if [[ "${MODE}" != "dry-run" && ! -f "${roofline_config}" ]]; then
+        echo "ERROR: roofline config not found: ${roofline_config}" >&2
         exit 2
       fi
-      if [[ -f "${ROOFLINE_CONFIG}" ]]; then
-        roofline_hash="$(sha256_file "${ROOFLINE_CONFIG}")"
+      if [[ -f "${roofline_config}" ]]; then
+        roofline_hash="$(sha256_file "${roofline_config}")"
+      fi
+      if [[ "${MODE}" == "submit" ]]; then
+        validate_roofline_config \
+          "${roofline_config}" \
+          "${expected_model}" \
+          "${target_tp}" \
+          "${draft_tp}" \
+          "${CONTAINER}" \
+          "$(sha256_file "${CONTAINER}")"
       fi
       ;;
   esac
@@ -285,7 +375,7 @@ submit_one() {
     if [[ "${gate_mode}" == "roofline" ]]; then
       overrides+=(
         "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_margin=0.05"
-        "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_config_path=${ROOFLINE_CONFIG}"
+        "++policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_config_path=${roofline_config}"
       )
     fi
   fi
@@ -355,9 +445,6 @@ submit_one() {
       ;;
     submit)
       mkdir -p "${run_dir}"
-      env "${environment[@]}" sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
-      local job_id
-      job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
       local manifest_header=$'timestamp\tmodel\tvariant\trunner\tgraph_mode\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcommit\tcontainer\tcontainer_sha256\trecipe\tjob_id\twandb_run_id\twandb_url\tcommand'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
@@ -367,6 +454,9 @@ submit_one() {
       if [[ ! -f "${manifest}" ]]; then
         printf '%s\n' "${manifest_header}" >"${manifest}"
       fi
+      env "${environment[@]}" sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
+      local job_id
+      job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${runner}" \
         "${graph_mode}" "${gate_mode}" "${draft_k}" "${threshold}" \

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +49,8 @@ def _dry_run(model: str, variant: str) -> str:
         EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
         RUN_TAG="contract",
         ATTEMPT_ID="attempt-1",
-        ROOFLINE_CONFIG="/lustre/test/calibrations/qwen3.json",
+        QWEN30_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen30.json",
+        QWEN32_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen32.json",
     )
     assert result.returncode == 0, result.stderr
     return result.stdout
@@ -64,7 +68,8 @@ def test_dry_run_exposes_exactly_the_seven_planned_variants() -> None:
         EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
         RUN_TAG="contract",
         ATTEMPT_ID="attempt-1",
-        ROOFLINE_CONFIG="/lustre/test/calibrations/qwen3.json",
+        QWEN30_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen30.json",
+        QWEN32_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen32.json",
     )
 
     assert result.returncode == 0, result.stderr
@@ -118,9 +123,25 @@ def test_v2_variants_preserve_runner_graph_and_gate_boundaries() -> None:
     assert "sd_tail_gate_mode=roofline" in roofline_output
     assert "sd_tail_gate_margin=0.05" in roofline_output
     assert (
-        "sd_tail_gate_config_path=/lustre/test/calibrations/qwen3.json"
+        "sd_tail_gate_config_path=/lustre/test/calibrations/qwen32.json"
         in roofline_output
     )
+
+
+def test_roofline_dry_run_selects_a_separate_config_per_model() -> None:
+    qwen30_output = _dry_run("qwen30ba3b", "efficient_roofline_v2_k5")
+    qwen32_output = _dry_run("qwen32b", "efficient_roofline_v2_k5")
+
+    assert (
+        "sd_tail_gate_config_path=/lustre/test/calibrations/qwen30.json"
+        in qwen30_output
+    )
+    assert "/lustre/test/calibrations/qwen32.json" not in qwen30_output
+    assert (
+        "sd_tail_gate_config_path=/lustre/test/calibrations/qwen32.json"
+        in qwen32_output
+    )
+    assert "/lustre/test/calibrations/qwen30.json" not in qwen32_output
 
 
 def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
@@ -244,6 +265,49 @@ def _create_pushed_repo(tmp_path: Path) -> tuple[Path, str]:
     return repo, commit
 
 
+def _write_roofline_config(
+    path: Path,
+    *,
+    model: str,
+    target_tp: int,
+    draft_tp: int,
+    container: Path,
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "hardware": {"gpu": "GB200", "tp": target_tp, "BW_eff": 1.0},
+                "model": {
+                    "name": model,
+                    "W_t": 1.0,
+                    "W_d": 1.0,
+                    "C_dense": 1.0,
+                    "C_attn": 1.0,
+                    "kappa_theoretical": 1,
+                },
+                "calibration": {
+                    "eta_d": 1.0,
+                    "kappa_eff": 1.0,
+                    "F_eff": 1.0,
+                    "per_gamma": {"5": {"c_T": 1.0, "c_D": 1.0, "c_V": 1.0}},
+                },
+                "metadata": {
+                    "model": model,
+                    "target_tp": target_tp,
+                    "draft_tp": draft_tp,
+                    "container": str(container),
+                    "container_sha256": hashlib.sha256(
+                        container.read_bytes()
+                    ).hexdigest(),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> None:
     repo, commit = _create_pushed_repo(tmp_path)
     bin_dir = tmp_path / "bin"
@@ -254,7 +318,13 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     container = tmp_path / "nemo-rl.sqsh"
     container.write_text("container contract\n", encoding="utf-8")
     roofline = tmp_path / "roofline.json"
-    roofline.write_text("{}\n", encoding="utf-8")
+    _write_roofline_config(
+        roofline,
+        model="Qwen/Qwen3-32B",
+        target_tp=2,
+        draft_tp=1,
+        container=container,
+    )
     draft_model = tmp_path / "draft-model"
     draft_model.mkdir()
     experiment_root = tmp_path / "runs"
@@ -268,7 +338,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         HF_HOME="/lustre/test/hf_home",
         CONTAINER=str(container),
         QWEN32_DRAFT_MODEL=str(draft_model),
-        ROOFLINE_CONFIG=str(roofline),
+        QWEN32_ROOFLINE_CONFIG=str(roofline),
         EXPERIMENT_ROOT=str(experiment_root),
         RUN_TAG="submit-contract",
         ATTEMPT_ID="attempt-1",
@@ -307,10 +377,109 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("model", "Qwen/Qwen3-30B-A3B"),
+        ("target_tp", 1),
+        ("draft_tp", 2),
+        ("container", "/lustre/other/container.sqsh"),
+        ("container_sha256", "0" * 64),
+    ),
+)
+def test_submit_rejects_mismatched_roofline_metadata_before_sbatch(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$SBATCH_LOG\"\nprintf '4242\\n'\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.write_text("container contract\n", encoding="utf-8")
+    draft_model = tmp_path / "draft-model"
+    draft_model.mkdir()
+    roofline = tmp_path / "roofline.json"
+    _write_roofline_config(
+        roofline,
+        model="Qwen/Qwen3-32B",
+        target_tp=2,
+        draft_tp=1,
+        container=container,
+    )
+    payload = json.loads(roofline.read_text(encoding="utf-8"))
+    payload["metadata"][field] = value
+    roofline.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _run_launcher(
+        "submit",
+        "qwen32b",
+        "efficient_roofline_v2_k5",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        QWEN32_DRAFT_MODEL=str(draft_model),
+        QWEN32_ROOFLINE_CONFIG=str(roofline),
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        WANDB_API_KEY="test-only-key",
+        SBATCH_LOG=str(sbatch_log),
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 2
+    assert f"roofline metadata mismatch: {field}" in result.stderr
+    assert not sbatch_log.exists()
+
+
+def test_submit_rejects_malformed_manifest_before_real_sbatch(tmp_path: Path) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$SBATCH_LOG\"\nprintf '4242\\n'\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+    experiment_root = tmp_path / "runs"
+    experiment_root.mkdir()
+    (experiment_root / "submissions.tsv").write_text(
+        "wrong\theader\n", encoding="utf-8"
+    )
+
+    result = _run_launcher(
+        "submit",
+        "qwen30ba3b",
+        "baseline_v1",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        EXPERIMENT_ROOT=str(experiment_root),
+        WANDB_API_KEY="test-only-key",
+        SBATCH_LOG=str(sbatch_log),
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 2
+    assert "submissions manifest header mismatch" in result.stderr
+    assert not sbatch_log.exists()
+
+
 def test_submit_ignores_known_unit_artifacts_but_rejects_other_untracked_files(
     tmp_path: Path,
 ) -> None:
     repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text("#!/usr/bin/env bash\nprintf '4242\\n'\n", encoding="utf-8")
+    sbatch.chmod(0o755)
     container = tmp_path / "nemo-rl.sqsh"
     container.touch()
     (repo / "tests/unit/unit_results").mkdir(parents=True)
@@ -327,10 +496,14 @@ def test_submit_ignores_known_unit_artifacts_but_rejects_other_untracked_files(
         CONTAINER=str(container),
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
         WANDB_API_KEY="test-only-key",
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
     )
-    assert result.returncode != 2 or "clean" not in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "4242\tqwen30ba3b\tbaseline_v1" in result.stdout
 
-    (repo / "unexpected.txt").write_text("not allowed\n", encoding="utf-8")
+    (repo / "tests/unit/unit_results.json.bak").write_text(
+        "not allowed\n", encoding="utf-8"
+    )
     rejected = _run_launcher(
         "submit",
         "qwen30ba3b",
@@ -341,6 +514,75 @@ def test_submit_ignores_known_unit_artifacts_but_rejects_other_untracked_files(
         CONTAINER=str(container),
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
         WANDB_API_KEY="test-only-key",
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
     )
     assert rejected.returncode == 2
     assert "untracked" in rejected.stderr
+    assert "unit_results.json.bak" in rejected.stderr
+
+
+def test_submit_rejects_dirty_submodules(tmp_path: Path) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    submodule_source = tmp_path / "submodule-source"
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(submodule_source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(submodule_source),
+            "config",
+            "user.email",
+            "test@example.invalid",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(submodule_source), "config", "user.name", "Test"], check=True
+    )
+    tracked = submodule_source / "tracked.txt"
+    tracked.write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(submodule_source), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(submodule_source), "commit", "-m", "seed"], check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            str(repo),
+            "submodule",
+            "add",
+            str(submodule_source),
+            "third_party/component",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-am", "add submodule"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "push"], check=True, capture_output=True)
+    (repo / "third_party/component/tracked.txt").write_text("dirty\n", encoding="utf-8")
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+
+    result = _run_launcher(
+        "submit",
+        "qwen30ba3b",
+        "baseline_v1",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        WANDB_API_KEY="test-only-key",
+    )
+
+    assert result.returncode == 2
+    assert "clean tracked checkout" in result.stderr
