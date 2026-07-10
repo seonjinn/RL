@@ -1012,6 +1012,41 @@ def _runtime_tail_gate_patch_anchors() -> dict[str, tuple[str, str, str]]:
     }
 
 
+_ACTIVATION_TICK_UPDATE = (
+    '                        "vllm:spec_decode_tail_gate_activation_tick_sum": float(\n'
+    "                            scheduler_output.tail_gate_tick\n"
+    "                        ),\n"
+    '                        "vllm:spec_decode_tail_gate_activation_tick_count": 1.0,\n'
+)
+
+
+def _runtime_tail_gate_5c307d7e_legacy_anchors() -> dict[str, tuple[str, str]]:
+    legacy_anchors = {}
+    anchors = _runtime_tail_gate_patch_anchors()
+    for anchor_name in ("v1_execute", "v2_execute"):
+        relative_path, _old_anchor, new_anchor = anchors[anchor_name]
+        assert new_anchor.count(_ACTIVATION_TICK_UPDATE) == 1
+        legacy_anchors[anchor_name] = (
+            relative_path,
+            new_anchor.replace(_ACTIVATION_TICK_UPDATE, "", 1),
+        )
+    return legacy_anchors
+
+
+def _runtime_tail_gate_declared_legacy_anchors() -> dict[str, str]:
+    function_source = dedent(inspect.getsource(patches._patch_vllm_runtime_tail_gating))
+    function_ast = ast.parse(function_source).body[0]
+    assert isinstance(function_ast, ast.FunctionDef)
+    return {
+        target.id.removesuffix("_legacy"): ast.literal_eval(node.value)
+        for node in function_ast.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance((target := node.targets[0]), ast.Name)
+        and target.id.endswith("_legacy")
+    }
+
+
 def _load_method_from_patched_source(
     path: Path,
     class_name: str,
@@ -1471,6 +1506,42 @@ def test_runtime_tail_gate_patch_is_idempotent(
     } == (patched)
 
 
+def test_runtime_tail_gate_patch_upgrades_5c307d7e_installation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    anchors = _runtime_tail_gate_patch_anchors()
+    legacy_anchors = _runtime_tail_gate_5c307d7e_legacy_anchors()
+
+    for anchor_name, (relative_path, old_anchor, new_anchor) in anchors.items():
+        installed_anchor = legacy_anchors.get(anchor_name, (relative_path, new_anchor))[
+            1
+        ]
+        source = paths[relative_path].read_text()
+        assert source.count(old_anchor) == 1
+        paths[relative_path].write_text(source.replace(old_anchor, installed_anchor, 1))
+
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    declared_legacy_anchors = _runtime_tail_gate_declared_legacy_anchors()
+    assert set(declared_legacy_anchors) == set(legacy_anchors)
+    for anchor_name, (_relative_path, legacy_anchor) in legacy_anchors.items():
+        assert declared_legacy_anchors[anchor_name] == legacy_anchor
+    for relative_path, old_anchor, new_anchor in anchors.values():
+        source = paths[relative_path].read_text()
+        assert old_anchor not in source
+        assert source.count(new_anchor) == 1
+
+    upgraded = {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    }
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+    assert {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    } == upgraded
+
+
 def test_runtime_tail_gate_patch_completes_mixed_old_new_installation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1507,7 +1578,8 @@ def test_runtime_tail_gate_patch_completes_mixed_old_new_installation(
         (anchor_name, anchor_state)
         for anchor_name in sorted(_runtime_tail_gate_patch_anchors())
         for anchor_state in ("old", "new")
-    ],
+    ]
+    + [(anchor_name, "legacy") for anchor_name in ("v1_execute", "v2_execute")],
     ids=lambda value: value,
 )
 def test_runtime_tail_gate_patch_validates_all_sources_before_writing(
@@ -1524,7 +1596,20 @@ def test_runtime_tail_gate_patch_validates_all_sources_before_writing(
     if anchor_state == "new":
         assert source.count(old_anchor) == 1
         source = source.replace(old_anchor, new_anchor, 1)
-    anchor = old_anchor if anchor_state == "old" else new_anchor
+    elif anchor_state == "legacy":
+        legacy_path, legacy_anchor = _runtime_tail_gate_5c307d7e_legacy_anchors()[
+            anchor_name
+        ]
+        assert legacy_path == changed_path
+        assert source.count(old_anchor) == 1
+        source = source.replace(old_anchor, legacy_anchor, 1)
+    anchor = {
+        "old": old_anchor,
+        "new": new_anchor,
+        "legacy": _runtime_tail_gate_5c307d7e_legacy_anchors().get(
+            anchor_name, (changed_path, "")
+        )[1],
+    }[anchor_state]
     assert source.count(anchor) == 1
     first_line_end = anchor.index("\n")
     changed_anchor = (

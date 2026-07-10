@@ -979,6 +979,121 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "\n"
         "        if not dummy_run:\n"
     )
+    v2_execute_legacy = (
+        "    @torch.inference_mode()\n"
+        "    def execute_model(\n"
+        "        self,\n"
+        "        scheduler_output: SchedulerOutput,\n"
+        "        intermediate_tensors: IntermediateTensors | None = None,\n"
+        "        dummy_run: bool = False,\n"
+        "        skip_attn_for_dummy_run: bool = False,\n"
+        "        is_profile: bool = False,\n"
+        "    ) -> ModelRunnerOutput | IntermediateTensors | None:\n"
+        "        runtime_num_spec_tokens = None\n"
+        "        tail_gate_mode = getattr(\n"
+        '            self.speculative_config, "sd_tail_gate_mode", "off"\n'
+        "        )\n"
+        '        if tail_gate_mode != "off" and not dummy_run:\n'
+        "            runtime_num_spec_tokens = (\n"
+        "                scheduler_output.num_spec_tokens_to_schedule\n"
+        "            )\n"
+        "            if runtime_num_spec_tokens is not None and (\n"
+        "                isinstance(runtime_num_spec_tokens, bool)\n"
+        "                or runtime_num_spec_tokens not in (0, self.num_speculative_steps)\n"
+        "            ):\n"
+        "                raise ValueError(\n"
+        '                    "Tail-gated Model Runner V2 runtime K must be None, 0, "\n'
+        '                    f"or the configured maximum {self.num_speculative_steps}; "\n'
+        '                    f"got {runtime_num_spec_tokens}."\n'
+        "                )\n"
+        "            if (\n"
+        "                self.speculative_config is None\n"
+        '                or self.speculative_config.method not in ("eagle", "eagle3")\n'
+        "            ):\n"
+        "                raise ValueError(\n"
+        '                    "Tail-gated Model Runner V2 requires an external "\n'
+        '                    "Eagle or Eagle-3 speculator."\n'
+        "                )\n"
+        "            if (\n"
+        "                getattr(\n"
+        "                    self.speculative_config,\n"
+        '                    "sd_tail_gate_off_mode",\n'
+        '                    "advance_only",\n'
+        "                )\n"
+        '                != "advance_only"\n'
+        "            ):\n"
+        "                raise ValueError(\n"
+        '                    "Model Runner V2 binary tail gating only supports "\n'
+        '                    "sd_tail_gate_off_mode=advance_only."\n'
+        "                )\n"
+        "\n"
+        "            tail_gate_metrics = getattr(\n"
+        '                self, "_nrl_tail_gate_metrics", None\n'
+        "            )\n"
+        "            if tail_gate_metrics is None:\n"
+        "                tail_gate_metrics = {}\n"
+        "                self._nrl_tail_gate_metrics = tail_gate_metrics\n"
+        "            effective_runtime_k = (\n"
+        "                self.num_speculative_steps\n"
+        "                if runtime_num_spec_tokens is None\n"
+        "                else runtime_num_spec_tokens\n"
+        "            )\n"
+        "            tail_gate_updates = {\n"
+        '                "vllm:spec_decode_tail_gate_decisions": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_enabled_steps": float(\n'
+        "                    effective_runtime_k > 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
+        "                    effective_runtime_k == 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_decode_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_count": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_expected_accept_length\n"
+        "                ),\n"
+        '                f"vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps": 1.0,\n'
+        "            }\n"
+        "            if scheduler_output.tail_gate_just_activated:\n"
+        "                tail_gate_updates.update(\n"
+        "                    {\n"
+        '                        "vllm:spec_decode_tail_gate_activations": 1.0,\n'
+        '                        "vllm:spec_decode_tail_gate_activation_batch_sum": float(\n'
+        "                            scheduler_output.tail_gate_active_requests\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_sequence_length_sum": float(\n'
+        "                            scheduler_output.tail_gate_mean_sequence_length\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": float(\n'
+        "                            scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_predicted_speedup_count": float(\n'
+        "                            scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                        ),\n"
+        "                    }\n"
+        "                )\n"
+        "            tail_gate_state = scheduler_output.tail_gate_state.lower()\n"
+        "            if tail_gate_state in (\n"
+        '                "ramping_off",\n'
+        '                "armed_off",\n'
+        '                "on_latched",\n'
+        "            ):\n"
+        "                tail_gate_updates[\n"
+        '                    f"vllm:spec_decode_tail_gate_{tail_gate_state}_steps"\n'
+        "                ] = 1.0\n"
+        "            for metric_name, metric_value in tail_gate_updates.items():\n"
+        "                tail_gate_metrics[metric_name] = (\n"
+        "                    tail_gate_metrics.get(metric_name, 0.0) + metric_value\n"
+        "                )\n"
+        "\n"
+        "        if not dummy_run:\n"
+    )
 
     v2_state_old = (
         "        finished_req_ids = scheduler_output.finished_req_ids\n"
@@ -1373,6 +1488,93 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "\n"
         "        if self.routed_experts_initialized:\n"
     )
+    v1_execute_legacy = (
+        "    @torch.inference_mode()\n"
+        "    def execute_model(\n"
+        "        self,\n"
+        '        scheduler_output: "SchedulerOutput",\n'
+        "        intermediate_tensors: IntermediateTensors | None = None,\n"
+        "    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:\n"
+        "        if self.execute_model_state is not None:\n"
+        "            raise RuntimeError(\n"
+        '                "State error: sample_tokens() must be called "\n'
+        '                "after execute_model() returns None."\n'
+        "            )\n"
+        "\n"
+        "        tail_gate_mode = getattr(\n"
+        '            self.speculative_config, "sd_tail_gate_mode", "off"\n'
+        "        )\n"
+        '        if tail_gate_mode != "off":\n'
+        "            runtime_num_spec_tokens = (\n"
+        "                scheduler_output.num_spec_tokens_to_schedule\n"
+        "            )\n"
+        "            tail_gate_metrics = getattr(\n"
+        '                self, "_nrl_tail_gate_metrics", None\n'
+        "            )\n"
+        "            if tail_gate_metrics is None:\n"
+        "                tail_gate_metrics = {}\n"
+        "                self._nrl_tail_gate_metrics = tail_gate_metrics\n"
+        "            effective_runtime_k = (\n"
+        "                self.num_spec_tokens\n"
+        "                if runtime_num_spec_tokens is None\n"
+        "                else runtime_num_spec_tokens\n"
+        "            )\n"
+        "            tail_gate_updates = {\n"
+        '                "vllm:spec_decode_tail_gate_decisions": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_enabled_steps": float(\n'
+        "                    effective_runtime_k > 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
+        "                    effective_runtime_k == 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_decode_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_count": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_expected_accept_length\n"
+        "                ),\n"
+        '                f"vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps": 1.0,\n'
+        "            }\n"
+        "            if scheduler_output.tail_gate_just_activated:\n"
+        "                tail_gate_updates.update(\n"
+        "                    {\n"
+        '                        "vllm:spec_decode_tail_gate_activations": 1.0,\n'
+        '                        "vllm:spec_decode_tail_gate_activation_batch_sum": float(\n'
+        "                            scheduler_output.tail_gate_active_requests\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_sequence_length_sum": float(\n'
+        "                            scheduler_output.tail_gate_mean_sequence_length\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": float(\n'
+        "                            scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_predicted_speedup_count": float(\n'
+        "                            scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                        ),\n"
+        "                    }\n"
+        "                )\n"
+        "            tail_gate_state = scheduler_output.tail_gate_state.lower()\n"
+        "            if tail_gate_state in (\n"
+        '                "ramping_off",\n'
+        '                "armed_off",\n'
+        '                "on_latched",\n'
+        "            ):\n"
+        "                tail_gate_updates[\n"
+        '                    f"vllm:spec_decode_tail_gate_{tail_gate_state}_steps"\n'
+        "                ] = 1.0\n"
+        "            for metric_name, metric_value in tail_gate_updates.items():\n"
+        "                tail_gate_metrics[metric_name] = (\n"
+        "                    tail_gate_metrics.get(metric_name, 0.0) + metric_value\n"
+        "                )\n"
+        "\n"
+        "        if self.routed_experts_initialized:\n"
+    )
 
     patch_specs = (
         ("config/speculative.py", ((config_old, config_new),)),
@@ -1383,7 +1585,7 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         (
             "v1/worker/gpu/model_runner.py",
             (
-                (v2_execute_old, v2_execute_new),
+                (v2_execute_old, v2_execute_new, v2_execute_legacy),
                 (v2_state_old, v2_state_new),
                 (v2_sample_state_old, v2_sample_state_new),
                 (v2_handler_init_old, v2_handler_init_new),
@@ -1398,7 +1600,10 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
                 (speculator_k0_old, speculator_k0_new),
             ),
         ),
-        ("v1/worker/gpu_model_runner.py", ((v1_execute_old, v1_execute_new),)),
+        (
+            "v1/worker/gpu_model_runner.py",
+            ((v1_execute_old, v1_execute_new, v1_execute_legacy),),
+        ),
     )
     file_paths = {
         relative_path: _get_vllm_file(relative_path) for relative_path, _ in patch_specs
@@ -1410,13 +1615,19 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         for relative_path, replacements in patch_specs:
             file_path = file_paths[relative_path]
             content = contents[file_path]
-            for old_snippet, new_snippet in replacements:
-                old_count = content.count(old_snippet)
+            for old_snippet, new_snippet, *legacy_snippets in replacements:
+                source_snippets = (old_snippet, *legacy_snippets)
+                source_counts = [content.count(snippet) for snippet in source_snippets]
                 new_count = content.count(new_snippet)
-                if old_count == 1 and new_count == 0:
-                    content = content.replace(old_snippet, new_snippet, 1)
+                if (
+                    new_count == 0
+                    and source_counts.count(1) == 1
+                    and max(source_counts) == 1
+                ):
+                    matched_snippet = source_snippets[source_counts.index(1)]
+                    content = content.replace(matched_snippet, new_snippet, 1)
                     changed_paths.add(file_path)
-                elif old_count == 0 and new_count == 1:
+                elif new_count == 1 and all(count == 0 for count in source_counts):
                     continue
                 else:
                     raise RuntimeError(
