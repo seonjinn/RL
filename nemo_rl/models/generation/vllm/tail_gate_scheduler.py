@@ -68,15 +68,14 @@ class TailGatedScheduler(Scheduler):
         self, scheduler_output: Any, model_runner_output: Any
     ) -> Any:
         """Accumulate acceptance feedback while preserving Scheduler semantics."""
-        eligible_request_ids = self._eligible_acceptance_request_ids(
+        acceptance_snapshot = self._snapshot_acceptance(
             scheduler_output, model_runner_output
         )
         self._failed_output_request_ids.clear()
         result = super().update_from_output(scheduler_output, model_runner_output)
         self._record_acceptance(
-            scheduler_output,
-            model_runner_output,
-            eligible_request_ids - self._failed_output_request_ids,
+            acceptance_snapshot,
+            self._failed_output_request_ids,
         )
         if self.get_num_unfinished_requests() == 0:
             self._tail_gate.finish_rollout(
@@ -116,26 +115,16 @@ class TailGatedScheduler(Scheduler):
             decode_active_batch_size,
         )
 
-    def _eligible_acceptance_request_ids(
+    def _snapshot_acceptance(
         self, scheduler_output: Any, model_runner_output: Any
-    ) -> set[str]:
-        eligible_request_ids: set[str] = set()
+    ) -> dict[str, int]:
+        acceptance_snapshot: dict[str, int] = {}
         for request_id in scheduler_output.num_scheduled_tokens:
             request = self.requests.get(request_id)
             if request is None or request.is_finished():
                 continue
             if request_id not in model_runner_output.req_id_to_index:
                 continue
-            eligible_request_ids.add(request_id)
-        return eligible_request_ids
-
-    def _record_acceptance(
-        self,
-        scheduler_output: Any,
-        model_runner_output: Any,
-        eligible_request_ids: set[str],
-    ) -> None:
-        for request_id in eligible_request_ids:
             draft_token_ids = scheduler_output.scheduled_spec_decode_tokens.get(
                 request_id
             )
@@ -149,10 +138,21 @@ class TailGatedScheduler(Scheduler):
             )
             if not sampled_token_ids:
                 continue
-            self._accepted_tokens += max(
+            acceptance_snapshot[request_id] = max(
                 len(sampled_token_ids) - self.num_sampled_tokens_per_step,
                 0,
             )
+        return acceptance_snapshot
+
+    def _record_acceptance(
+        self,
+        acceptance_snapshot: dict[str, int],
+        failed_request_ids: set[str],
+    ) -> None:
+        for request_id, accepted_tokens in acceptance_snapshot.items():
+            if request_id in failed_request_ids:
+                continue
+            self._accepted_tokens += accepted_tokens
             self._draft_cycles += 1
 
     def _write_tail_gate_output(

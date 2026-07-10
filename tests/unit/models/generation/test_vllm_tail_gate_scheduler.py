@@ -44,6 +44,7 @@ class _StubScheduler:
         self.update_result: object = object()
         self.update_exception: Exception | None = None
         self.failed_request_ids: set[str] = set()
+        self.trim_sampled_token_ids_to: int | None = None
 
     def schedule(self, throttle_prefills: bool = False) -> SimpleNamespace:
         self.schedule_throttle_prefills.append(throttle_prefills)
@@ -52,12 +53,15 @@ class _StubScheduler:
     def update_from_output(
         self,
         scheduler_output: SimpleNamespace,
-        _model_runner_output: SimpleNamespace,
+        model_runner_output: SimpleNamespace,
     ) -> object:
         if self.failed_request_ids:
             self._handle_invalid_blocks(set(), scheduler_output.num_scheduled_tokens)
         if self.update_exception is not None:
             raise self.update_exception
+        if self.trim_sampled_token_ids_to is not None:
+            for sampled_token_ids in model_runner_output.sampled_token_ids:
+                del sampled_token_ids[self.trim_sampled_token_ids_to :]
         return self.update_result
 
     def _handle_invalid_blocks(
@@ -273,3 +277,27 @@ def test_update_does_not_record_when_superclass_raises(
     assert exc_info.value is expected_error
     assert scheduler._accepted_tokens == 0
     assert scheduler._draft_cycles == 0
+
+
+def test_update_snapshots_acceptance_before_superclass_trims_sampled_tokens(
+    scheduler_module: ModuleType,
+) -> None:
+    scheduler = scheduler_module.TailGatedScheduler(_vllm_config())
+    scheduler.requests["request-1"] = _request()
+    scheduler.waiting.append(SimpleNamespace())
+    scheduler.trim_sampled_token_ids_to = 1
+    sampled_token_ids = [[10, 11, 12]]
+
+    result = scheduler.update_from_output(
+        _scheduler_output(drafts={"request-1": [1, 2, 3]}),
+        SimpleNamespace(
+            req_ids=["request-1"],
+            req_id_to_index={"request-1": 0},
+            sampled_token_ids=sampled_token_ids,
+        ),
+    )
+
+    assert result is scheduler.update_result
+    assert sampled_token_ids == [[10]]
+    assert scheduler._accepted_tokens == 2
+    assert scheduler._draft_cycles == 1
