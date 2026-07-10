@@ -200,11 +200,10 @@ def test_mini_scheduler_tail_gate_full_rollout_lifecycle(
         scheduler._tail_gate.enabled,
         scheduler._tail_gate.telemetry.state,
         scheduler._tail_gate.telemetry.tick,
-        scheduler._tail_gate._qualifying_checks,
         scheduler._tail_gate.expected_accept_length,
         scheduler._accepted_tokens,
         scheduler._draft_cycles,
-    ) == (False, "RAMPING_OFF", 0, 0, 4.0, 0, 0)
+    ) == (False, "RAMPING_OFF", 0, 4.0, 0, 0)
 
     scheduler.running = _running_requests(8)
     scheduler.schedule_outputs = [_scheduler_output()]
@@ -228,7 +227,10 @@ def test_mini_scheduler_tail_gate_full_rollout_lifecycle(
         *([0] * 10),
         5,
     ]
-    assert next_rollout_outputs[-1].tail_gate_just_activated is True
+    assert (
+        next_rollout_outputs[-1].tail_gate_tick,
+        next_rollout_outputs[-1].tail_gate_just_activated,
+    ) == (11, True)
 
 
 def test_all_prefill_batch_does_not_arm_tail_gate(
