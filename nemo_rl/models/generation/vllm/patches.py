@@ -484,8 +484,13 @@ def _patch_vllm_parallel_probabilistic_draft_temperature(logger) -> None:
         "    temperature = sampling_metadata.temperature\n"
         "    temperature_count = temperature.numel()\n"
         "    logits_count = logits.shape[0]\n"
+        "    if logits_count <= 0 or temperature_count <= 0:\n"
+        "        raise RuntimeError(\n"
+        '            "parallel draft logits and sampling temperature counts must be "\n'
+        '            f"positive: logits={logits_count}, temperatures={temperature_count}"\n'
+        "        )\n"
         "    if temperature_count != logits_count:\n"
-        "        if temperature_count <= 0 or logits_count % temperature_count != 0:\n"
+        "        if logits_count % temperature_count != 0:\n"
         "            raise RuntimeError(\n"
         '                "parallel draft logits count is not divisible by the sampling "\n'
         '                f"temperature count: logits={logits_count}, "\n'
@@ -500,11 +505,16 @@ def _patch_vllm_parallel_probabilistic_draft_temperature(logger) -> None:
     )
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
-        if "temperature_count = temperature.numel()" in content:
+        if content.count(new_snippet) == 1:
             logger.info(
                 "Parallel probabilistic draft temperature patch already applied."
             )
             return
+        if "temperature_count = temperature.numel()" in content:
+            raise RuntimeError(
+                "Found an incomplete parallel probabilistic draft temperature patch "
+                f"in {file_to_patch}; refusing to continue."
+            )
         if content.count(old_snippet) != 1:
             raise RuntimeError(
                 "Could not apply the parallel probabilistic draft temperature patch "

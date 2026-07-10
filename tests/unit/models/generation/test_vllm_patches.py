@@ -64,6 +64,33 @@ def _probabilistic_draft_temperature_source() -> str:
     )
 
 
+def _run_patched_parallel_probabilistic_draft_temperature(
+    source: str,
+    logits_count: int,
+    temperature_count: int,
+) -> None:
+    namespace: dict[str, object] = {"_SAMPLING_EPS": 1e-5}
+    exec(
+        "def sample(logits, sampling_metadata):\n"
+        f"{source}"
+        "    return None\n",
+        namespace,
+    )
+
+    class Logits:
+        shape = (logits_count,)
+
+    class Temperature:
+        def numel(self) -> int:
+            return temperature_count
+
+    class SamplingMetadata:
+        temperature = Temperature()
+        all_random = False
+
+    namespace["sample"](Logits(), SamplingMetadata())
+
+
 def test_parallel_probabilistic_draft_temperature_patch_expands_temperatures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -80,10 +107,51 @@ def test_parallel_probabilistic_draft_temperature_patch_expands_temperatures(
     assert (
         "temperature.repeat_interleave(logits_count // temperature_count)" in patched
     )
+    assert "if logits_count <= 0 or temperature_count <= 0:" in patched
+    assert patched.index("if logits_count <= 0") < patched.index(
+        "if temperature_count != logits_count"
+    )
 
     patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
 
     assert proposer.read_text() == patched
+
+
+@pytest.mark.parametrize(
+    ("logits_count", "temperature_count"),
+    [(0, 0), (0, 1), (1, 0)],
+)
+def test_parallel_probabilistic_draft_temperature_patch_rejects_non_positive_shapes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    logits_count: int,
+    temperature_count: int,
+) -> None:
+    proposer = tmp_path / "llm_base_proposer.py"
+    proposer.write_text(_probabilistic_draft_temperature_source())
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(proposer))
+
+    patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
+
+    with pytest.raises(RuntimeError, match="parallel draft logits"):
+        _run_patched_parallel_probabilistic_draft_temperature(
+            proposer.read_text(), logits_count, temperature_count
+        )
+
+
+def test_parallel_probabilistic_draft_temperature_patch_rejects_partial_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposer = tmp_path / "llm_base_proposer.py"
+    proposer.write_text(
+        "    temperature_count = temperature.numel()\n"
+        f"{_probabilistic_draft_temperature_source()}"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(proposer))
+
+    with pytest.raises(RuntimeError, match="incomplete"):
+        patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
 
 
 def test_parallel_probabilistic_draft_temperature_patch_rejects_unknown_layout(
