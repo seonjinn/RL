@@ -714,6 +714,48 @@ def _patch_vllm_draft_model_cudagraph_keys(logger) -> None:
     logger.info("Installed runtime-guarded generic draft-model CUDA-graph keys.")
 
 
+def _patch_vllm_piecewise_specdec_cudagraph_alignment(logger) -> None:
+    """Align PIECEWISE capture sizes to the speculative decode query length.
+
+    vLLM 0.24 only performs this alignment when the decode graph mode is FULL.
+    PIECEWISE graphs use the same uniform K+1 decode layout, so unaligned
+    captures can fall back to eager execution or use invalid slot offsets.
+    """
+    file_to_patch = _get_vllm_file("config/compilation.py")
+    old_snippet = (
+        "        if (\n"
+        "            cudagraph_mode.decode_mode() == CUDAGraphMode.FULL\n"
+        "            and uniform_decode_query_len > 1\n"
+        "        ):\n"
+        "            self.adjust_cudagraph_sizes_for_spec_decode(\n"
+        "                uniform_decode_query_len,\n"
+        "                tensor_parallel_size,\n"
+        "            )\n"
+    )
+    new_snippet = (
+        "        if (\n"
+        "            cudagraph_mode != CUDAGraphMode.NONE\n"
+        "            and uniform_decode_query_len > 1\n"
+        "        ):\n"
+        "            self.adjust_cudagraph_sizes_for_spec_decode(\n"
+        "                uniform_decode_query_len,\n"
+        "                tensor_parallel_size,\n"
+        "            )\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if new_snippet in content:
+            logger.info("PIECEWISE SpecDec CUDA-graph alignment already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the PIECEWISE SpecDec CUDA-graph alignment "
+                f"patch to {file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully aligned PIECEWISE SpecDec CUDA-graph sizes.")
+
+
 def _patch_vllm_hermes_tool_parser_thread_safety(logger) -> None:
     """Patch Hermes2ProToolParser.__init__ to cache tokenizer calls.
 
@@ -854,6 +896,7 @@ def _apply_vllm_patches(
     patch_logger.info("Successfully patched vllm _init_workers_ray.")
 
     if speculative_config:
+        _patch_vllm_piecewise_specdec_cudagraph_alignment(patch_logger)
         _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
         _patch_vllm_online_eagle_head_ownership(patch_logger)
         _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)

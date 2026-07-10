@@ -1,6 +1,10 @@
 # Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 
 import asyncio
+import sys
+import threading
+import time
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -93,3 +97,49 @@ def test_generate_text_async_cancellation_stops_child_request_task() -> None:
         await asyncio.wait_for(llm.cancelled.wait(), timeout=0.1)
 
     asyncio.run(exercise())
+
+
+def test_vllm_metrics_logger_stops_when_requested(monkeypatch) -> None:
+    calls = 0
+
+    def get_metrics_snapshot():
+        nonlocal calls
+        calls += 1
+        return []
+
+    vllm_module = ModuleType("vllm")
+    vllm_module.__path__ = []
+    v1_module = ModuleType("vllm.v1")
+    v1_module.__path__ = []
+    metrics_module = ModuleType("vllm.v1.metrics")
+    metrics_module.__path__ = []
+    reader_module = ModuleType("vllm.v1.metrics.reader")
+    reader_module.Gauge = type("Gauge", (), {})
+    reader_module.Counter = type("Counter", (), {})
+    reader_module.get_metrics_snapshot = get_metrics_snapshot
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.setitem(sys.modules, "vllm.v1", v1_module)
+    monkeypatch.setitem(sys.modules, "vllm.v1.metrics", metrics_module)
+    monkeypatch.setitem(sys.modules, "vllm.v1.metrics.reader", reader_module)
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = {
+        "vllm_cfg": {
+            "async_engine": True,
+            "enable_vllm_metrics_logger": True,
+            "vllm_metrics_logger_interval": 0.01,
+        }
+    }
+    worker.is_model_owner = True
+    worker._vllm_metrics_lock = threading.Lock()
+
+    worker._start_vllm_metrics_logger()
+    deadline = time.monotonic() + 0.5
+    while calls == 0 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert calls > 0
+
+    worker._vllm_metrics_logger_stop_event.set()
+    worker._vllm_metrics_logger_thread.join(timeout=0.2)
+
+    assert not worker._vllm_metrics_logger_thread.is_alive()

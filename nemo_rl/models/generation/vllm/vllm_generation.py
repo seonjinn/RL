@@ -551,6 +551,9 @@ class VllmGeneration(GenerationInterface):
                 "Previous snapshot will be overwritten.",
                 RuntimeWarning,
             )
+        if not self.cfg.get("vllm_kwargs", {}).get("speculative_config"):
+            self._step_metrics_snapshot = {}
+            return
         self._step_metrics_snapshot = self._get_raw_spec_counters()
 
     def get_step_metrics(self) -> dict[str, float]:
@@ -569,6 +572,10 @@ class VllmGeneration(GenerationInterface):
                 "Call snapshot_step_metrics() before generation to track metrics.",
                 RuntimeWarning,
             )
+            return {}
+
+        if not self.cfg.get("vllm_kwargs", {}).get("speculative_config"):
+            self._step_metrics_snapshot = None
             return {}
 
         counters_end = self._get_raw_spec_counters()

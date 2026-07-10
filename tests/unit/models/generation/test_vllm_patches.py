@@ -757,6 +757,33 @@ def test_draft_model_cudagraph_patch_supports_nightly_without_gemma4(
     assert "DraftModelProposer" in patched
 
 
+def test_piecewise_specdec_cudagraph_patch_aligns_capture_sizes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compilation = tmp_path / "compilation.py"
+    compilation.write_text(
+        "        if (\n"
+        "            cudagraph_mode.decode_mode() == CUDAGraphMode.FULL\n"
+        "            and uniform_decode_query_len > 1\n"
+        "        ):\n"
+        "            self.adjust_cudagraph_sizes_for_spec_decode(\n"
+        "                uniform_decode_query_len,\n"
+        "                tensor_parallel_size,\n"
+        "            )\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(compilation))
+
+    patches._patch_vllm_piecewise_specdec_cudagraph_alignment(MagicMock())
+
+    patched = compilation.read_text()
+    assert "cudagraph_mode != CUDAGraphMode.NONE" in patched
+    assert "cudagraph_mode.decode_mode() == CUDAGraphMode.FULL" not in patched
+
+    patches._patch_vllm_piecewise_specdec_cudagraph_alignment(MagicMock())
+    assert compilation.read_text() == patched
+
+
 @pytest.mark.parametrize(
     (
         "speculative_config",
@@ -814,6 +841,7 @@ def test_apply_patches_only_installs_required_specdec_patches(
         "_patch_vllm_qwen3_draft_loader_results",
         "_patch_vllm_llama_draft_loader_result",
         "_patch_vllm_medusa_load_config",
+        "_patch_vllm_piecewise_specdec_cudagraph_alignment",
     )
     patch_mocks = {}
     for name in (*always_patch_names, *specdec_patch_names):

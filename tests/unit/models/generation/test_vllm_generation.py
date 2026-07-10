@@ -164,6 +164,44 @@ def test_resolve_enable_prefix_caching_uses_cuda_capability_for_auto(monkeypatch
     assert _resolve_enable_prefix_caching({}) is False
 
 
+def test_baseline_step_metrics_skip_worker_rpc() -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_kwargs": {}}
+    generation._step_metrics_snapshot = None
+    generation._get_raw_spec_counters = MagicMock(
+        side_effect=AssertionError("baseline must not collect SpecDec counters")
+    )
+
+    generation.snapshot_step_metrics()
+
+    assert generation.get_step_metrics() == {}
+    generation._get_raw_spec_counters.assert_not_called()
+
+
+def test_specdec_step_metrics_collect_worker_counters() -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_kwargs": {"speculative_config": {"method": "eagle3"}}}
+    generation._step_metrics_snapshot = None
+    generation._get_raw_spec_counters = MagicMock(
+        side_effect=[
+            {"vllm:spec_decode_num_drafts": 10.0},
+            {
+                "vllm:spec_decode_num_drafts": 15.0,
+                "vllm:spec_decode_num_draft_tokens": 20.0,
+                "vllm:spec_decode_num_accepted_tokens": 8.0,
+            },
+        ]
+    )
+
+    generation.snapshot_step_metrics()
+    metrics = generation.get_step_metrics()
+
+    assert metrics["vllm/spec_num_drafts"] == 5.0
+    assert metrics["vllm/spec_num_draft_tokens"] == 20.0
+    assert metrics["vllm/spec_num_accepted_tokens"] == 8.0
+    assert generation._get_raw_spec_counters.call_count == 2
+
+
 basic_lora_test_config: LoRAConfig = {
     "enabled": False,
     "target_modules": [],

@@ -382,8 +382,9 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
 
         def _logger_loop():
             # Delay a little to let engine settle
-            time.sleep(min(2.0, interval_s))
-            while True:
+            if stop_event.wait(min(2.0, interval_s)):
+                return
+            while not stop_event.is_set():
                 try:
                     for m in get_metrics_snapshot():
                         with self._vllm_metrics_lock:
@@ -406,7 +407,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                         flush=True,
                     )
                     pass
-                time.sleep(interval_s)
+                stop_event.wait(interval_s)
 
         t = threading.Thread(
             target=_logger_loop, name="vllm-metrics-logger", daemon=True
