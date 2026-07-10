@@ -477,7 +477,8 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
     ) = _sampling_harness(patched_runtime_sources)
     runtime_spec_counters = {key: 0.0 for key in _SPEC_COUNTERS}
     cache_snapshots: list[list[list[int]]] = []
-    pre_activation_counters: dict[_CounterKey, float] = {}
+    pre_activation_counters_by_runner: dict[str, dict[_CounterKey, float]] = {}
+    stale_proposal_sentinel = 37
 
     for scheduler_output in _scheduler_outputs():
         _observe_runtime_k(runners_and_methods, scheduler_output)
@@ -490,6 +491,8 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
             num_spec_tokens_to_schedule=(scheduler_output.num_spec_tokens_to_schedule),
             finished_req_ids=set(),
         )
+        if scheduler_output.num_spec_tokens_to_schedule == 0:
+            sampling_runner.req_states.draft_tokens.fill_(stale_proposal_sentinel)
         sample_output = cast(_AsyncOutput, sample_tokens(sampling_runner, None))
         published = draft_tokens_handler.published[-1]
         if published.shape[1] > 0:
@@ -505,17 +508,37 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
         cache_snapshots.append(
             sampling_runner.req_states.draft_tokens.detach().cpu().tolist()
         )
-        if scheduler_output.tail_gate_tick == 2:
-            pre_activation_counters = _collect_spec_decode_counters(
-                telemetry_runners["v2"], runtime_spec_counters
+        if scheduler_output.num_spec_tokens_to_schedule == 0:
+            active_cache = sampling_runner.req_states.draft_tokens[
+                input_batch.idx_mapping
+            ]
+            assert torch.equal(active_cache, torch.zeros_like(active_cache))
+            assert torch.equal(
+                sampling_runner.req_states.draft_tokens[1],
+                torch.full_like(
+                    sampling_runner.req_states.draft_tokens[1],
+                    stale_proposal_sentinel,
+                ),
             )
+        if scheduler_output.tail_gate_tick == 2:
+            pre_activation_counters_by_runner = {
+                name: _collect_spec_decode_counters(runner, runtime_spec_counters)
+                for name, runner in telemetry_runners.items()
+            }
 
-    final_counters = _collect_spec_decode_counters(
-        telemetry_runners["v2"], runtime_spec_counters
-    )
+    final_counters_by_runner = {
+        name: _collect_spec_decode_counters(runner, runtime_spec_counters)
+        for name, runner in telemetry_runners.items()
+    }
+    pre_activation_counters = pre_activation_counters_by_runner["v2"]
+    final_counters = final_counters_by_runner["v2"]
     final_telemetry = {
-        name: {key: final_counters.get(key, 0.0) for key in _TELEMETRY_KEYS}
-        for name in telemetry_runners
+        name: {key: counters.get(key, 0.0) for key in _TELEMETRY_KEYS}
+        for name, counters in final_counters_by_runner.items()
+    }
+    aggregated_counters = {
+        name: {key: counters[key] for key in (*_SPEC_COUNTERS, *_TELEMETRY_KEYS)}
+        for name, counters in final_counters_by_runner.items()
     }
     all_keys: set[_CounterKey] = (
         set(final_counters) | set(pre_activation_counters) | set(_SPEC_COUNTERS)
@@ -543,9 +566,7 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
 
     observed = {
         "telemetry": final_telemetry,
-        "aggregated_counters": {
-            key: final_counters[key] for key in (*_SPEC_COUNTERS, *_TELEMETRY_KEYS)
-        },
+        "aggregated_counters": aggregated_counters,
         "proposal_lifecycle": {
             "published_widths": [
                 proposal.shape[1] for proposal in draft_tokens_handler.published
@@ -610,25 +631,29 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
         "vllm:spec_decode_tail_gate_k_0_steps": 2.0,
         "vllm:spec_decode_tail_gate_k_5_steps": 2.0,
     }
-    assert observed == {
-        "telemetry": {"v1": expected_telemetry, "v2": expected_telemetry},
-        "aggregated_counters": {
+    expected_aggregated_counters = {
+        name: {
             "vllm:spec_decode_num_drafts": 4.0,
             "vllm:spec_decode_num_draft_tokens": 20.0,
             "vllm:spec_decode_num_accepted_tokens": 3.0,
             **expected_telemetry,
-        },
+        }
+        for name in telemetry_runners
+    }
+    assert observed == {
+        "telemetry": {"v1": expected_telemetry, "v2": expected_telemetry},
+        "aggregated_counters": expected_aggregated_counters,
         "proposal_lifecycle": {
             "published_widths": [0, 0, 5, 5],
             "k0_cache_rows": [
                 [
                     [0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0],
+                    [37, 37, 37, 37, 37],
                     [0, 0, 0, 0, 0],
                 ],
                 [
                     [0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0],
+                    [37, 37, 37, 37, 37],
                     [0, 0, 0, 0, 0],
                 ],
             ],
@@ -639,10 +664,10 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
                 [[4, 4, 4, 4, 4], [4, 4, 4, 4, 4]],
             ],
             "inactive_cache_rows": [
-                [0, 0, 0, 0, 0],
-                [0, 0, 0, 0, 0],
-                [0, 0, 0, 0, 0],
-                [0, 0, 0, 0, 0],
+                [37, 37, 37, 37, 37],
+                [37, 37, 37, 37, 37],
+                [37, 37, 37, 37, 37],
+                [37, 37, 37, 37, 37],
             ],
             "eagle_advance_ticks": [1, 2, 3, 4],
             "decode_steps": [1, 2],
