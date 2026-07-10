@@ -662,6 +662,9 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
         "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 32000.0,
         "vllm:spec_decode_tail_gate_activation_batch_sum": 48.0,
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 24576.0,
+        "vllm:spec_decode_tail_gate_tick_sum": 900.0,
+        "vllm:spec_decode_tail_gate_activation_tick_sum": 51.0,
+        "vllm:spec_decode_tail_gate_activation_tick_count": 3.0,
         "vllm:spec_decode_tail_gate_predicted_speedup_sum": 11.0,
         "vllm:spec_decode_tail_gate_predicted_speedup_count": 10.0,
         "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": 3.3,
@@ -678,6 +681,9 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
         "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 72000.0,
         "vllm:spec_decode_tail_gate_activation_batch_sum": 64.0,
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 32768.0,
+        "vllm:spec_decode_tail_gate_tick_sum": 1000.0,
+        "vllm:spec_decode_tail_gate_activation_tick_sum": 68.0,
+        "vllm:spec_decode_tail_gate_activation_tick_count": 4.0,
         "vllm:spec_decode_tail_gate_predicted_speedup_sum": 15.48,
         "vllm:spec_decode_tail_gate_predicted_speedup_count": 14.0,
         "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": 4.8,
@@ -691,6 +697,7 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
     assert metrics["vllm/tail_gate_enabled_step_ratio"] == pytest.approx(0.25)
     assert metrics["vllm/tail_gate_activation_batch"] == pytest.approx(16.0)
     assert metrics["vllm/tail_gate_activation_seq_len"] == pytest.approx(8192.0)
+    assert metrics["vllm/tail_gate_activation_tick"] == pytest.approx(17.0)
     assert metrics["vllm/tail_gate_predicted_speedup"] == pytest.approx(1.12)
     assert metrics["vllm/tail_gate_activation_predicted_speedup"] == pytest.approx(1.5)
     assert metrics["vllm/tail_gate_advance_only_step_ratio"] == pytest.approx(0.75)
@@ -710,6 +717,8 @@ def test_compute_spec_decode_metrics_tail_gate_zero_denominators_are_zero() -> N
         "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 0.0,
         "vllm:spec_decode_tail_gate_activation_batch_sum": 0.0,
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 0.0,
+        "vllm:spec_decode_tail_gate_activation_tick_sum": 17.0,
+        "vllm:spec_decode_tail_gate_activation_tick_count": 0.0,
         "vllm:spec_decode_tail_gate_predicted_speedup_sum": 0.0,
         "vllm:spec_decode_tail_gate_predicted_speedup_count": 0.0,
         "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": 0.0,
@@ -723,6 +732,7 @@ def test_compute_spec_decode_metrics_tail_gate_zero_denominators_are_zero() -> N
         "vllm/tail_gate_enabled_step_ratio",
         "vllm/tail_gate_activation_batch",
         "vllm/tail_gate_activation_seq_len",
+        "vllm/tail_gate_activation_tick",
         "vllm/tail_gate_predicted_speedup",
         "vllm/tail_gate_activation_predicted_speedup",
         "vllm/tail_gate_advance_only_step_ratio",

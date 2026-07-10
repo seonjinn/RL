@@ -498,6 +498,10 @@ def compute_spec_decode_metrics(
         activation_seq_len_sum = delta.get(
             f"{tail_gate_prefix}activation_sequence_length_sum", 0.0
         )
+        activation_tick_sum = delta.get(f"{tail_gate_prefix}activation_tick_sum", 0.0)
+        activation_tick_count = delta.get(
+            f"{tail_gate_prefix}activation_tick_count", 0.0
+        )
         predicted_speedup_sum = delta.get(
             f"{tail_gate_prefix}predicted_speedup_sum", 0.0
         )
@@ -528,6 +532,9 @@ def compute_spec_decode_metrics(
                 ),
                 "vllm/tail_gate_activation_seq_len": tail_gate_ratio(
                     activation_seq_len_sum, activations
+                ),
+                "vllm/tail_gate_activation_tick": tail_gate_ratio(
+                    activation_tick_sum, activation_tick_count
                 ),
                 "vllm/tail_gate_predicted_speedup": tail_gate_ratio(
                     predicted_speedup_sum, predicted_speedup_count

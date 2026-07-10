@@ -951,6 +951,10 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '                        "vllm:spec_decode_tail_gate_activation_sequence_length_sum": float(\n'
         "                            scheduler_output.tail_gate_mean_sequence_length\n"
         "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_tick_sum": float(\n'
+        "                            scheduler_output.tail_gate_tick\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_tick_count": 1.0,\n'
         '                        "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": float(\n'
         "                            scheduler_output.tail_gate_predicted_speedup_sum\n"
         "                        ),\n"
@@ -1341,6 +1345,10 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '                        "vllm:spec_decode_tail_gate_activation_sequence_length_sum": float(\n'
         "                            scheduler_output.tail_gate_mean_sequence_length\n"
         "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_tick_sum": float(\n'
+        "                            scheduler_output.tail_gate_tick\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_tick_count": 1.0,\n'
         '                        "vllm:spec_decode_tail_gate_activation_predicted_speedup_sum": float(\n'
         "                            scheduler_output.tail_gate_predicted_speedup_sum\n"
         "                        ),\n"
