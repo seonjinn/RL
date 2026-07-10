@@ -149,6 +149,7 @@ def _mini_launcher_command(variant: str) -> str:
             f"TRITON_CACHE_DIR=/tmp/triton/{variant}",
             f"TORCHINDUCTOR_CACHE_DIR=/tmp/inductor/{variant}",
             "sbatch",
+            "--parsable",
             "--account=account",
             "--partition=batch_block1",
             "--nodes=4",

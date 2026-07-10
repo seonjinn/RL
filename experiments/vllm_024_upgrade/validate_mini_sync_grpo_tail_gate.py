@@ -199,6 +199,7 @@ MINI_LAUNCHER_ENV_ASSIGNMENTS: dict[str, str | None] = {
     "TORCHINDUCTOR_CACHE_DIR": None,
 }
 MINI_SBATCH_OPTIONS: dict[str, str | None] = {
+    "--parsable": "",
     "--account": None,
     "--partition": None,
     "--nodes": "4",
