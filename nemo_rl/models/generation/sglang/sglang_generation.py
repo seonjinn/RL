@@ -400,7 +400,11 @@ class SGLangGeneration(GenerationInterface):
 
     @wrap_with_nvtx_name("sglang_genertion/generate")
     def generate(
-        self, data: BatchedDataDict[GenerationDatumSpec], greedy: bool = False
+        self,
+        data: BatchedDataDict[GenerationDatumSpec],
+        greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> BatchedDataDict[GenerationOutputSpec]:
         """Generate a batch of data using Sglang generation.
 
@@ -415,6 +419,7 @@ class SGLangGeneration(GenerationInterface):
                 - generation_lengths: Lengths of each response
                 - unpadded_sequence_lengths: Lengths of each input + generated sequence
         """
+        del validation
         # Handle empty input case
         if len(data["input_ids"]) == 0:
             # Return empty BatchedDataDict with all required fields
@@ -576,6 +581,8 @@ class SGLangGeneration(GenerationInterface):
         self,
         data: BatchedDataDict[GenerationDatumSpec],
         greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> AsyncGenerator[tuple[int, BatchedDataDict[GenerationOutputSpec]], None]:
         """Generate a single sample using SGLang, yielding the result when ready.
 
@@ -586,6 +593,7 @@ class SGLangGeneration(GenerationInterface):
         Yields:
             Tuple of (original_index, BatchedDataDict conforming to GenerationOutputSpec)
         """
+        del validation
         # Handle empty input case
         if len(data["input_ids"]) == 0:
             return

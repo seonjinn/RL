@@ -3074,6 +3074,7 @@ class TestValidateFunction:
 
         # Verify log_batched_dict_as_jsonl was called
         mock_logger.log_batched_dict_as_jsonl.assert_called_once()
+        assert mock_rollout.call_args.kwargs["validation"] is True
 
         # Verify the filename
         assert logged_data["filename"] == "val_data_step5.jsonl"

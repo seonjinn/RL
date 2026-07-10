@@ -238,6 +238,7 @@ def generate_responses(
     input_lengths: torch.Tensor,
     include_logprobs: bool = True,
     greedy: bool = False,
+    validation: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], list[torch.Tensor], dict[str, float | int]]:
     """Generate responses from policy using synchronous generation."""
     # Add stop_strings to generation_input_data if present in the batch
@@ -249,7 +250,7 @@ def generate_responses(
 
     # Always use synchronous generation
     generation_outputs = policy_generation.generate(
-        generation_input_data, greedy=greedy
+        generation_input_data, greedy=greedy, validation=validation
     )
 
     # Extract everything we need from the generation outputs
@@ -323,6 +324,7 @@ async def generate_responses_async(
     input_lengths: torch.Tensor,
     include_logprobs: bool = True,
     greedy: bool = False,
+    validation: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], list[torch.Tensor], dict[str, float | int]]:
     """Async version of generate_responses that properly calls generate_async."""
     # Add stop_strings to generation_input_data if present in the batch
@@ -368,7 +370,7 @@ async def generate_responses_async(
         tuple[int, BatchedDataDict[GenerationOutputSpec]]
     ] = []
     async for original_idx, single_item_output in policy_generation.generate_async(
-        generation_input_data, greedy=greedy
+        generation_input_data, greedy=greedy, validation=validation
     ):
         collected_indexed_outputs.append((original_idx, single_item_output))
 
@@ -603,6 +605,7 @@ def run_multi_turn_rollout(
     max_seq_len: int,
     max_rollout_turns: int = 999999,
     greedy: bool = False,
+    validation: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], dict[str, Any]]:
     """Runs a multi-turn rollout loop, interacting with the environment.
 
@@ -695,6 +698,7 @@ def run_multi_turn_rollout(
             tokenizer,
             input_lengths=active_input_lengths,
             greedy=greedy,
+            validation=validation,
         )
 
         # Record response truncation (response hit max_tokens without stop token)
@@ -852,6 +856,7 @@ async def async_generate_response_for_sample_turn(
     tokenizer: TokenizerType,
     max_seq_len: int,
     greedy: bool = False,
+    validation: bool = False,
 ) -> tuple[list[dict], torch.Tensor, torch.Tensor, dict[str, float]]:
     """Generate a response for a single sample's turn using async generation.
 
@@ -903,6 +908,7 @@ async def async_generate_response_for_sample_turn(
         input_lengths=input_lengths,
         include_logprobs=True,
         greedy=greedy,
+        validation=validation,
     )
 
     # Extract results for the single sample
@@ -921,6 +927,7 @@ async def run_sample_multi_turn_rollout(
     max_seq_len: int,
     max_rollout_turns: int = 999999,
     greedy: bool = False,
+    validation: bool = False,
 ) -> tuple[dict, dict[str, Any]]:
     """Run a multi-turn rollout for a single sample.
 
@@ -985,6 +992,7 @@ async def run_sample_multi_turn_rollout(
                 tokenizer,
                 max_seq_len,
                 greedy=greedy,
+                validation=validation,
             )
             current_message_log = updated_message_log
 
@@ -1126,6 +1134,7 @@ def run_async_multi_turn_rollout(
     max_seq_len: int,
     max_rollout_turns: int = 999999,
     greedy: bool = False,
+    validation: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], dict[str, Any]]:
     """Run multi-turn rollouts with sample-level processing.
 
@@ -1176,6 +1185,7 @@ def run_async_multi_turn_rollout(
                     max_seq_len=max_seq_len,
                     max_rollout_turns=max_rollout_turns,
                     greedy=greedy,
+                    validation=validation,
                 )
                 return result
             except Exception as e:

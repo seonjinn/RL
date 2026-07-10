@@ -139,3 +139,30 @@ def test_mini_wrapper_rejects_threshold_at_local_scheduler_capacity() -> None:
         "TAIL_GATE_THRESHOLD must be below local scheduler capacity 8" in result.stderr
     )
     assert "[DRY-RUN] job" not in result.stdout
+
+
+def test_mini_wrapper_isolates_default_retry_attempts(tmp_path: Path) -> None:
+    def run_once() -> str:
+        result = subprocess.run(
+            ["bash", str(MINI_LAUNCHER), "dry-run"],
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "REPO_DIR": "/lustre/test/nemo-rl",
+                "LYRIS_ROOT": str(tmp_path),
+                "HF_HOME": "/lustre/test/hf_home",
+                "CONTAINER": "/lustre/test/nemo-rl.sqsh",
+                "RUN_TAG": "mini-contract",
+            },
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return next(
+            token.removeprefix("BASE_LOG_DIR=")
+            for token in result.stdout.split()
+            if token.startswith("BASE_LOG_DIR=")
+        )
+
+    assert run_once() != run_once()

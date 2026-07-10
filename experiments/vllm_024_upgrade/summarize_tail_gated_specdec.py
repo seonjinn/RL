@@ -34,6 +34,28 @@ EXPECTED_STEPS = set(range(2, 21))
 MIN_GRAPH_CALL_RATIO = 0.99
 MIN_ROOFLINE_PREDICTED_SPEEDUP = 1.05
 MIN_SPECDEC_HEADROOM_TOKENS = 32
+CUDAGRAPH_ROLES = (
+    "target",
+    "draft",
+    "draft_prefill",
+    "draft_decode",
+    "draft_query",
+)
+CUDAGRAPH_FALLBACK_REASONS = (
+    "uninitialized",
+    "disabled",
+    "missing_capture_limit",
+    "oversize",
+    "mode_restricted",
+    "missing_key",
+    "incompatible",
+    "empty",
+)
+CUDAGRAPH_FALLBACK_KEYS = tuple(
+    f"train/vllm/cudagraph_{role}_fallback_{reason}"
+    for role in CUDAGRAPH_ROLES
+    for reason in CUDAGRAPH_FALLBACK_REASONS
+)
 
 BASE_METRIC_KEYS = {
     "e2e_time": "timing/train/total_step_time",
@@ -221,6 +243,12 @@ STRUCTURED_PROVENANCE_MANIFEST_HEADER = (
     "command_argv_json",
     "launcher_argv_json",
 )
+IMMUTABLE_CHECKPOINT_MANIFEST_HEADER = (
+    *STRUCTURED_PROVENANCE_MANIFEST_HEADER[:-3],
+    "target_checkpoint",
+    "target_checkpoint_revision",
+    *STRUCTURED_PROVENANCE_MANIFEST_HEADER[-3:],
+)
 REQUIRED_MANIFEST_FIELDS = (
     *LEGACY_COHORT_FIELDS,
     "variant",
@@ -242,6 +270,8 @@ MINI_REQUIRED_MANIFEST_FIELDS = (
     "checkout_path",
     "ray_sub_path",
     "draft_checkpoint",
+    "target_checkpoint",
+    "target_checkpoint_revision",
     "command_argv_json",
     "launcher_argv_json",
 )
@@ -268,6 +298,9 @@ MANIFEST_SCHEMAS = {
     ),
     STRUCTURED_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
         "structured_provenance_v1", STRUCTURED_PROVENANCE_MANIFEST_HEADER, {}
+    ),
+    IMMUTABLE_CHECKPOINT_MANIFEST_HEADER: ManifestSchema(
+        "immutable_checkpoint_v2", IMMUTABLE_CHECKPOINT_MANIFEST_HEADER, {}
     ),
 }
 
@@ -306,6 +339,8 @@ class RunSummary:
     draft_graph_ratio: float | None
     draft_prefill_graph_ratio: float | None
     draft_decode_graph_ratio: float | None
+    cuda_graph_fallback_count: float | None
+    cuda_graph_evidence: str
     reward: float | None
     response_length: float | None
     approx_kl: float | None
@@ -346,6 +381,8 @@ class RunSummary:
     ray_log_dir: str
     launcher_command: str
     command: str
+    target_checkpoint: str
+    target_checkpoint_revision: str
     provenance: str
     comparison_key: tuple[tuple[str, str], ...]
 
@@ -438,7 +475,23 @@ def _required_metric_keys(metadata: Mapping[str, str]) -> dict[str, str]:
 
 
 def _history_keys(metadata: Mapping[str, str]) -> list[str]:
-    return ["_step", *_required_metric_keys(metadata).values()]
+    fallback_roles = ["target"]
+    if _is_specdec(metadata):
+        fallback_roles.extend(
+            ["draft"]
+            if metadata.get("runner") == "v1"
+            else ["draft_prefill", "draft_decode", "draft_query"]
+        )
+    fallback_keys = [
+        f"train/vllm/cudagraph_{role}_fallback_{reason}"
+        for role in fallback_roles
+        for reason in CUDAGRAPH_FALLBACK_REASONS
+    ]
+    return [
+        "_step",
+        *_required_metric_keys(metadata).values(),
+        *fallback_keys,
+    ]
 
 
 def _comparison_key(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
@@ -475,6 +528,17 @@ def _make_summary(
     status: str,
     reason: str,
 ) -> RunSummary:
+    fallback_count = metrics.get("cuda_graph_fallback_count")
+    fallback_display = (
+        str(int(fallback_count))
+        if fallback_count is not None and fallback_count.is_integer()
+        else str(fallback_count)
+    )
+    cuda_graph_evidence = (
+        "fallback counters unavailable; measured graph-call ratio threshold >= 0.99"
+        if fallback_count is None
+        else f"observed fallback counters={fallback_display}"
+    )
     return RunSummary(
         model=metadata.get("model", ""),
         runner=metadata.get("runner", ""),
@@ -508,6 +572,8 @@ def _make_summary(
         draft_graph_ratio=metrics.get("draft_graph_ratio"),
         draft_prefill_graph_ratio=metrics.get("draft_prefill_graph_ratio"),
         draft_decode_graph_ratio=metrics.get("draft_decode_graph_ratio"),
+        cuda_graph_fallback_count=fallback_count,
+        cuda_graph_evidence=cuda_graph_evidence,
         reward=metrics.get("reward"),
         response_length=metrics.get("response_length"),
         approx_kl=metrics.get("approx_kl"),
@@ -548,6 +614,8 @@ def _make_summary(
         ray_log_dir=metadata.get("ray_log_dir", ""),
         launcher_command=metadata.get("launcher_command", ""),
         command=metadata.get("command", ""),
+        target_checkpoint=metadata.get("target_checkpoint", ""),
+        target_checkpoint_revision=metadata.get("target_checkpoint_revision", ""),
         provenance=_provenance(metadata),
         comparison_key=_comparison_key(metadata),
     )
@@ -614,6 +682,21 @@ def summarize_history(
             for metric_name, metric_values in values.items()
         }
     )
+    observed_fallbacks: list[float] = []
+    for step in sorted(expected_steps):
+        record = records_by_step[step]
+        for key in CUDAGRAPH_FALLBACK_KEYS:
+            if key not in record:
+                continue
+            value = record[key]
+            if not _is_finite_number(value):
+                return _empty_summary(
+                    metadata, f"non_finite_metric:cuda_graph_fallback:{step}", steps
+                )
+            observed_fallbacks.append(float(value))
+    averages["cuda_graph_fallback_count"] = (
+        sum(observed_fallbacks) if observed_fallbacks else None
+    )
     for metric_name in (
         "e2e_time",
         "generation_time",
@@ -658,9 +741,21 @@ def _required_graph_metrics(summary: RunSummary) -> tuple[str, ...]:
 
 
 def _graph_health(summary: RunSummary) -> bool:
+    if (
+        summary.cuda_graph_fallback_count is not None
+        and summary.cuda_graph_fallback_count > 0.0
+    ):
+        return False
     for metric_name in _required_graph_metrics(summary):
         value = cast(float | None, getattr(summary, metric_name))
-        if value is None or value < MIN_GRAPH_CALL_RATIO or value > 1.0:
+        if (
+            value is None
+            or (
+                value < MIN_GRAPH_CALL_RATIO
+                and not math.isclose(value, MIN_GRAPH_CALL_RATIO, abs_tol=1e-12)
+            )
+            or value > 1.0
+        ):
             return False
     return True
 
@@ -679,9 +774,17 @@ def _gate_activation_health(summary: RunSummary) -> bool | None:
     )
     if any(value is None for value in values):
         return False
+    try:
+        expected_local_engines = float(summary.dp)
+    except ValueError:
+        return False
     if (
         cast(float, summary.gate_decisions) <= 0.0
-        or cast(float, summary.gate_activations) <= 0.0
+        or not math.isclose(
+            cast(float, summary.gate_activations),
+            expected_local_engines,
+            abs_tol=1e-9,
+        )
         or not 0.0 < cast(float, summary.gate_enabled_ratio) < 1.0
         or not 0.0 < cast(float, summary.gate_advance_only_ratio) < 1.0
         or cast(float, summary.activation_tick) <= 0.0

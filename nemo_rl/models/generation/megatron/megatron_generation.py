@@ -163,7 +163,11 @@ class MegatronGeneration(GenerationInterface):
         return self._policy.swap_weights_via_reshard(is_source=False)
 
     def generate(
-        self, data: BatchedDataDict[GenerationDatumSpec], greedy: bool = False
+        self,
+        data: BatchedDataDict[GenerationDatumSpec],
+        greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> BatchedDataDict[GenerationOutputSpec]:
         """Generate a batch of data using the Megatron generation backend.
 
@@ -178,6 +182,7 @@ class MegatronGeneration(GenerationInterface):
         Returns:
             BatchedDataDict conforming to GenerationOutputSpec.
         """
+        del validation
         future = self._policy.worker_group.run_single_worker_single_data(
             method_name="generate",
             worker_idx=0,
@@ -187,9 +192,14 @@ class MegatronGeneration(GenerationInterface):
         return ray.get(future)
 
     async def generate_async(
-        self, data: BatchedDataDict[GenerationDatumSpec], greedy: bool = False
+        self,
+        data: BatchedDataDict[GenerationDatumSpec],
+        greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> AsyncGenerator[tuple[int, BatchedDataDict[GenerationOutputSpec]], None]:
         """Generate asynchronously, yielding `(index, batch)` tuples as they complete."""
+        del validation
         worker = self._policy.worker_group.workers[0]
         futures = worker.generate_async.options(num_returns="streaming").remote(
             data=data, greedy=greedy

@@ -39,8 +39,58 @@ final_sync_exit_status() {
   return 0
 }
 
+write_final_sync_status() {
+  local log_dir="$1"
+  local driver_status="$2"
+  local sync_complete="$3"
+  local sync_complete_json=false
+  local status_path="${log_dir}/.ray_logs_final_sync_status.json"
+  local temporary_path="${status_path}.tmp.$$"
+
+  if [[ "${sync_complete}" -eq 1 ]]; then
+    sync_complete_json=true
+  fi
+  if ! printf \
+    '{"schema_version":1,"driver_exit_code":%d,"final_sync_complete":%s}\n' \
+    "${driver_status}" "${sync_complete_json}" >"${temporary_path}"; then
+    rm -f "${temporary_path}"
+    return 1
+  fi
+  mv "${temporary_path}" "${status_path}"
+}
+
+verify_runtime_checkout() {
+  local checkout="${NRL_RUNTIME_CHECKOUT:-}"
+  local expected_commit="${NRL_EXPECTED_RUNTIME_COMMIT:-}"
+  local actual_commit
+  local status
+
+  if [[ -z "${checkout}" && -z "${expected_commit}" ]]; then
+    return 0
+  fi
+  if [[ -z "${checkout}" || -z "${expected_commit}" ]]; then
+    echo "[ERROR] NRL_RUNTIME_CHECKOUT and NRL_EXPECTED_RUNTIME_COMMIT must be set together" >&2
+    return 1
+  fi
+  if ! actual_commit="$(git -C "${checkout}" rev-parse HEAD 2>/dev/null)"; then
+    echo "[ERROR] runtime checkout is not a readable Git checkout: ${checkout}" >&2
+    return 1
+  fi
+  if [[ "${actual_commit}" != "${expected_commit}" ]]; then
+    echo "[ERROR] runtime checkout commit changed while queued: expected ${expected_commit}, got ${actual_commit}" >&2
+    return 1
+  fi
+  status="$(git -C "${checkout}" status --porcelain=v1 --untracked-files=all --ignore-submodules=none)"
+  if [[ -n "${status}" ]]; then
+    echo "[ERROR] runtime checkout is not clean at job start: ${checkout}" >&2
+    printf '%s\n' "${status}" >&2
+    return 1
+  fi
+}
+
 # Record job-start epoch so Python can measure pre-Python overhead
 export NRL_JOB_START_EPOCH=$(date +%s.%N)
+verify_runtime_checkout
 
 ########################################################
 # Function to detect if SLURM cluster uses GRES
@@ -523,6 +573,26 @@ final_sync_exit_status() {
   return 0
 }
 
+write_final_sync_status() {
+  local log_dir="\$1"
+  local driver_status="\$2"
+  local sync_complete="\$3"
+  local sync_complete_json=false
+  local status_path="\${log_dir}/.ray_logs_final_sync_status.json"
+  local temporary_path="\${status_path}.tmp.\$\$"
+
+  if [[ "\${sync_complete}" -eq 1 ]]; then
+    sync_complete_json=true
+  fi
+  if ! printf \\
+    '{"schema_version":1,"driver_exit_code":%d,"final_sync_complete":%s}\\n' \\
+    "\${driver_status}" "\${sync_complete_json}" >"\${temporary_path}"; then
+    rm -f "\${temporary_path}"
+    return 1
+  fi
+  mv "\${temporary_path}" "\${status_path}"
+}
+
 # If this node can't see the canary, LOG_DIR is not shared. Fail now instead of
 # waiting forever for signal files the submit host writes but this node can't read.
 if [[ ! -f "$LOG_DIR/.shared_fs_canary" ]]; then
@@ -771,6 +841,10 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
     fi
     sleep 1
   done
+  if ! write_final_sync_status "$LOG_DIR" "\$driver_exit_code" "\$final_sync_complete"; then
+    echo "[ERROR] Failed to persist final driver/sync status" >&2
+    final_sync_complete=0
+  fi
   if [[ "\$final_sync_complete" -eq 1 ]]; then
     touch "$LOG_DIR/.ray_logs_final_sync_complete"
   else

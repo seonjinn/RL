@@ -14,6 +14,7 @@
 import json
 import warnings
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, cast
 
 from transformers import PreTrainedTokenizerBase
@@ -53,6 +54,19 @@ _TAIL_GATE_MODES = {"threshold", "roofline"}
 _TAIL_GATE_SCHEDULER_CLASS = (
     "nemo_rl.models.generation.vllm.tail_gate_scheduler.TailGatedScheduler"
 )
+
+
+def _immutable_hf_model_identity(model_name: str) -> tuple[str, str | None]:
+    path = Path(model_name)
+    if path.parent.name != "snapshots":
+        return model_name, None
+    model_cache_name = path.parent.parent.name
+    if not model_cache_name.startswith("models--"):
+        return model_name, None
+    components = model_cache_name.split("--")[1:]
+    if len(components) < 2 or not all(components):
+        return model_name, None
+    return "/".join(components), path.name
 
 
 def _get_speculative_config(config: VllmConfig) -> dict[str, Any] | None:
@@ -144,11 +158,27 @@ def _validate_tail_gate_speculative_config(
         roofline_config = tail_gate_config.roofline_config
         assert roofline_config is not None
         target_model = config.get("model_name")
-        if target_model is not None and roofline_config.model.name != target_model:
+        target_identity = None
+        target_revision = None
+        if target_model is not None:
+            target_identity, target_revision = _immutable_hf_model_identity(
+                target_model
+            )
+        if (
+            target_identity is not None
+            and roofline_config.model.name != target_identity
+        ):
             raise ValueError(
                 "Roofline calibration target model does not match "
                 f"generation model_name: {roofline_config.model.name!r} != "
-                f"{target_model!r}."
+                f"{target_identity!r}."
+            )
+        calibrated_revision = roofline_config.metadata.get("target_checkpoint_revision")
+        if target_revision is not None and calibrated_revision != target_revision:
+            raise ValueError(
+                "Roofline calibration target checkpoint revision does not match "
+                f"generation snapshot: {calibrated_revision!r} != "
+                f"{target_revision!r}."
             )
         if roofline_config.hardware.tp != target_tp:
             raise ValueError(

@@ -545,6 +545,7 @@ class BaseVllmGenerationWorker:
         stop_strings,
         max_new_tokens: Optional[int] = None,
         include_logprobs: bool = True,
+        validation: bool = False,
     ):
         top_k_cfg = self.cfg["top_k"]
         top_k_val = 1 if greedy else (top_k_cfg if top_k_cfg is not None else -1)
@@ -565,6 +566,7 @@ class BaseVllmGenerationWorker:
             stop=stop_strings,
             include_stop_str_in_output=True,
             ignore_eos=self.cfg.get("ignore_eos", False),
+            extra_args={"nemo_rl": {"validation": validation}},
         )
 
     def start_gpu_profiling(self) -> None:
@@ -704,7 +706,11 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
 
     @wrap_with_nvtx_name("vllm_genertion_worker/generate")
     def generate(
-        self, data: BatchedDataDict[GenerationDatumSpec], greedy: bool = False
+        self,
+        data: BatchedDataDict[GenerationDatumSpec],
+        greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> BatchedDataDict[GenerationOutputSpec]:
         """Generate a batch of data using vLLM generation.
 
@@ -771,6 +777,7 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 max_new_tokens=(
                     1 if remaining_tokens[index] == 0 else remaining_tokens[index]
                 ),
+                validation=validation,
             )
             for index in request_indices
         ]

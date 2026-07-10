@@ -1048,6 +1048,8 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         self,
         data: BatchedDataDict[GenerationDatumSpec],
         greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> AsyncGenerator[tuple[int, BatchedDataDict[GenerationOutputSpec]], None]:
         """Generate a batch of data using vLLM's AsyncLLMEngine, yielding results as they are ready.
 
@@ -1157,6 +1159,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 greedy=greedy,
                 stop_strings=final_stop_strings_for_sample,
                 max_new_tokens=allowed_new_tokens,
+                validation=validation,
             )
 
             request_id = str(uuid.uuid4())
@@ -1325,7 +1328,11 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             await asyncio.gather(*sample_tasks, return_exceptions=True)
 
     async def generate_text_async(
-        self, data: BatchedDataDict[GenerationDatumSpec], greedy: bool = False
+        self,
+        data: BatchedDataDict[GenerationDatumSpec],
+        greedy: bool = False,
+        *,
+        validation: bool = False,
     ) -> AsyncGenerator[tuple[int, BatchedDataDict[GenerationOutputSpec]], None]:
         """Generate text responses asynchronously, yielding results as they are ready.
 
@@ -1374,6 +1381,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 greedy=greedy,
                 stop_strings=final_stop_strings,
                 include_logprobs=False,
+                validation=validation,
             )
 
             request_id = str(uuid.uuid4())

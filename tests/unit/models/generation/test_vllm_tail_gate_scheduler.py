@@ -146,8 +146,13 @@ def _scheduler_output(*, drafts: dict[str, list[int]] | None = None) -> SimpleNa
     )
 
 
-def _request(*, finished: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(is_finished=lambda: finished)
+def _request(*, finished: bool = False, validation: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        is_finished=lambda: finished,
+        sampling_params=SimpleNamespace(
+            extra_args={"nemo_rl": {"validation": validation}}
+        ),
+    )
 
 
 def test_schedule_gates_the_next_proposal_and_preserves_pending_drafts(
@@ -343,3 +348,24 @@ def test_update_snapshots_acceptance_before_superclass_trims_sampled_tokens(
     assert sampled_token_ids == [[10]]
     assert scheduler._accepted_tokens == 2
     assert scheduler._draft_cycles == 1
+
+
+def test_validation_rollout_does_not_update_acceptance_estimate(
+    scheduler_module: ModuleType,
+) -> None:
+    scheduler = scheduler_module.TailGatedScheduler(_vllm_config())
+    scheduler.requests["request-1"] = _request(validation=True)
+    initial_estimate = scheduler._tail_gate.expected_accept_length
+
+    scheduler.update_from_output(
+        _scheduler_output(drafts={"request-1": [1, 2, 3]}),
+        SimpleNamespace(
+            req_ids=["request-1"],
+            req_id_to_index={"request-1": 0},
+            sampled_token_ids=[[10, 11, 12]],
+        ),
+    )
+
+    assert scheduler._tail_gate.expected_accept_length == initial_estimate
+    assert scheduler._accepted_tokens == 0
+    assert scheduler._draft_cycles == 0

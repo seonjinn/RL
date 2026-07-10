@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -135,6 +136,87 @@ def test_final_sync_requires_copied_logs_and_canonical_node_evidence() -> None:
         'final_sync_exit_status "\\$driver_exit_code" "\\$final_sync_complete"'
         in source
     )
+
+
+def test_final_sync_persists_structured_driver_status(tmp_path: Path) -> None:
+    source = RAY_SUB.read_text(encoding="utf-8")
+    definitions_start = source.index("FINAL_SYNC_FAILURE_EXIT_CODE=")
+    definitions_end = source.index("\n# Record job-start epoch", definitions_start)
+    definitions = source[definitions_start:definitions_end]
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'{definitions}\nwrite_final_sync_status "$1" 17 1',
+            "bash",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(
+        (tmp_path / ".ray_logs_final_sync_status.json").read_text(encoding="utf-8")
+    ) == {
+        "schema_version": 1,
+        "driver_exit_code": 17,
+        "final_sync_complete": True,
+    }
+
+
+def test_runtime_checkout_guard_rejects_changed_queued_checkout(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("original\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "seed"], check=True)
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source = RAY_SUB.read_text(encoding="utf-8")
+    definitions_start = source.index("FINAL_SYNC_FAILURE_EXIT_CODE=")
+    definitions_end = source.index("\n# Record job-start epoch", definitions_start)
+    definitions = source[definitions_start:definitions_end]
+
+    clean = subprocess.run(
+        ["bash", "-c", f"{definitions}\nverify_runtime_checkout"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "NRL_RUNTIME_CHECKOUT": str(repo),
+            "NRL_EXPECTED_RUNTIME_COMMIT": commit,
+        },
+    )
+    assert clean.returncode == 0, clean.stderr
+
+    tracked.write_text("changed while queued\n", encoding="utf-8")
+    changed = subprocess.run(
+        ["bash", "-c", f"{definitions}\nverify_runtime_checkout"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "NRL_RUNTIME_CHECKOUT": str(repo),
+            "NRL_EXPECTED_RUNTIME_COMMIT": commit,
+        },
+    )
+    assert changed.returncode != 0
+    assert "runtime checkout is not clean" in changed.stderr
 
 
 def test_restart_output_is_appended_without_clobbering_prior_attempt_logs() -> None:

@@ -155,6 +155,7 @@ def _history(
     activated: bool = True,
     predicted_speedup: float = 1.12,
     activation_predicted_speedup: float = 1.12,
+    fallback_count: float | None = None,
 ) -> list[dict[str, float]]:
     rows: list[dict[str, float]] = []
     for step in range(1, 21):
@@ -195,7 +196,9 @@ def _history(
             row.update(
                 {
                     "train/vllm/tail_gate_decisions": 100.0,
-                    "train/vllm/tail_gate_activations": 1.0 if activated else 0.0,
+                    "train/vllm/tail_gate_activations": (
+                        float(metadata["dp"]) if activated else 0.0
+                    ),
                     "train/vllm/tail_gate_enabled_step_ratio": (
                         0.25 if activated else 0.0
                     ),
@@ -220,6 +223,8 @@ def _history(
                 row["train/vllm/tail_gate_activation_predicted_speedup"] = (
                     activation_predicted_speedup if activated else 0.0
                 )
+        if fallback_count is not None:
+            row["train/vllm/cudagraph_target_fallback_missing_key"] = fallback_count
         rows.append(row)
     return rows
 
@@ -233,6 +238,7 @@ def _summary(
     activated: bool = True,
     predicted_speedup: float = 1.12,
     activation_predicted_speedup: float = 1.12,
+    fallback_count: float | None = None,
 ) -> RunSummary:
     return summarize_history(
         metadata,
@@ -244,8 +250,55 @@ def _summary(
             activated=activated,
             predicted_speedup=predicted_speedup,
             activation_predicted_speedup=activation_predicted_speedup,
+            fallback_count=fallback_count,
         ),
     )
+
+
+def test_available_cudagraph_fallback_counter_overrides_ratio_threshold() -> None:
+    metadata = _metadata(variant="fastrl_threshold_v2_k5")
+    summary = _summary(metadata, fallback_count=1.0)
+    baseline = _summary(_metadata(variant="baseline_v2"))
+    always_on = _summary(_metadata(variant="always_on_v2_k5"))
+
+    candidate = next(
+        row
+        for row in build_comparison_rows([baseline, always_on, summary])
+        if row.variant == "fastrl_threshold_v2_k5"
+    )
+
+    assert candidate.cuda_graph_fallback_count == 19.0
+    assert candidate.cuda_graph_health_passed is False
+    assert candidate.cuda_graph_evidence == "observed fallback counters=19"
+
+
+def test_ratio_only_graph_evidence_is_phrased_as_measured_threshold() -> None:
+    summary = _summary(_metadata(variant="baseline_v2"), target_graph_ratio=0.99)
+    row = build_comparison_rows([summary])[0]
+
+    assert row.cuda_graph_health_passed is True
+    assert row.cuda_graph_fallback_count is None
+    assert row.cuda_graph_evidence == (
+        "fallback counters unavailable; measured graph-call ratio threshold >= 0.99"
+    )
+
+
+def test_gate_activation_count_matches_manifest_generation_dp() -> None:
+    metadata = _metadata(variant="fastrl_threshold_v2_k5")
+    history = _history(metadata)
+    for record in history:
+        record["train/vllm/tail_gate_activations"] = 1.0
+    candidate_summary = summarize_history(metadata, history)
+    baseline = _summary(_metadata(variant="baseline_v2"))
+    always_on = _summary(_metadata(variant="always_on_v2_k5"))
+
+    candidate = next(
+        row
+        for row in build_comparison_rows([baseline, always_on, candidate_summary])
+        if row.variant == "fastrl_threshold_v2_k5"
+    )
+
+    assert candidate.gate_activation_health_passed is False
 
 
 def _cohort(*, model: str = "qwen32b", runner: str = "v2") -> list[dict[str, str]]:

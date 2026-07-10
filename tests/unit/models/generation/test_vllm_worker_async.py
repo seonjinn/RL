@@ -65,10 +65,11 @@ def test_generate_async_cancellation_stops_child_request_task() -> None:
                 "input_lengths": torch.tensor([2], dtype=torch.long),
             }
         )
-        generation = worker.generate_async(data)
+        generation = worker.generate_async(data, validation=True)
         next_result = asyncio.create_task(anext(generation))
 
         await asyncio.wait_for(llm.started.wait(), timeout=0.5)
+        assert llm.sampling_params["extra_args"] == {"nemo_rl": {"validation": True}}
         next_result.cancel()
         with pytest.raises(asyncio.CancelledError):
             await next_result

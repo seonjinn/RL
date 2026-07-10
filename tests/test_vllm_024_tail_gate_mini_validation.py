@@ -32,6 +32,9 @@ from experiments.vllm_024_upgrade.validate_mini_sync_grpo_tail_gate import (
     _render_activation_scatter,
 )
 
+TARGET_REVISION = "0123456789abcdef0123456789abcdef01234567"
+TARGET_CHECKPOINT = f"/models/target/snapshots/{TARGET_REVISION}"
+
 
 class _FakeRun:
     def __init__(self, history: list[dict[str, object]], url: str) -> None:
@@ -79,6 +82,7 @@ def _mini_command(variant: str) -> str:
         "grpo.num_generations_per_prompt=4",
         "checkpointing.enabled=false",
         f"checkpointing.checkpoint_dir={run_dir}/checkpoints",
+        f"policy.model_name={TARGET_CHECKPOINT}",
         "policy.train_global_batch_size=64",
         "policy.max_total_sequence_length=1024",
         "policy.generation.max_new_tokens=1024",
@@ -145,6 +149,8 @@ def _mini_launcher_command(variant: str) -> str:
             "PYTHONPATH=/repo",
             "PYTHONDONTWRITEBYTECODE=1",
             "RAY_LOG_SYNC_FREQUENCY=60",
+            "NRL_RUNTIME_CHECKOUT=/repo",
+            "NRL_EXPECTED_RUNTIME_COMMIT=abc123",
             "TMPDIR=/tmp",
             f"TRITON_CACHE_DIR=/tmp/triton/{variant}",
             f"TORCHINDUCTOR_CACHE_DIR=/tmp/inductor/{variant}",
@@ -222,6 +228,8 @@ def _metadata(variant: str) -> dict[str, str]:
         "command": command,
         "checkout_path": "/repo",
         "ray_sub_path": "/repo/ray.sub",
+        "target_checkpoint": TARGET_CHECKPOINT,
+        "target_checkpoint_revision": TARGET_REVISION,
         "draft_checkpoint": (
             "not_applicable" if variant == "baseline_v2" else "/models/draft"
         ),
@@ -237,6 +245,7 @@ def _history(
     *,
     activation_tick: float = 17.0,
     activation_batch: float = 4.0,
+    activations: float = 8.0,
     enabled_ratio: float = 0.25,
     advance_only_ratio: float = 0.75,
     k0_steps: float = 75.0,
@@ -278,7 +287,7 @@ def _history(
             row.update(
                 {
                     "train/vllm/tail_gate_decisions": 100.0,
-                    "train/vllm/tail_gate_activations": 1.0,
+                    "train/vllm/tail_gate_activations": activations,
                     "train/vllm/tail_gate_enabled_step_ratio": enabled_ratio,
                     "train/vllm/tail_gate_advance_only_step_ratio": advance_only_ratio,
                     "train/vllm/tail_gate_activation_tick": activation_tick,
@@ -322,6 +331,17 @@ def _write_manifest(path: Path, rows: Iterable[dict[str, str]]) -> None:
                 "Training completed through policy step 2.\n", encoding="utf-8"
             )
         (ray_driver_log.parent / ".ray_logs_final_sync_complete").touch()
+        (ray_driver_log.parent / ".ray_logs_final_sync_status.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "driver_exit_code": 0,
+                    "final_sync_complete": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         evidence_dir = ray_driver_log.parent / ".ray_logs_final_sync_evidence"
         evidence_dir.mkdir()
         (evidence_dir / "head").touch()
@@ -1079,6 +1099,54 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
     assert failure in threshold["reason"]
 
 
+def test_mini_validator_requires_one_activation_per_generation_engine(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    histories = {
+        row["wandb_run_id"]: _history(
+            row,
+            **(
+                {"activations": 1.0}
+                if row["variant"] == "fastrl_threshold_v2_k5"
+                else {}
+            ),
+        )
+        for row in rows
+    }
+
+    result, output_dir = _run_validator(tmp_path, rows, histories)
+
+    payload = json.loads((output_dir / "mini_summary.json").read_text())
+    threshold = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold["reason"] == (
+        "mini_health_failed:tail_gate_activations:expected_local_engines=8:actual=1.0"
+    )
+
+
+def test_mini_validator_rejects_available_structured_fallback_counter(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    threshold = rows[-1]
+    histories[threshold["wandb_run_id"]][0][
+        "train/vllm/cudagraph_target_fallback_missing_key"
+    ] = 1.0
+
+    result, output_dir = _run_validator(tmp_path, rows, histories)
+
+    payload = json.loads((output_dir / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == "mini_health_failed:cuda_graph_fallback_counter"
+
+
 @pytest.mark.parametrize(
     ("log_field", "log_text", "failure"),
     [
@@ -1309,6 +1377,9 @@ def test_mini_validator_scans_every_restart_attempt(tmp_path: Path) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("Training completed through policy step 2.\n")
     (restart_dir / ".ray_logs_final_sync_complete").touch()
+    (restart_dir / ".ray_logs_final_sync_status.json").write_text(
+        '{"schema_version":1,"driver_exit_code":0,"final_sync_complete":true}\n'
+    )
     evidence_dir = restart_dir / ".ray_logs_final_sync_evidence"
     evidence_dir.mkdir()
     (evidence_dir / "head").touch()
@@ -1360,6 +1431,35 @@ def test_mini_validator_requires_completion_marker_on_final_restart(
     assert threshold_row["reason"] == (
         "mini_health_failed:log_missing:final_sync_marker"
     )
+
+
+def test_mini_validator_rejects_failed_driver_despite_completion_marker(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    status_path = (
+        manifest.parent / threshold["ray_driver_log_path"]
+    ).parent / ".ray_logs_final_sync_status.json"
+    status_path.write_text(
+        '{"schema_version":1,"driver_exit_code":17,"final_sync_complete":true}\n',
+        encoding="utf-8",
+    )
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == "mini_health_failed:driver_exit_code:17"
 
 
 def test_mini_validator_requires_per_node_final_sync_evidence(tmp_path: Path) -> None:
@@ -1443,6 +1543,10 @@ def test_mini_validator_requires_final_attempt_driver_and_ray_evidence(
     restart_dir = run_dir / f"{threshold['job_id']}-3-logs"
     restart_dir.mkdir(parents=True)
     (restart_dir / ".ray_logs_final_sync_complete").touch()
+    (restart_dir / ".ray_logs_final_sync_status.json").write_text(
+        '{"schema_version":1,"driver_exit_code":0,"final_sync_complete":true}\n',
+        encoding="utf-8",
+    )
 
     result = main(
         ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],

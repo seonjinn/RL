@@ -89,6 +89,28 @@ def test_sync_generate_preserves_per_sample_stop_strings(
     assert set(sampling_params[1]["stop"]) == {"GLOBAL", "BETA"}
 
 
+def test_sync_generate_marks_validation_requests_in_sampling_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+    worker = _make_worker()
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1]], dtype=torch.long),
+            "input_lengths": torch.tensor([1], dtype=torch.long),
+            "stop_strings": [None],
+        }
+    )
+
+    with pytest.raises(_GenerationCaptured):
+        worker.generate(data, validation=True)
+
+    assert worker.llm.sampling_params[0]["extra_args"] == {
+        "nemo_rl": {"validation": True}
+    }
+
+
 def test_sync_generate_caps_outputs_below_specdec_context_headroom(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

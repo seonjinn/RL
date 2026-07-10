@@ -244,7 +244,11 @@ class GenerationInterface(ABC):
 
     @abstractmethod
     def generate(
-        self, data: BatchedDataDict["GenerationDatumSpec"], greedy: bool
+        self,
+        data: BatchedDataDict["GenerationDatumSpec"],
+        greedy: bool,
+        *,
+        validation: bool = False,
     ) -> BatchedDataDict["GenerationOutputSpec"]:
         pass
 

@@ -3402,6 +3402,7 @@ def validate(
                     max_seq_len=master_config.policy["max_total_sequence_length"],
                     max_rollout_turns=master_config.grpo["max_rollout_turns"],
                     greedy=False,
+                    validation=True,
                 )
             else:
                 val_batch, gen_metrics = run_multi_turn_rollout(
@@ -3412,6 +3413,7 @@ def validate(
                     max_seq_len=master_config.policy["max_total_sequence_length"],
                     max_rollout_turns=master_config.grpo["max_rollout_turns"],
                     greedy=False,
+                    validation=True,
                 )
 
             total_rewards.extend(val_batch["total_reward"].tolist())

@@ -47,6 +47,7 @@ MODEL_BASED_VARIANTS = (
     "fastrl_threshold_v2_k5",
     "efficient_roofline_v2_k5",
 )
+QWEN30_TARGET_REVISION = "0123456789abcdef0123456789abcdef01234567"
 QWEN32_TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
 QWEN32_DRAFT_REVISION = "dc84fe7ff1db31efa824776f49c141fc8195eb47"
 CALIBRATION_TIMESTAMP = "2026-07-10T12:34:56Z"
@@ -54,6 +55,12 @@ CALIBRATION_CLUSTER = "lyris-gb200"
 VLLM_COMMIT = "ee0da84a"
 VLLM_VERSION = "0.24.0"
 RUNTIME_VERSION = "nightly-20260707"
+
+
+def _target_snapshot(tmp_path: Path, model: str, revision: str) -> Path:
+    snapshot = tmp_path / f"models--Qwen--{model}" / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    return snapshot
 
 
 def _run_launcher(*args: str, **environment: str) -> subprocess.CompletedProcess[str]:
@@ -158,6 +165,12 @@ def test_v1_variants_preserve_stock_runner_and_dynamic_contract() -> None:
 def test_v2_variants_preserve_runner_graph_and_gate_boundaries() -> None:
     for variant in V2_VARIANTS:
         output = _dry_run("qwen32b", variant)
+        assert (
+            "policy.model_name=/lustre/test/hf_home/hub/"
+            f"models--Qwen--Qwen3-32B/snapshots/{QWEN32_TARGET_REVISION}" in output
+        )
+        assert "NRL_EXPECTED_RUNTIME_COMMIT=" in output
+        assert "NRL_RUNTIME_CHECKOUT=/lustre/test/nemo-rl" in output
 
         assert "VLLM_USE_V2_MODEL_RUNNER=1" in output
         assert "cudagraph_mode=FULL_AND_PIECEWISE" in output
@@ -608,6 +621,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     )
     draft_model = tmp_path / "draft-model"
     draft_model.mkdir()
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
     experiment_root = tmp_path / "runs"
 
     result = _run_launcher(
@@ -619,6 +633,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         HF_HOME="/lustre/test/hf_home",
         CONTAINER=str(container),
         QWEN32_DRAFT_MODEL=str(draft_model),
+        QWEN32_TARGET_MODEL=str(target_model),
         QWEN32_ROOFLINE_CONFIG=str(roofline),
         EXPERIMENT_ROOT=str(experiment_root),
         RUN_TAG="submit-contract",
@@ -677,6 +692,8 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "command",
         "checkout_path",
         "ray_sub_path",
+        "target_checkpoint",
+        "target_checkpoint_revision",
         "draft_checkpoint",
         "command_argv_json",
         "launcher_argv_json",
@@ -718,6 +735,8 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "slurm_log_path": str(expected_run_dir / "slurm-4242.out"),
         "ray_driver_log_path": str(expected_run_dir / "4242-logs" / "ray-driver.log"),
         "ray_log_dir": str(expected_run_dir / "4242-logs" / "ray"),
+        "target_checkpoint": str(target_model.resolve()),
+        "target_checkpoint_revision": QWEN32_TARGET_REVISION,
     }
     assert expected_manifest_values.items() <= manifest_row.items()
     command_argv = json.loads(manifest_row["command_argv_json"])
@@ -732,6 +751,9 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     assert manifest_row["checkout_path"] == str(repo.resolve())
     assert manifest_row["ray_sub_path"] == str((repo / "ray.sub").resolve())
     assert manifest_row["draft_checkpoint"] == str(draft_model.resolve())
+    assert f"policy.model_name={target_model.resolve()}" in manifest_row["command"]
+    assert f"NRL_RUNTIME_CHECKOUT={repo.resolve()}" in launcher_argv
+    assert f"NRL_EXPECTED_RUNTIME_COMMIT={commit}" in launcher_argv
     for expected in (
         "GPUS_PER_NODE=4",
         "RAY_LOG_SYNC_FREQUENCY=60",
@@ -780,6 +802,7 @@ def test_submit_executes_and_serializes_one_canonical_submission_argv(
     draft_model.mkdir()
     draft_model_link = tmp_path / "draft-model-link"
     draft_model_link.symlink_to(draft_model, target_is_directory=True)
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
     experiment_root = tmp_path / "runs"
 
     result = _run_launcher(
@@ -789,6 +812,7 @@ def test_submit_executes_and_serializes_one_canonical_submission_argv(
         REPO_DIR=str(repo),
         CONTAINER=str(container),
         QWEN32_DRAFT_MODEL=str(draft_model_link),
+        QWEN32_TARGET_MODEL=str(target_model),
         EXPERIMENT_ROOT=str(experiment_root),
         WANDB_API_KEY="test-only-key",
         SBATCH_LOG=str(sbatch_log),
@@ -827,6 +851,7 @@ def test_submit_records_environment_gate_settings_in_manifest(tmp_path: Path) ->
     container.write_text("container contract\n", encoding="utf-8")
     draft_model = tmp_path / "draft-model"
     draft_model.mkdir()
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
     experiment_root = tmp_path / "runs"
 
     result = _run_launcher(
@@ -836,6 +861,7 @@ def test_submit_records_environment_gate_settings_in_manifest(tmp_path: Path) ->
         REPO_DIR=str(repo),
         CONTAINER=str(container),
         QWEN32_DRAFT_MODEL=str(draft_model),
+        QWEN32_TARGET_MODEL=str(target_model),
         EXPERIMENT_ROOT=str(experiment_root),
         WANDB_API_KEY="test-only-key",
         TAIL_GATE_THRESHOLD="19",
@@ -868,6 +894,7 @@ def test_submit_records_long_output_engine_length_as_separate_cohort(
     sbatch.chmod(0o755)
     container = tmp_path / "nemo-rl.sqsh"
     container.write_text("container contract\n", encoding="utf-8")
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
     experiment_root = tmp_path / "runs"
 
     result = _run_launcher(
@@ -876,6 +903,7 @@ def test_submit_records_long_output_engine_length_as_separate_cohort(
         "baseline_v2",
         REPO_DIR=str(repo),
         CONTAINER=str(container),
+        QWEN32_TARGET_MODEL=str(target_model),
         EXPERIMENT_ROOT=str(experiment_root),
         MAX_OSL="32768",
         WANDB_API_KEY="test-only-key",
@@ -927,6 +955,7 @@ def test_submit_rejects_mismatched_roofline_metadata_before_sbatch(
     container.write_text("container contract\n", encoding="utf-8")
     draft_model = tmp_path / "draft-model"
     draft_model.mkdir()
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
     roofline = tmp_path / "roofline.json"
     _write_roofline_config(
         roofline,
@@ -946,6 +975,7 @@ def test_submit_rejects_mismatched_roofline_metadata_before_sbatch(
         REPO_DIR=str(repo),
         CONTAINER=str(container),
         QWEN32_DRAFT_MODEL=str(draft_model),
+        QWEN32_TARGET_MODEL=str(target_model),
         QWEN32_ROOFLINE_CONFIG=str(roofline),
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
         QWEN32_CALIBRATION_TIMESTAMP=CALIBRATION_TIMESTAMP,
@@ -974,6 +1004,7 @@ def test_submit_requires_exact_per_gamma_k5_before_sbatch(tmp_path: Path) -> Non
     container.write_text("container contract\n", encoding="utf-8")
     draft_model = tmp_path / "draft-model"
     draft_model.mkdir()
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
     roofline = tmp_path / "roofline.json"
     _write_roofline_config(
         roofline,
@@ -993,6 +1024,7 @@ def test_submit_requires_exact_per_gamma_k5_before_sbatch(tmp_path: Path) -> Non
         REPO_DIR=str(repo),
         CONTAINER=str(container),
         QWEN32_DRAFT_MODEL=str(draft_model),
+        QWEN32_TARGET_MODEL=str(target_model),
         QWEN32_ROOFLINE_CONFIG=str(roofline),
         QWEN32_CALIBRATION_TIMESTAMP=CALIBRATION_TIMESTAMP,
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
@@ -1019,6 +1051,7 @@ def test_submit_rejects_malformed_manifest_before_real_sbatch(tmp_path: Path) ->
     sbatch.chmod(0o755)
     container = tmp_path / "nemo-rl.sqsh"
     container.touch()
+    target_model = _target_snapshot(tmp_path, "Qwen3-30B-A3B", QWEN30_TARGET_REVISION)
     experiment_root = tmp_path / "runs"
     experiment_root.mkdir()
     (experiment_root / "submissions.tsv").write_text(
@@ -1031,6 +1064,8 @@ def test_submit_rejects_malformed_manifest_before_real_sbatch(tmp_path: Path) ->
         "baseline_v1",
         REPO_DIR=str(repo),
         CONTAINER=str(container),
+        QWEN30_TARGET_CHECKPOINT_REVISION=QWEN30_TARGET_REVISION,
+        QWEN30_TARGET_MODEL=str(target_model),
         EXPERIMENT_ROOT=str(experiment_root),
         WANDB_API_KEY="test-only-key",
         SBATCH_LOG=str(sbatch_log),
@@ -1053,6 +1088,7 @@ def test_submit_ignores_known_unit_artifacts_but_rejects_other_untracked_files(
     sbatch.chmod(0o755)
     container = tmp_path / "nemo-rl.sqsh"
     container.touch()
+    target_model = _target_snapshot(tmp_path, "Qwen3-30B-A3B", QWEN30_TARGET_REVISION)
     (repo / "tests/unit/unit_results").mkdir(parents=True)
     (repo / "tests/unit/unit_results.json").write_text("{}\n", encoding="utf-8")
     (repo / "tests/unit/unit_results/result.json").write_text("{}\n", encoding="utf-8")
@@ -1065,6 +1101,8 @@ def test_submit_ignores_known_unit_artifacts_but_rejects_other_untracked_files(
         LYRIS_ROOT="/lustre/test",
         HF_HOME="/lustre/test/hf_home",
         CONTAINER=str(container),
+        QWEN30_TARGET_CHECKPOINT_REVISION=QWEN30_TARGET_REVISION,
+        QWEN30_TARGET_MODEL=str(target_model),
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
         WANDB_API_KEY="test-only-key",
         PATH=f"{bin_dir}:{os.environ['PATH']}",
@@ -1083,6 +1121,8 @@ def test_submit_ignores_known_unit_artifacts_but_rejects_other_untracked_files(
         LYRIS_ROOT="/lustre/test",
         HF_HOME="/lustre/test/hf_home",
         CONTAINER=str(container),
+        QWEN30_TARGET_CHECKPOINT_REVISION=QWEN30_TARGET_REVISION,
+        QWEN30_TARGET_MODEL=str(target_model),
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
         WANDB_API_KEY="test-only-key",
         PATH=f"{bin_dir}:{os.environ['PATH']}",

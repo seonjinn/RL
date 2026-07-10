@@ -59,6 +59,8 @@ QWEN30_DRAFT_CHECKPOINT_REVISION="${QWEN30_DRAFT_CHECKPOINT_REVISION:-a7ec796dd6
 QWEN30_CALIBRATION_TIMESTAMP="${QWEN30_CALIBRATION_TIMESTAMP:-}"
 QWEN32_TARGET_CHECKPOINT_REVISION="${QWEN32_TARGET_CHECKPOINT_REVISION:-9216db5781bf21249d130ec9da846c4624c16137}"
 QWEN32_DRAFT_CHECKPOINT_REVISION="${QWEN32_DRAFT_CHECKPOINT_REVISION:-dc84fe7ff1db31efa824776f49c141fc8195eb47}"
+QWEN30_TARGET_MODEL="${QWEN30_TARGET_MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B/snapshots/${QWEN30_TARGET_CHECKPOINT_REVISION}}"
+QWEN32_TARGET_MODEL="${QWEN32_TARGET_MODEL:-${HF_HOME}/hub/models--Qwen--Qwen3-32B/snapshots/${QWEN32_TARGET_CHECKPOINT_REVISION}}"
 QWEN32_CALIBRATION_TIMESTAMP="${QWEN32_CALIBRATION_TIMESTAMP:-}"
 CALIBRATION_CLUSTER="${CALIBRATION_CLUSTER:-lyris-gb200}"
 VLLM_COMMIT="${VLLM_COMMIT:-ee0da84a}"
@@ -79,6 +81,17 @@ validate_positive_integer() {
 
 validate_positive_integer "TAIL_GATE_THRESHOLD" "${TAIL_GATE_THRESHOLD}"
 validate_positive_integer "TAIL_GATE_CONSECUTIVE_CHECKS" "${TAIL_GATE_CONSECUTIVE_CHECKS}"
+
+validate_immutable_revision() {
+  local name="$1"
+  local revision="$2"
+
+  if [[ ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'ERROR: %s must be an exact 40-character hexadecimal revision\n' \
+      "${name}" >&2
+    exit 2
+  fi
+}
 case "${DRAFT_SAMPLE_METHOD}" in
   greedy|probabilistic)
     ;;
@@ -338,6 +351,7 @@ submit_one() {
   local draft_tp=1
   local dp
   local draft_model
+  local target_model
   local expected_model
   local expected_target_revision
   local expected_draft_revision
@@ -369,6 +383,7 @@ submit_one() {
       expected_target_revision="${QWEN30_TARGET_CHECKPOINT_REVISION}"
       expected_draft_revision="${QWEN30_DRAFT_CHECKPOINT_REVISION}"
       expected_calibration_timestamp="${QWEN30_CALIBRATION_TIMESTAMP}"
+      target_model="${QWEN30_TARGET_MODEL}"
       draft_model="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
       roofline_config="${QWEN30_ROOFLINE_CONFIG}"
       ;;
@@ -379,6 +394,7 @@ submit_one() {
       expected_target_revision="${QWEN32_TARGET_CHECKPOINT_REVISION}"
       expected_draft_revision="${QWEN32_DRAFT_CHECKPOINT_REVISION}"
       expected_calibration_timestamp="${QWEN32_CALIBRATION_TIMESTAMP}"
+      target_model="${QWEN32_TARGET_MODEL}"
       draft_model="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
       roofline_config="${QWEN32_ROOFLINE_CONFIG}"
       ;;
@@ -465,6 +481,19 @@ submit_one() {
     echo "ERROR: recipe not found: ${REPO_DIR}/${recipe}" >&2
     exit 2
   fi
+  if [[ "${MODE}" == "submit" ]]; then
+    validate_immutable_revision "target checkpoint revision for ${model}" \
+      "${expected_target_revision}"
+    if [[ ! -d "${target_model}" ]]; then
+      echo "ERROR: immutable target checkpoint not found: ${target_model}" >&2
+      exit 2
+    fi
+    target_model="$(readlink -f "${target_model}")"
+    if [[ "$(basename "${target_model}")" != "${expected_target_revision}" ]]; then
+      echo "ERROR: target checkpoint path does not match revision ${expected_target_revision}: ${target_model}" >&2
+      exit 2
+    fi
+  fi
   if [[ "${MODE}" == "submit" ]] \
     && ! git -C "${REPO_DIR}" ls-files --error-unmatch "${recipe}" >/dev/null 2>&1; then
     echo "ERROR: recipe must be tracked before submit: ${recipe}" >&2
@@ -484,6 +513,7 @@ submit_one() {
     "grpo.num_generations_per_prompt=${NUM_GENERATIONS}"
     "checkpointing.enabled=false"
     "checkpointing.checkpoint_dir=${run_dir}/checkpoints"
+    "policy.model_name=${target_model}"
     "policy.train_global_batch_size=${TRAIN_GBS}"
     "policy.max_total_sequence_length=${MAX_SEQUENCE_LENGTH}"
     "policy.generation.max_new_tokens=${MAX_OSL}"
@@ -588,6 +618,14 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  local runtime_commit="${RUNTIME_COMMIT:-dry-run-unresolved}"
+  if [[ "${MODE}" == "submit" ]]; then
+    runtime_commit="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+  fi
+  environment+=(
+    "NRL_RUNTIME_CHECKOUT=${REPO_DIR}"
+    "NRL_EXPECTED_RUNTIME_COMMIT=${runtime_commit}"
+  )
   local sbatch_args=(
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
@@ -640,7 +678,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -658,8 +696,6 @@ submit_one() {
       "${test_only_argv[@]}"
       local job_id
       job_id="$("${submission_argv[@]}")"
-      local runtime_commit
-      runtime_commit="$(git -C "${REPO_DIR}" rev-parse HEAD)"
       local job_log_dir="${run_dir}/${job_id}-logs"
       local manifest_values=(
         "$(date --iso-8601=seconds)"
@@ -708,6 +744,8 @@ submit_one() {
         "${command}"
         "${REPO_DIR}"
         "${REPO_DIR}/ray.sub"
+        "${target_model}"
+        "${expected_target_revision}"
         "${manifest_draft_checkpoint}"
         "${command_argv_json}"
         "${launcher_argv_json}"

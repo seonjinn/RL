@@ -213,6 +213,7 @@ MINI_SBATCH_OPTIONS: dict[str, str | None] = {
     "--comment": "metrics",
 }
 FINAL_SYNC_MARKER = ".ray_logs_final_sync_complete"
+FINAL_SYNC_STATUS = ".ray_logs_final_sync_status.json"
 FINAL_SYNC_EVIDENCE_DIR = ".ray_logs_final_sync_evidence"
 FINAL_SYNC_EVIDENCE_FILES = frozenset(
     {"head", *(f"worker-{worker}" for worker in range(MINI_EXPECTED_NODES - 1))}
@@ -387,6 +388,7 @@ def _expected_command_assignments(row: Mapping[str, str]) -> dict[str, str | Non
     expected: dict[str, str | None] = {
         **MINI_COMMAND_ASSIGNMENTS,
         "checkpointing.checkpoint_dir": f"{row['run_dir']}/checkpoints",
+        "policy.model_name": row["target_checkpoint"],
         "logger.wandb.project": wandb_project,
         "logger.wandb.name": row["wandb_run_id"],
         "++logger.wandb.entity": wandb_entity,
@@ -530,6 +532,8 @@ def _mini_launcher_command_error(row: Mapping[str, str]) -> str | None:
         "BASE_LOG_DIR": row["run_dir"],
         "COMMAND": row["command"],
         "PYTHONPATH": row["checkout_path"],
+        "NRL_RUNTIME_CHECKOUT": row["checkout_path"],
+        "NRL_EXPECTED_RUNTIME_COMMIT": row["runtime_commit"],
     }
     if error := _assignment_error(environment, expected_environment):
         provenance_field = {
@@ -572,8 +576,21 @@ def _mini_execution_provenance_error(row: Mapping[str, str]) -> str | None:
     checkout_path = Path(row["checkout_path"])
     ray_sub_path = Path(row["ray_sub_path"])
     container_path = Path(row["container"])
-    if not checkout_path.is_absolute() or not container_path.is_absolute():
+    target_checkpoint = Path(row["target_checkpoint"])
+    if (
+        not checkout_path.is_absolute()
+        or not container_path.is_absolute()
+        or not target_checkpoint.is_absolute()
+    ):
         return f"invalid mini provenance:{variant}:absolute_paths"
+    revision = row["target_checkpoint_revision"]
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        return f"invalid mini provenance:{variant}:target_checkpoint_revision"
+    if (
+        target_checkpoint.name != revision
+        or target_checkpoint.parent.name != "snapshots"
+    ):
+        return f"invalid mini provenance:{variant}:target_checkpoint"
     if ray_sub_path != checkout_path / "ray.sub":
         return f"invalid mini provenance:{variant}:ray_sub_path"
     if not ray_sub_path.is_absolute():
@@ -801,6 +818,28 @@ def _log_health_failure(manifest: Path, metadata: Mapping[str, str]) -> str | No
         return "log_empty:ray_log_dir"
     if not (final_attempt / FINAL_SYNC_MARKER).is_file():
         return "log_missing:final_sync_marker"
+    status_path = final_attempt / FINAL_SYNC_STATUS
+    if not status_path.is_file():
+        return "log_missing:final_sync_status"
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "log_invalid:final_sync_status"
+    if not isinstance(status, dict) or set(status) != {
+        "schema_version",
+        "driver_exit_code",
+        "final_sync_complete",
+    }:
+        return "log_invalid:final_sync_status"
+    if status["schema_version"] != 1:
+        return "log_invalid:final_sync_status"
+    driver_exit_code = status["driver_exit_code"]
+    if isinstance(driver_exit_code, bool) or not isinstance(driver_exit_code, int):
+        return "log_invalid:final_sync_status"
+    if driver_exit_code != 0:
+        return f"driver_exit_code:{driver_exit_code}"
+    if status["final_sync_complete"] is not True:
+        return "final_sync_incomplete"
     evidence_dir = final_attempt / FINAL_SYNC_EVIDENCE_DIR
     if not evidence_dir.is_dir():
         return "log_missing:final_sync_node_evidence"
@@ -852,13 +891,22 @@ def _mini_failure(
 
     if metadata.get("gate_mode") != "threshold":
         return None
+    expected_local_engines = int(metadata["dp"])
     for record in records.values():
+        activations = record.get("train/vllm/tail_gate_activations")
+        if not _is_finite_number(activations) or float(activations) != float(
+            expected_local_engines
+        ):
+            return (
+                "tail_gate_activations:"
+                f"expected_local_engines={expected_local_engines}:actual={activations}"
+            )
+        if (
+            summary.cuda_graph_fallback_count is not None
+            and summary.cuda_graph_fallback_count > 0.0
+        ):
+            return "cuda_graph_fallback_counter"
         checks = (
-            (
-                "tail_gate_activations",
-                "train/vllm/tail_gate_activations",
-                lambda value: value == 1.0,
-            ),
             (
                 "activation_tick",
                 "train/vllm/tail_gate_activation_tick",

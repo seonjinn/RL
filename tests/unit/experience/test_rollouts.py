@@ -41,6 +41,7 @@ from nemo_rl.experience.interfaces import Completion, PromptGroupRecord
 from nemo_rl.experience.rollout_manager import RolloutManager
 from nemo_rl.experience.rollouts import (
     _calculate_single_metric,
+    generate_responses,
     generate_responses_async,
     run_async_multi_turn_rollout,
     run_async_nemo_gym_rollout,
@@ -119,7 +120,8 @@ class _DummySGLangGeneration:
             "use_async_rollouts": use_async_rollouts,
         }
 
-    async def generate_async(self, data, greedy=False):
+    async def generate_async(self, data, greedy=False, *, validation=False):
+        del validation
         yield (
             0,
             BatchedDataDict(
@@ -132,6 +134,57 @@ class _DummySGLangGeneration:
                 }
             ),
         )
+
+
+class _CaptureSyncGeneration:
+    def __init__(self) -> None:
+        self.validation: bool | None = None
+
+    def generate(self, data, greedy=False, *, validation=False):
+        del greedy
+        self.validation = validation
+        return BatchedDataDict(
+            {
+                "output_ids": data["input_ids"],
+                "logprobs": torch.zeros_like(data["input_ids"], dtype=torch.float32),
+                "generation_lengths": torch.zeros(1, dtype=torch.long),
+                "unpadded_sequence_lengths": data["input_lengths"],
+                "truncated": torch.zeros(1, dtype=torch.bool),
+            }
+        )
+
+
+class _CaptureAsyncGeneration(_DummySGLangGeneration):
+    def __init__(self) -> None:
+        super().__init__(use_async_rollouts=True)
+        self.validation: bool | None = None
+
+    async def generate_async(self, data, greedy=False, *, validation=False):
+        self.validation = validation
+        async for result in super().generate_async(data, greedy=greedy):
+            yield result
+
+
+def test_generate_responses_propagates_validation_cohort() -> None:
+    generation = _CaptureSyncGeneration()
+    generation_input_data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1]], dtype=torch.long),
+            "input_lengths": torch.tensor([1], dtype=torch.long),
+        }
+    )
+    batch = BatchedDataDict({"message_log": [[]]})
+
+    generate_responses(
+        generation,
+        generation_input_data,
+        batch,
+        _DummyTokenizer(),
+        generation_input_data["input_lengths"],
+        validation=True,
+    )
+
+    assert generation.validation is True
 
 
 def test_generate_responses_async_requires_sglang_opt_in():
@@ -177,6 +230,30 @@ def test_generate_responses_async_allows_sglang_opt_in():
     assert updated_batch["message_log"][0][-1]["content"] == "ok"
     assert generated_ids[0].tolist() == [2]
     assert gen_metrics["total_generated_tokens"] == 1
+
+
+def test_generate_responses_async_propagates_validation_cohort() -> None:
+    generation = _CaptureAsyncGeneration()
+    generation_input_data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1]]),
+            "input_lengths": torch.tensor([1], dtype=torch.long),
+        }
+    )
+    batch = BatchedDataDict({"message_log": [[]]})
+
+    asyncio.run(
+        generate_responses_async(
+            generation,
+            generation_input_data,
+            batch,
+            _DummyTokenizer(),
+            input_lengths=generation_input_data["input_lengths"],
+            validation=True,
+        )
+    )
+
+    assert generation.validation is True
 
 
 def test_sample_rollout_propagates_generation_failure(monkeypatch):

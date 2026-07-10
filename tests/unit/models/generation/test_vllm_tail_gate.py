@@ -120,6 +120,7 @@ def _write_roofline_config(
     gamma: int = 5,
     target_tp: int = 1,
     model_updates: dict[str, object] | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> None:
     model: dict[str, object] = {
         "name": "test-model",
@@ -141,6 +142,7 @@ def _write_roofline_config(
                 str(gamma): {"c_T": 1.0, "c_D": 1.0, "c_V": 1.0},
             },
         },
+        "metadata": metadata or {},
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -282,6 +284,26 @@ def test_roofline_validation_accepts_exact_finite_calibration(tmp_path: Path) ->
     calibration_path = tmp_path / "roofline.json"
     _write_roofline_config(calibration_path)
     config = _vllm_tail_gate_config(sd_tail_gate_config_path=str(calibration_path))
+
+    _validate_tail_gate_config(config)
+
+    assert config["vllm_kwargs"]["scheduler_cls"].endswith("TailGatedScheduler")
+
+
+def test_roofline_validation_accepts_matching_immutable_hf_snapshot(
+    tmp_path: Path,
+) -> None:
+    revision = "a" * 40
+    calibration_path = tmp_path / "roofline.json"
+    _write_roofline_config(
+        calibration_path,
+        model_updates={"name": "org/test-model"},
+        metadata={"target_checkpoint_revision": revision},
+    )
+    config = _vllm_tail_gate_config(sd_tail_gate_config_path=str(calibration_path))
+    config["model_name"] = str(
+        tmp_path / "hub" / "models--org--test-model" / "snapshots" / revision
+    )
 
     _validate_tail_gate_config(config)
 

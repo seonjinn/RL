@@ -48,6 +48,7 @@ class TailGatedScheduler(Scheduler):
         self._accepted_tokens = 0
         self._draft_cycles = 0
         self._failed_output_request_ids: set[str] = set()
+        self._rollout_validation: bool | None = None
 
     def schedule(self, throttle_prefills: bool = False) -> Any:
         """Schedule normally, then gate only the following proposal cycle."""
@@ -72,6 +73,7 @@ class TailGatedScheduler(Scheduler):
         acceptance_snapshot = self._snapshot_acceptance(
             scheduler_output, model_runner_output
         )
+        self._record_rollout_kind(scheduler_output)
         self._failed_output_request_ids.clear()
         result = super().update_from_output(scheduler_output, model_runner_output)
         self._record_acceptance(
@@ -82,11 +84,46 @@ class TailGatedScheduler(Scheduler):
             self._tail_gate.finish_rollout(
                 accepted_tokens=self._accepted_tokens,
                 num_drafts=self._draft_cycles,
-                validation=False,
+                validation=bool(self._rollout_validation),
             )
             self._accepted_tokens = 0
             self._draft_cycles = 0
+            self._rollout_validation = None
         return result
+
+    def _record_rollout_kind(self, scheduler_output: Any) -> None:
+        observed: set[bool] = set()
+        for request_id in scheduler_output.num_scheduled_tokens:
+            request = self.requests.get(request_id)
+            if request is None:
+                continue
+            sampling_params = getattr(request, "sampling_params", None)
+            extra_args = getattr(sampling_params, "extra_args", None)
+            if not isinstance(extra_args, dict):
+                continue
+            nemo_rl_metadata = extra_args.get("nemo_rl")
+            if not isinstance(nemo_rl_metadata, dict):
+                continue
+            validation = nemo_rl_metadata.get("validation")
+            if not isinstance(validation, bool):
+                raise RuntimeError(
+                    "Tail-gated request metadata requires boolean "
+                    "extra_args.nemo_rl.validation."
+                )
+            observed.add(validation)
+        if len(observed) > 1:
+            raise RuntimeError(
+                "Tail-gated rollout mixed training and validation requests."
+            )
+        if not observed:
+            return
+        validation = observed.pop()
+        if (
+            self._rollout_validation is not None
+            and self._rollout_validation != validation
+        ):
+            raise RuntimeError("Tail-gated rollout changed training/validation cohort.")
+        self._rollout_validation = validation
 
     def _handle_invalid_blocks(
         self, invalid_block_ids: set[int], num_scheduled_tokens: dict[str, int]
