@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DYNAMICSD_LAUNCHER = (
@@ -24,6 +26,19 @@ def _run_script(path: Path, *args: str, **environment: str) -> str:
         text=True,
     )
     return result.stdout
+
+
+def _run_script_unchecked(
+    path: Path, *args: str, **environment: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(path), *args],
+        cwd=REPO_ROOT,
+        env={**os.environ, **environment},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _dry_run_dynamicsd(model: str, variant: str) -> str:
@@ -275,6 +290,70 @@ def test_dynamicsd_launcher_renders_suffix_k32() -> None:
         "PYTHONPATH=/lustre/users/sna/arctic-inference-0.1.1:/lustre/users/sna/RL"
         in output
     )
+
+
+@pytest.mark.parametrize("variant", ["eagle3_k5", "pard_k5"])
+def test_dynamicsd_launcher_renders_probabilistic_sampling_for_model_based_specdec(
+    variant: str,
+) -> None:
+    output = _dry_run_dynamicsd("qwen30ba3b", variant)
+
+    assert "speculative_config.rejection_sample_method=standard" in output
+    assert "speculative_config.draft_sample_method=probabilistic" in output
+
+
+def test_dynamicsd_launcher_renders_only_rejection_sampling_for_suffix() -> None:
+    output = _dry_run_dynamicsd("qwen30ba3b", "suffix_k32")
+
+    assert "speculative_config.rejection_sample_method=standard" in output
+    assert "speculative_config.draft_sample_method=" not in output
+
+
+def test_dynamicsd_launcher_keeps_baseline_free_of_sampling_overrides() -> None:
+    output = _dry_run_dynamicsd("qwen32b", "baseline")
+
+    assert "speculative_config" not in output
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "environment_value", "expected_message"),
+    [
+        (
+            "REJECTION_SAMPLE_METHOD",
+            "random",
+            "REJECTION_SAMPLE_METHOD must be standard",
+        ),
+        (
+            "DRAFT_SAMPLE_METHOD",
+            "beam",
+            "DRAFT_SAMPLE_METHOD must be greedy or probabilistic",
+        ),
+    ],
+)
+def test_dynamicsd_launcher_rejects_invalid_sampling_methods(
+    environment_name: str,
+    environment_value: str,
+    expected_message: str,
+) -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "baseline",
+        **{environment_name: environment_value},
+    )
+
+    assert result.returncode != 0
+    assert expected_message in result.stderr
+
+
+def test_dynamicsd_launcher_records_sampling_provenance() -> None:
+    source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
+
+    assert "rejection_sample_method" in source
+    assert "draft_sample_method" in source
+    assert 'manifest_rejection_sample_method="not_applicable"' in source
+    assert 'manifest_draft_sample_method="not_applicable"' in source
 
 
 def test_dynamicsd_launcher_renders_pard_with_graph_patch() -> None:

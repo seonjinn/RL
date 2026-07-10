@@ -9,6 +9,8 @@ VARIANT_SELECTION="${3:-all}"
 MAX_STEPS="${MAX_STEPS:-20}"
 STATIC_K="${STATIC_K:-5}"
 DYNAMIC_SCHEDULE="${DYNAMIC_SCHEDULE:-[[1,16,5],[17,32,4],[33,64,3],[65,128,1],[129,512,0]]}"
+REJECTION_SAMPLE_METHOD="${REJECTION_SAMPLE_METHOD:-standard}"
+DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 PARD_K16_MAX_NUM_BATCHED_TOKENS="${PARD_K16_MAX_NUM_BATCHED_TOKENS:-32768}"
 ACCOUNT="${ACCOUNT:-nemotron_sw_post}"
 PARTITION="${PARTITION:-batch_long}"
@@ -20,6 +22,19 @@ NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
 TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-}"
 MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
+
+if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
+  echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
+  exit 2
+fi
+case "${DRAFT_SAMPLE_METHOD}" in
+  greedy|probabilistic)
+    ;;
+  *)
+    echo "ERROR: DRAFT_SAMPLE_METHOD must be greedy or probabilistic (got ${DRAFT_SAMPLE_METHOD})" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -128,6 +143,8 @@ submit_one() {
   local recipe
   local draft_model
   local draft_k="${STATIC_K}"
+  local manifest_rejection_sample_method="not_applicable"
+  local manifest_draft_sample_method="not_applicable"
   local nodes
 
   case "${model}" in
@@ -249,18 +266,24 @@ submit_one() {
     baseline)
       ;;
     suffix_k32)
+      manifest_rejection_sample_method="${REJECTION_SAMPLE_METHOD}"
       overrides+=(
         "++policy.generation.vllm_kwargs.speculative_config.method=suffix"
+        "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${REJECTION_SAMPLE_METHOD}"
         "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
       )
       ;;
     pard_k5|pard_k16)
+      manifest_rejection_sample_method="${REJECTION_SAMPLE_METHOD}"
+      manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
       overrides+=(
         "++policy.generation.vllm_kwargs.speculative_config.method=draft_model"
         "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
         "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
         "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
         "++policy.generation.vllm_kwargs.speculative_config.parallel_drafting=true"
+        "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${REJECTION_SAMPLE_METHOD}"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
         "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true"
       )
       if [[ "${variant}" == "pard_k16" ]]; then
@@ -270,11 +293,15 @@ submit_one() {
       fi
       ;;
     *)
+      manifest_rejection_sample_method="${REJECTION_SAMPLE_METHOD}"
+      manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
       overrides+=(
         "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
         "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
         "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
         "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+        "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${REJECTION_SAMPLE_METHOD}"
+        "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
       )
       if [[ "${variant}" == "dynamic" ]]; then
         overrides+=(
@@ -366,7 +393,7 @@ submit_one() {
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
       if [[ ! -f "${manifest}" ]]; then
-        printf 'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\tcommand\n' > "${manifest}"
+        printf 'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tcommand\n' > "${manifest}"
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
@@ -375,7 +402,9 @@ submit_one() {
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
-        "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" "${command}" >> "${manifest}"
+        "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" \
+        "${manifest_rejection_sample_method}" "${manifest_draft_sample_method}" \
+        "${command}" >> "${manifest}"
       ;;
     *)
       echo "ERROR: mode must be dry-run, test-only, or submit" >&2
