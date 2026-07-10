@@ -345,7 +345,7 @@ submit_one() {
   if [[ "${CUDAGRAPH_DISPATCH_METRICS}" == "true" ]]; then
     overrides+=(
       "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
-      "++policy.generation.vllm_kwargs.observability_config.cudagraph_metrics=true"
+      "++policy.generation.vllm_kwargs.cudagraph_metrics=true"
     )
   fi
   if [[ -n "${resolved_max_num_batched_tokens}" ]]; then

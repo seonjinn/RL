@@ -395,7 +395,8 @@ def test_dynamicsd_launcher_enables_cudagraph_dispatch_metrics() -> None:
     )
 
     assert "vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true" in output
-    assert "observability_config.cudagraph_metrics=true" in output
+    assert "++policy.generation.vllm_kwargs.cudagraph_metrics=true" in output
+    assert "observability_config.cudagraph_metrics" not in output
 
 
 def test_dynamicsd_launcher_renders_matched_scheduler_limits() -> None:
