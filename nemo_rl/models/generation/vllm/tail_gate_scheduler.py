@@ -25,6 +25,7 @@ from nemo_rl.models.generation.vllm.sd_toggle import load_config
 from nemo_rl.models.generation.vllm.tail_gate import (
     TailGateConfig,
     TailGateController,
+    TailGateDecision,
     TailGateObservation,
 )
 
@@ -98,13 +99,13 @@ class TailGatedScheduler(Scheduler):
 
     def _build_observation(self) -> tuple[TailGateObservation, int]:
         active_requests = len(self.running)
-        decode_active_batch_size = sum(
-            not request.is_prefill_chunk for request in self.running
-        )
+        decode_active_batch_size = 0
+        total_sequence_length = 0
+        for request in self.running:
+            decode_active_batch_size += int(not request.is_prefill_chunk)
+            total_sequence_length += request.num_tokens
         mean_sequence_length = (
-            sum(request.num_tokens for request in self.running) // active_requests
-            if active_requests
-            else 0
+            total_sequence_length // active_requests if active_requests else 0
         )
         return (
             TailGateObservation(
@@ -161,7 +162,7 @@ class TailGatedScheduler(Scheduler):
         *,
         observation: TailGateObservation,
         decode_active_batch_size: int,
-        decision: Any,
+        decision: TailGateDecision,
     ) -> None:
         telemetry = decision.telemetry
         predicted_speedup = telemetry.predicted_speedup

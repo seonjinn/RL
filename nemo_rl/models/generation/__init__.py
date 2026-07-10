@@ -23,6 +23,7 @@ from nemo_rl.models.generation.vllm.config import (
     MTP_SPECULATIVE_METHODS,
     VllmConfig,
 )
+from nemo_rl.models.generation.vllm.tail_gate import TailGateConfig
 
 TokenizerType = PreTrainedTokenizerBase
 
@@ -72,7 +73,7 @@ def _uses_static_neural_external_drafter(
 
 def _validate_tail_gate_speculative_config(
     speculative_config: Mapping[str, Any],
-    vllm_config: Mapping[str, Any],
+    config: VllmConfig,
 ) -> bool:
     """Validate tail-gate-only vLLM configuration without modifying it."""
     mode = speculative_config.get("sd_tail_gate_mode")
@@ -100,11 +101,20 @@ def _validate_tail_gate_speculative_config(
         speculative_config.get("sd_tail_gate_consecutive_checks"),
         "sd_tail_gate_consecutive_checks",
     )
+    if (
+        speculative_config.get("sd_tail_gate_off_mode", "advance_only")
+        != "advance_only"
+    ):
+        raise ValueError(
+            "Tail-gated speculative decoding only supports "
+            "sd_tail_gate_off_mode=advance_only."
+        )
     if speculative_config.get("num_speculative_tokens_per_batch_size") is not None:
         raise ValueError(
             "Tail-gated speculative decoding and stock DynamicSD schedules are "
             "mutually exclusive."
         )
+    vllm_config = config["vllm_cfg"]
     target_tp = vllm_config["tensor_parallel_size"]
     expert_parallel_size = vllm_config.get("expert_parallel_size", 1)
     if expert_parallel_size > target_tp:
@@ -118,6 +128,33 @@ def _validate_tail_gate_speculative_config(
             raise ValueError(
                 "Roofline tail gating requires a non-empty "
                 "sd_tail_gate_config_path config path."
+            )
+        tail_gate_config = TailGateConfig.from_dict(
+            {
+                "mode": mode,
+                "threshold": speculative_config.get("sd_tail_gate_threshold"),
+                "consecutive_checks": speculative_config.get(
+                    "sd_tail_gate_consecutive_checks"
+                ),
+                "gamma": speculative_config.get("num_speculative_tokens"),
+                "margin": speculative_config.get("sd_tail_gate_margin", 0.05),
+                "roofline_config_path": config_path,
+            }
+        )
+        roofline_config = tail_gate_config.roofline_config
+        assert roofline_config is not None
+        target_model = config.get("model_name")
+        if target_model is not None and roofline_config.model.name != target_model:
+            raise ValueError(
+                "Roofline calibration target model does not match "
+                f"generation model_name: {roofline_config.model.name!r} != "
+                f"{target_model!r}."
+            )
+        if roofline_config.hardware.tp != target_tp:
+            raise ValueError(
+                "Roofline calibration tensor parallel size does not match "
+                f"vllm_cfg.tensor_parallel_size: {roofline_config.hardware.tp} "
+                f"!= {target_tp}."
             )
     return True
 
@@ -139,7 +176,7 @@ def validate_vllm_speculative_config(
 
     method = speculative_config.get("method")
     tail_gate_enabled = _validate_tail_gate_speculative_config(
-        speculative_config, config["vllm_cfg"]
+        speculative_config, config
     )
     rejection_sample_method = speculative_config.get(
         "rejection_sample_method", "standard"

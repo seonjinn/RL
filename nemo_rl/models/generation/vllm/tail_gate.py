@@ -51,6 +51,14 @@ class TailGateConfig:
         _require_positive_int(self.ramp_threshold, "ramp_threshold")
         if self.mode == "roofline" and self.roofline_config is None:
             raise ValueError("roofline mode requires roofline_config")
+        if self.mode == "roofline":
+            assert self.roofline_config is not None
+            _validate_roofline_config(
+                self.roofline_config,
+                gamma=self.gamma,
+                expected_accept_length=self.expected_accept_length,
+                margin=self.margin,
+            )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "TailGateConfig":
@@ -123,8 +131,18 @@ class TailGateController:
     """Controls one monotone speculation transition during a rollout."""
 
     def __init__(self, config: TailGateConfig) -> None:
-        self.config = config
-        self._expected_accept_length = config.expected_accept_length
+        self.config: TailGateConfig = config
+        self._expected_accept_length: float = config.expected_accept_length
+        self._enabled: bool = False
+        self._seen_ramp: bool = False
+        self._qualifying_checks: int = 0
+        self._tick: int = 0
+        self._activation_tick: int | None = None
+        self._activation_active_requests: int | None = None
+        self._activation_sequence_length: int | None = None
+        self._predicted_speedup: float | None = None
+        self._drafter_target_ratio: float | None = None
+        self._verify_target_ratio: float | None = None
         self._reset_rollout_state()
 
     @property
@@ -155,7 +173,10 @@ class TailGateController:
             if observation.active_requests > self.config.ramp_threshold:
                 self._seen_ramp = True
             return self._decision(enabled=False, reason="ramp_guard")
-        predicate = self._threshold_predicate(observation)
+        if self.config.mode == "threshold":
+            predicate = observation.active_requests <= self.config.threshold
+        else:
+            predicate = self._roofline_predicate(observation)
         if predicate:
             self._qualifying_checks += 1
         else:
@@ -182,25 +203,18 @@ class TailGateController:
         self._reset_rollout_state()
         return previous_telemetry
 
-    def _threshold_predicate(self, observation: TailGateObservation) -> bool:
-        if self.config.mode == "threshold":
-            return observation.active_requests <= self.config.threshold
-        if self.config.mode != "roofline" or self.config.roofline_config is None:
-            return False
-        try:
-            prediction = predict_decision(
-                self.config.roofline_config,
-                observation.active_requests,
-                observation.mean_sequence_length,
-                self.config.gamma,
-                self._expected_accept_length,
-                self.config.margin,
-            )
-        except ValueError:
-            self._predicted_speedup = None
-            self._drafter_target_ratio = None
-            self._verify_target_ratio = None
-            return False
+    def _roofline_predicate(self, observation: TailGateObservation) -> bool:
+        roofline_config = self.config.roofline_config
+        if self.config.mode != "roofline" or roofline_config is None:
+            raise RuntimeError("roofline predicate requires roofline mode")
+        prediction = predict_decision(
+            roofline_config,
+            observation.active_requests,
+            observation.mean_sequence_length,
+            self.config.gamma,
+            self._expected_accept_length,
+            self.config.margin,
+        )
         self._predicted_speedup = prediction["speedup"]
         self._drafter_target_ratio = prediction["r"]
         self._verify_target_ratio = prediction["v"]
@@ -242,12 +256,56 @@ class TailGateController:
         self._seen_ramp = False
         self._qualifying_checks = 0
         self._tick = 0
-        self._activation_tick: int | None = None
-        self._activation_active_requests: int | None = None
-        self._activation_sequence_length: int | None = None
-        self._predicted_speedup: float | None = None
-        self._drafter_target_ratio: float | None = None
-        self._verify_target_ratio: float | None = None
+        self._activation_tick = None
+        self._activation_active_requests = None
+        self._activation_sequence_length = None
+        self._predicted_speedup = None
+        self._drafter_target_ratio = None
+        self._verify_target_ratio = None
+
+
+def _validate_roofline_config(
+    config: SDToggleConfig,
+    *,
+    gamma: int,
+    expected_accept_length: float,
+    margin: float,
+) -> None:
+    if gamma not in config.calibration.per_gamma:
+        raise ValueError(f"roofline calibration requires exact K={gamma} fit")
+
+    _require_nonempty_string(config.hardware.gpu, "hardware.gpu")
+    _require_positive_int(config.hardware.tp, "hardware.tp")
+    _require_finite_positive(config.hardware.BW_eff, "hardware.BW_eff")
+    _require_nonempty_string(config.model.name, "model.name")
+    for name, value in (
+        ("model.W_t", config.model.W_t),
+        ("model.W_d", config.model.W_d),
+        ("model.C_dense", config.model.C_dense),
+        ("model.C_attn", config.model.C_attn),
+        ("calibration.eta_d", config.calibration.eta_d),
+        ("calibration.kappa_eff", config.calibration.kappa_eff),
+        ("calibration.F_eff", config.calibration.F_eff),
+    ):
+        _require_finite_positive(value, name)
+    _require_positive_int(config.model.kappa_theoretical, "model.kappa_theoretical")
+
+    gamma_fit = config.calibration.per_gamma[gamma]
+    for name, value in (
+        (f"calibration.per_gamma[{gamma}].c_T", gamma_fit.c_T),
+        (f"calibration.per_gamma[{gamma}].c_D", gamma_fit.c_D),
+        (f"calibration.per_gamma[{gamma}].c_V", gamma_fit.c_V),
+    ):
+        _require_finite_positive(value, name)
+
+    predict_decision(
+        config,
+        1,
+        0,
+        gamma,
+        expected_accept_length,
+        margin,
+    )
 
 
 def _get_mode(data: Mapping[str, object], name: str) -> TailGateMode:
@@ -292,6 +350,11 @@ def _require_positive_int(value: int, name: str) -> None:
 def _require_nonnegative_int(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
+
+
+def _require_nonempty_string(value: str, name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
 
 
 def _require_finite_positive(value: float, name: str) -> None:

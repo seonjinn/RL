@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from collections.abc import Iterator, Sequence
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -71,6 +72,26 @@ class _StubScheduler:
 
     def get_num_unfinished_requests(self) -> int:
         return len(self.running) + len(self.waiting) + len(self.skipped_waiting)
+
+
+class _SinglePassRequests(Sequence[SimpleNamespace]):
+    """Request sequence that rejects a second scheduler scan."""
+
+    def __init__(self, requests: list[SimpleNamespace]) -> None:
+        self._requests = requests
+        self.iterations = 0
+
+    def __getitem__(self, index: int) -> SimpleNamespace:
+        return self._requests[index]
+
+    def __len__(self) -> int:
+        return len(self._requests)
+
+    def __iter__(self) -> Iterator[SimpleNamespace]:
+        self.iterations += 1
+        if self.iterations > 1:
+            raise AssertionError("scheduler scanned running requests more than once")
+        return iter(self._requests)
 
 
 @pytest.fixture
@@ -167,6 +188,27 @@ def test_schedule_gates_the_next_proposal_and_preserves_pending_drafts(
     assert activated_output.tail_gate_active_requests == 2
     assert activated_output.tail_gate_mean_sequence_length == 11
     assert activated_output.tail_gate_just_activated is True
+
+
+def test_schedule_scans_running_requests_once(scheduler_module: ModuleType) -> None:
+    scheduler = scheduler_module.TailGatedScheduler(_vllm_config())
+    running = _SinglePassRequests(
+        [
+            SimpleNamespace(is_prefill_chunk=False, num_tokens=10),
+            SimpleNamespace(is_prefill_chunk=True, num_tokens=12),
+            SimpleNamespace(is_prefill_chunk=False, num_tokens=14),
+        ]
+    )
+    scheduler.running = running
+    scheduler.schedule_outputs = [_scheduler_output()]
+
+    output = scheduler.schedule()
+
+    assert running.iterations == 1
+    assert output.tail_gate_state == "ARMED_OFF"
+    assert output.tail_gate_active_requests == 3
+    assert output.tail_gate_decode_active_requests == 2
+    assert output.tail_gate_mean_sequence_length == 12
 
 
 def test_update_records_acceptance_before_resetting_after_skipped_waiting_drains(
