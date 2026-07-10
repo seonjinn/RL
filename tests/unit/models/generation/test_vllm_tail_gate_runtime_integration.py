@@ -368,7 +368,7 @@ def _sampling_harness(
             prompt_len=SimpleNamespace(np=[1, 1, 1]),
             last_sampled_tokens=torch.zeros(3, dtype=torch.int64),
             next_prefill_tokens=torch.zeros(3, dtype=torch.int64),
-            draft_tokens=torch.full((3, 5), -7, dtype=torch.int64),
+            draft_tokens=torch.zeros((3, 5), dtype=torch.int64),
         ),
         main_stream=object(),
         output_copy_stream=object(),
@@ -417,14 +417,9 @@ def _collect_spec_decode_counters(
         {},
     )
     exported_metrics = cast(
-        dict[str, float | list[float]],
+        dict[str, float],
         export_metrics(SimpleNamespace(model_runner=telemetry_runner)),
     )
-
-    def collective_rpc(method: str, args: tuple[object, ...]) -> list[dict[str, float]]:
-        assert method == "get_cudagraph_dispatch_metrics"
-        assert args == ()
-        return [cast(dict[str, float], exported_metrics)]
 
     collect_metrics = _load_method(
         _VLLM_MODULE_ROOT / "vllm_worker.py",
@@ -432,21 +427,38 @@ def _collect_spec_decode_counters(
         "_get_raw_spec_counters",
         {"os": os},
     )
-    worker_report = cast(
-        dict[str, float | list[float]],
-        collect_metrics(
-            SimpleNamespace(
-                llm=SimpleNamespace(
-                    get_metrics=lambda: [
-                        SimpleNamespace(name=name, value=value)
-                        for name, value in runtime_spec_counters.items()
-                    ],
-                    collective_rpc=collective_rpc,
+    worker_reports: list[dict[str, float | list[float]]] = []
+    for worker_scale in (0.4, 0.6):
+        worker_runtime_metrics = {
+            name: value * worker_scale for name, value in runtime_spec_counters.items()
+        }
+        worker_exported_metrics = {
+            name: value * worker_scale for name, value in exported_metrics.items()
+        }
+
+        def collective_rpc(
+            method: str, args: tuple[object, ...]
+        ) -> list[dict[str, float]]:
+            assert method == "get_cudagraph_dispatch_metrics"
+            assert args == ()
+            return [worker_exported_metrics]
+
+        worker_report = cast(
+            dict[str, float | list[float]],
+            collect_metrics(
+                SimpleNamespace(
+                    llm=SimpleNamespace(
+                        get_metrics=lambda: [
+                            SimpleNamespace(name=name, value=value)
+                            for name, value in worker_runtime_metrics.items()
+                        ],
+                        collective_rpc=collective_rpc,
+                    )
                 )
-            )
-        ),
-    )
-    return aggregate_spec_decode_counters([worker_report])
+            ),
+        )
+        worker_reports.append(worker_report)
+    return aggregate_spec_decode_counters(worker_reports)
 
 
 def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
@@ -498,15 +510,13 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
                 telemetry_runners["v2"], runtime_spec_counters
             )
 
-    final_telemetry = {
-        name: {
-            key: runner._nrl_tail_gate_metrics.get(key, 0.0) for key in _TELEMETRY_KEYS
-        }
-        for name, runner in telemetry_runners.items()
-    }
     final_counters = _collect_spec_decode_counters(
         telemetry_runners["v2"], runtime_spec_counters
     )
+    final_telemetry = {
+        name: {key: final_counters.get(key, 0.0) for key in _TELEMETRY_KEYS}
+        for name in telemetry_runners
+    }
     all_keys: set[_CounterKey] = (
         set(final_counters) | set(pre_activation_counters) | set(_SPEC_COUNTERS)
     )
@@ -533,10 +543,14 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
 
     observed = {
         "telemetry": final_telemetry,
+        "aggregated_counters": {
+            key: final_counters[key] for key in (*_SPEC_COUNTERS, *_TELEMETRY_KEYS)
+        },
         "proposal_lifecycle": {
             "published_widths": [
                 proposal.shape[1] for proposal in draft_tokens_handler.published
             ],
+            "k0_cache_rows": cache_snapshots[:2],
             "active_cache_rows": [
                 [snapshot[index] for index in (0, 2)] for snapshot in cache_snapshots
             ],
@@ -598,8 +612,26 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
     }
     assert observed == {
         "telemetry": {"v1": expected_telemetry, "v2": expected_telemetry},
+        "aggregated_counters": {
+            "vllm:spec_decode_num_drafts": 4.0,
+            "vllm:spec_decode_num_draft_tokens": 20.0,
+            "vllm:spec_decode_num_accepted_tokens": 3.0,
+            **expected_telemetry,
+        },
         "proposal_lifecycle": {
             "published_widths": [0, 0, 5, 5],
+            "k0_cache_rows": [
+                [
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                ],
+                [
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                ],
+            ],
             "active_cache_rows": [
                 [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
                 [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
@@ -607,10 +639,10 @@ def test_patched_v1_v2_tail_gate_lifecycle_reaches_wandb_metrics(
                 [[4, 4, 4, 4, 4], [4, 4, 4, 4, 4]],
             ],
             "inactive_cache_rows": [
-                [-7, -7, -7, -7, -7],
-                [-7, -7, -7, -7, -7],
-                [-7, -7, -7, -7, -7],
-                [-7, -7, -7, -7, -7],
+                [0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0],
             ],
             "eagle_advance_ticks": [1, 2, 3, 4],
             "decode_steps": [1, 2],
