@@ -720,6 +720,28 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         input_ids = data["input_ids"]
         input_lengths = data["input_lengths"]
         output_max_model_len = self.cfg.get("_output_max_model_len")
+        return_routed_experts = bool(
+            self.cfg.get("vllm_kwargs", {}).get("enable_return_routed_experts", False)
+        )
+        remaining_tokens = [
+            (
+                min(
+                    self.cfg["max_new_tokens"],
+                    max(0, int(output_max_model_len) - int(input_lengths[index])),
+                )
+                if output_max_model_len is not None
+                else None
+            )
+            for index in range(len(input_ids))
+        ]
+        exhausted_indices = {
+            index for index, remaining in enumerate(remaining_tokens) if remaining == 0
+        }
+        request_indices = [
+            index
+            for index in range(len(input_ids))
+            if index not in exhausted_indices or return_routed_experts
+        ]
         batch_stop_strings: list[list[str]] = data.get("stop_strings", [])
         sampling_params = [
             self._build_sampling_params(
@@ -730,21 +752,10 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                     else None
                 ),
                 max_new_tokens=(
-                    max(
-                        1,
-                        min(
-                            self.cfg["max_new_tokens"],
-                            max(
-                                0,
-                                int(output_max_model_len) - int(input_lengths[index]),
-                            ),
-                        ),
-                    )
-                    if output_max_model_len is not None
-                    else None
+                    1 if remaining_tokens[index] == 0 else remaining_tokens[index]
                 ),
             )
-            for index in range(len(input_ids))
+            for index in request_indices
         ]
 
         # verify inputs have correct padding
@@ -754,14 +765,25 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         padded_input_length = input_ids.size(1)
 
         # Convert inputs to vLLM format
-        prompts = format_prompt_for_vllm_generation(data)
+        all_prompts = format_prompt_for_vllm_generation(data)
+        prompts = [all_prompts[index] for index in request_indices]
 
         # Generate outputs
         assert self.llm is not None, (
             "Attempting to generate with either an uninitialized vLLM or non-model-owner"
         )
         use_tqdm = self.cfg["vllm_cfg"].get("use_tqdm", True)
-        outputs = self.llm.generate(prompts, sampling_params, use_tqdm=use_tqdm)
+        outputs = (
+            self.llm.generate(prompts, sampling_params, use_tqdm=use_tqdm)
+            if request_indices
+            else []
+        )
+        if len(outputs) != len(request_indices):
+            raise RuntimeError(
+                "vLLM returned an unexpected number of generation outputs: "
+                f"expected={len(request_indices)}, actual={len(outputs)}"
+            )
+        outputs_by_index = dict(zip(request_indices, outputs, strict=True))
 
         # Process the outputs - but preserve the original input padding structure
         output_ids_list = []
@@ -774,17 +796,20 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
         unpadded_sequence_lengths = []
         truncated_list = []  # Track if response was truncated (hit max_tokens)
         max_length = 0
-        return_routed_experts = bool(
-            self.cfg.get("vllm_kwargs", {}).get("enable_return_routed_experts", False)
-        )
-        for output in outputs:
-            max_length = max(max_length, len(output.outputs[0].token_ids))
+        for index, output in outputs_by_index.items():
+            if index not in exhausted_indices:
+                max_length = max(max_length, len(output.outputs[0].token_ids))
 
-        for i, output in enumerate(outputs):
+        for i in range(len(input_ids)):
             # Extract generated tokens
             sequence_length = input_lengths[i]
-            generation = output.outputs[0]
-            generated_tokens = list(generation.token_ids)
+            output = outputs_by_index.get(i)
+            generation = output.outputs[0] if output is not None else None
+            generated_tokens = (
+                []
+                if generation is None or i in exhausted_indices
+                else list(generation.token_ids)
+            )
 
             # Calculate total sequence length (original input length + generated tokens)
             total_length = padded_input_length + max_length
@@ -804,9 +829,13 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
 
             output_ids_list.append(full_output)
             full_logprobs = torch.zeros(total_length, dtype=torch.float32)
-            generated_logprobs = extract_generated_token_logprobs(
-                generated_tokens,
-                getattr(generation, "logprobs", None),
+            generated_logprobs = (
+                extract_generated_token_logprobs(
+                    generated_tokens,
+                    getattr(generation, "logprobs", None),
+                )
+                if generation is not None
+                else []
             )
             if generated_logprobs:
                 full_logprobs[
@@ -816,15 +845,23 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             logprobs_list.append(full_logprobs)
 
             response_length = sequence_length + len(generated_tokens)
-            full_routed_experts, r3_stats = pad_and_align_routed_expert_indices(
-                output,
-                generation,
-                valid_length=response_length,
-                padded_length=total_length,
-                device=input_ids.device,
-                require_complete_routed_experts=return_routed_experts,
-                return_stats=True,
-            )
+            if output is not None and generation is not None:
+                full_routed_experts, r3_stats = pad_and_align_routed_expert_indices(
+                    output,
+                    generation,
+                    valid_length=response_length,
+                    padded_length=total_length,
+                    device=input_ids.device,
+                    require_complete_routed_experts=return_routed_experts,
+                    return_stats=True,
+                )
+            else:
+                full_routed_experts = None
+                r3_stats = {
+                    "missing_routes": 0,
+                    "expected_routes": 0,
+                    "actual_routes": 0,
+                }
             if return_routed_experts and full_routed_experts is None:
                 raise RuntimeError(
                     "vLLM was asked to return routed experts but the generation output "
@@ -841,12 +878,19 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
             unpadded_sequence_lengths.append(response_length)
 
             # Check if response was truncated (hit max_tokens length limit)
-            is_truncated = generation.finish_reason == "length"
+            is_truncated = (
+                i in exhausted_indices
+                or generation is not None
+                and generation.finish_reason == "length"
+            )
             truncated_list.append(is_truncated)
 
-            assert response_length <= self.llm.llm_engine.model_config.max_model_len, (
-                f"response_length={response_length} > max_model_len={self.llm.llm_engine.model_config.max_model_len}, which should not happen. Please check this behavior in isolation by running `uv run --extra vllm tools/model_diagnostics/1.max_model_len_respected.py {self.llm.llm_engine.model_config.model}` and raise this issue with the vllm team."
-            )
+            if output is not None:
+                assert (
+                    response_length <= self.llm.llm_engine.model_config.max_model_len
+                ), (
+                    f"response_length={response_length} > max_model_len={self.llm.llm_engine.model_config.max_model_len}, which should not happen. Please check this behavior in isolation by running `uv run --extra vllm tools/model_diagnostics/1.max_model_len_respected.py {self.llm.llm_engine.model_config.model}` and raise this issue with the vllm team."
+                )
 
         # Create return data conforming to GenerationOutputSpec
         output_ids = torch.stack(output_ids_list)

@@ -1,5 +1,6 @@
 # Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,29 @@ class _CaptureLLM:
     def generate(self, _prompts: Any, sampling_params: Any, **_kwargs: Any) -> None:
         self.sampling_params = sampling_params
         raise _GenerationCaptured
+
+
+class _StaticLLM:
+    def __init__(self) -> None:
+        self.prompts: Any = None
+        self.sampling_params: Any = None
+        self.llm_engine = SimpleNamespace(
+            model_config=SimpleNamespace(max_model_len=15)
+        )
+
+    def generate(self, prompts: Any, sampling_params: Any, **_kwargs: Any) -> Any:
+        self.prompts = prompts
+        self.sampling_params = sampling_params
+        generation = SimpleNamespace(
+            token_ids=[7],
+            logprobs=[{7: SimpleNamespace(logprob=-0.1)}],
+            finish_reason="length",
+            routed_experts=None,
+        )
+        return [
+            SimpleNamespace(outputs=[generation], prompt_routed_experts=None)
+            for _ in prompts
+        ]
 
 
 def _make_worker() -> Any:
@@ -92,7 +116,7 @@ def test_sync_generate_caps_outputs_below_specdec_context_headroom(
 
 
 @pytest.mark.parametrize("input_length", [10, 11])
-def test_sync_generate_uses_positive_limit_when_output_context_is_exhausted(
+def test_sync_generate_skips_requests_when_output_context_is_exhausted(
     monkeypatch: pytest.MonkeyPatch,
     input_length: int,
 ) -> None:
@@ -109,11 +133,45 @@ def test_sync_generate_uses_positive_limit_when_output_context_is_exhausted(
         }
     )
 
-    with pytest.raises(_GenerationCaptured):
-        worker.generate(data)
+    result = worker.generate(data)
 
-    sampling_params = worker.llm.sampling_params
-    assert sampling_params[0]["max_tokens"] == 1
+    assert worker.llm.sampling_params is None
+    assert result["generation_lengths"].tolist() == [0]
+    assert result["unpadded_sequence_lengths"].tolist() == [input_length]
+    assert result["truncated"].tolist() == [True]
+
+
+def test_sync_generate_preserves_order_when_only_some_contexts_are_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+    worker = _make_worker()
+    worker.llm = _StaticLLM()
+    worker.cfg["_output_max_model_len"] = 10
+    worker.cfg["vllm_cfg"]["max_model_len"] = 15
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.tensor(
+                [
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                    [1, 2, 3, 4, 5, 6, 7, 8, 0, 0],
+                ],
+                dtype=torch.long,
+            ),
+            "input_lengths": torch.tensor([10, 8], dtype=torch.long),
+            "stop_strings": [None, None],
+        }
+    )
+
+    result = worker.generate(data)
+
+    assert len(worker.llm.prompts) == 1
+    assert [params["max_tokens"] for params in worker.llm.sampling_params] == [2]
+    assert result["generation_lengths"].tolist() == [0, 1]
+    assert result["unpadded_sequence_lengths"].tolist() == [10, 9]
+    assert result["truncated"].tolist() == [True, True]
+    assert result["output_ids"][1, 8].item() == 7
 
 
 def test_sync_generate_text_preserves_per_prompt_stop_strings(
