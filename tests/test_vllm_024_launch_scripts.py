@@ -17,7 +17,8 @@ SUBMISSIONS_HEADER = (
     "container_sha256\tmax_steps\tstatic_k\tdynamic_schedule\t"
     "rejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\t"
     "max_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\t"
-    "max_cudagraph_capture_size\tnum_prompts_per_step\t"
+    "max_cudagraph_capture_size\tcudagraph_capture_sizes\t"
+    "num_prompts_per_step\t"
     "num_generations_per_prompt\ttrain_global_batch_size\t"
     "max_total_sequence_length\tmax_new_tokens\tcommand"
 )
@@ -337,6 +338,28 @@ def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_limit() -> None:
     assert "compilation_config.max_cudagraph_capture_size=768" in output
 
 
+def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_sizes() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "eagle3_k5",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="capture-shapes-test",
+        ATTEMPT_ID="attempt-1",
+        MAX_CUDAGRAPH_CAPTURE_SIZE="384",
+        CUDAGRAPH_CAPTURE_SIZES="[1,2,4,8,16,32,64,128,192,256,320,384]",
+    )
+
+    assert "compilation_config.max_cudagraph_capture_size=384" in output
+    assert (
+        "compilation_config.cudagraph_capture_sizes="
+        "\\[1\\,2\\,4\\,8\\,16\\,32\\,64\\,128\\,192\\,256\\,320\\,384\\]"
+    ) in output
+
+
 def test_dynamicsd_launcher_renders_matched_scheduler_limits() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
@@ -551,7 +574,7 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     lines = manifest.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert lines[0].split("\t") == SUBMISSIONS_HEADER.split("\t")
-    assert all(len(line.split("\t")) == 29 for line in lines)
+    assert all(len(line.split("\t")) == 30 for line in lines)
     assert lines[1].split("\t")[16:18] == ["standard", "probabilistic"]
     manifest_row = dict(
         zip(
@@ -674,6 +697,7 @@ def test_dynamicsd_launcher_records_reproducibility_metadata() -> None:
         "static_k",
         "dynamic_schedule",
         "max_cudagraph_capture_size",
+        "cudagraph_capture_sizes",
         "command",
     ):
         assert field in source

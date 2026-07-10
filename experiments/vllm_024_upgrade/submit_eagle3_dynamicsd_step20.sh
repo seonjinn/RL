@@ -27,6 +27,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-}"
 OUTPUT_MAX_MODEL_LEN="${OUTPUT_MAX_MODEL_LEN:-}"
 SPECDEC_CONTEXT_HEADROOM_TOKENS="${SPECDEC_CONTEXT_HEADROOM_TOKENS:-0}"
 MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
+CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES:-}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -53,6 +54,11 @@ for numeric_override in \
 done
 if [[ ! "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" =~ ^[0-9]+$ ]]; then
   echo "ERROR: SPECDEC_CONTEXT_HEADROOM_TOKENS must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "${CUDAGRAPH_CAPTURE_SIZES}" \
+  && ! "${CUDAGRAPH_CAPTURE_SIZES}" =~ ^\[[1-9][0-9]*(,[1-9][0-9]*)*\]$ ]]; then
+  echo "ERROR: CUDAGRAPH_CAPTURE_SIZES must be a comma-separated list of positive integers" >&2
   exit 2
 fi
 if [[ "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" != "0" && -z "${OUTPUT_MAX_MODEL_LEN}" ]]; then
@@ -288,6 +294,11 @@ submit_one() {
       "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${MAX_CUDAGRAPH_CAPTURE_SIZE}"
     )
   fi
+  if [[ -n "${CUDAGRAPH_CAPTURE_SIZES}" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CUDAGRAPH_CAPTURE_SIZES}"
+    )
+  fi
   if [[ -n "${resolved_max_num_batched_tokens}" ]]; then
     overrides+=(
       "++policy.generation.vllm_kwargs.max_num_batched_tokens=${resolved_max_num_batched_tokens}"
@@ -442,7 +453,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\tmax_cudagraph_capture_size\tnum_prompts_per_step\tnum_generations_per_prompt\ttrain_global_batch_size\tmax_total_sequence_length\tmax_new_tokens\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\tmax_cudagraph_capture_size\tcudagraph_capture_sizes\tnum_prompts_per_step\tnum_generations_per_prompt\ttrain_global_batch_size\tmax_total_sequence_length\tmax_new_tokens\tcommand'
       if [[ -f "${manifest}" ]]; then
         local existing_manifest_header
         existing_manifest_header="$(head -n 1 "${manifest}")"
@@ -458,7 +469,7 @@ submit_one() {
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
@@ -467,7 +478,8 @@ submit_one() {
         "${manifest_rejection_sample_method}" "${manifest_draft_sample_method}" \
         "${resolved_max_num_batched_tokens}" "${MAX_NUM_SEQS}" \
         "${OUTPUT_MAX_MODEL_LEN}" "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" \
-        "${MAX_CUDAGRAPH_CAPTURE_SIZE}" "${NUM_PROMPTS_PER_STEP}" \
+        "${MAX_CUDAGRAPH_CAPTURE_SIZE}" "${CUDAGRAPH_CAPTURE_SIZES}" \
+        "${NUM_PROMPTS_PER_STEP}" \
         "${NUM_GENERATIONS_PER_PROMPT}" "${TRAIN_GLOBAL_BATCH_SIZE}" \
         "${MAX_TOTAL_SEQUENCE_LENGTH}" "${MAX_NEW_TOKENS}" \
         "${command}" >> "${manifest}"

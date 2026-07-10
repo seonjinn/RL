@@ -65,6 +65,7 @@ MATCHED_SETUP_FIELDS = (
     "output_max_model_len",
     "specdec_context_headroom_tokens",
     "max_cudagraph_capture_size",
+    "cudagraph_capture_sizes",
     "num_prompts_per_step",
     "num_generations_per_prompt",
     "train_global_batch_size",

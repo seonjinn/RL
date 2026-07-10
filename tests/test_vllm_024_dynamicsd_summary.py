@@ -225,6 +225,7 @@ def test_validate_manifest_rows_matches_scheduler_and_graph_limits() -> None:
         "output_max_model_len": "4096",
         "specdec_context_headroom_tokens": "32",
         "max_cudagraph_capture_size": "768",
+        "cudagraph_capture_sizes": "[1,128,768]",
     }
     rows = [
         {**common, "variant": "baseline", "max_num_batched_tokens": "16384"},
@@ -232,6 +233,29 @@ def test_validate_manifest_rows_matches_scheduler_and_graph_limits() -> None:
     ]
 
     assert _validate_manifest_rows(rows) == "mismatched setup for model qwen30ba3b"
+
+
+def test_validate_manifest_rows_matches_explicit_graph_shapes() -> None:
+    common = {
+        "model": "qwen235b",
+        "commit": "aaa",
+        "nodes": "16",
+        "max_cudagraph_capture_size": "384",
+    }
+    rows = [
+        {
+            **common,
+            "variant": "baseline",
+            "cudagraph_capture_sizes": "[1,2,4,8,16,32,64,384]",
+        },
+        {
+            **common,
+            "variant": "eagle3_k5",
+            "cudagraph_capture_sizes": "[1,2,4,8,16,32,64]",
+        },
+    ]
+
+    assert _validate_manifest_rows(rows) == "mismatched setup for model qwen235b"
 
 
 @pytest.mark.parametrize(
