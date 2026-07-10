@@ -33,7 +33,11 @@ class TailGatedScheduler(Scheduler):
     """Applies a rollout-local tail gate to vLLM's next proposal step."""
 
     def __init__(self, vllm_config: Any, *args: Any, **kwargs: Any) -> None:
-        super().__init__(vllm_config, *args, **kwargs)
+        super().__init__(
+            vllm_config,  # pyrefly: ignore[bad-argument-count]  vLLM is an external runtime dependency
+            *args,
+            **kwargs,
+        )
         speculative_config = vllm_config.speculative_config
         if speculative_config is None:
             raise ValueError("TailGatedScheduler requires SpeculativeConfig")
@@ -42,6 +46,7 @@ class TailGatedScheduler(Scheduler):
         )
         self._accepted_tokens = 0
         self._draft_cycles = 0
+        self._failed_output_request_ids: set[str] = set()
 
     def schedule(self, throttle_prefills: bool = False) -> Any:
         """Schedule normally, then gate only the following proposal cycle."""
@@ -63,8 +68,16 @@ class TailGatedScheduler(Scheduler):
         self, scheduler_output: Any, model_runner_output: Any
     ) -> Any:
         """Accumulate acceptance feedback while preserving Scheduler semantics."""
-        self._record_acceptance(scheduler_output, model_runner_output)
+        eligible_request_ids = self._eligible_acceptance_request_ids(
+            scheduler_output, model_runner_output
+        )
+        self._failed_output_request_ids.clear()
         result = super().update_from_output(scheduler_output, model_runner_output)
+        self._record_acceptance(
+            scheduler_output,
+            model_runner_output,
+            eligible_request_ids - self._failed_output_request_ids,
+        )
         if self.get_num_unfinished_requests() == 0:
             self._tail_gate.finish_rollout(
                 accepted_tokens=self._accepted_tokens,
@@ -74,6 +87,15 @@ class TailGatedScheduler(Scheduler):
             self._accepted_tokens = 0
             self._draft_cycles = 0
         return result
+
+    def _handle_invalid_blocks(
+        self, invalid_block_ids: set[int], num_scheduled_tokens: dict[str, int]
+    ) -> set[str]:
+        failed_request_ids = super()._handle_invalid_blocks(
+            invalid_block_ids, num_scheduled_tokens
+        )
+        self._failed_output_request_ids.update(failed_request_ids)
+        return failed_request_ids
 
     def _build_observation(self) -> tuple[TailGateObservation, int]:
         active_requests = len(self.running)
@@ -94,16 +116,39 @@ class TailGatedScheduler(Scheduler):
             decode_active_batch_size,
         )
 
-    def _record_acceptance(
+    def _eligible_acceptance_request_ids(
         self, scheduler_output: Any, model_runner_output: Any
+    ) -> set[str]:
+        eligible_request_ids: set[str] = set()
+        for request_id in scheduler_output.num_scheduled_tokens:
+            request = self.requests.get(request_id)
+            if request is None or request.is_finished():
+                continue
+            if request_id not in model_runner_output.req_id_to_index:
+                continue
+            eligible_request_ids.add(request_id)
+        return eligible_request_ids
+
+    def _record_acceptance(
+        self,
+        scheduler_output: Any,
+        model_runner_output: Any,
+        eligible_request_ids: set[str],
     ) -> None:
-        for request_id, draft_token_ids in (
-            scheduler_output.scheduled_spec_decode_tokens.items()
-        ):
+        for request_id in eligible_request_ids:
+            draft_token_ids = scheduler_output.scheduled_spec_decode_tokens.get(
+                request_id
+            )
             if not draft_token_ids:
                 continue
             request_index = model_runner_output.req_id_to_index[request_id]
-            sampled_token_ids = model_runner_output.sampled_token_ids[request_index]
+            sampled_token_ids = (
+                model_runner_output.sampled_token_ids[request_index]
+                if model_runner_output.sampled_token_ids
+                else []
+            )
+            if not sampled_token_ids:
+                continue
             self._accepted_tokens += max(
                 len(sampled_token_ids) - self.num_sampled_tokens_per_step,
                 0,

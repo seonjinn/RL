@@ -168,6 +168,7 @@ project-includes = [
   "nemo_rl/models/generation/vllm/sd_toggle/predict.py",
   "nemo_rl/models/generation/vllm/sd_toggle/roofline.py",
   "nemo_rl/models/generation/vllm/tail_gate.py",
+  "nemo_rl/models/generation/vllm/tail_gate_scheduler.py",
   "nemo_rl/models/generation/vllm/utils.py",
   "nemo_rl/models/generation/vllm/vllm_backend.py",
   "nemo_rl/models/huggingface/__init__.py",

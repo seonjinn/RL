@@ -261,19 +261,27 @@ def validate_vllm_speculative_config(
                 "target tensor_parallel_size"
             )
     if tail_gate_enabled:
-        scheduler_cls = config["vllm_kwargs"].get("scheduler_cls")
+        vllm_kwargs = config.get("vllm_kwargs")
+        if vllm_kwargs is None:
+            raise ValueError(
+                "Tail-gated speculative decoding requires vllm_kwargs."
+            )
+        scheduler_cls = vllm_kwargs.get("scheduler_cls")
         if scheduler_cls is not None and scheduler_cls != _TAIL_GATE_SCHEDULER_CLASS:
             raise ValueError(
                 "Tail-gated speculative decoding requires scheduler_cls="
                 f"{_TAIL_GATE_SCHEDULER_CLASS}."
             )
-        config["vllm_kwargs"]["scheduler_cls"] = _TAIL_GATE_SCHEDULER_CLASS
+        vllm_kwargs["scheduler_cls"] = _TAIL_GATE_SCHEDULER_CLASS
 
 
 def get_vllm_specdec_runtime_contract(
     config: VllmConfig,
 ) -> dict[str, Any] | None:
     """Return the effective NeMo-side SpecDec and sampling startup contract."""
+    vllm_kwargs = config.get("vllm_kwargs")
+    if vllm_kwargs is None:
+        return None
     speculative_config = _get_speculative_config(config)
     if speculative_config is None:
         return None
@@ -312,7 +320,7 @@ def get_vllm_specdec_runtime_contract(
             "rejection_sample_method", "standard"
         ),
         "draft_sample_method": speculative_config.get("draft_sample_method", "greedy"),
-        "async_scheduling": config["vllm_kwargs"].get("async_scheduling"),
+        "async_scheduling": vllm_kwargs.get("async_scheduling"),
         "cuda_graph_enabled": not config["vllm_cfg"].get("enforce_eager", False),
         "draft_model_cudagraph_patch_requested": (
             draft_model_cudagraph_patch_requested
@@ -398,13 +406,15 @@ def configure_generation_config(
         )
         speculative_config = _get_speculative_config(config)
         if speculative_config is not None:
-            if config["vllm_kwargs"].get("async_scheduling") is not False:
+            vllm_kwargs = config.get("vllm_kwargs")
+            assert vllm_kwargs is not None
+            if vllm_kwargs.get("async_scheduling") is not False:
                 warnings.warn(
                     "Disabling vLLM async_scheduling for speculative decoding "
                     "because vLLM 0.24 can retain stale placeholder tokens after "
                     "preemption or retry."
                 )
-            config["vllm_kwargs"]["async_scheduling"] = False
+            vllm_kwargs["async_scheduling"] = False
         if speculative_config is not None and has_refit_draft_weights:
             draft_load_config = speculative_config.setdefault(
                 "draft_load_config", {"load_format": "dummy"}

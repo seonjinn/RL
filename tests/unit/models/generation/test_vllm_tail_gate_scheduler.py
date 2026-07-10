@@ -29,16 +29,21 @@ SCHEDULER_MODULE = "nemo_rl.models.generation.vllm.tail_gate_scheduler"
 class _StubScheduler:
     """Small vLLM Scheduler stand-in used without importing vLLM."""
 
-    def __init__(self, vllm_config: SimpleNamespace, *_args: object, **_kwargs: object) -> None:
+    def __init__(
+        self, vllm_config: SimpleNamespace, *_args: object, **_kwargs: object
+    ) -> None:
         self.vllm_config = vllm_config
         self.num_spec_tokens = vllm_config.num_speculative_tokens
         self.num_sampled_tokens_per_step = 1
+        self.requests: dict[str, SimpleNamespace] = {}
         self.running: list[SimpleNamespace] = []
         self.waiting: list[SimpleNamespace] = []
         self.skipped_waiting: list[SimpleNamespace] = []
         self.schedule_outputs: list[SimpleNamespace] = []
         self.schedule_throttle_prefills: list[bool] = []
         self.update_result: object = object()
+        self.update_exception: Exception | None = None
+        self.failed_request_ids: set[str] = set()
 
     def schedule(self, throttle_prefills: bool = False) -> SimpleNamespace:
         self.schedule_throttle_prefills.append(throttle_prefills)
@@ -46,10 +51,19 @@ class _StubScheduler:
 
     def update_from_output(
         self,
-        _scheduler_output: SimpleNamespace,
+        scheduler_output: SimpleNamespace,
         _model_runner_output: SimpleNamespace,
     ) -> object:
+        if self.failed_request_ids:
+            self._handle_invalid_blocks(set(), scheduler_output.num_scheduled_tokens)
+        if self.update_exception is not None:
+            raise self.update_exception
         return self.update_result
+
+    def _handle_invalid_blocks(
+        self, _invalid_block_ids: set[int], _num_scheduled_tokens: dict[str, int]
+    ) -> set[str]:
+        return self.failed_request_ids
 
     def get_num_unfinished_requests(self) -> int:
         return len(self.running) + len(self.waiting) + len(self.skipped_waiting)
@@ -99,10 +113,16 @@ def _vllm_config() -> SimpleNamespace:
 
 
 def _scheduler_output(*, drafts: dict[str, list[int]] | None = None) -> SimpleNamespace:
+    scheduled_drafts = drafts or {}
     return SimpleNamespace(
-        scheduled_spec_decode_tokens=drafts or {},
+        scheduled_spec_decode_tokens=scheduled_drafts,
+        num_scheduled_tokens={request_id: 1 for request_id in scheduled_drafts},
         num_spec_tokens_to_schedule=5,
     )
+
+
+def _request(*, finished: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(is_finished=lambda: finished)
 
 
 def test_schedule_gates_the_next_proposal_and_preserves_pending_drafts(
@@ -163,6 +183,7 @@ def test_update_records_acceptance_before_resetting_after_skipped_waiting_drains
 
     scheduler.running.clear()
     scheduler.skipped_waiting.append(SimpleNamespace())
+    scheduler.requests["request-1"] = _request()
     scheduler_output = _scheduler_output(drafts={"request-1": [1, 2, 3]})
     model_runner_output = SimpleNamespace(
         req_ids=["request-1"],
@@ -174,6 +195,8 @@ def test_update_records_acceptance_before_resetting_after_skipped_waiting_drains
 
     assert result is scheduler.update_result
     assert scheduler._tail_gate.enabled is True
+    assert scheduler._accepted_tokens == 2
+    assert scheduler._draft_cycles == 1
 
     scheduler.skipped_waiting.clear()
     result = scheduler.update_from_output(
@@ -184,3 +207,69 @@ def test_update_records_acceptance_before_resetting_after_skipped_waiting_drains
     assert result is scheduler.update_result
     assert scheduler._tail_gate.enabled is False
     assert scheduler._tail_gate.expected_accept_length == 3.0
+
+
+def test_update_ignores_scheduled_drafts_without_model_runner_output(
+    scheduler_module: ModuleType,
+) -> None:
+    scheduler = scheduler_module.TailGatedScheduler(_vllm_config())
+    scheduler.requests["request-1"] = _request()
+    scheduler.waiting.append(SimpleNamespace())
+
+    result = scheduler.update_from_output(
+        _scheduler_output(drafts={"request-1": [1, 2, 3]}),
+        SimpleNamespace(req_ids=[], req_id_to_index={}, sampled_token_ids=[]),
+    )
+
+    assert result is scheduler.update_result
+    assert scheduler._accepted_tokens == 0
+    assert scheduler._draft_cycles == 0
+
+
+@pytest.mark.parametrize("request_state", ["absent", "finished", "failed"])
+def test_update_ignores_requests_skipped_by_upstream_guards(
+    scheduler_module: ModuleType,
+    request_state: str,
+) -> None:
+    scheduler = scheduler_module.TailGatedScheduler(_vllm_config())
+    scheduler.waiting.append(SimpleNamespace())
+    if request_state != "absent":
+        scheduler.requests["request-1"] = _request(finished=request_state == "finished")
+    if request_state == "failed":
+        scheduler.failed_request_ids.add("request-1")
+
+    result = scheduler.update_from_output(
+        _scheduler_output(drafts={"request-1": [1, 2, 3]}),
+        SimpleNamespace(
+            req_ids=["request-1"],
+            req_id_to_index={"request-1": 0},
+            sampled_token_ids=[[10, 11, 12]],
+        ),
+    )
+
+    assert result is scheduler.update_result
+    assert scheduler._accepted_tokens == 0
+    assert scheduler._draft_cycles == 0
+
+
+def test_update_does_not_record_when_superclass_raises(
+    scheduler_module: ModuleType,
+) -> None:
+    scheduler = scheduler_module.TailGatedScheduler(_vllm_config())
+    scheduler.requests["request-1"] = _request()
+    expected_error = RuntimeError("upstream failed")
+    scheduler.update_exception = expected_error
+
+    with pytest.raises(RuntimeError) as exc_info:
+        scheduler.update_from_output(
+            _scheduler_output(drafts={"request-1": [1, 2, 3]}),
+            SimpleNamespace(
+                req_ids=["request-1"],
+                req_id_to_index={"request-1": 0},
+                sampled_token_ids=[[10, 11, 12]],
+            ),
+        )
+
+    assert exc_info.value is expected_error
+    assert scheduler._accepted_tokens == 0
+    assert scheduler._draft_cycles == 0
