@@ -51,6 +51,53 @@ def _run_patched_llama_loader(
     return receipt, model
 
 
+def _probabilistic_draft_temperature_source() -> str:
+    return (
+        "    # Use epsilon comparison to detect greedy sampling (temperature ~ 0.0)\n"
+        "    # consistent with sampler.py's _SAMPLING_EPS threshold\n"
+        "    temperature = sampling_metadata.temperature\n"
+        "    # Avoid division by zero if there are greedy requests.\n"
+        "    if not sampling_metadata.all_random:\n"
+        "        is_greedy = temperature < _SAMPLING_EPS\n"
+        "        temperature = torch.where(is_greedy, 1.0, temperature)\n"
+        "    logits.div_(temperature.view(-1, 1))\n"
+    )
+
+
+def test_parallel_probabilistic_draft_temperature_patch_expands_temperatures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposer = tmp_path / "llm_base_proposer.py"
+    proposer.write_text(_probabilistic_draft_temperature_source())
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(proposer))
+
+    patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
+
+    patched = proposer.read_text()
+    assert "temperature_count = temperature.numel()" in patched
+    assert "logits_count % temperature_count != 0" in patched
+    assert (
+        "temperature.repeat_interleave(logits_count // temperature_count)" in patched
+    )
+
+    patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
+
+    assert proposer.read_text() == patched
+
+
+def test_parallel_probabilistic_draft_temperature_patch_rejects_unknown_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposer = tmp_path / "llm_base_proposer.py"
+    proposer.write_text("class Proposer: pass\n")
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(proposer))
+
+    with pytest.raises(RuntimeError, match="vLLM source layout changed"):
+        patches._patch_vllm_parallel_probabilistic_draft_temperature(MagicMock())
+
+
 def test_online_eagle_patch_marks_dummy_refit_head_as_owned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -528,7 +575,7 @@ def test_draft_model_cudagraph_patch_supports_nightly_without_gemma4(
     (
         "speculative_config",
         "expect_specdec_patches",
-        "expect_probabilistic_guard",
+        "expect_probabilistic_patches",
         "expect_draft_cg_patch",
     ),
     [
@@ -558,7 +605,7 @@ def test_apply_patches_only_installs_required_specdec_patches(
     monkeypatch: pytest.MonkeyPatch,
     speculative_config: dict[str, object] | None,
     expect_specdec_patches: bool,
-    expect_probabilistic_guard: bool,
+    expect_probabilistic_patches: bool,
     expect_draft_cg_patch: bool,
 ) -> None:
     logger = MagicMock()
@@ -592,6 +639,13 @@ def test_apply_patches_only_installs_required_specdec_patches(
         "_patch_vllm_missing_draft_probs_fail_closed",
         probabilistic_guard,
     )
+    parallel_probabilistic_temperature_patch = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_patch_vllm_parallel_probabilistic_draft_temperature",
+        parallel_probabilistic_temperature_patch,
+        raising=False,
+    )
     draft_cg_patch = MagicMock()
     monkeypatch.setattr(
         patches,
@@ -620,10 +674,12 @@ def test_apply_patches_only_installs_required_specdec_patches(
         draft_cg_patch.assert_called_once_with(logger)
     else:
         draft_cg_patch.assert_not_called()
-    if expect_probabilistic_guard:
+    if expect_probabilistic_patches:
         probabilistic_guard.assert_called_once_with(logger)
+        parallel_probabilistic_temperature_patch.assert_called_once_with(logger)
     else:
         probabilistic_guard.assert_not_called()
+        parallel_probabilistic_temperature_patch.assert_not_called()
 
 
 @pytest.mark.parametrize(
