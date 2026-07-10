@@ -625,7 +625,8 @@ def test_missing_probabilistic_draft_row_patch_fails_closed(
     assert "raise RuntimeError(" in patched
     assert "missing q(token)" in patched
     assert "has no cached q(token)" in patched
-    assert "if any(spec_decode_metadata.num_draft_tokens):" in patched
+    assert "any(spec_decode_metadata.num_draft_tokens)" in patched
+    assert "not self.input_batch.sampling_metadata.all_greedy" in patched
     assert "falling back to legacy" not in patched
 
     patches._patch_vllm_missing_draft_probs_fail_closed(MagicMock())
