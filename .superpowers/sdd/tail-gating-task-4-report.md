@@ -14,7 +14,8 @@ Implemented Task 4 on `sna/nemorl-vllm024-tail-gating`.
 - `nemo_rl/models/generation/vllm/utils.py`
   - Deltas tail-gate cumulative counters before deriving enabled and
     advance-only ratios, activation batch and sequence-length means, predicted
-    speedup mean, and any reported K-histogram ratios.
+    speedup means for all decisions and activation time, and any reported
+    K-histogram ratios.
   - Uses `0.0` for every zero denominator.
 - `tests/unit/models/generation/test_vllm_generation.py`
   - Covers worker RPC merging, unchanged CUDA-graph counters, step-metric
@@ -145,3 +146,58 @@ Ruff, Python compilation, and scoped `git diff --check` passed. Pyrefly is not
 installed in the local environment. The Pyright fallback still reports the
 files' existing type-check debt (`336 errors`), but no new activation-consumer
 or fixture-loader diagnostics remain.
+
+## Task 6 Activation Roofline Follow-Up
+
+### Changes
+
+- `compute_spec_decode_metrics()` deltas the cumulative
+  `tail_gate_activation_predicted_speedup_sum` and
+  `tail_gate_activation_predicted_speedup_count` counters, then derives
+  `vllm/tail_gate_activation_predicted_speedup`. The training logger's existing
+  `train` prefix produces
+  `train/vllm/tail_gate_activation_predicted_speedup` in W&B.
+- Producer-shaped snapshots keep the all-step delta mean at `1.12` while one
+  activation has a distinct delta mean of `1.5`, preventing the two metrics
+  from being sourced from the same counters.
+- A zero activation prediction count derives `0.0` and is explicitly checked
+  as non-NaN. The existing all-step
+  `vllm/tail_gate_predicted_speedup` metric remains unchanged.
+
+### Activation Roofline RED
+
+```bash
+uv run --no-sync pytest --noconftest -o addopts='' \
+  tests/unit/models/generation/test_vllm_utils.py \
+  -k 'derives_tail_gate or tail_gate_zero' -q
+```
+
+Result: `2 failed, 30 deselected`. Both failures were the expected
+`KeyError: 'vllm/tail_gate_activation_predicted_speedup'`; the existing
+all-step `1.12` assertion passed before the missing-key assertion.
+
+### Activation Roofline GREEN
+
+The same focused command passed: `2 passed, 30 deselected`. The complete
+utility module passed with `32 passed`.
+
+Both generation/backend collection orders passed with
+`7 passed, 200 deselected`:
+
+```bash
+uv run --no-sync pytest --noconftest -o addopts='' \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_backend.py \
+  tests/unit/models/generation/test_vllm_utils.py \
+  -k 'tail_gate_worker or get_cudagraph_dispatch_metrics or derives_tail_gate or tail_gate_zero' -q
+
+uv run --no-sync pytest --noconftest -o addopts='' \
+  tests/unit/models/generation/test_vllm_backend.py \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_utils.py \
+  -k 'tail_gate_worker or get_cudagraph_dispatch_metrics or derives_tail_gate or tail_gate_zero' -q
+```
+
+Ruff and Python compilation passed. Scoped Pyright reported `123` pre-existing
+diagnostics in `utils.py` and `test_vllm_utils.py`; none are on the new
+activation-roofline consumer or test lines. Scoped `git diff --check` passed.

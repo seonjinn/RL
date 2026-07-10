@@ -506,6 +506,12 @@ def compute_spec_decode_metrics(
         predicted_speedup_count = delta.get(
             f"{tail_gate_prefix}predicted_speedup_count", 0.0
         )
+        activation_predicted_speedup_sum = delta.get(
+            f"{tail_gate_prefix}activation_predicted_speedup_sum", 0.0
+        )
+        activation_predicted_speedup_count = delta.get(
+            f"{tail_gate_prefix}activation_predicted_speedup_count", 0.0
+        )
 
         spec_metrics.update(
             {
@@ -527,6 +533,10 @@ def compute_spec_decode_metrics(
                 ),
                 "vllm/tail_gate_predicted_speedup": tail_gate_ratio(
                     predicted_speedup_sum, predicted_speedup_count
+                ),
+                "vllm/tail_gate_activation_predicted_speedup": tail_gate_ratio(
+                    activation_predicted_speedup_sum,
+                    activation_predicted_speedup_count,
                 ),
             }
         )
