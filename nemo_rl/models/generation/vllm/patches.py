@@ -927,17 +927,8 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
         "                    effective_runtime_k == 0\n"
         "                ),\n"
-        '                "vllm:spec_decode_tail_gate_activations": float(\n'
-        "                    scheduler_output.tail_gate_just_activated\n"
-        "                ),\n"
-        '                "vllm:spec_decode_tail_gate_active_requests_sum": float(\n'
-        "                    scheduler_output.tail_gate_active_requests\n"
-        "                ),\n"
         '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
         "                    scheduler_output.tail_gate_decode_active_requests\n"
-        "                ),\n"
-        '                "vllm:spec_decode_tail_gate_mean_sequence_length_sum": float(\n'
-        "                    scheduler_output.tail_gate_mean_sequence_length\n"
         "                ),\n"
         '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
         "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
@@ -948,7 +939,20 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
         "                    scheduler_output.tail_gate_expected_accept_length\n"
         "                ),\n"
+        '                f"vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps": 1.0,\n'
         "            }\n"
+        "            if scheduler_output.tail_gate_just_activated:\n"
+        "                tail_gate_updates.update(\n"
+        "                    {\n"
+        '                        "vllm:spec_decode_tail_gate_activations": 1.0,\n'
+        '                        "vllm:spec_decode_tail_gate_activation_batch_sum": float(\n'
+        "                            scheduler_output.tail_gate_active_requests\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_sequence_length_sum": float(\n'
+        "                            scheduler_output.tail_gate_mean_sequence_length\n"
+        "                        ),\n"
+        "                    }\n"
+        "                )\n"
         "            tail_gate_state = scheduler_output.tail_gate_state.lower()\n"
         "            if tail_gate_state in (\n"
         '                "ramping_off",\n'
@@ -1012,6 +1016,32 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "        self.execute_model_state = None\n"
     )
 
+    v2_handler_init_old = (
+        "        self.postprocess_sampled(\n"
+        "            input_batch.idx_mapping,\n"
+        "            sampler_output.sampled_token_ids,\n"
+        "            num_sampled,\n"
+        "            num_rejected,\n"
+        "            input_batch.query_start_loc,\n"
+        "        )\n"
+        "\n"
+        "        if self.speculator is not None:\n"
+        "            assert self.sampler is not None\n"
+    )
+    v2_handler_init_new = (
+        "        self.postprocess_sampled(\n"
+        "            input_batch.idx_mapping,\n"
+        "            sampler_output.sampled_token_ids,\n"
+        "            num_sampled,\n"
+        "            num_rejected,\n"
+        "            input_batch.query_start_loc,\n"
+        "        )\n"
+        "\n"
+        "        draft_tokens_for_handler = None\n"
+        "        if self.speculator is not None:\n"
+        "            assert self.sampler is not None\n"
+    )
+
     v2_proposal_old = (
         "            draft_tokens = self.speculator.propose(\n"
         "                input_batch,\n"
@@ -1069,7 +1099,6 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "                    num_speculative_tokens=runtime_num_spec_tokens,\n"
         "                    mm_inputs=mm_inputs,\n"
         "                )\n"
-        "            draft_tokens_for_handler = None\n"
         "            if runtime_num_spec_tokens == 0:\n"
         "                self.req_states.draft_tokens[input_batch.idx_mapping] = 0\n"
         "                draft_tokens_for_handler = draft_tokens\n"
@@ -1282,17 +1311,8 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
         "                    effective_runtime_k == 0\n"
         "                ),\n"
-        '                "vllm:spec_decode_tail_gate_activations": float(\n'
-        "                    scheduler_output.tail_gate_just_activated\n"
-        "                ),\n"
-        '                "vllm:spec_decode_tail_gate_active_requests_sum": float(\n'
-        "                    scheduler_output.tail_gate_active_requests\n"
-        "                ),\n"
         '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
         "                    scheduler_output.tail_gate_decode_active_requests\n"
-        "                ),\n"
-        '                "vllm:spec_decode_tail_gate_mean_sequence_length_sum": float(\n'
-        "                    scheduler_output.tail_gate_mean_sequence_length\n"
         "                ),\n"
         '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
         "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
@@ -1303,7 +1323,20 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
         "                    scheduler_output.tail_gate_expected_accept_length\n"
         "                ),\n"
+        '                f"vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps": 1.0,\n'
         "            }\n"
+        "            if scheduler_output.tail_gate_just_activated:\n"
+        "                tail_gate_updates.update(\n"
+        "                    {\n"
+        '                        "vllm:spec_decode_tail_gate_activations": 1.0,\n'
+        '                        "vllm:spec_decode_tail_gate_activation_batch_sum": float(\n'
+        "                            scheduler_output.tail_gate_active_requests\n"
+        "                        ),\n"
+        '                        "vllm:spec_decode_tail_gate_activation_sequence_length_sum": float(\n'
+        "                            scheduler_output.tail_gate_mean_sequence_length\n"
+        "                        ),\n"
+        "                    }\n"
+        "                )\n"
         "            tail_gate_state = scheduler_output.tail_gate_state.lower()\n"
         "            if tail_gate_state in (\n"
         '                "ramping_off",\n'
@@ -1333,6 +1366,7 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
                 (v2_execute_old, v2_execute_new),
                 (v2_state_old, v2_state_new),
                 (v2_sample_state_old, v2_sample_state_new),
+                (v2_handler_init_old, v2_handler_init_new),
                 (v2_proposal_old, v2_proposal_new),
                 (v2_execute_state_old, v2_execute_state_new),
             ),

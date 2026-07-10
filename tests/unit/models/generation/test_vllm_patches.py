@@ -1,10 +1,15 @@
 # Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 
+import ast
+import copy
+import inspect
+import subprocess
 import sys
 from enum import Enum
 from pathlib import Path
-from textwrap import dedent, indent
+from textwrap import dedent
 from types import ModuleType, SimpleNamespace
+from typing import Any, Callable, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -925,234 +930,115 @@ def test_cudagraph_dispatch_metrics_source_patch_is_idempotent(
     assert manager.read_text() == manager_patched
 
 
+_VLLM_024_COMMIT = "ee0da84ab9e04ac7610e28580af62c365e898389"
+_VLLM_024_TAIL_GATE_PATHS = (
+    "config/speculative.py",
+    "v1/core/sched/output.py",
+    "v1/worker/gpu/model_runner.py",
+    "v1/worker/gpu/spec_decode/autoregressive/speculator.py",
+    "v1/worker/gpu_model_runner.py",
+)
+_RUNTIME_TAIL_GATE_ANCHOR_PATHS = {
+    "config": "config/speculative.py",
+    "scheduler_output": "v1/core/sched/output.py",
+    "v2_execute": "v1/worker/gpu/model_runner.py",
+    "v2_state": "v1/worker/gpu/model_runner.py",
+    "v2_sample_state": "v1/worker/gpu/model_runner.py",
+    "v2_handler_init": "v1/worker/gpu/model_runner.py",
+    "v2_proposal": "v1/worker/gpu/model_runner.py",
+    "v2_execute_state": "v1/worker/gpu/model_runner.py",
+    "speculator_signature": ("v1/worker/gpu/spec_decode/autoregressive/speculator.py"),
+    "speculator_k0": "v1/worker/gpu/spec_decode/autoregressive/speculator.py",
+    "v1_execute": "v1/worker/gpu_model_runner.py",
+}
+
+
+def _find_vllm_024_source_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        source_root = parent / ".external" / "vllm-v0.24.0"
+        if source_root.is_dir():
+            return source_root
+    raise AssertionError("The pinned .external/vllm-v0.24.0 checkout is required")
+
+
 def _write_vllm_024_tail_gate_sources(tmp_path: Path) -> dict[str, Path]:
-    sources = {
-        "config/speculative.py": dedent(
-            '''\
-                # dynamic speculative decoding control
-                num_speculative_tokens_per_batch_size: list[tuple[int, int, int]] | None = None
-                """Batch-size schedule used to dynamically choose speculative-token count.
-
-                Each entry is ``(range_start, range_end, num_speculative_tokens)`` with an
-                inclusive batch-size range.
-                """
-
-                # params generated in the post-init stage
-            '''
-        ),
-        "v1/core/sched/output.py": dedent(
-            """\
-                # Dynamic speculative decoding: optimal K chosen by scheduler.
-                # Number of spec tokens to schedule for the next step.
-                num_spec_tokens_to_schedule: int = 0
-
-                @classmethod
-                def make_empty(cls) -> "SchedulerOutput":
-            """
-        ),
-        "v1/worker/gpu/model_runner.py": dedent(
-            """\
-                @torch.inference_mode()
-                def execute_model(
-                    self,
-                    scheduler_output: SchedulerOutput,
-                    intermediate_tensors: IntermediateTensors | None = None,
-                    dummy_run: bool = False,
-                    skip_attn_for_dummy_run: bool = False,
-                    is_profile: bool = False,
-                ) -> ModelRunnerOutput | IntermediateTensors | None:
-                    if not dummy_run:
-            """
-        )
-        + dedent(
-            """\
-                    finished_req_ids = scheduler_output.finished_req_ids
-                    self.execute_model_state = ExecuteModelState(
-                        input_batch=input_batch,
-                        attn_metadata=attn_metadata,
-                        slot_mappings_by_layer=slot_mappings_by_layer,
-                        hidden_states=hidden_states,
-                        aux_hidden_states=aux_hidden_states,
-                        finished_req_ids=finished_req_ids,
-                    )
-            """
-        )
-        + dedent(
-            """\
-                    input_batch = self.execute_model_state.input_batch
-                    attn_metadata = self.execute_model_state.attn_metadata
-                    slot_mappings_by_layer = self.execute_model_state.slot_mappings_by_layer
-                    hidden_states = self.execute_model_state.hidden_states
-                    aux_hidden_states = self.execute_model_state.aux_hidden_states
-                    finished_req_ids = self.execute_model_state.finished_req_ids
-                    self.execute_model_state = None
-            """
-        )
-        + dedent(
-            """\
-                        draft_tokens = self.speculator.propose(
-                            input_batch,
-                            attn_metadata,
-                            slot_mappings_by_layer,
-                            spec_hidden_states,
-                            aux_hidden_states,
-                            num_sampled,
-                            num_rejected,
-                            self.req_states.last_sampled_tokens,
-                            self.req_states.next_prefill_tokens,
-                            self.sampler.sampling_states.temperature.gpu,
-                            self.sampler.sampling_states.seeds.gpu,
-                            mm_inputs=mm_inputs,
-                        )
-                        self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
-
-                    if self.num_speculative_steps > 0:
-                        # Spec-decode and diffusion LLMs both use draft tokens but the latter does
-                        # not have a speculator (i.e. self.speculator is None)
-                        self.draft_tokens_handler.set_draft_tokens(
-                            input_batch,
-                            self.req_states.draft_tokens[input_batch.idx_mapping],
-                        )
-            """
-        )
-        + dedent(
-            """\
-                class ExecuteModelState(NamedTuple):
-                    input_batch: InputBatch
-                    attn_metadata: dict[str, Any] | None
-                    slot_mappings_by_layer: dict[str, torch.Tensor] | None
-                    hidden_states: torch.Tensor | None
-                    aux_hidden_states: list[torch.Tensor] | None
-                    finished_req_ids: set[str]
-            """
-        ),
-        "v1/worker/gpu/spec_decode/autoregressive/speculator.py": dedent(
-            """\
-                def propose(
-                    self,
-                    input_batch: InputBatch,
-                    attn_metadata: dict[str, Any],
-                    slot_mappings: dict[str, torch.Tensor],
-                    # [num_tokens, hidden_size]
-                    last_hidden_states: torch.Tensor,
-                    # num_layers x [num_tokens, hidden_size]
-                    aux_hidden_states: list[torch.Tensor] | None,
-                    # [num_reqs]
-                    num_sampled: torch.Tensor,
-                    # [num_reqs]
-                    num_rejected: torch.Tensor,
-                    # [max_num_reqs]
-                    last_sampled: torch.Tensor,
-                    # [max_num_reqs]
-                    next_prefill_tokens: torch.Tensor,
-                    # [max_num_reqs]
-                    temperature: torch.Tensor,
-                    # [max_num_reqs]
-                    seeds: torch.Tensor,
-                    num_tokens_across_dp: torch.Tensor | None = None,
-                    dummy_run: bool = False,
-                    skip_attn_for_dummy_run: bool = False,
-                    mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
-                    is_profile: bool = False,
-                ) -> torch.Tensor:
-                    num_tokens = input_batch.num_tokens_after_padding
-            """
-        )
-        + dedent(
-            """\
-                    self.draft_max_seq_len = min(
-                        max_seq_len + self.num_speculative_steps, self.max_model_len
-                    )
-            """
-        )
-        + dedent(
-            """\
-                        self._prefill(
-                            num_reqs,
-                            prefill_batch_desc.num_tokens,
-                            attn_metadata,
-                            slot_mappings,
-                            num_tokens_across_dp=num_tokens_across_dp,
-                            cudagraph_runtime_mode=prefill_batch_desc.cg_mode,
-                            mm_inputs=mm_inputs,
-                        )
-
-                    if self.num_speculative_steps == 1:
-                        # Early exit.
-                        return self.draft_tokens[:num_reqs, :1]
-
-                    # Prepare the inputs for the decode steps.
-                    prepare_decode_inputs(
-            """
-        )
-        + dedent(
-            """\
-                    # Generate the remaining num_speculative_steps - 1 draft tokens.
-                    self._multi_step_decode(
-                        num_reqs,
-                        dummy_run and skip_attn_for_dummy_run,
-                        decode_batch_desc,
-                        num_tokens_across_dp,
-                    )
-
-                    return self.draft_tokens[:num_reqs]
-            """
-        ),
-        "v1/worker/gpu_model_runner.py": dedent(
-            """\
-                @torch.inference_mode()
-                def execute_model(
-                    self,
-                    scheduler_output: "SchedulerOutput",
-                    intermediate_tensors: IntermediateTensors | None = None,
-                ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:
-                    if self.execute_model_state is not None:
-                        raise RuntimeError(
-                            "State error: sample_tokens() must be called "
-                            "after execute_model() returns None."
-                        )
-
-                    if self.routed_experts_initialized:
-            """
-        ),
-    }
-    for relative_path in (
-        "config/speculative.py",
-        "v1/core/sched/output.py",
-        "v1/worker/gpu_model_runner.py",
-    ):
-        sources[relative_path] = indent(sources[relative_path], "    ")
-    v2_source, execute_state = sources["v1/worker/gpu/model_runner.py"].split(
-        "class ExecuteModelState", 1
-    )
-    v2_execute, v2_body = v2_source.split(
-        "finished_req_ids = scheduler_output.finished_req_ids", 1
-    )
-    sources["v1/worker/gpu/model_runner.py"] = (
-        indent(v2_execute, "    ")
-        + indent(
-            "finished_req_ids = scheduler_output.finished_req_ids" + v2_body,
-            "        ",
-        )
-        + "class ExecuteModelState"
-        + execute_state
-    )
-    speculator_source = sources[
-        "v1/worker/gpu/spec_decode/autoregressive/speculator.py"
-    ]
-    speculator_signature, speculator_body = speculator_source.split(
-        "self.draft_max_seq_len", 1
-    )
-    sources["v1/worker/gpu/spec_decode/autoregressive/speculator.py"] = indent(
-        speculator_signature, "    "
-    ) + indent("self.draft_max_seq_len" + speculator_body, "        ")
+    source_root = _find_vllm_024_source_root()
     paths = {}
-    for relative_path, source in sources.items():
+    for relative_path in _VLLM_024_TAIL_GATE_PATHS:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source_root),
+                "show",
+                f"{_VLLM_024_COMMIT}:vllm/{relative_path}",
+            ],
+            check=True,
+            capture_output=True,
+        )
         path = tmp_path / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
+        path.write_bytes(result.stdout)
         paths[relative_path] = path
     return paths
+
+
+def _runtime_tail_gate_patch_anchors() -> dict[str, tuple[str, str, str]]:
+    function_source = dedent(inspect.getsource(patches._patch_vllm_runtime_tail_gating))
+    function_ast = ast.parse(function_source).body[0]
+    assert isinstance(function_ast, ast.FunctionDef)
+    values = {
+        target.id: ast.literal_eval(node.value)
+        for node in function_ast.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance((target := node.targets[0]), ast.Name)
+        and (target.id.endswith("_old") or target.id.endswith("_new"))
+    }
+    anchor_names = {
+        name.removesuffix("_old") for name in values if name.endswith("_old")
+    }
+    assert anchor_names == set(_RUNTIME_TAIL_GATE_ANCHOR_PATHS)
+    assert {name.removesuffix("_new") for name in values if name.endswith("_new")} == (
+        anchor_names
+    )
+    return {
+        name: (
+            _RUNTIME_TAIL_GATE_ANCHOR_PATHS[name],
+            values[f"{name}_old"],
+            values[f"{name}_new"],
+        )
+        for name in anchor_names
+    }
+
+
+def _load_method_from_patched_source(
+    path: Path,
+    class_name: str,
+    method_name: str,
+    namespace: dict[str, object],
+) -> Callable[..., Any]:
+    source_ast = ast.parse(path.read_text())
+    class_node = next(
+        node
+        for node in source_ast.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    method_node = copy.deepcopy(
+        next(
+            node
+            for node in class_node.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+    )
+    method_node.decorator_list = []
+    method_node.returns = None
+    for node in ast.walk(method_node):
+        if isinstance(node, ast.arg):
+            node.annotation = None
+    module = ast.fix_missing_locations(ast.Module(body=[method_node], type_ignores=[]))
+    exec(compile(module, str(path), "exec"), namespace)
+    return cast(Callable[..., Any], namespace[method_name])
 
 
 def _install_tail_gate_source_fixture(
@@ -1208,7 +1094,15 @@ def test_runtime_tail_gate_patch_applies_vllm_024_contract(
     assert "num_speculative_tokens=runtime_num_spec_tokens" in model_runner
     assert "self.req_states.draft_tokens[input_batch.idx_mapping] = 0" in model_runner
     assert "draft_tokens_for_handler" in model_runner
+    assert (
+        "draft_tokens_for_handler = None\n"
+        "        if self.speculator is not None:\n"
+        "            assert self.sampler is not None"
+    ) in model_runner
     assert "_nrl_tail_gate_metrics" in model_runner
+    assert "vllm:spec_decode_tail_gate_activation_batch_sum" in model_runner
+    assert "vllm:spec_decode_tail_gate_activation_sequence_length_sum" in model_runner
+    assert "vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps" in model_runner
     assert "vllm:spec_decode_tail_gate_decode_active_requests_sum" in model_runner
 
     speculator = paths[
@@ -1224,9 +1118,276 @@ def test_runtime_tail_gate_patch_applies_vllm_024_contract(
 
     v1_model_runner = paths["v1/worker/gpu_model_runner.py"].read_text()
     assert "_nrl_tail_gate_metrics" in v1_model_runner
+    assert "vllm:spec_decode_tail_gate_activation_batch_sum" in v1_model_runner
+    assert (
+        "vllm:spec_decode_tail_gate_activation_sequence_length_sum" in v1_model_runner
+    )
+    assert "vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps" in v1_model_runner
     assert "vllm:spec_decode_tail_gate_decode_active_requests_sum" in v1_model_runner
     assert "num_spec_tokens_to_schedule" in v1_model_runner
-    assert "propose_draft_token_ids" not in v1_model_runner
+    _v1_path, _v1_old, v1_new = _runtime_tail_gate_patch_anchors()["v1_execute"]
+    assert v1_new in v1_model_runner
+    assert "propose_draft_token_ids" not in v1_new
+
+
+def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_events_and_runtime_k(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    class StopAfterTelemetry(RuntimeError):
+        pass
+
+    def scheduler_output(runtime_k: int, just_activated: bool) -> SimpleNamespace:
+        return SimpleNamespace(
+            num_spec_tokens_to_schedule=runtime_k,
+            tail_gate_just_activated=just_activated,
+            tail_gate_active_requests=7,
+            tail_gate_decode_active_requests=5,
+            tail_gate_mean_sequence_length=41.5,
+            tail_gate_predicted_speedup_sum=1.25,
+            tail_gate_predicted_speedup_count=1,
+            tail_gate_expected_accept_length=2.75,
+            tail_gate_state="OFF",
+        )
+
+    runners_and_methods = []
+    v2_execute = _load_method_from_patched_source(
+        paths["v1/worker/gpu/model_runner.py"],
+        "GPUModelRunner",
+        "execute_model",
+        {},
+    )
+    v2_runner = SimpleNamespace(
+        speculative_config=SimpleNamespace(
+            sd_tail_gate_mode="threshold",
+            sd_tail_gate_off_mode="advance_only",
+            method="eagle3",
+        ),
+        num_speculative_steps=5,
+        update_pp_decode_requests=MagicMock(side_effect=StopAfterTelemetry),
+    )
+    runners_and_methods.append((v2_runner, v2_execute))
+
+    v1_execute = _load_method_from_patched_source(
+        paths["v1/worker/gpu_model_runner.py"],
+        "GPUModelRunner",
+        "execute_model",
+        {},
+    )
+
+    class V1Runner:
+        execute_model_state = None
+        speculative_config = SimpleNamespace(sd_tail_gate_mode="threshold")
+        num_spec_tokens = 5
+
+        @property
+        def routed_experts_initialized(self) -> bool:
+            raise StopAfterTelemetry
+
+    runners_and_methods.append((V1Runner(), v1_execute))
+
+    for runner, execute_model in runners_and_methods:
+        with pytest.raises(StopAfterTelemetry):
+            execute_model(runner, scheduler_output(0, False))
+        metrics = runner._nrl_tail_gate_metrics
+        assert metrics["vllm:spec_decode_tail_gate_decisions"] == 1.0
+        assert metrics.get("vllm:spec_decode_tail_gate_activations", 0.0) == 0.0
+        assert (
+            metrics.get("vllm:spec_decode_tail_gate_activation_batch_sum", 0.0) == 0.0
+        )
+        assert (
+            metrics.get(
+                "vllm:spec_decode_tail_gate_activation_sequence_length_sum", 0.0
+            )
+            == 0.0
+        )
+        assert metrics["vllm:spec_decode_tail_gate_k_0_steps"] == 1.0
+
+        with pytest.raises(StopAfterTelemetry):
+            execute_model(runner, scheduler_output(5, True))
+        assert metrics["vllm:spec_decode_tail_gate_decisions"] == 2.0
+        assert metrics["vllm:spec_decode_tail_gate_activations"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_activation_batch_sum"] == 7.0
+        assert (
+            metrics["vllm:spec_decode_tail_gate_activation_sequence_length_sum"] == 41.5
+        )
+        assert metrics["vllm:spec_decode_tail_gate_k_0_steps"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_k_5_steps"] == 1.0
+
+        with pytest.raises(StopAfterTelemetry):
+            execute_model(runner, scheduler_output(5, False))
+        assert metrics["vllm:spec_decode_tail_gate_decisions"] == 3.0
+        assert metrics["vllm:spec_decode_tail_gate_activations"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_activation_batch_sum"] == 7.0
+        assert (
+            metrics["vllm:spec_decode_tail_gate_activation_sequence_length_sum"] == 41.5
+        )
+        assert metrics["vllm:spec_decode_tail_gate_k_5_steps"] == 2.0
+
+
+def test_runtime_tail_gate_k0_executes_pinned_vllm_024_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    class CUDAGraphMode(Enum):
+        NONE = 0
+        FULL = 1
+
+    prepare_prefill_inputs = MagicMock()
+    prepare_decode_inputs = MagicMock()
+    dispatch_cg_and_sync_dp = MagicMock(
+        side_effect=lambda _manager, _num_reqs, num_tokens, *args, **kwargs: (
+            SimpleNamespace(cg_mode=CUDAGraphMode.NONE, num_tokens=num_tokens),
+            None,
+        )
+    )
+    propose = _load_method_from_patched_source(
+        paths["v1/worker/gpu/spec_decode/autoregressive/speculator.py"],
+        "AutoRegressiveSpeculator",
+        "propose",
+        {
+            "torch": torch,
+            "CUDAGraphMode": CUDAGraphMode,
+            "dispatch_cg_and_sync_dp": dispatch_cg_and_sync_dp,
+            "get_uniform_token_count": MagicMock(return_value=6),
+            "prepare_prefill_inputs": prepare_prefill_inputs,
+            "prepare_decode_inputs": prepare_decode_inputs,
+        },
+    )
+
+    input_batch = SimpleNamespace(
+        num_tokens_after_padding=12,
+        num_tokens=12,
+        num_reqs=2,
+        num_scheduled_tokens=torch.tensor([6, 6]),
+        seq_lens_cpu_upper_bound=torch.tensor([8, 10]),
+        seq_lens=torch.tensor([8, 10]),
+        idx_mapping=torch.tensor([0, 2]),
+        req_ids=["request-0", "request-2"],
+        query_start_loc=torch.tensor([0, 6, 12]),
+    )
+    speculator = SimpleNamespace(
+        num_speculative_steps=5,
+        max_model_len=64,
+        max_num_reqs=3,
+        method="eagle3",
+        hidden_states=torch.zeros((12, 4)),
+        draft_tokens=torch.arange(15).reshape(3, 5),
+        last_token_indices=torch.zeros(3, dtype=torch.int64),
+        current_draft_step=torch.tensor(0, dtype=torch.int64),
+        input_buffers=SimpleNamespace(),
+        prefill_cudagraph_manager=None,
+        decode_cudagraph_manager=None,
+        dp_size=1,
+        dp_rank=0,
+        advance_draft_positions=True,
+        supports_mm_inputs=False,
+        _copy_request_inputs=MagicMock(),
+        _prefill=MagicMock(),
+        _multi_step_decode=MagicMock(),
+    )
+    proposals = []
+    runtime_kwargs = []
+
+    def recording_propose(*args: Any, **kwargs: Any) -> Any:
+        runtime_kwargs.append(kwargs.copy())
+        proposal = propose(speculator, *args, **kwargs)
+        proposals.append(proposal)
+        return proposal
+
+    speculator.propose = recording_propose
+
+    class ModelRunnerOutput:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class AsyncOutput:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    sample_tokens = _load_method_from_patched_source(
+        paths["v1/worker/gpu/model_runner.py"],
+        "GPUModelRunner",
+        "sample_tokens",
+        {
+            "AsyncOutput": AsyncOutput,
+            "ModelRunnerOutput": ModelRunnerOutput,
+        },
+    )
+    fixed_draft_tokens = torch.full((3, 5), -1, dtype=torch.int64)
+    sampled_token_ids = torch.tensor([[4], [5]])
+    num_sampled = torch.ones(2, dtype=torch.int64)
+    num_rejected = torch.zeros(2, dtype=torch.int64)
+    draft_tokens_handler = MagicMock()
+    runner = SimpleNamespace(
+        execute_model_state=SimpleNamespace(
+            input_batch=input_batch,
+            attn_metadata={},
+            slot_mappings_by_layer={},
+            hidden_states=torch.zeros((12, 4)),
+            aux_hidden_states=None,
+            num_spec_tokens_to_schedule=0,
+            finished_req_ids=set(),
+        ),
+        is_last_pp_rank=True,
+        pp_handler=None,
+        sample=MagicMock(
+            return_value=(
+                SimpleNamespace(sampled_token_ids=sampled_token_ids),
+                num_sampled,
+                num_rejected,
+            )
+        ),
+        prompt_logprobs_worker=SimpleNamespace(
+            compute_prompt_logprobs=MagicMock(return_value={})
+        ),
+        model=SimpleNamespace(compute_logits=MagicMock()),
+        req_states=SimpleNamespace(
+            all_token_ids=SimpleNamespace(gpu=torch.zeros((3, 1))),
+            num_computed_tokens=SimpleNamespace(gpu=torch.zeros(3)),
+            prompt_len=SimpleNamespace(np=[1, 1, 1]),
+            last_sampled_tokens=torch.zeros(3, dtype=torch.int64),
+            next_prefill_tokens=torch.zeros(3, dtype=torch.int64),
+            draft_tokens=fixed_draft_tokens,
+        ),
+        main_stream=object(),
+        output_copy_stream=object(),
+        speculator=speculator,
+        postprocess_sampled=MagicMock(),
+        sampler=SimpleNamespace(
+            sampling_states=SimpleNamespace(
+                temperature=SimpleNamespace(gpu=torch.ones(3)),
+                seeds=SimpleNamespace(gpu=torch.zeros(3, dtype=torch.int64)),
+            )
+        ),
+        num_speculative_steps=5,
+        draft_tokens_handler=draft_tokens_handler,
+        kv_connector=SimpleNamespace(post_forward=MagicMock(return_value=None)),
+    )
+
+    sample_tokens(runner, None)
+
+    speculator._prefill.assert_called_once()
+    prepare_decode_inputs.assert_not_called()
+    speculator._multi_step_decode.assert_not_called()
+    assert runtime_kwargs == [{"num_speculative_tokens": 0, "mm_inputs": None}]
+    assert len(proposals) == 1
+    assert tuple(proposals[0].shape) == (2, 0)
+    assert torch.count_nonzero(fixed_draft_tokens[input_batch.idx_mapping]) == 0
+    assert torch.all(fixed_draft_tokens[1] == -1)
+    draft_tokens_handler.set_draft_tokens.assert_called_once()
+    published_input, published_drafts = (
+        draft_tokens_handler.set_draft_tokens.call_args.args
+    )
+    assert published_input is input_batch
+    assert published_drafts is proposals[0]
 
 
 def test_runtime_tail_gate_patch_is_idempotent(
@@ -1244,34 +1405,67 @@ def test_runtime_tail_gate_patch_is_idempotent(
     } == (patched)
 
 
+def test_runtime_tail_gate_patch_completes_mixed_old_new_installation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    anchors = _runtime_tail_gate_patch_anchors()
+    for index, (_name, (relative_path, old_anchor, new_anchor)) in enumerate(
+        sorted(anchors.items())
+    ):
+        if index % 2 == 0:
+            path = paths[relative_path]
+            source = path.read_text()
+            assert source.count(old_anchor) == 1
+            path.write_text(source.replace(old_anchor, new_anchor, 1))
+
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    for relative_path, old_anchor, new_anchor in anchors.values():
+        source = paths[relative_path].read_text()
+        assert old_anchor not in source
+        assert source.count(new_anchor) == 1
+    fully_patched = {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    }
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+    assert {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    } == fully_patched
+
+
 @pytest.mark.parametrize(
-    ("changed_path", "old_anchor"),
+    ("anchor_name", "anchor_state"),
     [
-        ("config/speculative.py", "# params generated in the post-init stage"),
-        (
-            "v1/core/sched/output.py",
-            '@classmethod\n    def make_empty(cls) -> "SchedulerOutput":',
-        ),
-        ("v1/worker/gpu/model_runner.py", "if not dummy_run:"),
-        (
-            "v1/worker/gpu/spec_decode/autoregressive/speculator.py",
-            "if self.num_speculative_steps == 1:",
-        ),
-        ("v1/worker/gpu_model_runner.py", "if self.routed_experts_initialized:"),
+        (anchor_name, anchor_state)
+        for anchor_name in sorted(_runtime_tail_gate_patch_anchors())
+        for anchor_state in ("old", "new")
     ],
+    ids=lambda value: value,
 )
 def test_runtime_tail_gate_patch_validates_all_sources_before_writing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    changed_path: str,
-    old_anchor: str,
+    anchor_name: str,
+    anchor_state: str,
 ) -> None:
     paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
-    changed_source = (
-        paths[changed_path].read_text().replace(old_anchor, f"changed {old_anchor}", 1)
+    changed_path, old_anchor, new_anchor = _runtime_tail_gate_patch_anchors()[
+        anchor_name
+    ]
+    source = paths[changed_path].read_text()
+    if anchor_state == "new":
+        assert source.count(old_anchor) == 1
+        source = source.replace(old_anchor, new_anchor, 1)
+    anchor = old_anchor if anchor_state == "old" else new_anchor
+    assert source.count(anchor) == 1
+    first_line_end = anchor.index("\n")
+    changed_anchor = (
+        anchor[:first_line_end] + "  # altered anchor" + anchor[first_line_end:]
     )
-    assert changed_source != paths[changed_path].read_text()
-    paths[changed_path].write_text(changed_source)
+    assert anchor not in changed_anchor
+    paths[changed_path].write_text(source.replace(anchor, changed_anchor, 1))
     original = {
         relative_path: path.read_text() for relative_path, path in paths.items()
     }
