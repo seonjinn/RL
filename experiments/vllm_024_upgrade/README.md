@@ -80,6 +80,43 @@ commit. The summary reports generation and E2E time/throughput speedups,
 acceptance rate, mean accepted length, job IDs, W&B links, and reward/response
 length/KL health gates.
 
+## Tail-Gated Eagle-3 Matrix on Lyris
+
+The tail-gated matrix keeps the Qwen3-30B-A3B and Qwen3-32B four-node upstream
+performance recipes matched. It exposes only three Model Runner V1 arms
+(`baseline_v1`, `always_on_v1_k5`, `stock_dynamic_v1`) and four Model Runner V2
+arms (`baseline_v2`, `always_on_v2_k5`, `fastrl_threshold_v2_k5`,
+`efficient_roofline_v2_k5`). V1 uses PIECEWISE graphs; V2 uses
+FULL_AND_PIECEWISE graphs. Do not compare performance across these runner
+cohorts.
+
+Render or validate the complete matrix before any submit:
+
+```bash
+experiments/vllm_024_upgrade/submit_tail_gated_specdec_step20.sh dry-run all all
+experiments/vllm_024_upgrade/submit_tail_gated_specdec_step20.sh test-only all all
+```
+
+The launcher pins 64 prompts by 32 generations, train GBS 512, 4,096-token
+sequence and output limits, a 4,128-token engine limit, and a 16,384-token
+scheduler budget. It records runner, graph, gate, calibration, W&B, container,
+commit, recipe, and Slurm provenance in the Lustre `submissions.tsv` manifest.
+`submit` runs Slurm validation before `sbatch`, requires a clean and already
+pushed `sna/` branch, and never pushes a remote itself.
+
+Create a roofline input from measured component latencies before running the
+roofline arm. The CSV must carry a single model/TP/cluster/container identity,
+the EfficientRollout constants, and `B,S,K,T_T,T_D,T_V` columns:
+
+```bash
+uv run --no-sync python experiments/vllm_024_upgrade/calibrate_tail_gate.py \
+  --input /lustre/.../tail_gate_measurements.csv \
+  --output-dir /lustre/.../tail_gate_calibrations
+```
+
+The converter writes a deterministic EfficientRollout-compatible JSON and a
+SHA256 sidecar for each calibration identity.
+
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 
 The parity gate runs Qwen3-32B target-only and Eagle-3 K5 through the NeMo-RL
