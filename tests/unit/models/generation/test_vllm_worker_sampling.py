@@ -91,6 +91,31 @@ def test_sync_generate_caps_outputs_below_specdec_context_headroom(
     assert [params["max_tokens"] for params in sampling_params] == [2, 4]
 
 
+@pytest.mark.parametrize("input_length", [10, 11])
+def test_sync_generate_uses_positive_limit_when_output_context_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    input_length: int,
+) -> None:
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+    worker = _make_worker()
+    worker.cfg["_output_max_model_len"] = 10
+    worker.cfg["vllm_cfg"]["max_model_len"] = 15
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.ones((1, input_length), dtype=torch.long),
+            "input_lengths": torch.tensor([input_length], dtype=torch.long),
+            "stop_strings": [None],
+        }
+    )
+
+    with pytest.raises(_GenerationCaptured):
+        worker.generate(data)
+
+    sampling_params = worker.llm.sampling_params
+    assert sampling_params[0]["max_tokens"] == 1
+
+
 def test_sync_generate_text_preserves_per_prompt_stop_strings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

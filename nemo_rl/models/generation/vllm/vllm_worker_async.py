@@ -216,6 +216,8 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         self.server_thread = None
         self.base_url = None
         self.http_server = None
+        self._vllm_metrics_logger_stop_event: threading.Event | None = None
+        self._vllm_metrics_logger_thread: threading.Thread | None = None
 
         super().__init__(
             config,
@@ -1093,9 +1095,9 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                     device=input_ids_single_row.device,
                 )
 
-                # Not truncated since no generation was attempted (length constraint)
+                # Context exhaustion is an overlong result even without generated tokens.
                 truncated_tensor = torch.tensor(
-                    [False], dtype=torch.bool, device=input_ids_single_row.device
+                    [True], dtype=torch.bool, device=input_ids_single_row.device
                 )
 
                 result_batch = BatchedDataDict[GenerationOutputSpec](
@@ -1550,6 +1552,11 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""
         try:
+            if self._vllm_metrics_logger_thread is not None:
+                assert self._vllm_metrics_logger_stop_event is not None
+                self._vllm_metrics_logger_stop_event.set()
+                self._vllm_metrics_logger_thread.join()
+
             if self.llm is not None:
                 # Clean up extension resources (e.g., ZMQ sockets)
                 await self.llm.collective_rpc("cleanup", args=tuple())

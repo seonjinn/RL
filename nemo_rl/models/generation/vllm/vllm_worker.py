@@ -730,9 +730,15 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                     else None
                 ),
                 max_new_tokens=(
-                    min(
-                        self.cfg["max_new_tokens"],
-                        max(0, int(output_max_model_len) - int(input_lengths[index])),
+                    max(
+                        1,
+                        min(
+                            self.cfg["max_new_tokens"],
+                            max(
+                                0,
+                                int(output_max_model_len) - int(input_lengths[index]),
+                            ),
+                        ),
                     )
                     if output_max_model_len is not None
                     else None
