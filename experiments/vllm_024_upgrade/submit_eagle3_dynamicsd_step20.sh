@@ -213,11 +213,18 @@ submit_one() {
       draft_k=32
       ;;
     pard_k5|pard_k16)
-      if [[ "${model}" != "qwen30ba3b" ]]; then
-        echo "ERROR: ${variant} currently supports only qwen30ba3b" >&2
-        exit 2
-      fi
-      draft_model="${QWEN30_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
+      case "${model}" in
+        qwen30ba3b)
+          draft_model="${QWEN30_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
+          ;;
+        qwen32b)
+          draft_model="${QWEN32_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
+          ;;
+        *)
+          echo "ERROR: ${variant} does not have a qualified PARD checkpoint for ${model}" >&2
+          exit 2
+          ;;
+      esac
       ;;
   esac
   if [[ -z "${resolved_max_num_batched_tokens}" ]] \

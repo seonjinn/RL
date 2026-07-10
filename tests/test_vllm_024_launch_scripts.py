@@ -627,6 +627,17 @@ def test_dynamicsd_launcher_renders_pard_with_graph_patch() -> None:
     assert "policy.generation.vllm_kwargs.max_num_batched_tokens=32768" in output
 
 
+def test_dynamicsd_launcher_renders_qwen32_pard_with_target_recipe_topology() -> None:
+    output = _dry_run_dynamicsd("qwen32b", "pard_k5")
+
+    assert "grpo-qwen3-32b-4n4g.yaml" in output
+    assert "speculative_config.method=draft_model" in output
+    assert "speculative_config.num_speculative_tokens=5" in output
+    assert "speculative_config.draft_tensor_parallel_size=1" in output
+    assert "models--amd--PARD-Qwen3-0.6B" in output
+    assert "cluster.segment_size=4" in output
+
+
 def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
     output = _dry_run_dynamicsd("qwen235b", "eagle3_k9")
 
