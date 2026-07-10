@@ -52,6 +52,57 @@ def _make_collective_update_extension(backend):
 
 
 @pytest.mark.vllm
+def test_get_cudagraph_dispatch_metrics_separates_target_and_draft() -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext.model_runner = SimpleNamespace(
+        cudagraph_dispatcher=SimpleNamespace(
+            _nrl_cudagraph_dispatch_metrics={
+                "calls_none": 2,
+                "calls_piecewise": 8,
+            }
+        ),
+        drafter=SimpleNamespace(
+            cudagraph_dispatcher=SimpleNamespace(
+                _nrl_cudagraph_dispatch_metrics={
+                    "calls_none": 1,
+                    "calls_piecewise": 9,
+                }
+            )
+        ),
+    )
+
+    assert ext.get_cudagraph_dispatch_metrics() == {
+        "vllm:spec_decode_cudagraph_target_calls_none": 2.0,
+        "vllm:spec_decode_cudagraph_target_calls_piecewise": 8.0,
+        "vllm:spec_decode_cudagraph_draft_calls_none": 1.0,
+        "vllm:spec_decode_cudagraph_draft_calls_piecewise": 9.0,
+    }
+
+
+@pytest.mark.vllm
+def test_get_cudagraph_dispatch_metrics_omits_non_neural_suffix_drafter() -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext.model_runner = SimpleNamespace(
+        cudagraph_dispatcher=SimpleNamespace(
+            _nrl_cudagraph_dispatch_metrics={"calls_piecewise": 3}
+        ),
+        drafter=SimpleNamespace(),
+    )
+
+    assert ext.get_cudagraph_dispatch_metrics() == {
+        "vllm:spec_decode_cudagraph_target_calls_piecewise": 3.0,
+    }
+
+
+@pytest.mark.vllm
 def test_prepare_refit_info_rejects_empty_weight_manifest() -> None:
     from nemo_rl.models.generation.vllm.vllm_backend import (
         VllmInternalWorkerExtension,

@@ -182,6 +182,24 @@ class VllmInternalWorkerExtension:
     _observed_update_weight_names: set[str] | None
     _draft_weights_updated: bool
 
+    def get_cudagraph_dispatch_metrics(self) -> dict[str, float]:
+        """Return cumulative target and neural-drafter dispatch counters."""
+        metrics: dict[str, float] = {}
+        target_dispatcher = getattr(self.model_runner, "cudagraph_dispatcher", None)
+        drafter = getattr(self.model_runner, "drafter", None)
+        draft_dispatcher = getattr(drafter, "cudagraph_dispatcher", None)
+
+        for role, dispatcher in (
+            ("target", target_dispatcher),
+            ("draft", draft_dispatcher),
+        ):
+            counters = getattr(dispatcher, "_nrl_cudagraph_dispatch_metrics", None)
+            if not counters:
+                continue
+            for name, value in counters.items():
+                metrics[f"vllm:spec_decode_cudagraph_{role}_{name}"] = float(value)
+        return metrics
+
     def bind_numa(self) -> bool:
         """Pin this TP worker to its GPU's NUMA-local CPUs/memory.
 

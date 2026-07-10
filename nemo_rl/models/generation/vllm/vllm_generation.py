@@ -551,7 +551,13 @@ class VllmGeneration(GenerationInterface):
                 "Previous snapshot will be overwritten.",
                 RuntimeWarning,
             )
-        if not self.cfg.get("vllm_kwargs", {}).get("speculative_config"):
+        if (
+            not self.cfg.get("vllm_kwargs", {}).get("speculative_config")
+            and os.environ.get(
+                "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false"
+            ).lower()
+            != "true"
+        ):
             self._step_metrics_snapshot = {}
             return
         self._step_metrics_snapshot = self._get_raw_spec_counters()
@@ -574,7 +580,13 @@ class VllmGeneration(GenerationInterface):
             )
             return {}
 
-        if not self.cfg.get("vllm_kwargs", {}).get("speculative_config"):
+        if (
+            not self.cfg.get("vllm_kwargs", {}).get("speculative_config")
+            and os.environ.get(
+                "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false"
+            ).lower()
+            != "true"
+        ):
             self._step_metrics_snapshot = None
             return {}
 

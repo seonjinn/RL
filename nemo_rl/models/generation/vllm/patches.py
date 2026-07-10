@@ -14,6 +14,7 @@
 
 import os
 from contextlib import contextmanager
+from functools import wraps
 from importlib.util import find_spec
 from typing import Any
 
@@ -99,6 +100,7 @@ def _patch_vllm_init_workers_ray(
         "HUGGING_FACE_HUB_TOKEN",
         "NCCL_CUMEM_ENABLE",
         "NCCL_NVLS_ENABLE",
+        "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS",
         "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH",
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
         *(extra_env_vars or []),
@@ -756,6 +758,127 @@ def _patch_vllm_piecewise_specdec_cudagraph_alignment(logger) -> None:
     logger.info("Successfully aligned PIECEWISE SpecDec CUDA-graph sizes.")
 
 
+def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
+    """Wrap a vLLM CUDA-graph dispatcher with cumulative coverage counters."""
+    if getattr(dispatcher_cls, "_nrl_cudagraph_dispatch_metrics_installed", False):
+        return
+
+    original_dispatch = dispatcher_cls.dispatch
+
+    @wraps(original_dispatch)
+    def dispatch_with_metrics(self, *args, **kwargs):
+        runtime_mode, batch_descriptor = original_dispatch(self, *args, **kwargs)
+        num_tokens = kwargs.get("num_tokens", args[0] if args else None)
+        if not isinstance(num_tokens, int):
+            raise RuntimeError(
+                "Could not determine num_tokens while recording CUDA-graph "
+                "dispatch metrics."
+            )
+
+        runtime_mode_name = getattr(runtime_mode, "name", str(runtime_mode)).lower()
+        counters = getattr(self, "_nrl_cudagraph_dispatch_metrics", None)
+        if counters is None:
+            counters = {}
+            self._nrl_cudagraph_dispatch_metrics = counters
+
+        def increment(name: str, value: int = 1) -> None:
+            counters[name] = counters.get(name, 0) + value
+
+        increment(f"calls_{runtime_mode_name}")
+        increment(f"unpadded_tokens_{runtime_mode_name}", num_tokens)
+        increment(
+            f"padded_tokens_{runtime_mode_name}",
+            int(getattr(batch_descriptor, "num_tokens", num_tokens)),
+        )
+
+        if runtime_mode_name == "none":
+            if not getattr(self, "keys_initialized", False):
+                fallback_reason = "uninitialized"
+            elif (
+                getattr(
+                    getattr(self, "cudagraph_mode", None),
+                    "name",
+                    str(getattr(self, "cudagraph_mode", "none")),
+                ).lower()
+                == "none"
+            ):
+                fallback_reason = "disabled"
+            else:
+                max_capture_size = getattr(
+                    getattr(self, "compilation_config", None),
+                    "max_cudagraph_capture_size",
+                    None,
+                )
+                if max_capture_size is None:
+                    fallback_reason = "missing_capture_limit"
+                elif num_tokens > max_capture_size:
+                    fallback_reason = "oversize"
+                else:
+                    valid_modes = kwargs.get(
+                        "valid_modes", args[4] if len(args) > 4 else None
+                    )
+                    invalid_modes = kwargs.get(
+                        "invalid_modes", args[5] if len(args) > 5 else None
+                    )
+                    valid_mode_names = (
+                        {
+                            getattr(mode, "name", str(mode)).lower()
+                            for mode in valid_modes
+                        }
+                        if valid_modes is not None
+                        else {"none", "piecewise", "full"}
+                    )
+                    if invalid_modes is not None:
+                        valid_mode_names -= {
+                            getattr(mode, "name", str(mode)).lower()
+                            for mode in invalid_modes
+                        }
+                    fallback_reason = (
+                        "mode_restricted"
+                        if valid_mode_names <= {"none"}
+                        else "missing_key"
+                    )
+            increment(f"fallback_{fallback_reason}")
+
+        return runtime_mode, batch_descriptor
+
+    setattr(dispatcher_cls, "dispatch", dispatch_with_metrics)
+    setattr(dispatcher_cls, "_nrl_cudagraph_dispatch_metrics_installed", True)
+
+
+def _patch_vllm_cudagraph_dispatch_metrics(logger) -> None:
+    """Install environment-gated dispatch counters in every vLLM worker."""
+    file_to_patch = _get_vllm_file("v1/cudagraph_dispatcher.py")
+    marker = "# NRL_CUDAGRAPH_DISPATCH_METRICS_PATCH"
+    source_suffix = (
+        "\n\n"
+        f"{marker}\n"
+        "import os as _nrl_os\n"
+        "if _nrl_os.environ.get(\n"
+        "    'NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS', 'false'\n"
+        ").lower() == 'true':\n"
+        "    from nemo_rl.models.generation.vllm.patches import (\n"
+        "        _install_vllm_cudagraph_dispatch_metrics,\n"
+        "    )\n"
+        "    _install_vllm_cudagraph_dispatch_metrics(CudagraphDispatcher)\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if marker not in content:
+            write_back(content + source_suffix)
+            logger.info("Installed CUDA-graph dispatch metrics source hook.")
+        else:
+            logger.info("CUDA-graph dispatch metrics source hook already installed.")
+
+    if (
+        os.environ.get("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false").lower()
+        == "true"
+    ):
+        from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+
+        _install_vllm_cudagraph_dispatch_metrics(CudagraphDispatcher)
+
+
 def _patch_vllm_hermes_tool_parser_thread_safety(logger) -> None:
     """Patch Hermes2ProToolParser.__init__ to cache tokenizer calls.
 
@@ -894,6 +1017,12 @@ def _apply_vllm_patches(
 
     _patch_vllm_init_workers_ray(py_executable, extra_env_vars)
     patch_logger.info("Successfully patched vllm _init_workers_ray.")
+
+    if (
+        os.environ.get("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false").lower()
+        == "true"
+    ):
+        _patch_vllm_cudagraph_dispatch_metrics(patch_logger)
 
     if speculative_config:
         _patch_vllm_piecewise_specdec_cudagraph_alignment(patch_logger)

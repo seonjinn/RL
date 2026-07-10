@@ -380,6 +380,24 @@ def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_sizes() -> None:
     ) in output
 
 
+def test_dynamicsd_launcher_enables_cudagraph_dispatch_metrics() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "pard_k5",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="cudagraph-dispatch-metrics-test",
+        ATTEMPT_ID="attempt-1",
+        CUDAGRAPH_DISPATCH_METRICS="true",
+    )
+
+    assert "vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true" in output
+    assert "observability_config.cudagraph_metrics=true" in output
+
+
 def test_dynamicsd_launcher_renders_matched_scheduler_limits() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
@@ -666,9 +684,7 @@ def test_dynamicsd_launcher_renders_qwen30_dflash_k15() -> None:
     assert "speculative_config.num_speculative_tokens=15" in output
     assert "speculative_config.draft_tensor_parallel_size=1" in output
     assert "speculative_config.attention_backend=FLASH_ATTN" in output
-    assert (
-        "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash" in output
-    )
+    assert "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash" in output
     assert "snapshots/RESOLVED_FROM_REFS_MAIN" in output
     assert "speculative_config.rejection_sample_method=standard" in output
     assert "speculative_config.draft_sample_method=probabilistic" in output

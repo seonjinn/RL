@@ -28,6 +28,7 @@ OUTPUT_MAX_MODEL_LEN="${OUTPUT_MAX_MODEL_LEN:-}"
 SPECDEC_CONTEXT_HEADROOM_TOKENS="${SPECDEC_CONTEXT_HEADROOM_TOKENS:-0}"
 MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
 CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES:-}"
+CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-false}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -54,6 +55,10 @@ for numeric_override in \
 done
 if [[ ! "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" =~ ^[0-9]+$ ]]; then
   echo "ERROR: SPECDEC_CONTEXT_HEADROOM_TOKENS must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS}" != "false" ]]; then
+  echo "ERROR: CUDAGRAPH_DISPATCH_METRICS must be true or false" >&2
   exit 2
 fi
 if [[ -n "${CUDAGRAPH_CAPTURE_SIZES}" \
@@ -335,6 +340,12 @@ submit_one() {
   if [[ -n "${CUDAGRAPH_CAPTURE_SIZES}" ]]; then
     overrides+=(
       "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CUDAGRAPH_CAPTURE_SIZES}"
+    )
+  fi
+  if [[ "${CUDAGRAPH_DISPATCH_METRICS}" == "true" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+      "++policy.generation.vllm_kwargs.observability_config.cudagraph_metrics=true"
     )
   fi
   if [[ -n "${resolved_max_num_batched_tokens}" ]]; then

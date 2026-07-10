@@ -650,3 +650,41 @@ def test_compute_spec_decode_metrics():
     assert math.isclose(metrics["vllm/spec_acceptance_length"], 3.4, rel_tol=1e-6)
     # acceptance_rate = accepted / draft_tokens = 240 / 300 = 0.8
     assert math.isclose(metrics["vllm/spec_acceptance_rate"], 0.8, rel_tol=1e-6)
+
+
+def test_compute_spec_decode_metrics_includes_cudagraph_coverage() -> None:
+    start_counters = {
+        "vllm:spec_decode_cudagraph_target_calls_none": 10.0,
+        "vllm:spec_decode_cudagraph_target_calls_piecewise": 20.0,
+        "vllm:spec_decode_cudagraph_target_unpadded_tokens_none": 100.0,
+        "vllm:spec_decode_cudagraph_target_unpadded_tokens_piecewise": 200.0,
+        "vllm:spec_decode_cudagraph_target_padded_tokens_piecewise": 240.0,
+        "vllm:spec_decode_cudagraph_target_fallback_missing_key": 10.0,
+        "vllm:spec_decode_cudagraph_draft_calls_full": 5.0,
+        "vllm:spec_decode_cudagraph_draft_unpadded_tokens_full": 50.0,
+        "vllm:spec_decode_cudagraph_draft_padded_tokens_full": 50.0,
+    }
+    end_counters = {
+        "vllm:spec_decode_cudagraph_target_calls_none": 12.0,
+        "vllm:spec_decode_cudagraph_target_calls_piecewise": 28.0,
+        "vllm:spec_decode_cudagraph_target_unpadded_tokens_none": 120.0,
+        "vllm:spec_decode_cudagraph_target_unpadded_tokens_piecewise": 280.0,
+        "vllm:spec_decode_cudagraph_target_padded_tokens_piecewise": 336.0,
+        "vllm:spec_decode_cudagraph_target_fallback_missing_key": 12.0,
+        "vllm:spec_decode_cudagraph_draft_calls_full": 15.0,
+        "vllm:spec_decode_cudagraph_draft_unpadded_tokens_full": 150.0,
+        "vllm:spec_decode_cudagraph_draft_padded_tokens_full": 150.0,
+    }
+
+    metrics = compute_spec_decode_metrics(start_counters, end_counters)
+
+    assert metrics["vllm/cudagraph_target_total_calls"] == 10.0
+    assert metrics["vllm/cudagraph_target_graph_calls"] == 8.0
+    assert metrics["vllm/cudagraph_target_eager_calls"] == 2.0
+    assert math.isclose(metrics["vllm/cudagraph_target_graph_call_ratio"], 0.8)
+    assert math.isclose(metrics["vllm/cudagraph_target_eager_call_ratio"], 0.2)
+    assert math.isclose(metrics["vllm/cudagraph_target_graph_token_ratio"], 0.8)
+    assert math.isclose(metrics["vllm/cudagraph_target_eager_token_ratio"], 0.2)
+    assert math.isclose(metrics["vllm/cudagraph_target_padding_overhead_ratio"], 0.2)
+    assert metrics["vllm/cudagraph_target_fallback_missing_key"] == 2.0
+    assert metrics["vllm/cudagraph_draft_graph_call_ratio"] == 1.0

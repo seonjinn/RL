@@ -643,6 +643,23 @@ class BaseVllmGenerationWorker:
                     metrics[metric.name] = metric.values
                 elif hasattr(metric, "value"):
                     metrics[metric.name] = metric.value
+            if (
+                os.environ.get(
+                    "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false"
+                ).lower()
+                == "true"
+            ):
+                worker_metrics = self.llm.collective_rpc(
+                    "get_cudagraph_dispatch_metrics", args=tuple()
+                )
+                for report in worker_metrics:
+                    for name, value in report.items():
+                        existing_value = metrics.get(name, 0.0)
+                        if isinstance(existing_value, list):
+                            raise RuntimeError(
+                                f"CUDA-graph counter {name} conflicts with a list metric."
+                            )
+                        metrics[name] = existing_value + value
         return metrics
 
 

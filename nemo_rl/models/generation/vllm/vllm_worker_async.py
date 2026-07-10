@@ -16,6 +16,7 @@ import asyncio
 import copy
 import gc
 import logging
+import os
 import threading
 import time
 import uuid
@@ -461,6 +462,46 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                     "MTP draft weight loading failed on one or more vLLM workers. "
                     f"Results: {worker_results}"
                 )
+
+    async def _get_raw_spec_counters(self) -> dict[str, float | list[float]]:
+        """Get SpecDec and optional CUDA-graph counters from AsyncLLM."""
+        metrics: dict[str, float | list[float]] = {}
+        if self.llm is None:
+            return metrics
+
+        from vllm.v1.metrics.reader import get_metrics_snapshot
+
+        for metric in get_metrics_snapshot():
+            if hasattr(metric, "values"):
+                metrics[metric.name] = metric.values
+            elif hasattr(metric, "value"):
+                metrics[metric.name] = metric.value
+
+        if (
+            os.environ.get(
+                "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false"
+            ).lower()
+            != "true"
+        ):
+            return metrics
+
+        result_or_coro = await self.llm.collective_rpc(
+            "get_cudagraph_dispatch_metrics", args=tuple()
+        )
+        worker_metrics = (
+            await result_or_coro
+            if asyncio.iscoroutine(result_or_coro)
+            else result_or_coro
+        )
+        for report in worker_metrics:
+            for name, value in report.items():
+                existing_value = metrics.get(name, 0.0)
+                if isinstance(existing_value, list):
+                    raise RuntimeError(
+                        f"CUDA-graph counter {name} conflicts with a list metric."
+                    )
+                metrics[name] = existing_value + value
+        return metrics
 
     async def get_reserved_url(self) -> Optional[str]:
         """Return the URL from the reserved socket, available before model loading."""

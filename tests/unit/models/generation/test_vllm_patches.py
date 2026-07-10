@@ -1,8 +1,9 @@
 # Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 
 import sys
+from enum import Enum
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -280,6 +281,7 @@ def test_ray_worker_patch_forwards_draft_cudagraph_runtime_guard(
         if name
     )
     assert "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH" in copied_names
+    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS" in copied_names
 
 
 def test_static_draft_loader_patch_uses_draft_load_config(
@@ -349,6 +351,7 @@ def test_v2_dflash_patch_uses_draft_load_config(
 def test_v2_dflash_patch_skips_when_dflash_is_not_installed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", raising=False)
     logger = MagicMock()
     monkeypatch.setattr(
         patches,
@@ -784,6 +787,80 @@ def test_piecewise_specdec_cudagraph_patch_aligns_capture_sizes(
     assert compilation.read_text() == patched
 
 
+def test_cudagraph_dispatch_metrics_records_graph_and_fallback_calls() -> None:
+    class Mode(Enum):
+        NONE = 0
+        PIECEWISE = 1
+
+    class Dispatcher:
+        keys_initialized = True
+        cudagraph_mode = Mode.PIECEWISE
+        compilation_config = SimpleNamespace(max_cudagraph_capture_size=64)
+
+        def dispatch(self, num_tokens: int, **_kwargs):
+            if num_tokens <= 64:
+                return Mode.PIECEWISE, SimpleNamespace(num_tokens=64)
+            return Mode.NONE, SimpleNamespace(num_tokens=num_tokens)
+
+    patches._install_vllm_cudagraph_dispatch_metrics(Dispatcher)
+    dispatcher = Dispatcher()
+
+    dispatcher.dispatch(32)
+    dispatcher.dispatch(96)
+
+    assert dispatcher._nrl_cudagraph_dispatch_metrics == {
+        "calls_none": 1,
+        "calls_piecewise": 1,
+        "unpadded_tokens_none": 96,
+        "unpadded_tokens_piecewise": 32,
+        "padded_tokens_none": 96,
+        "padded_tokens_piecewise": 64,
+        "fallback_oversize": 1,
+    }
+
+
+def test_cudagraph_dispatch_metrics_classifies_missing_capture_key() -> None:
+    class Mode(Enum):
+        NONE = 0
+        PIECEWISE = 1
+
+    class Dispatcher:
+        keys_initialized = True
+        cudagraph_mode = Mode.PIECEWISE
+        compilation_config = SimpleNamespace(max_cudagraph_capture_size=64)
+
+        def dispatch(self, num_tokens: int, **_kwargs):
+            return Mode.NONE, SimpleNamespace(num_tokens=num_tokens)
+
+    patches._install_vllm_cudagraph_dispatch_metrics(Dispatcher)
+    patches._install_vllm_cudagraph_dispatch_metrics(Dispatcher)
+    dispatcher = Dispatcher()
+
+    dispatcher.dispatch(32)
+
+    assert dispatcher._nrl_cudagraph_dispatch_metrics["calls_none"] == 1
+    assert dispatcher._nrl_cudagraph_dispatch_metrics["fallback_missing_key"] == 1
+
+
+def test_cudagraph_dispatch_metrics_source_patch_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatcher = tmp_path / "cudagraph_dispatcher.py"
+    dispatcher.write_text("class CudagraphDispatcher:\n    pass\n")
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(dispatcher))
+    monkeypatch.delenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", raising=False)
+
+    patches._patch_vllm_cudagraph_dispatch_metrics(MagicMock())
+    patched = dispatcher.read_text()
+
+    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS" in patched
+    assert "_install_vllm_cudagraph_dispatch_metrics" in patched
+
+    patches._patch_vllm_cudagraph_dispatch_metrics(MagicMock())
+    assert dispatcher.read_text() == patched
+
+
 @pytest.mark.parametrize(
     (
         "speculative_config",
@@ -894,6 +971,29 @@ def test_apply_patches_only_installs_required_specdec_patches(
     else:
         probabilistic_guard.assert_not_called()
         parallel_probabilistic_temperature_patch.assert_not_called()
+
+
+def test_apply_patches_installs_cudagraph_metrics_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    logger_module = ModuleType("vllm.logger")
+    logger_module.init_logger = lambda _name: logger
+    monkeypatch.setitem(sys.modules, "vllm", ModuleType("vllm"))
+    monkeypatch.setitem(sys.modules, "vllm.logger", logger_module)
+    monkeypatch.setenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "true")
+    monkeypatch.setattr(patches, "_patch_vllm_init_workers_ray", MagicMock())
+    metrics_patch = MagicMock()
+    monkeypatch.setattr(
+        patches, "_patch_vllm_cudagraph_dispatch_metrics", metrics_patch
+    )
+    monkeypatch.setattr(
+        patches, "_patch_vllm_hermes_tool_parser_thread_safety", MagicMock()
+    )
+
+    patches._apply_vllm_patches("/venv/bin/python", speculative_config=None)
+
+    metrics_patch.assert_called_once_with(logger)
 
 
 @pytest.mark.parametrize(

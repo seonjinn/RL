@@ -168,6 +168,7 @@ def test_ray_patch_uses_vllm_024_extra_env_contract(
         "HUGGING_FACE_HUB_TOKEN",
         "NCCL_CUMEM_ENABLE",
         "NCCL_NVLS_ENABLE",
+        "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS",
         "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH",
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
     }

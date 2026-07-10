@@ -484,6 +484,57 @@ def compute_spec_decode_metrics(
         "vllm/spec_acceptance_rate": acceptance_rate,
     }
 
+    for role in ("target", "draft"):
+        counter_prefix = f"vllm:spec_decode_cudagraph_{role}_"
+        eager_calls = delta.get(f"{counter_prefix}calls_none", 0.0)
+        piecewise_calls = delta.get(f"{counter_prefix}calls_piecewise", 0.0)
+        full_calls = delta.get(f"{counter_prefix}calls_full", 0.0)
+        graph_calls = piecewise_calls + full_calls
+        total_calls = eager_calls + graph_calls
+        if total_calls <= 0:
+            continue
+
+        eager_tokens = delta.get(f"{counter_prefix}unpadded_tokens_none", 0.0)
+        graph_tokens = delta.get(
+            f"{counter_prefix}unpadded_tokens_piecewise", 0.0
+        ) + delta.get(f"{counter_prefix}unpadded_tokens_full", 0.0)
+        padded_graph_tokens = delta.get(
+            f"{counter_prefix}padded_tokens_piecewise", 0.0
+        ) + delta.get(f"{counter_prefix}padded_tokens_full", 0.0)
+        total_tokens = eager_tokens + graph_tokens
+
+        spec_metrics.update(
+            {
+                f"vllm/cudagraph_{role}_total_calls": total_calls,
+                f"vllm/cudagraph_{role}_graph_calls": graph_calls,
+                f"vllm/cudagraph_{role}_eager_calls": eager_calls,
+                f"vllm/cudagraph_{role}_graph_call_ratio": graph_calls / total_calls,
+                f"vllm/cudagraph_{role}_eager_call_ratio": eager_calls / total_calls,
+                f"vllm/cudagraph_{role}_graph_token_ratio": (
+                    graph_tokens / total_tokens if total_tokens > 0 else 0.0
+                ),
+                f"vllm/cudagraph_{role}_eager_token_ratio": (
+                    eager_tokens / total_tokens if total_tokens > 0 else 0.0
+                ),
+                f"vllm/cudagraph_{role}_padding_overhead_ratio": (
+                    (padded_graph_tokens - graph_tokens) / graph_tokens
+                    if graph_tokens > 0
+                    else 0.0
+                ),
+            }
+        )
+        for reason in (
+            "uninitialized",
+            "disabled",
+            "missing_capture_limit",
+            "oversize",
+            "mode_restricted",
+            "missing_key",
+        ):
+            key = f"{counter_prefix}fallback_{reason}"
+            if key in delta:
+                spec_metrics[f"vllm/cudagraph_{role}_fallback_{reason}"] = delta[key]
+
     # Add per-position metrics for detailed analysis
     for key, value in delta.items():
         if isinstance(key, tuple):

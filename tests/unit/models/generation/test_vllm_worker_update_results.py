@@ -13,8 +13,9 @@
 # limitations under the License.
 
 import asyncio
+import sys
 from typing import Any
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -99,6 +100,56 @@ class _AsyncLifecycleLLM:
 
     async def wake_up(self, **_kwargs: Any) -> None:
         return None
+
+
+def test_raw_spec_counters_include_internal_cudagraph_dispatch_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LLM:
+        def get_metrics(self) -> list[Any]:
+            return []
+
+        def collective_rpc(self, method: str, args: tuple[Any, ...]) -> list[Any]:
+            assert method == "get_cudagraph_dispatch_metrics"
+            assert args == ()
+            return [
+                {"vllm:spec_decode_cudagraph_target_calls_piecewise": 4.0},
+                {"vllm:spec_decode_cudagraph_target_calls_piecewise": 4.0},
+            ]
+
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.llm = LLM()
+    monkeypatch.setenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "true")
+
+    assert worker._get_raw_spec_counters() == {
+        "vllm:spec_decode_cudagraph_target_calls_piecewise": 8.0
+    }
+
+
+def test_async_raw_spec_counters_await_internal_cudagraph_dispatch_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def exercise() -> None:
+        class LLM:
+            async def collective_rpc(
+                self, method: str, args: tuple[Any, ...]
+            ) -> list[Any]:
+                assert method == "get_cudagraph_dispatch_metrics"
+                assert args == ()
+                return [{"vllm:spec_decode_cudagraph_draft_calls_piecewise": 5.0}]
+
+        reader_module = ModuleType("vllm.v1.metrics.reader")
+        reader_module.get_metrics_snapshot = lambda: []
+        monkeypatch.setitem(sys.modules, "vllm.v1.metrics.reader", reader_module)
+        monkeypatch.setenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "true")
+        worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+        worker.llm = LLM()
+
+        assert await worker._get_raw_spec_counters() == {
+            "vllm:spec_decode_cudagraph_draft_calls_piecewise": 5.0
+        }
+
+    asyncio.run(exercise())
 
 
 def test_sync_prefix_reset_forwards_running_request_preemption() -> None:
