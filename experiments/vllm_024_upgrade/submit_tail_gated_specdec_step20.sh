@@ -28,6 +28,8 @@ VLLM_VERSION="${VLLM_VERSION:-0.24.0}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 MAX_OSL="${MAX_OSL:-4096}"
+SPECDEC_CONTEXT_HEADROOM_TOKENS="${SPECDEC_CONTEXT_HEADROOM_TOKENS:-32}"
+MAX_MODEL_LEN=$((MAX_OSL + SPECDEC_CONTEXT_HEADROOM_TOKENS))
 MAX_SEQUENCE_LENGTH="${MAX_SEQUENCE_LENGTH:-4096}"
 NUM_PROMPTS="${NUM_PROMPTS:-64}"
 NUM_GENERATIONS="${NUM_GENERATIONS:-32}"
@@ -433,7 +435,7 @@ submit_one() {
     "policy.generation.temperature=${TEMPERATURE}"
     "policy.generation.top_p=${TOP_P}"
     "policy.generation._output_max_model_len=${MAX_OSL}"
-    "policy.generation.vllm_cfg.max_model_len=4128"
+    "policy.generation.vllm_cfg.max_model_len=${MAX_MODEL_LEN}"
     "policy.generation.vllm_cfg.tensor_parallel_size=${target_tp}"
     "policy.generation.vllm_cfg.expert_parallel_size=${GENERATION_EP}"
     "policy.generation.vllm_cfg.enforce_eager=false"
@@ -552,7 +554,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tjob_id\twandb_run_id\twandb_url\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tjob_id\twandb_run_id\twandb_url\tcommand'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -587,6 +589,7 @@ submit_one() {
         "${TEMPERATURE}"
         "${TOP_P}"
         "${MAX_OSL}"
+        "${MAX_MODEL_LEN}"
         "${MAX_SEQUENCE_LENGTH}"
         "${NUM_PROMPTS}"
         "${NUM_GENERATIONS}"

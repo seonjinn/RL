@@ -45,20 +45,24 @@ def _run_launcher(*args: str, **environment: str) -> subprocess.CompletedProcess
     )
 
 
-def _dry_run(model: str, variant: str) -> str:
+def _dry_run(model: str, variant: str, **environment: str) -> str:
+    launcher_environment = {
+        "REPO_DIR": "/lustre/test/nemo-rl",
+        "LYRIS_ROOT": "/lustre/test",
+        "HF_HOME": "/lustre/test/hf_home",
+        "CONTAINER": "/lustre/test/nemo-rl.sqsh",
+        "EXPERIMENT_ROOT": "/lustre/test/tail-gate-runs",
+        "RUN_TAG": "contract",
+        "ATTEMPT_ID": "attempt-1",
+        "QWEN30_ROOFLINE_CONFIG": "/lustre/test/calibrations/qwen30.json",
+        "QWEN32_ROOFLINE_CONFIG": "/lustre/test/calibrations/qwen32.json",
+        **environment,
+    }
     result = _run_launcher(
         "dry-run",
         model,
         variant,
-        REPO_DIR="/lustre/test/nemo-rl",
-        LYRIS_ROOT="/lustre/test",
-        HF_HOME="/lustre/test/hf_home",
-        CONTAINER="/lustre/test/nemo-rl.sqsh",
-        EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
-        RUN_TAG="contract",
-        ATTEMPT_ID="attempt-1",
-        QWEN30_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen30.json",
-        QWEN32_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen32.json",
+        **launcher_environment,
     )
     assert result.returncode == 0, result.stderr
     return result.stdout
@@ -175,6 +179,15 @@ def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
         "BASE_LOG_DIR=/lustre/test/tail-gate-runs/qwen32b/always_on_v2_k5",
     ):
         assert expected in output
+
+
+def test_long_output_length_derives_engine_length_with_lookahead_headroom() -> None:
+    output = _dry_run("qwen32b", "always_on_v2_k5", MAX_OSL="32768")
+
+    assert "policy.generation.max_new_tokens=32768" in output
+    assert "policy.generation._output_max_model_len=32768" in output
+    assert "policy.generation.vllm_cfg.max_model_len=32800" in output
+    assert "policy.generation.vllm_cfg.max_model_len=4128" not in output
 
 
 @pytest.mark.parametrize(
@@ -408,6 +421,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "temperature",
         "top_p",
         "max_osl",
+        "max_model_len",
         "max_sequence_length",
         "num_prompts",
         "num_generations",
@@ -447,6 +461,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "temperature": "1.0",
         "top_p": "1.0",
         "max_osl": "4096",
+        "max_model_len": "4128",
         "max_sequence_length": "4096",
         "num_prompts": "64",
         "num_generations": "32",
@@ -473,6 +488,40 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         ).stdout
         == ""
     )
+
+
+def test_submit_records_long_output_engine_length_as_separate_cohort(
+    tmp_path: Path,
+) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text("#!/usr/bin/env bash\nprintf '5252\\n'\n", encoding="utf-8")
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.write_text("container contract\n", encoding="utf-8")
+    experiment_root = tmp_path / "runs"
+
+    result = _run_launcher(
+        "submit",
+        "qwen32b",
+        "baseline_v2",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        EXPERIMENT_ROOT=str(experiment_root),
+        MAX_OSL="32768",
+        WANDB_API_KEY="test-only-key",
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with (experiment_root / "submissions.tsv").open(
+        encoding="utf-8", newline=""
+    ) as stream:
+        row = next(csv.DictReader(stream, delimiter="\t"))
+    assert row["max_osl"] == "32768"
+    assert row["max_model_len"] == "32800"
 
 
 @pytest.mark.parametrize(

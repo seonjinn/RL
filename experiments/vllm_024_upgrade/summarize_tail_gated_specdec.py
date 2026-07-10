@@ -33,6 +33,7 @@ from typing import Iterable, Mapping, Protocol, TypeGuard, cast
 EXPECTED_STEPS = set(range(2, 21))
 MIN_GRAPH_CALL_RATIO = 0.99
 MIN_ROOFLINE_PREDICTED_SPEEDUP = 1.05
+MIN_SPECDEC_HEADROOM_TOKENS = 32
 
 BASE_METRIC_KEYS = {
     "e2e_time": "timing/train/total_step_time",
@@ -72,12 +73,18 @@ TAIL_GATE_METRIC_KEYS = {
     "activation_seq_len": "train/vllm/tail_gate_activation_seq_len",
     "predicted_speedup": "train/vllm/tail_gate_predicted_speedup",
 }
+ROOFLINE_ACTIVATION_METRIC_KEYS = {
+    "activation_predicted_speedup": (
+        "train/vllm/tail_gate_activation_predicted_speedup"
+    ),
+}
 METRIC_KEYS = {
     **BASE_METRIC_KEYS,
     **SPECDEC_METRIC_KEYS,
     **V1_DRAFT_GRAPH_METRIC_KEYS,
     **V2_DRAFT_GRAPH_METRIC_KEYS,
     **TAIL_GATE_METRIC_KEYS,
+    **ROOFLINE_ACTIVATION_METRIC_KEYS,
 }
 HEALTH_METRICS = ("reward", "response_length", "approx_kl", "policy_loss")
 COHORT_FIELDS = (
@@ -95,6 +102,7 @@ COHORT_FIELDS = (
     "temperature",
     "top_p",
     "max_osl",
+    "max_model_len",
     "max_sequence_length",
     "num_prompts",
     "num_generations",
@@ -146,6 +154,7 @@ class RunSummary:
     activation_batch: float | None
     activation_seq_len: float | None
     predicted_speedup: float | None
+    activation_predicted_speedup: float | None
     target_graph_ratio: float | None
     draft_graph_ratio: float | None
     draft_prefill_graph_ratio: float | None
@@ -170,6 +179,7 @@ class RunSummary:
     temperature: str
     top_p: str
     max_osl: str
+    max_model_len: str
     max_sequence_length: str
     num_prompts: str
     num_generations: str
@@ -268,6 +278,8 @@ def _required_metric_keys(metadata: Mapping[str, str]) -> dict[str, str]:
         )
     if _is_gated(metadata):
         required.update(TAIL_GATE_METRIC_KEYS)
+    if metadata.get("gate_mode") == "roofline":
+        required.update(ROOFLINE_ACTIVATION_METRIC_KEYS)
     return required
 
 
@@ -319,6 +331,7 @@ def _make_summary(
         activation_batch=metrics.get("activation_batch"),
         activation_seq_len=metrics.get("activation_seq_len"),
         predicted_speedup=metrics.get("predicted_speedup"),
+        activation_predicted_speedup=metrics.get("activation_predicted_speedup"),
         target_graph_ratio=metrics.get("target_graph_ratio"),
         draft_graph_ratio=metrics.get("draft_graph_ratio"),
         draft_prefill_graph_ratio=metrics.get("draft_prefill_graph_ratio"),
@@ -343,6 +356,7 @@ def _make_summary(
         temperature=metadata.get("temperature", ""),
         top_p=metadata.get("top_p", ""),
         max_osl=metadata.get("max_osl", ""),
+        max_model_len=metadata.get("max_model_len", ""),
         max_sequence_length=metadata.get("max_sequence_length", ""),
         num_prompts=metadata.get("num_prompts", ""),
         num_generations=metadata.get("num_generations", ""),
@@ -500,8 +514,8 @@ def _gate_activation_health(summary: RunSummary) -> bool | None:
     return not (
         summary.gate_mode == "roofline"
         and (
-            summary.predicted_speedup is None
-            or summary.predicted_speedup < MIN_ROOFLINE_PREDICTED_SPEEDUP
+            summary.activation_predicted_speedup is None
+            or summary.activation_predicted_speedup < MIN_ROOFLINE_PREDICTED_SPEEDUP
         )
     )
 
@@ -630,6 +644,16 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         if key in seen:
             return f"duplicate variant in cohort:{row['variant']}"
         seen.add(key)
+        try:
+            max_osl = int(row["max_osl"])
+            max_model_len = int(row["max_model_len"])
+        except ValueError:
+            return "max_osl and max_model_len must be integers"
+        if max_model_len < max_osl + MIN_SPECDEC_HEADROOM_TOKENS:
+            return (
+                "max_model_len must be at least max_osl plus "
+                f"{MIN_SPECDEC_HEADROOM_TOKENS}:{max_model_len}:{max_osl}"
+            )
     return None
 
 

@@ -44,6 +44,9 @@ EXPECTED_METRIC_KEYS = {
     "activation_batch": "train/vllm/tail_gate_activation_batch",
     "activation_seq_len": "train/vllm/tail_gate_activation_seq_len",
     "predicted_speedup": "train/vllm/tail_gate_predicted_speedup",
+    "activation_predicted_speedup": (
+        "train/vllm/tail_gate_activation_predicted_speedup"
+    ),
     "target_graph_ratio": "train/vllm/cudagraph_target_graph_call_ratio",
     "draft_graph_ratio": "train/vllm/cudagraph_draft_graph_call_ratio",
     "draft_prefill_graph_ratio": "train/vllm/cudagraph_draft_prefill_graph_call_ratio",
@@ -83,6 +86,7 @@ def _metadata(
         "temperature": "1.0",
         "top_p": "1.0",
         "max_osl": "4096",
+        "max_model_len": "4128",
         "max_sequence_length": "4096",
         "num_prompts": "64",
         "num_generations": "32",
@@ -121,6 +125,8 @@ def _history(
     target_graph_ratio: float = 1.0,
     draft_graph_ratio: float = 1.0,
     activated: bool = True,
+    predicted_speedup: float = 1.12,
+    activation_predicted_speedup: float = 1.12,
 ) -> list[dict[str, float]]:
     rows: list[dict[str, float]] = []
     for step in range(1, 21):
@@ -175,10 +181,14 @@ def _history(
                         8192.0 if activated else 0.0
                     ),
                     "train/vllm/tail_gate_predicted_speedup": (
-                        1.12 if activated else 0.0
+                        predicted_speedup if activated else 0.0
                     ),
                 }
             )
+            if metadata["gate_mode"] == "roofline":
+                row["train/vllm/tail_gate_activation_predicted_speedup"] = (
+                    activation_predicted_speedup if activated else 0.0
+                )
         rows.append(row)
     return rows
 
@@ -190,6 +200,8 @@ def _summary(
     target_graph_ratio: float = 1.0,
     draft_graph_ratio: float = 1.0,
     activated: bool = True,
+    predicted_speedup: float = 1.12,
+    activation_predicted_speedup: float = 1.12,
 ) -> RunSummary:
     return summarize_history(
         metadata,
@@ -199,6 +211,8 @@ def _summary(
             target_graph_ratio=target_graph_ratio,
             draft_graph_ratio=draft_graph_ratio,
             activated=activated,
+            predicted_speedup=predicted_speedup,
+            activation_predicted_speedup=activation_predicted_speedup,
         ),
     )
 
@@ -271,6 +285,7 @@ def test_history_keys_are_variant_and_runner_aware() -> None:
     baseline = _metadata()
     v1_spec = _metadata(model="qwen30ba3b", runner="v1", variant="always_on_v1_k5")
     gated = _metadata(variant="fastrl_threshold_v2_k5")
+    roofline = _metadata(variant="efficient_roofline_v2_k5")
 
     baseline_keys = _history_keys(baseline)
     assert "train/vllm/cudagraph_target_graph_call_ratio" in baseline_keys
@@ -284,8 +299,13 @@ def test_history_keys_are_variant_and_runner_aware() -> None:
 
     gated_keys = _history_keys(gated)
     assert "train/vllm/tail_gate_activations" in gated_keys
+    assert "train/vllm/tail_gate_activation_predicted_speedup" not in gated_keys
     assert "train/vllm/cudagraph_draft_prefill_graph_call_ratio" in gated_keys
     assert "train/vllm/cudagraph_draft_decode_graph_call_ratio" in gated_keys
+
+    assert "train/vllm/tail_gate_activation_predicted_speedup" in _history_keys(
+        roofline
+    )
 
 
 def test_baseline_is_final_without_specdec_gate_or_draft_metrics() -> None:
@@ -365,6 +385,7 @@ def test_comparison_key_uses_only_complete_explicit_cohort_schema() -> None:
         "dp",
         "temperature",
         "max_osl",
+        "max_model_len",
         "num_generations",
         "graph_mode",
         "sampling",
@@ -387,6 +408,15 @@ def test_manifest_rejects_every_missing_cohort_dimension() -> None:
         assert (
             _validate_manifest_rows([incomplete]) == f"missing manifest fields:{field}"
         )
+
+
+def test_manifest_rejects_engine_length_below_output_plus_headroom() -> None:
+    row = _metadata()
+    row["max_model_len"] = "4096"
+
+    assert _validate_manifest_rows([row]) == (
+        "max_model_len must be at least max_osl plus 32:4096:4096"
+    )
 
 
 @pytest.mark.parametrize(
@@ -461,6 +491,48 @@ def test_gated_variant_cannot_report_always_on_behavior() -> None:
 
     assert candidate.gate_activation_health_passed is False
     assert candidate.status == "health_failed"
+
+
+def test_roofline_requires_explicit_activation_predicted_speedup() -> None:
+    metadata = _metadata(variant="efficient_roofline_v2_k5")
+    history = _history(metadata)
+    del history[5]["train/vllm/tail_gate_activation_predicted_speedup"]
+
+    summary = summarize_history(metadata, history)
+
+    assert summary.status == "partial"
+    assert summary.reason == "missing_metric:activation_predicted_speedup:6"
+
+
+@pytest.mark.parametrize(
+    ("all_decision_speedup", "activation_speedup", "expected_status"),
+    [(1.30, 1.01, "health_failed"), (0.90, 1.06, "final")],
+)
+def test_roofline_health_uses_only_activation_predicted_speedup(
+    all_decision_speedup: float,
+    activation_speedup: float,
+    expected_status: str,
+) -> None:
+    baseline = _metadata()
+    always_on = _metadata(variant="always_on_v2_k5")
+    roofline = _metadata(variant="efficient_roofline_v2_k5")
+    rows = build_comparison_rows(
+        [
+            _summary(baseline),
+            _summary(always_on),
+            _summary(
+                roofline,
+                predicted_speedup=all_decision_speedup,
+                activation_predicted_speedup=activation_speedup,
+            ),
+        ]
+    )
+
+    candidate = next(row for row in rows if row.variant == "efficient_roofline_v2_k5")
+
+    assert candidate.predicted_speedup == all_decision_speedup
+    assert candidate.activation_predicted_speedup == activation_speedup
+    assert candidate.status == expected_status
 
 
 def test_main_renders_interleaved_models_and_runner_sections(tmp_path: Path) -> None:
