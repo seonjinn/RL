@@ -484,7 +484,13 @@ def compute_spec_decode_metrics(
         "vllm/spec_acceptance_rate": acceptance_rate,
     }
 
-    for role in ("target", "draft"):
+    for role in (
+        "target",
+        "draft",
+        "draft_prefill",
+        "draft_decode",
+        "draft_query",
+    ):
         counter_prefix = f"vllm:spec_decode_cudagraph_{role}_"
         eager_calls = delta.get(f"{counter_prefix}calls_none", 0.0)
         piecewise_calls = delta.get(f"{counter_prefix}calls_piecewise", 0.0)
@@ -530,6 +536,8 @@ def compute_spec_decode_metrics(
             "oversize",
             "mode_restricted",
             "missing_key",
+            "incompatible",
+            "empty",
         ):
             key = f"{counter_prefix}fallback_{reason}"
             if key in delta:

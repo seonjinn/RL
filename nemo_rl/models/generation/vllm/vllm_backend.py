@@ -186,18 +186,28 @@ class VllmInternalWorkerExtension:
         """Return cumulative target and neural-drafter dispatch counters."""
         metrics: dict[str, float] = {}
         target_dispatcher = getattr(self.model_runner, "cudagraph_dispatcher", None)
+        target_manager = getattr(self.model_runner, "cudagraph_manager", None)
         drafter = getattr(self.model_runner, "drafter", None)
         draft_dispatcher = getattr(drafter, "cudagraph_dispatcher", None)
+        speculator = getattr(self.model_runner, "speculator", None)
+        draft_prefill_manager = getattr(speculator, "prefill_cudagraph_manager", None)
+        draft_decode_manager = getattr(speculator, "decode_cudagraph_manager", None)
+        draft_query_manager = getattr(speculator, "query_cudagraph_manager", None)
 
         for role, dispatcher in (
             ("target", target_dispatcher),
+            ("target", target_manager),
             ("draft", draft_dispatcher),
+            ("draft_prefill", draft_prefill_manager),
+            ("draft_decode", draft_decode_manager),
+            ("draft_query", draft_query_manager),
         ):
             counters = getattr(dispatcher, "_nrl_cudagraph_dispatch_metrics", None)
             if not counters:
                 continue
             for name, value in counters.items():
-                metrics[f"vllm:spec_decode_cudagraph_{role}_{name}"] = float(value)
+                metric_name = f"vllm:spec_decode_cudagraph_{role}_{name}"
+                metrics[metric_name] = metrics.get(metric_name, 0.0) + float(value)
         return metrics
 
     def bind_numa(self) -> bool:

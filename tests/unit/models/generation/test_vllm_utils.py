@@ -663,6 +663,8 @@ def test_compute_spec_decode_metrics_includes_cudagraph_coverage() -> None:
         "vllm:spec_decode_cudagraph_draft_calls_full": 5.0,
         "vllm:spec_decode_cudagraph_draft_unpadded_tokens_full": 50.0,
         "vllm:spec_decode_cudagraph_draft_padded_tokens_full": 50.0,
+        "vllm:spec_decode_cudagraph_draft_decode_calls_none": 20.0,
+        "vllm:spec_decode_cudagraph_draft_decode_unpadded_tokens_none": 20.0,
     }
     end_counters = {
         "vllm:spec_decode_cudagraph_target_calls_none": 12.0,
@@ -674,6 +676,8 @@ def test_compute_spec_decode_metrics_includes_cudagraph_coverage() -> None:
         "vllm:spec_decode_cudagraph_draft_calls_full": 15.0,
         "vllm:spec_decode_cudagraph_draft_unpadded_tokens_full": 150.0,
         "vllm:spec_decode_cudagraph_draft_padded_tokens_full": 150.0,
+        "vllm:spec_decode_cudagraph_draft_decode_calls_none": 100.0,
+        "vllm:spec_decode_cudagraph_draft_decode_unpadded_tokens_none": 100.0,
     }
 
     metrics = compute_spec_decode_metrics(start_counters, end_counters)
@@ -688,3 +692,4 @@ def test_compute_spec_decode_metrics_includes_cudagraph_coverage() -> None:
     assert math.isclose(metrics["vllm/cudagraph_target_padding_overhead_ratio"], 0.2)
     assert metrics["vllm/cudagraph_target_fallback_missing_key"] == 2.0
     assert metrics["vllm/cudagraph_draft_graph_call_ratio"] == 1.0
+    assert metrics["vllm/cudagraph_draft_decode_eager_call_ratio"] == 1.0

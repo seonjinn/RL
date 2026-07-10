@@ -842,23 +842,86 @@ def test_cudagraph_dispatch_metrics_classifies_missing_capture_key() -> None:
     assert dispatcher._nrl_cudagraph_dispatch_metrics["fallback_missing_key"] == 1
 
 
+def test_cudagraph_dispatch_metrics_classifies_uninitialized_v1_dispatcher() -> None:
+    class Mode(Enum):
+        NONE = 0
+
+    class Dispatcher:
+        keys_initialized = False
+        cudagraph_mode = Mode.NONE
+        compilation_config = SimpleNamespace(max_cudagraph_capture_size=64)
+
+        def dispatch(self, num_tokens: int, **_kwargs):
+            return Mode.NONE, SimpleNamespace(num_tokens=num_tokens)
+
+    patches._install_vllm_cudagraph_dispatch_metrics(Dispatcher)
+    dispatcher = Dispatcher()
+
+    dispatcher.dispatch(32)
+
+    assert dispatcher._nrl_cudagraph_dispatch_metrics["fallback_uninitialized"] == 1
+
+
+def test_cudagraph_dispatch_metrics_supports_v2_graph_manager() -> None:
+    class Mode(Enum):
+        NONE = 0
+        PIECEWISE = 1
+
+    class Manager:
+        _graphs_captured = True
+        cudagraph_mode = Mode.PIECEWISE
+        compilation_config = SimpleNamespace(max_cudagraph_capture_size=64)
+
+        def dispatch(
+            self,
+            num_reqs: int,
+            num_tokens: int,
+            uniform_token_count: int | None,
+            num_active_loras: int,
+        ):
+            del num_reqs, uniform_token_count, num_active_loras
+            mode = Mode.PIECEWISE if num_tokens <= 64 else Mode.NONE
+            return SimpleNamespace(cg_mode=mode, num_tokens=num_tokens)
+
+    patches._install_vllm_cudagraph_dispatch_metrics(Manager)
+    manager = Manager()
+
+    manager.dispatch(8, 32, 4, 0)
+    manager.dispatch(8, 96, 4, 0)
+
+    assert manager._nrl_cudagraph_dispatch_metrics["calls_piecewise"] == 1
+    assert manager._nrl_cudagraph_dispatch_metrics["calls_none"] == 1
+    assert manager._nrl_cudagraph_dispatch_metrics["fallback_oversize"] == 1
+
+
 def test_cudagraph_dispatch_metrics_source_patch_is_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dispatcher = tmp_path / "cudagraph_dispatcher.py"
+    manager = tmp_path / "cudagraph_utils.py"
     dispatcher.write_text("class CudagraphDispatcher:\n    pass\n")
-    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(dispatcher))
+    manager.write_text("class CudaGraphManager:\n    pass\n")
+    vllm_files = {
+        "v1/cudagraph_dispatcher.py": dispatcher,
+        "v1/worker/gpu/cudagraph_utils.py": manager,
+    }
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda path: str(vllm_files[path]))
     monkeypatch.delenv("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", raising=False)
 
     patches._patch_vllm_cudagraph_dispatch_metrics(MagicMock())
     patched = dispatcher.read_text()
+    manager_patched = manager.read_text()
 
     assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS" in patched
     assert "_install_vllm_cudagraph_dispatch_metrics" in patched
+    assert "_install_vllm_cudagraph_dispatch_metrics(CudaGraphManager)" in (
+        manager_patched
+    )
 
     patches._patch_vllm_cudagraph_dispatch_metrics(MagicMock())
     assert dispatcher.read_text() == patched
+    assert manager.read_text() == manager_patched
 
 
 @pytest.mark.parametrize(

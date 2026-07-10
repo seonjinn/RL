@@ -767,8 +767,16 @@ def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
 
     @wraps(original_dispatch)
     def dispatch_with_metrics(self, *args, **kwargs):
-        runtime_mode, batch_descriptor = original_dispatch(self, *args, **kwargs)
-        num_tokens = kwargs.get("num_tokens", args[0] if args else None)
+        dispatch_result = original_dispatch(self, *args, **kwargs)
+        is_v1_dispatcher = isinstance(dispatch_result, tuple)
+        if is_v1_dispatcher:
+            runtime_mode, batch_descriptor = dispatch_result
+            positional_num_tokens = args[0] if args else None
+        else:
+            batch_descriptor = dispatch_result
+            runtime_mode = batch_descriptor.cg_mode
+            positional_num_tokens = args[1] if len(args) > 1 else None
+        num_tokens = kwargs.get("num_tokens", positional_num_tokens)
         if not isinstance(num_tokens, int):
             raise RuntimeError(
                 "Could not determine num_tokens while recording CUDA-graph "
@@ -792,17 +800,19 @@ def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
         )
 
         if runtime_mode_name == "none":
-            if not getattr(self, "keys_initialized", False):
+            configured_mode_name = getattr(
+                getattr(self, "cudagraph_mode", None),
+                "name",
+                str(getattr(self, "cudagraph_mode", "none")),
+            ).lower()
+            if is_v1_dispatcher and not getattr(self, "keys_initialized", False):
                 fallback_reason = "uninitialized"
-            elif (
-                getattr(
-                    getattr(self, "cudagraph_mode", None),
-                    "name",
-                    str(getattr(self, "cudagraph_mode", "none")),
-                ).lower()
-                == "none"
-            ):
+            elif configured_mode_name == "none":
                 fallback_reason = "disabled"
+            elif not is_v1_dispatcher and not getattr(self, "_graphs_captured", False):
+                fallback_reason = "uninitialized"
+            elif not is_v1_dispatcher and num_tokens <= 0:
+                fallback_reason = "empty"
             else:
                 max_capture_size = getattr(
                     getattr(self, "compilation_config", None),
@@ -813,6 +823,21 @@ def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
                     fallback_reason = "missing_capture_limit"
                 elif num_tokens > max_capture_size:
                     fallback_reason = "oversize"
+                elif not is_v1_dispatcher:
+                    num_active_loras = kwargs.get(
+                        "num_active_loras", args[3] if len(args) > 3 else 0
+                    )
+                    effective_loras = (
+                        self._resolve_effective_loras(num_active_loras)
+                        if hasattr(self, "_resolve_effective_loras")
+                        else num_active_loras
+                    )
+                    candidate_key = (num_tokens, effective_loras)
+                    fallback_reason = (
+                        "incompatible"
+                        if candidate_key in getattr(self, "_candidates", {})
+                        else "missing_key"
+                    )
                 else:
                     valid_modes = kwargs.get(
                         "valid_modes", args[4] if len(args) > 4 else None
@@ -840,7 +865,7 @@ def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
                     )
             increment(f"fallback_{fallback_reason}")
 
-        return runtime_mode, batch_descriptor
+        return dispatch_result
 
     setattr(dispatcher_cls, "dispatch", dispatch_with_metrics)
     setattr(dispatcher_cls, "_nrl_cudagraph_dispatch_metrics_installed", True)
@@ -848,35 +873,47 @@ def _install_vllm_cudagraph_dispatch_metrics(dispatcher_cls: type[Any]) -> None:
 
 def _patch_vllm_cudagraph_dispatch_metrics(logger) -> None:
     """Install environment-gated dispatch counters in every vLLM worker."""
-    file_to_patch = _get_vllm_file("v1/cudagraph_dispatcher.py")
     marker = "# NRL_CUDAGRAPH_DISPATCH_METRICS_PATCH"
-    source_suffix = (
-        "\n\n"
-        f"{marker}\n"
-        "import os as _nrl_os\n"
-        "if _nrl_os.environ.get(\n"
-        "    'NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS', 'false'\n"
-        ").lower() == 'true':\n"
-        "    from nemo_rl.models.generation.vllm.patches import (\n"
-        "        _install_vllm_cudagraph_dispatch_metrics,\n"
-        "    )\n"
-        "    _install_vllm_cudagraph_dispatch_metrics(CudagraphDispatcher)\n"
-    )
+    for relative_path, class_name in (
+        ("v1/cudagraph_dispatcher.py", "CudagraphDispatcher"),
+        ("v1/worker/gpu/cudagraph_utils.py", "CudaGraphManager"),
+    ):
+        file_to_patch = _get_vllm_file(relative_path)
+        source_suffix = (
+            "\n\n"
+            f"{marker}\n"
+            "import os as _nrl_os\n"
+            "if _nrl_os.environ.get(\n"
+            "    'NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS', 'false'\n"
+            ").lower() == 'true':\n"
+            "    from nemo_rl.models.generation.vllm.patches import (\n"
+            "        _install_vllm_cudagraph_dispatch_metrics,\n"
+            "    )\n"
+            f"    _install_vllm_cudagraph_dispatch_metrics({class_name})\n"
+        )
 
-    with _locked_file_patch(file_to_patch) as (content, write_back):
-        if marker not in content:
-            write_back(content + source_suffix)
-            logger.info("Installed CUDA-graph dispatch metrics source hook.")
-        else:
-            logger.info("CUDA-graph dispatch metrics source hook already installed.")
+        with _locked_file_patch(file_to_patch) as (content, write_back):
+            if marker not in content:
+                write_back(content + source_suffix)
+                logger.info(
+                    "Installed CUDA-graph dispatch metrics source hook in %s.",
+                    relative_path,
+                )
+            else:
+                logger.info(
+                    "CUDA-graph dispatch metrics source hook already installed in %s.",
+                    relative_path,
+                )
 
     if (
         os.environ.get("NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS", "false").lower()
         == "true"
     ):
         from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+        from vllm.v1.worker.gpu.cudagraph_utils import CudaGraphManager
 
         _install_vllm_cudagraph_dispatch_metrics(CudagraphDispatcher)
+        _install_vllm_cudagraph_dispatch_metrics(CudaGraphManager)
 
 
 def _patch_vllm_hermes_tool_parser_thread_safety(logger) -> None:
