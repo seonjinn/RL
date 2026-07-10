@@ -15,8 +15,8 @@ SUBMISSIONS_HEADER = (
     "timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\t"
     "wandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\t"
     "container_sha256\tmax_steps\tstatic_k\tdynamic_schedule\t"
-    "rejection_sample_method\tdraft_sample_method\tmax_cudagraph_capture_size\t"
-    "command"
+    "rejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\t"
+    "max_num_seqs\tmax_cudagraph_capture_size\tcommand"
 )
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
@@ -324,6 +324,24 @@ def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_limit() -> None:
     assert "compilation_config.max_cudagraph_capture_size=768" in output
 
 
+def test_dynamicsd_launcher_renders_matched_scheduler_limits() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="scheduler-contract-test",
+        ATTEMPT_ID="attempt-1",
+        MAX_NUM_BATCHED_TOKENS="32768",
+        MAX_NUM_SEQS="128",
+    )
+
+    assert "policy.generation.vllm_kwargs.max_num_batched_tokens=32768" in output
+    assert "policy.generation.vllm_kwargs.max_num_seqs=128" in output
+
+
 def test_dynamicsd_launcher_rejects_invalid_cudagraph_capture_limit() -> None:
     result = _run_script_unchecked(
         DYNAMICSD_LAUNCHER,
@@ -485,7 +503,7 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     lines = manifest.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert lines[0].split("\t") == SUBMISSIONS_HEADER.split("\t")
-    assert all(len(line.split("\t")) == 20 for line in lines)
+    assert all(len(line.split("\t")) == 22 for line in lines)
     assert lines[1].split("\t")[16:18] == ["standard", "probabilistic"]
 
 

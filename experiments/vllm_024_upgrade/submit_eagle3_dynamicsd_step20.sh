@@ -22,6 +22,8 @@ NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
 TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-}"
 MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-}"
 MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
@@ -36,11 +38,16 @@ case "${DRAFT_SAMPLE_METHOD}" in
     exit 2
     ;;
 esac
-if [[ -n "${MAX_CUDAGRAPH_CAPTURE_SIZE}" \
-  && ! "${MAX_CUDAGRAPH_CAPTURE_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "ERROR: MAX_CUDAGRAPH_CAPTURE_SIZE must be a positive integer" >&2
-  exit 2
-fi
+for numeric_override in \
+  MAX_NUM_BATCHED_TOKENS \
+  MAX_NUM_SEQS \
+  MAX_CUDAGRAPH_CAPTURE_SIZE; do
+  numeric_value="${!numeric_override}"
+  if [[ -n "${numeric_value}" && ! "${numeric_value}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: ${numeric_override} must be a positive integer" >&2
+    exit 2
+  fi
+done
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -151,6 +158,7 @@ submit_one() {
   local draft_k="${STATIC_K}"
   local manifest_rejection_sample_method="not_applicable"
   local manifest_draft_sample_method="not_applicable"
+  local resolved_max_num_batched_tokens="${MAX_NUM_BATCHED_TOKENS}"
   local nodes
 
   case "${model}" in
@@ -194,6 +202,9 @@ submit_one() {
       draft_model="${QWEN30_PARD_MODEL:-${HF_HOME}/hub/models--amd--PARD-Qwen3-0.6B/snapshots/f9f650fbab180c26498817718f0db5cae8f25136}"
       ;;
   esac
+  if [[ "${variant}" == "pard_k16" && -z "${resolved_max_num_batched_tokens}" ]]; then
+    resolved_max_num_batched_tokens="${PARD_K16_MAX_NUM_BATCHED_TOKENS}"
+  fi
 
   if [[ "${MODE}" != "dry-run" && -n "${draft_model}" && "${variant}" != "baseline" && ! -d "${draft_model}" ]]; then
     echo "ERROR: draft model directory not found: ${draft_model}" >&2
@@ -258,6 +269,14 @@ submit_one() {
       "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${MAX_CUDAGRAPH_CAPTURE_SIZE}"
     )
   fi
+  if [[ -n "${resolved_max_num_batched_tokens}" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_kwargs.max_num_batched_tokens=${resolved_max_num_batched_tokens}"
+    )
+  fi
+  if [[ -n "${MAX_NUM_SEQS}" ]]; then
+    overrides+=("++policy.generation.vllm_kwargs.max_num_seqs=${MAX_NUM_SEQS}")
+  fi
   if [[ -n "${NUM_PROMPTS_PER_STEP}" ]]; then
     overrides+=("grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP}")
   fi
@@ -297,11 +316,6 @@ submit_one() {
         "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
         "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH=true"
       )
-      if [[ "${variant}" == "pard_k16" ]]; then
-        overrides+=(
-          "++policy.generation.vllm_kwargs.max_num_batched_tokens=${PARD_K16_MAX_NUM_BATCHED_TOKENS}"
-        )
-      fi
       ;;
     *)
       manifest_rejection_sample_method="${REJECTION_SAMPLE_METHOD}"
@@ -402,7 +416,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_cudagraph_capture_size\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\tmax_cudagraph_capture_size\tcommand'
       if [[ -f "${manifest}" ]]; then
         local existing_manifest_header
         existing_manifest_header="$(head -n 1 "${manifest}")"
@@ -418,13 +432,14 @@ submit_one() {
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
         "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" \
         "${manifest_rejection_sample_method}" "${manifest_draft_sample_method}" \
+        "${resolved_max_num_batched_tokens}" "${MAX_NUM_SEQS}" \
         "${MAX_CUDAGRAPH_CAPTURE_SIZE}" "${command}" >> "${manifest}"
       ;;
     *)

@@ -88,6 +88,20 @@ def test_summarize_history_requires_positive_specdec_evidence() -> None:
     assert summary.reason == "missing_specdec_evidence"
 
 
+@pytest.mark.parametrize("variant", ["pard_k5", "pard_k16", "suffix_k32"])
+def test_summarize_history_requires_counters_for_every_specdec_variant(
+    variant: str,
+) -> None:
+    history = _history(1.2)
+    for row in history:
+        del row["train/vllm/spec_num_drafts"]
+
+    summary = summarize_history("qwen30ba3b", variant, history)
+
+    assert not summary.complete
+    assert summary.reason == "non_finite_metrics:num_drafts:2"
+
+
 def test_summarize_history_weights_specdec_ratios_by_counters() -> None:
     history = _history(1.2)
     history[1]["train/vllm/spec_num_drafts"] = 1.0
@@ -195,6 +209,22 @@ def test_validate_manifest_rows_rejects_setup_mismatch_and_duplicates() -> None:
     assert (
         _validate_manifest_rows(rows) == "duplicate variant baseline for model qwen32b"
     )
+
+
+def test_validate_manifest_rows_matches_scheduler_and_graph_limits() -> None:
+    common = {
+        "model": "qwen30ba3b",
+        "commit": "aaa",
+        "nodes": "4",
+        "max_num_seqs": "128",
+        "max_cudagraph_capture_size": "768",
+    }
+    rows = [
+        {**common, "variant": "baseline", "max_num_batched_tokens": "16384"},
+        {**common, "variant": "pard_k16", "max_num_batched_tokens": "32768"},
+    ]
+
+    assert _validate_manifest_rows(rows) == "mismatched setup for model qwen30ba3b"
 
 
 def test_validate_manifest_rows_allows_sampling_specific_variants() -> None:
