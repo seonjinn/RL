@@ -389,15 +389,24 @@ submit_one() {
       ;;
     submit)
       mkdir -p "${run_dir}"
+      local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
+      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tcommand'
+      if [[ -f "${manifest}" ]]; then
+        local existing_manifest_header
+        existing_manifest_header="$(head -n 1 "${manifest}")"
+        if [[ "${existing_manifest_header}" != "${manifest_header}" ]]; then
+          echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
+          exit 2
+        fi
+      fi
       local job_id
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
-      local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
       if [[ ! -f "${manifest}" ]]; then
-        printf 'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tcommand\n' > "${manifest}"
+        printf '%s\n' "${manifest_header}" > "${manifest}"
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
         "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \

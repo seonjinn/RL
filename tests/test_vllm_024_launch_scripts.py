@@ -11,6 +11,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DYNAMICSD_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_eagle3_dynamicsd_step20.sh"
 )
+SUBMISSIONS_HEADER = (
+    "timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\t"
+    "wandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\t"
+    "container_sha256\tmax_steps\tstatic_k\tdynamic_schedule\t"
+    "rejection_sample_method\tdraft_sample_method\tcommand"
+)
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
 )
@@ -39,6 +45,88 @@ def _run_script_unchecked(
         capture_output=True,
         text=True,
     )
+
+
+def _prepare_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    tracked_files = (
+        checkout / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+        checkout / "experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh",
+        checkout / "ray.sub",
+    )
+    for tracked_file in tracked_files:
+        tracked_file.parent.mkdir(parents=True, exist_ok=True)
+        tracked_file.touch()
+
+    git_environment = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "contract-test",
+        "GIT_AUTHOR_EMAIL": "contract-test@example.invalid",
+        "GIT_COMMITTER_NAME": "contract-test",
+        "GIT_COMMITTER_EMAIL": "contract-test@example.invalid",
+    }
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "contract-test"],
+        ["git", "config", "user.email", "contract-test@example.invalid"],
+        ["git", "add", "."],
+        ["git", "commit", "-q", "-m", "contract-test"],
+    ):
+        subprocess.run(
+            command,
+            cwd=checkout,
+            env=git_environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    subprocess.run(
+        ["git", "branch", "-M", "main"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    (stub_bin / "sbatch").write_text(
+        "#!/usr/bin/env bash\nprintf '12345\\n'\n", encoding="utf-8"
+    )
+    (stub_bin / "readlink").write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$2\"\n", encoding="utf-8"
+    )
+    (stub_bin / "date").write_text(
+        "#!/usr/bin/env bash\nprintf '2026-07-09T00:00:00+00:00\\n'\n",
+        encoding="utf-8",
+    )
+    for stub in stub_bin.iterdir():
+        stub.chmod(0o755)
+
+    container = tmp_path / "container.sqsh"
+    container.touch()
+    draft_model = tmp_path / "draft-model"
+    draft_model.mkdir()
+    experiment_root = tmp_path / "runs"
+    environment = {
+        "REPO_DIR": str(checkout),
+        "CONTAINER": str(container),
+        "QWEN30_DRAFT_MODEL": str(draft_model),
+        "EXPERIMENT_ROOT": str(experiment_root),
+        "RUN_TAG": "submit-contract",
+        "ATTEMPT_ID": "attempt-1",
+        "WANDB_API_KEY": "contract-test-key",
+        "PATH": f"{stub_bin}:{os.environ['PATH']}",
+    }
+    return environment, experiment_root / "submissions.tsv"
 
 
 def _dry_run_dynamicsd(model: str, variant: str) -> str:
@@ -347,13 +435,50 @@ def test_dynamicsd_launcher_rejects_invalid_sampling_methods(
     assert expected_message in result.stderr
 
 
-def test_dynamicsd_launcher_records_sampling_provenance() -> None:
-    source = DYNAMICSD_LAUNCHER.read_text(encoding="utf-8")
+def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
+    tmp_path: Path,
+) -> None:
+    environment, manifest = _prepare_submit_environment(tmp_path)
 
-    assert "rejection_sample_method" in source
-    assert "draft_sample_method" in source
-    assert 'manifest_rejection_sample_method="not_applicable"' in source
-    assert 'manifest_draft_sample_method="not_applicable"' in source
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "submit",
+        "qwen30ba3b",
+        "eagle3_k5",
+        **environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert lines[0].split("\t") == SUBMISSIONS_HEADER.split("\t")
+    assert all(len(line.split("\t")) == 19 for line in lines)
+    assert lines[1].split("\t")[16:18] == ["standard", "probabilistic"]
+
+
+def test_dynamicsd_launcher_submit_rejects_a_legacy_manifest_header(
+    tmp_path: Path,
+) -> None:
+    environment, manifest = _prepare_submit_environment(tmp_path)
+    manifest.parent.mkdir(parents=True)
+    legacy_header = (
+        "timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\t"
+        "wandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\t"
+        "container_sha256\tmax_steps\tstatic_k\tdynamic_schedule\tcommand\n"
+    )
+    manifest.write_text(legacy_header, encoding="utf-8")
+
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "submit",
+        "qwen30ba3b",
+        "eagle3_k5",
+        **environment,
+    )
+
+    assert result.returncode == 2
+    assert "submissions manifest header mismatch" in result.stderr
+    assert manifest.read_text(encoding="utf-8") == legacy_header
 
 
 def test_dynamicsd_launcher_renders_pard_with_graph_patch() -> None:
