@@ -323,8 +323,9 @@ def _write_manifest(path: Path, rows: Iterable[dict[str, str]]) -> None:
         (ray_driver_log.parent / ".ray_logs_final_sync_complete").touch()
         evidence_dir = ray_driver_log.parent / ".ray_logs_final_sync_evidence"
         evidence_dir.mkdir()
-        for node in range(4):
-            (evidence_dir / f"node-{node}").touch()
+        (evidence_dir / "head").touch()
+        for worker in range(3):
+            (evidence_dir / f"worker-{worker}").touch()
 
 
 def _run_validator(
@@ -1205,6 +1206,11 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
             "(RayWorker pid=42) IndexError: CUDA graph replay failed\n",
             "cuda_graph_fallback",
         ),
+        (
+            "ray_log_dir",
+            "\x1b[31m(VllmGenerationWorker pid=42) RuntimeError: CUDA graph capture failed\x1b[0m\n",
+            "cuda_graph_fallback",
+        ),
     ],
 )
 def test_mini_validator_recursively_rejects_explicit_log_failure_signatures(
@@ -1304,8 +1310,9 @@ def test_mini_validator_scans_every_restart_attempt(tmp_path: Path) -> None:
     (restart_dir / ".ray_logs_final_sync_complete").touch()
     evidence_dir = restart_dir / ".ray_logs_final_sync_evidence"
     evidence_dir.mkdir()
-    for node in range(4):
-        (evidence_dir / f"node-{node}").touch()
+    (evidence_dir / "head").touch()
+    for worker in range(3):
+        (evidence_dir / f"worker-{worker}").touch()
     _manifest_path(manifest, threshold, "ray_driver_log_path").write_text(
         "RuntimeError: NCCL error: unhandled system error\n", encoding="utf-8"
     )
@@ -1363,7 +1370,50 @@ def test_mini_validator_requires_per_node_final_sync_evidence(tmp_path: Path) ->
     evidence_dir = (
         manifest.parent / threshold["ray_driver_log_path"]
     ).parent / ".ray_logs_final_sync_evidence"
-    (evidence_dir / "node-3").unlink()
+    (evidence_dir / "worker-2").unlink()
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == (
+        "mini_health_failed:log_missing:final_sync_node_evidence"
+    )
+
+
+@pytest.mark.parametrize(
+    ("replaced_name", "replacement_name", "replacement_is_directory"),
+    [
+        ("worker-2", "unexpected", False),
+        ("worker-2", "worker-2", True),
+    ],
+)
+def test_mini_validator_requires_exact_regular_final_sync_evidence(
+    tmp_path: Path,
+    replaced_name: str,
+    replacement_name: str,
+    replacement_is_directory: bool,
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    evidence_dir = (
+        manifest.parent / threshold["ray_driver_log_path"]
+    ).parent / ".ray_logs_final_sync_evidence"
+    (evidence_dir / replaced_name).unlink()
+    replacement = evidence_dir / replacement_name
+    if replacement_is_directory:
+        replacement.mkdir()
+    else:
+        replacement.touch()
 
     result = main(
         ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
@@ -1418,6 +1468,7 @@ def test_mini_validator_ignores_benign_log_mentions(tmp_path: Path) -> None:
         "NCCL timeout is configured for 600 seconds.\n"
         "CUDA graph fallback count: 0; eager_fallback_count=0.\n"
         "CUDA graph fallback was disabled.\n"
+        "No uncaptured CUDA graphs were observed.\n"
         "q-cache mismatch check passed.\n"
         "stale draft IDs observed: 0.\n"
         "invalid tokens found: 0.\n"

@@ -270,11 +270,12 @@ def test_ray_launcher_completes_final_distributed_log_sync_before_driver_exit() 
     driver_exit = source.index("driver_exit_code=\\$?")
     request = source.index(".ray_logs_final_sync_requested", driver_exit)
     completion = source.index(".ray_logs_final_sync_complete", request)
-    preserved_exit = source.index('exit "\\$driver_exit_code"', completion)
-    assert driver_exit < request < completion < preserved_exit
+    final_status = source.index("final_sync_exit_status", completion)
+    assert driver_exit < request < completion < final_status
     assert ".ray_logs_final_sync_ack.head" in source
     assert ".ray_logs_final_sync_ack.worker-\\$SLURM_PROCID" in source
-    assert 'expected_sync_acks="$SLURM_JOB_NUM_NODES"' in source
+    assert "expected_sync_nodes=(head)" in source
+    assert 'expected_sync_acks="\\${#expected_sync_nodes[@]}"' in source
 
 
 @pytest.mark.parametrize("assignment", ["head_cmd", "worker_cmd"])

@@ -49,6 +49,7 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
 
 
 MINI_STEPS = {1, 2}
+MINI_EXPECTED_NODES = 4
 MINI_EXPECTED_GLOBAL_ROLLOUTS = 64
 MINI_EXPECTED_LOCAL_CAPACITY = 8
 MINI_EXPECTED_THRESHOLD = 4
@@ -212,7 +213,11 @@ MINI_SBATCH_OPTIONS: dict[str, str | None] = {
 }
 FINAL_SYNC_MARKER = ".ray_logs_final_sync_complete"
 FINAL_SYNC_EVIDENCE_DIR = ".ray_logs_final_sync_evidence"
+FINAL_SYNC_EVIDENCE_FILES = frozenset(
+    {"head", *(f"worker-{worker}" for worker in range(MINI_EXPECTED_NODES - 1))}
+)
 TEXT_LOG_SUFFIXES = {".err", ".log", ".out", ".txt"}
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 LOG_FAILURE_PATTERNS = (
     (
         "stale_draft_id",
@@ -285,16 +290,14 @@ LOG_FAILURE_PATTERNS = (
     (
         "cuda_graph_fallback",
         re.compile(
-            r"(?:^\s*(?:(?:\[[^\]\n]*(?:rank|ray)[^\]\n]*\]|"
-            r"\([^\)\n]*(?:ray|rank)[^\)\n]*\)|ray::[^\s:]+)\s*:?\s*)*"
-            r"(?:runtimeerror|indexerror)\s*:.*\bcuda[ _]?graphs?\b.*"
+            r"(?:^\s*(?:(?:\[[^\]\n]+\]|\([^\)\n]+\)|ray::[^\s:]+)\s*:?\s*)*"
+            r"(?:runtimeerror|indexerror|error)\s*:.*\bcuda[ _]?graphs?\b.*"
             r"\b(?:fallback|capture|replay|execution|failed)\b|"
             r"\bcuda[ _]?graphs?\s+fallback\s+"
             r"(?:to eager|detected|used|occurred)\b|"
             r"\bcuda[ _]?graphs?\s+fallback count\s*[:=]\s*[1-9]\d*\b|"
             r"\b(?:vllm:)?cudagraph(?:_[a-z0-9]+)*_"
             r"(?:eager_)?fallback(?:_count)?\s*[:=]\s*[1-9]\d*(?:\.0+)?\b|"
-            r"\buncaptured cuda[ _]?graphs?\b|"
             r"\beager[ _-]?fallback(?:[ _]?count)?\s*[:=]\s*[1-9]\d*\b)",
             re.IGNORECASE,
         ),
@@ -748,8 +751,9 @@ def _scan_log(path: Path) -> str | None:
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
             for line in stream:
+                normalized_line = ANSI_ESCAPE_PATTERN.sub("", line)
                 for reason, pattern in LOG_FAILURE_PATTERNS:
-                    if pattern.search(line):
+                    if pattern.search(normalized_line):
                         return f"logs:{reason}"
     except OSError:
         return "log_unreadable"
@@ -797,7 +801,14 @@ def _log_health_failure(manifest: Path, metadata: Mapping[str, str]) -> str | No
     if not (final_attempt / FINAL_SYNC_MARKER).is_file():
         return "log_missing:final_sync_marker"
     evidence_dir = final_attempt / FINAL_SYNC_EVIDENCE_DIR
-    if not evidence_dir.is_dir() or len(list(evidence_dir.iterdir())) != 4:
+    if not evidence_dir.is_dir():
+        return "log_missing:final_sync_node_evidence"
+    evidence_entries = list(evidence_dir.iterdir())
+    if {
+        entry.name for entry in evidence_entries
+    } != FINAL_SYNC_EVIDENCE_FILES or not all(
+        entry.is_file() for entry in evidence_entries
+    ):
         return "log_missing:final_sync_node_evidence"
 
     text_logs = [slurm_log]

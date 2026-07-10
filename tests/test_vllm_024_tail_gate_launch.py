@@ -18,6 +18,7 @@ import csv
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -758,6 +759,61 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         ).stdout
         == ""
     )
+
+
+def test_submit_executes_and_serializes_one_canonical_submission_argv(
+    tmp_path: Path,
+) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\nprintf '%q ' \"$@\" >>\"$SBATCH_LOG\"\nprintf '\\n' >>\"$SBATCH_LOG\"\nprintf '4242\\n'\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.write_text("container contract\n", encoding="utf-8")
+    draft_model = tmp_path / "draft-model"
+    draft_model.mkdir()
+    draft_model_link = tmp_path / "draft-model-link"
+    draft_model_link.symlink_to(draft_model, target_is_directory=True)
+    experiment_root = tmp_path / "runs"
+
+    result = _run_launcher(
+        "submit",
+        "qwen32b",
+        "always_on_v2_k5",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        QWEN32_DRAFT_MODEL=str(draft_model_link),
+        EXPERIMENT_ROOT=str(experiment_root),
+        WANDB_API_KEY="test-only-key",
+        SBATCH_LOG=str(sbatch_log),
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with (experiment_root / "submissions.tsv").open(
+        encoding="utf-8", newline=""
+    ) as stream:
+        row = next(csv.DictReader(stream, delimiter="\t"))
+    submission_argv = json.loads(row["launcher_argv_json"])
+    sbatch_index = submission_argv.index("sbatch")
+    submitted_argv = next(
+        shlex.split(line)
+        for line in sbatch_log.read_text(encoding="utf-8").splitlines()
+        if "--parsable" in shlex.split(line)
+    )
+
+    assert submitted_argv == submission_argv[sbatch_index + 1 :]
+    assert submission_argv.count("--parsable") == 1
+    assert submitted_argv.count("--parsable") == 1
+    assert shlex.split(row["launcher_command"]) == submission_argv
+    assert row["draft_checkpoint"] == str(draft_model.resolve())
+    assert f"speculative_config.model={draft_model.resolve()}" in row["command"]
 
 
 def test_submit_records_environment_gate_settings_in_manifest(tmp_path: Path) -> None:

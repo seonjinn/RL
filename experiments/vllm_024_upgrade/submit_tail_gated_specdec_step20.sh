@@ -354,6 +354,7 @@ submit_one() {
   local manifest_draft_sample_method="not_applicable"
   local manifest_draft_checkpoint="not_applicable"
   local container_path="${CONTAINER}"
+  local index
   local run_dir="${EXPERIMENT_ROOT}/${model}/${variant}"
   local wandb_run_id="${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
   local triton_cache_dir="/tmp/nemorl-tail-gate-triton-${RUN_TAG}-${model}-${variant}"
@@ -473,6 +474,9 @@ submit_one() {
     echo "ERROR: draft model directory not found: ${draft_model}" >&2
     exit 2
   fi
+  if [[ "${draft_k}" != "0" && -d "${draft_model}" ]]; then
+    draft_model="$(readlink -f "${draft_model}")"
+  fi
 
   local overrides=(
     "grpo.max_num_steps=${MAX_STEPS}"
@@ -511,9 +515,6 @@ submit_one() {
   if [[ "${draft_k}" != "0" ]]; then
     manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
     manifest_draft_checkpoint="${draft_model}"
-    if [[ -d "${draft_model}" ]]; then
-      manifest_draft_checkpoint="$(readlink -f "${draft_model}")"
-    fi
     overrides+=(
       "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
       "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
@@ -600,18 +601,19 @@ submit_one() {
     --open-mode=append
     --comment=metrics
   )
-  local launcher_command_parts=(
+  local submission_argv=(
     env
     "${environment[@]}"
     sbatch
+    --parsable
     "${sbatch_args[@]}"
     "${REPO_DIR}/ray.sub"
   )
   local launcher_command
-  printf -v launcher_command '%q ' "${launcher_command_parts[@]}"
+  printf -v launcher_command '%q ' "${submission_argv[@]}"
   launcher_command="${launcher_command% }"
   local launcher_argv_json
-  launcher_argv_json="$(json_argv "${launcher_command_parts[@]}")"
+  launcher_argv_json="$(json_argv "${submission_argv[@]}")"
 
   case "${MODE}" in
     dry-run)
@@ -626,7 +628,14 @@ submit_one() {
       ;;
     test-only)
       mkdir -p "${run_dir}"
-      env "${environment[@]}" sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
+      local test_only_argv=("${submission_argv[@]}")
+      for index in "${!test_only_argv[@]}"; do
+        if [[ "${test_only_argv[${index}]}" == "--parsable" ]]; then
+          test_only_argv[${index}]=--test-only
+          break
+        fi
+      done
+      "${test_only_argv[@]}"
       ;;
     submit)
       mkdir -p "${run_dir}"
@@ -639,9 +648,16 @@ submit_one() {
       if [[ ! -f "${manifest}" ]]; then
         printf '%s\n' "${manifest_header}" >"${manifest}"
       fi
-      env "${environment[@]}" sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
+      local test_only_argv=("${submission_argv[@]}")
+      for index in "${!test_only_argv[@]}"; do
+        if [[ "${test_only_argv[${index}]}" == "--parsable" ]]; then
+          test_only_argv[${index}]=--test-only
+          break
+        fi
+      done
+      "${test_only_argv[@]}"
       local job_id
-      job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
+      job_id="$("${submission_argv[@]}")"
       local runtime_commit
       runtime_commit="$(git -C "${REPO_DIR}" rev-parse HEAD)"
       local job_log_dir="${run_dir}/${job_id}-logs"

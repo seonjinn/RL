@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -67,14 +68,69 @@ def test_final_sync_exit_status_preserves_driver_failure(
     assert result.returncode == expected_status, result.stderr
 
 
-def test_final_sync_requires_node_evidence_and_nonempty_ray_sessions() -> None:
+def _sync_ray_logs_once(source: str, assignment: str) -> str:
+    start = source.index("sync-ray-logs-once()", source.index(f"{assignment}=$(cat"))
+    end = source.index("\nlog-sync-sidecar()", start)
+    return source[start:end].replace("\\$", "$")
+
+
+@pytest.mark.parametrize("assignment", ("head_cmd", "worker_cmd"))
+def test_final_sync_rejects_empty_ray_sessions_before_acknowledging(
+    tmp_path: Path, assignment: str
+) -> None:
+    source = RAY_SUB.read_text(encoding="utf-8")
+    session_logs = tmp_path / "ray" / "session_1" / "logs"
+    session_logs.mkdir(parents=True)
+    function = _sync_ray_logs_once(source, assignment).replace(
+        "/tmp/ray", str(tmp_path / "ray")
+    )
+    log_dir = tmp_path / "collected"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "rsync").write_text(
+        '#!/usr/bin/env bash\ncp -a "${2%/}/." "$3"\n', encoding="utf-8"
+    )
+    (fake_bin / "rsync").chmod(0o755)
+
+    empty = subprocess.run(
+        ["bash", "-c", f"{function}\nsync-ray-logs-once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "LOG_DIR": str(log_dir),
+            "SLURMD_NODENAME": "node-a",
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+    )
+    assert empty.returncode == 1, empty.stderr
+
+    (session_logs / "worker-1.err").write_text("Ray log\n", encoding="utf-8")
+    populated = subprocess.run(
+        ["bash", "-c", f"{function}\nsync-ray-logs-once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "LOG_DIR": str(log_dir),
+            "SLURMD_NODENAME": "node-a",
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+    )
+    assert populated.returncode == 0, populated.stderr
+
+
+def test_final_sync_requires_copied_logs_and_canonical_node_evidence() -> None:
     source = RAY_SUB.read_text(encoding="utf-8")
 
-    assert "found_ray_logs=0" in source
-    assert 'found_ray_logs" -eq 0' in source
+    assert source.count("local copied_ray_logs=0") == 2
+    assert source.count('copied_ray_logs" -eq 0') == 2
+    assert source.count('find "\\$session_dir/logs" -type f -print -quit') == 2
+    assert source.count("copied_ray_logs=1") >= 2
     assert ".ray_logs_final_sync_evidence" in source
-    assert 'for sync_node in "${nodes_array[@]}"; do' in source
-    assert ".ray_logs_final_sync_ack.\\$sync_node" in source
+    assert ".ray_logs_final_sync_ack.head" in source
+    assert ".ray_logs_final_sync_ack.worker-\\$SLURM_PROCID" in source
+    assert 'for sync_node in "\\${expected_sync_nodes[@]}"; do' in source
     assert (
         'final_sync_exit_status "\\$driver_exit_code" "\\$final_sync_complete"'
         in source

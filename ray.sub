@@ -556,23 +556,33 @@ monitor-sidecar &
 # Background process to sync Ray logs periodically and once more on driver exit.
 sync-ray-logs-once() {
   local sync_status=0
-  local found_ray_logs=0
+  local copied_ray_logs=0
   mkdir -p "$LOG_DIR/ray" || return 1
   if compgen -G "/tmp/ray/session_[0-9]*" > /dev/null; then
     for session_dir in /tmp/ray/session_[0-9]*/; do
       if [[ -d "\$session_dir/logs" ]]; then
-        found_ray_logs=1
+        if ! find "\$session_dir/logs" -type f -print -quit | grep -q .; then
+          continue
+        fi
         session_name=\$(basename "\$session_dir")
         mkdir -p "$LOG_DIR/ray/\$session_name/logs" || sync_status=1
         if command -v rsync > /dev/null 2>&1; then
-          rsync -ah "\$session_dir/logs/" "$LOG_DIR/ray/\$session_name/logs/" || sync_status=1
+          if rsync -ah "\$session_dir/logs/" "$LOG_DIR/ray/\$session_name/logs/"; then
+            copied_ray_logs=1
+          else
+            sync_status=1
+          fi
         else
-          cp -a "\$session_dir/logs/." "$LOG_DIR/ray/\$session_name/logs/" || sync_status=1
+          if cp -a "\$session_dir/logs/." "$LOG_DIR/ray/\$session_name/logs/"; then
+            copied_ray_logs=1
+          else
+            sync_status=1
+          fi
         fi
       fi
     done
   fi
-  if [[ "\$found_ray_logs" -eq 0 ]]; then
+  if [[ "\$copied_ray_logs" -eq 0 ]]; then
     return 1
   fi
   return \$sync_status
@@ -584,11 +594,10 @@ log-sync-sidecar() {
   while true; do
     if [[ -f "$LOG_DIR/.ray_logs_final_sync_requested" ]]; then
       if sync-ray-logs-once; then
-        sync_node="\${SLURMD_NODENAME:-$head_node}"
-        touch "$LOG_DIR/.ray_logs_final_sync_evidence/\$sync_node"
-        touch "$LOG_DIR/.ray_logs_final_sync_ack.\$sync_node"
+        touch "$LOG_DIR/.ray_logs_final_sync_evidence/head"
+        touch "$LOG_DIR/.ray_logs_final_sync_ack.head"
       else
-        touch "$LOG_DIR/.ray_logs_final_sync_failed.\${SLURMD_NODENAME:-$head_node}"
+        touch "$LOG_DIR/.ray_logs_final_sync_failed.head"
       fi
       break
     fi
@@ -734,13 +743,17 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
   bash "$DRIVER_COMMAND_FILE" > "$LOG_DIR/ray-driver.log" 2>&1
   driver_exit_code=\$?
   touch "$LOG_DIR/.ray_logs_final_sync_requested"
-  expected_sync_acks="${#nodes_array[@]}"
+  expected_sync_nodes=(head)
+  for ((worker_index=0; worker_index < $(( ${#nodes_array[@]} - 1 )); worker_index++)); do
+    expected_sync_nodes+=("worker-\$worker_index")
+  done
+  expected_sync_acks="\${#expected_sync_nodes[@]}"
   sync_deadline=\$((SECONDS + 180))
   final_sync_complete=0
   while (( SECONDS <= sync_deadline )); do
     sync_acks=0
     missing_sync_evidence=0
-    for sync_node in "${nodes_array[@]}"; do
+    for sync_node in "\${expected_sync_nodes[@]}"; do
       if [[ -f "$LOG_DIR/.ray_logs_final_sync_ack.\$sync_node" ]] \
         && [[ -f "$LOG_DIR/.ray_logs_final_sync_evidence/\$sync_node" ]]; then
         sync_acks=\$((sync_acks + 1))
@@ -813,24 +826,34 @@ monitor-sidecar &
 # Background process to sync Ray logs periodically and acknowledge final sync.
 sync-ray-logs-once() {
   local sync_status=0
-  local found_ray_logs=0
+  local copied_ray_logs=0
   mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME" || return 1
   if compgen -G "/tmp/ray/session_[0-9]*" > /dev/null; then
     for session_dir in /tmp/ray/session_[0-9]*/; do
       if [[ -d "\$session_dir/logs" ]]; then
-        found_ray_logs=1
+        if ! find "\$session_dir/logs" -type f -print -quit | grep -q .; then
+          continue
+        fi
         session_name=\$(basename "\$session_dir")
         destination="$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/logs"
         mkdir -p "\$destination" || sync_status=1
         if command -v rsync > /dev/null 2>&1; then
-          rsync -ah "\$session_dir/logs/" "\$destination/" || sync_status=1
+          if rsync -ah "\$session_dir/logs/" "\$destination/"; then
+            copied_ray_logs=1
+          else
+            sync_status=1
+          fi
         else
-          cp -a "\$session_dir/logs/." "\$destination/" || sync_status=1
+          if cp -a "\$session_dir/logs/." "\$destination/"; then
+            copied_ray_logs=1
+          else
+            sync_status=1
+          fi
         fi
       fi
     done
   fi
-  if [[ "\$found_ray_logs" -eq 0 ]]; then
+  if [[ "\$copied_ray_logs" -eq 0 ]]; then
     return 1
   fi
   return \$sync_status
@@ -842,10 +865,10 @@ log-sync-sidecar() {
   while true; do
     if [[ -f "$LOG_DIR/.ray_logs_final_sync_requested" ]]; then
       if sync-ray-logs-once; then
-        touch "$LOG_DIR/.ray_logs_final_sync_evidence/\$SLURMD_NODENAME"
-        touch "$LOG_DIR/.ray_logs_final_sync_ack.\$SLURMD_NODENAME"
+        touch "$LOG_DIR/.ray_logs_final_sync_evidence/worker-\$SLURM_PROCID"
+        touch "$LOG_DIR/.ray_logs_final_sync_ack.worker-\$SLURM_PROCID"
       else
-        touch "$LOG_DIR/.ray_logs_final_sync_failed.\$SLURMD_NODENAME"
+        touch "$LOG_DIR/.ray_logs_final_sync_failed.worker-\$SLURM_PROCID"
       fi
       break
     fi
