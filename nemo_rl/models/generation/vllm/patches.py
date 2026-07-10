@@ -465,6 +465,55 @@ def _patch_vllm_missing_draft_probs_fail_closed(logger) -> None:
     logger.info("Successfully patched missing probabilistic draft rows to fail closed.")
 
 
+def _patch_vllm_parallel_probabilistic_draft_temperature(logger) -> None:
+    """Expand per-request temperatures for parallel probabilistic drafts."""
+    file_to_patch = _get_vllm_file("v1/spec_decode/llm_base_proposer.py")
+    old_snippet = (
+        "    # Use epsilon comparison to detect greedy sampling (temperature ~ 0.0)\n"
+        "    # consistent with sampler.py's _SAMPLING_EPS threshold\n"
+        "    temperature = sampling_metadata.temperature\n"
+        "    # Avoid division by zero if there are greedy requests.\n"
+        "    if not sampling_metadata.all_random:\n"
+        "        is_greedy = temperature < _SAMPLING_EPS\n"
+        "        temperature = torch.where(is_greedy, 1.0, temperature)\n"
+        "    logits.div_(temperature.view(-1, 1))\n"
+    )
+    new_snippet = (
+        "    # Use epsilon comparison to detect greedy sampling (temperature ~ 0.0)\n"
+        "    # consistent with sampler.py's _SAMPLING_EPS threshold\n"
+        "    temperature = sampling_metadata.temperature\n"
+        "    temperature_count = temperature.numel()\n"
+        "    logits_count = logits.shape[0]\n"
+        "    if temperature_count != logits_count:\n"
+        "        if temperature_count <= 0 or logits_count % temperature_count != 0:\n"
+        "            raise RuntimeError(\n"
+        '                "parallel draft logits count is not divisible by the sampling "\n'
+        '                f"temperature count: logits={logits_count}, "\n'
+        '                f"temperatures={temperature_count}"\n'
+        "            )\n"
+        "        temperature = temperature.repeat_interleave(logits_count // temperature_count)\n"
+        "    # Avoid division by zero if there are greedy requests.\n"
+        "    if not sampling_metadata.all_random:\n"
+        "        is_greedy = temperature < _SAMPLING_EPS\n"
+        "        temperature = torch.where(is_greedy, 1.0, temperature)\n"
+        "    logits.div_(temperature.view(-1, 1))\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if "temperature_count = temperature.numel()" in content:
+            logger.info(
+                "Parallel probabilistic draft temperature patch already applied."
+            )
+            return
+        if content.count(old_snippet) != 1:
+            raise RuntimeError(
+                "Could not apply the parallel probabilistic draft temperature patch "
+                f"to {file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Successfully patched parallel probabilistic draft temperatures.")
+
+
 def _patch_vllm_draft_model_load_config(logger) -> None:
     """Make the generic draft-model proposer honor draft_load_config."""
     file_to_patch = _get_vllm_file("v1/spec_decode/draft_model.py")
@@ -779,6 +828,7 @@ def _apply_vllm_patches(
             and speculative_config.get("draft_sample_method", "greedy")
             == "probabilistic"
         ):
+            _patch_vllm_parallel_probabilistic_draft_temperature(patch_logger)
             _patch_vllm_missing_draft_probs_fail_closed(patch_logger)
         _patch_vllm_draft_model_load_config(patch_logger)
         _patch_vllm_medusa_load_config(patch_logger)
