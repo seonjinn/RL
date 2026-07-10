@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import os
@@ -29,6 +30,8 @@ QWEN32_DRAFT_REVISION = "dc84fe7ff1db31efa824776f49c141fc8195eb47"
 CALIBRATION_TIMESTAMP = "2026-07-10T12:34:56Z"
 CALIBRATION_CLUSTER = "lyris-gb200"
 VLLM_COMMIT = "ee0da84a"
+VLLM_VERSION = "0.24.0"
+RUNTIME_VERSION = "nightly-20260707"
 
 
 def _run_launcher(*args: str, **environment: str) -> subprocess.CompletedProcess[str]:
@@ -172,6 +175,32 @@ def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
         "BASE_LOG_DIR=/lustre/test/tail-gate-runs/qwen32b/always_on_v2_k5",
     ):
         assert expected in output
+
+
+@pytest.mark.parametrize(
+    ("model", "variant"),
+    [
+        ("qwen30ba3b", "baseline_v1"),
+        ("qwen32b", "baseline_v2"),
+        ("qwen32b", "fastrl_threshold_v2_k5"),
+    ],
+)
+def test_all_cohorts_enable_cuda_graph_and_vllm_metric_collection(
+    model: str, variant: str
+) -> None:
+    output = _dry_run(model, variant)
+
+    assert "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true" in output
+    assert "policy.generation.vllm_cfg.vllm_metrics_logger_interval=0.5" in output
+    assert (
+        "policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+        in output
+    )
+    assert "env VLLM_USE_V2_MODEL_RUNNER=" in output
+    assert (
+        "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+        in output.split("/opt/nemo_rl_venv/bin/python", maxsplit=1)[0]
+    )
 
 
 def test_test_only_uses_lyris_scheduler_without_gres(tmp_path: Path) -> None:
@@ -355,12 +384,37 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         ATTEMPT_ID="attempt-1",
         QWEN32_CALIBRATION_TIMESTAMP=CALIBRATION_TIMESTAMP,
         WANDB_API_KEY="test-only-key",
+        RUNTIME_VERSION=RUNTIME_VERSION,
         PATH=f"{bin_dir}:{os.environ['PATH']}",
     )
 
     assert result.returncode == 0, result.stderr
-    manifest = (experiment_root / "submissions.tsv").read_text(encoding="utf-8")
+    manifest_path = experiment_root / "submissions.tsv"
+    with manifest_path.open(encoding="utf-8", newline="") as stream:
+        manifest_rows = list(csv.DictReader(stream, delimiter="\t"))
+    assert len(manifest_rows) == 1
+    manifest_row = manifest_rows[0]
     assert {
+        "cluster",
+        "runtime",
+        "runtime_version",
+        "runtime_commit",
+        "vllm_version",
+        "vllm_commit",
+        "target_tp",
+        "draft_tp",
+        "dp",
+        "ep",
+        "temperature",
+        "top_p",
+        "max_osl",
+        "max_sequence_length",
+        "num_prompts",
+        "num_generations",
+        "train_gbs",
+        "max_num_batched_tokens",
+        "max_num_seqs",
+        "sampling",
         "runner",
         "graph_mode",
         "gate_mode",
@@ -368,16 +422,48 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "threshold",
         "consecutive_checks",
         "roofline_config_sha256",
-        "commit",
         "container",
+        "container_sha256",
         "recipe",
         "job_id",
-    }.issubset(manifest.splitlines()[0].split("\t"))
-    assert "\tv2\tFULL_AND_PIECEWISE\troofline\t5\t32\t10\t" in manifest
-    assert hashlib.sha256(roofline.read_bytes()).hexdigest() in manifest
-    assert commit in manifest
-    assert "4242" in manifest
-    assert "test-only-key" not in manifest
+    }.issubset(manifest_row)
+    expected_manifest_values = {
+        "model": "qwen32b",
+        "variant": "efficient_roofline_v2_k5",
+        "gate_mode": "roofline",
+        "k": "5",
+        "threshold": "32",
+        "consecutive_checks": "10",
+        "cluster": "lyris-gb200",
+        "runtime": "nemo-rl",
+        "runtime_version": RUNTIME_VERSION,
+        "runtime_commit": commit,
+        "vllm_version": VLLM_VERSION,
+        "vllm_commit": VLLM_COMMIT,
+        "target_tp": "2",
+        "draft_tp": "1",
+        "dp": "8",
+        "ep": "1",
+        "temperature": "1.0",
+        "top_p": "1.0",
+        "max_osl": "4096",
+        "max_sequence_length": "4096",
+        "num_prompts": "64",
+        "num_generations": "32",
+        "train_gbs": "512",
+        "max_num_batched_tokens": "16384",
+        "max_num_seqs": "1024",
+        "runner": "v2",
+        "graph_mode": "FULL_AND_PIECEWISE",
+        "sampling": "standard",
+        "job_id": "4242",
+    }
+    assert expected_manifest_values.items() <= manifest_row.items()
+    assert (
+        manifest_row["roofline_config_sha256"]
+        == hashlib.sha256(roofline.read_bytes()).hexdigest()
+    )
+    assert "test-only-key" not in manifest_path.read_text(encoding="utf-8")
     assert (
         subprocess.run(
             ["git", "-C", str(repo), "status", "--porcelain"],

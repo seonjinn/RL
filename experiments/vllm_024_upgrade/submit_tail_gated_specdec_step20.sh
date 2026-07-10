@@ -21,6 +21,23 @@ VARIANT_SELECTION="${3:-all}"
 MAX_STEPS="${MAX_STEPS:-20}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-gb200}"
+CLUSTER_NAME="${CLUSTER_NAME:-lyris-gb200}"
+RUNTIME_NAME="${RUNTIME_NAME:-nemo-rl}"
+RUNTIME_VERSION="${RUNTIME_VERSION:-nightly-20260707}"
+VLLM_VERSION="${VLLM_VERSION:-0.24.0}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
+TOP_P="${TOP_P:-1.0}"
+MAX_OSL="${MAX_OSL:-4096}"
+MAX_SEQUENCE_LENGTH="${MAX_SEQUENCE_LENGTH:-4096}"
+NUM_PROMPTS="${NUM_PROMPTS:-64}"
+NUM_GENERATIONS="${NUM_GENERATIONS:-32}"
+TRAIN_GBS="${TRAIN_GBS:-512}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-1024}"
+GENERATION_EP="${GENERATION_EP:-1}"
+SAMPLING="${SAMPLING:-standard}"
+CLUSTER_GPUS_PER_NODE="${CLUSTER_GPUS_PER_NODE:-4}"
+CLUSTER_NUM_NODES="${CLUSTER_NUM_NODES:-4}"
 LYRIS_ROOT="${LYRIS_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
 CONTAINER="${CONTAINER:-${LYRIS_ROOT}/containers/nemo_rl_nightly_20260707.sqsh}"
 HF_HOME="${HF_HOME:-${LYRIS_ROOT}/hf_home}"
@@ -269,6 +286,7 @@ submit_one() {
   local recipe
   local target_tp
   local draft_tp=1
+  local dp
   local draft_model
   local expected_model
   local expected_target_revision
@@ -311,6 +329,8 @@ submit_one() {
       roofline_config="${QWEN32_ROOFLINE_CONFIG}"
       ;;
   esac
+
+  dp=$((CLUSTER_GPUS_PER_NODE * CLUSTER_NUM_NODES / target_tp))
 
   case "${variant}" in
     baseline_v1)
@@ -403,24 +423,30 @@ submit_one() {
 
   local overrides=(
     "grpo.max_num_steps=${MAX_STEPS}"
-    "grpo.num_prompts_per_step=64"
-    "grpo.num_generations_per_prompt=32"
+    "grpo.num_prompts_per_step=${NUM_PROMPTS}"
+    "grpo.num_generations_per_prompt=${NUM_GENERATIONS}"
     "checkpointing.enabled=false"
     "checkpointing.checkpoint_dir=${run_dir}/checkpoints"
-    "policy.train_global_batch_size=512"
-    "policy.max_total_sequence_length=4096"
-    "policy.generation.max_new_tokens=4096"
-    "policy.generation._output_max_model_len=4096"
+    "policy.train_global_batch_size=${TRAIN_GBS}"
+    "policy.max_total_sequence_length=${MAX_SEQUENCE_LENGTH}"
+    "policy.generation.max_new_tokens=${MAX_OSL}"
+    "policy.generation.temperature=${TEMPERATURE}"
+    "policy.generation.top_p=${TOP_P}"
+    "policy.generation._output_max_model_len=${MAX_OSL}"
     "policy.generation.vllm_cfg.max_model_len=4128"
     "policy.generation.vllm_cfg.tensor_parallel_size=${target_tp}"
+    "policy.generation.vllm_cfg.expert_parallel_size=${GENERATION_EP}"
     "policy.generation.vllm_cfg.enforce_eager=false"
-    "++policy.generation.vllm_kwargs.max_num_batched_tokens=16384"
-    "++policy.generation.vllm_kwargs.max_num_seqs=1024"
+    "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true"
+    "policy.generation.vllm_cfg.vllm_metrics_logger_interval=0.5"
+    "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+    "++policy.generation.vllm_kwargs.max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS}"
+    "++policy.generation.vllm_kwargs.max_num_seqs=${MAX_NUM_SEQS}"
     "++policy.generation.vllm_kwargs.moe_backend=triton"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${graph_mode}"
-    "cluster.gpus_per_node=4"
-    "cluster.num_nodes=4"
-    "cluster.segment_size=4"
+    "cluster.gpus_per_node=${CLUSTER_GPUS_PER_NODE}"
+    "cluster.num_nodes=${CLUSTER_NUM_NODES}"
+    "cluster.segment_size=${CLUSTER_GPUS_PER_NODE}"
     "logger.wandb_enabled=true"
     "logger.tensorboard_enabled=false"
     "logger.wandb.project=${WANDB_PROJECT}"
@@ -435,6 +461,7 @@ submit_one() {
       "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
       "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
       "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${draft_tp}"
+      "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${SAMPLING}"
     )
   fi
   if [[ "${variant}" == "stock_dynamic_v1" ]]; then
@@ -461,6 +488,7 @@ submit_one() {
   local command_parts=(
     env
     "VLLM_USE_V2_MODEL_RUNNER=${use_v2_runner}"
+    "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
@@ -484,7 +512,7 @@ submit_one() {
     "CONTAINER_WORKDIR=${REPO_DIR}"
     "COMMAND=${command}"
     "BASE_LOG_DIR=${run_dir}"
-    "GPUS_PER_NODE=4"
+    "GPUS_PER_NODE=${CLUSTER_GPUS_PER_NODE}"
     "HF_HOME=${HF_HOME}"
     "PYTHONPATH=${REPO_DIR}"
     "PYTHONDONTWRITEBYTECODE=1"
@@ -496,11 +524,11 @@ submit_one() {
   local sbatch_args=(
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
-    --nodes=4
+    --nodes="${CLUSTER_NUM_NODES}"
     --ntasks-per-node=1
     --exclusive
     --time="${WALLTIME}"
-    --segment=4
+    --segment="${CLUSTER_GPUS_PER_NODE}"
     --job-name="${ACCOUNT}-nemorl.tail-gate-${model}-${variant}"
     --output="${run_dir}/slurm-%j.out"
     --comment=metrics
@@ -524,7 +552,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\trunner\tgraph_mode\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcommit\tcontainer\tcontainer_sha256\trecipe\tjob_id\twandb_run_id\twandb_url\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tjob_id\twandb_run_id\twandb_url\tcommand'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -535,14 +563,51 @@ submit_one() {
       env "${environment[@]}" sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
       local job_id
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$(date --iso-8601=seconds)" "${model}" "${variant}" "${runner}" \
-        "${graph_mode}" "${gate_mode}" "${draft_k}" "${threshold}" \
-        "${consecutive_checks}" "${roofline_hash}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
-        "$(readlink -f "${CONTAINER}")" "$(sha256_file "${CONTAINER}")" "${recipe}" \
-        "${job_id}" "${wandb_run_id}" \
-        "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" "${command}" \
-        >>"${manifest}"
+      local runtime_commit
+      runtime_commit="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+      local manifest_values=(
+        "$(date --iso-8601=seconds)"
+        "${model}"
+        "${variant}"
+        "${gate_mode}"
+        "${draft_k}"
+        "${threshold}"
+        "${consecutive_checks}"
+        "${roofline_hash}"
+        "${CLUSTER_NAME}"
+        "${RUNTIME_NAME}"
+        "${RUNTIME_VERSION}"
+        "${runtime_commit}"
+        "${VLLM_VERSION}"
+        "${VLLM_COMMIT}"
+        "${target_tp}"
+        "${draft_tp}"
+        "${dp}"
+        "${GENERATION_EP}"
+        "${TEMPERATURE}"
+        "${TOP_P}"
+        "${MAX_OSL}"
+        "${MAX_SEQUENCE_LENGTH}"
+        "${NUM_PROMPTS}"
+        "${NUM_GENERATIONS}"
+        "${TRAIN_GBS}"
+        "${MAX_NUM_BATCHED_TOKENS}"
+        "${MAX_NUM_SEQS}"
+        "${recipe}"
+        "$(readlink -f "${CONTAINER}")"
+        "$(sha256_file "${CONTAINER}")"
+        "${runner}"
+        "${graph_mode}"
+        "${SAMPLING}"
+        "${job_id}"
+        "${wandb_run_id}"
+        "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}"
+        "${command}"
+      )
+      (
+        IFS=$'\t'
+        printf '%s\n' "${manifest_values[*]}"
+      ) >>"${manifest}"
       printf '%s\t%s\t%s\n' "${job_id}" "${model}" "${variant}"
       ;;
   esac
