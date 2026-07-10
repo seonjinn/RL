@@ -38,6 +38,8 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1024}"
 GENERATION_EP="${GENERATION_EP:-1}"
 SAMPLING="${SAMPLING:-standard}"
+TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
+TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
 CLUSTER_GPUS_PER_NODE="${CLUSTER_GPUS_PER_NODE:-4}"
 CLUSTER_NUM_NODES="${CLUSTER_NUM_NODES:-4}"
 LYRIS_ROOT="${LYRIS_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}"
@@ -63,6 +65,19 @@ WALLTIME="${WALLTIME:-04:00:00}"
 TMPDIR="${TMPDIR_OVERRIDE:-/tmp}"
 PERSONAL_BRANCH_PREFIX="${PERSONAL_BRANCH_PREFIX:-sna/}"
 SCHEDULER_CLASS="nemo_rl.models.generation.vllm.tail_gate_scheduler.TailGatedScheduler"
+
+validate_positive_integer() {
+  local setting="$1"
+  local value="$2"
+
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ERROR: %s must be a positive integer, got %s\n' "${setting}" "${value}" >&2
+    exit 2
+  fi
+}
+
+validate_positive_integer "TAIL_GATE_THRESHOLD" "${TAIL_GATE_THRESHOLD}"
+validate_positive_integer "TAIL_GATE_CONSECUTIVE_CHECKS" "${TAIL_GATE_CONSECUTIVE_CHECKS}"
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -369,8 +384,8 @@ submit_one() {
       graph_mode="FULL_AND_PIECEWISE"
       gate_mode="threshold"
       draft_k=5
-      threshold=32
-      consecutive_checks=10
+      threshold="${TAIL_GATE_THRESHOLD}"
+      consecutive_checks="${TAIL_GATE_CONSECUTIVE_CHECKS}"
       ;;
     efficient_roofline_v2_k5)
       runner=v2
@@ -378,8 +393,8 @@ submit_one() {
       graph_mode="FULL_AND_PIECEWISE"
       gate_mode="roofline"
       draft_k=5
-      threshold=32
-      consecutive_checks=10
+      threshold="${TAIL_GATE_THRESHOLD}"
+      consecutive_checks="${TAIL_GATE_CONSECUTIVE_CHECKS}"
       if [[ "${MODE}" != "dry-run" && ! -f "${roofline_config}" ]]; then
         echo "ERROR: roofline config not found: ${roofline_config}" >&2
         exit 2

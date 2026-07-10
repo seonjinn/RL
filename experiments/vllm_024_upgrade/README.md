@@ -136,6 +136,32 @@ Calibration fails if any fitted per-K residual overhead is non-positive. Such
 measurements are inconsistent with the configured roofline constants and must
 be corrected instead of clamped into an apparently valid configuration.
 
+## Mini Sync-GRPO Tail-Gate Smoke on Pre-Tyche
+
+Run the short Qwen3-32B validation matrix before the full tail-gated cohort:
+
+```bash
+experiments/vllm_024_upgrade/submit_tail_gated_specdec_mini_sync_grpo.sh dry-run
+experiments/vllm_024_upgrade/submit_tail_gated_specdec_mini_sync_grpo.sh test-only
+experiments/vllm_024_upgrade/submit_tail_gated_specdec_mini_sync_grpo.sh submit
+```
+
+The wrapper renders exactly `baseline_v2`, `always_on_v2_k5`, and
+`fastrl_threshold_v2_k5` on the Qwen3-32B 4n4g recipe. It defaults to two
+steps, 16 prompts by four generations, train GBS 64, 1,024-token output and
+sequence limits, a 1,056-token vLLM model limit, four nodes with
+`--segment=4`, no GPU GRES, and the staged `nightly-20260705` image. The V2
+arms use `FULL_AND_PIECEWISE` CUDA graphs with checkpointing disabled; only
+the threshold arm configures the FastRL scheduler at threshold 32 with ten
+consecutive checks. It sets explicit Pre-Tyche W&B project/entity defaults and
+one shared run tag and attempt ID so all three submitted jobs append to the
+same manifest.
+
+Caller-supplied environment values override these smoke defaults. The main
+launcher validates `TAIL_GATE_THRESHOLD` and `TAIL_GATE_CONSECUTIVE_CHECKS` as
+positive integers and records their resolved values in both the generated
+command and submission manifest.
+
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 
 The parity gate runs Qwen3-32B target-only and Eagle-3 K5 through the NeMo-RL

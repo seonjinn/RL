@@ -140,6 +140,56 @@ def test_v2_variants_preserve_runner_graph_and_gate_boundaries() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("setting", "value", "expected"),
+    (
+        ("TAIL_GATE_THRESHOLD", "17", "sd_tail_gate_threshold=17"),
+        (
+            "TAIL_GATE_CONSECUTIVE_CHECKS",
+            "3",
+            "sd_tail_gate_consecutive_checks=3",
+        ),
+    ),
+)
+def test_gate_settings_use_validated_environment_values(
+    setting: str, value: str, expected: str
+) -> None:
+    for variant in GATED_V2_VARIANTS:
+        output = _dry_run("qwen32b", variant, **{setting: value})
+
+        assert expected in output
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    (
+        ("TAIL_GATE_THRESHOLD", "0"),
+        ("TAIL_GATE_THRESHOLD", "not-an-integer"),
+        ("TAIL_GATE_CONSECUTIVE_CHECKS", "0"),
+        ("TAIL_GATE_CONSECUTIVE_CHECKS", "not-an-integer"),
+    ),
+)
+def test_gate_settings_reject_non_positive_integers(setting: str, value: str) -> None:
+    result = _run_launcher(
+        "dry-run",
+        "qwen32b",
+        "baseline_v2",
+        REPO_DIR="/lustre/test/nemo-rl",
+        LYRIS_ROOT="/lustre/test",
+        HF_HOME="/lustre/test/hf_home",
+        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
+        RUN_TAG="contract",
+        ATTEMPT_ID="attempt-1",
+        QWEN30_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen30.json",
+        QWEN32_ROOFLINE_CONFIG="/lustre/test/calibrations/qwen32.json",
+        **{setting: value},
+    )
+
+    assert result.returncode == 2
+    assert f"ERROR: {setting} must be a positive integer" in result.stderr
+
+
 def test_roofline_dry_run_selects_a_separate_config_per_model() -> None:
     qwen30_output = _dry_run("qwen30ba3b", "efficient_roofline_v2_k5")
     qwen32_output = _dry_run("qwen32b", "efficient_roofline_v2_k5")
@@ -488,6 +538,44 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         ).stdout
         == ""
     )
+
+
+def test_submit_records_environment_gate_settings_in_manifest(tmp_path: Path) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text("#!/usr/bin/env bash\nprintf '4242\\n'\n", encoding="utf-8")
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.write_text("container contract\n", encoding="utf-8")
+    draft_model = tmp_path / "draft-model"
+    draft_model.mkdir()
+    experiment_root = tmp_path / "runs"
+
+    result = _run_launcher(
+        "submit",
+        "qwen32b",
+        "fastrl_threshold_v2_k5",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        QWEN32_DRAFT_MODEL=str(draft_model),
+        EXPERIMENT_ROOT=str(experiment_root),
+        WANDB_API_KEY="test-only-key",
+        TAIL_GATE_THRESHOLD="19",
+        TAIL_GATE_CONSECUTIVE_CHECKS="4",
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with (experiment_root / "submissions.tsv").open(
+        encoding="utf-8", newline=""
+    ) as stream:
+        row = next(csv.DictReader(stream, delimiter="\t"))
+    assert row["threshold"] == "19"
+    assert row["consecutive_checks"] == "4"
+    assert "sd_tail_gate_threshold=19" in row["command"]
+    assert "sd_tail_gate_consecutive_checks=4" in row["command"]
 
 
 def test_submit_records_long_output_engine_length_as_separate_cohort(
