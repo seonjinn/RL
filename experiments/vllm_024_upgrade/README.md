@@ -179,6 +179,12 @@ command and submission manifest. The validator and activation chart must read
 the local threshold from each manifest row rather than assume a global rollout
 count or a fixed threshold.
 
+The manifest also records `run_dir`, the resolved outer Slurm log, the
+`<job-id>-logs/ray-driver.log` path, the recursively synchronized Ray log
+directory, and the serialized `sbatch` launcher command. Mini validation
+requires all three log locations after W&B completion and scans the driver and
+Ray text logs recursively; the outer Slurm log alone is not sufficient.
+
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 
 The parity gate runs Qwen3-32B target-only and Eagle-3 K5 through the NeMo-RL

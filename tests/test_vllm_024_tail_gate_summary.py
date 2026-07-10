@@ -1,3 +1,17 @@
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import csv
@@ -11,6 +25,7 @@ import pytest
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     COHORT_FIELDS,
     METRIC_KEYS,
+    REQUIRED_MANIFEST_FIELDS,
     REQUIRED_ROW_FIELDS,
     RunSummary,
     _history_keys,
@@ -63,6 +78,9 @@ def _metadata(
 ) -> dict[str, str]:
     is_qwen32 = model == "qwen32b"
     gated = "threshold" in variant or "roofline" in variant
+    job_id = f"job-{model}-{variant}"
+    run_dir = f"runs/{model}/{variant}"
+    ray_log_root = f"{run_dir}/{job_id}-logs"
     return {
         "timestamp": "2026-07-10T12:00:00Z",
         "model": model,
@@ -107,9 +125,14 @@ def _metadata(
         "draft_sample_method": (
             "not_applicable" if variant.startswith("baseline_") else "probabilistic"
         ),
-        "job_id": f"job-{model}-{variant}",
+        "job_id": job_id,
         "wandb_run_id": f"run-{model}-{variant}",
         "wandb_url": f"https://wandb.example/{model}/{variant}",
+        "run_dir": run_dir,
+        "slurm_log_path": f"{run_dir}/slurm-{job_id}.out",
+        "ray_driver_log_path": f"{ray_log_root}/ray-driver.log",
+        "ray_log_dir": f"{ray_log_root}/ray",
+        "launcher_command": f"sbatch --model={model} --variant={variant}",
         "command": f"run --model={model} --variant={variant}",
     }
 
@@ -443,6 +466,25 @@ def test_manifest_rejects_every_missing_cohort_dimension() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "run_dir",
+        "slurm_log_path",
+        "ray_driver_log_path",
+        "ray_log_dir",
+        "launcher_command",
+        "command",
+    ],
+)
+def test_manifest_requires_log_and_command_provenance(field: str) -> None:
+    row = _metadata()
+    row[field] = ""
+
+    assert field in REQUIRED_MANIFEST_FIELDS
+    assert _validate_manifest_rows([row]) == f"missing manifest fields:{field}"
+
+
 @pytest.mark.parametrize("field", ["wandb_run_id", "job_id"])
 def test_manifest_rejects_duplicate_run_identifiers_before_wandb_fetch(
     tmp_path: Path, field: str
@@ -718,3 +760,12 @@ def test_output_rows_include_full_metric_speedup_health_and_provenance_contract(
     assert set(COHORT_FIELDS).issubset(rows[0].to_dict())
     baseline = next(row for row in rows if row.variant == "baseline_v2")
     assert baseline.to_dict()["draft_sample_method"] == "not_applicable"
+    for field in (
+        "run_dir",
+        "slurm_log_path",
+        "ray_driver_log_path",
+        "ray_log_dir",
+        "launcher_command",
+        "command",
+    ):
+        assert baseline.to_dict()[field] == _metadata()[field]

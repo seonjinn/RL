@@ -574,6 +574,16 @@ submit_one() {
     --output="${run_dir}/slurm-%j.out"
     --comment=metrics
   )
+  local launcher_command_parts=(
+    env
+    "${environment[@]}"
+    sbatch
+    "${sbatch_args[@]}"
+    "${REPO_DIR}/ray.sub"
+  )
+  local launcher_command
+  printf -v launcher_command '%q ' "${launcher_command_parts[@]}"
+  launcher_command="${launcher_command% }"
 
   case "${MODE}" in
     dry-run)
@@ -593,7 +603,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -606,6 +616,7 @@ submit_one() {
       job_id="$(env "${environment[@]}" sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
       local runtime_commit
       runtime_commit="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+      local job_log_dir="${run_dir}/${job_id}-logs"
       local manifest_values=(
         "$(date --iso-8601=seconds)"
         "${model}"
@@ -645,6 +656,11 @@ submit_one() {
         "${job_id}"
         "${wandb_run_id}"
         "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}"
+        "${run_dir}"
+        "${run_dir}/slurm-${job_id}.out"
+        "${job_log_dir}/ray-driver.log"
+        "${job_log_dir}/ray"
+        "${launcher_command}"
         "${command}"
       )
       (

@@ -668,7 +668,14 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "container_sha256",
         "recipe",
         "job_id",
+        "run_dir",
+        "slurm_log_path",
+        "ray_driver_log_path",
+        "ray_log_dir",
+        "launcher_command",
+        "command",
     }.issubset(manifest_row)
+    expected_run_dir = experiment_root / "qwen32b" / "efficient_roofline_v2_k5"
     expected_manifest_values = {
         "model": "qwen32b",
         "variant": "efficient_roofline_v2_k5",
@@ -701,8 +708,24 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "sampling": "standard",
         "draft_sample_method": "probabilistic",
         "job_id": "4242",
+        "run_dir": str(expected_run_dir),
+        "slurm_log_path": str(expected_run_dir / "slurm-4242.out"),
+        "ray_driver_log_path": str(expected_run_dir / "4242-logs" / "ray-driver.log"),
+        "ray_log_dir": str(expected_run_dir / "4242-logs" / "ray"),
     }
     assert expected_manifest_values.items() <= manifest_row.items()
+    for expected in (
+        "GPUS_PER_NODE=4",
+        "RAY_LOG_SYNC_FREQUENCY=60",
+        "sbatch",
+        "--nodes=4",
+        "--segment=4",
+        f"--output={expected_run_dir}/slurm-%j.out",
+        "ray.sub",
+    ):
+        assert expected in manifest_row["launcher_command"]
+    assert "--gres" not in manifest_row["launcher_command"]
+    assert manifest_row["command"]
     assert (
         manifest_row["roofline_config_sha256"]
         == hashlib.sha256(roofline.read_bytes()).hexdigest()

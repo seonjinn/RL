@@ -118,13 +118,22 @@ COHORT_FIELDS = (
     "sampling",
     "draft_sample_method",
 )
+LOG_PROVENANCE_FIELDS = (
+    "run_dir",
+    "slurm_log_path",
+    "ray_driver_log_path",
+    "ray_log_dir",
+)
 REQUIRED_MANIFEST_FIELDS = (
     *COHORT_FIELDS,
+    *LOG_PROVENANCE_FIELDS,
     "variant",
     "gate_mode",
     "k",
     "job_id",
     "wandb_run_id",
+    "launcher_command",
+    "command",
 )
 
 
@@ -196,6 +205,12 @@ class RunSummary:
     sampling: str
     draft_sample_method: str
     wandb_run_id: str
+    run_dir: str
+    slurm_log_path: str
+    ray_driver_log_path: str
+    ray_log_dir: str
+    launcher_command: str
+    command: str
     provenance: str
     comparison_key: tuple[tuple[str, str], ...]
 
@@ -383,6 +398,12 @@ def _make_summary(
         sampling=metadata.get("sampling", ""),
         draft_sample_method=metadata.get("draft_sample_method", ""),
         wandb_run_id=metadata.get("wandb_run_id", ""),
+        run_dir=metadata.get("run_dir", ""),
+        slurm_log_path=metadata.get("slurm_log_path", ""),
+        ray_driver_log_path=metadata.get("ray_driver_log_path", ""),
+        ray_log_dir=metadata.get("ray_log_dir", ""),
+        launcher_command=metadata.get("launcher_command", ""),
+        command=metadata.get("command", ""),
         provenance=_provenance(metadata),
         comparison_key=_comparison_key(metadata),
     )

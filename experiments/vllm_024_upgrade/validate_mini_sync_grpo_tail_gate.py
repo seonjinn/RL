@@ -21,6 +21,7 @@ import html
 import importlib
 import json
 import re
+import shlex
 import statistics
 from dataclasses import replace
 from pathlib import Path
@@ -47,6 +48,9 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
 
 
 MINI_STEPS = {1, 2}
+MINI_EXPECTED_GLOBAL_ROLLOUTS = 64
+MINI_EXPECTED_LOCAL_CAPACITY = 8
+MINI_EXPECTED_THRESHOLD = 4
 DEFAULT_WANDB_ENTITY = "nvidia"
 DEFAULT_WANDB_PROJECT = "nemorl-vllm024-tail-gated-mini-sync-grpo-pre-tyche"
 REQUIRED_COMMON_CONFIG = {
@@ -103,26 +107,83 @@ MINI_ROW_FIELDS = (
     "mini_health_passed",
     *MINI_METRIC_KEYS,
 )
-SLURM_LOG_FIELDS = ("slurm_log", "slurm_log_path", "log_path")
-SLURM_FAILURE_PATTERNS = (
+MINI_COMMAND_ASSIGNMENTS = {
+    "VLLM_USE_V2_MODEL_RUNNER": "1",
+    "grpo.max_num_steps": "2",
+    "grpo.num_prompts_per_step": "16",
+    "grpo.num_generations_per_prompt": "4",
+    "checkpointing.enabled": "false",
+    "policy.train_global_batch_size": "64",
+    "policy.max_total_sequence_length": "1024",
+    "policy.generation.max_new_tokens": "1024",
+    "policy.generation.temperature": "1.0",
+    "policy.generation.top_p": "1.0",
+    "policy.generation.vllm_cfg.tensor_parallel_size": "2",
+    "policy.generation.vllm_cfg.expert_parallel_size": "1",
+    "policy.generation.vllm_cfg.enforce_eager": "false",
+    "policy.generation.vllm_kwargs.max_num_batched_tokens": "16384",
+    "policy.generation.vllm_kwargs.max_num_seqs": "1024",
+    "policy.generation.vllm_kwargs.moe_backend": "triton",
+    "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode": (
+        "FULL_AND_PIECEWISE"
+    ),
+    "cluster.gpus_per_node": "4",
+    "cluster.num_nodes": "4",
+    "cluster.segment_size": "4",
+}
+SPECDEC_COMMAND_ASSIGNMENTS = {
+    "policy.generation.vllm_kwargs.speculative_config.method": "eagle3",
+    "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens": "5",
+    "policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size": (
+        "1"
+    ),
+    "policy.generation.vllm_kwargs.speculative_config.rejection_sample_method": (
+        "standard"
+    ),
+    "policy.generation.vllm_kwargs.speculative_config.draft_sample_method": (
+        "probabilistic"
+    ),
+}
+THRESHOLD_COMMAND_ASSIGNMENTS = {
+    "policy.generation.vllm_kwargs.scheduler_cls": (
+        "nemo_rl.models.generation.vllm.tail_gate_scheduler.TailGatedScheduler"
+    ),
+    "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_mode": ("threshold"),
+    "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_consecutive_checks": (
+        "10"
+    ),
+    "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_off_mode": (
+        "advance_only"
+    ),
+}
+TEXT_LOG_SUFFIXES = {".err", ".log", ".out", ".txt"}
+LOG_FAILURE_PATTERNS = (
     (
         "stale_draft_id",
         re.compile(
-            r"(?<!no )\bstale draft (?:ids?|token ids?)\b",
+            r"(?:^\s*(?:[\w.]*?(?:runtimeerror|valueerror|assertionerror|"
+            r"exception)|error)\s*:.*\bstale draft (?:ids?|token ids?)\b|"
+            r"\bstale draft (?:ids?|token ids?)\s*"
+            r"(?:(?:observed|found|detected)\s*)?[:=]\s*"
+            r"(?:[1-9]\d*|\[[^\]]*[1-9]\d*[^\]]*\]))",
             re.IGNORECASE,
         ),
     ),
     (
         "invalid_token",
         re.compile(
-            r"(?:\b(?:valueerror|runtimeerror|error|exception|assertionerror)\b.*"
-            r"\binvalid tokens?(?: ids?)?\b|(?<!no )\binvalid tokens?"
-            r"(?: ids?)?\b.*\b(?:generated|detected|found|observed|returned|"
-            r"produced)\b)",
+            r"(?:^\s*(?:[\w.]*?(?:runtimeerror|valueerror|assertionerror|"
+            r"exception)|error)\s*:.*\binvalid tokens?(?: ids?)?\b|"
+            r"\binvalid tokens?(?: ids?)?\s*"
+            r"(?:(?:observed|found|detected)\s*)?[:=]\s*"
+            r"(?:[1-9]\d*|\[[^\]]*[1-9]\d*[^\]]*\]))",
             re.IGNORECASE,
         ),
     ),
-    ("tokens_left_for_obs", re.compile(r"\btokens_left_for_obs\s*=\s*-\d+\b")),
+    (
+        "tokens_left_for_obs",
+        re.compile(r"\btokens_left_for_obs\s*[:=]\s*-[1-9]\d*\b", re.IGNORECASE),
+    ),
     (
         "nan",
         re.compile(
@@ -136,16 +197,19 @@ SLURM_FAILURE_PATTERNS = (
     (
         "oom",
         re.compile(
-            r"\b(?:cuda out of memory|outofmemoryerror|oom-kill(?:er)?|"
-            r"killed process.*out of memory|(?:runtimeerror|error|exception)"
-            r"\b.*\boom\b)\b",
+            r"(?:^\s*slurmstepd(?:\[[^\]]+\])?:\s*error:.*"
+            r"(?:\boom[_ -]?kill\b|\boom\b|\bout of memory\b)|"
+            r"\b(?:cuda out of memory|outofmemoryerror)\b|"
+            r"^\s*(?:runtimeerror|error|exception)\s*:.*\boom\b)",
             re.IGNORECASE,
         ),
     ),
     (
         "nccl",
         re.compile(
-            r"(?:\bnccl\b.*\b(?:watchdog\s+)?(?:timed out|timeout detected|"
+            r"(?:\bdistbackenderror\s*:.*\bnccl\b.*"
+            r"\b(?:error|timed out|timeout|hang|hung|aborted)\b|"
+            r"\bnccl\b.*\b(?:watchdog\s+timed out|timeout detected|"
             r"hang detected|hung|aborted)\b|\bwatchdog caught collective "
             r"operation timeout\b.*\bworknccl\b)",
             re.IGNORECASE,
@@ -154,21 +218,20 @@ SLURM_FAILURE_PATTERNS = (
     (
         "q_cache",
         re.compile(
-            r"(?:\bq[-_ ]?cache\b.*\b(?:error|mismatch|failed|failure|corrupt)"
-            r"\w*\b|\b(?:assertionerror|runtimeerror|error|exception)\b.*"
-            r"\bq[-_ ]?cache\b)",
+            r"(?:^\s*(?:[\w.]*?(?:runtimeerror|valueerror|assertionerror|"
+            r"exception)|error)\s*:.*\bq[-_ ]?cache\b|\bq[-_ ]?cache\b.*"
+            r"\b(?:mismatch|failure|corruption)\s+(?:detected|found|failed)\b)",
             re.IGNORECASE,
         ),
     ),
     (
         "cuda_graph_fallback",
         re.compile(
-            r"(?:\bcuda[ _]?graphs?\b.*\b(?:fallback to eager|"
-            r"falling back to eager|uncaptured)\b|\buncaptured "
-            r"cuda[ _]?graphs?\b|\bcuda[ _]?graphs?\s+fallback\b"
-            r"(?!\s+(?:count\s*[:=]\s*0|disabled)\b)|\beager[ _-]?fallback"
-            r"(?![ _]?count\s*[:=]\s*0\b)(?:\s+(?:detected|used|occurred)\b|"
-            r"[ _]?count\s*[:=]\s*[1-9]\d*\b))",
+            r"(?:\bcuda[ _]?graphs?\s+fallback\s+"
+            r"(?:to eager|detected|used|occurred)\b|"
+            r"\bcuda[ _]?graphs?\s+fallback count\s*[:=]\s*[1-9]\d*\b|"
+            r"\buncaptured cuda[ _]?graphs?\b|"
+            r"\beager[ _-]?fallback(?:[ _]?count)?\s*[:=]\s*[1-9]\d*\b)",
             re.IGNORECASE,
         ),
     ),
@@ -210,12 +273,191 @@ def _wandb_run_path_from_url(url: str, *, variant: str, expected_run_id: str) ->
     return f"{entity}/{project}/{run_id}"
 
 
-def _command_override_values(command: str, key: str) -> set[str]:
-    pattern = re.compile(rf"(?:^|\s){re.escape(key)}=([^\s]+)(?=\s|$)")
-    return {match.group(1) for match in pattern.finditer(command)}
+def _command_assignment_values(tokens: list[str], key: str) -> list[str]:
+    return [
+        value
+        for token in tokens
+        if (normalized := token.removeprefix("++")).startswith(f"{key}=")
+        and normalized.split("=", maxsplit=1)[0] == key
+        for value in [normalized.split("=", maxsplit=1)[1]]
+    ]
 
 
-def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
+def _mini_command_error(row: Mapping[str, str]) -> str | None:
+    variant = row["variant"]
+    try:
+        tokens = shlex.split(row["command"])
+    except ValueError:
+        return f"invalid mini command:{variant}:shell syntax"
+    if not tokens:
+        return f"invalid mini command:{variant}:empty"
+    for key, expected in MINI_COMMAND_ASSIGNMENTS.items():
+        if _command_assignment_values(tokens, key) != [expected]:
+            return f"invalid mini command:{variant}:{key}"
+    configs = [
+        tokens[index + 1]
+        for index, token in enumerate(tokens[:-1])
+        if token == "--config"
+    ]
+    if configs != [REQUIRED_COMMON_CONFIG["recipe"]]:
+        return f"invalid mini command:{variant}:recipe"
+    if tokens.count("examples/run_grpo.py") != 1:
+        return f"invalid mini command:{variant}:entrypoint"
+    if any(token == "--gres" or token.startswith("--gres=") for token in tokens):
+        return f"invalid mini command:{variant}:gres"
+
+    speculative_tokens = [
+        token
+        for token in tokens
+        if token.removeprefix("++").startswith(
+            "policy.generation.vllm_kwargs.speculative_config."
+        )
+    ]
+    if variant == "baseline_v2":
+        if speculative_tokens:
+            return f"invalid mini command:{variant}:speculative_config"
+        if _command_assignment_values(
+            tokens, "policy.generation.vllm_kwargs.scheduler_cls"
+        ):
+            return f"invalid mini command:{variant}:scheduler_cls"
+        return None
+
+    for key, expected in SPECDEC_COMMAND_ASSIGNMENTS.items():
+        if _command_assignment_values(tokens, key) != [expected]:
+            return f"invalid mini command:{variant}:{key}"
+    draft_models = _command_assignment_values(
+        tokens, "policy.generation.vllm_kwargs.speculative_config.model"
+    )
+    if len(draft_models) != 1 or not draft_models[0]:
+        return f"invalid mini command:{variant}:draft_model"
+
+    if variant == "always_on_v2_k5":
+        if any("sd_tail_gate_" in token for token in speculative_tokens):
+            return f"invalid mini command:{variant}:tail_gate"
+        if _command_assignment_values(
+            tokens, "policy.generation.vllm_kwargs.scheduler_cls"
+        ):
+            return f"invalid mini command:{variant}:scheduler_cls"
+        return None
+
+    for key, expected in THRESHOLD_COMMAND_ASSIGNMENTS.items():
+        if _command_assignment_values(tokens, key) != [expected]:
+            return f"invalid mini command:{variant}:{key}"
+    if _command_assignment_values(
+        tokens,
+        "policy.generation.vllm_kwargs.speculative_config.sd_tail_gate_threshold",
+    ) != [row["threshold"]]:
+        return f"invalid mini command:{variant}:threshold"
+    return None
+
+
+def _mini_launcher_command_error(row: Mapping[str, str]) -> str | None:
+    variant = row["variant"]
+    try:
+        tokens = shlex.split(row["launcher_command"])
+    except ValueError:
+        return f"invalid mini launcher command:{variant}:shell syntax"
+    if not tokens or tokens[0] != "env" or tokens.count("sbatch") != 1:
+        return f"invalid mini launcher command:{variant}:shape"
+    expected_assignments = {
+        "BASE_LOG_DIR": row["run_dir"],
+        "COMMAND": row["command"],
+        "GPUS_PER_NODE": "4",
+        "RAY_LOG_SYNC_FREQUENCY": "60",
+    }
+    for key, expected in expected_assignments.items():
+        if _command_assignment_values(tokens, key) != [expected]:
+            return f"invalid mini launcher command:{variant}:{key}"
+    expected_options = {
+        "--nodes=4",
+        "--ntasks-per-node=1",
+        "--exclusive",
+        "--segment=4",
+        f"--output={row['run_dir']}/slurm-%j.out",
+    }
+    if not expected_options.issubset(tokens):
+        return f"invalid mini launcher command:{variant}:sbatch options"
+    if any(token == "--gres" or token.startswith("--gres=") for token in tokens):
+        return f"invalid mini launcher command:{variant}:gres"
+    ray_sub_paths = [token for token in tokens if Path(token).name == "ray.sub"]
+    if len(ray_sub_paths) != 1:
+        return f"invalid mini launcher command:{variant}:ray.sub"
+    return None
+
+
+def _resolved_manifest_path(manifest: Path, value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = manifest.parent / path
+    return path.resolve(strict=False)
+
+
+def _mini_log_provenance_error(manifest: Path, row: Mapping[str, str]) -> str | None:
+    variant = row["variant"]
+    run_dir = _resolved_manifest_path(manifest, row["run_dir"])
+    expected_run_dir = (manifest.parent / row["model"] / variant).resolve(strict=False)
+    if run_dir != expected_run_dir:
+        return f"invalid mini log provenance:{variant}:run_dir"
+    job_log_dir = run_dir / f"{row['job_id']}-logs"
+    expected_paths = {
+        "slurm_log_path": run_dir / f"slurm-{row['job_id']}.out",
+        "ray_driver_log_path": job_log_dir / "ray-driver.log",
+        "ray_log_dir": job_log_dir / "ray",
+    }
+    for field, expected in expected_paths.items():
+        if _resolved_manifest_path(manifest, row[field]) != expected:
+            return f"invalid mini log provenance:{variant}:{field}"
+    return None
+
+
+def _mini_capacity_error(rows: Iterable[Mapping[str, str]]) -> str | None:
+    capacities: dict[str, int] = {}
+    for row in rows:
+        variant = row["variant"]
+        try:
+            num_prompts = int(row["num_prompts"])
+            num_generations = int(row["num_generations"])
+            dp = int(row["dp"])
+        except ValueError:
+            return f"invalid mini scheduler capacity:{variant}:non-integer"
+        if num_prompts <= 0 or num_generations <= 0 or dp <= 0:
+            return f"invalid mini scheduler capacity:{variant}:non-positive"
+        global_rollouts = num_prompts * num_generations
+        if global_rollouts % dp:
+            return (
+                f"invalid mini scheduler capacity:{variant}:"
+                f"global rollouts not divisible by dp:{global_rollouts}:{dp}"
+            )
+        capacity = global_rollouts // dp
+        if capacity != MINI_EXPECTED_LOCAL_CAPACITY:
+            return (
+                f"invalid mini local scheduler capacity:{variant}:{capacity}:"
+                f"expected:{MINI_EXPECTED_LOCAL_CAPACITY}"
+            )
+        if global_rollouts != MINI_EXPECTED_GLOBAL_ROLLOUTS:
+            return (
+                f"invalid mini global rollouts:{variant}:{global_rollouts}:"
+                f"expected:{MINI_EXPECTED_GLOBAL_ROLLOUTS}"
+            )
+        capacities[variant] = capacity
+    threshold_row = next(
+        row for row in rows if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    try:
+        threshold = int(threshold_row["threshold"])
+    except ValueError:
+        return "invalid mini threshold:non-integer"
+    capacity = capacities["fastrl_threshold_v2_k5"]
+    if not 0 < threshold < capacity:
+        return f"invalid mini threshold:{threshold}:capacity:{capacity}"
+    if threshold != MINI_EXPECTED_THRESHOLD:
+        return f"invalid mini threshold:{threshold}:expected:{MINI_EXPECTED_THRESHOLD}"
+    return None
+
+
+def _validate_mini_manifest_rows(
+    rows: list[dict[str, str]], *, manifest: Path
+) -> str | None:
     variants = sorted(row.get("variant", "") for row in rows)
     required_variants = sorted(REQUIRED_VARIANT_CONFIG)
     if variants != required_variants:
@@ -223,6 +465,8 @@ def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
             "mini manifest variants must be exactly:"
             f"{','.join(required_variants)}:got:{','.join(variants)}"
         )
+    if capacity_error := _mini_capacity_error(rows):
+        return capacity_error
     for row in rows:
         variant = row["variant"]
         for field, expected in REQUIRED_COMMON_CONFIG.items():
@@ -237,24 +481,15 @@ def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
                 return (
                     f"invalid mini manifest field:{variant}:{field}:{actual}:{expected}"
                 )
-        if variant == "fastrl_threshold_v2_k5":
-            try:
-                threshold = int(row.get("threshold", ""))
-            except ValueError:
-                return f"invalid mini manifest field:{variant}:threshold"
-            if threshold <= 0:
-                return f"invalid mini manifest field:{variant}:threshold"
         checkpointing_enabled = row.get("checkpointing_enabled", "")
-        command = row.get("command", "")
         if checkpointing_enabled and checkpointing_enabled.lower() != "false":
             return f"invalid mini manifest provenance:{variant}:checkpointing_enabled"
-        if command:
-            if _command_override_values(command, "checkpointing.enabled") != {"false"}:
-                return f"invalid mini manifest provenance:{variant}:command"
-            if _command_override_values(command, "grpo.max_num_steps") != {"2"}:
-                return f"invalid mini manifest provenance:{variant}:command"
-        if not checkpointing_enabled and not command:
-            return f"invalid mini manifest provenance:{variant}:checkpointing"
+        if command_error := _mini_command_error(row):
+            return command_error
+        if launcher_error := _mini_launcher_command_error(row):
+            return launcher_error
+        if log_error := _mini_log_provenance_error(manifest, row):
+            return log_error
         if row.get("wandb_url"):
             try:
                 _wandb_run_path_from_url(
@@ -304,29 +539,50 @@ def _positive_metric(record: Mapping[str, object], key: str) -> bool:
     return _is_finite_number(value) and value > 0.0
 
 
-def _slurm_log_path(manifest: Path, metadata: Mapping[str, str]) -> Path:
-    for field in SLURM_LOG_FIELDS:
-        value = metadata.get(field, "")
-        if value:
-            path = Path(value.replace("%j", metadata["job_id"]))
-            return path if path.is_absolute() else manifest.parent / path
-    return (
-        manifest.parent
-        / metadata["model"]
-        / metadata["variant"]
-        / f"slurm-{metadata['job_id']}.out"
+def _scan_log(path: Path) -> str | None:
+    try:
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                for reason, pattern in LOG_FAILURE_PATTERNS:
+                    if pattern.search(line):
+                        return f"logs:{reason}"
+    except OSError:
+        return "log_unreadable"
+    return None
+
+
+def _log_health_failure(manifest: Path, metadata: Mapping[str, str]) -> str | None:
+    direct_logs = (
+        (
+            "slurm_log_path",
+            _resolved_manifest_path(manifest, metadata["slurm_log_path"]),
+        ),
+        (
+            "ray_driver_log_path",
+            _resolved_manifest_path(manifest, metadata["ray_driver_log_path"]),
+        ),
     )
+    for field, path in direct_logs:
+        if not path.is_file():
+            return f"log_missing:{field}"
 
+    ray_log_dir = _resolved_manifest_path(manifest, metadata["ray_log_dir"])
+    if not ray_log_dir.is_dir():
+        return "log_missing:ray_log_dir"
+    ray_logs = sorted(
+        path
+        for path in ray_log_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in TEXT_LOG_SUFFIXES
+    )
+    if not ray_logs:
+        return "log_empty:ray_log_dir"
 
-def _slurm_log_failure(manifest: Path, metadata: Mapping[str, str]) -> str | None:
-    path = _slurm_log_path(manifest, metadata)
-    if not path.is_file():
-        return "slurm_log_missing"
-    with path.open(encoding="utf-8", errors="replace") as stream:
-        for line in stream:
-            for reason, pattern in SLURM_FAILURE_PATTERNS:
-                if pattern.search(line):
-                    return f"slurm_log:{reason}"
+    for _, path in direct_logs:
+        if failure := _scan_log(path):
+            return failure
+    for path in ray_logs:
+        if failure := _scan_log(path):
+            return failure
     return None
 
 
@@ -336,12 +592,12 @@ def _mini_failure(
     metadata: Mapping[str, str],
     *,
     threshold: int,
-    slurm_log_failure: str | None,
+    log_failure: str | None,
 ) -> str | None:
     if summary.status != "final":
         return summary.reason
-    if slurm_log_failure is not None:
-        return slurm_log_failure
+    if log_failure is not None:
+        return log_failure
     records = _records_by_step(history)
     if set(records) != MINI_STEPS:
         return (
@@ -522,7 +778,9 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     manifest_error = _validate_manifest_rows(manifest_rows)
     if manifest_error:
         raise ValueError(manifest_error)
-    mini_manifest_error = _validate_mini_manifest_rows(manifest_rows)
+    mini_manifest_error = _validate_mini_manifest_rows(
+        manifest_rows, manifest=args.manifest
+    )
     if mini_manifest_error:
         raise ValueError(mini_manifest_error)
     threshold = _mini_threshold(manifest_rows)
@@ -561,7 +819,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
                 history,
                 metadata,
                 threshold=threshold,
-                slurm_log_failure=_slurm_log_failure(args.manifest, metadata),
+                log_failure=_log_health_failure(args.manifest, metadata),
             )
             if summary.status == "final" and failure is not None:
                 summary = replace(
