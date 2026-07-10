@@ -36,6 +36,7 @@ from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.models.generation import (
     configure_generation_config,
     get_vllm_specdec_runtime_contract,
+    validate_vllm_speculative_config,
 )
 from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
@@ -578,6 +579,97 @@ def test_configure_generation_config_preserves_dynamic_eagle3_schedule():
     assert configured["vllm_kwargs"]["compilation_config"] == {
         "cudagraph_mode": "PIECEWISE"
     }
+
+
+def _tail_gate_config(**speculative_config_updates: Any) -> VllmConfig:
+    vllm_config = deepcopy(basic_vllm_test_config)
+    speculative_config = {
+        "method": "eagle3",
+        "model": "/tmp/eagle3-model",
+        "num_speculative_tokens": 5,
+        "sd_tail_gate_mode": "threshold",
+        "sd_tail_gate_threshold": 32,
+        "sd_tail_gate_consecutive_checks": 10,
+    }
+    speculative_config.update(speculative_config_updates)
+    vllm_config["vllm_kwargs"] = {"speculative_config": speculative_config}
+    return vllm_config
+
+
+def test_tail_gate_validation_requires_external_eagle() -> None:
+    vllm_config = _tail_gate_config(method="suffix")
+
+    with pytest.raises(ValueError, match="external Eagle"):
+        validate_vllm_speculative_config(
+            vllm_config,
+            has_refit_draft_weights=False,
+            is_eval=False,
+        )
+
+
+def test_tail_gate_validation_rejects_stock_dynamic_schedule() -> None:
+    vllm_config = _tail_gate_config(
+        num_speculative_tokens_per_batch_size=[[1, 32, 5]],
+    )
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_vllm_speculative_config(
+            vllm_config,
+            has_refit_draft_weights=False,
+            is_eval=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("updates", "match"),
+    [
+        ({"sd_tail_gate_mode": "invalid"}, "must be one of"),
+        ({"num_speculative_tokens": 0}, "positive"),
+        ({"sd_tail_gate_threshold": 0}, "positive"),
+        ({"sd_tail_gate_consecutive_checks": 0}, "positive"),
+        ({"sd_tail_gate_mode": "roofline"}, "config path"),
+    ],
+)
+def test_tail_gate_validation_rejects_invalid_gate_settings(
+    updates: dict[str, Any], match: str
+) -> None:
+    vllm_config = _tail_gate_config(**updates)
+
+    with pytest.raises(ValueError, match=match):
+        validate_vllm_speculative_config(
+            vllm_config,
+            has_refit_draft_weights=False,
+            is_eval=False,
+        )
+
+
+def test_tail_gate_validation_rejects_internal_vllm_data_parallelism() -> None:
+    vllm_config = _tail_gate_config()
+    vllm_config["vllm_cfg"]["tensor_parallel_size"] = 2
+    vllm_config["vllm_cfg"]["expert_parallel_size"] = 4
+
+    with pytest.raises(ValueError, match="internal vLLM data parallelism"):
+        validate_vllm_speculative_config(
+            vllm_config,
+            has_refit_draft_weights=False,
+            is_eval=False,
+        )
+
+
+def test_tail_gate_validation_configures_scheduler_without_mutating_speculative_config() -> None:
+    vllm_config = _tail_gate_config()
+    speculative_config = deepcopy(vllm_config["vllm_kwargs"]["speculative_config"])
+
+    validate_vllm_speculative_config(
+        vllm_config,
+        has_refit_draft_weights=False,
+        is_eval=False,
+    )
+
+    assert vllm_config["vllm_kwargs"]["speculative_config"] == speculative_config
+    assert vllm_config["vllm_kwargs"]["scheduler_cls"] == (
+        "nemo_rl.models.generation.vllm.tail_gate_scheduler.TailGatedScheduler"
+    )
 
 
 @pytest.mark.parametrize(

@@ -48,6 +48,10 @@ _FIXED_K_DYNAMIC_UNSUPPORTED_METHODS = {
     "ngram_gpu",
     "suffix",
 }
+_TAIL_GATE_MODES = {"threshold", "roofline"}
+_TAIL_GATE_SCHEDULER_CLASS = (
+    "nemo_rl.models.generation.vllm.tail_gate_scheduler.TailGatedScheduler"
+)
 
 
 def _get_speculative_config(config: VllmConfig) -> dict[str, Any] | None:
@@ -66,6 +70,63 @@ def _uses_static_neural_external_drafter(
     return method not in MTP_SPECULATIVE_METHODS.union(_MODEL_FREE_SPEC_METHODS)
 
 
+def _validate_tail_gate_speculative_config(
+    speculative_config: Mapping[str, Any],
+    vllm_config: Mapping[str, Any],
+) -> bool:
+    """Validate tail-gate-only vLLM configuration without modifying it."""
+    mode = speculative_config.get("sd_tail_gate_mode")
+    if mode is None or mode == "off":
+        return False
+    if mode not in _TAIL_GATE_MODES:
+        raise ValueError(
+            "speculative_config.sd_tail_gate_mode must be one of 'off', "
+            "'threshold', or 'roofline'."
+        )
+    if speculative_config.get("method") not in _ONLINE_REFIT_SPEC_METHODS or not speculative_config.get(
+        "model"
+    ):
+        raise ValueError(
+            "Tail-gated speculative decoding requires an external Eagle or "
+            "Eagle-3 drafter with speculative_config.model."
+        )
+    _require_positive_tail_gate_int(
+        speculative_config.get("num_speculative_tokens"), "num_speculative_tokens"
+    )
+    _require_positive_tail_gate_int(
+        speculative_config.get("sd_tail_gate_threshold"), "sd_tail_gate_threshold"
+    )
+    _require_positive_tail_gate_int(
+        speculative_config.get("sd_tail_gate_consecutive_checks"),
+        "sd_tail_gate_consecutive_checks",
+    )
+    if speculative_config.get("num_speculative_tokens_per_batch_size") is not None:
+        raise ValueError(
+            "Tail-gated speculative decoding and stock DynamicSD schedules are "
+            "mutually exclusive."
+        )
+    target_tp = vllm_config["tensor_parallel_size"]
+    expert_parallel_size = vllm_config.get("expert_parallel_size", 1)
+    if expert_parallel_size > target_tp:
+        raise ValueError(
+            "Tail-gated speculative decoding cannot use internal vLLM data "
+            "parallelism. Use expert_parallel_size <= tensor_parallel_size."
+        )
+    if mode == "roofline":
+        config_path = speculative_config.get("sd_tail_gate_config_path")
+        if not isinstance(config_path, str) or not config_path:
+            raise ValueError(
+                "Roofline tail gating requires a non-empty "
+                "sd_tail_gate_config_path config path."
+            )
+    return True
+
+
+def _require_positive_tail_gate_int(value: object, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"speculative_config.{name} must be a positive integer.")
+
+
 def validate_vllm_speculative_config(
     config: VllmConfig,
     *,
@@ -77,6 +138,9 @@ def validate_vllm_speculative_config(
         return
 
     method = speculative_config.get("method")
+    tail_gate_enabled = _validate_tail_gate_speculative_config(
+        speculative_config, config["vllm_cfg"]
+    )
     rejection_sample_method = speculative_config.get(
         "rejection_sample_method", "standard"
     )
@@ -196,6 +260,14 @@ def validate_vllm_speculative_config(
                 "draft_model requires draft_tensor_parallel_size to match the "
                 "target tensor_parallel_size"
             )
+    if tail_gate_enabled:
+        scheduler_cls = config["vllm_kwargs"].get("scheduler_cls")
+        if scheduler_cls is not None and scheduler_cls != _TAIL_GATE_SCHEDULER_CLASS:
+            raise ValueError(
+                "Tail-gated speculative decoding requires scheduler_cls="
+                f"{_TAIL_GATE_SCHEDULER_CLASS}."
+            )
+        config["vllm_kwargs"]["scheduler_cls"] = _TAIL_GATE_SCHEDULER_CLASS
 
 
 def get_vllm_specdec_runtime_contract(
