@@ -20,6 +20,7 @@ import argparse
 import html
 import importlib
 import json
+import re
 import statistics
 from dataclasses import replace
 from pathlib import Path
@@ -46,27 +47,51 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
 
 
 MINI_STEPS = {1, 2}
-MINI_THRESHOLD = 32
 DEFAULT_WANDB_ENTITY = "nvidia"
 DEFAULT_WANDB_PROJECT = "nemorl-vllm024-tail-gated-mini-sync-grpo-pre-tyche"
+REQUIRED_COMMON_CONFIG = {
+    "model": "qwen32b",
+    "cluster": "pre-tyche",
+    "runtime": "nemo-rl",
+    "recipe": "examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
+    "target_tp": "2",
+    "draft_tp": "1",
+    "dp": "8",
+    "ep": "1",
+    "temperature": "1.0",
+    "top_p": "1.0",
+    "max_osl": "1024",
+    "max_model_len": "1056",
+    "max_sequence_length": "1024",
+    "num_prompts": "16",
+    "num_generations": "4",
+    "train_gbs": "64",
+    "max_num_batched_tokens": "16384",
+    "max_num_seqs": "1024",
+    "runner": "v2",
+    "graph_mode": "FULL_AND_PIECEWISE",
+    "sampling": "standard",
+}
 REQUIRED_VARIANT_CONFIG = {
     "baseline_v2": {
         "gate_mode": "off",
         "k": "0",
         "threshold": "",
         "consecutive_checks": "",
+        "draft_sample_method": "not_applicable",
     },
     "always_on_v2_k5": {
         "gate_mode": "off",
         "k": "5",
         "threshold": "",
         "consecutive_checks": "",
+        "draft_sample_method": "probabilistic",
     },
     "fastrl_threshold_v2_k5": {
         "gate_mode": "threshold",
         "k": "5",
-        "threshold": "32",
         "consecutive_checks": "10",
+        "draft_sample_method": "probabilistic",
     },
 }
 MINI_METRIC_KEYS = {
@@ -77,6 +102,76 @@ MINI_ROW_FIELDS = (
     *REQUIRED_ROW_FIELDS,
     "mini_health_passed",
     *MINI_METRIC_KEYS,
+)
+SLURM_LOG_FIELDS = ("slurm_log", "slurm_log_path", "log_path")
+SLURM_FAILURE_PATTERNS = (
+    (
+        "stale_draft_id",
+        re.compile(
+            r"(?<!no )\bstale draft (?:ids?|token ids?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "invalid_token",
+        re.compile(
+            r"(?:\b(?:valueerror|runtimeerror|error|exception|assertionerror)\b.*"
+            r"\binvalid tokens?(?: ids?)?\b|(?<!no )\binvalid tokens?"
+            r"(?: ids?)?\b.*\b(?:generated|detected|found|observed|returned|"
+            r"produced)\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    ("tokens_left_for_obs", re.compile(r"\btokens_left_for_obs\s*=\s*-\d+\b")),
+    (
+        "nan",
+        re.compile(
+            r"(?:\b(?:loss|reward|logprobs?|gradients?|metrics?)\b\s*"
+            r"(?:is|are|=|:|contains?)\s*nan\b|\bnan detected in\b.*"
+            r"\b(?:loss|reward|logprobs?|gradients?|metrics?)\b|"
+            r"\b(?:found|detected|encountered)\s+nan\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "oom",
+        re.compile(
+            r"\b(?:cuda out of memory|outofmemoryerror|oom-kill(?:er)?|"
+            r"killed process.*out of memory|(?:runtimeerror|error|exception)"
+            r"\b.*\boom\b)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "nccl",
+        re.compile(
+            r"(?:\bnccl\b.*\b(?:watchdog\s+)?(?:timed out|timeout detected|"
+            r"hang detected|hung|aborted)\b|\bwatchdog caught collective "
+            r"operation timeout\b.*\bworknccl\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "q_cache",
+        re.compile(
+            r"(?:\bq[-_ ]?cache\b.*\b(?:error|mismatch|failed|failure|corrupt)"
+            r"\w*\b|\b(?:assertionerror|runtimeerror|error|exception)\b.*"
+            r"\bq[-_ ]?cache\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "cuda_graph_fallback",
+        re.compile(
+            r"(?:\bcuda[ _]?graphs?\b.*\b(?:fallback to eager|"
+            r"falling back to eager|uncaptured)\b|\buncaptured "
+            r"cuda[ _]?graphs?\b|\bcuda[ _]?graphs?\s+fallback\b"
+            r"(?!\s+(?:count\s*[:=]\s*0|disabled)\b)|\beager[ _-]?fallback"
+            r"(?![ _]?count\s*[:=]\s*0\b)(?:\s+(?:detected|used|occurred)\b|"
+            r"[ _]?count\s*[:=]\s*[1-9]\d*\b))",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 
@@ -115,6 +210,11 @@ def _wandb_run_path_from_url(url: str, *, variant: str, expected_run_id: str) ->
     return f"{entity}/{project}/{run_id}"
 
 
+def _command_override_values(command: str, key: str) -> set[str]:
+    pattern = re.compile(rf"(?:^|\s){re.escape(key)}=([^\s]+)(?=\s|$)")
+    return {match.group(1) for match in pattern.finditer(command)}
+
+
 def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
     variants = sorted(row.get("variant", "") for row in rows)
     required_variants = sorted(REQUIRED_VARIANT_CONFIG)
@@ -125,12 +225,36 @@ def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         )
     for row in rows:
         variant = row["variant"]
+        for field, expected in REQUIRED_COMMON_CONFIG.items():
+            actual = row.get(field, "")
+            if actual != expected:
+                return (
+                    f"invalid mini manifest field:{variant}:{field}:{actual}:{expected}"
+                )
         for field, expected in REQUIRED_VARIANT_CONFIG[variant].items():
             actual = row.get(field, "")
             if actual != expected:
                 return (
                     f"invalid mini manifest field:{variant}:{field}:{actual}:{expected}"
                 )
+        if variant == "fastrl_threshold_v2_k5":
+            try:
+                threshold = int(row.get("threshold", ""))
+            except ValueError:
+                return f"invalid mini manifest field:{variant}:threshold"
+            if threshold <= 0:
+                return f"invalid mini manifest field:{variant}:threshold"
+        checkpointing_enabled = row.get("checkpointing_enabled", "")
+        command = row.get("command", "")
+        if checkpointing_enabled and checkpointing_enabled.lower() != "false":
+            return f"invalid mini manifest provenance:{variant}:checkpointing_enabled"
+        if command:
+            if _command_override_values(command, "checkpointing.enabled") != {"false"}:
+                return f"invalid mini manifest provenance:{variant}:command"
+            if _command_override_values(command, "grpo.max_num_steps") != {"2"}:
+                return f"invalid mini manifest provenance:{variant}:command"
+        if not checkpointing_enabled and not command:
+            return f"invalid mini manifest provenance:{variant}:checkpointing"
         if row.get("wandb_url"):
             try:
                 _wandb_run_path_from_url(
@@ -141,6 +265,13 @@ def _validate_mini_manifest_rows(rows: list[dict[str, str]]) -> str | None:
             except ValueError as error:
                 return str(error)
     return None
+
+
+def _mini_threshold(rows: Iterable[Mapping[str, str]]) -> int:
+    threshold_row = next(
+        row for row in rows if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    return int(threshold_row["threshold"])
 
 
 def _wandb_run_path(
@@ -173,13 +304,44 @@ def _positive_metric(record: Mapping[str, object], key: str) -> bool:
     return _is_finite_number(value) and value > 0.0
 
 
+def _slurm_log_path(manifest: Path, metadata: Mapping[str, str]) -> Path:
+    for field in SLURM_LOG_FIELDS:
+        value = metadata.get(field, "")
+        if value:
+            path = Path(value.replace("%j", metadata["job_id"]))
+            return path if path.is_absolute() else manifest.parent / path
+    return (
+        manifest.parent
+        / metadata["model"]
+        / metadata["variant"]
+        / f"slurm-{metadata['job_id']}.out"
+    )
+
+
+def _slurm_log_failure(manifest: Path, metadata: Mapping[str, str]) -> str | None:
+    path = _slurm_log_path(manifest, metadata)
+    if not path.is_file():
+        return "slurm_log_missing"
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            for reason, pattern in SLURM_FAILURE_PATTERNS:
+                if pattern.search(line):
+                    return f"slurm_log:{reason}"
+    return None
+
+
 def _mini_failure(
     summary: RunSummary,
     history: Iterable[Mapping[str, object]],
     metadata: Mapping[str, str],
+    *,
+    threshold: int,
+    slurm_log_failure: str | None,
 ) -> str | None:
     if summary.status != "final":
         return summary.reason
+    if slurm_log_failure is not None:
+        return slurm_log_failure
     records = _records_by_step(history)
     if set(records) != MINI_STEPS:
         return (
@@ -193,12 +355,6 @@ def _mini_failure(
 
     if metadata.get("gate_mode") != "threshold":
         return None
-    try:
-        threshold = int(metadata["threshold"])
-    except (KeyError, ValueError):
-        return "threshold"
-    if threshold != MINI_THRESHOLD:
-        return "threshold"
     for record in records.values():
         checks = (
             (
@@ -278,7 +434,9 @@ def _activation_events(
     return events
 
 
-def _render_activation_scatter(events: list[dict[str, object]]) -> str:
+def _render_activation_scatter(
+    events: list[dict[str, object]], *, threshold: int
+) -> str:
     ordered = sorted(
         events,
         key=lambda event: (
@@ -295,9 +453,11 @@ def _render_activation_scatter(events: list[dict[str, object]]) -> str:
     top = 18
     plot_width = 382
     plot_height = 152
-    max_tick = max([MINI_THRESHOLD, *(cast(float, event["tick"]) for event in ordered)])
+    max_tick = max(
+        [float(threshold), *(cast(float, event["tick"]) for event in ordered)]
+    )
     max_batch = max(
-        [float(MINI_THRESHOLD), *(cast(float, event["batch"]) for event in ordered)]
+        [float(threshold), *(cast(float, event["batch"]) for event in ordered)]
     )
 
     def x(value: float) -> float:
@@ -306,7 +466,7 @@ def _render_activation_scatter(events: list[dict[str, object]]) -> str:
     def y(value: float) -> float:
         return top + plot_height * (1.0 - value / max_batch)
 
-    threshold_y = y(float(MINI_THRESHOLD))
+    threshold_y = y(float(threshold))
     fragments = [
         '<section class="tail-gate-activation-events">',
         "<style>.tail-gate-activation-events{font:13px sans-serif}.tail-gate-activation-events svg{border:1px solid #c9c9c9}.tail-gate-activation-events .axis{stroke:#333}.tail-gate-activation-events .threshold{stroke:#c55;stroke-dasharray:4 3}.tail-gate-activation-events .event{fill:#76b900}.tail-gate-activation-events text{fill:#222}</style>",
@@ -315,7 +475,7 @@ def _render_activation_scatter(events: list[dict[str, object]]) -> str:
         f'<line class="axis" x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}"/>',
         f'<line class="axis" x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}"/>',
         f'<line class="threshold" x1="{left}" y1="{threshold_y:.1f}" x2="{left + plot_width}" y2="{threshold_y:.1f}"/>',
-        f'<text x="{left + 4}" y="{threshold_y - 4:.1f}">threshold=32</text>',
+        f'<text x="{left + 4}" y="{threshold_y - 4:.1f}">threshold={threshold}</text>',
         f'<text x="{left + plot_width / 2:.1f}" y="{height - 12}" text-anchor="middle">Scheduler tick</text>',
         f'<text x="14" y="{top + plot_height / 2:.1f}" transform="rotate(-90 14 {top + plot_height / 2:.1f})" text-anchor="middle">Inflight batch</text>',
     ]
@@ -365,6 +525,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     mini_manifest_error = _validate_mini_manifest_rows(manifest_rows)
     if mini_manifest_error:
         raise ValueError(mini_manifest_error)
+    threshold = _mini_threshold(manifest_rows)
     _claim_output_directory(args.output_dir)
 
     client = api if api is not None else _create_wandb_api()
@@ -395,7 +556,13 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
             )
             histories[job_id] = history
             summary = summarize_history(metadata, history, expected_steps=MINI_STEPS)
-            failure = _mini_failure(summary, history, metadata)
+            failure = _mini_failure(
+                summary,
+                history,
+                metadata,
+                threshold=threshold,
+                slurm_log_failure=_slurm_log_failure(args.manifest, metadata),
+            )
             if summary.status == "final" and failure is not None:
                 summary = replace(
                     summary,
@@ -446,7 +613,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     _write_csv(args.output_dir / "mini_summary.csv", rows, fieldnames=MINI_ROW_FIELDS)
     _write_atomic(
         args.output_dir / "tail_gate_activation_events.html",
-        _render_activation_scatter(events),
+        _render_activation_scatter(events, threshold=threshold),
     )
     return int(
         any(row["status"] != "final" or not row["mini_health_passed"] for row in rows)

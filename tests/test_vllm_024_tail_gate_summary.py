@@ -104,6 +104,9 @@ def _metadata(
         "runner": runner,
         "graph_mode": "FULL_AND_PIECEWISE" if runner == "v2" else "PIECEWISE",
         "sampling": "standard",
+        "draft_sample_method": (
+            "not_applicable" if variant.startswith("baseline_") else "probabilistic"
+        ),
         "job_id": f"job-{model}-{variant}",
         "wandb_run_id": f"run-{model}-{variant}",
         "wandb_url": f"https://wandb.example/{model}/{variant}",
@@ -391,6 +394,18 @@ def test_comparison_key_uses_only_complete_explicit_cohort_schema() -> None:
     assert candidate.e2e_time_speedup_vs_baseline == 1.25
 
 
+def test_comparison_rejects_mixed_nonbaseline_draft_sample_methods() -> None:
+    baseline = _metadata()
+    always_on = _metadata(variant="always_on_v2_k5")
+    threshold = _metadata(variant="fastrl_threshold_v2_k5")
+    always_on["draft_sample_method"] = "greedy"
+
+    with pytest.raises(ValueError, match="mixed draft_sample_method"):
+        build_comparison_rows(
+            [_summary(baseline), _summary(always_on), _summary(threshold)]
+        )
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -426,6 +441,27 @@ def test_manifest_rejects_every_missing_cohort_dimension() -> None:
         assert (
             _validate_manifest_rows([incomplete]) == f"missing manifest fields:{field}"
         )
+
+
+@pytest.mark.parametrize("field", ["wandb_run_id", "job_id"])
+def test_manifest_rejects_duplicate_run_identifiers_before_wandb_fetch(
+    tmp_path: Path, field: str
+) -> None:
+    rows = _cohort()
+    rows[1][field] = rows[0][field]
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    output_dir = tmp_path / "output"
+    api = _api_for(rows)
+
+    with pytest.raises(ValueError, match=rf"duplicate {field}"):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == 0
+    assert not output_dir.exists()
 
 
 def test_manifest_rejects_engine_length_below_output_plus_headroom() -> None:
@@ -680,3 +716,5 @@ def test_output_rows_include_full_metric_speedup_health_and_provenance_contract(
 
     assert set(REQUIRED_ROW_FIELDS) == set(rows[0].to_dict())
     assert set(COHORT_FIELDS).issubset(rows[0].to_dict())
+    baseline = next(row for row in rows if row.variant == "baseline_v2")
+    assert baseline.to_dict()["draft_sample_method"] == "not_applicable"

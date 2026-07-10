@@ -116,6 +116,7 @@ COHORT_FIELDS = (
     "runner",
     "graph_mode",
     "sampling",
+    "draft_sample_method",
 )
 REQUIRED_MANIFEST_FIELDS = (
     *COHORT_FIELDS,
@@ -193,6 +194,7 @@ class RunSummary:
     container_sha256: str
     graph_mode: str
     sampling: str
+    draft_sample_method: str
     wandb_run_id: str
     provenance: str
     comparison_key: tuple[tuple[str, str], ...]
@@ -290,7 +292,15 @@ def _history_keys(metadata: Mapping[str, str]) -> list[str]:
 
 
 def _comparison_key(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
-    return tuple((field, metadata.get(field, "")) for field in COHORT_FIELDS)
+    return tuple(
+        (
+            field,
+            "matched_specdec_method"
+            if field == "draft_sample_method"
+            else metadata.get(field, ""),
+        )
+        for field in COHORT_FIELDS
+    )
 
 
 def _provenance(metadata: Mapping[str, str]) -> str:
@@ -371,6 +381,7 @@ def _make_summary(
         container_sha256=metadata.get("container_sha256", ""),
         graph_mode=metadata.get("graph_mode", ""),
         sampling=metadata.get("sampling", ""),
+        draft_sample_method=metadata.get("draft_sample_method", ""),
         wandb_run_id=metadata.get("wandb_run_id", ""),
         provenance=_provenance(metadata),
         comparison_key=_comparison_key(metadata),
@@ -593,6 +604,20 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
         variants = [summary.variant for summary in cohort]
         if len(variants) != len(set(variants)):
             raise ValueError(f"duplicate variants in cohort:{dict(key)}")
+        baseline_methods = {
+            summary.draft_sample_method
+            for summary in cohort
+            if summary.variant.startswith("baseline_")
+        }
+        if baseline_methods and baseline_methods != {"not_applicable"}:
+            raise ValueError(f"invalid baseline draft_sample_method:{dict(key)}")
+        specdec_methods = {
+            summary.draft_sample_method
+            for summary in cohort
+            if not summary.variant.startswith("baseline_")
+        }
+        if len(specdec_methods) > 1:
+            raise ValueError(f"mixed draft_sample_method:{dict(key)}")
         runner = cohort[0].runner
         baselines = [
             summary for summary in cohort if summary.variant == f"baseline_{runner}"
@@ -636,10 +661,24 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
     if not rows:
         return "empty manifest"
     seen: set[tuple[tuple[tuple[str, str], ...], str]] = set()
+    seen_job_ids: set[str] = set()
+    seen_wandb_run_ids: set[str] = set()
     for row in rows:
         missing = [field for field in REQUIRED_MANIFEST_FIELDS if not row.get(field)]
         if missing:
             return f"missing manifest fields:{','.join(missing)}"
+        if row["job_id"] in seen_job_ids:
+            return f"duplicate job_id:{row['job_id']}"
+        seen_job_ids.add(row["job_id"])
+        if row["wandb_run_id"] in seen_wandb_run_ids:
+            return f"duplicate wandb_run_id:{row['wandb_run_id']}"
+        seen_wandb_run_ids.add(row["wandb_run_id"])
+        draft_sample_method = row["draft_sample_method"]
+        if row["variant"].startswith("baseline_"):
+            if draft_sample_method != "not_applicable":
+                return f"invalid baseline draft_sample_method:{draft_sample_method}"
+        elif draft_sample_method not in {"greedy", "probabilistic"}:
+            return f"invalid SpecDec draft_sample_method:{draft_sample_method}"
         runner = row["runner"]
         if runner not in {"v1", "v2"}:
             return f"invalid runner:{runner}"
@@ -724,7 +763,7 @@ def _render_html(rows: list[dict[str, object]]) -> str:
                 width = (
                     0
                     if speedup is None
-                    else min(100, max(0, (cast(float, speedup) - 0.5) * 80))
+                    else min(100.0, max(0.0, (cast(float, speedup) - 0.5) * 80))
                 )
                 fragments.append(
                     f'<span class="bar" style="width:{width:.0f}px"></span> {html.escape(cast(str, row["variant"]))} {_format_metric(speedup)}<br>'

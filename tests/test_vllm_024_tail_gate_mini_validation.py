@@ -12,6 +12,9 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     REQUIRED_MANIFEST_FIELDS,
 )
 from experiments.vllm_024_upgrade.validate_mini_sync_grpo_tail_gate import main
+from experiments.vllm_024_upgrade.validate_mini_sync_grpo_tail_gate import (
+    _render_activation_scatter,
+)
 
 
 class _FakeRun:
@@ -43,7 +46,7 @@ def _metadata(variant: str) -> dict[str, str]:
         "variant": variant,
         "gate_mode": "threshold" if gated else "off",
         "k": "0" if variant == "baseline_v2" else "5",
-        "threshold": "32" if gated else "",
+        "threshold": "4" if gated else "",
         "consecutive_checks": "10" if gated else "",
         "roofline_config_sha256": "",
         "cluster": "pre-tyche",
@@ -52,9 +55,9 @@ def _metadata(variant: str) -> dict[str, str]:
         "runtime_commit": "abc123",
         "vllm_version": "0.24.0",
         "vllm_commit": "ee0da84a",
-        "target_tp": "4",
+        "target_tp": "2",
         "draft_tp": "1",
-        "dp": "4",
+        "dp": "8",
         "ep": "1",
         "temperature": "1.0",
         "top_p": "1.0",
@@ -64,17 +67,21 @@ def _metadata(variant: str) -> dict[str, str]:
         "num_prompts": "16",
         "num_generations": "4",
         "train_gbs": "64",
-        "max_num_batched_tokens": "4096",
-        "max_num_seqs": "64",
+        "max_num_batched_tokens": "16384",
+        "max_num_seqs": "1024",
         "recipe": "examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
         "container": "/containers/nemo.sqsh",
         "container_sha256": "deadbeef",
         "runner": "v2",
         "graph_mode": "FULL_AND_PIECEWISE",
         "sampling": "standard",
+        "draft_sample_method": (
+            "not_applicable" if variant == "baseline_v2" else "probabilistic"
+        ),
         "job_id": f"job-{variant}",
         "wandb_run_id": f"run-{variant}",
         "wandb_url": "",
+        "command": "run grpo.max_num_steps=2 checkpointing.enabled=false",
     }
     assert set(REQUIRED_MANIFEST_FIELDS).issubset(values)
     return values
@@ -84,7 +91,7 @@ def _history(
     metadata: Mapping[str, str],
     *,
     activation_tick: float = 17.0,
-    activation_batch: float = 16.0,
+    activation_batch: float = 4.0,
     enabled_ratio: float = 0.25,
     advance_only_ratio: float = 0.75,
     k0_steps: float = 75.0,
@@ -96,7 +103,7 @@ def _history(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for step in (1, 2):
-        row = {
+        row: dict[str, object] = {
             "_step": step,
             "timing/train/total_step_time": 200.0,
             "timing/train/generation": 100.0,
@@ -158,6 +165,14 @@ def _write_manifest(path: Path, rows: Iterable[dict[str, str]]) -> None:
         )
         writer.writeheader()
         writer.writerows(materialized)
+    for row in materialized:
+        log_path = (
+            path.parent / row["model"] / row["variant"] / f"slurm-{row['job_id']}.out"
+        )
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(
+            "Training completed through policy step 2.\n", encoding="utf-8"
+        )
 
 
 def _run_validator(
@@ -219,6 +234,28 @@ def test_mini_validator_rejects_incomplete_matrix_before_wandb_query(
     assert not output_dir.exists()
 
 
+@pytest.mark.parametrize("field", ["wandb_run_id", "job_id"])
+def test_mini_validator_rejects_duplicate_run_identifiers_before_wandb_query(
+    tmp_path: Path, field: str
+) -> None:
+    rows = _cohort()
+    rows[1][field] = rows[0][field]
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(ValueError, match=rf"duplicate {field}"):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
 @pytest.mark.parametrize(
     ("variant", "field", "invalid_value"),
     [
@@ -230,10 +267,12 @@ def test_mini_validator_rejects_incomplete_matrix_before_wandb_query(
         ("always_on_v2_k5", "k", "0"),
         ("always_on_v2_k5", "threshold", "32"),
         ("always_on_v2_k5", "consecutive_checks", "10"),
+        ("always_on_v2_k5", "draft_sample_method", "greedy"),
         ("fastrl_threshold_v2_k5", "gate_mode", "off"),
         ("fastrl_threshold_v2_k5", "k", "0"),
-        ("fastrl_threshold_v2_k5", "threshold", "31"),
+        ("fastrl_threshold_v2_k5", "threshold", "0"),
         ("fastrl_threshold_v2_k5", "consecutive_checks", "9"),
+        ("fastrl_threshold_v2_k5", "draft_sample_method", "greedy"),
     ],
 )
 def test_mini_validator_rejects_invalid_variant_mapping_before_wandb_query(
@@ -252,6 +291,72 @@ def test_mini_validator_rejects_invalid_variant_mapping_before_wandb_query(
         ValueError,
         match=rf"invalid mini manifest field:{variant}:{field}",
     ):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == []
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("model", "qwen30ba3b"),
+        ("cluster", "lyris-gb200"),
+        ("runtime", "other-runtime"),
+        ("recipe", "examples/configs/recipes/llm/performance/other.yaml"),
+        ("target_tp", "4"),
+        ("draft_tp", "2"),
+        ("dp", "4"),
+        ("ep", "2"),
+        ("temperature", "0.7"),
+        ("top_p", "0.9"),
+        ("max_osl", "512"),
+        ("max_model_len", "2080"),
+        ("max_sequence_length", "2048"),
+        ("num_prompts", "32"),
+        ("num_generations", "8"),
+        ("train_gbs", "128"),
+        ("max_num_batched_tokens", "4096"),
+        ("max_num_seqs", "64"),
+        ("runner", "v1"),
+        ("graph_mode", "PIECEWISE"),
+        ("sampling", "typical"),
+        ("command", "run checkpointing.enabled=true"),
+        (
+            "command",
+            "run grpo.max_num_steps=2 checkpointing.enabled=falseish",
+        ),
+        (
+            "command",
+            "run grpo.max_num_steps=2 checkpointing.enabled=false "
+            "checkpointing.enabled=true",
+        ),
+        (
+            "command",
+            "run grpo.max_num_steps=20 checkpointing.enabled=false",
+        ),
+    ],
+)
+def test_mini_validator_rejects_non_exact_workload_before_wandb_query(
+    tmp_path: Path, field: str, invalid_value: str
+) -> None:
+    rows = _cohort()
+    rows[0][field] = invalid_value
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+    error_pattern = (
+        "runner"
+        if field == "runner"
+        else rf"invalid mini manifest (field|provenance):.*{field}"
+    )
+
+    with pytest.raises(ValueError, match=error_pattern):
         main(
             ["--manifest", str(manifest), "--output-dir", str(output_dir)],
             api=api,
@@ -295,6 +400,31 @@ def test_mini_validator_uses_manifest_wandb_url_for_each_run(tmp_path: Path) -> 
     payload = json.loads((output_dir / "mini_summary.json").read_text())
     urls_by_variant = {row["variant"]: row["wandb_url"] for row in payload}
     assert urls_by_variant == {row["variant"]: row["wandb_url"] for row in rows}
+
+
+def test_mini_validator_rejects_conflicting_checkpoint_provenance(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    for row in rows:
+        row["checkpointing_enabled"] = "false"
+    rows[0]["command"] = "run checkpointing.enabled=true"
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    with pytest.raises(
+        ValueError, match="invalid mini manifest provenance:baseline_v2:command"
+    ):
+        main(
+            ["--manifest", str(manifest), "--output-dir", str(output_dir)],
+            api=api,
+        )
+
+    assert api.calls == []
+    assert not output_dir.exists()
 
 
 def test_mini_validator_fallback_matches_mini_launcher_project(tmp_path: Path) -> None:
@@ -377,6 +507,148 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
     assert failure in threshold["reason"]
 
 
+@pytest.mark.parametrize(
+    ("log_text", "failure"),
+    [
+        ("RuntimeError: stale draft IDs detected\n", "stale_draft_id"),
+        ("stale draft token IDs detected after K transition\n", "stale_draft_id"),
+        ("ValueError: invalid token id 151936\n", "invalid_token"),
+        ("invalid tokens generated by speculative decode\n", "invalid_token"),
+        (
+            "AssertionError: tokens_left_for_obs=-1 should not be negative\n",
+            "tokens_left_for_obs",
+        ),
+        ("RuntimeError: loss is NaN\n", "nan"),
+        ("ERROR: NaN detected in policy loss\n", "nan"),
+        ("found NaN in reward tensor\n", "nan"),
+        ("torch.OutOfMemoryError: CUDA out of memory\n", "oom"),
+        ("RuntimeError: OOM while allocating KV cache\n", "oom"),
+        ("NCCL watchdog timed out after 600 seconds\n", "nccl"),
+        ("ERROR: NCCL timeout detected in communicator\n", "nccl"),
+        (
+            "Watchdog caught collective operation timeout: WorkNCCL(SeqNum=7)\n",
+            "nccl",
+        ),
+        ("RuntimeError: q-cache mismatch detected\n", "q_cache"),
+        ("AssertionError: q_cache must be empty before replay\n", "q_cache"),
+        ("WARNING: CUDA graph fallback to eager execution\n", "cuda_graph_fallback"),
+        ("WARNING: CUDA graph fallback detected for batch 4\n", "cuda_graph_fallback"),
+        ("ERROR: uncaptured CUDA graph execution\n", "cuda_graph_fallback"),
+        ("eager fallback count: 2\n", "cuda_graph_fallback"),
+        ("eager_fallback_count=1\n", "cuda_graph_fallback"),
+    ],
+)
+def test_mini_validator_rejects_explicit_slurm_failure_signatures(
+    tmp_path: Path, log_text: str, failure: str
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    log_path = (
+        manifest.parent
+        / threshold["model"]
+        / threshold["variant"]
+        / f"slurm-{threshold['job_id']}.out"
+    )
+    log_path.write_text(log_text, encoding="utf-8")
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["status"] == "health_failed"
+    assert threshold_row["reason"] == f"mini_health_failed:slurm_log:{failure}"
+
+
+def test_mini_validator_treats_missing_slurm_log_as_health_failure(
+    tmp_path: Path,
+) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    threshold = rows[-1]
+    (
+        manifest.parent
+        / threshold["model"]
+        / threshold["variant"]
+        / f"slurm-{threshold['job_id']}.out"
+    ).unlink()
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == "mini_health_failed:slurm_log_missing"
+
+
+def test_mini_validator_ignores_benign_log_mentions(tmp_path: Path) -> None:
+    rows = _cohort()
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    benign = (
+        "OOM avoidance enabled; NaN checks configured.\n"
+        "NCCL timeout is configured for 600 seconds.\n"
+        "CUDA graph fallback count: 0; eager_fallback_count=0.\n"
+        "CUDA graph fallback disabled; no invalid tokens observed.\n"
+        "q-cache initialized; no stale draft IDs; tokens_left_for_obs=128.\n"
+    )
+    for row in rows:
+        (
+            manifest.parent
+            / row["model"]
+            / row["variant"]
+            / f"slurm-{row['job_id']}.out"
+        ).write_text(benign, encoding="utf-8")
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    assert result == 0
+
+
+def test_mini_validator_honors_recorded_slurm_log_path(tmp_path: Path) -> None:
+    rows = _cohort()
+    for row in rows:
+        row["slurm_log"] = ""
+    rows[-1]["slurm_log"] = "recorded/threshold.out"
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    _write_manifest(manifest, rows)
+    recorded = manifest.parent / "recorded" / "threshold.out"
+    recorded.parent.mkdir()
+    recorded.write_text("RuntimeError: stale draft ID detected\n", encoding="utf-8")
+
+    result = main(
+        ["--manifest", str(manifest), "--output-dir", str(tmp_path / "output")],
+        api=_FakeApi(histories),
+    )
+
+    payload = json.loads((tmp_path / "output" / "mini_summary.json").read_text())
+    threshold_row = next(
+        row for row in payload if row["variant"] == "fastrl_threshold_v2_k5"
+    )
+    assert result == 1
+    assert threshold_row["reason"] == "mini_health_failed:slurm_log:stale_draft_id"
+
+
 def test_mini_validator_reuses_exact_collector_cohort_matching(tmp_path: Path) -> None:
     rows = _cohort()
     rows[1]["container_sha256"] = "different"
@@ -410,9 +682,27 @@ def test_activation_scatter_is_deterministic_and_identifies_the_event(
     report = first.decode()
     assert "Scheduler tick" in report
     assert "Inflight batch" in report
-    assert "threshold=32" in report
+    assert "threshold=4" in report
     assert "OFF-to-ON" in report
     assert "tick=17" in report
-    assert "batch=16" in report
+    assert "batch=4" in report
     assert "stable speedup" not in report
     assert "two-step smoke makes no speedup claim" in report
+
+
+def test_activation_scatter_escapes_event_labels() -> None:
+    report = _render_activation_scatter(
+        [
+            {
+                "variant": "<script>alert(1)</script>",
+                "job_id": "job",
+                "step": 1,
+                "tick": 2.0,
+                "batch": 1.0,
+            }
+        ],
+        threshold=4,
+    )
+
+    assert "<script>" not in report
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in report
