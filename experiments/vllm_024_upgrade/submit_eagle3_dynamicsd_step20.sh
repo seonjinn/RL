@@ -240,7 +240,7 @@ submit_one() {
           if [[ -n "${QWEN30_DFLASH_MODEL:-}" ]]; then
             draft_model="${QWEN30_DFLASH_MODEL}"
           else
-            dflash_cache="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-speculator.dflash"
+            dflash_cache="${HF_HOME}/hub/models--inference-optimization--Qwen3-30B-A3B-speculator.dflash"
             dflash_revision="RESOLVED_FROM_REFS_MAIN"
             if [[ -r "${dflash_cache}/refs/main" ]]; then
               dflash_revision="$(<"${dflash_cache}/refs/main")"

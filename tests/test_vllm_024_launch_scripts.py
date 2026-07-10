@@ -199,7 +199,7 @@ def test_hf_snapshot_prewarm_matches_lyris_topology_and_dflash_checkpoint() -> N
         EXPERIMENT_ROOT="/lustre/users/sna/experiments/dflash-prewarm",
     )
 
-    assert "RedHatAI/Qwen3-30B-A3B-speculator.dflash" in output
+    assert "inference-optimization/Qwen3-30B-A3B-speculator.dflash" in output
     assert "cache_dir=/lustre/users/sna/hf_home/hub" in output
     assert "--nodes=1" in output
     assert "--segment=1" in output
@@ -666,7 +666,9 @@ def test_dynamicsd_launcher_renders_qwen30_dflash_k15() -> None:
     assert "speculative_config.num_speculative_tokens=15" in output
     assert "speculative_config.draft_tensor_parallel_size=1" in output
     assert "speculative_config.attention_backend=FLASH_ATTN" in output
-    assert "models--RedHatAI--Qwen3-30B-A3B-speculator.dflash" in output
+    assert (
+        "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash" in output
+    )
     assert "snapshots/RESOLVED_FROM_REFS_MAIN" in output
     assert "speculative_config.rejection_sample_method=standard" in output
     assert "speculative_config.draft_sample_method=probabilistic" in output
