@@ -484,6 +484,64 @@ def compute_spec_decode_metrics(
         "vllm/spec_acceptance_rate": acceptance_rate,
     }
 
+    tail_gate_prefix = "vllm:spec_decode_tail_gate_"
+    if any(isinstance(key, str) and key.startswith(tail_gate_prefix) for key in keys):
+
+        def tail_gate_ratio(numerator: float, denominator: float) -> float:
+            return numerator / denominator if denominator > 0 else 0.0
+
+        decisions = delta.get(f"{tail_gate_prefix}decisions", 0.0)
+        enabled_steps = delta.get(f"{tail_gate_prefix}enabled_steps", 0.0)
+        disabled_steps = delta.get(f"{tail_gate_prefix}disabled_steps", 0.0)
+        activations = delta.get(f"{tail_gate_prefix}activations", 0.0)
+        activation_batch_sum = delta.get(f"{tail_gate_prefix}active_requests_sum", 0.0)
+        activation_seq_len_sum = delta.get(
+            f"{tail_gate_prefix}mean_sequence_length_sum", 0.0
+        )
+        predicted_speedup_sum = delta.get(
+            f"{tail_gate_prefix}predicted_speedup_sum", 0.0
+        )
+        predicted_speedup_count = delta.get(
+            f"{tail_gate_prefix}predicted_speedup_count", 0.0
+        )
+
+        spec_metrics.update(
+            {
+                "vllm/tail_gate_decisions": decisions,
+                "vllm/tail_gate_enabled_steps": enabled_steps,
+                "vllm/tail_gate_disabled_steps": disabled_steps,
+                "vllm/tail_gate_activations": activations,
+                "vllm/tail_gate_enabled_step_ratio": tail_gate_ratio(
+                    enabled_steps, decisions
+                ),
+                "vllm/tail_gate_advance_only_step_ratio": tail_gate_ratio(
+                    disabled_steps, decisions
+                ),
+                "vllm/tail_gate_activation_batch": tail_gate_ratio(
+                    activation_batch_sum, activations
+                ),
+                "vllm/tail_gate_activation_seq_len": tail_gate_ratio(
+                    activation_seq_len_sum, activations
+                ),
+                "vllm/tail_gate_predicted_speedup": tail_gate_ratio(
+                    predicted_speedup_sum, predicted_speedup_count
+                ),
+            }
+        )
+
+        for key, value in delta.items():
+            if not isinstance(key, str):
+                continue
+            histogram_prefix = f"{tail_gate_prefix}k_"
+            if key.startswith(histogram_prefix) and key.endswith("_steps"):
+                metric_name = key.removeprefix("vllm:spec_decode_").removesuffix(
+                    "_steps"
+                )
+                spec_metrics[f"vllm/{metric_name}_steps"] = value
+                spec_metrics[f"vllm/{metric_name}_step_ratio"] = tail_gate_ratio(
+                    value, decisions
+                )
+
     cudagraph_roles = (
         "target",
         "draft",

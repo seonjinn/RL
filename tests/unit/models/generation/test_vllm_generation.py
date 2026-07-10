@@ -42,6 +42,11 @@ from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
 )
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
+
+if importlib.util.find_spec("vllm") is None:
+    sys.modules["vllm"] = types.ModuleType("vllm")
+
+from nemo_rl.models.generation.vllm.vllm_backend import VllmInternalWorkerExtension
 from nemo_rl.models.generation.vllm.vllm_worker import (
     _resolve_enable_prefix_caching,
 )
@@ -232,6 +237,61 @@ def test_specdec_step_metrics_collect_worker_counters() -> None:
     assert metrics["vllm/spec_num_draft_tokens"] == 20.0
     assert metrics["vllm/spec_num_accepted_tokens"] == 8.0
     assert generation._get_raw_spec_counters.call_count == 2
+
+
+def test_tail_gate_worker_counters_are_reported_and_derived() -> None:
+    extension = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        cudagraph_dispatcher=types.SimpleNamespace(
+            _nrl_cudagraph_dispatch_metrics={"calls_none": 2.0}
+        ),
+        _nrl_tail_gate_metrics={
+            "vllm:spec_decode_tail_gate_decisions": 4.0,
+            "vllm:spec_decode_tail_gate_enabled_steps": 1.0,
+            "vllm:spec_decode_tail_gate_disabled_steps": 3.0,
+        },
+    )
+
+    counters = extension.get_cudagraph_dispatch_metrics()
+
+    assert counters["vllm:spec_decode_cudagraph_target_calls_none"] == 2.0
+    assert counters["vllm:spec_decode_tail_gate_decisions"] == 4.0
+
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_kwargs": {"speculative_config": {"method": "eagle3"}}}
+    generation._step_metrics_snapshot = None
+    generation._get_raw_spec_counters = MagicMock(
+        side_effect=[
+            {
+                "vllm:spec_decode_tail_gate_decisions": 10.0,
+                "vllm:spec_decode_tail_gate_enabled_steps": 2.0,
+                "vllm:spec_decode_tail_gate_disabled_steps": 8.0,
+            },
+            {
+                "vllm:spec_decode_tail_gate_decisions": 14.0,
+                "vllm:spec_decode_tail_gate_enabled_steps": 3.0,
+                "vllm:spec_decode_tail_gate_disabled_steps": 11.0,
+            },
+        ]
+    )
+
+    generation.snapshot_step_metrics()
+    metrics = generation.get_step_metrics()
+
+    assert metrics["vllm/tail_gate_enabled_step_ratio"] == pytest.approx(0.25)
+    assert metrics["vllm/tail_gate_advance_only_step_ratio"] == pytest.approx(0.75)
+
+
+def test_tail_gate_worker_counters_reject_list_values() -> None:
+    extension = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        _nrl_tail_gate_metrics={
+            "vllm:spec_decode_tail_gate_decisions": [1.0],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Tail-gate counter.*list metric"):
+        extension.get_cudagraph_dispatch_metrics()
 
 
 basic_lora_test_config: LoRAConfig = {

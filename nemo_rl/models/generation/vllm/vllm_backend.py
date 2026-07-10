@@ -176,6 +176,7 @@ def _read_mtp_layer_weights_from_checkpoint(
 
 
 class VllmInternalWorkerExtension:
+    model_runner: Any
     state_dict_info: dict[str, Any]
     require_mtp_draft_weights: bool
     _pending_draft_weights: list[tuple[str, torch.Tensor]] | None
@@ -183,7 +184,7 @@ class VllmInternalWorkerExtension:
     _draft_weights_updated: bool
 
     def get_cudagraph_dispatch_metrics(self) -> dict[str, float]:
-        """Return cumulative target and neural-drafter dispatch counters."""
+        """Return cumulative CUDA-graph dispatch and tail-gate counters."""
         metrics: dict[str, float] = {}
         target_dispatcher = getattr(self.model_runner, "cudagraph_dispatcher", None)
         target_manager = getattr(self.model_runner, "cudagraph_manager", None)
@@ -214,6 +215,15 @@ class VllmInternalWorkerExtension:
                 metrics[metric_name] = metrics.get(metric_name, 0.0) + float(
                     value * multiplier
                 )
+
+        tail_gate_metrics = getattr(self.model_runner, "_nrl_tail_gate_metrics", None)
+        if tail_gate_metrics:
+            for name, value in tail_gate_metrics.items():
+                if isinstance(value, list):
+                    raise RuntimeError(
+                        f"Tail-gate counter {name} conflicts with a list metric."
+                    )
+                metrics[name] = metrics.get(name, 0.0) + float(value)
         return metrics
 
     def bind_numa(self) -> bool:

@@ -652,6 +652,70 @@ def test_compute_spec_decode_metrics():
     assert math.isclose(metrics["vllm/spec_acceptance_rate"], 0.8, rel_tol=1e-6)
 
 
+def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
+    start_counters: dict[str | tuple[str, int], float] = {
+        "vllm:spec_decode_tail_gate_decisions": 10.0,
+        "vllm:spec_decode_tail_gate_enabled_steps": 2.0,
+        "vllm:spec_decode_tail_gate_disabled_steps": 8.0,
+        "vllm:spec_decode_tail_gate_activations": 3.0,
+        "vllm:spec_decode_tail_gate_active_requests_sum": 24.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 12288.0,
+        "vllm:spec_decode_tail_gate_predicted_speedup_sum": 3.0,
+        "vllm:spec_decode_tail_gate_predicted_speedup_count": 3.0,
+        "vllm:spec_decode_tail_gate_k_0_steps": 8.0,
+        "vllm:spec_decode_tail_gate_k_5_steps": 2.0,
+    }
+    end_counters: dict[str | tuple[str, int], float] = {
+        "vllm:spec_decode_tail_gate_decisions": 14.0,
+        "vllm:spec_decode_tail_gate_enabled_steps": 3.0,
+        "vllm:spec_decode_tail_gate_disabled_steps": 11.0,
+        "vllm:spec_decode_tail_gate_activations": 4.0,
+        "vllm:spec_decode_tail_gate_active_requests_sum": 40.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 20480.0,
+        "vllm:spec_decode_tail_gate_predicted_speedup_sum": 5.24,
+        "vllm:spec_decode_tail_gate_predicted_speedup_count": 5.0,
+        "vllm:spec_decode_tail_gate_k_0_steps": 11.0,
+        "vllm:spec_decode_tail_gate_k_5_steps": 3.0,
+    }
+
+    metrics = compute_spec_decode_metrics(start_counters, end_counters)
+
+    assert metrics["vllm/tail_gate_enabled_step_ratio"] == pytest.approx(0.25)
+    assert metrics["vllm/tail_gate_activation_batch"] == pytest.approx(16.0)
+    assert metrics["vllm/tail_gate_activation_seq_len"] == pytest.approx(8192.0)
+    assert metrics["vllm/tail_gate_predicted_speedup"] == pytest.approx(1.12)
+    assert metrics["vllm/tail_gate_advance_only_step_ratio"] == pytest.approx(0.75)
+    assert metrics["vllm/tail_gate_k_0_step_ratio"] == pytest.approx(0.75)
+    assert metrics["vllm/tail_gate_k_5_step_ratio"] == pytest.approx(0.25)
+
+
+def test_compute_spec_decode_metrics_tail_gate_zero_denominators_are_zero() -> None:
+    counters: dict[str | tuple[str, int], float] = {
+        "vllm:spec_decode_tail_gate_decisions": 0.0,
+        "vllm:spec_decode_tail_gate_enabled_steps": 0.0,
+        "vllm:spec_decode_tail_gate_disabled_steps": 0.0,
+        "vllm:spec_decode_tail_gate_activations": 0.0,
+        "vllm:spec_decode_tail_gate_active_requests_sum": 0.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 0.0,
+        "vllm:spec_decode_tail_gate_predicted_speedup_sum": 0.0,
+        "vllm:spec_decode_tail_gate_predicted_speedup_count": 0.0,
+        "vllm:spec_decode_tail_gate_k_0_steps": 0.0,
+    }
+
+    metrics = compute_spec_decode_metrics(counters, counters)
+
+    for metric_name in (
+        "vllm/tail_gate_enabled_step_ratio",
+        "vllm/tail_gate_activation_batch",
+        "vllm/tail_gate_activation_seq_len",
+        "vllm/tail_gate_predicted_speedup",
+        "vllm/tail_gate_advance_only_step_ratio",
+        "vllm/tail_gate_k_0_step_ratio",
+    ):
+        assert metrics[metric_name] == 0.0
+        assert not math.isnan(metrics[metric_name])
+
+
 def test_compute_spec_decode_metrics_includes_cudagraph_coverage() -> None:
     start_counters = {
         "vllm:spec_decode_cudagraph_target_calls_none": 10.0,
