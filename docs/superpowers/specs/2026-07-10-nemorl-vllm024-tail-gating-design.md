@@ -13,8 +13,10 @@ enabling it only in the low-concurrency tail. Compare three scheduling families:
 The first target is Qwen3-32B because official vLLM 0.24 selects Model Runner V2
 for this architecture and the existing NeMo-RL branch has matched Eagle-3 and
 CUDA-graph dispatch instrumentation. Qwen3-30B-A3B follows after the Qwen3-32B
-smoke and correctness gates pass. A 32K-output cohort follows the unmodified
-performance-recipe cohort.
+smoke and correctness gates pass. Qwen3-30B-A3B uses V1 by default; a V2 support
+smoke must pass before any V2 production row is created. Otherwise its stock,
+threshold, and roofline variants remain a matched V1 cohort. A 32K-output cohort
+follows the unmodified performance-recipe cohort.
 
 ## Upstream Reference Points
 
