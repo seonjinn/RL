@@ -2,8 +2,10 @@
 
 import ast
 import copy
+import hashlib
 import inspect
-import subprocess
+import json
+import shutil
 import sys
 from enum import Enum
 from pathlib import Path
@@ -931,6 +933,7 @@ def test_cudagraph_dispatch_metrics_source_patch_is_idempotent(
 
 
 _VLLM_024_COMMIT = "ee0da84ab9e04ac7610e28580af62c365e898389"
+_VLLM_024_FIXTURE_ROOT = Path(__file__).with_name("fixtures") / "vllm_v0_24_0"
 _VLLM_024_TAIL_GATE_PATHS = (
     "config/speculative.py",
     "v1/core/sched/output.py",
@@ -953,32 +956,29 @@ _RUNTIME_TAIL_GATE_ANCHOR_PATHS = {
 }
 
 
-def _find_vllm_024_source_root() -> Path:
-    for parent in Path(__file__).resolve().parents:
-        source_root = parent / ".external" / "vllm-v0.24.0"
-        if source_root.is_dir():
-            return source_root
-    raise AssertionError("The pinned .external/vllm-v0.24.0 checkout is required")
+def _load_vllm_024_fixture_manifest() -> dict[str, Any]:
+    manifest_path = _VLLM_024_FIXTURE_ROOT / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["source_commit"] == _VLLM_024_COMMIT
+    assert set(manifest["files"]) == set(_VLLM_024_TAIL_GATE_PATHS)
+    for relative_path, provenance in manifest["files"].items():
+        fixture_path = _VLLM_024_FIXTURE_ROOT / relative_path
+        assert provenance["source_path"] == f"vllm/{relative_path}"
+        assert (
+            hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+            == provenance["fixture_sha256"]
+        )
+    return manifest
 
 
 def _write_vllm_024_tail_gate_sources(tmp_path: Path) -> dict[str, Path]:
-    source_root = _find_vllm_024_source_root()
+    _load_vllm_024_fixture_manifest()
     paths = {}
     for relative_path in _VLLM_024_TAIL_GATE_PATHS:
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(source_root),
-                "show",
-                f"{_VLLM_024_COMMIT}:vllm/{relative_path}",
-            ],
-            check=True,
-            capture_output=True,
-        )
+        fixture_path = _VLLM_024_FIXTURE_ROOT / relative_path
         path = tmp_path / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(result.stdout)
+        shutil.copyfile(fixture_path, path)
         paths[relative_path] = path
     return paths
 
@@ -1049,6 +1049,15 @@ def _install_tail_gate_source_fixture(
         patches, "_get_vllm_file", lambda relative_path: str(paths[relative_path])
     )
     return paths
+
+
+def test_runtime_tail_gate_vllm_024_fixtures_have_pinned_provenance() -> None:
+    manifest = _load_vllm_024_fixture_manifest()
+
+    assert manifest["source_repository"] == "https://github.com/vllm-project/vllm"
+    for provenance in manifest["files"].values():
+        assert provenance["upstream_blob_sha1"]
+        assert provenance["excerpts"]
 
 
 def test_runtime_tail_gate_patch_applies_vllm_024_contract(

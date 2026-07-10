@@ -1,0 +1,42 @@
+{
+  "source_repository": "https://github.com/vllm-project/vllm",
+  "source_commit": "ee0da84ab9e04ac7610e28580af62c365e898389",
+  "description": "Compact exact source excerpts with minimal class/body adapters for executable NeMo-RL source-patch tests.",
+  "files": {
+    "config/speculative.py": {
+      "source_path": "vllm/config/speculative.py",
+      "upstream_blob_sha1": "de505e122cf6310ccbd33952ea7372381e35b7d1",
+      "fixture_sha256": "c64873ebc4e70896a1ea00311a3659f68276cc2ffcbfa87d3f5c2f06e8780ed1",
+      "excerpts": ["lines 161-169"],
+      "adapters": ["provenance comment", "SpeculativeConfig class declaration"]
+    },
+    "v1/core/sched/output.py": {
+      "source_path": "vllm/v1/core/sched/output.py",
+      "upstream_blob_sha1": "291e73bc64b3936c5a83a9d260489c4c39283c2c",
+      "fixture_sha256": "102e66025901b113f80ff808bee61f4c250841714c7db205409397cf9ce66c15",
+      "excerpts": ["lines 243-248"],
+      "adapters": ["provenance comment", "SchedulerOutput class declaration", "make_empty body"]
+    },
+    "v1/worker/gpu/model_runner.py": {
+      "source_path": "vllm/v1/worker/gpu/model_runner.py",
+      "upstream_blob_sha1": "30ca2ddc5629c1a33185a42ea15c4b80571c4a2e",
+      "fixture_sha256": "93b3d559e4c47eb69a9756b7e7b89c9ef5f26e568a8e5baf9c34d9b625b26e1d",
+      "excerpts": ["line 119", "lines 1100-1121", "lines 1309-1468", "lines 1572-1578"],
+      "adapters": ["Ruff F821 directive", "provenance comments", "omitted execute_model body between lines 1121 and 1309"]
+    },
+    "v1/worker/gpu/spec_decode/autoregressive/speculator.py": {
+      "source_path": "vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py",
+      "upstream_blob_sha1": "775c06f7b8d2164f49b7741cb4adc9106ca9393b",
+      "fixture_sha256": "26b4f1f667e3fa7a4ad53fd4607e3e36b2cc455595f16d17d59a447033e9915a",
+      "excerpts": ["line 30", "lines 136-280"],
+      "adapters": ["Ruff F821 directive", "provenance comments"]
+    },
+    "v1/worker/gpu_model_runner.py": {
+      "source_path": "vllm/v1/worker/gpu_model_runner.py",
+      "upstream_blob_sha1": "74938a823d9fd4cec8f63f08bc41abc67958825c",
+      "fixture_sha256": "e7b4a93565b23629851990f1d5bb3419bbc03fa009257435c57306b81585cb4d",
+      "excerpts": ["lines 4055-4068"],
+      "adapters": ["Ruff F821 directive", "provenance comments", "GPUModelRunner class declaration", "execute_model return"]
+    }
+  }
+}
