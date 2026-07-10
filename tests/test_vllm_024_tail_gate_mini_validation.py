@@ -88,7 +88,7 @@ def _mini_command(variant: str) -> str:
         "policy.generation.max_new_tokens=1024",
         "policy.generation.temperature=1.0",
         "policy.generation.top_p=1.0",
-        "policy.generation._output_max_model_len=1024",
+        "++policy.generation._output_max_model_len=1024",
         "policy.generation.vllm_cfg.max_model_len=1056",
         "policy.generation.vllm_cfg.tensor_parallel_size=2",
         "policy.generation.vllm_cfg.expert_parallel_size=1",

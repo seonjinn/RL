@@ -333,7 +333,7 @@ def test_long_output_length_derives_engine_length_with_lookahead_headroom() -> N
     output = _dry_run("qwen32b", "always_on_v2_k5", MAX_OSL="32768")
 
     assert "policy.generation.max_new_tokens=32768" in output
-    assert "policy.generation._output_max_model_len=32768" in output
+    assert "++policy.generation._output_max_model_len=32768" in output
     assert "policy.generation.vllm_cfg.max_model_len=32800" in output
     assert "policy.generation.vllm_cfg.max_model_len=4128" not in output
 

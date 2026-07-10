@@ -519,7 +519,7 @@ submit_one() {
     "policy.generation.max_new_tokens=${MAX_OSL}"
     "policy.generation.temperature=${TEMPERATURE}"
     "policy.generation.top_p=${TOP_P}"
-    "policy.generation._output_max_model_len=${MAX_OSL}"
+    "++policy.generation._output_max_model_len=${MAX_OSL}"
     "policy.generation.vllm_cfg.max_model_len=${MAX_MODEL_LEN}"
     "policy.generation.vllm_cfg.tensor_parallel_size=${target_tp}"
     "policy.generation.vllm_cfg.expert_parallel_size=${GENERATION_EP}"
