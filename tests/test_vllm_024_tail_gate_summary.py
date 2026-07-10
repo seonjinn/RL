@@ -41,6 +41,7 @@ EXPECTED_METRIC_KEYS = {
     "gate_activations": "train/vllm/tail_gate_activations",
     "gate_enabled_ratio": "train/vllm/tail_gate_enabled_step_ratio",
     "gate_advance_only_ratio": "train/vllm/tail_gate_advance_only_step_ratio",
+    "activation_tick": "train/vllm/tail_gate_activation_tick",
     "activation_batch": "train/vllm/tail_gate_activation_batch",
     "activation_seq_len": "train/vllm/tail_gate_activation_seq_len",
     "predicted_speedup": "train/vllm/tail_gate_predicted_speedup",
@@ -173,6 +174,9 @@ def _history(
                     ),
                     "train/vllm/tail_gate_advance_only_step_ratio": (
                         0.75 if activated else 1.0
+                    ),
+                    "train/vllm/tail_gate_activation_tick": (
+                        17.0 if activated else 0.0
                     ),
                     "train/vllm/tail_gate_activation_batch": (
                         16.0 if activated else 0.0
@@ -347,6 +351,20 @@ def test_variant_required_metrics_cannot_be_missing(
 
     assert summary.status == "partial"
     assert summary.reason == f"missing_metric:{reason_metric}:6"
+
+
+def test_activation_tick_is_required_only_for_gated_variants() -> None:
+    gated = _metadata(variant="fastrl_threshold_v2_k5")
+    baseline = _metadata()
+    history = _history(gated)
+    del history[5]["train/vllm/tail_gate_activation_tick"]
+
+    summary = summarize_history(gated, history)
+
+    assert summary.status == "partial"
+    assert summary.reason == "missing_metric:activation_tick:6"
+    assert "train/vllm/tail_gate_activation_tick" in _history_keys(gated)
+    assert "train/vllm/tail_gate_activation_tick" not in _history_keys(baseline)
 
 
 def test_nonfinite_production_metric_is_partial() -> None:

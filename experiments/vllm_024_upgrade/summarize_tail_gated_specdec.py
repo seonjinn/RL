@@ -69,6 +69,7 @@ TAIL_GATE_METRIC_KEYS = {
     "gate_activations": "train/vllm/tail_gate_activations",
     "gate_enabled_ratio": "train/vllm/tail_gate_enabled_step_ratio",
     "gate_advance_only_ratio": "train/vllm/tail_gate_advance_only_step_ratio",
+    "activation_tick": "train/vllm/tail_gate_activation_tick",
     "activation_batch": "train/vllm/tail_gate_activation_batch",
     "activation_seq_len": "train/vllm/tail_gate_activation_seq_len",
     "predicted_speedup": "train/vllm/tail_gate_predicted_speedup",
@@ -151,6 +152,7 @@ class RunSummary:
     gate_activations: float | None
     gate_enabled_ratio: float | None
     gate_advance_only_ratio: float | None
+    activation_tick: float | None
     activation_batch: float | None
     activation_seq_len: float | None
     predicted_speedup: float | None
@@ -328,6 +330,7 @@ def _make_summary(
         gate_activations=metrics.get("gate_activations"),
         gate_enabled_ratio=metrics.get("gate_enabled_ratio"),
         gate_advance_only_ratio=metrics.get("gate_advance_only_ratio"),
+        activation_tick=metrics.get("activation_tick"),
         activation_batch=metrics.get("activation_batch"),
         activation_seq_len=metrics.get("activation_seq_len"),
         predicted_speedup=metrics.get("predicted_speedup"),
@@ -387,21 +390,24 @@ def _empty_summary(
 
 
 def summarize_history(
-    metadata: Mapping[str, str], history: Iterable[Mapping[str, object]]
+    metadata: Mapping[str, str],
+    history: Iterable[Mapping[str, object]],
+    *,
+    expected_steps: set[int] = EXPECTED_STEPS,
 ) -> RunSummary:
-    """Average required production W&B metrics over Steps 2-20."""
+    """Average required production W&B metrics over the requested steps."""
     records_by_step: dict[int, Mapping[str, object]] = {}
     for record in history:
         step = record.get("_step")
         if (
             isinstance(step, int)
             and not isinstance(step, bool)
-            and step in EXPECTED_STEPS
+            and step in expected_steps
         ):
             records_by_step[step] = record
 
     steps = sorted(records_by_step)
-    missing_steps = sorted(EXPECTED_STEPS - records_by_step.keys())
+    missing_steps = sorted(expected_steps - records_by_step.keys())
     if missing_steps:
         return _empty_summary(
             metadata, f"missing_steps:{','.join(map(str, missing_steps))}", steps
@@ -409,7 +415,7 @@ def summarize_history(
 
     required = _required_metric_keys(metadata)
     values: dict[str, list[float]] = {metric_name: [] for metric_name in required}
-    for step in sorted(EXPECTED_STEPS):
+    for step in sorted(expected_steps):
         record = records_by_step[step]
         for metric_name, wandb_key in required.items():
             if wandb_key not in record:
@@ -491,6 +497,7 @@ def _gate_activation_health(summary: RunSummary) -> bool | None:
         summary.gate_activations,
         summary.gate_enabled_ratio,
         summary.gate_advance_only_ratio,
+        summary.activation_tick,
         summary.activation_batch,
         summary.activation_seq_len,
     )
@@ -501,6 +508,7 @@ def _gate_activation_health(summary: RunSummary) -> bool | None:
         or cast(float, summary.gate_activations) <= 0.0
         or not 0.0 < cast(float, summary.gate_enabled_ratio) < 1.0
         or not 0.0 < cast(float, summary.gate_advance_only_ratio) < 1.0
+        or cast(float, summary.activation_tick) <= 0.0
         or cast(float, summary.activation_batch) <= 0.0
         or cast(float, summary.activation_seq_len) <= 0.0
         or not math.isclose(
@@ -668,13 +676,16 @@ def _write_atomic(path: Path, contents: str) -> None:
     temporary_path.replace(path)
 
 
-def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
+def _write_csv(
+    path: Path,
+    rows: list[dict[str, object]],
+    *,
+    fieldnames: tuple[str, ...] = REQUIRED_ROW_FIELDS,
+) -> None:
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", newline="", dir=path.parent, delete=False
     ) as stream:
-        writer = csv.DictWriter(
-            stream, fieldnames=REQUIRED_ROW_FIELDS, extrasaction="raise"
-        )
+        writer = csv.DictWriter(stream, fieldnames=fieldnames, extrasaction="raise")
         writer.writeheader()
         writer.writerows(rows)
         stream.flush()
