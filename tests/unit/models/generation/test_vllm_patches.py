@@ -983,25 +983,52 @@ def _write_vllm_024_tail_gate_sources(tmp_path: Path) -> dict[str, Path]:
     return paths
 
 
-def _runtime_tail_gate_patch_anchors() -> dict[str, tuple[str, str, str]]:
+def _runtime_tail_gate_anchor_values() -> dict[str, Any]:
     function_source = dedent(inspect.getsource(patches._patch_vllm_runtime_tail_gating))
     function_ast = ast.parse(function_source).body[0]
     assert isinstance(function_ast, ast.FunctionDef)
-    values = {
-        target.id: ast.literal_eval(node.value)
-        for node in function_ast.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance((target := node.targets[0]), ast.Name)
-        and (target.id.endswith("_old") or target.id.endswith("_new"))
-    }
+    values: dict[str, Any] = {}
+    for node in function_ast.body:
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "patch_specs"
+        ):
+            break
+        if (
+            not isinstance(node, ast.Assign)
+            or len(node.targets) != 1
+            or not isinstance((target := node.targets[0]), ast.Name)
+        ):
+            continue
+        if target.id == "patch_specs":
+            break
+        expression = ast.Expression(body=node.value)
+        values[target.id] = eval(
+            compile(
+                ast.fix_missing_locations(expression), "<tail_gate_anchor>", "eval"
+            ),
+            {},
+            values,
+        )
+    return values
+
+
+def _runtime_tail_gate_patch_anchors() -> dict[str, tuple[str, str, str]]:
+    values = _runtime_tail_gate_anchor_values()
     anchor_names = {
-        name.removesuffix("_old") for name in values if name.endswith("_old")
+        name.removesuffix("_old")
+        for name in values
+        if name.endswith("_old")
+        and name.removesuffix("_old") in _RUNTIME_TAIL_GATE_ANCHOR_PATHS
     }
     assert anchor_names == set(_RUNTIME_TAIL_GATE_ANCHOR_PATHS)
-    assert {name.removesuffix("_new") for name in values if name.endswith("_new")} == (
-        anchor_names
-    )
+    assert {
+        name.removesuffix("_new")
+        for name in values
+        if name.endswith("_new")
+        and name.removesuffix("_new") in _RUNTIME_TAIL_GATE_ANCHOR_PATHS
+    } == anchor_names
     return {
         name: (
             _RUNTIME_TAIL_GATE_ANCHOR_PATHS[name],
@@ -1020,30 +1047,55 @@ _ACTIVATION_TICK_UPDATE = (
 )
 
 
-def _runtime_tail_gate_5c307d7e_legacy_anchors() -> dict[str, tuple[str, str]]:
+_AVAILABLE_TAIL_GATE_TELEMETRY_UPDATES = (
+    (
+        '                "vllm:spec_decode_tail_gate_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_active_requests_count": 1.0,\n'
+    ),
+    '                "vllm:spec_decode_tail_gate_decode_active_requests_count": 1.0,\n',
+    (
+        '                "vllm:spec_decode_tail_gate_mean_sequence_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_mean_sequence_length\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_mean_sequence_length_count": 1.0,\n'
+    ),
+    '                "vllm:spec_decode_tail_gate_expected_accept_length_count": 1.0,\n',
+)
+
+
+def _runtime_tail_gate_5c7693d6_legacy_anchors() -> dict[str, tuple[str, str]]:
     legacy_anchors = {}
     anchors = _runtime_tail_gate_patch_anchors()
     for anchor_name in ("v1_execute", "v2_execute"):
         relative_path, _old_anchor, new_anchor = anchors[anchor_name]
-        assert new_anchor.count(_ACTIVATION_TICK_UPDATE) == 1
+        legacy_anchor = new_anchor
+        for update in _AVAILABLE_TAIL_GATE_TELEMETRY_UPDATES:
+            legacy_anchor = legacy_anchor.replace(update, "", 1)
+        legacy_anchors[anchor_name] = (relative_path, legacy_anchor)
+    return legacy_anchors
+
+
+def _runtime_tail_gate_5c307d7e_legacy_anchors() -> dict[str, tuple[str, str]]:
+    legacy_anchors = {}
+    for anchor_name, (
+        relative_path,
+        activation_tick_anchor,
+    ) in _runtime_tail_gate_5c7693d6_legacy_anchors().items():
+        assert activation_tick_anchor.count(_ACTIVATION_TICK_UPDATE) == 1
         legacy_anchors[anchor_name] = (
             relative_path,
-            new_anchor.replace(_ACTIVATION_TICK_UPDATE, "", 1),
+            activation_tick_anchor.replace(_ACTIVATION_TICK_UPDATE, "", 1),
         )
     return legacy_anchors
 
 
 def _runtime_tail_gate_declared_legacy_anchors() -> dict[str, str]:
-    function_source = dedent(inspect.getsource(patches._patch_vllm_runtime_tail_gating))
-    function_ast = ast.parse(function_source).body[0]
-    assert isinstance(function_ast, ast.FunctionDef)
     return {
-        target.id.removesuffix("_legacy"): ast.literal_eval(node.value)
-        for node in function_ast.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance((target := node.targets[0]), ast.Name)
-        and target.id.endswith("_legacy")
+        name.removesuffix("_legacy"): value
+        for name, value in _runtime_tail_gate_anchor_values().items()
+        if name.endswith("_legacy")
     }
 
 
@@ -1281,6 +1333,14 @@ def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_tick_and_runtime_k(
         )
         assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_sum"] == 1.25
         assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_count"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_active_requests_sum"] == 7.0
+        assert metrics["vllm:spec_decode_tail_gate_active_requests_count"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_decode_active_requests_sum"] == 5.0
+        assert metrics["vllm:spec_decode_tail_gate_decode_active_requests_count"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_mean_sequence_length_sum"] == 41.5
+        assert metrics["vllm:spec_decode_tail_gate_mean_sequence_length_count"] == 1.0
+        assert metrics["vllm:spec_decode_tail_gate_expected_accept_length_sum"] == 2.75
+        assert metrics["vllm:spec_decode_tail_gate_expected_accept_length_count"] == 1.0
         assert metrics["vllm:spec_decode_tail_gate_k_0_steps"] == 1.0
 
         with pytest.raises(StopAfterTelemetry):
@@ -1303,6 +1363,14 @@ def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_tick_and_runtime_k(
         assert metrics["vllm:spec_decode_tail_gate_activation_tick_count"] == 1.0
         assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_sum"] == 2.5
         assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_count"] == 2.0
+        assert metrics["vllm:spec_decode_tail_gate_active_requests_sum"] == 14.0
+        assert metrics["vllm:spec_decode_tail_gate_active_requests_count"] == 2.0
+        assert metrics["vllm:spec_decode_tail_gate_decode_active_requests_sum"] == 10.0
+        assert metrics["vllm:spec_decode_tail_gate_decode_active_requests_count"] == 2.0
+        assert metrics["vllm:spec_decode_tail_gate_mean_sequence_length_sum"] == 83.0
+        assert metrics["vllm:spec_decode_tail_gate_mean_sequence_length_count"] == 2.0
+        assert metrics["vllm:spec_decode_tail_gate_expected_accept_length_sum"] == 5.5
+        assert metrics["vllm:spec_decode_tail_gate_expected_accept_length_count"] == 2.0
         assert metrics["vllm:spec_decode_tail_gate_k_0_steps"] == 1.0
         assert metrics["vllm:spec_decode_tail_gate_k_5_steps"] == 1.0
 
@@ -1326,6 +1394,14 @@ def test_runtime_tail_gate_v1_v2_telemetry_uses_activation_tick_and_runtime_k(
         assert metrics["vllm:spec_decode_tail_gate_activation_tick_count"] == 1.0
         assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_sum"] == 3.75
         assert metrics["vllm:spec_decode_tail_gate_predicted_speedup_count"] == 3.0
+        assert metrics["vllm:spec_decode_tail_gate_active_requests_sum"] == 21.0
+        assert metrics["vllm:spec_decode_tail_gate_active_requests_count"] == 3.0
+        assert metrics["vllm:spec_decode_tail_gate_decode_active_requests_sum"] == 15.0
+        assert metrics["vllm:spec_decode_tail_gate_decode_active_requests_count"] == 3.0
+        assert metrics["vllm:spec_decode_tail_gate_mean_sequence_length_sum"] == 124.5
+        assert metrics["vllm:spec_decode_tail_gate_mean_sequence_length_count"] == 3.0
+        assert metrics["vllm:spec_decode_tail_gate_expected_accept_length_sum"] == 8.25
+        assert metrics["vllm:spec_decode_tail_gate_expected_accept_length_count"] == 3.0
         assert metrics["vllm:spec_decode_tail_gate_k_5_steps"] == 2.0
 
 
@@ -1525,13 +1601,46 @@ def test_runtime_tail_gate_patch_upgrades_5c307d7e_installation(
     patches._patch_vllm_runtime_tail_gating(MagicMock())
 
     declared_legacy_anchors = _runtime_tail_gate_declared_legacy_anchors()
-    assert set(declared_legacy_anchors) == set(legacy_anchors)
     for anchor_name, (_relative_path, legacy_anchor) in legacy_anchors.items():
         assert declared_legacy_anchors[anchor_name] == legacy_anchor
     for relative_path, old_anchor, new_anchor in anchors.values():
         source = paths[relative_path].read_text()
         assert old_anchor not in source
         assert source.count(new_anchor) == 1
+
+    upgraded = {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    }
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+    assert {
+        relative_path: path.read_text() for relative_path, path in paths.items()
+    } == upgraded
+
+
+def test_runtime_tail_gate_patch_upgrades_5c7693d6_telemetry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _install_tail_gate_source_fixture(tmp_path, monkeypatch)
+    anchors = _runtime_tail_gate_patch_anchors()
+    legacy_anchors = _runtime_tail_gate_5c7693d6_legacy_anchors()
+
+    for anchor_name, (relative_path, old_anchor, new_anchor) in anchors.items():
+        installed_anchor = legacy_anchors.get(anchor_name, (relative_path, new_anchor))[
+            1
+        ]
+        source = paths[relative_path].read_text()
+        assert source.count(old_anchor) == 1
+        paths[relative_path].write_text(source.replace(old_anchor, installed_anchor, 1))
+
+    patches._patch_vllm_runtime_tail_gating(MagicMock())
+
+    function_source = inspect.getsource(patches._patch_vllm_runtime_tail_gating)
+    for anchor_name, (relative_path, legacy_anchor) in legacy_anchors.items():
+        assert f"{anchor_name}_activation_tick_legacy" in function_source
+        source = paths[relative_path].read_text()
+        for update in _AVAILABLE_TAIL_GATE_TELEMETRY_UPDATES:
+            assert source.count(update) == 1
 
     upgraded = {
         relative_path: path.read_text() for relative_path, path in paths.items()
@@ -1579,7 +1688,11 @@ def test_runtime_tail_gate_patch_completes_mixed_old_new_installation(
         for anchor_name in sorted(_runtime_tail_gate_patch_anchors())
         for anchor_state in ("old", "new")
     ]
-    + [(anchor_name, "legacy") for anchor_name in ("v1_execute", "v2_execute")],
+    + [(anchor_name, "legacy") for anchor_name in ("v1_execute", "v2_execute")]
+    + [
+        (anchor_name, "activation_tick_legacy")
+        for anchor_name in ("v1_execute", "v2_execute")
+    ],
     ids=lambda value: value,
 )
 def test_runtime_tail_gate_patch_validates_all_sources_before_writing(
@@ -1603,10 +1716,20 @@ def test_runtime_tail_gate_patch_validates_all_sources_before_writing(
         assert legacy_path == changed_path
         assert source.count(old_anchor) == 1
         source = source.replace(old_anchor, legacy_anchor, 1)
+    elif anchor_state == "activation_tick_legacy":
+        legacy_path, legacy_anchor = _runtime_tail_gate_5c7693d6_legacy_anchors()[
+            anchor_name
+        ]
+        assert legacy_path == changed_path
+        assert source.count(old_anchor) == 1
+        source = source.replace(old_anchor, legacy_anchor, 1)
     anchor = {
         "old": old_anchor,
         "new": new_anchor,
         "legacy": _runtime_tail_gate_5c307d7e_legacy_anchors().get(
+            anchor_name, (changed_path, "")
+        )[1],
+        "activation_tick_legacy": _runtime_tail_gate_5c7693d6_legacy_anchors().get(
             anchor_name, (changed_path, "")
         )[1],
     }[anchor_state]

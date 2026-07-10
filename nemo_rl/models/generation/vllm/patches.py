@@ -18,6 +18,9 @@ from functools import wraps
 from importlib.util import find_spec
 from typing import Any
 
+type _RuntimePatchReplacement = tuple[str, str, tuple[str, ...]]
+type _RuntimePatchSpec = tuple[str, tuple[_RuntimePatchReplacement, ...]]
+
 
 def _get_vllm_file(relative_path: str) -> str:
     """Return absolute path to a vLLM file or raise if it cannot be found.
@@ -848,6 +851,53 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         '    def make_empty(cls) -> "SchedulerOutput":\n'
     )
 
+    tail_gate_telemetry_old = (
+        '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
+        "                    effective_runtime_k == 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_decode_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_count": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_expected_accept_length\n"
+        "                ),\n"
+        '                f"vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps": 1.0,\n'
+    )
+    tail_gate_telemetry_new = (
+        '                "vllm:spec_decode_tail_gate_disabled_steps": float(\n'
+        "                    effective_runtime_k == 0\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_active_requests_count": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_sum": float(\n'
+        "                    scheduler_output.tail_gate_decode_active_requests\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_decode_active_requests_count": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_mean_sequence_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_mean_sequence_length\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_mean_sequence_length_count": 1.0,\n'
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_sum": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_sum\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_predicted_speedup_count": float(\n'
+        "                    scheduler_output.tail_gate_predicted_speedup_count\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_sum": float(\n'
+        "                    scheduler_output.tail_gate_expected_accept_length\n"
+        "                ),\n"
+        '                "vllm:spec_decode_tail_gate_expected_accept_length_count": 1.0,\n'
+        '                f"vllm:spec_decode_tail_gate_k_{effective_runtime_k}_steps": 1.0,\n'
+    )
+
     v2_execute_old = (
         "    @torch.inference_mode()\n"
         "    def execute_model(\n"
@@ -978,6 +1028,12 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "                )\n"
         "\n"
         "        if not dummy_run:\n"
+    )
+    if v2_execute_new.count(tail_gate_telemetry_old) != 1:
+        raise RuntimeError("Internal V2 tail-gate telemetry anchor changed.")
+    v2_execute_activation_tick_legacy = v2_execute_new
+    v2_execute_new = v2_execute_new.replace(
+        tail_gate_telemetry_old, tail_gate_telemetry_new, 1
     )
     v2_execute_legacy = (
         "    @torch.inference_mode()\n"
@@ -1488,6 +1544,12 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "\n"
         "        if self.routed_experts_initialized:\n"
     )
+    if v1_execute_new.count(tail_gate_telemetry_old) != 1:
+        raise RuntimeError("Internal V1 tail-gate telemetry anchor changed.")
+    v1_execute_activation_tick_legacy = v1_execute_new
+    v1_execute_new = v1_execute_new.replace(
+        tail_gate_telemetry_old, tail_gate_telemetry_new, 1
+    )
     v1_execute_legacy = (
         "    @torch.inference_mode()\n"
         "    def execute_model(\n"
@@ -1576,33 +1638,43 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         "        if self.routed_experts_initialized:\n"
     )
 
-    patch_specs = (
-        ("config/speculative.py", ((config_old, config_new),)),
+    patch_specs: tuple[_RuntimePatchSpec, ...] = (
+        ("config/speculative.py", ((config_old, config_new, ()),)),
         (
             "v1/core/sched/output.py",
-            ((scheduler_output_old, scheduler_output_new),),
+            ((scheduler_output_old, scheduler_output_new, ()),),
         ),
         (
             "v1/worker/gpu/model_runner.py",
             (
-                (v2_execute_old, v2_execute_new, v2_execute_legacy),
-                (v2_state_old, v2_state_new),
-                (v2_sample_state_old, v2_sample_state_new),
-                (v2_handler_init_old, v2_handler_init_new),
-                (v2_proposal_old, v2_proposal_new),
-                (v2_execute_state_old, v2_execute_state_new),
+                (
+                    v2_execute_old,
+                    v2_execute_new,
+                    (v2_execute_legacy, v2_execute_activation_tick_legacy),
+                ),
+                (v2_state_old, v2_state_new, ()),
+                (v2_sample_state_old, v2_sample_state_new, ()),
+                (v2_handler_init_old, v2_handler_init_new, ()),
+                (v2_proposal_old, v2_proposal_new, ()),
+                (v2_execute_state_old, v2_execute_state_new, ()),
             ),
         ),
         (
             "v1/worker/gpu/spec_decode/autoregressive/speculator.py",
             (
-                (speculator_signature_old, speculator_signature_new),
-                (speculator_k0_old, speculator_k0_new),
+                (speculator_signature_old, speculator_signature_new, ()),
+                (speculator_k0_old, speculator_k0_new, ()),
             ),
         ),
         (
             "v1/worker/gpu_model_runner.py",
-            ((v1_execute_old, v1_execute_new, v1_execute_legacy),),
+            (
+                (
+                    v1_execute_old,
+                    v1_execute_new,
+                    (v1_execute_legacy, v1_execute_activation_tick_legacy),
+                ),
+            ),
         ),
     )
     file_paths = {
@@ -1615,8 +1687,8 @@ def _patch_vllm_runtime_tail_gating(logger) -> None:
         for relative_path, replacements in patch_specs:
             file_path = file_paths[relative_path]
             content = contents[file_path]
-            for old_snippet, new_snippet, *legacy_snippets in replacements:
-                source_snippets = (old_snippet, *legacy_snippets)
+            for old_snippet, new_snippet, legacy_snippets in replacements:
+                source_snippets = (old_snippet,) + legacy_snippets
                 source_counts = [content.count(snippet) for snippet in source_snippets]
                 new_count = content.count(new_snippet)
                 if (

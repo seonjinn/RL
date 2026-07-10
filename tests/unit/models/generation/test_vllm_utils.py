@@ -659,7 +659,13 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
         "vllm:spec_decode_tail_gate_disabled_steps": 8.0,
         "vllm:spec_decode_tail_gate_activations": 3.0,
         "vllm:spec_decode_tail_gate_active_requests_sum": 100.0,
+        "vllm:spec_decode_tail_gate_active_requests_count": 10.0,
+        "vllm:spec_decode_tail_gate_decode_active_requests_sum": 80.0,
+        "vllm:spec_decode_tail_gate_decode_active_requests_count": 10.0,
         "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 32000.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_count": 10.0,
+        "vllm:spec_decode_tail_gate_expected_accept_length_sum": 30.0,
+        "vllm:spec_decode_tail_gate_expected_accept_length_count": 10.0,
         "vllm:spec_decode_tail_gate_activation_batch_sum": 48.0,
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 24576.0,
         "vllm:spec_decode_tail_gate_tick_sum": 900.0,
@@ -678,7 +684,13 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
         "vllm:spec_decode_tail_gate_disabled_steps": 11.0,
         "vllm:spec_decode_tail_gate_activations": 4.0,
         "vllm:spec_decode_tail_gate_active_requests_sum": 180.0,
+        "vllm:spec_decode_tail_gate_active_requests_count": 14.0,
+        "vllm:spec_decode_tail_gate_decode_active_requests_sum": 132.0,
+        "vllm:spec_decode_tail_gate_decode_active_requests_count": 14.0,
         "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 72000.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_count": 14.0,
+        "vllm:spec_decode_tail_gate_expected_accept_length_sum": 44.0,
+        "vllm:spec_decode_tail_gate_expected_accept_length_count": 14.0,
         "vllm:spec_decode_tail_gate_activation_batch_sum": 64.0,
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 32768.0,
         "vllm:spec_decode_tail_gate_tick_sum": 1000.0,
@@ -697,7 +709,12 @@ def test_compute_spec_decode_metrics_derives_tail_gate_metrics() -> None:
     assert metrics["vllm/tail_gate_enabled_step_ratio"] == pytest.approx(0.25)
     assert metrics["vllm/tail_gate_activation_batch"] == pytest.approx(16.0)
     assert metrics["vllm/tail_gate_activation_seq_len"] == pytest.approx(8192.0)
+    assert metrics["vllm/tail_gate_activation_sequence_length"] == pytest.approx(8192.0)
     assert metrics["vllm/tail_gate_activation_tick"] == pytest.approx(17.0)
+    assert metrics["vllm/tail_gate_active_requests"] == pytest.approx(20.0)
+    assert metrics["vllm/tail_gate_decode_active_requests"] == pytest.approx(13.0)
+    assert metrics["vllm/tail_gate_mean_sequence_length"] == pytest.approx(10000.0)
+    assert metrics["vllm/tail_gate_expected_accept_length"] == pytest.approx(3.5)
     assert metrics["vllm/tail_gate_predicted_speedup"] == pytest.approx(1.12)
     assert metrics["vllm/tail_gate_activation_predicted_speedup"] == pytest.approx(1.5)
     assert metrics["vllm/tail_gate_advance_only_step_ratio"] == pytest.approx(0.75)
@@ -713,8 +730,14 @@ def test_compute_spec_decode_metrics_tail_gate_zero_denominators_are_zero() -> N
         "vllm:spec_decode_tail_gate_enabled_steps": 0.0,
         "vllm:spec_decode_tail_gate_disabled_steps": 0.0,
         "vllm:spec_decode_tail_gate_activations": 0.0,
-        "vllm:spec_decode_tail_gate_active_requests_sum": 0.0,
-        "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 0.0,
+        "vllm:spec_decode_tail_gate_active_requests_sum": 100.0,
+        "vllm:spec_decode_tail_gate_active_requests_count": 0.0,
+        "vllm:spec_decode_tail_gate_decode_active_requests_sum": 80.0,
+        "vllm:spec_decode_tail_gate_decode_active_requests_count": 0.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_sum": 32000.0,
+        "vllm:spec_decode_tail_gate_mean_sequence_length_count": 0.0,
+        "vllm:spec_decode_tail_gate_expected_accept_length_sum": 30.0,
+        "vllm:spec_decode_tail_gate_expected_accept_length_count": 0.0,
         "vllm:spec_decode_tail_gate_activation_batch_sum": 0.0,
         "vllm:spec_decode_tail_gate_activation_sequence_length_sum": 0.0,
         "vllm:spec_decode_tail_gate_activation_tick_sum": 17.0,
@@ -726,13 +749,18 @@ def test_compute_spec_decode_metrics_tail_gate_zero_denominators_are_zero() -> N
         "vllm:spec_decode_tail_gate_k_0_steps": 0.0,
     }
 
-    metrics = compute_spec_decode_metrics(counters, counters)
+    metrics = compute_spec_decode_metrics({}, counters)
 
     for metric_name in (
         "vllm/tail_gate_enabled_step_ratio",
         "vllm/tail_gate_activation_batch",
         "vllm/tail_gate_activation_seq_len",
+        "vllm/tail_gate_activation_sequence_length",
         "vllm/tail_gate_activation_tick",
+        "vllm/tail_gate_active_requests",
+        "vllm/tail_gate_decode_active_requests",
+        "vllm/tail_gate_mean_sequence_length",
+        "vllm/tail_gate_expected_accept_length",
         "vllm/tail_gate_predicted_speedup",
         "vllm/tail_gate_activation_predicted_speedup",
         "vllm/tail_gate_advance_only_step_ratio",

@@ -494,6 +494,28 @@ def compute_spec_decode_metrics(
         enabled_steps = delta.get(f"{tail_gate_prefix}enabled_steps", 0.0)
         disabled_steps = delta.get(f"{tail_gate_prefix}disabled_steps", 0.0)
         activations = delta.get(f"{tail_gate_prefix}activations", 0.0)
+        active_requests_sum = delta.get(f"{tail_gate_prefix}active_requests_sum", 0.0)
+        active_requests_count = delta.get(
+            f"{tail_gate_prefix}active_requests_count", 0.0
+        )
+        decode_active_requests_sum = delta.get(
+            f"{tail_gate_prefix}decode_active_requests_sum", 0.0
+        )
+        decode_active_requests_count = delta.get(
+            f"{tail_gate_prefix}decode_active_requests_count", 0.0
+        )
+        mean_sequence_length_sum = delta.get(
+            f"{tail_gate_prefix}mean_sequence_length_sum", 0.0
+        )
+        mean_sequence_length_count = delta.get(
+            f"{tail_gate_prefix}mean_sequence_length_count", 0.0
+        )
+        expected_accept_length_sum = delta.get(
+            f"{tail_gate_prefix}expected_accept_length_sum", 0.0
+        )
+        expected_accept_length_count = delta.get(
+            f"{tail_gate_prefix}expected_accept_length_count", 0.0
+        )
         activation_batch_sum = delta.get(f"{tail_gate_prefix}activation_batch_sum", 0.0)
         activation_seq_len_sum = delta.get(
             f"{tail_gate_prefix}activation_sequence_length_sum", 0.0
@@ -533,8 +555,23 @@ def compute_spec_decode_metrics(
                 "vllm/tail_gate_activation_seq_len": tail_gate_ratio(
                     activation_seq_len_sum, activations
                 ),
+                "vllm/tail_gate_activation_sequence_length": tail_gate_ratio(
+                    activation_seq_len_sum, activations
+                ),
                 "vllm/tail_gate_activation_tick": tail_gate_ratio(
                     activation_tick_sum, activation_tick_count
+                ),
+                "vllm/tail_gate_active_requests": tail_gate_ratio(
+                    active_requests_sum, active_requests_count
+                ),
+                "vllm/tail_gate_decode_active_requests": tail_gate_ratio(
+                    decode_active_requests_sum, decode_active_requests_count
+                ),
+                "vllm/tail_gate_mean_sequence_length": tail_gate_ratio(
+                    mean_sequence_length_sum, mean_sequence_length_count
+                ),
+                "vllm/tail_gate_expected_accept_length": tail_gate_ratio(
+                    expected_accept_length_sum, expected_accept_length_count
                 ),
                 "vllm/tail_gate_predicted_speedup": tail_gate_ratio(
                     predicted_speedup_sum, predicted_speedup_count
