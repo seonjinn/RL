@@ -88,7 +88,10 @@ def test_summarize_history_requires_positive_specdec_evidence() -> None:
     assert summary.reason == "missing_specdec_evidence"
 
 
-@pytest.mark.parametrize("variant", ["pard_k5", "pard_k16", "suffix_k32"])
+@pytest.mark.parametrize(
+    "variant",
+    ["eagle3_k1", "eagle3_k2", "pard_k5", "pard_k16", "suffix_k32"],
+)
 def test_summarize_history_requires_counters_for_every_specdec_variant(
     variant: str,
 ) -> None:

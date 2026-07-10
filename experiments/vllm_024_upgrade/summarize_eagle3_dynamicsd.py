@@ -27,6 +27,8 @@ METRIC_KEYS = {
 EXPECTED_STEPS = set(range(2, 21))
 SPECDEC_VARIANTS = frozenset(
     {
+        "eagle3_k1",
+        "eagle3_k2",
         "eagle3_k5",
         "eagle3_k7",
         "eagle3_k9",

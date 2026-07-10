@@ -308,6 +308,16 @@ def test_dynamicsd_launcher_renders_fixed_eagle3() -> None:
     assert "Qwen3-30B-A3B-Thinking-2507-speculator.eagle3" in output
 
 
+def test_dynamicsd_launcher_renders_low_k_eagle3_controls() -> None:
+    k1_output = _dry_run_dynamicsd("qwen30ba3b", "eagle3_k1")
+    k2_output = _dry_run_dynamicsd("qwen30ba3b", "eagle3_k2")
+
+    assert "speculative_config.num_speculative_tokens=1" in k1_output
+    assert "speculative_config.num_speculative_tokens=2" in k2_output
+    assert "num_speculative_tokens_per_batch_size" not in k1_output
+    assert "num_speculative_tokens_per_batch_size" not in k2_output
+
+
 def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_limit() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
