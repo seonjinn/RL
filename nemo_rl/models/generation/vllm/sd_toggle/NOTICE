@@ -1,0 +1,9 @@
+This package includes modified, dependency-light runtime logic derived from
+EfficientRollout (https://github.com/furiosa-ai/EfficientRollout), commit
+0ff0bc5bc7eb323a96391d556f4485137dd7f0f1.
+
+Copyright 2026 FuriosaAI, Inc. and EfficientRollout contributors.
+
+EfficientRollout is licensed under the Apache License, Version 2.0. This
+package retains the required attribution while omitting EfficientRollout's
+SciPy-based fitting and plotting utilities from the runtime dependency surface.
