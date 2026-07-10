@@ -364,6 +364,7 @@ submit_one() {
     --exclusive
     --time="${WALLTIME}"
     --segment="${nodes}"
+    --dependency=
     --job-name="${ACCOUNT}-nemorl.dynamicsd-${model}-${variant}"
     --output="${run_dir}/slurm-%j.out"
     --comment=metrics

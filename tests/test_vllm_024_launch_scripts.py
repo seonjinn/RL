@@ -236,6 +236,7 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "cluster.segment_size=4" in output
     assert "--nodes=4" in output
     assert "--segment=4" in output
+    assert "--dependency=" in output
     assert "--gres=gpu:4" in output
     assert "logger.wandb.entity=nvidia" in output
     assert "logger.tensorboard_enabled=false" in output
