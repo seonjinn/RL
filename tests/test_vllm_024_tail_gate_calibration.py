@@ -161,9 +161,9 @@ def test_calibration_writes_deterministic_efficientrollout_schema_and_provenance
     assert len({per_gamma[key]["c_D"] for key in per_gamma}) == 3
     assert len({per_gamma[key]["c_V"] for key in per_gamma}) == 3
     for fit in per_gamma.values():
-        assert fit["c_T"] >= 0.0
-        assert fit["c_D"] >= 0.0
-        assert fit["c_V"] >= 0.0
+        assert fit["c_T"] > 0.0
+        assert fit["c_D"] > 0.0
+        assert fit["c_V"] > 0.0
         assert fit["c_D"] < min(float(row["T_D"]) for row in _rows()) * 1000.0
         assert fit["c_V"] < min(float(row["T_V"]) for row in _rows()) * 1000.0
     for section, key in (
@@ -295,3 +295,16 @@ def test_calibration_rejects_mutable_checkpoint_revisions(
     assert (
         f"{field} must be an exact 40-character hexadecimal revision" in result.stderr
     )
+
+
+def test_calibration_rejects_non_positive_fitted_residual(tmp_path: Path) -> None:
+    source = tmp_path / "measurements.csv"
+    rows = _rows()
+    for row in rows:
+        row["T_V"] = "0.000001"
+    _write_csv(source, rows)
+
+    result = _run(source, tmp_path / "output")
+
+    assert result.returncode == 2
+    assert "fitted residual overhead c_V for K=1 must be positive" in result.stderr

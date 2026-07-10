@@ -32,6 +32,14 @@ ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/${RUN_TAG}}"
 QWEN30_ROOFLINE_CONFIG="${QWEN30_ROOFLINE_CONFIG:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/calibrations/qwen-qwen3-30b-a3b-tp1-dtp1-lyris-gb200-k1-3-5.json}"
 QWEN32_ROOFLINE_CONFIG="${QWEN32_ROOFLINE_CONFIG:-${LYRIS_ROOT}/experiments/vllm024-tail-gated/calibrations/qwen-qwen3-32b-tp2-dtp1-lyris-gb200-k1-3-5.json}"
+QWEN30_TARGET_CHECKPOINT_REVISION="${QWEN30_TARGET_CHECKPOINT_REVISION:-}"
+QWEN30_DRAFT_CHECKPOINT_REVISION="${QWEN30_DRAFT_CHECKPOINT_REVISION:-a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
+QWEN30_CALIBRATION_TIMESTAMP="${QWEN30_CALIBRATION_TIMESTAMP:-}"
+QWEN32_TARGET_CHECKPOINT_REVISION="${QWEN32_TARGET_CHECKPOINT_REVISION:-9216db5781bf21249d130ec9da846c4624c16137}"
+QWEN32_DRAFT_CHECKPOINT_REVISION="${QWEN32_DRAFT_CHECKPOINT_REVISION:-dc84fe7ff1db31efa824776f49c141fc8195eb47}"
+QWEN32_CALIBRATION_TIMESTAMP="${QWEN32_CALIBRATION_TIMESTAMP:-}"
+CALIBRATION_CLUSTER="${CALIBRATION_CLUSTER:-lyris-gb200}"
+VLLM_COMMIT="${VLLM_COMMIT:-ee0da84a}"
 WALLTIME="${WALLTIME:-04:00:00}"
 TMPDIR="${TMPDIR_OVERRIDE:-/tmp}"
 PERSONAL_BRANCH_PREFIX="${PERSONAL_BRANCH_PREFIX:-sna/}"
@@ -112,6 +120,11 @@ validate_roofline_config() {
   local expected_draft_tp="$4"
   local expected_container="$5"
   local expected_container_sha256="$6"
+  local expected_target_revision="$7"
+  local expected_draft_revision="$8"
+  local expected_calibration_timestamp="$9"
+  local expected_cluster="${10}"
+  local expected_vllm_commit="${11}"
 
   python3 - \
     "${config_path}" \
@@ -119,8 +132,14 @@ validate_roofline_config() {
     "${expected_target_tp}" \
     "${expected_draft_tp}" \
     "${expected_container}" \
-    "${expected_container_sha256}" <<'PY'
+    "${expected_container_sha256}" \
+    "${expected_target_revision}" \
+    "${expected_draft_revision}" \
+    "${expected_calibration_timestamp}" \
+    "${expected_cluster}" \
+    "${expected_vllm_commit}" <<'PY'
 import json
+import math
 import sys
 
 (
@@ -130,6 +149,11 @@ import sys
     expected_draft_tp,
     expected_container,
     expected_container_sha256,
+    expected_target_revision,
+    expected_draft_revision,
+    expected_calibration_timestamp,
+    expected_cluster,
+    expected_vllm_commit,
 ) = sys.argv[1:]
 
 try:
@@ -146,6 +170,11 @@ expected = {
     "draft_tp": int(expected_draft_tp),
     "container": expected_container,
     "container_sha256": expected_container_sha256,
+    "target_checkpoint_revision": expected_target_revision,
+    "draft_checkpoint_revision": expected_draft_revision,
+    "calibration_timestamp": expected_calibration_timestamp,
+    "cluster": expected_cluster,
+    "vllm_commit": expected_vllm_commit,
 }
 for field, expected_value in expected.items():
     actual_value = metadata.get(field)
@@ -153,6 +182,36 @@ for field, expected_value in expected.items():
         print(
             f"ERROR: roofline metadata mismatch: {field}: "
             f"expected {expected_value!r}, got {actual_value!r}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+k_values = metadata.get("k_values")
+if (
+    not isinstance(k_values, list)
+    or not all(type(value) is int for value in k_values)
+    or 5 not in k_values
+):
+    print(
+        f"ERROR: roofline metadata mismatch: k_values: "
+        f"expected exact integer K5, got {k_values!r}",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+per_gamma = payload.get("calibration", {}).get("per_gamma", {})
+k5_calibration = per_gamma.get("5") if isinstance(per_gamma, dict) else None
+if not isinstance(k5_calibration, dict):
+    print(
+        'ERROR: roofline config requires exact calibration.per_gamma["5"]',
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+for field in ("c_T", "c_D", "c_V"):
+    value = k5_calibration.get(field)
+    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+        print(
+            f'ERROR: calibration.per_gamma["5"].{field} must be positive',
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -212,6 +271,9 @@ submit_one() {
   local draft_tp=1
   local draft_model
   local expected_model
+  local expected_target_revision
+  local expected_draft_revision
+  local expected_calibration_timestamp
   local roofline_config
   local runner
   local use_v2_runner
@@ -232,6 +294,9 @@ submit_one() {
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
       target_tp=1
       expected_model="Qwen/Qwen3-30B-A3B"
+      expected_target_revision="${QWEN30_TARGET_CHECKPOINT_REVISION}"
+      expected_draft_revision="${QWEN30_DRAFT_CHECKPOINT_REVISION}"
+      expected_calibration_timestamp="${QWEN30_CALIBRATION_TIMESTAMP}"
       draft_model="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
       roofline_config="${QWEN30_ROOFLINE_CONFIG}"
       ;;
@@ -239,6 +304,9 @@ submit_one() {
       recipe="examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml"
       target_tp=2
       expected_model="Qwen/Qwen3-32B"
+      expected_target_revision="${QWEN32_TARGET_CHECKPOINT_REVISION}"
+      expected_draft_revision="${QWEN32_DRAFT_CHECKPOINT_REVISION}"
+      expected_calibration_timestamp="${QWEN32_CALIBRATION_TIMESTAMP}"
       draft_model="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/dc84fe7ff1db31efa824776f49c141fc8195eb47}"
       roofline_config="${QWEN32_ROOFLINE_CONFIG}"
       ;;
@@ -298,13 +366,23 @@ submit_one() {
         roofline_hash="$(sha256_file "${roofline_config}")"
       fi
       if [[ "${MODE}" == "submit" ]]; then
+        if [[ -z "${expected_target_revision}" || -z "${expected_draft_revision}" \
+          || -z "${expected_calibration_timestamp}" ]]; then
+          echo "ERROR: submit requires exact target/draft revisions and calibration timestamp for ${model}" >&2
+          exit 2
+        fi
         validate_roofline_config \
           "${roofline_config}" \
           "${expected_model}" \
           "${target_tp}" \
           "${draft_tp}" \
           "${CONTAINER}" \
-          "$(sha256_file "${CONTAINER}")"
+          "$(sha256_file "${CONTAINER}")" \
+          "${expected_target_revision}" \
+          "${expected_draft_revision}" \
+          "${expected_calibration_timestamp}" \
+          "${CALIBRATION_CLUSTER}" \
+          "${VLLM_COMMIT}"
       fi
       ;;
   esac

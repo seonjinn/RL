@@ -276,13 +276,23 @@ def _verify_base_seconds(
 
 
 def _residual_overhead_us(
-    rows: list[dict[str, str]], measured_field: str, base_seconds: Sequence[float]
+    rows: list[dict[str, str]],
+    measured_field: str,
+    base_seconds: Sequence[float],
+    *,
+    parameter: str,
+    gamma: int,
 ) -> float:
     residuals = [
-        max(0.0, (float(row[measured_field]) * 1e-3 - base) / (int(row["B"]) * 1e-6))
+        (float(row[measured_field]) * 1e-3 - base) / (int(row["B"]) * 1e-6)
         for row, base in zip(rows, base_seconds)
     ]
-    return statistics.median(residuals)
+    fitted = statistics.median(residuals)
+    if not math.isfinite(fitted) or fitted <= 0.0:
+        raise ValueError(
+            f"fitted residual overhead {parameter} for K={gamma} must be positive"
+        )
+    return fitted
 
 
 def _fit_per_gamma(
@@ -302,6 +312,8 @@ def _fit_per_gamma(
                 _target_base_seconds(row, values, bandwidth, kappa_eff)
                 for row in gamma_rows
             ],
+            parameter="c_T",
+            gamma=gamma,
         )
         c_d = _residual_overhead_us(
             gamma_rows,
@@ -310,6 +322,8 @@ def _fit_per_gamma(
                 _draft_base_seconds(row, values, bandwidth, kappa_eff, eta_d)
                 for row in gamma_rows
             ],
+            parameter="c_D",
+            gamma=gamma,
         )
         c_v = _residual_overhead_us(
             gamma_rows,
@@ -318,6 +332,8 @@ def _fit_per_gamma(
                 _verify_base_seconds(row, values, bandwidth, kappa_eff)
                 for row in gamma_rows
             ],
+            parameter="c_V",
+            gamma=gamma,
         )
         result[str(gamma)] = {"R2": 0.0, "c_D": c_d, "c_T": c_t, "c_V": c_v}
     return result

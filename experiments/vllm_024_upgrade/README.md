@@ -106,8 +106,13 @@ pushed `sna/` branch, and never pushes a remote itself.
 
 Set `QWEN30_ROOFLINE_CONFIG` and `QWEN32_ROOFLINE_CONFIG` to separate fitted
 JSON files. Before submitting a roofline arm, the launcher verifies the JSON's
-model, target TP, draft TP, container path, and container SHA256 metadata. It
-also validates or creates the exact manifest header before asking Slurm to
+model, target TP, draft TP, container path/SHA256, exact target and draft
+checkpoint revisions, caller-supplied calibration timestamp, cluster, vLLM
+commit, and integer K5 membership. Set the matching per-model
+`*_CALIBRATION_TIMESTAMP` and, for Qwen3-30B-A3B, the exact
+`QWEN30_TARGET_CHECKPOINT_REVISION`. The fixed-K5 arm additionally requires an
+exact positive `calibration.per_gamma["5"]`; nearest-K fallback is rejected. The
+launcher validates or creates the exact manifest header before asking Slurm to
 create a job.
 
 Create a roofline input from measured component latencies before running the
@@ -126,6 +131,10 @@ The CSV also requires immutable `target_checkpoint_revision` and
 deterministic output, fits additive timing residuals independently for every K,
 and emits an EfficientRollout-compatible JSON plus SHA256 sidecar for each
 calibration identity.
+
+Calibration fails if any fitted per-K residual overhead is non-positive. Such
+measurements are inconsistent with the configured roofline constants and must
+be corrected instead of clamped into an apparently valid configuration.
 
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 

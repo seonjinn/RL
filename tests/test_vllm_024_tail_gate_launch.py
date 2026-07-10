@@ -24,6 +24,11 @@ V2_VARIANTS = (
     "efficient_roofline_v2_k5",
 )
 GATED_V2_VARIANTS = ("fastrl_threshold_v2_k5", "efficient_roofline_v2_k5")
+QWEN32_TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
+QWEN32_DRAFT_REVISION = "dc84fe7ff1db31efa824776f49c141fc8195eb47"
+CALIBRATION_TIMESTAMP = "2026-07-10T12:34:56Z"
+CALIBRATION_CLUSTER = "lyris-gb200"
+VLLM_COMMIT = "ee0da84a"
 
 
 def _run_launcher(*args: str, **environment: str) -> subprocess.CompletedProcess[str]:
@@ -299,6 +304,12 @@ def _write_roofline_config(
                     "container_sha256": hashlib.sha256(
                         container.read_bytes()
                     ).hexdigest(),
+                    "target_checkpoint_revision": QWEN32_TARGET_REVISION,
+                    "draft_checkpoint_revision": QWEN32_DRAFT_REVISION,
+                    "calibration_timestamp": CALIBRATION_TIMESTAMP,
+                    "cluster": CALIBRATION_CLUSTER,
+                    "vllm_commit": VLLM_COMMIT,
+                    "k_values": [1, 3, 5],
                 },
             },
             sort_keys=True,
@@ -342,6 +353,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         EXPERIMENT_ROOT=str(experiment_root),
         RUN_TAG="submit-contract",
         ATTEMPT_ID="attempt-1",
+        QWEN32_CALIBRATION_TIMESTAMP=CALIBRATION_TIMESTAMP,
         WANDB_API_KEY="test-only-key",
         PATH=f"{bin_dir}:{os.environ['PATH']}",
     )
@@ -385,6 +397,13 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         ("draft_tp", 2),
         ("container", "/lustre/other/container.sqsh"),
         ("container_sha256", "0" * 64),
+        ("target_checkpoint_revision", "3" * 40),
+        ("draft_checkpoint_revision", "4" * 40),
+        ("calibration_timestamp", "2026-07-11T12:34:56Z"),
+        ("cluster", "oci-hsg-gb200"),
+        ("vllm_commit", "different-vllm-commit"),
+        ("k_values", [1, 3]),
+        ("k_values", [1, 3, "5"]),
     ),
 )
 def test_submit_rejects_mismatched_roofline_metadata_before_sbatch(
@@ -425,6 +444,7 @@ def test_submit_rejects_mismatched_roofline_metadata_before_sbatch(
         QWEN32_DRAFT_MODEL=str(draft_model),
         QWEN32_ROOFLINE_CONFIG=str(roofline),
         EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        QWEN32_CALIBRATION_TIMESTAMP=CALIBRATION_TIMESTAMP,
         WANDB_API_KEY="test-only-key",
         SBATCH_LOG=str(sbatch_log),
         PATH=f"{bin_dir}:{os.environ['PATH']}",
@@ -432,6 +452,53 @@ def test_submit_rejects_mismatched_roofline_metadata_before_sbatch(
 
     assert result.returncode == 2
     assert f"roofline metadata mismatch: {field}" in result.stderr
+    assert not sbatch_log.exists()
+
+
+def test_submit_requires_exact_per_gamma_k5_before_sbatch(tmp_path: Path) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$SBATCH_LOG\"\nprintf '4242\\n'\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.write_text("container contract\n", encoding="utf-8")
+    draft_model = tmp_path / "draft-model"
+    draft_model.mkdir()
+    roofline = tmp_path / "roofline.json"
+    _write_roofline_config(
+        roofline,
+        model="Qwen/Qwen3-32B",
+        target_tp=2,
+        draft_tp=1,
+        container=container,
+    )
+    payload = json.loads(roofline.read_text(encoding="utf-8"))
+    payload["calibration"]["per_gamma"] = {"3": {"c_T": 1.0, "c_D": 1.0, "c_V": 1.0}}
+    roofline.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _run_launcher(
+        "submit",
+        "qwen32b",
+        "efficient_roofline_v2_k5",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        QWEN32_DRAFT_MODEL=str(draft_model),
+        QWEN32_ROOFLINE_CONFIG=str(roofline),
+        QWEN32_CALIBRATION_TIMESTAMP=CALIBRATION_TIMESTAMP,
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        WANDB_API_KEY="test-only-key",
+        SBATCH_LOG=str(sbatch_log),
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 2
+    assert 'roofline config requires exact calibration.per_gamma["5"]' in result.stderr
     assert not sbatch_log.exists()
 
 
