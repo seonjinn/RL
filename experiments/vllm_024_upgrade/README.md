@@ -155,11 +155,14 @@ arms use `FULL_AND_PIECEWISE` CUDA graphs with checkpointing disabled; only
 the threshold arm configures the FastRL scheduler at threshold 32 with ten
 consecutive checks. It sets explicit Pre-Tyche W&B project/entity defaults and
 one shared run tag and attempt ID so all three submitted jobs append to the
-same manifest.
+same manifest. Eagle arms use standard rejection sampling with explicit
+probabilistic draft sampling; baseline arms do not receive a speculative draft
+sampling override.
 
 Caller-supplied environment values override these smoke defaults. The main
 launcher validates `TAIL_GATE_THRESHOLD` and `TAIL_GATE_CONSECUTIVE_CHECKS` as
-positive integers and records their resolved values in both the generated
+positive integers, validates `DRAFT_SAMPLE_METHOD` as `greedy` or
+`probabilistic`, and records their resolved values in both the generated
 command and submission manifest.
 
 ## Baseline/SpecDec Token and Logprob Parity on Lyris

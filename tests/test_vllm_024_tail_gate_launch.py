@@ -25,6 +25,13 @@ V2_VARIANTS = (
     "efficient_roofline_v2_k5",
 )
 GATED_V2_VARIANTS = ("fastrl_threshold_v2_k5", "efficient_roofline_v2_k5")
+MODEL_BASED_VARIANTS = (
+    "always_on_v1_k5",
+    "stock_dynamic_v1",
+    "always_on_v2_k5",
+    "fastrl_threshold_v2_k5",
+    "efficient_roofline_v2_k5",
+)
 QWEN32_TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
 QWEN32_DRAFT_REVISION = "dc84fe7ff1db31efa824776f49c141fc8195eb47"
 CALIBRATION_TIMESTAMP = "2026-07-10T12:34:56Z"
@@ -138,6 +145,45 @@ def test_v2_variants_preserve_runner_graph_and_gate_boundaries() -> None:
         "sd_tail_gate_config_path=/lustre/test/calibrations/qwen32.json"
         in roofline_output
     )
+
+
+def test_model_based_variants_use_explicit_probabilistic_draft_sampling() -> None:
+    for variant in MODEL_BASED_VARIANTS:
+        output = _dry_run("qwen32b", variant)
+
+        assert "speculative_config.rejection_sample_method=standard" in output
+        assert "speculative_config.draft_sample_method=probabilistic" in output
+
+    for variant in ("baseline_v1", "baseline_v2"):
+        output = _dry_run("qwen32b", variant)
+
+        assert "speculative_config.draft_sample_method=" not in output
+
+
+def test_draft_sampling_method_honors_valid_environment_override() -> None:
+    output = _dry_run("qwen32b", "always_on_v2_k5", DRAFT_SAMPLE_METHOD="greedy")
+
+    assert "speculative_config.draft_sample_method=greedy" in output
+    assert "speculative_config.draft_sample_method=probabilistic" not in output
+
+
+def test_draft_sampling_method_rejects_unknown_value() -> None:
+    result = _run_launcher(
+        "dry-run",
+        "qwen32b",
+        "always_on_v2_k5",
+        REPO_DIR="/lustre/test/nemo-rl",
+        LYRIS_ROOT="/lustre/test",
+        HF_HOME="/lustre/test/hf_home",
+        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
+        RUN_TAG="contract",
+        ATTEMPT_ID="attempt-1",
+        DRAFT_SAMPLE_METHOD="unknown",
+    )
+
+    assert result.returncode == 2
+    assert "ERROR: DRAFT_SAMPLE_METHOD must be greedy or probabilistic" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -479,6 +525,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "max_num_batched_tokens",
         "max_num_seqs",
         "sampling",
+        "draft_sample_method",
         "runner",
         "graph_mode",
         "gate_mode",
@@ -521,6 +568,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "runner": "v2",
         "graph_mode": "FULL_AND_PIECEWISE",
         "sampling": "standard",
+        "draft_sample_method": "probabilistic",
         "job_id": "4242",
     }
     assert expected_manifest_values.items() <= manifest_row.items()
@@ -564,6 +612,7 @@ def test_submit_records_environment_gate_settings_in_manifest(tmp_path: Path) ->
         WANDB_API_KEY="test-only-key",
         TAIL_GATE_THRESHOLD="19",
         TAIL_GATE_CONSECUTIVE_CHECKS="4",
+        DRAFT_SAMPLE_METHOD="greedy",
         PATH=f"{bin_dir}:{os.environ['PATH']}",
     )
 
@@ -574,8 +623,10 @@ def test_submit_records_environment_gate_settings_in_manifest(tmp_path: Path) ->
         row = next(csv.DictReader(stream, delimiter="\t"))
     assert row["threshold"] == "19"
     assert row["consecutive_checks"] == "4"
+    assert row["draft_sample_method"] == "greedy"
     assert "sd_tail_gate_threshold=19" in row["command"]
     assert "sd_tail_gate_consecutive_checks=4" in row["command"]
+    assert "draft_sample_method=greedy" in row["command"]
 
 
 def test_submit_records_long_output_engine_length_as_separate_cohort(
@@ -610,6 +661,8 @@ def test_submit_records_long_output_engine_length_as_separate_cohort(
         row = next(csv.DictReader(stream, delimiter="\t"))
     assert row["max_osl"] == "32768"
     assert row["max_model_len"] == "32800"
+    assert row["draft_sample_method"] == "not_applicable"
+    assert "draft_sample_method=" not in row["command"]
 
 
 @pytest.mark.parametrize(

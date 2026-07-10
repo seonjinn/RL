@@ -38,6 +38,7 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1024}"
 GENERATION_EP="${GENERATION_EP:-1}"
 SAMPLING="${SAMPLING:-standard}"
+DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
 TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
 CLUSTER_GPUS_PER_NODE="${CLUSTER_GPUS_PER_NODE:-4}"
@@ -78,6 +79,15 @@ validate_positive_integer() {
 
 validate_positive_integer "TAIL_GATE_THRESHOLD" "${TAIL_GATE_THRESHOLD}"
 validate_positive_integer "TAIL_GATE_CONSECUTIVE_CHECKS" "${TAIL_GATE_CONSECUTIVE_CHECKS}"
+case "${DRAFT_SAMPLE_METHOD}" in
+  greedy|probabilistic)
+    ;;
+  *)
+    printf 'ERROR: DRAFT_SAMPLE_METHOD must be greedy or probabilistic, got %s\n' \
+      "${DRAFT_SAMPLE_METHOD}" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -318,6 +328,7 @@ submit_one() {
   local threshold=""
   local consecutive_checks=""
   local roofline_hash=""
+  local manifest_draft_sample_method="not_applicable"
   local run_dir="${EXPERIMENT_ROOT}/${model}/${variant}"
   local wandb_run_id="${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
   local triton_cache_dir="/tmp/nemorl-tail-gate-triton-${RUN_TAG}-${model}-${variant}"
@@ -473,12 +484,14 @@ submit_one() {
   )
 
   if [[ "${draft_k}" != "0" ]]; then
+    manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
     overrides+=(
       "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
       "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
       "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"
       "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${draft_tp}"
       "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${SAMPLING}"
+      "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
     )
   fi
   if [[ "${variant}" == "stock_dynamic_v1" ]]; then
@@ -569,7 +582,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tjob_id\twandb_run_id\twandb_url\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\tcommand'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -617,6 +630,7 @@ submit_one() {
         "${runner}"
         "${graph_mode}"
         "${SAMPLING}"
+        "${manifest_draft_sample_method}"
         "${job_id}"
         "${wandb_run_id}"
         "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}"

@@ -85,8 +85,11 @@ def test_mini_wrapper_renders_exact_three_arm_sync_grpo_smoke() -> None:
         if line.startswith("[DRY-RUN] command ")
     }
     assert "scheduler_cls=" not in command_by_variant["baseline_v2"]
+    assert "draft_sample_method=" not in command_by_variant["baseline_v2"]
     assert "scheduler_cls=" not in command_by_variant["always_on_v2_k5"]
+    assert "draft_sample_method=probabilistic" in command_by_variant["always_on_v2_k5"]
     threshold_command = command_by_variant["fastrl_threshold_v2_k5"]
+    assert "draft_sample_method=probabilistic" in threshold_command
     assert "sd_tail_gate_mode=threshold" in threshold_command
     assert "sd_tail_gate_threshold=32" in threshold_command
     assert "sd_tail_gate_consecutive_checks=10" in threshold_command

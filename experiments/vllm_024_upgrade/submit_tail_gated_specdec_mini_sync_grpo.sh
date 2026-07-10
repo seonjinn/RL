@@ -44,6 +44,7 @@ export RUN_TAG="${RUN_TAG:-vllm024-mini-sync-grpo-20260710}"
 export ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 export TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
 export TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
+export DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 
 for variant in baseline_v2 always_on_v2_k5 fastrl_threshold_v2_k5; do
   bash "${SCRIPT_DIR}/submit_tail_gated_specdec_step20.sh" \
