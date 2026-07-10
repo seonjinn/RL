@@ -31,9 +31,14 @@ The matrix contains matched V2 arms only:
 | `always_on_v2_k5` | Eagle-3 K5 from the first decode |
 | `fastrl_threshold_v2_k5` | K0 advance-only until the FastRL tail gate activates, then K5 |
 
-The threshold arm uses threshold 32 and 10 consecutive qualifying decode
-checks. It must first observe more than 32 active requests, preventing an early
-prefill-completion false activation.
+The threshold is local to each vLLM scheduler, not global across the GRPO
+rollout batch. Qwen3-32B target TP2 on 16 GPUs yields DP8, so the 64 global
+rollouts produce eight initial requests per local scheduler. The mini threshold
+arm therefore uses threshold 4 and 10 consecutive qualifying decode checks. It
+must first observe more than four local active requests, then activate only
+after ten consecutive checks at or below four. The wrapper rejects thresholds
+that are not positive or are greater than or equal to the computed local
+scheduler capacity.
 
 ## Activation Observability
 
@@ -50,9 +55,10 @@ each GRPO step:
 
 Activation counters update only when `tail_gate_just_activated` is true. The
 HTML report renders activation events with scheduler tick on the x-axis and
-inflight batch on the y-axis, includes a horizontal threshold line at 32, and
-labels the OFF-to-ON point. W&B retains activation tick and batch as separate
-step-wise graphs so the event is inspectable directly from the run.
+inflight batch on the y-axis, reads the local threshold from the manifest row,
+and renders that value as the horizontal threshold line. It labels the
+OFF-to-ON point. W&B retains activation tick and batch as separate step-wise
+graphs so the event is inspectable directly from the run.
 
 ## Functional Gates
 
@@ -63,7 +69,8 @@ The two-step threshold smoke is valid only when:
 - V2 and `FULL_AND_PIECEWISE` CUDA graphs are selected;
 - the gate observes both K0 and K5 scheduler steps;
 - exactly one activation is recorded per training rollout;
-- activation batch is positive and no larger than 32;
+- activation batch is positive and no larger than the manifest's local
+  scheduler threshold;
 - activation tick is positive;
 - enabled and advance-only ratios are each strictly between 0 and 1;
 - proposals and accepted tokens are positive after activation;
@@ -82,6 +89,15 @@ image. Submit only after the branch is pushed to the personal fork, the remote
 checkout is updated, recursive submodules are initialized, and launcher
 `test-only` succeeds. Monitor for at least five minutes and through the first
 policy-training step.
+
+Before submit, fetch the current branch from the `fork` remote and require
+local `HEAD` to equal `refs/remotes/fork/<current-branch>` exactly. Reject
+ahead, behind, diverged, fetch-failed, and stale remote-tracking states.
+
+The production launcher's `all` selections exclude every Qwen3-30B-A3B V2 arm
+until commit-scoped V2 support smoke evidence exists. An operator may render a
+single Qwen3-30B-A3B V2 smoke only by selecting both the model and variant
+explicitly; it must not enter a production all-model or all-variant batch.
 
 ## Non-Goals
 

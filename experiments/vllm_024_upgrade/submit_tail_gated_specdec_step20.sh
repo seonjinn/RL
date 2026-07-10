@@ -271,6 +271,9 @@ PY
 
 require_submit_checkout() {
   local branch
+  local fork_head
+  local head
+  local remote_ref
   local untracked
 
   if ! git -C "${REPO_DIR}" diff --quiet --ignore-submodules=none \
@@ -297,8 +300,16 @@ require_submit_checkout() {
     echo "ERROR: submit requires a ${PERSONAL_BRANCH_PREFIX} personal branch" >&2
     exit 2
   fi
-  if ! git -C "${REPO_DIR}" branch -r --contains HEAD | grep -q .; then
-    echo "ERROR: submit requires HEAD to be present on a remote branch; push it yourself first" >&2
+  remote_ref="refs/remotes/fork/${branch}"
+  if ! git -C "${REPO_DIR}" fetch --quiet --no-tags fork \
+    "+refs/heads/${branch}:${remote_ref}"; then
+    echo "ERROR: submit could not fetch fork/${branch}" >&2
+    exit 2
+  fi
+  head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+  fork_head="$(git -C "${REPO_DIR}" rev-parse --verify "${remote_ref}")"
+  if [[ "${head}" != "${fork_head}" ]]; then
+    echo "ERROR: submit HEAD must exactly match ${remote_ref} after fetch" >&2
     exit 2
   fi
 }
@@ -650,6 +661,12 @@ if [[ "${MODE}" != "dry-run" ]]; then
 fi
 for model in "${models[@]}"; do
   for variant in "${variants[@]}"; do
+    if [[ "${model}" == "qwen30ba3b" && "${variant}" == *_v2* \
+      && ( "${MODEL_SELECTION}" == "all" || "${VARIANT_SELECTION}" == "all" ) ]]; then
+      printf '[SKIP] model=%s variant=%s: Qwen30 V2 requires explicit variant selection\n' \
+        "${model}" "${variant}" >&2
+      continue
+    fi
     submit_one "${model}" "${variant}"
   done
 done

@@ -97,12 +97,21 @@ experiments/vllm_024_upgrade/submit_tail_gated_specdec_step20.sh dry-run all all
 experiments/vllm_024_upgrade/submit_tail_gated_specdec_step20.sh test-only all all
 ```
 
+`all` is fail-closed for Qwen3-30B-A3B V2: it schedules that model's three V1
+arms and all seven Qwen3-32B arms, but skips the four Qwen3-30B-A3B V2 arms.
+After commit-scoped V2 support evidence exists, select `qwen30ba3b` and one V2
+variant explicitly; neither an all-model nor an all-variant request includes
+those jobs.
+
 The launcher pins 64 prompts by 32 generations, train GBS 512, 4,096-token
 sequence and output limits, a 4,128-token engine limit, and a 16,384-token
 scheduler budget. It records runner, graph, gate, calibration, W&B, container,
 commit, recipe, and Slurm provenance in the Lustre `submissions.tsv` manifest.
 `submit` runs Slurm validation before `sbatch`, requires a clean and already
-pushed `sna/` branch, and never pushes a remote itself.
+pushed `sna/` branch, and never pushes a remote itself. It fetches the current
+branch from `fork` and requires local `HEAD` to equal
+`refs/remotes/fork/<current-branch>` exactly, rejecting ahead, behind,
+diverged, fetch-failed, or stale-tracking states.
 
 Set `QWEN30_ROOFLINE_CONFIG` and `QWEN32_ROOFLINE_CONFIG` to separate fitted
 JSON files. Before submitting a roofline arm, the launcher verifies the JSON's
@@ -152,10 +161,13 @@ steps, 16 prompts by four generations, train GBS 64, 1,024-token output and
 sequence limits, a 1,056-token vLLM model limit, four nodes with
 `--segment=4`, no GPU GRES, and the staged `nightly-20260705` image. The V2
 arms use `FULL_AND_PIECEWISE` CUDA graphs with checkpointing disabled; only
-the threshold arm configures the FastRL scheduler at threshold 32 with ten
-consecutive checks. It sets explicit Pre-Tyche W&B project/entity defaults and
-one shared run tag and attempt ID so all three submitted jobs append to the
-same manifest. Eagle arms use standard rejection sampling with explicit
+the threshold arm configures the FastRL scheduler at local threshold 4 with
+ten consecutive checks. The 64 global rollouts are distributed over DP 8,
+giving each local scheduler eight initial requests; the wrapper rejects a
+threshold greater than or equal to that local capacity. It sets explicit
+Pre-Tyche W&B project/entity defaults and one shared run tag and attempt ID so
+all three submitted jobs append to the same manifest. Eagle arms use standard
+rejection sampling with explicit
 probabilistic draft sampling; baseline arms do not receive a speculative draft
 sampling override.
 
@@ -163,7 +175,9 @@ Caller-supplied environment values override these smoke defaults. The main
 launcher validates `TAIL_GATE_THRESHOLD` and `TAIL_GATE_CONSECUTIVE_CHECKS` as
 positive integers, validates `DRAFT_SAMPLE_METHOD` as `greedy` or
 `probabilistic`, and records their resolved values in both the generated
-command and submission manifest.
+command and submission manifest. The validator and activation chart must read
+the local threshold from each manifest row rather than assume a global rollout
+count or a fixed threshold.
 
 ## Baseline/SpecDec Token and Logprob Parity on Lyris
 

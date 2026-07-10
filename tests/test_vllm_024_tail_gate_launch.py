@@ -75,7 +75,7 @@ def _dry_run(model: str, variant: str, **environment: str) -> str:
     return result.stdout
 
 
-def test_dry_run_exposes_exactly_the_seven_planned_variants() -> None:
+def test_dry_run_all_excludes_unproven_qwen30_v2_variants() -> None:
     result = _run_launcher(
         "dry-run",
         "all",
@@ -92,9 +92,33 @@ def test_dry_run_exposes_exactly_the_seven_planned_variants() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("[DRY-RUN] job ") == 14
-    for variant in (*V1_VARIANTS, *V2_VARIANTS):
+    assert result.stdout.count("[DRY-RUN] job ") == 10
+    for variant in V1_VARIANTS:
         assert result.stdout.count(f"variant={variant}") == 2
+    for variant in V2_VARIANTS:
+        assert result.stdout.count(f"variant={variant}") == 1
+        assert f"model=qwen30ba3b variant={variant}" not in result.stdout
+    assert result.stderr.count("Qwen30 V2 requires explicit variant selection") == 4
+
+
+def test_model_all_excludes_unproven_qwen30_v2_variant() -> None:
+    result = _run_launcher(
+        "dry-run",
+        "all",
+        "baseline_v2",
+        REPO_DIR="/lustre/test/nemo-rl",
+        LYRIS_ROOT="/lustre/test",
+        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
+        RUN_TAG="contract",
+        ATTEMPT_ID="attempt-1",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("[DRY-RUN] job ") == 1
+    assert "model=qwen32b variant=baseline_v2" in result.stdout
+    assert "model=qwen30ba3b" not in result.stdout
+    assert "Qwen30 V2 requires explicit variant selection" in result.stderr
 
 
 def test_v1_variants_preserve_stock_runner_and_dynamic_contract() -> None:
@@ -388,13 +412,13 @@ def _create_pushed_repo(tmp_path: Path) -> tuple[Path, str]:
         text=True,
     )
     subprocess.run(
-        ["git", "-C", str(repo), "remote", "add", "origin", str(remote)],
+        ["git", "-C", str(repo), "remote", "add", "fork", str(remote)],
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        ["git", "-C", str(repo), "push", "--set-upstream", "origin", "sna/tail-gate"],
+        ["git", "-C", str(repo), "push", "--set-upstream", "fork", "sna/tail-gate"],
         check=True,
         capture_output=True,
         text=True,
@@ -406,6 +430,99 @@ def _create_pushed_repo(tmp_path: Path) -> tuple[Path, str]:
         text=True,
     ).stdout.strip()
     return repo, commit
+
+
+def _commit_test_file(repo: Path, name: str, content: str) -> None:
+    path = repo / name
+    path.write_text(content, encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", name],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", f"test: add {name}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _advance_fork(tmp_path: Path) -> None:
+    writer = tmp_path / "fork-writer"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--branch",
+            "sna/tail-gate",
+            str(tmp_path / "remote.git"),
+            str(writer),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(writer), "config", "user.email", "fork@example.invalid"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(writer), "config", "user.name", "Fork Writer"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    _commit_test_file(writer, "fork-only.txt", "remote advance\n")
+    subprocess.run(
+        ["git", "-C", str(writer), "push", "origin", "sna/tail-gate"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("state", ("ahead", "behind", "diverged"))
+def test_submit_requires_exact_fetched_fork_head(tmp_path: Path, state: str) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    if state in {"ahead", "diverged"}:
+        _commit_test_file(repo, "local-only.txt", "local advance\n")
+    if state in {"behind", "diverged"}:
+        _advance_fork(tmp_path)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$SBATCH_LOG\"\nprintf '4242\\n'\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+
+    result = _run_launcher(
+        "submit",
+        "qwen30ba3b",
+        "baseline_v1",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        WANDB_API_KEY="test-only-key",
+        SBATCH_LOG=str(sbatch_log),
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 2
+    assert (
+        "must exactly match refs/remotes/fork/sna/tail-gate after fetch"
+        in result.stderr
+    )
+    assert not sbatch_log.exists()
 
 
 def _write_roofline_config(

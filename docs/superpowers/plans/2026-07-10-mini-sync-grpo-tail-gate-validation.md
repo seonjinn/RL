@@ -4,7 +4,7 @@
 
 **Goal:** Add and run a two-step Qwen3-32B synchronous GRPO smoke that proves FastRL-style tail gating activates at an observable inflight batch without changing the production performance recipe topology.
 
-**Architecture:** Extend the existing cumulative vLLM telemetry with an activation-only scheduler tick, expose it through the current W&B derivation, and reuse the matched tail-gate launcher through a smoke-sized wrapper. The existing collector renders the activation event and validates the three-arm baseline/always-on/threshold matrix before the same commit is submitted on Pre-Tyche.
+**Architecture:** Extend the existing cumulative vLLM telemetry with an activation-only scheduler tick, expose it through the current W&B derivation, and reuse the matched tail-gate launcher through a smoke-sized wrapper. The wrapper derives local scheduler capacity from global rollouts and DP, while the collector and validator consume the resolved local threshold from manifest provenance. The three-arm baseline/always-on/threshold matrix is validated before the exact fetched fork commit is submitted on Pre-Tyche.
 
 **Tech Stack:** Python 3.13, Bash, NeMo-RL, vLLM 0.24.0, pytest, W&B, SLURM/Pyxis, Pre-Tyche GB200.
 
@@ -16,7 +16,14 @@
 - V2 arms use `VLLM_USE_V2_MODEL_RUNNER=1`, `enforce_eager=false`, and `FULL_AND_PIECEWISE` CUDA graphs.
 - Sampling remains temperature 1.0, top-p 1.0, standard rejection, and probabilistic Eagle drafting.
 - Smoke geometry defaults to 16 prompts, 4 generations, train GBS 64, OSL/total length 1024, max model length 1056, and 2 steps.
-- FastRL threshold defaults to 32 active requests and 10 consecutive decode checks.
+- The mini FastRL threshold defaults to 4 local active requests and 10
+  consecutive decode checks. With 64 global rollouts and DP8, each local
+  scheduler starts with eight requests; global rollout count is not the gate
+  threshold.
+- Production `all` selections exclude Qwen3-30B-A3B V2 arms until
+  commit-scoped V2 smoke evidence exists.
+- Submit fetches `fork/<current-branch>` and requires exact equality between
+  local `HEAD` and `refs/remotes/fork/<current-branch>`.
 - Checkpointing remains disabled and no experimental checkpoint is written.
 - Preserve untracked `tests/unit/unit_results.json` and `tests/unit/unit_results/`.
 
@@ -110,7 +117,9 @@ TAIL_GATE_CONSECUTIVE_CHECKS=10
 ```
 
 and records the resolved values in commands and manifests rather than using
-hard-coded values.
+hard-coded values. Also assert submit fetches `fork/<current-branch>` and
+rejects ahead, behind, diverged, fetch-failed, and stale states unless local
+`HEAD` exactly equals the fetched remote-tracking ref.
 
 - [ ] **Step 2: Add failing mini-wrapper tests**
 
@@ -122,20 +131,27 @@ baseline_v2 always_on_v2_k5 fastrl_threshold_v2_k5
 
 Every arm must render Qwen3-32B 4n4g, 16x4 rollouts, GBS64, OSL/sequence 1024,
 max model length 1056, max steps 2, V2, FULL_AND_PIECEWISE, no checkpoints,
-four nodes, `--segment=4`, no `--gres`, and explicit W&B metadata. Only the
-threshold arm sets the gate scheduler/threshold/check count.
+four nodes, `--segment=4`, no `--gres`, and explicit W&B metadata. DP8 gives
+eight initial requests per local scheduler, so only the threshold arm sets the
+gate scheduler with local threshold 4 and ten checks. Assert the wrapper rejects
+a threshold greater than or equal to the computed local capacity.
 
 - [ ] **Step 3: Implement environment-backed threshold settings**
 
 Add validated positive integer environment values to the main launcher and use
-them for threshold and roofline variants. Keep current 32/10 defaults.
+them for threshold and roofline variants. Keep current production 32/10
+defaults. Exclude Qwen3-30B-A3B V2 arms whenever either model or variant
+selection uses `all`; explicit model-plus-variant selection remains available
+for commit-scoped support smoke evidence.
 
 - [ ] **Step 4: Implement the mini wrapper**
 
 The wrapper exports smoke defaults while allowing explicit caller overrides,
 then invokes the existing launcher once per selected arm. It must propagate a
 failure immediately and use a shared run tag/project so one manifest contains
-all three jobs.
+all three jobs. Override the production threshold with local threshold 4 and
+validate it is positive and strictly below
+`(NUM_PROMPTS * NUM_GENERATIONS) / DP`.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -173,9 +189,10 @@ or health-failed and return nonzero.
 - [ ] **Step 3: Add failing chart tests**
 
 Render deterministic HTML with scheduler tick on x, inflight batch on y, a
-threshold=32 reference line, and an annotated OFF-to-ON activation point. Test
-that both axis labels and exact event values appear and shuffled input produces
-byte-identical output.
+reference line taken from each manifest row's local threshold, and an annotated
+OFF-to-ON activation point. Test that both axis labels, the manifest threshold,
+and exact event values appear and shuffled input produces byte-identical
+output. Do not hard-code 32 or infer the threshold from global rollout count.
 
 - [ ] **Step 4: Implement collector and validator changes**
 
@@ -209,7 +226,9 @@ Require Ruff/format/Bash/diff checks and a clean tracked worktree.
 
 Push only `fork/sna/nemorl-vllm024-tail-gating`. On `login-ptyche`, update
 `/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm024-upgrade-20260707`, initialize
-recursive submodules, and verify HEAD and container provenance.
+recursive submodules, and verify HEAD and container provenance. Fetch the
+current branch and require local `HEAD` to equal
+`refs/remotes/fork/sna/nemorl-vllm024-tail-gating` exactly before submission.
 
 - [ ] **Step 3: Run Pre-Tyche test-only**
 

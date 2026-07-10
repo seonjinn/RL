@@ -19,8 +19,8 @@ MINI_VARIANTS = (
 )
 
 
-def _dry_run_mini(**environment: str) -> str:
-    result = subprocess.run(
+def _run_mini(**environment: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["bash", str(MINI_LAUNCHER), "dry-run"],
         cwd=REPO_ROOT,
         env={
@@ -38,6 +38,10 @@ def _dry_run_mini(**environment: str) -> str:
         capture_output=True,
         text=True,
     )
+
+
+def _dry_run_mini(**environment: str) -> str:
+    result = _run_mini(**environment)
 
     assert result.returncode == 0, result.stderr
     return result.stdout
@@ -91,12 +95,14 @@ def test_mini_wrapper_renders_exact_three_arm_sync_grpo_smoke() -> None:
     threshold_command = command_by_variant["fastrl_threshold_v2_k5"]
     assert "draft_sample_method=probabilistic" in threshold_command
     assert "sd_tail_gate_mode=threshold" in threshold_command
-    assert "sd_tail_gate_threshold=32" in threshold_command
+    assert "sd_tail_gate_threshold=4" in threshold_command
     assert "sd_tail_gate_consecutive_checks=10" in threshold_command
 
 
 def test_mini_wrapper_allows_explicit_smoke_setting_overrides() -> None:
-    output = _dry_run_mini(MAX_STEPS="3", WANDB_PROJECT="caller-project")
+    output = _dry_run_mini(
+        MAX_STEPS="3", WANDB_PROJECT="caller-project", TAIL_GATE_THRESHOLD="3"
+    )
     command_lines = [
         line for line in output.splitlines() if line.startswith("[DRY-RUN] command ")
     ]
@@ -104,3 +110,17 @@ def test_mini_wrapper_allows_explicit_smoke_setting_overrides() -> None:
     assert len(command_lines) == 3
     assert all("grpo.max_num_steps=3" in line for line in command_lines)
     assert all("logger.wandb.project=caller-project" in line for line in command_lines)
+    threshold_command = next(
+        line for line in command_lines if "fastrl_threshold_v2_k5" in line
+    )
+    assert "sd_tail_gate_threshold=3" in threshold_command
+
+
+def test_mini_wrapper_rejects_threshold_at_local_scheduler_capacity() -> None:
+    result = _run_mini(TAIL_GATE_THRESHOLD="8")
+
+    assert result.returncode == 2
+    assert (
+        "TAIL_GATE_THRESHOLD must be below local scheduler capacity 8" in result.stderr
+    )
+    assert "[DRY-RUN] job" not in result.stdout
