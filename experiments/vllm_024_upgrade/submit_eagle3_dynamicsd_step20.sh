@@ -173,9 +173,9 @@ case "${VARIANT_SELECTION}" in
   low-k) variants=(eagle3_k1 eagle3_k2) ;;
   aggressive) variants=(eagle3_k7 eagle3_k9) ;;
   compare) variants=(baseline eagle3_k5 eagle3_k7 eagle3_k9 suffix_k32 pard_k5 pard_k16 dflash_k15) ;;
-  baseline|eagle3_k1|eagle3_k2|eagle3_k5|eagle3_k7|eagle3_k9|dynamic|suffix_k32|pard_k5|pard_k16|dflash_k15) variants=("${VARIANT_SELECTION}") ;;
+  baseline|eagle3_k1|eagle3_k2|eagle3_k3|eagle3_k5|eagle3_k7|eagle3_k9|dynamic|suffix_k32|pard_k5|pard_k16|dflash_k15) variants=("${VARIANT_SELECTION}") ;;
   *)
-    echo "ERROR: variant must be all, low-k, aggressive, compare, baseline, eagle3_k1, eagle3_k2, eagle3_k5, eagle3_k7, eagle3_k9, dynamic, suffix_k32, pard_k5, pard_k16, or dflash_k15" >&2
+    echo "ERROR: variant must be all, low-k, aggressive, compare, baseline, eagle3_k1, eagle3_k2, eagle3_k3, eagle3_k5, eagle3_k7, eagle3_k9, dynamic, suffix_k32, pard_k5, pard_k16, or dflash_k15" >&2
     exit 2
     ;;
 esac
@@ -302,6 +302,9 @@ submit_one() {
       ;;
     eagle3_k2)
       draft_k=2
+      ;;
+    eagle3_k3)
+      draft_k=3
       ;;
     eagle3_k5)
       draft_k=5
