@@ -1040,6 +1040,31 @@ def test_mini_validator_fallback_matches_mini_launcher_project(tmp_path: Path) -
     ]
 
 
+def test_mini_validator_accepts_explicit_lyris_cluster(tmp_path: Path) -> None:
+    rows = _cohort()
+    for row in rows:
+        row["cluster"] = "lyris-gb200"
+    histories = {row["wandb_run_id"]: _history(row) for row in rows}
+    manifest = tmp_path / "submissions.tsv"
+    output_dir = tmp_path / "output"
+    api = _FakeApi(histories)
+    _write_manifest(manifest, rows)
+
+    result = main(
+        [
+            "--manifest",
+            str(manifest),
+            "--expected-cluster",
+            "lyris-gb200",
+            "--output-dir",
+            str(output_dir),
+        ],
+        api=api,
+    )
+
+    assert result == 0
+
+
 def test_mini_validator_rejects_wandb_url_run_id_mismatch_before_query(
     tmp_path: Path,
 ) -> None:

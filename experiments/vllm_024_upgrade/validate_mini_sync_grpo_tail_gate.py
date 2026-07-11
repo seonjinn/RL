@@ -312,6 +312,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--entity", default=DEFAULT_WANDB_ENTITY)
     parser.add_argument("--project", default=DEFAULT_WANDB_PROJECT)
+    parser.add_argument(
+        "--expected-cluster", default=REQUIRED_COMMON_CONFIG["cluster"]
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -674,7 +677,7 @@ def _mini_capacity_error(rows: Iterable[Mapping[str, str]]) -> str | None:
 
 
 def _validate_mini_manifest_rows(
-    rows: list[dict[str, str]], *, manifest: Path
+    rows: list[dict[str, str]], *, manifest: Path, expected_cluster: str
 ) -> str | None:
     for row in rows:
         missing = [
@@ -691,9 +694,13 @@ def _validate_mini_manifest_rows(
         )
     if capacity_error := _mini_capacity_error(rows):
         return capacity_error
+    required_common_config = {
+        **REQUIRED_COMMON_CONFIG,
+        "cluster": expected_cluster,
+    }
     for row in rows:
         variant = row["variant"]
-        for field, expected in REQUIRED_COMMON_CONFIG.items():
+        for field, expected in required_common_config.items():
             actual = row.get(field, "")
             if actual != expected:
                 return (
@@ -1068,7 +1075,9 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     if manifest_error:
         raise ValueError(manifest_error)
     mini_manifest_error = _validate_mini_manifest_rows(
-        manifest_rows, manifest=args.manifest
+        manifest_rows,
+        manifest=args.manifest,
+        expected_cluster=args.expected_cluster,
     )
     if mini_manifest_error:
         raise ValueError(mini_manifest_error)
