@@ -76,8 +76,8 @@ def test_scan_sparse_history_uses_unfiltered_wandb_rows() -> None:
     rows = [{"_step": 1, "metric": 2.0}, {"_step": 2, "metric": 3.0}]
 
     class SparseRun:
-        def scan_history(self, *, keys: list[str]):
-            return iter(rows if not keys else [])
+        def scan_history(self, *, keys: list[str] | None = None):
+            return iter(rows if keys is None else [])
 
     assert _scan_sparse_history(SparseRun(), ["_step", "optional_metric"]) == rows
 

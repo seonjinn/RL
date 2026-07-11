@@ -435,7 +435,9 @@ REQUIRED_ROW_FIELDS = tuple(
 class WandbRun(Protocol):
     url: str
 
-    def scan_history(self, *, keys: list[str]) -> Iterable[Mapping[str, object]]: ...
+    def scan_history(
+        self, *, keys: list[str] | None = None
+    ) -> Iterable[Mapping[str, object]]: ...
 
 
 class WandbApi(Protocol):
@@ -498,6 +500,12 @@ def _scan_sparse_history(
     run: WandbRun, fallback_keys: list[str]
 ) -> list[Mapping[str, object]]:
     """Read sparse W&B rows without requiring every optional metric key."""
+    try:
+        history = list(run.scan_history())
+    except TypeError:
+        history = []
+    if history and all("_step" in row for row in history):
+        return history
     history = list(run.scan_history(keys=[]))
     if history and all("_step" in row for row in history):
         return history
