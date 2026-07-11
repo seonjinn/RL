@@ -916,6 +916,7 @@ def test_long_output_launcher_renders_matched_16k_and_32k_matrix() -> None:
     assert "policy.generation.vllm_cfg.max_model_len=40968" not in output
     assert output.count("policy.megatron_cfg.activation_checkpointing=true") == 16
     assert output.count("policy.logprob_batch_size=1") == 8
+    assert output.count("policy.generation.vllm_kwargs.max_num_batched_tokens=32768") == 16
     assert output.count("speculative_config.num_speculative_tokens=3") == 8
     assert output.count("speculative_config.model=") == 8
     assert output.count("compilation_config.cudagraph_mode=FULL_AND_PIECEWISE") == 16
@@ -938,6 +939,31 @@ def test_long_output_launcher_can_select_the_32k_retry_slice() -> None:
     assert "policy.generation.max_new_tokens=16384" not in output
     assert output.count("policy.generation.max_new_tokens=32768") == 8
     assert output.count("policy.logprob_batch_size=1") == 8
+
+
+def test_long_output_launcher_can_select_qwen235b_k3_k5_16k_slice() -> None:
+    output = _run_script(
+        LONG_OUTPUT_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="long-output-qwen235b-contract-test",
+        ATTEMPT_ID="attempt-3",
+        MODEL_SELECTION="qwen235b",
+        OUTPUT_LENGTH_SELECTION="16k",
+        VARIANT_SELECTION="compare",
+    )
+
+    assert output.count("[LONG-OUTPUT]") == 3
+    assert "grpo-qwen3-235b-16n4g.yaml" in output
+    assert "models--nvidia--Qwen3-235B-A22B-Eagle3" in output
+    assert "speculative_config.num_speculative_tokens=3" in output
+    assert "speculative_config.num_speculative_tokens=5" in output
+    assert "--nodes=16" in output
+    assert "--segment=16" in output
+    assert "--gres=gpu:4" not in output
 
 
 def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:

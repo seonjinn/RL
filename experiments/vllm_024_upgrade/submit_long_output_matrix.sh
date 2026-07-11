@@ -24,12 +24,23 @@ ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 BASE_EXPERIMENT_ROOT="${BASE_EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_024_upgrade/runs/${RUN_TAG}}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-long-output-lyris}"
 MAX_STEPS="${MAX_STEPS:-5}"
+MODEL_SELECTION="${MODEL_SELECTION:-core}"
 OUTPUT_LENGTH_SELECTION="${OUTPUT_LENGTH_SELECTION:-all}"
+VARIANT_SELECTION="${VARIANT_SELECTION:-core}"
 
 qwen30_draft="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
 qwen32_draft="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-Thinking-speculator.eagle3/snapshots/a1403e07b73a66fc9ef561463631c31864616933}"
+qwen235_draft="${QWEN235_DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba}"
 
-models=(qwen30ba3b qwen32b)
+case "${MODEL_SELECTION}" in
+  core) models=(qwen30ba3b qwen32b) ;;
+  all) models=(qwen30ba3b qwen32b qwen235b) ;;
+  qwen30ba3b|qwen32b|qwen235b) models=("${MODEL_SELECTION}") ;;
+  *)
+    echo "ERROR: MODEL_SELECTION must be core, all, qwen30ba3b, qwen32b, or qwen235b" >&2
+    exit 2
+    ;;
+esac
 case "${OUTPUT_LENGTH_SELECTION}" in
   all) output_lengths=(16k 32k) ;;
   16k|32k) output_lengths=("${OUTPUT_LENGTH_SELECTION}") ;;
@@ -38,7 +49,15 @@ case "${OUTPUT_LENGTH_SELECTION}" in
     exit 2
     ;;
 esac
-variants=(baseline eagle3_k3)
+case "${VARIANT_SELECTION}" in
+  core) variants=(baseline eagle3_k3) ;;
+  compare) variants=(baseline eagle3_k3 eagle3_k5) ;;
+  k5-control) variants=(baseline eagle3_k5) ;;
+  *)
+    echo "ERROR: VARIANT_SELECTION must be core, compare, or k5-control" >&2
+    exit 2
+    ;;
+esac
 
 for output_length in "${output_lengths[@]}"; do
   case "${output_length}" in
@@ -92,6 +111,7 @@ for output_length in "${output_lengths[@]}"; do
         MAX_TOTAL_SEQUENCE_LENGTH="${max_total_sequence_length}" \
         MAX_NEW_TOKENS="${max_new_tokens}" \
         ACTIVATION_CHECKPOINTING=true \
+        MAX_NUM_BATCHED_TOKENS=32768 \
         OUTPUT_MAX_MODEL_LEN="${max_total_sequence_length}" \
         SPECDEC_CONTEXT_HEADROOM_TOKENS="${specdec_context_headroom_tokens}" \
         TEMPERATURE=1.0 \
@@ -105,6 +125,7 @@ for output_length in "${output_lengths[@]}"; do
         CUDAGRAPH_CAPTURE_SIZES="${capture_sizes}" \
         QWEN30_DRAFT_MODEL="${qwen30_draft}" \
         QWEN32_DRAFT_MODEL="${qwen32_draft}" \
+        QWEN235_DRAFT_MODEL="${qwen235_draft}" \
         NCCL_NVLS_ENABLE=0 \
         bash "${LAUNCHER}" "${MODE}" "${model}" "${variant}"
     done
