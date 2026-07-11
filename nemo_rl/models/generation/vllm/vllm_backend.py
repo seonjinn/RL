@@ -52,6 +52,52 @@ class _DraftModel(Protocol):
     def named_modules(self) -> Iterable[tuple[str, torch.nn.Module]]: ...
 
 
+def _build_specdec_runtime_diagnostics(
+    model_runner: Any,
+    *,
+    active_tp_world_size: int,
+    active_tp_rank: int | None,
+) -> dict[str, Any]:
+    """Describe the configured and effective topology of a loaded drafter."""
+    vllm_config = getattr(model_runner, "vllm_config", None)
+    speculative_config = getattr(vllm_config, "speculative_config", None)
+    if speculative_config is None:
+        return {}
+
+    draft_owner = getattr(model_runner, "drafter", None)
+    if draft_owner is None:
+        draft_owner = getattr(model_runner, "speculator", None)
+    draft_model = getattr(draft_owner, "model", None)
+    lm_head = getattr(draft_model, "lm_head", None)
+    lm_head_weight = getattr(lm_head, "weight", None)
+    lm_head_shape = (
+        list(lm_head_weight.shape) if lm_head_weight is not None else None
+    )
+
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    draft_parallel_config = getattr(
+        speculative_config, "draft_parallel_config", None
+    )
+    draft_parallel_tp = getattr(
+        draft_parallel_config, "tensor_parallel_size", None
+    )
+    return {
+        "method": getattr(speculative_config, "method", None),
+        "model_runner": type(model_runner).__name__,
+        "draft_owner": type(draft_owner).__name__ if draft_owner is not None else None,
+        "draft_model": type(draft_model).__name__ if draft_model is not None else None,
+        "target_tp_config": getattr(parallel_config, "tensor_parallel_size", None),
+        "draft_tp_config": getattr(
+            speculative_config, "draft_tensor_parallel_size", None
+        ),
+        "draft_parallel_tp_config": draft_parallel_tp,
+        "active_tp_world_size": active_tp_world_size,
+        "active_tp_rank": active_tp_rank,
+        "draft_tp_matches_active_group": draft_parallel_tp == active_tp_world_size,
+        "draft_lm_head_shape": lm_head_shape,
+    }
+
+
 def fix_gemma3_vision_weight_name(key: str) -> str:
     """Re-insert the `vision_model` segment into Gemma3 vision-tower weights.
 
@@ -182,6 +228,17 @@ class VllmInternalWorkerExtension:
     _pending_draft_weights: list[tuple[str, torch.Tensor]] | None
     _observed_update_weight_names: set[str] | None
     _draft_weights_updated: bool
+
+    def get_specdec_runtime_diagnostics(self) -> dict[str, Any]:
+        """Report the TP group that the loaded drafter actually executes in."""
+        from vllm.distributed.parallel_state import get_tp_group
+
+        tp_group = get_tp_group()
+        return _build_specdec_runtime_diagnostics(
+            self.model_runner,
+            active_tp_world_size=int(tp_group.world_size),
+            active_tp_rank=getattr(tp_group, "rank_in_group", None),
+        )
 
     def get_cudagraph_dispatch_metrics(self) -> dict[str, float]:
         """Return cumulative CUDA-graph dispatch and tail-gate counters."""

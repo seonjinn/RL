@@ -24,6 +24,8 @@ import ray
 import torch
 from transformers import AutoTokenizer
 
+import nemo_rl.experience.rollouts as rollouts_module
+
 from nemo_rl.data.collate_fn import rl_collate_fn
 from nemo_rl.data.datasets.response_datasets import NemoGymDataset
 from nemo_rl.data.interfaces import DatumSpec
@@ -165,7 +167,9 @@ class _CaptureAsyncGeneration(_DummySGLangGeneration):
             yield result
 
 
-def test_generate_responses_propagates_validation_cohort() -> None:
+def test_generate_responses_propagates_validation_cohort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     generation = _CaptureSyncGeneration()
     generation_input_data = BatchedDataDict(
         {
@@ -175,7 +179,10 @@ def test_generate_responses_propagates_validation_cohort() -> None:
     )
     batch = BatchedDataDict({"message_log": [[]]})
 
-    generate_responses(
+    timestamps = iter((10.0, 12.5))
+    monkeypatch.setattr(rollouts_module.time, "perf_counter", lambda: next(timestamps))
+
+    _, _, gen_metrics = generate_responses(
         generation,
         generation_input_data,
         batch,
@@ -185,6 +192,7 @@ def test_generate_responses_propagates_validation_cohort() -> None:
     )
 
     assert generation.validation is True
+    assert gen_metrics["generation_call_time_s"] == 2.5
 
 
 def test_generate_responses_async_requires_sglang_opt_in():

@@ -260,6 +260,8 @@ def test_sync_colocated_throughput_flops_and_imbalance(capsys):
     # samples_per_step = 8 * 10 = 80
     metrics = {
         "total_num_tokens": 8000.0,
+        "generation_num_tokens": 3200.0,
+        "generation_call_time_s": 4.0,
         "per_worker_token_counts": {0: 1000, 1: 2000, 2: 3000, 3: 4000},
     }
 
@@ -293,6 +295,16 @@ def test_sync_colocated_throughput_flops_and_imbalance(capsys):
     )
     assert math.isclose(
         perf["generation_tokens_per_sec_per_gpu"], 8000.0 / 5.0 / 16.0, rel_tol=1e-6
+    )
+    assert math.isclose(
+        perf["generation_output_tokens_per_sec_per_gpu"],
+        3200.0 / 5.0 / 16.0,
+        rel_tol=1e-6,
+    )
+    assert math.isclose(
+        perf["generation_call_tokens_per_sec_per_gpu"],
+        3200.0 / 4.0 / 16.0,
+        rel_tol=1e-6,
     )
 
     # Group totals
@@ -399,8 +411,13 @@ def test_minimal_inputs_no_counts_no_flops(capsys):
     ]:
         assert k in perf
 
+    assert "generation_output_tokens_per_sec_per_gpu" not in perf
+    assert "generation_call_tokens_per_sec_per_gpu" not in perf
+
     out = capsys.readouterr().out
     assert "Throughputs (per GPU)" in out
+    assert "Generation Output" not in out
+    assert "Generation Call Output" not in out
 
 
 def test_empty_per_worker_token_counts_skips_imbalance(capsys):

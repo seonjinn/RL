@@ -20,6 +20,7 @@ import copy
 import json
 import math
 import statistics
+import time
 import warnings
 from collections import defaultdict
 from collections.abc import Sequence
@@ -249,9 +250,11 @@ def generate_responses(
         generation_input_data["stop_strings"] = [None] * len(input_lengths)
 
     # Always use synchronous generation
+    generation_started_at = time.perf_counter()
     generation_outputs = policy_generation.generate(
         generation_input_data, greedy=greedy, validation=validation
     )
+    generation_call_time_s = time.perf_counter() - generation_started_at
 
     # Extract everything we need from the generation outputs
     output_ids = generation_outputs["output_ids"]
@@ -306,6 +309,7 @@ def generate_responses(
     gen_metrics = {
         "mean_generation_length": generation_lengths.float().mean().item(),
         "total_generated_tokens": generation_lengths.sum().item(),
+        "generation_call_time_s": generation_call_time_s,
     }
     _add_r3_fallback_metrics(gen_metrics, generation_outputs)
 
@@ -642,6 +646,7 @@ def run_multi_turn_rollout(
     sample_terminated = torch.zeros(batch_size, dtype=torch.bool)
     sample_truncated = torch.zeros(batch_size, dtype=torch.bool)
     sample_max_turns_reached = torch.zeros(batch_size, dtype=torch.bool)
+    generation_call_time_s = 0.0
 
     # Tracking per-turn metrics
     total_gen_tokens_per_turn = []
@@ -700,6 +705,7 @@ def run_multi_turn_rollout(
             greedy=greedy,
             validation=validation,
         )
+        generation_call_time_s += float(gen_metrics["generation_call_time_s"])
 
         # Record response truncation (response hit max_tokens without stop token)
         response_truncated = gen_metrics.pop("_response_truncated", None)
@@ -842,6 +848,8 @@ def run_multi_turn_rollout(
         "max_gen_tokens_per_sample": float(
             sample_assistant_token_counts.float().max().item()
         ),
+        "total_gen_tokens": int(sample_assistant_token_counts.sum().item()),
+        "generation_call_time_s": generation_call_time_s,
         "mean_env_tokens_per_sample": float(
             sample_env_token_counts.float().mean().item()
         ),
@@ -1280,6 +1288,9 @@ def run_async_multi_turn_rollout(
             )
             / batch_size,
             "max_gen_tokens_per_sample": max(
+                m["assistant_tokens"] for m in all_sample_metrics
+            ),
+            "total_gen_tokens": sum(
                 m["assistant_tokens"] for m in all_sample_metrics
             ),
             "mean_env_tokens_per_sample": sum(

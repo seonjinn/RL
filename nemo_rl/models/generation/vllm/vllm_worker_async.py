@@ -15,6 +15,7 @@
 import asyncio
 import copy
 import gc
+import json
 import logging
 import os
 import threading
@@ -448,6 +449,17 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
     async def post_init_async(self):
         if self.llm is not None:
             await self.llm.collective_rpc("bind_numa", args=tuple())
+            diagnostics = await self.llm.collective_rpc(
+                "get_specdec_runtime_diagnostics", args=tuple()
+            )
+            if asyncio.iscoroutine(diagnostics):
+                diagnostics = await diagnostics
+            diagnostics = [report for report in diagnostics if report]
+            if diagnostics:
+                LOGGER.info(
+                    "[specdec] effective_runtime=%s",
+                    json.dumps(diagnostics, sort_keys=True),
+                )
         self.vllm_device_ids = await self.report_device_id_async()
         if self._mtp_load_from_disk:
             result_or_coro = await self.llm.collective_rpc(
@@ -1564,14 +1576,8 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "sleep_async can only be used with async_engine=True. Use sleep instead."
             )
 
-        # Reset the prefix cache to ensure that prefix cache is not reused after weights are updated
-        await self.llm.reset_prefix_cache()
-        # Reset the multimodal processor cache (sender side) so it stays in
-        # sync with the receiver cache that vLLM clears internally during
-        # sleep.  Without this, the sender thinks images are already cached on
-        # the receiver and sends data=None, causing an assertion error.
-        if hasattr(self.llm, "reset_mm_cache"):
-            await self.llm.reset_mm_cache()
+        # vLLM 0.24 level-1 sleep aborts requests and resets prefix,
+        # multimodal, and encoder caches before offloading weights.
         await self.llm.sleep(level=1)
 
         gc.collect()

@@ -347,6 +347,7 @@ class AsyncRolloutImpl:
             # token metrics
             **_calculate_single_metric(total_tokens, n, "total_tokens_per_sample"),
             **_calculate_single_metric(assistant_tokens, n, "gen_tokens_per_sample"),
+            "total_gen_tokens": sum(assistant_tokens),
             **_calculate_single_metric(env_tokens, n, "env_tokens_per_sample"),
             # truncated metrics
             "truncation_rate": sum(truncated) / n,
@@ -554,6 +555,7 @@ class AsyncNemoGymRolloutImpl:
             # token metrics
             **_calculate_single_metric(total_tokens, n, "total_tokens_per_sample"),
             **_calculate_single_metric(assistant_tokens, n, "gen_tokens_per_sample"),
+            "total_gen_tokens": sum(assistant_tokens),
             # truncated metrics
             "natural_termination_rate": sum(not t for t in truncated) / n,
             "truncation_rate": sum(truncated) / n,

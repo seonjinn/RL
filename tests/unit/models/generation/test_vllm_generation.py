@@ -28,6 +28,8 @@ import ray
 import requests
 import torch
 
+import nemo_rl.models.generation.vllm.vllm_generation as vllm_generation_module
+
 from nemo_rl.algorithms.grpo import refit_policy_generation
 from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.utils import get_tokenizer
@@ -234,6 +236,66 @@ def test_specdec_step_metrics_collect_worker_counters() -> None:
     assert generation._get_raw_spec_counters.call_count == 2
 
 
+def test_generation_lifecycle_metrics_split_prepare_and_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+        "vllm_kwargs": {},
+    }
+    generation._step_metrics_snapshot = None
+    generation._step_lifecycle_metrics = {}
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+
+    timestamps = iter((10.0, 11.5, 20.0, 22.5))
+    monkeypatch.setattr(
+        vllm_generation_module.time, "perf_counter", lambda: next(timestamps)
+    )
+    monkeypatch.setattr(vllm_generation_module.ray, "get", lambda _futures: [True])
+
+    assert generation.prepare_for_generation() is True
+    generation.snapshot_step_metrics()
+    assert generation.finish_generation() is True
+
+    metrics = generation.get_step_metrics()
+
+    assert metrics["vllm/lifecycle_prepare_for_generation_s"] == 1.5
+    assert metrics["vllm/lifecycle_finish_generation_s"] == 2.5
+    assert generation._step_lifecycle_metrics == {}
+
+
+def test_prepare_for_generation_discards_completed_unconsumed_lifecycle_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation._step_metrics_snapshot = None
+    generation._step_lifecycle_metrics = {
+        "vllm/lifecycle_prepare_for_generation_s": 3.0,
+        "vllm/lifecycle_finish_generation_s": 4.0,
+    }
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+
+    timestamps = iter((10.0, 11.5))
+    monkeypatch.setattr(
+        vllm_generation_module.time, "perf_counter", lambda: next(timestamps)
+    )
+    monkeypatch.setattr(vllm_generation_module.ray, "get", lambda _futures: [True])
+
+    assert generation.prepare_for_generation() is True
+
+    assert generation._step_lifecycle_metrics == {
+        "vllm/lifecycle_prepare_for_generation_s": 1.5
+    }
+
+
 @pytest.fixture
 def vllm_internal_worker_extension(
     monkeypatch: pytest.MonkeyPatch,
@@ -318,6 +380,40 @@ def test_tail_gate_worker_counters_reject_list_values(
 
     with pytest.raises(RuntimeError, match="Tail-gate counter.*list metric"):
         extension.get_cudagraph_dispatch_metrics()
+
+
+def test_specdec_runtime_diagnostics_report_effective_draft_tp_mismatch(
+    vllm_internal_worker_extension: type[Any],
+) -> None:
+    backend_module = sys.modules[vllm_internal_worker_extension.__module__]
+    draft_model = types.SimpleNamespace(
+        lm_head=types.SimpleNamespace(weight=torch.empty(75968, 4096))
+    )
+    runner = types.SimpleNamespace(
+        vllm_config=types.SimpleNamespace(
+            parallel_config=types.SimpleNamespace(tensor_parallel_size=2),
+            speculative_config=types.SimpleNamespace(
+                method="eagle3",
+                draft_tensor_parallel_size=1,
+                draft_parallel_config=types.SimpleNamespace(tensor_parallel_size=1),
+            ),
+        ),
+        speculator=types.SimpleNamespace(model=draft_model),
+    )
+
+    diagnostics = backend_module._build_specdec_runtime_diagnostics(
+        runner,
+        active_tp_world_size=2,
+        active_tp_rank=0,
+    )
+
+    assert diagnostics["method"] == "eagle3"
+    assert diagnostics["target_tp_config"] == 2
+    assert diagnostics["draft_tp_config"] == 1
+    assert diagnostics["draft_parallel_tp_config"] == 1
+    assert diagnostics["active_tp_world_size"] == 2
+    assert diagnostics["draft_tp_matches_active_group"] is False
+    assert diagnostics["draft_lm_head_shape"] == [75968, 4096]
 
 
 basic_lora_test_config: LoRAConfig = {
@@ -735,6 +831,18 @@ def test_tail_gate_validation_rejects_internal_vllm_data_parallelism() -> None:
     vllm_config["vllm_cfg"]["expert_parallel_size"] = 4
 
     with pytest.raises(ValueError, match="internal vLLM data parallelism"):
+        validate_vllm_speculative_config(
+            vllm_config,
+            has_refit_draft_weights=False,
+            is_eval=False,
+        )
+
+
+def test_tail_gate_validation_rejects_async_engine() -> None:
+    vllm_config = _tail_gate_config()
+    vllm_config["vllm_cfg"]["async_engine"] = True
+
+    with pytest.raises(ValueError, match="does not support vllm_cfg.async_engine"):
         validate_vllm_speculative_config(
             vllm_config,
             has_refit_draft_weights=False,

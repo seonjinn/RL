@@ -2603,6 +2603,14 @@ def grpo_train(
                     metrics_logging_data["mean_gen_tokens_per_sample"] = (
                         rollout_metrics["mean_gen_tokens_per_sample"]
                     )
+                    metrics_logging_data["generation_call_time_s"] = (
+                        metrics_logging_data.get("generation_call_time_s", 0.0)
+                        + rollout_metrics.get("generation_call_time_s", 0.0)
+                    )
+                    metrics_logging_data["generation_num_tokens"] = (
+                        metrics_logging_data.get("generation_num_tokens", 0)
+                        + rollout_metrics.get("total_gen_tokens", 0)
+                    )
                     logger.log_metrics(rollout_metrics, total_steps + 1, prefix="train")
 
                 repeated_batch = scale_rewards(
@@ -3055,6 +3063,13 @@ def grpo_train(
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
                 metrics.update(rollout_metrics)
+                metrics["generation_num_tokens"] = metrics_logging_data.get(
+                    "generation_num_tokens", 0
+                ) or flat_token_mask.sum().item()
+                if "generation_call_time_s" in metrics_logging_data:
+                    metrics["generation_call_time_s"] = metrics_logging_data[
+                        "generation_call_time_s"
+                    ]
                 metrics["generation_logger_metrics"] = generation_logger_metrics
                 total_valid_tokens += metrics["global_valid_toks"]
 

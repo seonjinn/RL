@@ -129,6 +129,12 @@ def _validate_tail_gate_speculative_config(
             "mutually exclusive."
         )
     vllm_config = config["vllm_cfg"]
+    if vllm_config.get("async_engine", False):
+        raise ValueError(
+            "Tail-gated speculative decoding does not support "
+            "vllm_cfg.async_engine=True because scheduler gate state is shared "
+            "across concurrent rollout cohorts."
+        )
     target_tp = vllm_config["tensor_parallel_size"]
     expert_parallel_size = vllm_config.get("expert_parallel_size", 1)
     if expert_parallel_size > target_tp:

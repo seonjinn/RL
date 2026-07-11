@@ -43,6 +43,8 @@ class _SyncCollectiveRpc:
         self.calls.append((method, args))
         if method == "report_device_id":
             return ["device-0", "device-1"]
+        if method == "get_specdec_runtime_diagnostics":
+            return []
         return self.worker_results
 
 
@@ -61,6 +63,8 @@ class _AsyncCollectiveRpc:
         self.calls.append((method, args))
         if method == "report_device_id":
             return ["device-0", "device-1"]
+        if method == "get_specdec_runtime_diagnostics":
+            return []
         if not self.return_nested_awaitable:
             return self.worker_results
 
@@ -74,7 +78,13 @@ class _SyncLifecycleLLM:
     def __init__(self) -> None:
         self.draft_weight = object()
         self.sleep_levels: list[int] = []
-        self.llm_engine = SimpleNamespace(reset_prefix_cache=lambda: None)
+        self.explicit_prefix_reset_calls = 0
+        self.llm_engine = SimpleNamespace(
+            reset_prefix_cache=self._reset_prefix_cache
+        )
+
+    def _reset_prefix_cache(self) -> None:
+        self.explicit_prefix_reset_calls += 1
 
     def sleep(self, *, level: int) -> None:
         self.sleep_levels.append(level)
@@ -89,9 +99,14 @@ class _AsyncLifecycleLLM:
     def __init__(self) -> None:
         self.draft_weight = object()
         self.sleep_levels: list[int] = []
+        self.explicit_prefix_reset_calls = 0
+        self.explicit_mm_reset_calls = 0
 
     async def reset_prefix_cache(self) -> None:
-        return None
+        self.explicit_prefix_reset_calls += 1
+
+    async def reset_mm_cache(self) -> None:
+        self.explicit_mm_reset_calls += 1
 
     async def sleep(self, *, level: int) -> None:
         self.sleep_levels.append(level)
@@ -447,6 +462,7 @@ def test_sync_mtp_startup_accepts_complete_load() -> None:
     worker.post_init()
 
     assert worker.vllm_device_ids == ["device-0", "device-1"]
+    assert ("get_specdec_runtime_diagnostics", ()) in worker.llm.calls
 
 
 @pytest.mark.parametrize("worker_results", [[None, True, False], [None, None], []])
@@ -465,6 +481,7 @@ def test_async_mtp_startup_accepts_complete_load() -> None:
     asyncio.run(worker.post_init_async())
 
     assert worker.vllm_device_ids == ["device-0", "device-1"]
+    assert ("get_specdec_runtime_diagnostics", ()) in worker.llm.calls
 
 
 def test_sync_prepare_refit_forwards_mtp_draft_requirement() -> None:
@@ -504,6 +521,7 @@ def test_sync_sleep_wake_uses_level_one_and_preserves_drafter() -> None:
 
     assert llm.sleep_levels == [1]
     assert llm.draft_weight is original_draft_weight
+    assert llm.explicit_prefix_reset_calls == 0
 
 
 def test_async_sleep_wake_uses_level_one_and_preserves_drafter() -> None:
@@ -517,3 +535,5 @@ def test_async_sleep_wake_uses_level_one_and_preserves_drafter() -> None:
 
     assert llm.sleep_levels == [1]
     assert llm.draft_weight is original_draft_weight
+    assert llm.explicit_prefix_reset_calls == 0
+    assert llm.explicit_mm_reset_calls == 0

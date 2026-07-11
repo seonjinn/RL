@@ -15,6 +15,7 @@
 import asyncio
 import logging
 import os
+import time
 import warnings
 from collections import defaultdict
 from typing import (
@@ -272,6 +273,7 @@ class VllmGeneration(GenerationInterface):
             self.device_uuids = self._report_device_id()
 
         self._step_metrics_snapshot: dict[str | tuple[str, int], float] | None = None
+        self._step_lifecycle_metrics: dict[str, float] = {}
 
     def _get_tied_worker_bundle_indices(
         self, cluster: RayVirtualCluster
@@ -562,6 +564,19 @@ class VllmGeneration(GenerationInterface):
             return
         self._step_metrics_snapshot = self._get_raw_spec_counters()
 
+    def _record_lifecycle_duration(self, name: str, started_at: float) -> None:
+        metrics = getattr(self, "_step_lifecycle_metrics", None)
+        if metrics is None:
+            metrics = {}
+            self._step_lifecycle_metrics = metrics
+        key = f"vllm/lifecycle_{name}_s"
+        metrics[key] = metrics.get(key, 0.0) + (time.perf_counter() - started_at)
+
+    def _consume_lifecycle_metrics(self) -> dict[str, float]:
+        metrics = dict(getattr(self, "_step_lifecycle_metrics", {}))
+        self._step_lifecycle_metrics = {}
+        return metrics
+
     def get_step_metrics(self) -> dict[str, float]:
         """Get speculative decoding metrics delta since snapshot_step_metrics().
 
@@ -578,7 +593,9 @@ class VllmGeneration(GenerationInterface):
                 "Call snapshot_step_metrics() before generation to track metrics.",
                 RuntimeWarning,
             )
-            return {}
+            return self._consume_lifecycle_metrics()
+
+        lifecycle_metrics = self._consume_lifecycle_metrics()
 
         if (
             not self.cfg.get("vllm_kwargs", {}).get("speculative_config")
@@ -588,7 +605,7 @@ class VllmGeneration(GenerationInterface):
             != "true"
         ):
             self._step_metrics_snapshot = None
-            return {}
+            return lifecycle_metrics
 
         counters_end = self._get_raw_spec_counters()
         step_metrics = compute_spec_decode_metrics(
@@ -598,6 +615,7 @@ class VllmGeneration(GenerationInterface):
         # Reset snapshot for next step
         self._step_metrics_snapshot = None
 
+        step_metrics.update(lifecycle_metrics)
         return step_metrics
 
     def init_collective(
@@ -895,8 +913,17 @@ class VllmGeneration(GenerationInterface):
 
     def prepare_for_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Wake workers up for colocated inference."""
+        lifecycle_metrics = getattr(self, "_step_lifecycle_metrics", {})
+        if (
+            getattr(self, "_step_metrics_snapshot", None) is None
+            and "vllm/lifecycle_finish_generation_s" in lifecycle_metrics
+        ):
+            self._step_lifecycle_metrics = {}
+
+        started_at = time.perf_counter()
         # non-colocated no need to wake up
         if not self.cfg["colocated"]["enabled"]:
+            self._record_lifecycle_duration("prepare_for_generation", started_at)
             return True
 
         try:
@@ -916,9 +943,12 @@ class VllmGeneration(GenerationInterface):
         except Exception as e:
             print(f"Error during policy preparation: {e}")
             return False
+        finally:
+            self._record_lifecycle_duration("prepare_for_generation", started_at)
 
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Sleep workers and reset prefix cache."""
+        started_at = time.perf_counter()
         try:
             # Choose the appropriate method based on setting
             # non-colocated only needs reset prefix cache, no need to sleep.
@@ -941,8 +971,10 @@ class VllmGeneration(GenerationInterface):
             results = ray.get(futures)
             return bool(results) and all(result is True for result in results)
         except Exception as e:
-            print(f"Error during policy preparation: {e}")
+            print(f"Error during generation cleanup: {e}")
             return False
+        finally:
+            self._record_lifecycle_duration("finish_generation", started_at)
 
     def shutdown(self) -> bool:
         """Shut down all vLLM workers and clean up resources."""

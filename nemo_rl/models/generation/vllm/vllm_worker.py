@@ -14,6 +14,7 @@
 
 import copy
 import gc
+import json
 import logging
 import os
 import sys
@@ -674,6 +675,15 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
     def post_init(self):
         if self.llm is not None:
             self.llm.collective_rpc("bind_numa", args=tuple())
+            diagnostics = self.llm.collective_rpc(
+                "get_specdec_runtime_diagnostics", args=tuple()
+            )
+            diagnostics = [report for report in diagnostics if report]
+            if diagnostics:
+                logger.info(
+                    "[specdec] effective_runtime=%s",
+                    json.dumps(diagnostics, sort_keys=True),
+                )
         self.vllm_device_ids = self.report_device_id()
         if self._mtp_load_from_disk:
             worker_results = self.llm.collective_rpc(
@@ -1146,18 +1156,8 @@ class VllmGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "sleep cannot be used with async_engine=True. Use sleep_async instead."
             )
 
-        # Reset the prefix cache to ensure that prefix cache is not reused after weights are updated
-        self.llm.llm_engine.reset_prefix_cache()
-        # Clear the renderer's multimodal processor cache (sender side) so it
-        # stays in sync with the receiver cache that vLLM clears internally
-        # during sleep.  Without this, the sender thinks images are already
-        # cached on the receiver and sends data=None, causing an assertion
-        # error.  We only clear the renderer (sender) cache here — the
-        # receiver and worker-level caches are reset by sleep() internally.
-        if hasattr(self.llm, "renderer") and hasattr(
-            self.llm.renderer, "clear_mm_cache"
-        ):
-            self.llm.renderer.clear_mm_cache()
+        # vLLM 0.24 level-1 sleep aborts requests and resets prefix,
+        # multimodal, and encoder caches before offloading weights.
         self.llm.sleep(level=1)
 
         gc.collect()

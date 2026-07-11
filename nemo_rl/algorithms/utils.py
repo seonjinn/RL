@@ -787,6 +787,10 @@ def print_performance_metrics(
         training_num_gpus = total_num_gpus - generation_num_gpus
 
     total_num_tokens = metrics.get("total_num_tokens", 0)
+    has_generation_num_tokens = "generation_num_tokens" in metrics
+    has_generation_call_time = "generation_call_time_s" in metrics
+    generation_num_tokens = metrics.get("generation_num_tokens", 0)
+    generation_call_time = metrics.get("generation_call_time_s", 0)
 
     e2e_samples_per_sec_per_gpu = (
         number_of_samples_per_step / total_time / total_num_gpus
@@ -820,6 +824,16 @@ def print_performance_metrics(
         if generation_time > 0
         else 0
     )
+    generation_output_tokens_per_sec_per_gpu = (
+        generation_num_tokens / generation_time / generation_num_gpus
+        if generation_time > 0
+        else 0
+    )
+    generation_call_tokens_per_sec_per_gpu = (
+        generation_num_tokens / generation_call_time / generation_num_gpus
+        if generation_call_time > 0
+        else 0
+    )
 
     print("  • Throughputs (per GPU):")
     print(f"    - E2E (Samples/sec/gpu): {e2e_samples_per_sec_per_gpu:.2f}")
@@ -836,6 +850,16 @@ def print_performance_metrics(
     print(
         f"    - Generation Worker Group (Tokens/sec/gpu): {generation_tokens_per_sec_per_gpu:.2f}"
     )
+    if has_generation_num_tokens:
+        print(
+            "    - Generation Output (Tokens/sec/gpu): "
+            f"{generation_output_tokens_per_sec_per_gpu:.2f}"
+        )
+    if has_generation_num_tokens and has_generation_call_time:
+        print(
+            "    - Generation Call Output (Tokens/sec/gpu): "
+            f"{generation_call_tokens_per_sec_per_gpu:.2f}"
+        )
 
     print("  • Throughputs (per Group):")
     print(
@@ -904,6 +928,14 @@ def print_performance_metrics(
             * generation_num_gpus,
         }
     )
+    if has_generation_num_tokens:
+        performance_metrics["generation_output_tokens_per_sec_per_gpu"] = (
+            generation_output_tokens_per_sec_per_gpu
+        )
+    if has_generation_num_tokens and has_generation_call_time:
+        performance_metrics["generation_call_tokens_per_sec_per_gpu"] = (
+            generation_call_tokens_per_sec_per_gpu
+        )
 
     return performance_metrics
 
