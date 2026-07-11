@@ -339,6 +339,24 @@ def test_dynamicsd_launcher_honors_sampling_overrides() -> None:
     assert "policy.generation.top_p=1.0" not in output
 
 
+def test_dynamicsd_launcher_keeps_target_model_and_tokenizer_matched() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "eagle3_k1",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="target-model-contract-test",
+        ATTEMPT_ID="attempt-1",
+        POLICY_MODEL_NAME="Qwen/Qwen3-235B-A22B-Instruct-2507",
+    )
+
+    assert "policy.model_name=Qwen/Qwen3-235B-A22B-Instruct-2507" in output
+    assert "policy.tokenizer.name=Qwen/Qwen3-235B-A22B-Instruct-2507" in output
+
+
 def test_dynamicsd_launcher_propagates_refit_diagnostics_to_vllm_workers() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,

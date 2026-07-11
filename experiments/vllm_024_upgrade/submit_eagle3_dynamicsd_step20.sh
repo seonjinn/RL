@@ -32,6 +32,7 @@ CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-false}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
+POLICY_MODEL_NAME="${POLICY_MODEL_NAME:-}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -343,6 +344,12 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
+  if [[ -n "${POLICY_MODEL_NAME}" ]]; then
+    overrides+=(
+      "policy.model_name=${POLICY_MODEL_NAME}"
+      "policy.tokenizer.name=${POLICY_MODEL_NAME}"
+    )
+  fi
   if [[ -n "${MAX_CUDAGRAPH_CAPTURE_SIZE}" ]]; then
     overrides+=(
       "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${MAX_CUDAGRAPH_CAPTURE_SIZE}"
