@@ -634,7 +634,6 @@ def test_eagle_weight_update_loads_each_chunk_without_full_draft_staging(
     ext._finish_weight_update()
 
 
-@pytest.mark.vllm
 def test_static_eagle_refit_diagnostics_report_zero_draft_payload(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
