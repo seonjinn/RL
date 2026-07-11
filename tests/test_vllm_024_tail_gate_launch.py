@@ -425,6 +425,40 @@ def test_all_cohorts_enable_cuda_graph_and_vllm_metric_collection(
     )
 
 
+@pytest.mark.parametrize(
+    "variant",
+    ("baseline_v2", "always_on_v2_k5", "fastrl_threshold_v2_k5"),
+)
+def test_cuda_graph_mode_off_disables_v2_graph_overrides(variant: str) -> None:
+    output = _dry_run("qwen32b", variant, CUDA_GRAPH_MODE="off")
+
+    assert "policy.generation.vllm_cfg.enforce_eager=true" in output
+    assert "compilation_config.cudagraph_mode=" not in output
+    assert "compilation_config.max_cudagraph_capture_size=" not in output
+    assert "compilation_config.cudagraph_capture_sizes=" not in output
+    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS" not in output
+
+
+@pytest.mark.parametrize("cuda_graph_mode", ("invalid",))
+def test_cuda_graph_mode_rejects_invalid_value(cuda_graph_mode: str) -> None:
+    result = _run_launcher(
+        "dry-run",
+        "qwen32b",
+        "baseline_v2",
+        REPO_DIR="/lustre/test/nemo-rl",
+        LYRIS_ROOT="/lustre/test",
+        HF_HOME="/lustre/test/hf_home",
+        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
+        RUN_TAG="contract",
+        ATTEMPT_ID="attempt-1",
+        CUDA_GRAPH_MODE=cuda_graph_mode,
+    )
+
+    assert result.returncode == 2
+    assert "ERROR: CUDA_GRAPH_MODE must be on or off" in result.stderr
+
+
 def test_test_only_uses_lyris_scheduler_without_gres(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

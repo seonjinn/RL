@@ -39,6 +39,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-1024}"
 GENERATION_EP="${GENERATION_EP:-1}"
 SAMPLING="${SAMPLING:-standard}"
 DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
+CUDA_GRAPH_MODE="${CUDA_GRAPH_MODE:-on}"
 TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
 TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
 CLUSTER_GPUS_PER_NODE="${CLUSTER_GPUS_PER_NODE:-4}"
@@ -127,6 +128,15 @@ case "${DRAFT_SAMPLE_METHOD}" in
   *)
     printf 'ERROR: DRAFT_SAMPLE_METHOD must be greedy or probabilistic, got %s\n' \
       "${DRAFT_SAMPLE_METHOD}" >&2
+    exit 2
+    ;;
+esac
+
+case "${CUDA_GRAPH_MODE}" in
+  on|off)
+    ;;
+  *)
+    echo "ERROR: CUDA_GRAPH_MODE must be on or off" >&2
     exit 2
     ;;
 esac
@@ -389,6 +399,9 @@ submit_one() {
   local runner
   local use_v2_runner
   local graph_mode
+  local cuda_graph_enabled=true
+  local enforce_eager=false
+  local effective_graph_mode
   local gate_mode="off"
   local draft_k=0
   local threshold=""
@@ -511,8 +524,15 @@ submit_one() {
       ;;
   esac
 
+  effective_graph_mode="${graph_mode}"
+  if [[ "${CUDA_GRAPH_MODE}" == "off" ]]; then
+    cuda_graph_enabled=false
+    enforce_eager=true
+    effective_graph_mode=NONE
+  fi
+
   local_rollout_capacity=$(((NUM_PROMPTS * NUM_GENERATIONS + dp - 1) / dp))
-  if [[ "${runner}" == "v2" ]]; then
+  if [[ "${runner}" == "v2" && "${cuda_graph_enabled}" == "true" ]]; then
     cudagraph_max_requests="${CUDAGRAPH_MAX_REQUESTS:-${local_rollout_capacity}}"
     validate_positive_integer "CUDAGRAPH_MAX_REQUESTS" "${cudagraph_max_requests}"
     if ((cudagraph_max_requests > MAX_NUM_SEQS)); then
@@ -577,14 +597,12 @@ submit_one() {
     "policy.generation.vllm_cfg.max_model_len=${MAX_MODEL_LEN}"
     "policy.generation.vllm_cfg.tensor_parallel_size=${target_tp}"
     "policy.generation.vllm_cfg.expert_parallel_size=${GENERATION_EP}"
-    "policy.generation.vllm_cfg.enforce_eager=false"
+    "policy.generation.vllm_cfg.enforce_eager=${enforce_eager}"
     "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true"
     "policy.generation.vllm_cfg.vllm_metrics_logger_interval=0.5"
-    "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
     "++policy.generation.vllm_kwargs.max_num_batched_tokens=${MAX_NUM_BATCHED_TOKENS}"
     "++policy.generation.vllm_kwargs.max_num_seqs=${MAX_NUM_SEQS}"
     "++policy.generation.vllm_kwargs.moe_backend=triton"
-    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${graph_mode}"
     "cluster.gpus_per_node=${CLUSTER_GPUS_PER_NODE}"
     "cluster.num_nodes=${CLUSTER_NUM_NODES}"
     "cluster.segment_size=${CLUSTER_GPUS_PER_NODE}"
@@ -595,6 +613,13 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
+
+  if [[ "${cuda_graph_enabled}" == "true" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+      "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${effective_graph_mode}"
+    )
+  fi
 
   if [[ "${draft_k}" != "0" ]]; then
     manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
@@ -608,7 +633,7 @@ submit_one() {
       "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
     )
   fi
-  if [[ "${runner}" == "v2" ]]; then
+  if [[ "${runner}" == "v2" && "${cuda_graph_enabled}" == "true" ]]; then
     overrides+=(
       "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${cudagraph_max_tokens}"
       "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${cudagraph_capture_sizes}"
@@ -638,7 +663,13 @@ submit_one() {
   local command_parts=(
     env
     "VLLM_USE_V2_MODEL_RUNNER=${use_v2_runner}"
-    "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+  )
+  if [[ "${cuda_graph_enabled}" == "true" ]]; then
+    command_parts+=(
+      "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+    )
+  fi
+  command_parts+=(
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
@@ -716,7 +747,7 @@ submit_one() {
   case "${MODE}" in
     dry-run)
       printf '[DRY-RUN] job model=%s variant=%s runner=%s graph_mode=%s gate_mode=%s k=%s\n' \
-        "${model}" "${variant}" "${runner}" "${graph_mode}" "${gate_mode}" "${draft_k}"
+        "${model}" "${variant}" "${runner}" "${effective_graph_mode}" "${gate_mode}" "${draft_k}"
       printf '[DRY-RUN] env'
       printf ' %q' "${environment[@]}"
       printf ' sbatch'
@@ -793,7 +824,7 @@ submit_one() {
         "$(readlink -f "${CONTAINER}")"
         "$(sha256_file "${CONTAINER}")"
         "${runner}"
-        "${graph_mode}"
+        "${effective_graph_mode}"
         "${SAMPLING}"
         "${manifest_draft_sample_method}"
         "${job_id}"
