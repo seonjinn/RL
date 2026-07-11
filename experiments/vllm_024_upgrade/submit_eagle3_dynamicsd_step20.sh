@@ -29,6 +29,9 @@ SPECDEC_CONTEXT_HEADROOM_TOKENS="${SPECDEC_CONTEXT_HEADROOM_TOKENS:-0}"
 MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
 CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES:-}"
 CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-false}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
+TOP_P="${TOP_P:-1.0}"
+REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -59,6 +62,14 @@ if [[ ! "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS}" != "false" ]]; then
   echo "ERROR: CUDAGRAPH_DISPATCH_METRICS must be true or false" >&2
+  exit 2
+fi
+if ! awk -v value="${TOP_P}" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value > 0 && value <= 1) }'; then
+  echo "ERROR: TOP_P must be a number in (0, 1] (got ${TOP_P})" >&2
+  exit 2
+fi
+if [[ "${REFIT_DIAGNOSTICS}" != "true" && "${REFIT_DIAGNOSTICS}" != "false" ]]; then
+  echo "ERROR: REFIT_DIAGNOSTICS must be true or false" >&2
   exit 2
 fi
 if [[ -n "${CUDAGRAPH_CAPTURE_SIZES}" \
@@ -319,8 +330,8 @@ submit_one() {
     "checkpointing.enabled=false"
     "checkpointing.checkpoint_dir=${run_dir}/checkpoints"
     "policy.generation.vllm_cfg.enforce_eager=false"
-    "policy.generation.temperature=1.0"
-    "policy.generation.top_p=1.0"
+    "policy.generation.temperature=${TEMPERATURE}"
+    "policy.generation.top_p=${TOP_P}"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE"
     "cluster.gpus_per_node=${GPUS_PER_NODE}"
     "cluster.num_nodes=${nodes}"
@@ -447,6 +458,12 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  if [[ "${REFIT_DIAGNOSTICS}" == "true" ]]; then
+    command_env+=(
+      "NRL_VLLM_REFIT_DIAGNOSTICS=true"
+      "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=NRL_VLLM_REFIT_DIAGNOSTICS"
+    )
+  fi
   if [[ "${NRL_IGNORE_TP_ACCURACY_CHECK:-0}" == "1" ]]; then
     command_env+=("NRL_IGNORE_TP_ACCURACY_CHECK=1")
   fi
