@@ -31,6 +31,7 @@ from typing import Iterable, Mapping, Protocol, TypeGuard, cast
 
 
 EXPECTED_STEPS = set(range(2, 21))
+APPROVED_GRAPH_ON_RUNTIME_COMMIT = "539cfb96f3944ea6e32616ec43e10f4d1cf20491"
 MIN_GRAPH_CALL_RATIO = 0.99
 MIN_ROOFLINE_PREDICTED_SPEEDUP = 1.05
 MIN_SPECDEC_HEADROOM_TOKENS = 32
@@ -116,6 +117,7 @@ COHORT_FIELDS = (
     "runtime",
     "runtime_version",
     "runtime_commit",
+    "ablation_behavior_revision",
     "vllm_version",
     "vllm_commit",
     "target_tp",
@@ -144,6 +146,7 @@ COHORT_FIELDS = (
 )
 CAPTURE_PROFILE_COHORT_FIELDS = ("cudagraph_max_requests",)
 GRAPH_ABLATION_COHORT_FIELDS = (
+    "runtime_commit",
     "graph_mode",
     "cuda_graph_enabled",
     "enforce_eager",
@@ -172,6 +175,7 @@ LOG_PROVENANCE_FIELDS = (
 LEGACY_UNRECORDED_MAX_MODEL_LEN = "legacy_unrecorded"
 LEGACY_UNRECORDED_CAPTURE_PROFILE = "legacy_unrecorded"
 LEGACY_UNRECORDED_CUDA_GRAPH_STATE = "legacy_unrecorded"
+LEGACY_UNRECORDED_ABLATION_BEHAVIOR = "legacy_unrecorded"
 LEGACY_CUDA_GRAPH_STATE_DEFAULTS = {
     "cuda_graph_enabled": LEGACY_UNRECORDED_CUDA_GRAPH_STATE,
     "enforce_eager": LEGACY_UNRECORDED_CUDA_GRAPH_STATE,
@@ -276,6 +280,21 @@ CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER = (
     "enforce_eager",
     *MINI_PROVENANCE_MANIFEST_HEADER[_MINI_GRAPH_MODE_INDEX + 1 :],
 )
+CUDA_GRAPH_ABLATION_MINI_PROVENANCE_V4_MANIFEST_HEADER = (
+    CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER
+)
+_MINI_RUNTIME_COMMIT_INDEX = CUDA_GRAPH_ABLATION_MINI_PROVENANCE_V4_MANIFEST_HEADER.index(
+    "runtime_commit"
+)
+CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER = (
+    *CUDA_GRAPH_ABLATION_MINI_PROVENANCE_V4_MANIFEST_HEADER[
+        : _MINI_RUNTIME_COMMIT_INDEX + 1
+    ],
+    "ablation_behavior_revision",
+    *CUDA_GRAPH_ABLATION_MINI_PROVENANCE_V4_MANIFEST_HEADER[
+        _MINI_RUNTIME_COMMIT_INDEX + 1 :
+    ],
+)
 IMMUTABLE_CHECKPOINT_MANIFEST_HEADER = (
     *STRUCTURED_PROVENANCE_MANIFEST_HEADER[:-3],
     "target_checkpoint",
@@ -291,11 +310,19 @@ CAPTURE_PROFILE_MANIFEST_HEADER = (
     *IMMUTABLE_CHECKPOINT_MANIFEST_HEADER[_MAX_NUM_SEQS_INDEX + 1 :],
 )
 _GRAPH_MODE_INDEX = CAPTURE_PROFILE_MANIFEST_HEADER.index("graph_mode")
-CUDA_GRAPH_ABLATION_MANIFEST_HEADER = (
+CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER = (
     *CAPTURE_PROFILE_MANIFEST_HEADER[: _GRAPH_MODE_INDEX + 1],
     "cuda_graph_enabled",
     "enforce_eager",
     *CAPTURE_PROFILE_MANIFEST_HEADER[_GRAPH_MODE_INDEX + 1 :],
+)
+_RUNTIME_COMMIT_INDEX = CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER.index(
+    "runtime_commit"
+)
+CUDA_GRAPH_ABLATION_MANIFEST_HEADER = (
+    *CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER[: _RUNTIME_COMMIT_INDEX + 1],
+    "ablation_behavior_revision",
+    *CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER[_RUNTIME_COMMIT_INDEX + 1 :],
 )
 REQUIRED_MANIFEST_FIELDS = (
     *LEGACY_COHORT_FIELDS,
@@ -340,6 +367,7 @@ MANIFEST_SCHEMAS = {
             "max_model_len": LEGACY_UNRECORDED_MAX_MODEL_LEN,
             "draft_sample_method": "",
             "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            "ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR,
             **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
         },
     ),
@@ -348,11 +376,20 @@ MANIFEST_SCHEMAS = {
         MINI_PROVENANCE_MANIFEST_HEADER,
         {
             "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            "ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR,
             **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
         },
     ),
-    CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
+    CUDA_GRAPH_ABLATION_MINI_PROVENANCE_V4_MANIFEST_HEADER: ManifestSchema(
         "cuda_graph_ablation_mini_provenance_v4",
+        CUDA_GRAPH_ABLATION_MINI_PROVENANCE_V4_MANIFEST_HEADER,
+        {
+            "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            "ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR,
+        },
+    ),
+    CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
+        "cuda_graph_ablation_mini_provenance_v5",
         CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER,
         {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
     ),
@@ -361,6 +398,7 @@ MANIFEST_SCHEMAS = {
         STRUCTURED_PROVENANCE_MANIFEST_HEADER,
         {
             "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            "ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR,
             **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
         },
     ),
@@ -369,18 +407,39 @@ MANIFEST_SCHEMAS = {
         IMMUTABLE_CHECKPOINT_MANIFEST_HEADER,
         {
             "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            "ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR,
             **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
         },
     ),
     CAPTURE_PROFILE_MANIFEST_HEADER: ManifestSchema(
         "capture_profile_v3",
         CAPTURE_PROFILE_MANIFEST_HEADER,
-        LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
+        {
+            **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
+            "ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR,
+        },
+    ),
+    CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER: ManifestSchema(
+        "cuda_graph_ablation_v4",
+        CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER,
+        {"ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR},
     ),
     CUDA_GRAPH_ABLATION_MANIFEST_HEADER: ManifestSchema(
-        "cuda_graph_ablation_v4", CUDA_GRAPH_ABLATION_MANIFEST_HEADER, {}
+        "cuda_graph_ablation_v5", CUDA_GRAPH_ABLATION_MANIFEST_HEADER, {}
     ),
 }
+LEGACY_GRAPH_STATE_SCHEMA_NAMES = frozenset(
+    schema.name
+    for schema in MANIFEST_SCHEMAS.values()
+    if schema.legacy_defaults.get("cuda_graph_enabled")
+    == LEGACY_UNRECORDED_CUDA_GRAPH_STATE
+)
+LEGACY_BEHAVIOR_SCHEMA_NAMES = frozenset(
+    schema.name
+    for schema in MANIFEST_SCHEMAS.values()
+    if schema.legacy_defaults.get("ablation_behavior_revision")
+    == LEGACY_UNRECORDED_ABLATION_BEHAVIOR
+)
 
 
 @dataclass(frozen=True)
@@ -433,6 +492,7 @@ class RunSummary:
     runtime: str
     runtime_version: str
     runtime_commit: str
+    ablation_behavior_revision: str
     vllm_version: str
     vllm_commit: str
     target_tp: str
@@ -489,6 +549,10 @@ class ComparisonRow:
     e2e_time_speedup_vs_always_on: float | None
     generation_tps_gpu_speedup_vs_always_on: float | None
     e2e_tps_gpu_speedup_vs_always_on: float | None
+    generation_time_speedup_vs_graph_on: float | None
+    e2e_time_speedup_vs_graph_on: float | None
+    generation_tps_gpu_speedup_vs_graph_on: float | None
+    e2e_tps_gpu_speedup_vs_graph_on: float | None
     reward_health_passed: bool | None
     response_length_health_passed: bool | None
     approx_kl_health_passed: bool | None
@@ -546,13 +610,16 @@ def _is_gated(metadata: Mapping[str, str]) -> bool:
 
 def _required_metric_keys(metadata: Mapping[str, str]) -> dict[str, str]:
     required = dict(BASE_METRIC_KEYS)
+    if metadata.get("cuda_graph_enabled") != "true":
+        required.pop("target_graph_ratio")
     if _is_specdec(metadata):
         required.update(SPECDEC_METRIC_KEYS)
-        required.update(
-            V1_DRAFT_GRAPH_METRIC_KEYS
-            if metadata.get("runner") == "v1"
-            else V2_DRAFT_GRAPH_METRIC_KEYS
-        )
+        if metadata.get("cuda_graph_enabled") == "true":
+            required.update(
+                V1_DRAFT_GRAPH_METRIC_KEYS
+                if metadata.get("runner") == "v1"
+                else V2_DRAFT_GRAPH_METRIC_KEYS
+            )
     if _is_gated(metadata):
         required.update(TAIL_GATE_METRIC_KEYS)
     if metadata.get("gate_mode") == "roofline":
@@ -561,8 +628,8 @@ def _required_metric_keys(metadata: Mapping[str, str]) -> dict[str, str]:
 
 
 def _history_keys(metadata: Mapping[str, str]) -> list[str]:
-    fallback_roles = ["target"]
-    if _is_specdec(metadata):
+    fallback_roles = ["target"] if metadata.get("cuda_graph_enabled") == "true" else []
+    if _is_specdec(metadata) and fallback_roles:
         fallback_roles.extend(
             ["draft"]
             if metadata.get("runner") == "v1"
@@ -649,11 +716,14 @@ def _make_summary(
         if fallback_count is not None and fallback_count.is_integer()
         else str(fallback_count)
     )
-    cuda_graph_evidence = (
-        "fallback counters unavailable; measured graph-call ratio threshold >= 0.99"
-        if fallback_count is None
-        else f"observed fallback counters={fallback_display}"
-    )
+    if metadata.get("cuda_graph_enabled") != "true":
+        cuda_graph_evidence = "not applicable: CUDA graphs disabled"
+    else:
+        cuda_graph_evidence = (
+            "fallback counters unavailable; measured graph-call ratio threshold >= 0.99"
+            if fallback_count is None
+            else f"observed fallback counters={fallback_display}"
+        )
     return RunSummary(
         model=metadata.get("model", ""),
         runner=metadata.get("runner", ""),
@@ -703,6 +773,7 @@ def _make_summary(
         runtime=metadata.get("runtime", ""),
         runtime_version=metadata.get("runtime_version", ""),
         runtime_commit=metadata.get("runtime_commit", ""),
+        ablation_behavior_revision=metadata.get("ablation_behavior_revision", ""),
         vllm_version=metadata.get("vllm_version", ""),
         vllm_commit=metadata.get("vllm_commit", ""),
         target_tp=metadata.get("target_tp", ""),
@@ -861,7 +932,9 @@ def _required_graph_metrics(summary: RunSummary) -> tuple[str, ...]:
     )
 
 
-def _graph_health(summary: RunSummary) -> bool:
+def _graph_health(summary: RunSummary) -> bool | None:
+    if summary.cuda_graph_enabled != "true":
+        return None
     if (
         summary.cuda_graph_fallback_count is not None
         and summary.cuda_graph_fallback_count > 0.0
@@ -925,7 +998,7 @@ def _gate_activation_health(summary: RunSummary) -> bool | None:
 
 
 def _empty_comparison_row(summary: RunSummary) -> ComparisonRow:
-    return ComparisonRow(summary, *([None] * 15))
+    return ComparisonRow(summary, *([None] * 19))
 
 
 def _comparison_row(
@@ -942,10 +1015,14 @@ def _comparison_row(
     }
     graph_health = _graph_health(summary)
     gate_health = _gate_activation_health(summary)
-    overall_health = all(health.values()) and graph_health and gate_health is not False
+    overall_health = (
+        all(health.values())
+        and graph_health is not False
+        and gate_health is not False
+    )
     if not overall_health:
         failed = [name for name, passed in health.items() if not passed]
-        if not graph_health:
+        if graph_health is False:
             failed.append("cuda_graph")
         if gate_health is False:
             failed.append("gate_activation")
@@ -968,6 +1045,10 @@ def _comparison_row(
         if always_on
         else None,
         _speedup(summary.e2e_tps_gpu, always_on.e2e_tps_gpu) if always_on else None,
+        None,
+        None,
+        None,
+        None,
         health["reward"],
         health["response_length"],
         health["approx_kl"],
@@ -1037,6 +1118,44 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
     )
 
 
+def add_graph_ablation_deltas(rows: Iterable[ComparisonRow]) -> list[ComparisonRow]:
+    """Attach graph-off versus matched graph-on effects to report rows."""
+    materialized = list(rows)
+    grouped: dict[tuple[tuple[str, str], ...], list[ComparisonRow]] = {}
+    for row in materialized:
+        grouped.setdefault(same_variant_graph_mode_key(row.summary), []).append(row)
+
+    updated: list[ComparisonRow] = []
+    for row in materialized:
+        if row.cuda_graph_enabled != "false":
+            updated.append(row)
+            continue
+        matches = grouped[same_variant_graph_mode_key(row.summary)]
+        graph_on = [candidate for candidate in matches if candidate.cuda_graph_enabled == "true"]
+        if len(graph_on) != 1 or row.status != "final" or graph_on[0].status != "final":
+            updated.append(row)
+            continue
+        reference = graph_on[0]
+        updated.append(
+            replace(
+                row,
+                generation_time_speedup_vs_graph_on=_speedup(
+                    reference.generation_time, row.generation_time
+                ),
+                e2e_time_speedup_vs_graph_on=_speedup(
+                    reference.e2e_time, row.e2e_time
+                ),
+                generation_tps_gpu_speedup_vs_graph_on=_speedup(
+                    row.generation_tps_gpu, reference.generation_tps_gpu
+                ),
+                e2e_tps_gpu_speedup_vs_graph_on=_speedup(
+                    row.e2e_tps_gpu, reference.e2e_tps_gpu
+                ),
+            )
+        )
+    return updated
+
+
 def _read_manifest(path: Path) -> tuple[ManifestSchema, list[dict[str, str]]]:
     with path.open(encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream, delimiter="\t")
@@ -1044,7 +1163,28 @@ def _read_manifest(path: Path) -> tuple[ManifestSchema, list[dict[str, str]]]:
         schema = MANIFEST_SCHEMAS.get(header)
         if schema is None:
             raise ValueError(f"unsupported manifest header:{','.join(header)}")
-        return schema, [{**schema.legacy_defaults, **row} for row in reader]
+        rows = []
+        for raw_row in reader:
+            row = {
+                **schema.legacy_defaults,
+                **raw_row,
+                "_manifest_schema": schema.name,
+            }
+            if (
+                row.get("runtime_commit") == APPROVED_GRAPH_ON_RUNTIME_COMMIT
+                and row.get("graph_mode") in {"FULL_AND_PIECEWISE", "PIECEWISE"}
+            ):
+                if "cuda_graph_enabled" not in schema.header:
+                    row["cuda_graph_enabled"] = "true"
+                    row["enforce_eager"] = "false"
+                if row.get("cuda_graph_enabled") == "true" and row.get(
+                    "ablation_behavior_revision"
+                ) == LEGACY_UNRECORDED_ABLATION_BEHAVIOR:
+                    row["ablation_behavior_revision"] = (
+                        APPROVED_GRAPH_ON_RUNTIME_COMMIT
+                    )
+            rows.append(row)
+        return schema, rows
 
 
 def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
@@ -1057,6 +1197,57 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         missing = [field for field in REQUIRED_MANIFEST_FIELDS if not row.get(field)]
         if missing:
             return f"missing manifest fields:{','.join(missing)}"
+        graph_state = row["cuda_graph_enabled"]
+        enforce_eager = row["enforce_eager"]
+        legacy_schema = row.get("_manifest_schema", "")
+        has_legacy_state = LEGACY_UNRECORDED_CUDA_GRAPH_STATE in {
+            graph_state,
+            enforce_eager,
+        }
+        if (
+            has_legacy_state
+            and legacy_schema not in LEGACY_GRAPH_STATE_SCHEMA_NAMES
+        ):
+            return "legacy graph state requires legacy schema"
+        behavior_revision = row["ablation_behavior_revision"]
+        if (
+            behavior_revision == LEGACY_UNRECORDED_ABLATION_BEHAVIOR
+            and legacy_schema not in LEGACY_BEHAVIOR_SCHEMA_NAMES
+        ):
+            return "legacy ablation behavior requires legacy schema"
+        if graph_state == "true":
+            if enforce_eager != "false":
+                return "invalid graph-on enforce_eager"
+            expected_mode = (
+                "FULL_AND_PIECEWISE" if row["runner"] == "v2" else "PIECEWISE"
+            )
+            if row["graph_mode"] != expected_mode:
+                return "invalid graph-on graph_mode"
+            if row["runner"] == "v2" and any(
+                row.get(field) in {"", "not_applicable", LEGACY_UNRECORDED_CAPTURE_PROFILE}
+                for field in (
+                    "cudagraph_max_requests",
+                    "cudagraph_max_tokens",
+                    "cudagraph_capture_sizes",
+                )
+            ):
+                return "invalid graph-on capture profile"
+        elif graph_state == "false":
+            if enforce_eager != "true":
+                return "invalid graph-off enforce_eager"
+            if row["graph_mode"] != "NONE":
+                return "invalid graph-off graph_mode"
+            if any(
+                row.get(field) != "not_applicable"
+                for field in (
+                    "cudagraph_max_requests",
+                    "cudagraph_max_tokens",
+                    "cudagraph_capture_sizes",
+                )
+            ):
+                return "invalid graph-off capture profile"
+        elif not has_legacy_state:
+            return f"invalid cuda_graph_enabled:{graph_state}"
         if row["job_id"] in seen_job_ids:
             return f"duplicate job_id:{row['job_id']}"
         seen_job_ids.add(row["job_id"])
@@ -1195,6 +1386,26 @@ def _render_html(rows: list[dict[str, object]]) -> str:
                 f'<tr class="{row_class}"><td>{html.escape(cast(str, row["variant"]))}</td><td>{html.escape(status)}</td><td>{_format_metric(row["e2e_time_speedup_vs_baseline"])}</td><td>{_format_metric(row["generation_time_speedup_vs_baseline"])}</td><td>{row["health_gate_passed"] if row["health_gate_passed"] is not None else "-"}</td><td>{link}</td></tr>'
             )
         fragments.append("</tbody></table>")
+    graph_effect_rows = [
+        row
+        for row in rows
+        if row["cuda_graph_enabled"] == "false"
+        and row["e2e_time_speedup_vs_graph_on"] is not None
+    ]
+    if graph_effect_rows:
+        fragments.append(
+            "<h3>CUDA Graph Effect</h3><table><thead><tr><th>Variant</th>"
+            "<th>Runner</th><th>E2E x vs graph on</th>"
+            "<th>Generation x vs graph on</th></tr></thead><tbody>"
+        )
+        for row in graph_effect_rows:
+            fragments.append(
+                f"<tr><td>{html.escape(cast(str, row['variant']))}</td>"
+                f"<td>{html.escape(cast(str, row['runner']))}</td>"
+                f"<td>{_format_metric(row['e2e_time_speedup_vs_graph_on'])}</td>"
+                f"<td>{_format_metric(row['generation_time_speedup_vs_graph_on'])}</td></tr>"
+            )
+        fragments.append("</tbody></table>")
     finding_rows = [
         row
         for row in final_rows
@@ -1216,11 +1427,37 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Summarize tail-gated SpecDec W&B runs."
     )
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument(
+        "--manifest-project",
+        action="append",
+        default=[],
+        metavar="MANIFEST=PROJECT",
+        help="repeatable manifest-to-W&B-project binding",
+    )
     parser.add_argument("--entity", default="nvidia")
     parser.add_argument("--project", default="nemorl-vllm024-tail-gated-lyris")
     parser.add_argument("--output-dir", type=Path, required=True)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.manifest is None and not args.manifest_project:
+        parser.error("one of --manifest or --manifest-project is required")
+    if args.manifest is not None and args.manifest_project:
+        parser.error("--manifest cannot be combined with --manifest-project")
+    return args
+
+
+def _manifest_project_bindings(args: argparse.Namespace) -> list[tuple[Path, str]]:
+    if args.manifest is not None:
+        return [(args.manifest, args.project)]
+    bindings = []
+    for value in args.manifest_project:
+        manifest, separator, project = value.rpartition("=")
+        if not separator or not manifest or not project:
+            raise ValueError(
+                f"invalid --manifest-project binding (expected MANIFEST=PROJECT):{value}"
+            )
+        bindings.append((Path(manifest), project))
+    return bindings
 
 
 def _create_wandb_api() -> WandbApi:
@@ -1240,21 +1477,24 @@ def _claim_output_directory(path: Path) -> None:
 
 def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
     args = _parse_args(argv)
-    _, manifest_rows = _read_manifest(args.manifest)
-    manifest_error = _validate_manifest_rows(manifest_rows)
-    if manifest_error:
-        raise ValueError(manifest_error)
+    bound_rows: list[tuple[Path, str, dict[str, str]]] = []
+    for manifest, project in _manifest_project_bindings(args):
+        _, manifest_rows = _read_manifest(manifest)
+        manifest_error = _validate_manifest_rows(manifest_rows)
+        if manifest_error:
+            raise ValueError(f"{manifest}:{manifest_error}")
+        bound_rows.extend((manifest, project, row) for row in manifest_rows)
     _claim_output_directory(args.output_dir)
 
     client = api if api is not None else _create_wandb_api()
     summaries: list[RunSummary] = []
-    for manifest_row in manifest_rows:
+    for manifest, project, manifest_row in bound_rows:
         metadata = {
             **manifest_row,
-            "source": manifest_row.get("source") or args.manifest.name,
+            "source": manifest_row.get("source") or manifest.name,
         }
         try:
-            run = client.run(f"{args.entity}/{args.project}/{metadata['wandb_run_id']}")
+            run = client.run(f"{args.entity}/{project}/{metadata['wandb_run_id']}")
             if not metadata.get("wandb_url"):
                 metadata["wandb_url"] = run.url
             summaries.append(
@@ -1288,6 +1528,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
                 )
                 for summary in cohort
             )
+    comparison_rows = add_graph_ablation_deltas(comparison_rows)
     rows = [
         row.to_dict()
         for row in sorted(

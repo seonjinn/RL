@@ -40,6 +40,7 @@ GENERATION_EP="${GENERATION_EP:-1}"
 SAMPLING="${SAMPLING:-standard}"
 DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 CUDA_GRAPH_MODE="${CUDA_GRAPH_MODE:-on}"
+ABLATION_BEHAVIOR_REVISION="${ABLATION_BEHAVIOR_REVISION:-539cfb96f3944ea6e32616ec43e10f4d1cf20491}"
 TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
 TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
 CLUSTER_GPUS_PER_NODE="${CLUSTER_GPUS_PER_NODE:-4}"
@@ -140,6 +141,8 @@ case "${CUDA_GRAPH_MODE}" in
     exit 2
     ;;
 esac
+validate_immutable_revision "ABLATION_BEHAVIOR_REVISION" \
+  "${ABLATION_BEHAVIOR_REVISION}"
 
 if [[ -z "${REPO_DIR:-}" ]]; then
   logical_pwd="$(pwd -L)"
@@ -671,6 +674,10 @@ submit_one() {
     command_parts+=(
       "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
     )
+  else
+    command_parts+=(
+      "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=false"
+    )
   fi
   command_parts+=(
     "WANDB_RUN_ID=${wandb_run_id}"
@@ -772,7 +779,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tcuda_graph_enabled\tenforce_eager\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tablation_behavior_revision\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tcuda_graph_enabled\tenforce_eager\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -804,6 +811,7 @@ submit_one() {
         "${RUNTIME_NAME}"
         "${RUNTIME_VERSION}"
         "${runtime_commit}"
+        "${ABLATION_BEHAVIOR_REVISION}"
         "${VLLM_VERSION}"
         "${VLLM_COMMIT}"
         "${target_tp}"

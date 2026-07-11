@@ -34,6 +34,12 @@ LAUNCHER = (
     / "vllm_024_upgrade"
     / "submit_tail_gated_specdec_step20.sh"
 )
+ABLATION_WRAPPER = (
+    REPO_ROOT
+    / "experiments"
+    / "vllm_024_upgrade"
+    / "submit_cudagraph_ablation_step20.sh"
+)
 V1_VARIANTS = ("baseline_v1", "always_on_v1_k5", "stock_dynamic_v1")
 V2_VARIANTS = (
     "baseline_v2",
@@ -68,6 +74,19 @@ def _target_snapshot(tmp_path: Path, model: str, revision: str) -> Path:
 def _run_launcher(*args: str, **environment: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(LAUNCHER), *args],
+        cwd=REPO_ROOT,
+        env={**os.environ, **environment},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_ablation_wrapper(
+    mode: str, **environment: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(ABLATION_WRAPPER), mode],
         cwd=REPO_ROOT,
         env={**os.environ, **environment},
         check=False,
@@ -436,7 +455,48 @@ def test_cuda_graph_mode_off_disables_v2_graph_overrides(variant: str) -> None:
     assert "compilation_config.cudagraph_mode=" not in output
     assert "compilation_config.max_cudagraph_capture_size=" not in output
     assert "compilation_config.cudagraph_capture_sizes=" not in output
-    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS" not in output
+    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=false" in output
+    assert (
+        "vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS="
+        not in output
+    )
+
+
+def test_cuda_graph_ablation_wrapper_selects_only_the_approved_six_rows() -> None:
+    result = _run_ablation_wrapper(
+        "dry-run",
+        REPO_DIR="/lustre/test/nemo-rl",
+        LYRIS_ROOT="/lustre/test",
+        HF_HOME="/lustre/test/hf_home",
+        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        RUN_TAG="ablation-contract",
+        ATTEMPT_ID="attempt-1",
+        WANDB_PROJECT="inherited-wrong-project",
+        EXPERIMENT_ROOT="/lustre/test/inherited-wrong-root",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("[DRY-RUN] job ") == 6
+    expected_variants = {
+        "baseline_v2",
+        "always_on_v2_k5",
+        "fastrl_threshold_v2_k5",
+        "baseline_v1",
+        "always_on_v1_k5",
+        "stock_dynamic_v1",
+    }
+    for variant in expected_variants:
+        assert result.stdout.count(f"model=qwen32b variant={variant}") == 1
+    assert "qwen30ba3b" not in result.stdout
+    assert "efficient_roofline_v2_k5" not in result.stdout
+    assert "logger.wandb.project=nemorl-vllm024-cudagraph-off-step20-lyris" in result.stdout
+    assert "/experiments/vllm024-cudagraph-off/ablation-contract" in result.stdout
+    assert "/lustre/test/inherited-wrong-root" not in result.stdout
+    assert "grpo.max_num_steps=20" in result.stdout
+    assert "speculative_config.draft_sample_method=probabilistic" in result.stdout
+    assert "sd_tail_gate_threshold=64" in result.stdout
+    assert "sd_tail_gate_consecutive_checks=3" in result.stdout
+    assert result.stdout.count("policy.generation.vllm_cfg.enforce_eager=true") >= 6
 
 
 @pytest.mark.parametrize("cuda_graph_mode", ("invalid",))
@@ -744,7 +804,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     with manifest_path.open(encoding="utf-8", newline="") as stream:
         manifest_rows = list(csv.DictReader(stream, delimiter="\t"))
     schema, _ = _read_manifest(manifest_path)
-    assert schema.name == "cuda_graph_ablation_v4"
+    assert schema.name == "cuda_graph_ablation_v5"
     assert len(manifest_rows) == 1
     manifest_row = manifest_rows[0]
     assert {
@@ -752,6 +812,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "runtime",
         "runtime_version",
         "runtime_commit",
+        "ablation_behavior_revision",
         "vllm_version",
         "vllm_commit",
         "target_tp",
@@ -926,6 +987,16 @@ def test_submit_records_cuda_graph_off_manifest_provenance(tmp_path: Path) -> No
     assert row["cudagraph_max_requests"] == "not_applicable"
     assert row["cudagraph_max_tokens"] == "not_applicable"
     assert row["cudagraph_capture_sizes"] == "not_applicable"
+    assert row["ablation_behavior_revision"] == (
+        "539cfb96f3944ea6e32616ec43e10f4d1cf20491"
+    )
+    assert row["runtime_commit"] == _commit
+    command_argv = json.loads(row["command_argv_json"])
+    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=false" in command_argv
+    assert not any(
+        "vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=" in value
+        for value in command_argv
+    )
 
 
 def test_submit_executes_and_serializes_one_canonical_submission_argv(
