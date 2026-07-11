@@ -460,6 +460,20 @@ def test_cuda_graph_mode_on_can_disable_dispatch_metrics() -> None:
     )
 
 
+def test_v1_can_use_explicit_token_capacity_capture_profile() -> None:
+    output = _dry_run(
+        "qwen32b",
+        "always_on_v1_k5",
+        V1_EXPLICIT_CUDAGRAPH_PROFILE="true",
+    )
+
+    assert "VLLM_USE_V2_MODEL_RUNNER=0" in output
+    assert "compilation_config.cudagraph_mode=PIECEWISE" in output
+    assert "compilation_config.max_cudagraph_capture_size=1536" in output
+    assert "compilation_config.cudagraph_capture_sizes=\\[6\\,12\\,24" in output
+    assert "\\,1488\\,1536\\]" in output
+
+
 @pytest.mark.parametrize(
     "variant",
     ("baseline_v2", "always_on_v2_k5", "fastrl_threshold_v2_k5"),

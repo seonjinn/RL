@@ -41,6 +41,7 @@ SAMPLING="${SAMPLING:-standard}"
 DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 CUDA_GRAPH_MODE="${CUDA_GRAPH_MODE:-on}"
 CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-true}"
+V1_EXPLICIT_CUDAGRAPH_PROFILE="${V1_EXPLICIT_CUDAGRAPH_PROFILE:-false}"
 ABLATION_BEHAVIOR_REVISION="${ABLATION_BEHAVIOR_REVISION:-539cfb96f3944ea6e32616ec43e10f4d1cf20491}"
 TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
 TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
@@ -115,6 +116,10 @@ validate_positive_integer "TAIL_GATE_THRESHOLD" "${TAIL_GATE_THRESHOLD}"
 validate_positive_integer "TAIL_GATE_CONSECUTIVE_CHECKS" "${TAIL_GATE_CONSECUTIVE_CHECKS}"
 if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS}" != "false" ]]; then
   echo "ERROR: CUDAGRAPH_DISPATCH_METRICS must be true or false" >&2
+  exit 2
+fi
+if [[ "${V1_EXPLICIT_CUDAGRAPH_PROFILE}" != "true" && "${V1_EXPLICIT_CUDAGRAPH_PROFILE}" != "false" ]]; then
+  echo "ERROR: V1_EXPLICIT_CUDAGRAPH_PROFILE must be true or false" >&2
   exit 2
 fi
 
@@ -544,7 +549,8 @@ submit_one() {
   fi
 
   local_rollout_capacity=$(((NUM_PROMPTS * NUM_GENERATIONS + dp - 1) / dp))
-  if [[ "${runner}" == "v2" && "${cuda_graph_enabled}" == "true" ]]; then
+  if [[ "${cuda_graph_enabled}" == "true" \
+    && ("${runner}" == "v2" || "${V1_EXPLICIT_CUDAGRAPH_PROFILE}" == "true") ]]; then
     cudagraph_max_requests="${CUDAGRAPH_MAX_REQUESTS:-${local_rollout_capacity}}"
     validate_positive_integer "CUDAGRAPH_MAX_REQUESTS" "${cudagraph_max_requests}"
     if ((cudagraph_max_requests > MAX_NUM_SEQS)); then
@@ -650,7 +656,8 @@ submit_one() {
       "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
     )
   fi
-  if [[ "${runner}" == "v2" && "${cuda_graph_enabled}" == "true" ]]; then
+  if [[ "${cuda_graph_enabled}" == "true" \
+    && ("${runner}" == "v2" || "${V1_EXPLICIT_CUDAGRAPH_PROFILE}" == "true") ]]; then
     overrides+=(
       "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${cudagraph_max_tokens}"
       "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${cudagraph_capture_sizes}"
