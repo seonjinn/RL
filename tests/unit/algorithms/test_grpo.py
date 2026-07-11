@@ -124,7 +124,7 @@ def test_refit_records_each_colocated_phase(monkeypatch: pytest.MonkeyPatch) -> 
         "prepare_for_generation/policy_offload_after_refit",
         "prepare_for_generation/wake_kv_cache",
     }
-    assert expected_labels == set(timer.get_timing_dict())
+    assert expected_labels == set(timer.get_timing_metrics())
 
 
 @pytest.mark.parametrize(
