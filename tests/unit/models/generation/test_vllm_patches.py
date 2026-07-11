@@ -1875,7 +1875,9 @@ def test_apply_patches_only_installs_required_specdec_patches(
     else:
         draft_cg_patch.assert_not_called()
     if expect_tail_gate_patch:
-        tail_gate_patch.assert_called_once_with(logger)
+        tail_gate_patch.assert_called_once_with(
+            patches.logging.getLogger("vllm_patch.bootstrap")
+        )
     else:
         tail_gate_patch.assert_not_called()
     if expect_probabilistic_patches:
@@ -1907,6 +1909,14 @@ def test_apply_patches_installs_cudagraph_metrics_when_enabled(
     patches._apply_vllm_patches("/venv/bin/python", speculative_config=None)
 
     metrics_patch.assert_called_once_with(logger)
+
+
+def test_tail_gate_source_patch_precedes_first_vllm_import() -> None:
+    source = inspect.getsource(patches._apply_vllm_patches)
+
+    assert source.index("_patch_vllm_runtime_tail_gating") < source.index(
+        "from vllm.logger import init_logger"
+    )
 
 
 @pytest.mark.parametrize(

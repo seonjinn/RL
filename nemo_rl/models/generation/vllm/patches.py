@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
 from contextlib import contextmanager
 from functools import wraps
@@ -2006,6 +2007,15 @@ def _apply_vllm_patches(
     extra_env_vars: list[str] | None = None,
     speculative_config: dict[str, Any] | None,
 ) -> None:
+    tail_gate_enabled = bool(
+        speculative_config
+        and speculative_config.get("sd_tail_gate_mode", "off") != "off"
+    )
+    if tail_gate_enabled:
+        # This source patch extends SpeculativeConfig, so it must run before
+        # importing any vLLM module that may cache the dataclass definition.
+        _patch_vllm_runtime_tail_gating(logging.getLogger("vllm_patch.bootstrap"))
+
     # Import lazily so importing the worker module does not import vLLM.
     from vllm.logger import init_logger
 
@@ -2021,8 +2031,6 @@ def _apply_vllm_patches(
         _patch_vllm_cudagraph_dispatch_metrics(patch_logger)
 
     if speculative_config:
-        if speculative_config.get("sd_tail_gate_mode", "off") != "off":
-            _patch_vllm_runtime_tail_gating(patch_logger)
         _patch_vllm_piecewise_specdec_cudagraph_alignment(patch_logger)
         _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
         _patch_vllm_online_eagle_head_ownership(patch_logger)
