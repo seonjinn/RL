@@ -89,6 +89,8 @@ top-p 1.0, probabilistic draft sampling, and checkpointing disabled.
 The baseline, fixed K5, and native DynamicSD arms all use PIECEWISE graph mode
 and the same capture-size set. vLLM 0.24 requires PIECEWISE for native
 DynamicSD, so this avoids comparing it against a stronger fixed-K graph mode.
+The 40K recipe uses TP4 and train micro-batch size 1, so this profile also sets
+logprob batch size 1 to satisfy NeMo-RL's TP batch-variant accuracy guard.
 
 The fixed-target cohort keeps `Qwen/Qwen3-30B-A3B` and compares the Base and
 Instruct-2507 Red Hat Eagle-3 weights. The Base and Thinking-2507 repositories

@@ -1056,6 +1056,7 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
         assert drafter in output
 
     assert output.count("policy.generation.max_new_tokens=16384") == 22
+    assert output.count("policy.logprob_batch_size=1") == 22
     assert "policy.generation.max_new_tokens=32768" not in output
     assert output.count("speculative_config.num_speculative_tokens=5") == 16
     assert output.count("num_speculative_tokens_per_batch_size") == 8

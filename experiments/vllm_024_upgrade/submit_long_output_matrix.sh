@@ -151,6 +151,9 @@ for identity in "${identities[@]}"; do
       max_total_sequence_length=20480
       specdec_context_headroom_tokens=8
       logprob_batch_size=""
+      if [[ "${MATRIX_SELECTION}" == "qwen30-drafter" ]]; then
+        logprob_batch_size=1
+      fi
       ;;
     32k)
       max_new_tokens=32768
