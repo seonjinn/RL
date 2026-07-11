@@ -565,6 +565,71 @@ def test_same_variant_graph_mode_key_matches_only_graph_ablation_states() -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "mismatched_value"),
+    [
+        ("target_checkpoint", "/lustre/test/other-target"),
+        ("target_checkpoint_revision", "b" * 40),
+        ("draft_checkpoint", "/lustre/test/other-draft"),
+        ("runner", "v1"),
+        ("target_tp", "4"),
+        ("draft_tp", "2"),
+        ("dp", "4"),
+        ("ep", "2"),
+        ("max_osl", "8192"),
+        ("max_model_len", "8256"),
+        ("max_sequence_length", "8192"),
+        ("temperature", "0.7"),
+        ("top_p", "0.9"),
+        ("sampling", "different"),
+        ("draft_sample_method", "greedy"),
+        ("gate_mode", "threshold"),
+        ("k", "7"),
+        ("threshold", "16"),
+        ("consecutive_checks", "3"),
+        ("roofline_config_sha256", "different-roofline-config"),
+    ],
+)
+def test_same_variant_graph_mode_key_requires_exact_non_graph_provenance(
+    field: str, mismatched_value: str
+) -> None:
+    graph_on_metadata = _metadata(variant="efficient_roofline_v2_k5")
+    graph_on_metadata.update(
+        {
+            "cudagraph_max_requests": "256",
+            "cudagraph_max_tokens": "1536",
+            "cudagraph_capture_sizes": "[6,12,24,1536]",
+            "target_checkpoint": "/lustre/test/qwen32b-target",
+            "target_checkpoint_revision": "a" * 40,
+            "draft_checkpoint": "/lustre/test/eagle3",
+        }
+    )
+    graph_off_metadata = {
+        **graph_on_metadata,
+        "cuda_graph_enabled": "false",
+        "enforce_eager": "true",
+        "graph_mode": "NONE",
+        "cudagraph_max_requests": "not_applicable",
+        "cudagraph_max_tokens": "not_applicable",
+        "cudagraph_capture_sizes": "not_applicable",
+    }
+
+    graph_on_key = summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_on_metadata)
+    )
+    graph_off_key = summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_off_metadata)
+    )
+    assert graph_on_key == graph_off_key
+    assert dict(graph_on_key)[field] == graph_on_metadata[field]
+    assert dict(graph_off_key)[field] == graph_off_metadata[field]
+
+    mismatched_metadata = {**graph_off_metadata, field: mismatched_value}
+    assert graph_on_key != summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(mismatched_metadata)
+    )
+
+
 def test_comparison_rejects_mixed_nonbaseline_draft_sample_methods() -> None:
     baseline = _metadata()
     always_on = _metadata(variant="always_on_v2_k5")

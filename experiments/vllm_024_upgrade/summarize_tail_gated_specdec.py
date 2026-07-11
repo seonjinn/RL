@@ -149,6 +149,17 @@ GRAPH_ABLATION_COHORT_FIELDS = (
     "enforce_eager",
     *CAPTURE_PROFILE_COHORT_FIELDS,
 )
+SAME_VARIANT_GRAPH_MODE_FIELDS = (
+    *(field for field in COHORT_FIELDS if field not in GRAPH_ABLATION_COHORT_FIELDS),
+    "target_checkpoint",
+    "target_checkpoint_revision",
+    "draft_checkpoint",
+    "gate_mode",
+    "k",
+    "threshold",
+    "consecutive_checks",
+    "roofline_config_sha256",
+)
 LEGACY_COHORT_FIELDS = tuple(
     field for field in COHORT_FIELDS if field != "draft_sample_method"
 )
@@ -379,6 +390,9 @@ class RunSummary:
     variant: str
     gate_mode: str
     K: str
+    threshold: str
+    consecutive_checks: str
+    roofline_config_sha256: str
     steps: list[int]
     job_id: str
     wandb_url: str
@@ -452,6 +466,7 @@ class RunSummary:
     command: str
     target_checkpoint: str
     target_checkpoint_revision: str
+    draft_checkpoint: str
     provenance: str
     comparison_key: tuple[tuple[str, str], ...]
 
@@ -600,14 +615,8 @@ def same_variant_graph_mode_key(
     return (
         ("variant", summary.variant),
         *(
-            (
-                field,
-                summary.draft_sample_method
-                if field == "draft_sample_method"
-                else value,
-            )
-            for field, value in summary.comparison_key
-            if field not in GRAPH_ABLATION_COHORT_FIELDS
+            (field, getattr(summary, "K" if field == "k" else field))
+            for field in SAME_VARIANT_GRAPH_MODE_FIELDS
         ),
     )
 
@@ -651,6 +660,9 @@ def _make_summary(
         variant=metadata.get("variant", ""),
         gate_mode=metadata.get("gate_mode", ""),
         K=metadata.get("k", ""),
+        threshold=metadata.get("threshold", ""),
+        consecutive_checks=metadata.get("consecutive_checks", ""),
+        roofline_config_sha256=metadata.get("roofline_config_sha256", ""),
         steps=steps,
         job_id=metadata.get("job_id", ""),
         wandb_url=metadata.get("wandb_url", ""),
@@ -724,6 +736,7 @@ def _make_summary(
         command=metadata.get("command", ""),
         target_checkpoint=metadata.get("target_checkpoint", ""),
         target_checkpoint_revision=metadata.get("target_checkpoint_revision", ""),
+        draft_checkpoint=metadata.get("draft_checkpoint", ""),
         provenance=_provenance(metadata),
         comparison_key=_comparison_key(metadata),
     )
