@@ -95,6 +95,7 @@ for identity in "${identities[@]}"; do
   identity_draft="${qwen30_draft}"
   identity_recipe=""
   identity_nodes=""
+  identity_cudagraph_mode="FULL_AND_PIECEWISE"
   identity_variants=("${variants[@]}")
   case "${identity}" in
     default)
@@ -123,6 +124,7 @@ for identity in "${identities[@]}"; do
   if [[ "${MATRIX_SELECTION}" == "qwen30-drafter" ]]; then
     identity_recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-40K.yaml"
     identity_nodes=8
+    identity_cudagraph_mode=PIECEWISE
   fi
 
   for output_length in "${output_lengths[@]}"; do
@@ -143,7 +145,10 @@ for identity in "${identities[@]}"; do
 
   for model in "${models[@]}"; do
     for variant in "${identity_variants[@]}"; do
-      if [[ "${variant}" == "baseline" ]]; then
+      if [[ "${MATRIX_SELECTION}" == "qwen30-drafter" ]]; then
+        capture_sizes='[1,2,4,8,16,32,64,128,256]'
+        capture_max=256
+      elif [[ "${variant}" == "baseline" ]]; then
         capture_sizes='[1,2,4,8,16,32,64]'
         capture_max=64
       else
@@ -197,6 +202,7 @@ for identity in "${identities[@]}"; do
         MAX_NUM_SEQS=64 \
         MAX_CUDAGRAPH_CAPTURE_SIZE="${capture_max}" \
         CUDAGRAPH_CAPTURE_SIZES="${capture_sizes}" \
+        CUDAGRAPH_MODE="${identity_cudagraph_mode}" \
         POLICY_MODEL_NAME="${identity_target}" \
         QWEN30_RECIPE="${identity_recipe}" \
         QWEN30_NODES="${identity_nodes}" \

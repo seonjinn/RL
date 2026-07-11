@@ -505,6 +505,24 @@ def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_limit() -> None:
     assert "compilation_config.max_cudagraph_capture_size=768" in output
 
 
+def test_dynamicsd_launcher_honors_explicit_cudagraph_mode() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "eagle3_k5",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="graph-mode-contract-test",
+        ATTEMPT_ID="attempt-1",
+        CUDAGRAPH_MODE="PIECEWISE",
+    )
+
+    assert "compilation_config.cudagraph_mode=PIECEWISE" in output
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" not in output
+
+
 def test_dynamicsd_launcher_renders_explicit_cudagraph_capture_sizes() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
@@ -1015,6 +1033,13 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
     assert "policy.generation.max_new_tokens=32768" not in output
     assert output.count("speculative_config.num_speculative_tokens=5") == 16
     assert output.count("num_speculative_tokens_per_batch_size") == 8
+    assert output.count("compilation_config.cudagraph_mode=PIECEWISE") == 22
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" not in output
+    assert output.count("compilation_config.max_cudagraph_capture_size=256") == 22
+    assert output.count(
+        "compilation_config.cudagraph_capture_sizes="
+        "\\[1\\,2\\,4\\,8\\,16\\,32\\,64\\,128\\,256\\]"
+    ) == 11
     assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
     assert "--nodes=8" in output
     assert "--segment=8" in output

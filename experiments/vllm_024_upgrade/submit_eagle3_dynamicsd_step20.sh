@@ -30,6 +30,7 @@ OUTPUT_MAX_MODEL_LEN="${OUTPUT_MAX_MODEL_LEN:-}"
 SPECDEC_CONTEXT_HEADROOM_TOKENS="${SPECDEC_CONTEXT_HEADROOM_TOKENS:-0}"
 MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
 CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES:-}"
+CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-FULL_AND_PIECEWISE}"
 CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-false}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
@@ -68,6 +69,14 @@ if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS
   echo "ERROR: CUDAGRAPH_DISPATCH_METRICS must be true or false" >&2
   exit 2
 fi
+case "${CUDAGRAPH_MODE}" in
+  FULL_AND_PIECEWISE|PIECEWISE)
+    ;;
+  *)
+    echo "ERROR: CUDAGRAPH_MODE must be FULL_AND_PIECEWISE or PIECEWISE" >&2
+    exit 2
+    ;;
+esac
 if ! awk -v value="${TOP_P}" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value > 0 && value <= 1) }'; then
   echo "ERROR: TOP_P must be a number in (0, 1] (got ${TOP_P})" >&2
   exit 2
@@ -345,7 +354,7 @@ submit_one() {
     "policy.generation.vllm_cfg.enforce_eager=false"
     "policy.generation.temperature=${TEMPERATURE}"
     "policy.generation.top_p=${TOP_P}"
-    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE"
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${CUDAGRAPH_MODE}"
     "cluster.gpus_per_node=${GPUS_PER_NODE}"
     "cluster.num_nodes=${nodes}"
     "cluster.segment_size=${nodes}"
