@@ -20,6 +20,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-dynamicsd-aws-dfw}"
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-}"
 NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
 TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-}"
+LOGPROB_BATCH_SIZE="${LOGPROB_BATCH_SIZE:-}"
 MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
 ACTIVATION_CHECKPOINTING="${ACTIVATION_CHECKPOINTING:-}"
@@ -48,6 +49,7 @@ case "${DRAFT_SAMPLE_METHOD}" in
     ;;
 esac
 for numeric_override in \
+  LOGPROB_BATCH_SIZE \
   MAX_NUM_BATCHED_TOKENS \
   MAX_NUM_SEQS \
   OUTPUT_MAX_MODEL_LEN \
@@ -399,6 +401,9 @@ submit_one() {
   fi
   if [[ -n "${TRAIN_GLOBAL_BATCH_SIZE}" ]]; then
     overrides+=("policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}")
+  fi
+  if [[ -n "${LOGPROB_BATCH_SIZE}" ]]; then
+    overrides+=("policy.logprob_batch_size=${LOGPROB_BATCH_SIZE}")
   fi
   if [[ -n "${MAX_TOTAL_SEQUENCE_LENGTH}" ]]; then
     overrides+=("policy.max_total_sequence_length=${MAX_TOTAL_SEQUENCE_LENGTH}")

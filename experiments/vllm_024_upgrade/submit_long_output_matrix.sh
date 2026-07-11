@@ -24,12 +24,20 @@ ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 BASE_EXPERIMENT_ROOT="${BASE_EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_024_upgrade/runs/${RUN_TAG}}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-long-output-lyris}"
 MAX_STEPS="${MAX_STEPS:-5}"
+OUTPUT_LENGTH_SELECTION="${OUTPUT_LENGTH_SELECTION:-all}"
 
 qwen30_draft="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
 qwen32_draft="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-Thinking-speculator.eagle3/snapshots/a1403e07b73a66fc9ef561463631c31864616933}"
 
 models=(qwen30ba3b qwen32b)
-output_lengths=(16k 32k)
+case "${OUTPUT_LENGTH_SELECTION}" in
+  all) output_lengths=(16k 32k) ;;
+  16k|32k) output_lengths=("${OUTPUT_LENGTH_SELECTION}") ;;
+  *)
+    echo "ERROR: OUTPUT_LENGTH_SELECTION must be all, 16k, or 32k" >&2
+    exit 2
+    ;;
+esac
 variants=(baseline eagle3_k3)
 
 for output_length in "${output_lengths[@]}"; do
@@ -38,11 +46,13 @@ for output_length in "${output_lengths[@]}"; do
       max_new_tokens=16384
       max_total_sequence_length=20480
       specdec_context_headroom_tokens=8
+      logprob_batch_size=""
       ;;
     32k)
       max_new_tokens=32768
       max_total_sequence_length=40960
       specdec_context_headroom_tokens=0
+      logprob_batch_size=1
       ;;
   esac
 
@@ -78,6 +88,7 @@ for output_length in "${output_lengths[@]}"; do
         NUM_PROMPTS_PER_STEP=16 \
         NUM_GENERATIONS_PER_PROMPT=16 \
         TRAIN_GLOBAL_BATCH_SIZE=256 \
+        LOGPROB_BATCH_SIZE="${logprob_batch_size}" \
         MAX_TOTAL_SEQUENCE_LENGTH="${max_total_sequence_length}" \
         MAX_NEW_TOKENS="${max_new_tokens}" \
         ACTIVATION_CHECKPOINTING=true \
