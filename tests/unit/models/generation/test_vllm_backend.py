@@ -635,6 +635,41 @@ def test_eagle_weight_update_loads_each_chunk_without_full_draft_staging(
 
 
 @pytest.mark.vllm
+def test_static_eagle_refit_diagnostics_report_zero_draft_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ext = _make_extension_for_draft_load(draft_model=SimpleNamespace())
+    ext.model_runner.model = SimpleNamespace(load_weights=MagicMock())
+    ext.model_runner.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=[]),
+        speculative_config=SimpleNamespace(
+            method="eagle3", draft_model_config=object()
+        ),
+    )
+    ext.model_config = object()
+    ext.device = torch.device("cpu")
+    ext.state_dict_info = {"model.layers.0.weight": object()}
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    setattr(fp8_module, "is_fp8_model", lambda _config: False)
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.models.generation.vllm.quantization.fp8", fp8_module
+    )
+    _patch_vllm_postload(monkeypatch)
+    monkeypatch.setenv("NRL_VLLM_REFIT_DIAGNOSTICS", "true")
+
+    ext._begin_weight_update()
+    ext._load_weights([("model.layers.0.weight", torch.ones(4))])
+    ext._finish_weight_update()
+
+    output = capsys.readouterr().out
+    assert (
+        "[refit] trainer_weight_tensors=1 draft_weight_tensors=0 "
+        "draft_weight_bytes=0 draft_weights_updated=false"
+    ) in output
+
+
+@pytest.mark.vllm
 def test_weight_update_skips_draft_load_on_non_owner_pipeline_rank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

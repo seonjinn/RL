@@ -105,6 +105,28 @@ def test_refit_rejects_failed_kv_cache_wake(monkeypatch: pytest.MonkeyPatch) -> 
     policy.offload_after_refit.assert_called_once_with()
 
 
+def test_refit_records_each_colocated_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy, policy_generation = _mock_colocated_refit(monkeypatch)
+    policy_generation.prepare_for_generation.return_value = True
+    timer = Timer()
+
+    refit_policy_generation(
+        policy,
+        policy_generation,
+        colocated_inference=True,
+        timer=timer,
+    )
+
+    expected_labels = {
+        "prepare_for_generation/policy_offload_before_refit",
+        "prepare_for_generation/wake_weights",
+        "prepare_for_generation/transfer_and_update_weights",
+        "prepare_for_generation/policy_offload_after_refit",
+        "prepare_for_generation/wake_kv_cache",
+    }
+    assert expected_labels == set(timer.get_timing_dict())
+
+
 @pytest.mark.parametrize(
     "update_results",
     [
