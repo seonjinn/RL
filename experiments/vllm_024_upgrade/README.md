@@ -92,11 +92,13 @@ DynamicSD, so this avoids comparing it against a stronger fixed-K graph mode.
 The 40K recipe uses TP4 and train micro-batch size 1, so this profile also sets
 logprob batch size 1 to satisfy NeMo-RL's TP batch-variant accuracy guard.
 Worker environments are still rebuilt from the locked project, but this
-profile uses `${LYRIS_ROOT}/uv_cache/vllm024` only as a prewarmed seed. At job
-start, each allocated node copies that seed into its own `/tmp` cache mounted
-at `/root/.cache/uv`. This avoids both repeated FlashInfer downloads and the
-cross-node distribution-lock contention caused by running eight `uv` builders
-against one Lustre cache.
+profile first runs `submit_uv_cache_prewarm.sh` on one node to populate both
+the vLLM and mcore locked dependency sets in
+`${LYRIS_ROOT}/uv_cache/vllm024`. Matrix jobs then reuse that completed cache
+with an extended lock timeout. Serial prewarming avoids duplicate builds and
+cross-node distribution-lock contention without copying the roughly 96 GB
+cache to every compute node. `UV_CACHE_SEED_DIR` remains available as an
+explicit node-local fallback for smaller caches.
 
 The fixed-target cohort keeps `Qwen/Qwen3-30B-A3B` and compares the Base and
 Instruct-2507 Red Hat Eagle-3 weights. The Base and Thinking-2507 repositories

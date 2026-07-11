@@ -38,9 +38,14 @@ REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
 POLICY_MODEL_NAME="${POLICY_MODEL_NAME:-}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-}"
 UV_CACHE_SEED_DIR="${UV_CACHE_SEED_DIR:-}"
+UV_LOCK_TIMEOUT="${UV_LOCK_TIMEOUT:-900}"
 
 if [[ -n "${UV_CACHE_DIR}" && -n "${UV_CACHE_SEED_DIR}" ]]; then
   echo "ERROR: set only one of UV_CACHE_DIR or UV_CACHE_SEED_DIR" >&2
+  exit 2
+fi
+if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: UV_LOCK_TIMEOUT must be a positive integer" >&2
   exit 2
 fi
 
@@ -517,10 +522,10 @@ submit_one() {
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
   if [[ -n "${effective_uv_cache_dir}" ]]; then
-    command_env+=("UV_CACHE_DIR=${effective_uv_cache_dir}")
-  fi
-  if [[ -n "${UV_CACHE_SEED_DIR}" ]]; then
-    command_env+=("UV_LOCK_TIMEOUT=900")
+    command_env+=(
+      "UV_CACHE_DIR=${effective_uv_cache_dir}"
+      "UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT}"
+    )
   fi
   if [[ "${REFIT_DIAGNOSTICS}" == "true" ]]; then
     command_env+=(

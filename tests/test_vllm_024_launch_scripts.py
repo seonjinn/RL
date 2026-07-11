@@ -34,6 +34,9 @@ LONG_OUTPUT_LAUNCHER = (
 HF_PREWARM_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_hf_snapshot_prewarm.sh"
 )
+UV_PREWARM_LAUNCHER = (
+    REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_uv_cache_prewarm.sh"
+)
 SUBMISSIONS_HEADER = (
     "timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\t"
     "wandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\t"
@@ -223,6 +226,28 @@ def test_hf_snapshot_prewarm_matches_lyris_topology_and_dflash_checkpoint() -> N
     assert "cache_dir=/lustre/users/sna/hf_home/hub" in output
     assert "--nodes=1" in output
     assert "--segment=1" in output
+
+
+def test_uv_cache_prewarm_builds_vllm_and_mcore_serially_on_one_node() -> None:
+    output = _run_script(
+        UV_PREWARM_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        UV_CACHE_DIR="/lustre/users/sna/uv_cache/vllm024",
+        RUN_TAG="uv-prewarm-contract-test",
+    )
+
+    assert "--nodes=1" in output
+    assert "--segment=1" in output
+    assert "--gres" not in output
+    assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" in output
+    assert "UV_LOCK_TIMEOUT=1800" in output
+    assert "UV_PROJECT_ENVIRONMENT=/tmp/nemorl-vllm024-prewarm-vllm" in output
+    assert "UV_PROJECT_ENVIRONMENT=/tmp/nemorl-vllm024-prewarm-mcore" in output
+    assert "--extra vllm" in output
+    assert "--extra mcore" in output
     assert "--gres" not in output
 
 
@@ -455,6 +480,7 @@ def test_dynamicsd_launcher_propagates_shared_uv_cache() -> None:
     )
 
     assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" in output
+    assert "UV_LOCK_TIMEOUT=900" in output
 
 
 def test_dynamicsd_launcher_seeds_an_isolated_node_local_uv_cache() -> None:
@@ -1128,10 +1154,10 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
     assert "--nodes=8" in output
     assert "--segment=8" in output
     assert "scheduler_cls=" not in output
-    assert "UV_CACHE_DIR_OVERRIDE=/tmp/nemorl-vllm024-uv-cache-" in output
-    assert "UV_CACHE_DIR=/root/.cache/uv" in output
-    assert "/lustre/users/sna/uv_cache/vllm024/." in output
-    assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" not in output
+    assert "UV_CACHE_DIR_OVERRIDE=" not in output
+    assert "UV_CACHE_DIR=/root/.cache/uv" not in output
+    assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" in output
+    assert "UV_LOCK_TIMEOUT=900" in output
 
 
 def test_qwen30_drafter_final_submit_requires_calibrated_dynamic_schedule() -> None:

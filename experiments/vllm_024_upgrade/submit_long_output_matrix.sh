@@ -136,8 +136,8 @@ for identity in "${identities[@]}"; do
     identity_recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-40K.yaml"
     identity_nodes=8
     identity_cudagraph_mode=PIECEWISE
-    identity_uv_cache_dir="${UV_CACHE_DIR:-}"
-    identity_uv_cache_seed_dir="${UV_CACHE_SEED_DIR:-${LYRIS_ROOT}/uv_cache/vllm024}"
+    identity_uv_cache_dir="${UV_CACHE_DIR:-${LYRIS_ROOT}/uv_cache/vllm024}"
+    identity_uv_cache_seed_dir="${UV_CACHE_SEED_DIR:-}"
     if [[ "${MODE}" != "dry-run" && ! -d "${identity_target}" ]]; then
       echo "ERROR: target model directory not found: ${identity_target}" >&2
       exit 2
