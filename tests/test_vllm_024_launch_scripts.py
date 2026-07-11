@@ -443,6 +443,32 @@ def test_dynamicsd_launcher_propagates_shared_uv_cache() -> None:
     assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" in output
 
 
+def test_dynamicsd_launcher_seeds_an_isolated_node_local_uv_cache() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="uv-cache-seed-contract-test",
+        ATTEMPT_ID="attempt-1",
+        UV_CACHE_SEED_DIR="/lustre/users/sna/uv_cache/vllm024",
+    )
+
+    assert (
+        "UV_CACHE_DIR_OVERRIDE=/tmp/nemorl-vllm024-uv-cache-"
+        "uv-cache-seed-contract-test" in output
+    )
+    assert "UV_CACHE_DIR=/root/.cache/uv" in output
+    assert "UV_LOCK_TIMEOUT=900" in output
+    assert "SETUP_COMMAND=" in output
+    assert "cp\\ -a\\ -n" in output
+    assert "/lustre/users/sna/uv_cache/vllm024/." in output
+    assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" not in output
+
+
 def test_dynamicsd_launcher_renders_qwen30_long_context_topology() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
@@ -1088,7 +1114,10 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
     assert "--nodes=8" in output
     assert "--segment=8" in output
     assert "scheduler_cls=" not in output
-    assert "/lustre/users/sna/uv_cache/vllm024" in output
+    assert "UV_CACHE_DIR_OVERRIDE=/tmp/nemorl-vllm024-uv-cache-" in output
+    assert "UV_CACHE_DIR=/root/.cache/uv" in output
+    assert "/lustre/users/sna/uv_cache/vllm024/." in output
+    assert "UV_CACHE_DIR=/lustre/users/sna/uv_cache/vllm024" not in output
 
 
 def test_qwen30_drafter_final_submit_requires_calibrated_dynamic_schedule() -> None:

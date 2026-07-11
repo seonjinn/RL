@@ -106,6 +106,7 @@ for identity in "${identities[@]}"; do
   identity_nodes="${QWEN30_NODES:-}"
   identity_cudagraph_mode="${CUDAGRAPH_MODE:-FULL_AND_PIECEWISE}"
   identity_uv_cache_dir="${UV_CACHE_DIR:-}"
+  identity_uv_cache_seed_dir="${UV_CACHE_SEED_DIR:-}"
   identity_variants=("${variants[@]}")
   case "${identity}" in
     default)
@@ -135,7 +136,8 @@ for identity in "${identities[@]}"; do
     identity_recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-40K.yaml"
     identity_nodes=8
     identity_cudagraph_mode=PIECEWISE
-    identity_uv_cache_dir="${UV_CACHE_DIR:-${LYRIS_ROOT}/uv_cache/vllm024}"
+    identity_uv_cache_dir="${UV_CACHE_DIR:-}"
+    identity_uv_cache_seed_dir="${UV_CACHE_SEED_DIR:-${LYRIS_ROOT}/uv_cache/vllm024}"
     if [[ "${MODE}" != "dry-run" && ! -d "${identity_target}" ]]; then
       echo "ERROR: target model directory not found: ${identity_target}" >&2
       exit 2
@@ -226,6 +228,7 @@ for identity in "${identities[@]}"; do
         CUDAGRAPH_CAPTURE_SIZES="${capture_sizes}" \
         CUDAGRAPH_MODE="${identity_cudagraph_mode}" \
         UV_CACHE_DIR="${identity_uv_cache_dir}" \
+        UV_CACHE_SEED_DIR="${identity_uv_cache_seed_dir}" \
         POLICY_MODEL_NAME="${identity_target}" \
         QWEN30_RECIPE="${identity_recipe}" \
         QWEN30_NODES="${identity_nodes}" \

@@ -37,6 +37,12 @@ TOP_P="${TOP_P:-1.0}"
 REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
 POLICY_MODEL_NAME="${POLICY_MODEL_NAME:-}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-}"
+UV_CACHE_SEED_DIR="${UV_CACHE_SEED_DIR:-}"
+
+if [[ -n "${UV_CACHE_DIR}" && -n "${UV_CACHE_SEED_DIR}" ]]; then
+  echo "ERROR: set only one of UV_CACHE_DIR or UV_CACHE_SEED_DIR" >&2
+  exit 2
+fi
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -127,6 +133,10 @@ CONTAINER_SHA256="${CONTAINER_SHA256:-}"
 
 if [[ "${MODE}" != "dry-run" && ! -f "${CONTAINER}" ]]; then
   echo "ERROR: container not found: ${CONTAINER}" >&2
+  exit 2
+fi
+if [[ "${MODE}" != "dry-run" && -n "${UV_CACHE_SEED_DIR}" && ! -d "${UV_CACHE_SEED_DIR}" ]]; then
+  echo "ERROR: UV cache seed directory not found: ${UV_CACHE_SEED_DIR}" >&2
   exit 2
 fi
 
@@ -315,6 +325,17 @@ submit_one() {
   local triton_cache_dir="/tmp/nemorl-vllm024-triton-${RUN_TAG}-${model}-${variant}"
   local inductor_cache_dir="/tmp/nemorl-vllm024-inductor-${RUN_TAG}-${model}-${variant}"
   local venv_dir="/tmp/nemorl-vllm024-venvs-${RUN_TAG}-${ATTEMPT_ID}-${model}-${variant}"
+  local effective_uv_cache_dir="${UV_CACHE_DIR}"
+  local node_local_uv_cache_dir=""
+  local uv_cache_setup_command=""
+  if [[ -n "${UV_CACHE_SEED_DIR}" ]]; then
+    local uv_cache_tag="${RUN_TAG//[^A-Za-z0-9_.-]/_}"
+    local quoted_uv_cache_seed
+    printf -v quoted_uv_cache_seed '%q' "${UV_CACHE_SEED_DIR}/."
+    effective_uv_cache_dir="/root/.cache/uv"
+    node_local_uv_cache_dir="/tmp/nemorl-vllm024-uv-cache-${uv_cache_tag}"
+    uv_cache_setup_command="mkdir -p /root/.cache/uv && cp -a -n ${quoted_uv_cache_seed} /root/.cache/uv/"
+  fi
   case "${variant}" in
     eagle3_k1)
       draft_k=1
@@ -495,8 +516,11 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
-  if [[ -n "${UV_CACHE_DIR}" ]]; then
-    command_env+=("UV_CACHE_DIR=${UV_CACHE_DIR}")
+  if [[ -n "${effective_uv_cache_dir}" ]]; then
+    command_env+=("UV_CACHE_DIR=${effective_uv_cache_dir}")
+  fi
+  if [[ -n "${UV_CACHE_SEED_DIR}" ]]; then
+    command_env+=("UV_LOCK_TIMEOUT=900")
   fi
   if [[ "${REFIT_DIAGNOSTICS}" == "true" ]]; then
     command_env+=(
@@ -537,6 +561,12 @@ submit_one() {
   )
   if [[ -n "${UV_CACHE_DIR}" ]]; then
     environment+=("UV_CACHE_DIR=${UV_CACHE_DIR}")
+  fi
+  if [[ -n "${UV_CACHE_SEED_DIR}" ]]; then
+    environment+=(
+      "UV_CACHE_DIR_OVERRIDE=${node_local_uv_cache_dir}"
+      "SETUP_COMMAND=${uv_cache_setup_command}"
+    )
   fi
   if [[ "${model}" == "qwen235b" ]]; then
     environment+=("NRL_DISABLE_VLLM_PORT_OVERRIDE=1")
