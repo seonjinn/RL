@@ -912,7 +912,9 @@ def test_long_output_launcher_renders_matched_16k_and_32k_matrix() -> None:
     assert output.count("policy.generation._output_max_model_len=20480") == 8
     assert output.count("policy.generation.vllm_cfg.max_model_len=20488") == 8
     assert output.count("policy.generation._output_max_model_len=40960") == 8
-    assert output.count("policy.generation.vllm_cfg.max_model_len=40968") == 8
+    assert output.count("policy.generation.vllm_cfg.max_model_len=40960") == 8
+    assert "policy.generation.vllm_cfg.max_model_len=40968" not in output
+    assert output.count("policy.megatron_cfg.activation_checkpointing=true") == 16
     assert output.count("speculative_config.num_speculative_tokens=3") == 8
     assert output.count("speculative_config.model=") == 8
     assert output.count("compilation_config.cudagraph_mode=FULL_AND_PIECEWISE") == 16

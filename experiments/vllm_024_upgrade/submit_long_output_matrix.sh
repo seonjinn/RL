@@ -37,10 +37,12 @@ for output_length in "${output_lengths[@]}"; do
     16k)
       max_new_tokens=16384
       max_total_sequence_length=20480
+      specdec_context_headroom_tokens=8
       ;;
     32k)
       max_new_tokens=32768
       max_total_sequence_length=40960
+      specdec_context_headroom_tokens=0
       ;;
   esac
 
@@ -78,8 +80,9 @@ for output_length in "${output_lengths[@]}"; do
         TRAIN_GLOBAL_BATCH_SIZE=256 \
         MAX_TOTAL_SEQUENCE_LENGTH="${max_total_sequence_length}" \
         MAX_NEW_TOKENS="${max_new_tokens}" \
+        ACTIVATION_CHECKPOINTING=true \
         OUTPUT_MAX_MODEL_LEN="${max_total_sequence_length}" \
-        SPECDEC_CONTEXT_HEADROOM_TOKENS=8 \
+        SPECDEC_CONTEXT_HEADROOM_TOKENS="${specdec_context_headroom_tokens}" \
         TEMPERATURE=1.0 \
         TOP_P=1.0 \
         REJECTION_SAMPLE_METHOD=standard \

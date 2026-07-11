@@ -22,6 +22,7 @@ NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
 TRAIN_GLOBAL_BATCH_SIZE="${TRAIN_GLOBAL_BATCH_SIZE:-}"
 MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
+ACTIVATION_CHECKPOINTING="${ACTIVATION_CHECKPOINTING:-}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-}"
 OUTPUT_MAX_MODEL_LEN="${OUTPUT_MAX_MODEL_LEN:-}"
@@ -71,6 +72,12 @@ if ! awk -v value="${TOP_P}" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && v
 fi
 if [[ "${REFIT_DIAGNOSTICS}" != "true" && "${REFIT_DIAGNOSTICS}" != "false" ]]; then
   echo "ERROR: REFIT_DIAGNOSTICS must be true or false" >&2
+  exit 2
+fi
+if [[ -n "${ACTIVATION_CHECKPOINTING}" \
+  && "${ACTIVATION_CHECKPOINTING}" != "true" \
+  && "${ACTIVATION_CHECKPOINTING}" != "false" ]]; then
+  echo "ERROR: ACTIVATION_CHECKPOINTING must be true or false" >&2
   exit 2
 fi
 if [[ -n "${CUDAGRAPH_CAPTURE_SIZES}" \
@@ -398,6 +405,11 @@ submit_one() {
   fi
   if [[ -n "${MAX_NEW_TOKENS}" ]]; then
     overrides+=("policy.generation.max_new_tokens=${MAX_NEW_TOKENS}")
+  fi
+  if [[ -n "${ACTIVATION_CHECKPOINTING}" ]]; then
+    overrides+=(
+      "policy.megatron_cfg.activation_checkpointing=${ACTIVATION_CHECKPOINTING}"
+    )
   fi
   case "${variant}" in
     baseline)
