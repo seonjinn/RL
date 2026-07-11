@@ -90,12 +90,21 @@ case "${MATRIX_SELECTION}" in
     ;;
 esac
 
+if [[ "${MATRIX_SELECTION}" == "qwen30-drafter" \
+  && "${MODE}" == "submit" \
+  && "${MAX_STEPS}" =~ ^[1-9][0-9]*$ \
+  && -z "${DYNAMIC_SCHEDULE:-}" ]] \
+  && ((MAX_STEPS >= 20)); then
+  echo "ERROR: DYNAMIC_SCHEDULE is required for a 20-step qwen30-drafter submit" >&2
+  exit 2
+fi
+
 for identity in "${identities[@]}"; do
-  identity_target=""
+  identity_target="${POLICY_MODEL_NAME:-}"
   identity_draft="${qwen30_draft}"
-  identity_recipe=""
-  identity_nodes=""
-  identity_cudagraph_mode="FULL_AND_PIECEWISE"
+  identity_recipe="${QWEN30_RECIPE:-}"
+  identity_nodes="${QWEN30_NODES:-}"
+  identity_cudagraph_mode="${CUDAGRAPH_MODE:-FULL_AND_PIECEWISE}"
   identity_variants=("${variants[@]}")
   case "${identity}" in
     default)
@@ -125,6 +134,14 @@ for identity in "${identities[@]}"; do
     identity_recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-40K.yaml"
     identity_nodes=8
     identity_cudagraph_mode=PIECEWISE
+    if [[ "${MODE}" != "dry-run" && ! -d "${identity_target}" ]]; then
+      echo "ERROR: target model directory not found: ${identity_target}" >&2
+      exit 2
+    fi
+    if [[ "${MODE}" != "dry-run" && ! -d "${identity_draft}" ]]; then
+      echo "ERROR: draft model directory not found: ${identity_draft}" >&2
+      exit 2
+    fi
   fi
 
   for output_length in "${output_lengths[@]}"; do

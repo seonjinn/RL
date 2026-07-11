@@ -959,6 +959,32 @@ def test_long_output_launcher_can_select_the_32k_retry_slice() -> None:
     assert output.count("policy.logprob_batch_size=1") == 8
 
 
+def test_long_output_standard_profile_preserves_caller_qwen30_overrides() -> None:
+    output = _run_script(
+        LONG_OUTPUT_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="long-output-override-contract-test",
+        ATTEMPT_ID="attempt-override",
+        MODEL_SELECTION="qwen30ba3b",
+        OUTPUT_LENGTH_SELECTION="16k",
+        VARIANT_SELECTION="k5-control",
+        POLICY_MODEL_NAME="/models/custom-target/snapshots/target-revision",
+        QWEN30_DRAFT_MODEL="/models/custom-draft/snapshots/draft-revision",
+        QWEN30_RECIPE="examples/configs/custom-qwen30.yaml",
+        QWEN30_NODES="7",
+    )
+
+    assert "policy.model_name=/models/custom-target/snapshots/target-revision" in output
+    assert "models/custom-draft/snapshots/draft-revision" in output
+    assert "examples/configs/custom-qwen30.yaml" in output
+    assert "--nodes=7" in output
+    assert "--segment=7" in output
+
+
 def test_long_output_launcher_can_select_qwen235b_k3_k5_16k_slice() -> None:
     output = _run_script(
         LONG_OUTPUT_LAUNCHER,
@@ -1043,6 +1069,37 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
     assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
     assert "--nodes=8" in output
     assert "--segment=8" in output
+    assert "scheduler_cls=" not in output
+
+
+def test_qwen30_drafter_final_submit_requires_calibrated_dynamic_schedule() -> None:
+    result = _run_script_unchecked(
+        LONG_OUTPUT_LAUNCHER,
+        "submit",
+        MATRIX_SELECTION="qwen30-drafter",
+        MAX_STEPS="20",
+    )
+
+    assert result.returncode == 2
+    assert "DYNAMIC_SCHEDULE is required for a 20-step" in result.stderr
+
+
+def test_qwen30_drafter_profile_preflights_target_snapshot(tmp_path: Path) -> None:
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+    result = _run_script_unchecked(
+        LONG_OUTPUT_LAUNCHER,
+        "test-only",
+        REPO_DIR=str(REPO_ROOT),
+        LYRIS_ROOT=str(tmp_path),
+        HF_HOME=str(tmp_path / "missing-hf-home"),
+        CONTAINER=str(container),
+        MATRIX_SELECTION="qwen30-drafter",
+        MAX_STEPS="3",
+    )
+
+    assert result.returncode == 2
+    assert "target model directory not found" in result.stderr
 
 
 def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:

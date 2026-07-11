@@ -128,6 +128,26 @@ length divided by inter-token latency, then pass the resulting lookup table as
 that calibration is complete. The 20-step GRPO comparison is operational E2E
 evidence because policy weights and sampled trajectories can diverge after
 refits; use a frozen-target prompt replay when isolating the scheduler policy.
+The launcher rejects a 20-step `submit` unless `DYNAMIC_SCHEDULE` is set
+explicitly; short smoke runs may use the provisional default to validate
+compatibility and collect scheduler-occupancy evidence.
+
+After the final runs complete, collect all four identity manifests with:
+
+```bash
+python experiments/vllm_024_upgrade/summarize_qwen30_drafter_matrix.py \
+  --manifest .../16k/base__base/submissions.tsv \
+  --manifest .../16k/base__instruct2507/submissions.tsv \
+  --manifest .../16k/instruct2507__instruct2507/submissions.tsv \
+  --manifest .../16k/thinking2507__thinking2507/submissions.tsv \
+  --project nemorl-vllm024-q30-drafter-lyris \
+  --output-dir .../summary
+```
+
+The collector matches baselines by target revision and matches DynamicSD to
+Fixed K5 by target plus drafter revision. It writes deterministic CSV and JSON
+with Steps 2-20 timing, throughput, acceptance, W&B provenance, and
+reward/response-length/KL health gates.
 
 ## Tail-Gated Eagle-3 Matrix on Lyris
 
