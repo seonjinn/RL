@@ -80,6 +80,50 @@ commit. The summary reports generation and E2E time/throughput speedups,
 acceptance rate, mean accepted length, job IDs, W&B links, and reward/response
 length/KL health gates.
 
+## Qwen3-30B Drafter Distribution Matrix on Lyris
+
+The `qwen30-drafter` long-output profile separates a fixed-target drafter
+comparison from matched target/drafter pairs. It uses the 40K performance
+recipe topology, a 16,384-token output limit, CUDA Graphs, temperature 1.0,
+top-p 1.0, probabilistic draft sampling, and checkpointing disabled.
+
+The fixed-target cohort keeps `Qwen/Qwen3-30B-A3B` and compares the Base and
+Instruct-2507 Red Hat Eagle-3 weights. The Base and Thinking-2507 repositories
+have identical model and config blobs, so the Base row also represents the
+Thinking-2507 alias without submitting duplicate jobs. The matched-pair
+cohort runs Base/Base, Instruct-2507/Instruct-2507, and
+Thinking-2507/Thinking-2507. Baselines are emitted once per unique target.
+Every identity has a separate experiment root, manifest, cache namespace, and
+W&B run group.
+
+Render the eleven-job matrix without submitting:
+
+```bash
+MATRIX_SELECTION=qwen30-drafter MAX_STEPS=20 \
+experiments/vllm_024_upgrade/submit_long_output_matrix.sh dry-run
+```
+
+Run a three-step compatibility gate before the final twenty-step cohort:
+
+```bash
+MATRIX_SELECTION=qwen30-drafter MAX_STEPS=3 \
+RUN_TAG=vllm024-q30-drafter-osl16k-smoke-20260711 \
+experiments/vllm_024_upgrade/submit_long_output_matrix.sh test-only
+
+MATRIX_SELECTION=qwen30-drafter MAX_STEPS=3 \
+RUN_TAG=vllm024-q30-drafter-osl16k-smoke-20260711 \
+experiments/vllm_024_upgrade/submit_long_output_matrix.sh submit
+```
+
+The DynamicSD arm uses vLLM 0.24's native
+`num_speculative_tokens_per_batch_size`; it does not patch the scheduler.
+Because Qwen3-30B-A3B is MoE, the final schedule must come from GB200 offline
+profiling rather than assuming K decreases monotonically with batch size.
+For each measured batch-size bucket, select the K that maximizes acceptance
+length divided by inter-token latency, then pass the resulting lookup table as
+`DYNAMIC_SCHEDULE`. Keep the provisional schedule clearly identified until
+that calibration is complete.
+
 ## Tail-Gated Eagle-3 Matrix on Lyris
 
 The tail-gated matrix keeps the Qwen3-30B-A3B and Qwen3-32B four-node upstream

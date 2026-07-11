@@ -966,6 +966,60 @@ def test_long_output_launcher_can_select_qwen235b_k3_k5_16k_slice() -> None:
     assert "--gres=gpu:4" not in output
 
 
+def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> None:
+    output = _run_script(
+        LONG_OUTPUT_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="qwen30-drafter-contract-test",
+        ATTEMPT_ID="attempt-4",
+        MATRIX_SELECTION="qwen30-drafter",
+        MAX_STEPS="20",
+    )
+
+    rows = [line for line in output.splitlines() if line.startswith("[LONG-OUTPUT]")]
+    assert len(rows) == 11
+    assert sum("variant=baseline" in row for row in rows) == 3
+    assert sum("variant=eagle3_k5" in row for row in rows) == 4
+    assert sum("variant=dynamic" in row for row in rows) == 4
+    for identity in (
+        "base__base",
+        "base__instruct2507",
+        "instruct2507__instruct2507",
+        "thinking2507__thinking2507",
+    ):
+        assert any(f"identity={identity}" in row for row in rows)
+        assert f"/{identity}/qwen30ba3b/" in output
+    assert "identity=base__thinking2507" not in output
+    assert "[DRAFTER-ALIAS] base=thinking2507" in output
+
+    for target in (
+        "models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
+        "models--Qwen--Qwen3-30B-A3B-Instruct-2507/snapshots/0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe",
+        "models--Qwen--Qwen3-30B-A3B-Thinking-2507/snapshots/144afc2f379b542fdd4e85a1fcd5e1f79112d95d",
+    ):
+        assert f"policy.model_name=/lustre/users/sna/hf_home/hub/{target}" in output
+        assert f"policy.tokenizer.name=/lustre/users/sna/hf_home/hub/{target}" in output
+
+    for drafter in (
+        "models--RedHatAI--Qwen3-30B-A3B-speculator.eagle3",
+        "models--RedHatAI--Qwen3-30B-A3B-Instruct-2507-speculator.eagle3",
+        "models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3",
+    ):
+        assert drafter in output
+
+    assert output.count("policy.generation.max_new_tokens=16384") == 22
+    assert "policy.generation.max_new_tokens=32768" not in output
+    assert output.count("speculative_config.num_speculative_tokens=5") == 16
+    assert output.count("num_speculative_tokens_per_batch_size") == 8
+    assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
+    assert "--nodes=8" in output
+    assert "--segment=8" in output
+
+
 def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,

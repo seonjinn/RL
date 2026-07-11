@@ -24,6 +24,7 @@ ATTEMPT_ID="${ATTEMPT_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 BASE_EXPERIMENT_ROOT="${BASE_EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_024_upgrade/runs/${RUN_TAG}}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-long-output-lyris}"
 MAX_STEPS="${MAX_STEPS:-5}"
+MATRIX_SELECTION="${MATRIX_SELECTION:-standard}"
 MODEL_SELECTION="${MODEL_SELECTION:-core}"
 OUTPUT_LENGTH_SELECTION="${OUTPUT_LENGTH_SELECTION:-all}"
 VARIANT_SELECTION="${VARIANT_SELECTION:-core}"
@@ -31,6 +32,13 @@ VARIANT_SELECTION="${VARIANT_SELECTION:-core}"
 qwen30_draft="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
 qwen32_draft="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-Thinking-speculator.eagle3/snapshots/a1403e07b73a66fc9ef561463631c31864616933}"
 qwen235_draft="${QWEN235_DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba}"
+
+qwen30_base_target="${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39"
+qwen30_instruct_target="${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B-Instruct-2507/snapshots/0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe"
+qwen30_thinking_target="${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B-Thinking-2507/snapshots/144afc2f379b542fdd4e85a1fcd5e1f79112d95d"
+qwen30_base_draft="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-speculator.eagle3/snapshots/6afc5aa2477b923467fb9a8d906782b984a9a6ba"
+qwen30_instruct_draft="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Instruct-2507-speculator.eagle3/snapshots/a7600ef6ca94c4e06cc1022879944be15949aee4"
+qwen30_thinking_draft="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 
 case "${MODEL_SELECTION}" in
   core) models=(qwen30ba3b qwen32b) ;;
@@ -59,7 +67,65 @@ case "${VARIANT_SELECTION}" in
     ;;
 esac
 
-for output_length in "${output_lengths[@]}"; do
+case "${MATRIX_SELECTION}" in
+  standard)
+    identities=(default)
+    ;;
+  qwen30-drafter)
+    models=(qwen30ba3b)
+    output_lengths=(16k)
+    identities=(
+      base__base
+      base__instruct2507
+      instruct2507__instruct2507
+      thinking2507__thinking2507
+    )
+    printf '[DRAFTER-ALIAS] base=thinking2507 weight_sha256=%s config_blob=%s\n' \
+      'd2d6e2e63e09dc755053ae5c98cdececae3611ae5e202d4fa5411126dd3b1dfa' \
+      '4e11c4dbb9b0bd911748a6f567d41f57c3dcdbe3'
+    ;;
+  *)
+    echo "ERROR: MATRIX_SELECTION must be standard or qwen30-drafter" >&2
+    exit 2
+    ;;
+esac
+
+for identity in "${identities[@]}"; do
+  identity_target=""
+  identity_draft="${qwen30_draft}"
+  identity_recipe=""
+  identity_nodes=""
+  identity_variants=("${variants[@]}")
+  case "${identity}" in
+    default)
+      ;;
+    base__base)
+      identity_target="${qwen30_base_target}"
+      identity_draft="${qwen30_base_draft}"
+      identity_variants=(baseline eagle3_k5 dynamic)
+      ;;
+    base__instruct2507)
+      identity_target="${qwen30_base_target}"
+      identity_draft="${qwen30_instruct_draft}"
+      identity_variants=(eagle3_k5 dynamic)
+      ;;
+    instruct2507__instruct2507)
+      identity_target="${qwen30_instruct_target}"
+      identity_draft="${qwen30_instruct_draft}"
+      identity_variants=(baseline eagle3_k5 dynamic)
+      ;;
+    thinking2507__thinking2507)
+      identity_target="${qwen30_thinking_target}"
+      identity_draft="${qwen30_thinking_draft}"
+      identity_variants=(baseline eagle3_k5 dynamic)
+      ;;
+  esac
+  if [[ "${MATRIX_SELECTION}" == "qwen30-drafter" ]]; then
+    identity_recipe="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-40K.yaml"
+    identity_nodes=8
+  fi
+
+  for output_length in "${output_lengths[@]}"; do
   case "${output_length}" in
     16k)
       max_new_tokens=16384
@@ -76,7 +142,7 @@ for output_length in "${output_lengths[@]}"; do
   esac
 
   for model in "${models[@]}"; do
-    for variant in "${variants[@]}"; do
+    for variant in "${identity_variants[@]}"; do
       if [[ "${variant}" == "baseline" ]]; then
         capture_sizes='[1,2,4,8,16,32,64]'
         capture_max=64
@@ -85,9 +151,17 @@ for output_length in "${output_lengths[@]}"; do
         capture_max=256
       fi
 
-      printf '[LONG-OUTPUT] model=%s osl=%s variant=%s max_total_sequence_length=%s\n' \
-        "${model}" "${output_length}" "${variant}" \
+      printf '[LONG-OUTPUT] identity=%s model=%s osl=%s variant=%s max_total_sequence_length=%s\n' \
+        "${identity}" "${model}" "${output_length}" "${variant}" \
         "${max_total_sequence_length}"
+
+      if [[ "${identity}" == "default" ]]; then
+        identity_run_tag="${RUN_TAG}-${output_length}"
+        identity_root="${BASE_EXPERIMENT_ROOT}/${output_length}"
+      else
+        identity_run_tag="${RUN_TAG}-${identity}-${output_length}"
+        identity_root="${BASE_EXPERIMENT_ROOT}/${output_length}/${identity}"
+      fi
 
       env \
         REPO_DIR="${REPO_DIR}" \
@@ -100,9 +174,9 @@ for output_length in "${output_lengths[@]}"; do
         HF_HOME="${HF_HOME}" \
         WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE}" \
         WANDB_PROJECT="${WANDB_PROJECT}" \
-        RUN_TAG="${RUN_TAG}-${output_length}" \
+        RUN_TAG="${identity_run_tag}" \
         ATTEMPT_ID="${ATTEMPT_ID}" \
-        EXPERIMENT_ROOT="${BASE_EXPERIMENT_ROOT}/${output_length}" \
+        EXPERIMENT_ROOT="${identity_root}" \
         MAX_STEPS="${MAX_STEPS}" \
         NUM_PROMPTS_PER_STEP=16 \
         NUM_GENERATIONS_PER_PROMPT=16 \
@@ -123,11 +197,15 @@ for output_length in "${output_lengths[@]}"; do
         MAX_NUM_SEQS=64 \
         MAX_CUDAGRAPH_CAPTURE_SIZE="${capture_max}" \
         CUDAGRAPH_CAPTURE_SIZES="${capture_sizes}" \
-        QWEN30_DRAFT_MODEL="${qwen30_draft}" \
+        POLICY_MODEL_NAME="${identity_target}" \
+        QWEN30_RECIPE="${identity_recipe}" \
+        QWEN30_NODES="${identity_nodes}" \
+        QWEN30_DRAFT_MODEL="${identity_draft}" \
         QWEN32_DRAFT_MODEL="${qwen32_draft}" \
         QWEN235_DRAFT_MODEL="${qwen235_draft}" \
         NCCL_NVLS_ENABLE=0 \
         bash "${LAUNCHER}" "${MODE}" "${model}" "${variant}"
     done
   done
+done
 done
