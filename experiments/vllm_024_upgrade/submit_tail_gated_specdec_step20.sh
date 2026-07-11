@@ -40,6 +40,7 @@ GENERATION_EP="${GENERATION_EP:-1}"
 SAMPLING="${SAMPLING:-standard}"
 DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 CUDA_GRAPH_MODE="${CUDA_GRAPH_MODE:-on}"
+CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-true}"
 ABLATION_BEHAVIOR_REVISION="${ABLATION_BEHAVIOR_REVISION:-539cfb96f3944ea6e32616ec43e10f4d1cf20491}"
 TAIL_GATE_THRESHOLD="${TAIL_GATE_THRESHOLD:-32}"
 TAIL_GATE_CONSECUTIVE_CHECKS="${TAIL_GATE_CONSECUTIVE_CHECKS:-10}"
@@ -112,6 +113,10 @@ build_specdec_cudagraph_capture_sizes() {
 
 validate_positive_integer "TAIL_GATE_THRESHOLD" "${TAIL_GATE_THRESHOLD}"
 validate_positive_integer "TAIL_GATE_CONSECUTIVE_CHECKS" "${TAIL_GATE_CONSECUTIVE_CHECKS}"
+if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS}" != "false" ]]; then
+  echo "ERROR: CUDAGRAPH_DISPATCH_METRICS must be true or false" >&2
+  exit 2
+fi
 
 validate_immutable_revision() {
   local name="$1"
@@ -621,9 +626,13 @@ submit_one() {
     "logger.log_dir=${run_dir}/nemo_logs"
   )
 
-  if [[ "${cuda_graph_enabled}" == "true" ]]; then
+  if [[ "${cuda_graph_enabled}" == "true" && "${CUDAGRAPH_DISPATCH_METRICS}" == "true" ]]; then
     overrides+=(
       "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+      "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${effective_graph_mode}"
+    )
+  elif [[ "${cuda_graph_enabled}" == "true" ]]; then
+    overrides+=(
       "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${effective_graph_mode}"
     )
   fi
@@ -672,7 +681,7 @@ submit_one() {
     env
     "VLLM_USE_V2_MODEL_RUNNER=${use_v2_runner}"
   )
-  if [[ "${cuda_graph_enabled}" == "true" ]]; then
+  if [[ "${cuda_graph_enabled}" == "true" && "${CUDAGRAPH_DISPATCH_METRICS}" == "true" ]]; then
     command_parts+=(
       "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
     )

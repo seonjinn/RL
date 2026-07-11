@@ -444,6 +444,22 @@ def test_all_cohorts_enable_cuda_graph_and_vllm_metric_collection(
     )
 
 
+def test_cuda_graph_mode_on_can_disable_dispatch_metrics() -> None:
+    output = _dry_run(
+        "qwen32b",
+        "always_on_v2_k5",
+        CUDAGRAPH_DISPATCH_METRICS="false",
+    )
+
+    assert "policy.generation.vllm_cfg.enforce_eager=false" in output
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in output
+    assert "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=false" in output
+    assert (
+        "vllm_cfg.env_vars.NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS=true"
+        not in output
+    )
+
+
 @pytest.mark.parametrize(
     "variant",
     ("baseline_v2", "always_on_v2_k5", "fastrl_threshold_v2_k5"),
