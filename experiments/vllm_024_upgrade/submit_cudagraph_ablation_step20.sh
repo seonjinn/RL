@@ -45,6 +45,10 @@ for variant in "${variants[@]}"; do
     RUNTIME_VERSION=nightly-20260707 \
     VLLM_VERSION=0.24.0 \
     VLLM_COMMIT=ee0da84a \
+    ACCOUNT=coreai_dlalgo_llm \
+    PARTITION=gb200 \
+    WALLTIME=04:00:00 \
+    WANDB_ENTITY=nvidia \
     GENERATION_EP=1 \
     CONTAINER="${CONTAINER}" \
     EXPERIMENT_ROOT="${ABLATION_ROOT}" \

@@ -1114,6 +1114,31 @@ def test_legacy_reference_provenance_is_normalized_only_for_approved_rows(
     assert unrelated_rows[0]["draft_checkpoint_revision"] == "legacy_unrecorded"
 
 
+def test_current_v6_approved_reference_is_never_rewritten(tmp_path: Path) -> None:
+    current = _metadata()
+    current.update(
+        {
+            "runtime_commit": APPROVED_GRAPH_ON_RUNTIME_COMMIT,
+            "job_id": "2342623",
+            "target_checkpoint": AUDITED_TARGET_CHECKPOINT,
+            "target_checkpoint_revision": AUDITED_TARGET_REVISION,
+            "node_count": "8",
+            "gpus_per_node": "8",
+            "segment_size": "8",
+        }
+    )
+    manifest = tmp_path / "current-v6.tsv"
+    _write_manifest(manifest, [current])
+
+    schema, rows = _read_manifest(manifest)
+
+    assert schema.name == "cuda_graph_ablation_v6"
+    assert rows[0]["node_count"] == "8"
+    assert rows[0]["gpus_per_node"] == "8"
+    assert rows[0]["segment_size"] == "8"
+    assert _validate_manifest_rows(rows) is None
+
+
 def test_manifest_rejects_checkpoint_path_revision_mismatch() -> None:
     row = _metadata(variant="always_on_v2_k5")
     row["draft_checkpoint_revision"] = "b" * 40
@@ -1374,8 +1399,66 @@ def test_main_ingests_project_bound_manifests_and_emits_graph_mode_deltas(
     assert graph_off["e2e_time_speedup_vs_baseline"] == pytest.approx(1 / 0.9)
     assert graph_off["e2e_time_speedup_vs_graph_on"] == pytest.approx(0.8)
     assert graph_off["generation_time_speedup_vs_graph_on"] == pytest.approx(0.8)
+    assert graph_off["status"] == "final"
+    assert graph_off["reason"] == ""
     fragment = (output_dir / "tail_gated_specdec.html").read_text(encoding="utf-8")
     assert "CUDA Graph Effect" in fragment
+
+
+@pytest.mark.parametrize(
+    ("wandb_key", "health_field", "different_value"),
+    [
+        ("train/reward", "reward", 0.8),
+        ("train/mean_gen_tokens_per_sample", "response_length", 2048.0),
+        ("train/gen_kl_error", "approx_kl", 0.02),
+        ("train/loss", "policy_loss", 0.4),
+    ],
+)
+def test_graph_ablation_health_mismatch_suppresses_deltas(
+    wandb_key: str, health_field: str, different_value: float
+) -> None:
+    graph_on = _cohort()
+    graph_off = [
+        {
+            **row,
+            "job_id": f"{row['job_id']}-off",
+            "wandb_run_id": f"{row['wandb_run_id']}-off",
+            "runtime_commit": "final-launcher-report-commit",
+            "cuda_graph_enabled": "false",
+            "enforce_eager": "true",
+            "graph_mode": "NONE",
+            "cudagraph_max_requests": "not_applicable",
+            "cudagraph_max_tokens": "not_applicable",
+            "cudagraph_capture_sizes": "not_applicable",
+        }
+        for row in graph_on
+    ]
+    graph_off_summaries = []
+    for metadata in graph_off:
+        history = _history(metadata)
+        for record in history:
+            record[wandb_key] = different_value
+        graph_off_summaries.append(summarize_history(metadata, history))
+
+    rows = add_graph_ablation_deltas(
+        [
+            *build_comparison_rows([_summary(row) for row in graph_on]),
+            *build_comparison_rows(graph_off_summaries),
+        ]
+    )
+    mismatched = next(
+        row
+        for row in rows
+        if row.variant == "always_on_v2_k5"
+        and row.cuda_graph_enabled == "false"
+    )
+
+    assert mismatched.status == "partial"
+    assert mismatched.reason == f"graph_ablation_health_failed:{health_field}"
+    assert mismatched.generation_time_speedup_vs_graph_on is None
+    assert mismatched.e2e_time_speedup_vs_graph_on is None
+    assert mismatched.generation_tps_gpu_speedup_vs_graph_on is None
+    assert mismatched.e2e_tps_gpu_speedup_vs_graph_on is None
 
 
 def test_combined_report_marks_unmatched_graph_off_rows_partial(

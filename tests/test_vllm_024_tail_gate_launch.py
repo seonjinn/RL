@@ -474,6 +474,10 @@ def test_cuda_graph_ablation_wrapper_selects_only_the_approved_six_rows() -> Non
         RUNTIME_VERSION="poisoned-runtime-version",
         VLLM_VERSION="poisoned-vllm-version",
         VLLM_COMMIT="poisoned-vllm-commit",
+        ACCOUNT="poisoned-account",
+        PARTITION="poisoned-partition",
+        WALLTIME="00:01:00",
+        WANDB_ENTITY="poisoned-entity",
         RUN_TAG="ablation-contract",
         ATTEMPT_ID="attempt-1",
         WANDB_PROJECT="inherited-wrong-project",
@@ -540,7 +544,14 @@ def test_cuda_graph_ablation_wrapper_selects_only_the_approved_six_rows() -> Non
     assert "sd_tail_gate_consecutive_checks=3" in result.stdout
     assert result.stdout.count("--nodes=4") == 6
     assert result.stdout.count("--segment=4") == 6
+    assert result.stdout.count("--account=coreai_dlalgo_llm") == 6
+    assert result.stdout.count("--partition=gb200") == 6
+    assert result.stdout.count("--time=04:00:00") == 6
+    assert result.stdout.count("logger.wandb.entity=nvidia") >= 6
     assert "--gres" not in result.stdout
+    assert "poisoned-account" not in result.stdout
+    assert "poisoned-partition" not in result.stdout
+    assert "poisoned-entity" not in result.stdout
     assert result.stdout.count("dp=8") == 6
     assert (
         "/lustre/test/hf_home/hub/models--Qwen--Qwen3-32B/snapshots/"

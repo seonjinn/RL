@@ -1262,6 +1262,29 @@ def add_graph_ablation_deltas(rows: Iterable[ComparisonRow]) -> list[ComparisonR
             updated.append(row)
             continue
         reference = graph_on[0]
+        failed_health = [
+            field
+            for field in HEALTH_METRICS
+            if not _within_ten_percent(
+                cast(float | None, getattr(row, field)),
+                cast(float | None, getattr(reference, field)),
+            )
+        ]
+        if failed_health:
+            updated.append(
+                replace(
+                    row,
+                    summary=replace(
+                        row.summary,
+                        status="partial",
+                        reason=(
+                            "graph_ablation_health_failed:"
+                            f"{','.join(failed_health)}"
+                        ),
+                    ),
+                )
+            )
+            continue
         updated.append(
             replace(
                 row,
@@ -1308,7 +1331,8 @@ def _read_manifest(path: Path) -> tuple[ManifestSchema, list[dict[str, str]]]:
                     row.setdefault(field, LEGACY_UNRECORDED_CHECKPOINT)
 
             is_approved_reference = (
-                row.get("runtime_commit") == APPROVED_GRAPH_ON_RUNTIME_COMMIT
+                schema.name in LEGACY_PROVENANCE_SCHEMA_NAMES
+                and row.get("runtime_commit") == APPROVED_GRAPH_ON_RUNTIME_COMMIT
                 and (row.get("job_id", ""), row.get("variant", ""))
                 in APPROVED_LEGACY_REFERENCES
                 and row.get("model") == "qwen32b"
