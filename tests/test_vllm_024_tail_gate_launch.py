@@ -143,6 +143,19 @@ def test_model_all_excludes_unproven_qwen30_v2_variant() -> None:
     assert "Qwen30 V2 requires explicit variant selection" in result.stderr
 
 
+def test_job_name_is_unique_per_attempt() -> None:
+    output = _dry_run(
+        "qwen32b",
+        "fastrl_threshold_v2_k5",
+        ATTEMPT_ID="threshold-32-checks-3",
+    )
+
+    assert (
+        "--job-name=coreai_dlalgo_llm-nemorl.tail-gate-qwen32b-"
+        "fastrl_threshold_v2_k5-threshold-32-checks-3"
+    ) in output
+
+
 def test_v1_variants_preserve_stock_runner_and_dynamic_contract() -> None:
     for variant in V1_VARIANTS:
         output = _dry_run("qwen30ba3b", variant)

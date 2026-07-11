@@ -367,6 +367,7 @@ submit_one() {
   local roofline_hash=""
   local manifest_draft_sample_method="not_applicable"
   local manifest_draft_checkpoint="not_applicable"
+  local job_attempt_id="${ATTEMPT_ID//[^[:alnum:]_.-]/-}"
   local container_path="${CONTAINER}"
   local index
   local run_dir="${EXPERIMENT_ROOT}/${model}/${variant}"
@@ -634,7 +635,7 @@ submit_one() {
     --exclusive
     --time="${WALLTIME}"
     --segment="${CLUSTER_GPUS_PER_NODE}"
-    --job-name="${ACCOUNT}-nemorl.tail-gate-${model}-${variant}"
+    --job-name="${ACCOUNT}-nemorl.tail-gate-${model}-${variant}-${job_attempt_id}"
     --output="${run_dir}/slurm-%j.out"
     --open-mode=append
     --comment=metrics
