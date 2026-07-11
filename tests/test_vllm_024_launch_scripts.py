@@ -304,7 +304,8 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "policy.generation.vllm_cfg.enforce_eager=false" in output
     assert "policy.generation.temperature=1.0" in output
     assert "policy.generation.top_p=1.0" in output
-    assert "compilation_config.cudagraph_mode=PIECEWISE" in output
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in output
+    assert "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE=true" in output
     assert "cluster.segment_size=4" in output
     assert "--nodes=4" in output
     assert "--segment=4" in output
@@ -783,8 +784,9 @@ def test_dynamicsd_launcher_renders_dynamic_schedule() -> None:
 def test_dynamicsd_launcher_keeps_baseline_free_of_specdec() -> None:
     output = _dry_run_dynamicsd("qwen32b", "baseline")
 
-    assert "compilation_config.cudagraph_mode=PIECEWISE" in output
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in output
     assert "speculative_config" not in output
+    assert "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE" not in output
 
 
 def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:

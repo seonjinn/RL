@@ -135,6 +135,8 @@ def _patch_vllm_init_workers_ray(
         "NCCL_NVLS_ENABLE",
         "NRL_VLLM_ENABLE_CUDAGRAPH_DISPATCH_METRICS",
         "NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH",
+        "NRL_VLLM_ENABLE_V1_PIECEWISE_SPECDEC_ALIGNMENT",
+        "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE",
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
         *(extra_env_vars or []),
     ]
@@ -789,6 +791,79 @@ def _patch_vllm_piecewise_specdec_cudagraph_alignment(logger) -> None:
             )
         write_back(content.replace(old_snippet, new_snippet, 1))
     logger.info("Successfully aligned PIECEWISE SpecDec CUDA-graph sizes.")
+
+
+def _patch_vllm_v2_draft_decode_capture_profile(logger) -> None:
+    """Give V2 autoregressive draft decode request-unit CUDA graph buckets."""
+    file_to_patch = _get_vllm_file(
+        "v1/worker/gpu/spec_decode/autoregressive/speculator.py"
+    )
+    old_snippet = (
+        "        # Initialize cudagraph manager for draft decodes (draft positions > 0).\n"
+        "        self.decode_cudagraph_manager = DecodeSpeculatorCudaGraphManager(\n"
+        "            self.vllm_config,\n"
+        "            self.device,\n"
+        "            cudagraph_mode,\n"
+        "            decode_query_len=1,\n"
+        "        )\n"
+    )
+    new_snippet = (
+        "        # Initialize cudagraph manager for draft decodes (draft positions > 0).\n"
+        "        compilation_config = self.vllm_config.compilation_config\n"
+        "        original_capture_sizes = compilation_config.cudagraph_capture_sizes\n"
+        "        original_max_capture_size = (\n"
+        "            compilation_config.max_cudagraph_capture_size\n"
+        "        )\n"
+        "        use_request_unit_profile = (\n"
+        "            __import__('os').environ.get(\n"
+        "                'NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE',\n"
+        "                'false',\n"
+        "            ).lower() == 'true'\n"
+        "        )\n"
+        "        if use_request_unit_profile and original_capture_sizes:\n"
+        "            target_query_len = self.num_speculative_steps + 1\n"
+        "            if any(size % target_query_len for size in original_capture_sizes):\n"
+        "                raise ValueError(\n"
+        "                    'V2 draft-decode request-unit capture profile requires '\n"
+        "                    'target capture sizes divisible by K+1.'\n"
+        "                )\n"
+        "            decode_capture_sizes = sorted({\n"
+        "                size // target_query_len for size in original_capture_sizes\n"
+        "                if size >= target_query_len\n"
+        "            })\n"
+        "            if not decode_capture_sizes:\n"
+        "                raise ValueError(\n"
+        "                    'V2 draft-decode request-unit capture profile is empty.'\n"
+        "                )\n"
+        "            compilation_config.cudagraph_capture_sizes = decode_capture_sizes\n"
+        "            compilation_config.max_cudagraph_capture_size = (\n"
+        "                decode_capture_sizes[-1]\n"
+        "            )\n"
+        "        try:\n"
+        "            self.decode_cudagraph_manager = DecodeSpeculatorCudaGraphManager(\n"
+        "                self.vllm_config,\n"
+        "                self.device,\n"
+        "                cudagraph_mode,\n"
+        "                decode_query_len=1,\n"
+        "            )\n"
+        "        finally:\n"
+        "            compilation_config.cudagraph_capture_sizes = original_capture_sizes\n"
+        "            compilation_config.max_cudagraph_capture_size = (\n"
+        "                original_max_capture_size\n"
+        "            )\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE" in content:
+            logger.info("V2 draft-decode request-unit capture profile already applied.")
+            return
+        if old_snippet not in content:
+            raise RuntimeError(
+                "Could not apply the V2 draft-decode capture profile patch to "
+                f"{file_to_patch}; the vLLM source layout changed."
+            )
+        write_back(content.replace(old_snippet, new_snippet, 1))
+    logger.info("Installed V2 draft-decode request-unit capture profile.")
 
 
 def _patch_vllm_runtime_tail_gating(logger) -> None:
@@ -2031,7 +2106,20 @@ def _apply_vllm_patches(
         _patch_vllm_cudagraph_dispatch_metrics(patch_logger)
 
     if speculative_config:
-        _patch_vllm_piecewise_specdec_cudagraph_alignment(patch_logger)
+        if (
+            os.environ.get(
+                "NRL_VLLM_ENABLE_V1_PIECEWISE_SPECDEC_ALIGNMENT", "false"
+            ).lower()
+            == "true"
+        ):
+            _patch_vllm_piecewise_specdec_cudagraph_alignment(patch_logger)
+        if (
+            os.environ.get(
+                "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE", "false"
+            ).lower()
+            == "true"
+        ):
+            _patch_vllm_v2_draft_decode_capture_profile(patch_logger)
         _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
         _patch_vllm_online_eagle_head_ownership(patch_logger)
         _patch_vllm_v2_eagle_load_config_and_ownership(patch_logger)

@@ -321,7 +321,7 @@ submit_one() {
     "policy.generation.vllm_cfg.enforce_eager=false"
     "policy.generation.temperature=1.0"
     "policy.generation.top_p=1.0"
-    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE"
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE"
     "cluster.gpus_per_node=${GPUS_PER_NODE}"
     "cluster.num_nodes=${nodes}"
     "cluster.segment_size=${nodes}"
@@ -420,6 +420,7 @@ submit_one() {
       manifest_rejection_sample_method="${REJECTION_SAMPLE_METHOD}"
       manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
       overrides+=(
+        "++policy.generation.vllm_cfg.env_vars.NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE=true"
         "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
         "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
         "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${draft_k}"

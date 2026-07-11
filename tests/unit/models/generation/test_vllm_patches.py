@@ -795,6 +795,76 @@ def test_piecewise_specdec_cudagraph_patch_aligns_capture_sizes(
     assert compilation.read_text() == patched
 
 
+def test_v2_draft_decode_capture_profile_uses_request_unit_buckets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    speculator = tmp_path / "speculator.py"
+    speculator.write_text(
+        "        # Initialize cudagraph manager for draft decodes (draft positions > 0).\n"
+        "        self.decode_cudagraph_manager = DecodeSpeculatorCudaGraphManager(\n"
+        "            self.vllm_config,\n"
+        "            self.device,\n"
+        "            cudagraph_mode,\n"
+        "            decode_query_len=1,\n"
+        "        )\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(speculator))
+
+    patches._patch_vllm_v2_draft_decode_capture_profile(MagicMock())
+
+    patched = speculator.read_text()
+    assert "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE" in patched
+    assert "size // target_query_len" in patched
+    assert "original_capture_sizes" in patched
+    assert "finally:" in patched
+    assert "compilation_config.cudagraph_capture_sizes = original_capture_sizes" in patched
+    ast.parse(dedent(patched))
+
+    class DecodeManager:
+        def __init__(
+            self,
+            vllm_config: Any,
+            _device: object,
+            _mode: object,
+            *,
+            decode_query_len: int,
+        ) -> None:
+            self.capture_sizes = list(
+                vllm_config.compilation_config.cudagraph_capture_sizes
+            )
+            self.decode_query_len = decode_query_len
+
+    namespace = {"DecodeSpeculatorCudaGraphManager": DecodeManager}
+    exec("def build(self, cudagraph_mode):\n" + patched, namespace)
+    compilation_config = SimpleNamespace(
+        cudagraph_capture_sizes=[6, 12, 24, 48, 96],
+        max_cudagraph_capture_size=96,
+    )
+    speculator_instance = SimpleNamespace(
+        vllm_config=SimpleNamespace(compilation_config=compilation_config),
+        device=object(),
+        num_speculative_steps=5,
+    )
+    monkeypatch.setenv("NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE", "true")
+
+    namespace["build"](speculator_instance, object())
+
+    assert speculator_instance.decode_cudagraph_manager.capture_sizes == [
+        1,
+        2,
+        4,
+        8,
+        16,
+    ]
+    assert speculator_instance.decode_cudagraph_manager.decode_query_len == 1
+    assert compilation_config.cudagraph_capture_sizes == [6, 12, 24, 48, 96]
+    assert compilation_config.max_cudagraph_capture_size == 96
+
+    patches._patch_vllm_v2_draft_decode_capture_profile(MagicMock())
+    assert speculator.read_text() == patched
+
+
 def test_cudagraph_dispatch_metrics_records_graph_and_fallback_calls() -> None:
     class Mode(Enum):
         NONE = 0
@@ -1820,7 +1890,6 @@ def test_apply_patches_only_installs_required_specdec_patches(
         "_patch_vllm_qwen3_draft_loader_results",
         "_patch_vllm_llama_draft_loader_result",
         "_patch_vllm_medusa_load_config",
-        "_patch_vllm_piecewise_specdec_cudagraph_alignment",
     )
     patch_mocks = {}
     for name in (*always_patch_names, *specdec_patch_names):
@@ -1853,6 +1922,18 @@ def test_apply_patches_only_installs_required_specdec_patches(
         tail_gate_patch,
         raising=False,
     )
+    v1_piecewise_patch = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_patch_vllm_piecewise_specdec_cudagraph_alignment",
+        v1_piecewise_patch,
+    )
+    v2_decode_profile_patch = MagicMock()
+    monkeypatch.setattr(
+        patches,
+        "_patch_vllm_v2_draft_decode_capture_profile",
+        v2_decode_profile_patch,
+    )
     if expect_draft_cg_patch:
         monkeypatch.setenv("NRL_VLLM_ENABLE_DRAFT_MODEL_CUDAGRAPH_PATCH", "true")
     patches._apply_vllm_patches(
@@ -1874,6 +1955,8 @@ def test_apply_patches_only_installs_required_specdec_patches(
         draft_cg_patch.assert_called_once_with(logger)
     else:
         draft_cg_patch.assert_not_called()
+    v1_piecewise_patch.assert_not_called()
+    v2_decode_profile_patch.assert_not_called()
     if expect_tail_gate_patch:
         tail_gate_patch.assert_called_once_with(
             patches.logging.getLogger("vllm_patch.bootstrap")
