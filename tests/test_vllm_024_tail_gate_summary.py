@@ -35,6 +35,7 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     _read_manifest,
     _scan_sparse_history,
     _validate_manifest_rows,
+    add_graph_ablation_deltas,
     build_comparison_rows,
     main,
     summarize_history,
@@ -43,6 +44,17 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
 
 ABLATION_BEHAVIOR_REVISION = "539cfb96f3944ea6e32616ec43e10f4d1cf20491"
 APPROVED_GRAPH_ON_RUNTIME_COMMIT = ABLATION_BEHAVIOR_REVISION
+AUDITED_TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
+AUDITED_DRAFT_REVISION = "dc84fe7ff1db31efa824776f49c141fc8195eb47"
+AUDITED_TARGET_CHECKPOINT = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+    f"models--Qwen--Qwen3-32B/snapshots/{AUDITED_TARGET_REVISION}"
+)
+AUDITED_DRAFT_CHECKPOINT = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+    "models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/"
+    f"{AUDITED_DRAFT_REVISION}"
+)
 
 
 EXPECTED_METRIC_KEYS = {
@@ -122,6 +134,9 @@ def _metadata(
         "draft_tp": "1",
         "dp": "8" if is_qwen32 else "16",
         "ep": "1",
+        "node_count": "4",
+        "gpus_per_node": "4",
+        "segment_size": "4",
         "temperature": "1.0",
         "top_p": "1.0",
         "max_osl": "4096",
@@ -161,12 +176,15 @@ def _metadata(
         "command": f"run --model={model} --variant={variant}",
         "checkout_path": "/lustre/test/nemo-rl",
         "ray_sub_path": "/lustre/test/nemo-rl/ray.sub",
-        "target_checkpoint": f"/lustre/test/{model}-target",
+        "target_checkpoint": f"/lustre/test/{model}/snapshots/{'a' * 40}",
         "target_checkpoint_revision": "a" * 40,
         "draft_checkpoint": (
             "not_applicable"
             if variant.startswith("baseline_")
-            else "/lustre/test/eagle3"
+            else f"/lustre/test/eagle3/snapshots/{'a' * 40}"
+        ),
+        "draft_checkpoint_revision": (
+            "not_applicable" if variant.startswith("baseline_") else "a" * 40
         ),
         "command_argv_json": "[]",
         "launcher_argv_json": "[]",
@@ -456,6 +474,8 @@ def test_eager_rows_do_not_request_or_require_cuda_graph_telemetry() -> None:
         "variant": "baseline_v2",
         "k": "0",
         "draft_sample_method": "not_applicable",
+        "draft_checkpoint": "not_applicable",
+        "draft_checkpoint_revision": "not_applicable",
     }
     baseline_history = [
         {key: value for key, value in row.items() if "cudagraph_" not in key}
@@ -651,6 +671,9 @@ def test_same_variant_graph_mode_key_matches_only_graph_ablation_states() -> Non
         ("consecutive_checks", "3"),
         ("roofline_config_sha256", "different-roofline-config"),
         ("ablation_behavior_revision", "b" * 40),
+        ("node_count", "8"),
+        ("gpus_per_node", "8"),
+        ("segment_size", "8"),
     ],
 )
 def test_same_variant_graph_mode_key_requires_exact_non_graph_provenance(
@@ -715,6 +738,45 @@ def test_same_variant_graph_mode_key_rejects_unrelated_behavior_revision() -> No
     ) != summarize_tail_gated_specdec.same_variant_graph_mode_key(_summary(graph_off))
 
 
+@pytest.mark.parametrize(
+    ("field", "different"),
+    [
+        ("target_checkpoint", "/lustre/test/other/snapshots/" + "b" * 40),
+        ("target_checkpoint_revision", "b" * 40),
+    ],
+)
+def test_within_mode_speedup_rejects_target_checkpoint_mismatch(
+    field: str, different: str
+) -> None:
+    baseline = _metadata()
+    candidate = _metadata(variant="always_on_v2_k5")
+    candidate[field] = different
+
+    with pytest.raises(ValueError, match="missing matched baseline"):
+        build_comparison_rows([_summary(baseline), _summary(candidate)])
+
+
+@pytest.mark.parametrize(
+    ("field", "different"),
+    [
+        ("draft_checkpoint", "/lustre/test/other-draft/snapshots/" + "b" * 40),
+        ("draft_checkpoint_revision", "b" * 40),
+    ],
+)
+def test_within_mode_speedup_rejects_mixed_specdec_checkpoint(
+    field: str, different: str
+) -> None:
+    baseline = _metadata()
+    always_on = _metadata(variant="always_on_v2_k5")
+    threshold = _metadata(variant="fastrl_threshold_v2_k5")
+    threshold[field] = different
+
+    with pytest.raises(ValueError, match="mixed draft checkpoint provenance"):
+        build_comparison_rows(
+            [_summary(baseline), _summary(always_on), _summary(threshold)]
+        )
+
+
 def test_comparison_rejects_mixed_nonbaseline_draft_sample_methods() -> None:
     baseline = _metadata()
     always_on = _metadata(variant="always_on_v2_k5")
@@ -774,9 +836,6 @@ def test_manifest_rejects_every_missing_cohort_dimension() -> None:
         "launcher_command",
         "checkout_path",
         "ray_sub_path",
-        "target_checkpoint",
-        "target_checkpoint_revision",
-        "draft_checkpoint",
         "command_argv_json",
         "launcher_argv_json",
         "command",
@@ -809,6 +868,9 @@ def test_historical_manifest_without_mini_fields_remains_collectible(
         "draft_sample_method",
         "max_model_len",
         "ablation_behavior_revision",
+        "node_count",
+        "gpus_per_node",
+        "segment_size",
         "cudagraph_max_requests",
         "cudagraph_max_tokens",
         "cudagraph_capture_sizes",
@@ -824,6 +886,7 @@ def test_historical_manifest_without_mini_fields_remains_collectible(
         "target_checkpoint",
         "target_checkpoint_revision",
         "draft_checkpoint",
+        "draft_checkpoint_revision",
         "command_argv_json",
         "launcher_argv_json",
     )
@@ -839,13 +902,15 @@ def test_historical_manifest_without_mini_fields_remains_collectible(
             ["--manifest", str(manifest), "--output-dir", str(output_dir)],
             api=_api_for(rows),
         )
-        == 0
+        == 1
     )
     payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     baseline = next(row for row in payload if row["variant"] == "baseline_v2")
     always_on = next(row for row in payload if row["variant"] == "always_on_v2_k5")
     assert baseline["draft_sample_method"] == "not_applicable"
     assert always_on["draft_sample_method"] == "legacy_unspecified"
+    assert {row["status"] for row in payload} == {"partial"}
+    assert all(row["reason"].startswith("comparison_failed:") for row in payload)
 
 
 def test_c78a93c8_header_fixture_uses_explicit_legacy_sentinels(tmp_path: Path) -> None:
@@ -867,10 +932,11 @@ def test_c78a93c8_header_fixture_uses_explicit_legacy_sentinels(tmp_path: Path) 
             ["--manifest", str(manifest), "--output-dir", str(output_dir)],
             api=_api_for(_cohort()),
         )
-        == 0
+        == 1
     )
     payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert {row["max_model_len"] for row in payload} == {"legacy_unrecorded"}
+    assert {row["status"] for row in payload} == {"partial"}
     assert (
         next(row for row in payload if row["variant"] == "baseline_v2")[
             "draft_sample_method"
@@ -989,16 +1055,34 @@ def test_current_manifest_validates_complete_graph_state_tuple(
     assert _validate_manifest_rows([row]) == expected
 
 
-def test_legacy_graph_state_is_normalized_only_for_approved_runtime(
+def test_legacy_reference_provenance_is_normalized_only_for_approved_rows(
     tmp_path: Path,
 ) -> None:
     approved = _metadata()
-    approved["runtime_commit"] = APPROVED_GRAPH_ON_RUNTIME_COMMIT
-    approved_row = {
-        field: approved.get(field, "") for field in CAPTURE_PROFILE_MANIFEST_HEADER
-    }
+    approved.update(
+        {
+            "runtime_commit": APPROVED_GRAPH_ON_RUNTIME_COMMIT,
+            "job_id": "2342623",
+            "target_checkpoint": AUDITED_TARGET_CHECKPOINT,
+            "target_checkpoint_revision": AUDITED_TARGET_REVISION,
+        }
+    )
+    approved_specdec = _metadata(variant="always_on_v2_k5")
+    approved_specdec.update(
+        {
+            "runtime_commit": APPROVED_GRAPH_ON_RUNTIME_COMMIT,
+            "job_id": "2342632",
+            "target_checkpoint": AUDITED_TARGET_CHECKPOINT,
+            "target_checkpoint_revision": AUDITED_TARGET_REVISION,
+            "draft_checkpoint": AUDITED_DRAFT_CHECKPOINT,
+        }
+    )
+    approved_rows_to_write = [
+        {field: row.get(field, "") for field in CAPTURE_PROFILE_MANIFEST_HEADER}
+        for row in (approved, approved_specdec)
+    ]
     approved_manifest = tmp_path / "approved.tsv"
-    _write_manifest(approved_manifest, [approved_row])
+    _write_manifest(approved_manifest, approved_rows_to_write)
 
     _, approved_rows = _read_manifest(approved_manifest)
     assert approved_rows[0]["cuda_graph_enabled"] == "true"
@@ -1007,13 +1091,34 @@ def test_legacy_graph_state_is_normalized_only_for_approved_runtime(
         approved_rows[0]["ablation_behavior_revision"]
         == APPROVED_GRAPH_ON_RUNTIME_COMMIT
     )
+    assert approved_rows[0]["node_count"] == "4"
+    assert approved_rows[0]["gpus_per_node"] == "4"
+    assert approved_rows[0]["segment_size"] == "4"
+    assert approved_rows[0]["target_checkpoint"] == AUDITED_TARGET_CHECKPOINT
+    assert approved_rows[0]["target_checkpoint_revision"] == AUDITED_TARGET_REVISION
+    assert approved_rows[0]["draft_checkpoint"] == "not_applicable"
+    assert approved_rows[0]["draft_checkpoint_revision"] == "not_applicable"
+    assert approved_rows[1]["draft_checkpoint"] == AUDITED_DRAFT_CHECKPOINT
+    assert approved_rows[1]["draft_checkpoint_revision"] == AUDITED_DRAFT_REVISION
 
-    unrelated_row = {**approved_row, "runtime_commit": "b" * 40}
+    unrelated_row = {
+        **approved_rows_to_write[0],
+        "job_id": "unrelated-job",
+    }
     unrelated_manifest = tmp_path / "unrelated.tsv"
     _write_manifest(unrelated_manifest, [unrelated_row])
     _, unrelated_rows = _read_manifest(unrelated_manifest)
     assert unrelated_rows[0]["cuda_graph_enabled"] == "legacy_unrecorded"
     assert unrelated_rows[0]["ablation_behavior_revision"] == "legacy_unrecorded"
+    assert unrelated_rows[0]["node_count"] == "legacy_unrecorded"
+    assert unrelated_rows[0]["draft_checkpoint_revision"] == "legacy_unrecorded"
+
+
+def test_manifest_rejects_checkpoint_path_revision_mismatch() -> None:
+    row = _metadata(variant="always_on_v2_k5")
+    row["draft_checkpoint_revision"] = "b" * 40
+
+    assert _validate_manifest_rows([row]) == "draft checkpoint path/revision mismatch"
 
 
 @pytest.mark.parametrize("schema", ("", "unknown_schema"))
@@ -1028,6 +1133,24 @@ def test_unrecognized_legacy_graph_sentinels_are_rejected(schema: str) -> None:
     )
 
     assert _validate_manifest_rows([row]) == "legacy graph state requires legacy schema"
+
+
+def test_unrecognized_legacy_provenance_sentinels_are_rejected() -> None:
+    row = _metadata()
+    row.update(
+        {
+            "node_count": "legacy_unrecorded",
+            "gpus_per_node": "legacy_unrecorded",
+            "segment_size": "legacy_unrecorded",
+            "target_checkpoint": "legacy_unrecorded",
+            "target_checkpoint_revision": "legacy_unrecorded",
+            "_manifest_schema": "unknown_schema",
+        }
+    )
+
+    assert _validate_manifest_rows([row]) == (
+        "legacy topology/checkpoint provenance requires legacy schema"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1170,6 +1293,8 @@ def test_main_renders_interleaved_models_and_runner_sections(tmp_path: Path) -> 
     assert "qwen30ba3b" in fragment
     assert "qwen32b" in fragment
     assert "Final finding:" in fragment
+    assert "<th>CUDA graph</th><th>Graph mode</th>" in fragment
+    assert "CUDA graph true, PIECEWISE" in fragment
 
 
 def test_main_ingests_project_bound_manifests_and_emits_graph_mode_deltas(
@@ -1251,6 +1376,118 @@ def test_main_ingests_project_bound_manifests_and_emits_graph_mode_deltas(
     assert graph_off["generation_time_speedup_vs_graph_on"] == pytest.approx(0.8)
     fragment = (output_dir / "tail_gated_specdec.html").read_text(encoding="utf-8")
     assert "CUDA Graph Effect" in fragment
+
+
+def test_combined_report_marks_unmatched_graph_off_rows_partial(
+    tmp_path: Path,
+) -> None:
+    graph_on_rows = _cohort()
+    graph_off_rows = [
+        {
+            **row,
+            "job_id": f"{row['job_id']}-off",
+            "wandb_run_id": f"{row['wandb_run_id']}-off",
+            "runtime_commit": "final-launcher-report-commit",
+            "top_p": "0.9",
+            "cuda_graph_enabled": "false",
+            "enforce_eager": "true",
+            "graph_mode": "NONE",
+            "cudagraph_max_requests": "not_applicable",
+            "cudagraph_max_tokens": "not_applicable",
+            "cudagraph_capture_sizes": "not_applicable",
+        }
+        for row in graph_on_rows
+    ]
+    graph_on_manifest = tmp_path / "graph-on.tsv"
+    graph_off_manifest = tmp_path / "graph-off.tsv"
+    _write_manifest(graph_on_manifest, graph_on_rows)
+    _write_manifest(graph_off_manifest, graph_off_rows)
+    histories = {
+        row["wandb_run_id"]: _history(row) for row in graph_on_rows
+    }
+    histories.update(
+        {
+            row["wandb_run_id"]: [
+                {
+                    key: value
+                    for key, value in record.items()
+                    if "cudagraph_" not in key
+                }
+                for record in _history(row)
+            ]
+            for row in graph_off_rows
+        }
+    )
+    output_dir = tmp_path / "output"
+
+    assert (
+        main(
+            [
+                "--manifest-project",
+                f"{graph_on_manifest}=graph-on-project",
+                "--manifest-project",
+                f"{graph_off_manifest}=graph-off-project",
+                "--output-dir",
+                str(output_dir),
+            ],
+            api=_FakeApi(histories),
+        )
+        == 1
+    )
+    payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    unmatched = next(
+        row
+        for row in payload
+        if row["variant"] == "always_on_v2_k5"
+        and row["cuda_graph_enabled"] == "false"
+    )
+    assert unmatched["status"] == "partial"
+    assert unmatched["reason"] == (
+        "graph_ablation_pairing_failed:no_exact_graph_on_match"
+    )
+
+
+def test_combined_report_marks_ambiguous_graph_on_match_partial() -> None:
+    graph_on = _cohort()
+    duplicate_graph_on = [
+        {
+            **row,
+            "job_id": f"{row['job_id']}-duplicate",
+            "wandb_run_id": f"{row['wandb_run_id']}-duplicate",
+        }
+        for row in graph_on
+    ]
+    graph_off = [
+        {
+            **row,
+            "job_id": f"{row['job_id']}-off",
+            "wandb_run_id": f"{row['wandb_run_id']}-off",
+            "runtime_commit": "final-launcher-report-commit",
+            "cuda_graph_enabled": "false",
+            "enforce_eager": "true",
+            "graph_mode": "NONE",
+            "cudagraph_max_requests": "not_applicable",
+            "cudagraph_max_tokens": "not_applicable",
+            "cudagraph_capture_sizes": "not_applicable",
+        }
+        for row in graph_on
+    ]
+    rows = add_graph_ablation_deltas(
+        [
+            *build_comparison_rows([_summary(row) for row in graph_on]),
+            *build_comparison_rows([_summary(row) for row in duplicate_graph_on]),
+            *build_comparison_rows([_summary(row) for row in graph_off]),
+        ]
+    )
+
+    ambiguous = next(
+        row
+        for row in rows
+        if row.variant == "always_on_v2_k5"
+        and row.cuda_graph_enabled == "false"
+    )
+    assert ambiguous.status == "partial"
+    assert ambiguous.reason == "graph_ablation_pairing_failed:ambiguous_graph_on_match"
 
 
 def test_findings_exclude_health_failed_rows(tmp_path: Path) -> None:

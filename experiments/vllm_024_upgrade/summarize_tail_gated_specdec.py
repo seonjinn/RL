@@ -32,6 +32,25 @@ from typing import Iterable, Mapping, Protocol, TypeGuard, cast
 
 EXPECTED_STEPS = set(range(2, 21))
 APPROVED_GRAPH_ON_RUNTIME_COMMIT = "539cfb96f3944ea6e32616ec43e10f4d1cf20491"
+AUDITED_TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
+AUDITED_DRAFT_REVISION = "dc84fe7ff1db31efa824776f49c141fc8195eb47"
+AUDITED_TARGET_CHECKPOINT = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+    f"models--Qwen--Qwen3-32B/snapshots/{AUDITED_TARGET_REVISION}"
+)
+AUDITED_DRAFT_CHECKPOINT = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+    "models--RedHatAI--Qwen3-32B-speculator.eagle3/snapshots/"
+    f"{AUDITED_DRAFT_REVISION}"
+)
+APPROVED_LEGACY_REFERENCES = {
+    ("2342623", "baseline_v2"),
+    ("2342632", "always_on_v2_k5"),
+    ("2343185", "fastrl_threshold_v2_k5"),
+    ("2343202", "baseline_v1"),
+    ("2343210", "always_on_v1_k5"),
+    ("2343216", "stock_dynamic_v1"),
+}
 MIN_GRAPH_CALL_RATIO = 0.99
 MIN_ROOFLINE_PREDICTED_SPEEDUP = 1.05
 MIN_SPECDEC_HEADROOM_TOKENS = 32
@@ -124,6 +143,9 @@ COHORT_FIELDS = (
     "draft_tp",
     "dp",
     "ep",
+    "node_count",
+    "gpus_per_node",
+    "segment_size",
     "temperature",
     "top_p",
     "max_osl",
@@ -143,8 +165,11 @@ COHORT_FIELDS = (
     "enforce_eager",
     "sampling",
     "draft_sample_method",
+    "target_checkpoint",
+    "target_checkpoint_revision",
 )
 CAPTURE_PROFILE_COHORT_FIELDS = ("cudagraph_max_requests",)
+DRAFT_CHECKPOINT_FIELDS = ("draft_checkpoint", "draft_checkpoint_revision")
 GRAPH_ABLATION_COHORT_FIELDS = (
     "runtime_commit",
     "graph_mode",
@@ -154,9 +179,8 @@ GRAPH_ABLATION_COHORT_FIELDS = (
 )
 SAME_VARIANT_GRAPH_MODE_FIELDS = (
     *(field for field in COHORT_FIELDS if field not in GRAPH_ABLATION_COHORT_FIELDS),
-    "target_checkpoint",
-    "target_checkpoint_revision",
     "draft_checkpoint",
+    "draft_checkpoint_revision",
     "gate_mode",
     "k",
     "threshold",
@@ -176,6 +200,8 @@ LEGACY_UNRECORDED_MAX_MODEL_LEN = "legacy_unrecorded"
 LEGACY_UNRECORDED_CAPTURE_PROFILE = "legacy_unrecorded"
 LEGACY_UNRECORDED_CUDA_GRAPH_STATE = "legacy_unrecorded"
 LEGACY_UNRECORDED_ABLATION_BEHAVIOR = "legacy_unrecorded"
+LEGACY_UNRECORDED_PHYSICAL_TOPOLOGY = "legacy_unrecorded"
+LEGACY_UNRECORDED_CHECKPOINT = "legacy_unrecorded"
 LEGACY_CUDA_GRAPH_STATE_DEFAULTS = {
     "cuda_graph_enabled": LEGACY_UNRECORDED_CUDA_GRAPH_STATE,
     "enforce_eager": LEGACY_UNRECORDED_CUDA_GRAPH_STATE,
@@ -324,8 +350,24 @@ CUDA_GRAPH_ABLATION_MANIFEST_HEADER = (
     "ablation_behavior_revision",
     *CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER[_RUNTIME_COMMIT_INDEX + 1 :],
 )
+CUDA_GRAPH_ABLATION_V5_MANIFEST_HEADER = CUDA_GRAPH_ABLATION_MANIFEST_HEADER
+_EP_INDEX = CUDA_GRAPH_ABLATION_V5_MANIFEST_HEADER.index("ep")
+_TOPOLOGY_MANIFEST_HEADER = (
+    *CUDA_GRAPH_ABLATION_V5_MANIFEST_HEADER[: _EP_INDEX + 1],
+    "node_count",
+    "gpus_per_node",
+    "segment_size",
+    *CUDA_GRAPH_ABLATION_V5_MANIFEST_HEADER[_EP_INDEX + 1 :],
+)
+_DRAFT_CHECKPOINT_INDEX = _TOPOLOGY_MANIFEST_HEADER.index("draft_checkpoint")
+CUDA_GRAPH_ABLATION_MANIFEST_HEADER = (
+    *_TOPOLOGY_MANIFEST_HEADER[: _DRAFT_CHECKPOINT_INDEX + 1],
+    "draft_checkpoint_revision",
+    *_TOPOLOGY_MANIFEST_HEADER[_DRAFT_CHECKPOINT_INDEX + 1 :],
+)
 REQUIRED_MANIFEST_FIELDS = (
     *LEGACY_COHORT_FIELDS,
+    *DRAFT_CHECKPOINT_FIELDS,
     "variant",
     "gate_mode",
     "k",
@@ -345,6 +387,7 @@ MINI_REQUIRED_MANIFEST_FIELDS = (
     "checkout_path",
     "ray_sub_path",
     "draft_checkpoint",
+    "draft_checkpoint_revision",
     "target_checkpoint",
     "target_checkpoint_revision",
     "command_argv_json",
@@ -424,8 +467,11 @@ MANIFEST_SCHEMAS = {
         CUDA_GRAPH_ABLATION_V4_MANIFEST_HEADER,
         {"ablation_behavior_revision": LEGACY_UNRECORDED_ABLATION_BEHAVIOR},
     ),
+    CUDA_GRAPH_ABLATION_V5_MANIFEST_HEADER: ManifestSchema(
+        "cuda_graph_ablation_v5", CUDA_GRAPH_ABLATION_V5_MANIFEST_HEADER, {}
+    ),
     CUDA_GRAPH_ABLATION_MANIFEST_HEADER: ManifestSchema(
-        "cuda_graph_ablation_v5", CUDA_GRAPH_ABLATION_MANIFEST_HEADER, {}
+        "cuda_graph_ablation_v6", CUDA_GRAPH_ABLATION_MANIFEST_HEADER, {}
     ),
 }
 LEGACY_GRAPH_STATE_SCHEMA_NAMES = frozenset(
@@ -439,6 +485,11 @@ LEGACY_BEHAVIOR_SCHEMA_NAMES = frozenset(
     for schema in MANIFEST_SCHEMAS.values()
     if schema.legacy_defaults.get("ablation_behavior_revision")
     == LEGACY_UNRECORDED_ABLATION_BEHAVIOR
+)
+LEGACY_PROVENANCE_SCHEMA_NAMES = frozenset(
+    schema.name
+    for schema in MANIFEST_SCHEMAS.values()
+    if schema.name != "cuda_graph_ablation_v6"
 )
 
 
@@ -499,6 +550,9 @@ class RunSummary:
     draft_tp: str
     dp: str
     ep: str
+    node_count: str
+    gpus_per_node: str
+    segment_size: str
     temperature: str
     top_p: str
     max_osl: str
@@ -527,6 +581,7 @@ class RunSummary:
     target_checkpoint: str
     target_checkpoint_revision: str
     draft_checkpoint: str
+    draft_checkpoint_revision: str
     provenance: str
     comparison_key: tuple[tuple[str, str], ...]
 
@@ -667,11 +722,19 @@ def _comparison_key(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
     return tuple(
         (
             field,
-            "matched_specdec_method"
-            if field == "draft_sample_method"
+            (
+                "matched_specdec_method"
+                if field == "draft_sample_method"
+                else "matched_specdec_checkpoint"
+            )
+            if field in ("draft_sample_method", *DRAFT_CHECKPOINT_FIELDS)
             else metadata.get(field, ""),
         )
-        for field in (*COHORT_FIELDS, *CAPTURE_PROFILE_COHORT_FIELDS)
+        for field in (
+            *COHORT_FIELDS,
+            *CAPTURE_PROFILE_COHORT_FIELDS,
+            *DRAFT_CHECKPOINT_FIELDS,
+        )
     )
 
 
@@ -780,6 +843,9 @@ def _make_summary(
         draft_tp=metadata.get("draft_tp", ""),
         dp=metadata.get("dp", ""),
         ep=metadata.get("ep", ""),
+        node_count=metadata.get("node_count", ""),
+        gpus_per_node=metadata.get("gpus_per_node", ""),
+        segment_size=metadata.get("segment_size", ""),
         temperature=metadata.get("temperature", ""),
         top_p=metadata.get("top_p", ""),
         max_osl=metadata.get("max_osl", ""),
@@ -808,6 +874,7 @@ def _make_summary(
         target_checkpoint=metadata.get("target_checkpoint", ""),
         target_checkpoint_revision=metadata.get("target_checkpoint_revision", ""),
         draft_checkpoint=metadata.get("draft_checkpoint", ""),
+        draft_checkpoint_revision=metadata.get("draft_checkpoint_revision", ""),
         provenance=_provenance(metadata),
         comparison_key=_comparison_key(metadata),
     )
@@ -1084,6 +1151,40 @@ def build_comparison_rows(summaries: Iterable[RunSummary]) -> list[ComparisonRow
         }
         if len(specdec_methods) > 1:
             raise ValueError(f"mixed draft_sample_method:{dict(key)}")
+        baseline_draft_provenance = {
+            (summary.draft_checkpoint, summary.draft_checkpoint_revision)
+            for summary in cohort
+            if summary.variant.startswith("baseline_")
+        }
+        if baseline_draft_provenance and baseline_draft_provenance != {
+            ("not_applicable", "not_applicable")
+        }:
+            raise ValueError(f"invalid baseline draft checkpoint:{dict(key)}")
+        specdec_draft_provenance = {
+            (summary.draft_checkpoint, summary.draft_checkpoint_revision)
+            for summary in cohort
+            if not summary.variant.startswith("baseline_")
+        }
+        if len(specdec_draft_provenance) > 1:
+            raise ValueError(f"mixed draft checkpoint provenance:{dict(key)}")
+        if any(
+            getattr(summary, field) in {"", LEGACY_UNRECORDED_CHECKPOINT}
+            for summary in cohort
+            for field in (
+                "target_checkpoint",
+                "target_checkpoint_revision",
+                "node_count",
+                "gpus_per_node",
+                "segment_size",
+            )
+        ):
+            raise ValueError(f"missing explicit cohort provenance:{dict(key)}")
+        if any(
+            value in {"", LEGACY_UNRECORDED_CHECKPOINT}
+            for provenance in specdec_draft_provenance
+            for value in provenance
+        ):
+            raise ValueError(f"missing explicit draft checkpoint provenance:{dict(key)}")
         runner = cohort[0].runner
         baselines = [
             summary for summary in cohort if summary.variant == f"baseline_{runner}"
@@ -1124,6 +1225,9 @@ def add_graph_ablation_deltas(rows: Iterable[ComparisonRow]) -> list[ComparisonR
     grouped: dict[tuple[tuple[str, str], ...], list[ComparisonRow]] = {}
     for row in materialized:
         grouped.setdefault(same_variant_graph_mode_key(row.summary), []).append(row)
+    combined_report = {
+        row.cuda_graph_enabled for row in materialized
+    }.issuperset({"true", "false"})
 
     updated: list[ComparisonRow] = []
     for row in materialized:
@@ -1131,8 +1235,30 @@ def add_graph_ablation_deltas(rows: Iterable[ComparisonRow]) -> list[ComparisonR
             updated.append(row)
             continue
         matches = grouped[same_variant_graph_mode_key(row.summary)]
-        graph_on = [candidate for candidate in matches if candidate.cuda_graph_enabled == "true"]
-        if len(graph_on) != 1 or row.status != "final" or graph_on[0].status != "final":
+        graph_on = [
+            candidate for candidate in matches if candidate.cuda_graph_enabled == "true"
+        ]
+        if row.status != "final":
+            updated.append(row)
+            continue
+        if combined_report and len(graph_on) != 1:
+            mismatch = (
+                "no_exact_graph_on_match"
+                if not graph_on
+                else "ambiguous_graph_on_match"
+            )
+            updated.append(
+                replace(
+                    row,
+                    summary=replace(
+                        row.summary,
+                        status="partial",
+                        reason=f"graph_ablation_pairing_failed:{mismatch}",
+                    ),
+                )
+            )
+            continue
+        if len(graph_on) != 1 or graph_on[0].status != "final":
             updated.append(row)
             continue
         reference = graph_on[0]
@@ -1170,10 +1296,36 @@ def _read_manifest(path: Path) -> tuple[ManifestSchema, list[dict[str, str]]]:
                 **raw_row,
                 "_manifest_schema": schema.name,
             }
-            if (
+            if schema.name in LEGACY_PROVENANCE_SCHEMA_NAMES:
+                for field in ("node_count", "gpus_per_node", "segment_size"):
+                    row.setdefault(field, LEGACY_UNRECORDED_PHYSICAL_TOPOLOGY)
+                for field in (
+                    "target_checkpoint",
+                    "target_checkpoint_revision",
+                    "draft_checkpoint",
+                    "draft_checkpoint_revision",
+                ):
+                    row.setdefault(field, LEGACY_UNRECORDED_CHECKPOINT)
+
+            is_approved_reference = (
                 row.get("runtime_commit") == APPROVED_GRAPH_ON_RUNTIME_COMMIT
-                and row.get("graph_mode") in {"FULL_AND_PIECEWISE", "PIECEWISE"}
-            ):
+                and (row.get("job_id", ""), row.get("variant", ""))
+                in APPROVED_LEGACY_REFERENCES
+                and row.get("model") == "qwen32b"
+                and row.get("graph_mode")
+                in {"FULL_AND_PIECEWISE", "PIECEWISE"}
+                and row.get("target_checkpoint") == AUDITED_TARGET_CHECKPOINT
+                and row.get("target_checkpoint_revision")
+                == AUDITED_TARGET_REVISION
+                and (
+                    (
+                        row.get("variant", "").startswith("baseline_")
+                        and row.get("draft_checkpoint") == "not_applicable"
+                    )
+                    or row.get("draft_checkpoint") == AUDITED_DRAFT_CHECKPOINT
+                )
+            )
+            if is_approved_reference:
                 if "cuda_graph_enabled" not in schema.header:
                     row["cuda_graph_enabled"] = "true"
                     row["enforce_eager"] = "false"
@@ -1183,6 +1335,18 @@ def _read_manifest(path: Path) -> tuple[ManifestSchema, list[dict[str, str]]]:
                     row["ablation_behavior_revision"] = (
                         APPROVED_GRAPH_ON_RUNTIME_COMMIT
                     )
+                row.update(
+                    {
+                        "node_count": "4",
+                        "gpus_per_node": "4",
+                        "segment_size": "4",
+                        "draft_checkpoint_revision": (
+                            "not_applicable"
+                            if row.get("variant", "").startswith("baseline_")
+                            else AUDITED_DRAFT_REVISION
+                        ),
+                    }
+                )
             rows.append(row)
         return schema, rows
 
@@ -1197,9 +1361,61 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         missing = [field for field in REQUIRED_MANIFEST_FIELDS if not row.get(field)]
         if missing:
             return f"missing manifest fields:{','.join(missing)}"
+        legacy_schema = row.get("_manifest_schema", "")
+        has_legacy_provenance = any(
+            row[field] in {
+                LEGACY_UNRECORDED_PHYSICAL_TOPOLOGY,
+                LEGACY_UNRECORDED_CHECKPOINT,
+            }
+            for field in (
+                "node_count",
+                "gpus_per_node",
+                "segment_size",
+                "target_checkpoint",
+                "target_checkpoint_revision",
+                "draft_checkpoint",
+                "draft_checkpoint_revision",
+            )
+        )
+        if (
+            has_legacy_provenance
+            and legacy_schema not in LEGACY_PROVENANCE_SCHEMA_NAMES
+        ):
+            return "legacy topology/checkpoint provenance requires legacy schema"
+        for field in ("node_count", "gpus_per_node", "segment_size"):
+            value = row[field]
+            if (
+                value == LEGACY_UNRECORDED_PHYSICAL_TOPOLOGY
+                and legacy_schema in LEGACY_PROVENANCE_SCHEMA_NAMES
+            ):
+                continue
+            if not value.isdigit() or int(value) <= 0:
+                return f"invalid physical topology:{field}:{value}"
+        target_checkpoint = row["target_checkpoint"]
+        target_revision = row["target_checkpoint_revision"]
+        if LEGACY_UNRECORDED_CHECKPOINT not in {
+            target_checkpoint,
+            target_revision,
+        } and Path(target_checkpoint).name != target_revision:
+            return "target checkpoint path/revision mismatch"
+        draft_checkpoint = row["draft_checkpoint"]
+        draft_revision = row["draft_checkpoint_revision"]
+        if row["variant"].startswith("baseline_"):
+            if (draft_checkpoint, draft_revision) != (
+                "not_applicable",
+                "not_applicable",
+            ) and LEGACY_UNRECORDED_CHECKPOINT not in {
+                draft_checkpoint,
+                draft_revision,
+            }:
+                return "invalid baseline draft checkpoint"
+        elif LEGACY_UNRECORDED_CHECKPOINT not in {
+            draft_checkpoint,
+            draft_revision,
+        } and Path(draft_checkpoint).name != draft_revision:
+            return "draft checkpoint path/revision mismatch"
         graph_state = row["cuda_graph_enabled"]
         enforce_eager = row["enforce_eager"]
-        legacy_schema = row.get("_manifest_schema", "")
         has_legacy_state = LEGACY_UNRECORDED_CUDA_GRAPH_STATE in {
             graph_state,
             enforce_eager,
@@ -1375,7 +1591,9 @@ def _render_html(rows: list[dict[str, object]]) -> str:
                 )
             fragments.append("</div>")
         fragments.append(
-            "<table><thead><tr><th>Variant</th><th>Status</th><th>E2E x</th><th>Gen x</th><th>Health</th><th>W&B</th></tr></thead><tbody>"
+            "<table><thead><tr><th>Variant</th><th>CUDA graph</th>"
+            "<th>Graph mode</th><th>Status</th><th>E2E x</th><th>Gen x</th>"
+            "<th>Health</th><th>W&B</th></tr></thead><tbody>"
         )
         for row in runner_rows:
             status = cast(str, row["status"])
@@ -1383,7 +1601,12 @@ def _render_html(rows: list[dict[str, object]]) -> str:
             url = html.escape(cast(str, row["wandb_url"]), quote=True)
             link = f'<a href="{url}">run</a>' if url else "-"
             fragments.append(
-                f'<tr class="{row_class}"><td>{html.escape(cast(str, row["variant"]))}</td><td>{html.escape(status)}</td><td>{_format_metric(row["e2e_time_speedup_vs_baseline"])}</td><td>{_format_metric(row["generation_time_speedup_vs_baseline"])}</td><td>{row["health_gate_passed"] if row["health_gate_passed"] is not None else "-"}</td><td>{link}</td></tr>'
+                f'<tr class="{row_class}"><td>{html.escape(cast(str, row["variant"]))}</td>'
+                f'<td>{html.escape(cast(str, row["cuda_graph_enabled"]))}</td>'
+                f'<td>{html.escape(cast(str, row["graph_mode"]))}</td>'
+                f'<td>{html.escape(status)}</td><td>{_format_metric(row["e2e_time_speedup_vs_baseline"])}</td>'
+                f'<td>{_format_metric(row["generation_time_speedup_vs_baseline"])}</td>'
+                f'<td>{row["health_gate_passed"] if row["health_gate_passed"] is not None else "-"}</td><td>{link}</td></tr>'
             )
         fragments.append("</tbody></table>")
     graph_effect_rows = [
@@ -1417,7 +1640,10 @@ def _render_html(rows: list[dict[str, object]]) -> str:
             key=lambda row: cast(float, row["e2e_time_speedup_vs_baseline"] or 0.0),
         )
         fragments.append(
-            f"<p>Final finding: {html.escape(cast(str, best['variant']))} has the highest matched E2E time speedup ({_format_metric(best['e2e_time_speedup_vs_baseline'])}x).</p>"
+            f"<p>Final finding: {html.escape(cast(str, best['variant']))} "
+            f"(CUDA graph {html.escape(cast(str, best['cuda_graph_enabled']))}, "
+            f"{html.escape(cast(str, best['graph_mode']))}) has the highest matched "
+            f"E2E time speedup ({_format_metric(best['e2e_time_speedup_vs_baseline'])}x).</p>"
         )
     fragments.append("</section>\n")
     return "\n".join(fragments)

@@ -412,6 +412,7 @@ submit_one() {
   local roofline_hash=""
   local manifest_draft_sample_method="not_applicable"
   local manifest_draft_checkpoint="not_applicable"
+  local manifest_draft_checkpoint_revision="not_applicable"
   local local_rollout_capacity
   local cudagraph_max_requests=""
   local cudagraph_max_tokens=""
@@ -630,6 +631,7 @@ submit_one() {
   if [[ "${draft_k}" != "0" ]]; then
     manifest_draft_sample_method="${DRAFT_SAMPLE_METHOD}"
     manifest_draft_checkpoint="${draft_model}"
+    manifest_draft_checkpoint_revision="${expected_draft_revision}"
     overrides+=(
       "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
       "++policy.generation.vllm_kwargs.speculative_config.model=${draft_model}"
@@ -756,8 +758,8 @@ submit_one() {
 
   case "${MODE}" in
     dry-run)
-      printf '[DRY-RUN] job model=%s variant=%s runner=%s graph_mode=%s gate_mode=%s k=%s\n' \
-        "${model}" "${variant}" "${runner}" "${effective_graph_mode}" "${gate_mode}" "${draft_k}"
+      printf '[DRY-RUN] job model=%s variant=%s runner=%s graph_mode=%s gate_mode=%s k=%s dp=%s\n' \
+        "${model}" "${variant}" "${runner}" "${effective_graph_mode}" "${gate_mode}" "${draft_k}" "${dp}"
       printf '[DRY-RUN] env'
       printf ' %q' "${environment[@]}"
       printf ' sbatch'
@@ -779,7 +781,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tablation_behavior_revision\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tcuda_graph_enabled\tenforce_eager\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tablation_behavior_revision\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\tnode_count\tgpus_per_node\tsegment_size\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tcuda_graph_enabled\tenforce_eager\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tdraft_checkpoint_revision\tcommand_argv_json\tlauncher_argv_json'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -818,6 +820,9 @@ submit_one() {
         "${draft_tp}"
         "${dp}"
         "${GENERATION_EP}"
+        "${CLUSTER_NUM_NODES}"
+        "${CLUSTER_GPUS_PER_NODE}"
+        "${CLUSTER_GPUS_PER_NODE}"
         "${TEMPERATURE}"
         "${TOP_P}"
         "${MAX_OSL}"
@@ -854,6 +859,7 @@ submit_one() {
         "${target_model}"
         "${expected_target_revision}"
         "${manifest_draft_checkpoint}"
+        "${manifest_draft_checkpoint_revision}"
         "${command_argv_json}"
         "${launcher_argv_json}"
       )

@@ -467,12 +467,39 @@ def test_cuda_graph_ablation_wrapper_selects_only_the_approved_six_rows() -> Non
         "dry-run",
         REPO_DIR="/lustre/test/nemo-rl",
         LYRIS_ROOT="/lustre/test",
-        HF_HOME="/lustre/test/hf_home",
-        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        HF_HOME="/poisoned/hf-home",
+        CONTAINER="/poisoned/container.sqsh",
+        CLUSTER_NAME="poisoned-cluster",
+        RUNTIME_NAME="poisoned-runtime",
+        RUNTIME_VERSION="poisoned-runtime-version",
+        VLLM_VERSION="poisoned-vllm-version",
+        VLLM_COMMIT="poisoned-vllm-commit",
         RUN_TAG="ablation-contract",
         ATTEMPT_ID="attempt-1",
         WANDB_PROJECT="inherited-wrong-project",
         EXPERIMENT_ROOT="/lustre/test/inherited-wrong-root",
+        CLUSTER_NUM_NODES="9",
+        CLUSTER_GPUS_PER_NODE="8",
+        GENERATION_EP="7",
+        MAX_STEPS="1",
+        NUM_PROMPTS="1",
+        NUM_GENERATIONS="1",
+        TRAIN_GBS="1",
+        MAX_OSL="128",
+        SPECDEC_CONTEXT_HEADROOM_TOKENS="1",
+        MAX_SEQUENCE_LENGTH="128",
+        TEMPERATURE="0.2",
+        TOP_P="0.3",
+        SAMPLING="poisoned",
+        DRAFT_SAMPLE_METHOD="greedy",
+        MAX_NUM_BATCHED_TOKENS="128",
+        MAX_NUM_SEQS="8",
+        TAIL_GATE_THRESHOLD="1",
+        TAIL_GATE_CONSECUTIVE_CHECKS="1",
+        QWEN32_TARGET_CHECKPOINT_REVISION="a" * 40,
+        QWEN32_DRAFT_CHECKPOINT_REVISION="b" * 40,
+        QWEN32_TARGET_MODEL="/poisoned/target",
+        QWEN32_DRAFT_MODEL="/poisoned/draft",
     )
 
     assert result.returncode == 0, result.stderr
@@ -493,9 +520,37 @@ def test_cuda_graph_ablation_wrapper_selects_only_the_approved_six_rows() -> Non
     assert "/experiments/vllm024-cudagraph-off/ablation-contract" in result.stdout
     assert "/lustre/test/inherited-wrong-root" not in result.stdout
     assert "grpo.max_num_steps=20" in result.stdout
+    assert "grpo.num_prompts_per_step=64" in result.stdout
+    assert "grpo.num_generations_per_prompt=32" in result.stdout
+    assert "policy.train_global_batch_size=512" in result.stdout
+    assert "policy.max_total_sequence_length=4096" in result.stdout
+    assert "policy.generation.max_new_tokens=4096" in result.stdout
+    assert "policy.generation.vllm_cfg.max_model_len=4128" in result.stdout
+    assert "policy.generation.temperature=1.0" in result.stdout
+    assert "policy.generation.top_p=1.0" in result.stdout
+    assert "max_num_batched_tokens=16384" in result.stdout
+    assert "max_num_seqs=1024" in result.stdout
+    assert "policy.generation.vllm_cfg.tensor_parallel_size=2" in result.stdout
+    assert "speculative_config.draft_tensor_parallel_size=1" in result.stdout
+    assert "policy.generation.vllm_cfg.expert_parallel_size=1" in result.stdout
+    assert "speculative_config.rejection_sample_method=standard" in result.stdout
     assert "speculative_config.draft_sample_method=probabilistic" in result.stdout
+    assert "moe_backend=triton" in result.stdout
     assert "sd_tail_gate_threshold=64" in result.stdout
     assert "sd_tail_gate_consecutive_checks=3" in result.stdout
+    assert result.stdout.count("--nodes=4") == 6
+    assert result.stdout.count("--segment=4") == 6
+    assert "--gres" not in result.stdout
+    assert result.stdout.count("dp=8") == 6
+    assert (
+        "/lustre/test/hf_home/hub/models--Qwen--Qwen3-32B/snapshots/"
+        f"{QWEN32_TARGET_REVISION}" in result.stdout
+    )
+    assert (
+        "/lustre/test/hf_home/hub/models--RedHatAI--Qwen3-32B-speculator.eagle3/"
+        f"snapshots/{QWEN32_DRAFT_REVISION}" in result.stdout
+    )
+    assert "/poisoned/" not in result.stdout
     assert result.stdout.count("policy.generation.vllm_cfg.enforce_eager=true") >= 6
 
 
@@ -804,7 +859,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     with manifest_path.open(encoding="utf-8", newline="") as stream:
         manifest_rows = list(csv.DictReader(stream, delimiter="\t"))
     schema, _ = _read_manifest(manifest_path)
-    assert schema.name == "cuda_graph_ablation_v5"
+    assert schema.name == "cuda_graph_ablation_v6"
     assert len(manifest_rows) == 1
     manifest_row = manifest_rows[0]
     assert {
@@ -813,6 +868,9 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "runtime_version",
         "runtime_commit",
         "ablation_behavior_revision",
+        "node_count",
+        "gpus_per_node",
+        "segment_size",
         "vllm_version",
         "vllm_commit",
         "target_tp",
@@ -858,6 +916,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "target_checkpoint",
         "target_checkpoint_revision",
         "draft_checkpoint",
+        "draft_checkpoint_revision",
         "command_argv_json",
         "launcher_argv_json",
     }.issubset(manifest_row)
@@ -878,6 +937,9 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "target_tp": "2",
         "draft_tp": "1",
         "dp": "8",
+        "node_count": "4",
+        "gpus_per_node": "4",
+        "segment_size": "4",
         "ep": "1",
         "temperature": "1.0",
         "top_p": "1.0",
@@ -919,6 +981,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     assert manifest_row["checkout_path"] == str(repo.resolve())
     assert manifest_row["ray_sub_path"] == str((repo / "ray.sub").resolve())
     assert manifest_row["draft_checkpoint"] == str(draft_model.resolve())
+    assert manifest_row["draft_checkpoint_revision"] == QWEN32_DRAFT_REVISION
     assert f"policy.model_name={target_model.resolve()}" in manifest_row["command"]
     assert f"NRL_RUNTIME_CHECKOUT={repo.resolve()}" in launcher_argv
     assert f"NRL_EXPECTED_RUNTIME_COMMIT={commit}" in launcher_argv
