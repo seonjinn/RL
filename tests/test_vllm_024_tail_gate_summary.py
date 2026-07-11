@@ -30,6 +30,7 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     REQUIRED_ROW_FIELDS,
     RunSummary,
     _history_keys,
+    _scan_sparse_history,
     _validate_manifest_rows,
     build_comparison_rows,
     main,
@@ -69,6 +70,16 @@ EXPECTED_METRIC_KEYS = {
     "draft_prefill_graph_ratio": "train/vllm/cudagraph_draft_prefill_graph_call_ratio",
     "draft_decode_graph_ratio": "train/vllm/cudagraph_draft_decode_graph_call_ratio",
 }
+
+
+def test_scan_sparse_history_uses_unfiltered_wandb_rows() -> None:
+    rows = [{"_step": 1, "metric": 2.0}, {"_step": 2, "metric": 3.0}]
+
+    class SparseRun:
+        def scan_history(self, *, keys: list[str]):
+            return iter(rows if not keys else [])
+
+    assert _scan_sparse_history(SparseRun(), ["_step", "optional_metric"]) == rows
 
 
 def _metadata(

@@ -40,6 +40,7 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     _history_keys,
     _is_finite_number,
     _read_manifest,
+    _scan_sparse_history,
     _validate_manifest_rows,
     _write_atomic,
     _write_csv,
@@ -1105,10 +1106,8 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
             )
             if not metadata.get("wandb_url"):
                 metadata["wandb_url"] = run.url
-            history = list(
-                run.scan_history(
-                    keys=[*_history_keys(metadata), *MINI_METRIC_KEYS.values()]
-                )
+            history = _scan_sparse_history(
+                run, [*_history_keys(metadata), *MINI_METRIC_KEYS.values()]
             )
             histories[job_id] = history
             summary = summarize_history(metadata, history, expected_steps=MINI_STEPS)

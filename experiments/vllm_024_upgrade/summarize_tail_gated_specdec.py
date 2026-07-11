@@ -494,6 +494,16 @@ def _history_keys(metadata: Mapping[str, str]) -> list[str]:
     ]
 
 
+def _scan_sparse_history(
+    run: WandbRun, fallback_keys: list[str]
+) -> list[Mapping[str, object]]:
+    """Read sparse W&B rows without requiring every optional metric key."""
+    history = list(run.scan_history(keys=[]))
+    if history and all("_step" in row for row in history):
+        return history
+    return list(run.scan_history(keys=fallback_keys))
+
+
 def _comparison_key(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
     return tuple(
         (
@@ -1124,7 +1134,7 @@ def main(argv: list[str] | None = None, *, api: WandbApi | None = None) -> int:
                 metadata["wandb_url"] = run.url
             summaries.append(
                 summarize_history(
-                    metadata, run.scan_history(keys=_history_keys(metadata))
+                    metadata, _scan_sparse_history(run, _history_keys(metadata))
                 )
             )
         except Exception as error:  # W&B failures become provenance-preserving rows.
