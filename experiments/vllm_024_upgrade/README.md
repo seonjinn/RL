@@ -92,8 +92,11 @@ DynamicSD, so this avoids comparing it against a stronger fixed-K graph mode.
 The 40K recipe uses TP4 and train micro-batch size 1, so this profile also sets
 logprob batch size 1 to satisfy NeMo-RL's TP batch-variant accuracy guard.
 Worker environments are still rebuilt from the locked project, but this
-profile uses `${LYRIS_ROOT}/uv_cache/vllm024` as a shared download cache so
-every node does not fetch the same FlashInfer wheels from GitHub.
+profile uses `${LYRIS_ROOT}/uv_cache/vllm024` only as a prewarmed seed. At job
+start, each allocated node copies that seed into its own `/tmp` cache mounted
+at `/root/.cache/uv`. This avoids both repeated FlashInfer downloads and the
+cross-node distribution-lock contention caused by running eight `uv` builders
+against one Lustre cache.
 
 The fixed-target cohort keeps `Qwen/Qwen3-30B-A3B` and compares the Base and
 Instruct-2507 Red Hat Eagle-3 weights. The Base and Thinking-2507 repositories
