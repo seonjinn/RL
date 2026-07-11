@@ -22,6 +22,7 @@ from typing import Iterable, Mapping
 
 import pytest
 
+from experiments.vllm_024_upgrade import summarize_tail_gated_specdec
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     CAPTURE_PROFILE_MANIFEST_HEADER,
     COHORT_FIELDS,
@@ -135,6 +136,8 @@ def _metadata(
         "container_sha256": "deadbeef",
         "runner": runner,
         "graph_mode": "FULL_AND_PIECEWISE" if runner == "v2" else "PIECEWISE",
+        "cuda_graph_enabled": "true",
+        "enforce_eager": "false",
         "sampling": "standard",
         "draft_sample_method": (
             "not_applicable" if variant.startswith("baseline_") else "probabilistic"
@@ -496,6 +499,72 @@ def test_comparison_rejects_mismatched_cudagraph_request_coverage() -> None:
         )
 
 
+def test_comparison_rejects_mixed_cuda_graph_states() -> None:
+    baseline_metadata = _metadata()
+    candidate_metadata = _metadata(variant="always_on_v2_k5")
+    candidate_metadata["cuda_graph_enabled"] = "false"
+    candidate_metadata["enforce_eager"] = "true"
+
+    with pytest.raises(ValueError, match="missing matched baseline"):
+        build_comparison_rows(
+            [_summary(baseline_metadata), _summary(candidate_metadata)]
+        )
+
+
+def test_same_variant_graph_mode_key_matches_only_graph_ablation_states() -> None:
+    graph_on_metadata = _metadata(variant="always_on_v2_k5")
+    graph_on_metadata.update(
+        {
+            "cudagraph_max_requests": "256",
+            "cudagraph_max_tokens": "1536",
+            "cudagraph_capture_sizes": "[6,12,24,1536]",
+        }
+    )
+    graph_off_metadata = {
+        **graph_on_metadata,
+        "cuda_graph_enabled": "false",
+        "enforce_eager": "true",
+        "graph_mode": "NONE",
+        "cudagraph_max_requests": "not_applicable",
+        "cudagraph_max_tokens": "not_applicable",
+        "cudagraph_capture_sizes": "not_applicable",
+    }
+
+    assert summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_on_metadata)
+    ) == summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_off_metadata)
+    )
+
+    different_variant = {
+        **graph_off_metadata,
+        "variant": "fastrl_threshold_v2_k5",
+    }
+    different_recipe = {
+        **graph_off_metadata,
+        "recipe": "examples/configs/recipes/llm/performance/different.yaml",
+    }
+    different_draft_sampling = {
+        **graph_off_metadata,
+        "draft_sample_method": "greedy",
+    }
+    assert summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_on_metadata)
+    ) != summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(different_variant)
+    )
+    assert summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_on_metadata)
+    ) != summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(different_recipe)
+    )
+    assert summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(graph_on_metadata)
+    ) != summarize_tail_gated_specdec.same_variant_graph_mode_key(
+        _summary(different_draft_sampling)
+    )
+
+
 def test_comparison_rejects_mixed_nonbaseline_draft_sample_methods() -> None:
     baseline = _metadata()
     always_on = _metadata(variant="always_on_v2_k5")
@@ -582,6 +651,8 @@ def test_historical_manifest_without_mini_fields_remains_collectible(
     mini_only_fields = (
         "draft_sample_method",
         "max_model_len",
+        "cuda_graph_enabled",
+        "enforce_eager",
         "run_dir",
         "slurm_log_path",
         "ray_driver_log_path",

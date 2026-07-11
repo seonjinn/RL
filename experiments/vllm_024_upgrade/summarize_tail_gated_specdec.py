@@ -137,10 +137,18 @@ COHORT_FIELDS = (
     "container_sha256",
     "runner",
     "graph_mode",
+    "cuda_graph_enabled",
+    "enforce_eager",
     "sampling",
     "draft_sample_method",
 )
 CAPTURE_PROFILE_COHORT_FIELDS = ("cudagraph_max_requests",)
+GRAPH_ABLATION_COHORT_FIELDS = (
+    "graph_mode",
+    "cuda_graph_enabled",
+    "enforce_eager",
+    *CAPTURE_PROFILE_COHORT_FIELDS,
+)
 LEGACY_COHORT_FIELDS = tuple(
     field for field in COHORT_FIELDS if field != "draft_sample_method"
 )
@@ -152,6 +160,11 @@ LOG_PROVENANCE_FIELDS = (
 )
 LEGACY_UNRECORDED_MAX_MODEL_LEN = "legacy_unrecorded"
 LEGACY_UNRECORDED_CAPTURE_PROFILE = "legacy_unrecorded"
+LEGACY_UNRECORDED_CUDA_GRAPH_STATE = "legacy_unrecorded"
+LEGACY_CUDA_GRAPH_STATE_DEFAULTS = {
+    "cuda_graph_enabled": LEGACY_UNRECORDED_CUDA_GRAPH_STATE,
+    "enforce_eager": LEGACY_UNRECORDED_CUDA_GRAPH_STATE,
+}
 LEGACY_C78A93C8_MANIFEST_HEADER = (
     "timestamp",
     "model",
@@ -245,6 +258,13 @@ STRUCTURED_PROVENANCE_MANIFEST_HEADER = (
     "command_argv_json",
     "launcher_argv_json",
 )
+_MINI_GRAPH_MODE_INDEX = MINI_PROVENANCE_MANIFEST_HEADER.index("graph_mode")
+CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER = (
+    *MINI_PROVENANCE_MANIFEST_HEADER[: _MINI_GRAPH_MODE_INDEX + 1],
+    "cuda_graph_enabled",
+    "enforce_eager",
+    *MINI_PROVENANCE_MANIFEST_HEADER[_MINI_GRAPH_MODE_INDEX + 1 :],
+)
 IMMUTABLE_CHECKPOINT_MANIFEST_HEADER = (
     *STRUCTURED_PROVENANCE_MANIFEST_HEADER[:-3],
     "target_checkpoint",
@@ -258,6 +278,13 @@ CAPTURE_PROFILE_MANIFEST_HEADER = (
     "cudagraph_max_tokens",
     "cudagraph_capture_sizes",
     *IMMUTABLE_CHECKPOINT_MANIFEST_HEADER[_MAX_NUM_SEQS_INDEX + 1 :],
+)
+_GRAPH_MODE_INDEX = CAPTURE_PROFILE_MANIFEST_HEADER.index("graph_mode")
+CUDA_GRAPH_ABLATION_MANIFEST_HEADER = (
+    *CAPTURE_PROFILE_MANIFEST_HEADER[: _GRAPH_MODE_INDEX + 1],
+    "cuda_graph_enabled",
+    "enforce_eager",
+    *CAPTURE_PROFILE_MANIFEST_HEADER[_GRAPH_MODE_INDEX + 1 :],
 )
 REQUIRED_MANIFEST_FIELDS = (
     *LEGACY_COHORT_FIELDS,
@@ -302,25 +329,45 @@ MANIFEST_SCHEMAS = {
             "max_model_len": LEGACY_UNRECORDED_MAX_MODEL_LEN,
             "draft_sample_method": "",
             "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
         },
     ),
     MINI_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
         "mini_provenance_v1",
         MINI_PROVENANCE_MANIFEST_HEADER,
+        {
+            "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
+        },
+    ),
+    CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
+        "cuda_graph_ablation_mini_provenance_v4",
+        CUDA_GRAPH_ABLATION_MINI_PROVENANCE_MANIFEST_HEADER,
         {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
     ),
     STRUCTURED_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
         "structured_provenance_v1",
         STRUCTURED_PROVENANCE_MANIFEST_HEADER,
-        {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
+        {
+            "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
+        },
     ),
     IMMUTABLE_CHECKPOINT_MANIFEST_HEADER: ManifestSchema(
         "immutable_checkpoint_v2",
         IMMUTABLE_CHECKPOINT_MANIFEST_HEADER,
-        {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
+        {
+            "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
+            **LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
+        },
     ),
     CAPTURE_PROFILE_MANIFEST_HEADER: ManifestSchema(
-        "capture_profile_v3", CAPTURE_PROFILE_MANIFEST_HEADER, {}
+        "capture_profile_v3",
+        CAPTURE_PROFILE_MANIFEST_HEADER,
+        LEGACY_CUDA_GRAPH_STATE_DEFAULTS,
+    ),
+    CUDA_GRAPH_ABLATION_MANIFEST_HEADER: ManifestSchema(
+        "cuda_graph_ablation_v4", CUDA_GRAPH_ABLATION_MANIFEST_HEADER, {}
     ),
 }
 
@@ -392,6 +439,8 @@ class RunSummary:
     container: str
     container_sha256: str
     graph_mode: str
+    cuda_graph_enabled: str
+    enforce_eager: str
     sampling: str
     draft_sample_method: str
     wandb_run_id: str
@@ -544,6 +593,25 @@ def _comparison_key(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
     )
 
 
+def same_variant_graph_mode_key(
+    summary: RunSummary,
+) -> tuple[tuple[str, str], ...]:
+    """Match graph ablations only within an otherwise identical variant."""
+    return (
+        ("variant", summary.variant),
+        *(
+            (
+                field,
+                summary.draft_sample_method
+                if field == "draft_sample_method"
+                else value,
+            )
+            for field, value in summary.comparison_key
+            if field not in GRAPH_ABLATION_COHORT_FIELDS
+        ),
+    )
+
+
 def _provenance(metadata: Mapping[str, str]) -> str:
     return json.dumps(
         dict(sorted(metadata.items())), separators=(",", ":"), sort_keys=True
@@ -643,6 +711,8 @@ def _make_summary(
         container=metadata.get("container", ""),
         container_sha256=metadata.get("container_sha256", ""),
         graph_mode=metadata.get("graph_mode", ""),
+        cuda_graph_enabled=metadata.get("cuda_graph_enabled", ""),
+        enforce_eager=metadata.get("enforce_eager", ""),
         sampling=metadata.get("sampling", ""),
         draft_sample_method=_draft_sample_method(metadata),
         wandb_run_id=metadata.get("wandb_run_id", ""),

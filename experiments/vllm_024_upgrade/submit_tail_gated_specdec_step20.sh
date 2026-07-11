@@ -529,6 +529,9 @@ submit_one() {
     cuda_graph_enabled=false
     enforce_eager=true
     effective_graph_mode=NONE
+    cudagraph_max_requests=not_applicable
+    cudagraph_max_tokens=not_applicable
+    cudagraph_capture_sizes=not_applicable
   fi
 
   local_rollout_capacity=$(((NUM_PROMPTS * NUM_GENERATIONS + dp - 1) / dp))
@@ -769,7 +772,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tcuda_graph_enabled\tenforce_eager\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -825,6 +828,8 @@ submit_one() {
         "$(sha256_file "${CONTAINER}")"
         "${runner}"
         "${effective_graph_mode}"
+        "${cuda_graph_enabled}"
+        "${enforce_eager}"
         "${SAMPLING}"
         "${manifest_draft_sample_method}"
         "${job_id}"

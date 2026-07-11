@@ -744,7 +744,7 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     with manifest_path.open(encoding="utf-8", newline="") as stream:
         manifest_rows = list(csv.DictReader(stream, delimiter="\t"))
     schema, _ = _read_manifest(manifest_path)
-    assert schema.name == "capture_profile_v3"
+    assert schema.name == "cuda_graph_ablation_v4"
     assert len(manifest_rows) == 1
     manifest_row = manifest_rows[0]
     assert {
@@ -775,6 +775,8 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "draft_sample_method",
         "runner",
         "graph_mode",
+        "cuda_graph_enabled",
+        "enforce_eager",
         "gate_mode",
         "k",
         "threshold",
@@ -831,6 +833,8 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "cudagraph_capture_sizes": "[6,12,24,48,96,144,192,240,288,336,384,432,480,528,576,624,672,720,768,816,864,912,960,1008,1056,1104,1152,1200,1248,1296,1344,1392,1440,1488,1536]",
         "runner": "v2",
         "graph_mode": "FULL_AND_PIECEWISE",
+        "cuda_graph_enabled": "true",
+        "enforce_eager": "false",
         "sampling": "standard",
         "draft_sample_method": "probabilistic",
         "job_id": "4242",
@@ -884,6 +888,44 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         ).stdout
         == ""
     )
+
+
+def test_submit_records_cuda_graph_off_manifest_provenance(tmp_path: Path) -> None:
+    repo, _commit = _create_pushed_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text("#!/usr/bin/env bash\nprintf '4242\\n'\n", encoding="utf-8")
+    sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.write_text("container contract\n", encoding="utf-8")
+    target_model = _target_snapshot(tmp_path, "Qwen3-32B", QWEN32_TARGET_REVISION)
+    experiment_root = tmp_path / "runs"
+
+    result = _run_launcher(
+        "submit",
+        "qwen32b",
+        "baseline_v2",
+        REPO_DIR=str(repo),
+        CONTAINER=str(container),
+        QWEN32_TARGET_MODEL=str(target_model),
+        EXPERIMENT_ROOT=str(experiment_root),
+        CUDA_GRAPH_MODE="off",
+        WANDB_API_KEY="test-only-key",
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with (experiment_root / "submissions.tsv").open(
+        encoding="utf-8", newline=""
+    ) as stream:
+        row = next(csv.DictReader(stream, delimiter="\t"))
+    assert row["cuda_graph_enabled"] == "false"
+    assert row["enforce_eager"] == "true"
+    assert row["graph_mode"] == "NONE"
+    assert row["cudagraph_max_requests"] == "not_applicable"
+    assert row["cudagraph_max_tokens"] == "not_applicable"
+    assert row["cudagraph_capture_sizes"] == "not_applicable"
 
 
 def test_submit_executes_and_serializes_one_canonical_submission_argv(
