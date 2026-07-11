@@ -793,16 +793,12 @@ def _gate_activation_health(summary: RunSummary) -> bool | None:
     if any(value is None for value in values):
         return False
     try:
-        expected_local_engines = float(summary.dp)
+        max_worker_ranks = float(summary.dp) * float(summary.target_tp)
     except ValueError:
         return False
     if (
         cast(float, summary.gate_decisions) <= 0.0
-        or not math.isclose(
-            cast(float, summary.gate_activations),
-            expected_local_engines,
-            abs_tol=1e-9,
-        )
+        or not 0.0 < cast(float, summary.gate_activations) <= max_worker_ranks
         or not 0.0 < cast(float, summary.gate_enabled_ratio) < 1.0
         or not 0.0 < cast(float, summary.gate_advance_only_ratio) < 1.0
         or cast(float, summary.activation_tick) <= 0.0

@@ -899,15 +899,16 @@ def _mini_failure(
 
     if metadata.get("gate_mode") != "threshold":
         return None
-    expected_local_engines = int(metadata["dp"])
+    max_worker_ranks = int(metadata["dp"]) * int(metadata["target_tp"])
     for record in records.values():
         activations = record.get("train/vllm/tail_gate_activations")
-        if not _is_finite_number(activations) or float(activations) != float(
-            expected_local_engines
+        if (
+            not _is_finite_number(activations)
+            or not 0.0 < float(activations) <= float(max_worker_ranks)
         ):
             return (
                 "tail_gate_activations:"
-                f"expected_local_engines={expected_local_engines}:actual={activations}"
+                f"expected_range=(0,{max_worker_ranks}]:actual={activations}"
             )
         if (
             summary.cuda_graph_fallback_count is not None

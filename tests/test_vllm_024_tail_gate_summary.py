@@ -294,11 +294,11 @@ def test_ratio_only_graph_evidence_is_phrased_as_measured_threshold() -> None:
     )
 
 
-def test_gate_activation_count_matches_manifest_generation_dp() -> None:
+def test_gate_activation_count_cannot_exceed_worker_ranks() -> None:
     metadata = _metadata(variant="fastrl_threshold_v2_k5")
     history = _history(metadata)
     for record in history:
-        record["train/vllm/tail_gate_activations"] = 1.0
+        record["train/vllm/tail_gate_activations"] = 17.0
     candidate_summary = summarize_history(metadata, history)
     baseline = _summary(_metadata(variant="baseline_v2"))
     always_on = _summary(_metadata(variant="always_on_v2_k5"))

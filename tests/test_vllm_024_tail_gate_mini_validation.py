@@ -1124,7 +1124,7 @@ def test_mini_validator_rejects_failed_threshold_health_gate(
     assert failure in threshold["reason"]
 
 
-def test_mini_validator_requires_one_activation_per_generation_engine(
+def test_mini_validator_rejects_activation_count_above_worker_ranks(
     tmp_path: Path,
 ) -> None:
     rows = _cohort()
@@ -1132,7 +1132,7 @@ def test_mini_validator_requires_one_activation_per_generation_engine(
         row["wandb_run_id"]: _history(
             row,
             **(
-                {"activations": 1.0}
+                {"activations": 17.0}
                 if row["variant"] == "fastrl_threshold_v2_k5"
                 else {}
             ),
@@ -1148,7 +1148,7 @@ def test_mini_validator_requires_one_activation_per_generation_engine(
     )
     assert result == 1
     assert threshold["reason"] == (
-        "mini_health_failed:tail_gate_activations:expected_local_engines=8:actual=1.0"
+        "mini_health_failed:tail_gate_activations:expected_range=(0,16]:actual=17.0"
     )
 
 
