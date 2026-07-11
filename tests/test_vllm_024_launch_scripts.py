@@ -25,6 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DYNAMICSD_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_eagle3_dynamicsd_step20.sh"
 )
+CG_TOP_P_PROFILE_LAUNCHER = (
+    REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_cg_top_p_refit_profile.sh"
+)
 HF_PREWARM_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_hf_snapshot_prewarm.sh"
 )
@@ -314,6 +317,79 @@ def test_dynamicsd_launcher_preserves_matched_runtime_contract() -> None:
     assert "logger.wandb.entity=nvidia" in output
     assert "logger.tensorboard_enabled=false" in output
     assert "WANDB_RESUME=never" in output
+
+
+def test_dynamicsd_launcher_honors_sampling_overrides() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen32b",
+        "eagle3_k1",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="top-p-contract-test",
+        ATTEMPT_ID="attempt-1",
+        TEMPERATURE="1.0",
+        TOP_P="0.7",
+    )
+
+    assert "policy.generation.temperature=1.0" in output
+    assert "policy.generation.top_p=0.7" in output
+    assert "policy.generation.top_p=1.0" not in output
+
+
+def test_dynamicsd_launcher_propagates_refit_diagnostics_to_vllm_workers() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen32b",
+        "eagle3_k1",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="refit-diagnostics-contract-test",
+        ATTEMPT_ID="attempt-1",
+        REFIT_DIAGNOSTICS="true",
+    )
+
+    assert "NRL_VLLM_REFIT_DIAGNOSTICS=true" in output
+    assert "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=NRL_VLLM_REFIT_DIAGNOSTICS" in output
+
+
+@pytest.mark.parametrize("top_p", ["0", "1.1", "not-a-number"])
+def test_dynamicsd_launcher_rejects_invalid_top_p(top_p: str) -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen32b",
+        "baseline",
+        TOP_P=top_p,
+    )
+
+    assert result.returncode == 2
+    assert "TOP_P must be a number in (0, 1]" in result.stderr
+
+
+def test_cg_top_p_profile_wrapper_renders_complete_matched_matrix() -> None:
+    output = _run_script(
+        CG_TOP_P_PROFILE_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="cg-top-p-contract-test",
+        ATTEMPT_ID="attempt-1",
+    )
+
+    assert output.count("[PROFILE-MATRIX]") == 12
+    for model in ("qwen30ba3b", "qwen32b", "qwen235b"):
+        for top_p_label in ("top_p10", "top_p07"):
+            for variant in ("baseline", "eagle3_k1"):
+                assert f"model={model} top_p={top_p_label} variant={variant}" in output
+    assert "max_cudagraph_capture_size=128" in output
+    assert "max_cudagraph_capture_size=256" in output
+    assert "max_cudagraph_capture_size=512" in output
 
 
 def test_dynamicsd_launcher_rebuilds_the_vllm_024_worker_runtime() -> None:
