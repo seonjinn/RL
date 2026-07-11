@@ -28,6 +28,9 @@ DYNAMICSD_LAUNCHER = (
 CG_TOP_P_PROFILE_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_cg_top_p_refit_profile.sh"
 )
+LONG_OUTPUT_LAUNCHER = (
+    REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_long_output_matrix.sh"
+)
 HF_PREWARM_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_hf_snapshot_prewarm.sh"
 )
@@ -884,6 +887,35 @@ def test_dynamicsd_launcher_keeps_baseline_free_of_specdec() -> None:
     assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in output
     assert "speculative_config" not in output
     assert "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE" not in output
+
+
+def test_long_output_launcher_renders_matched_16k_and_32k_matrix() -> None:
+    output = _run_script(
+        LONG_OUTPUT_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="long-output-contract-test",
+        ATTEMPT_ID="attempt-1",
+    )
+
+    assert output.count("[LONG-OUTPUT]") == 8
+    assert output.count("grpo.num_prompts_per_step=16") == 16
+    assert output.count("grpo.num_generations_per_prompt=16") == 16
+    assert output.count("policy.train_global_batch_size=256") == 16
+    assert output.count("policy.generation.max_new_tokens=16384") == 8
+    assert output.count("policy.max_total_sequence_length=20480") == 8
+    assert output.count("policy.generation.max_new_tokens=32768") == 8
+    assert output.count("policy.max_total_sequence_length=40960") == 8
+    assert output.count("policy.generation._output_max_model_len=20480") == 8
+    assert output.count("policy.generation.vllm_cfg.max_model_len=20488") == 8
+    assert output.count("policy.generation._output_max_model_len=40960") == 8
+    assert output.count("policy.generation.vllm_cfg.max_model_len=40968") == 8
+    assert output.count("speculative_config.num_speculative_tokens=3") == 8
+    assert output.count("speculative_config.model=") == 8
+    assert output.count("compilation_config.cudagraph_mode=FULL_AND_PIECEWISE") == 16
 
 
 def test_dynamicsd_launcher_defaults_to_aws_dynamically_staged_assets() -> None:
