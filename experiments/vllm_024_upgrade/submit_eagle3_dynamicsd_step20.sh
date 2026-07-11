@@ -15,6 +15,7 @@ PARD_K16_MAX_NUM_BATCHED_TOKENS="${PARD_K16_MAX_NUM_BATCHED_TOKENS:-32768}"
 ACCOUNT="${ACCOUNT:-nemotron_sw_post}"
 PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
+SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-dynamicsd-aws-dfw}"
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-}"
@@ -42,6 +43,10 @@ UV_LOCK_TIMEOUT="${UV_LOCK_TIMEOUT:-900}"
 
 if [[ -n "${UV_CACHE_DIR}" && -n "${UV_CACHE_SEED_DIR}" ]]; then
   echo "ERROR: set only one of UV_CACHE_DIR or UV_CACHE_SEED_DIR" >&2
+  exit 2
+fi
+if [[ -n "${SBATCH_DEPENDENCY}" && ! "${SBATCH_DEPENDENCY}" =~ ^afterok:[0-9]+(:[0-9]+)*$ ]]; then
+  echo "ERROR: SBATCH_DEPENDENCY must be empty or afterok:<job_id>[:<job_id>...]" >&2
   exit 2
 fi
 if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
@@ -584,7 +589,7 @@ submit_one() {
     --exclusive
     --time="${WALLTIME}"
     --segment="${nodes}"
-    --dependency=
+    --dependency="${SBATCH_DEPENDENCY}"
     --job-name="${ACCOUNT}-nemorl.dynamicsd-${model}-${variant}"
     --output="${run_dir}/slurm-%j.out"
     --comment=metrics

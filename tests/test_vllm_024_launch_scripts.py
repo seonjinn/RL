@@ -483,6 +483,23 @@ def test_dynamicsd_launcher_propagates_shared_uv_cache() -> None:
     assert "UV_LOCK_TIMEOUT=900" in output
 
 
+def test_dynamicsd_launcher_accepts_an_explicit_afterok_dependency() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen30ba3b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="dependency-contract-test",
+        ATTEMPT_ID="attempt-1",
+        SBATCH_DEPENDENCY="afterok:12345",
+    )
+
+    assert "--dependency=afterok:12345" in output
+
+
 def test_dynamicsd_launcher_seeds_an_isolated_node_local_uv_cache() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
