@@ -2052,11 +2052,23 @@ def refit_policy_generation(
         policy_generation.suspend_for_refit()
 
     if colocated_inference or isinstance(policy_generation, MegatronGeneration):
-        policy.offload_before_refit()
+        offload_before_context = (
+            timer.time("prepare_for_generation/policy_offload_before_refit")
+            if timer is not None
+            else nullcontext()
+        )
+        with offload_before_context:
+            policy.offload_before_refit()
     # Colocated inference needs to prepare for generation.
     # Megatron non-colocated inference needs to enter inference mode after refit.
     if colocated_inference or isinstance(policy_generation, MegatronGeneration):
-        prepare_result = policy_generation.prepare_for_generation(tags=["weights"])
+        wake_weights_context = (
+            timer.time("prepare_for_generation/wake_weights")
+            if timer is not None
+            else nullcontext()
+        )
+        with wake_weights_context:
+            prepare_result = policy_generation.prepare_for_generation(tags=["weights"])
         if prepare_result is False:
             raise RuntimeError(
                 "Failed to prepare generation backend for weights during refit."
@@ -2144,11 +2156,23 @@ def refit_policy_generation(
             raise RuntimeError(error_message)
 
     if colocated_inference:
-        policy.offload_after_refit()
+        offload_after_context = (
+            timer.time("prepare_for_generation/policy_offload_after_refit")
+            if timer is not None
+            else nullcontext()
+        )
+        with offload_after_context:
+            policy.offload_after_refit()
     # Colocated inference needs to prepare for generation.
     # Megatron non-colocated inference needs to enter inference mode after refit.
     if colocated_inference or isinstance(policy_generation, MegatronGeneration):
-        prepare_result = policy_generation.prepare_for_generation(tags=["kv_cache"])
+        wake_kv_context = (
+            timer.time("prepare_for_generation/wake_kv_cache")
+            if timer is not None
+            else nullcontext()
+        )
+        with wake_kv_context:
+            prepare_result = policy_generation.prepare_for_generation(tags=["kv_cache"])
         if prepare_result is False:
             raise RuntimeError(
                 "Failed to prepare generation backend for kv_cache after refit."
@@ -3063,9 +3087,10 @@ def grpo_train(
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
                 metrics.update(rollout_metrics)
-                metrics["generation_num_tokens"] = metrics_logging_data.get(
-                    "generation_num_tokens", 0
-                ) or flat_token_mask.sum().item()
+                metrics["generation_num_tokens"] = (
+                    metrics_logging_data.get("generation_num_tokens", 0)
+                    or flat_token_mask.sum().item()
+                )
                 if "generation_call_time_s" in metrics_logging_data:
                     metrics["generation_call_time_s"] = metrics_logging_data[
                         "generation_call_time_s"

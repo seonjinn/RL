@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import os
 import re
 import traceback
 from collections.abc import Iterable
@@ -70,17 +71,11 @@ def _build_specdec_runtime_diagnostics(
     draft_model = getattr(draft_owner, "model", None)
     lm_head = getattr(draft_model, "lm_head", None)
     lm_head_weight = getattr(lm_head, "weight", None)
-    lm_head_shape = (
-        list(lm_head_weight.shape) if lm_head_weight is not None else None
-    )
+    lm_head_shape = list(lm_head_weight.shape) if lm_head_weight is not None else None
 
     parallel_config = getattr(vllm_config, "parallel_config", None)
-    draft_parallel_config = getattr(
-        speculative_config, "draft_parallel_config", None
-    )
-    draft_parallel_tp = getattr(
-        draft_parallel_config, "tensor_parallel_size", None
-    )
+    draft_parallel_config = getattr(speculative_config, "draft_parallel_config", None)
+    draft_parallel_tp = getattr(draft_parallel_config, "tensor_parallel_size", None)
     return {
         "method": getattr(speculative_config, "method", None),
         "model_runner": type(model_runner).__name__,
@@ -228,6 +223,8 @@ class VllmInternalWorkerExtension:
     _pending_draft_weights: list[tuple[str, torch.Tensor]] | None
     _observed_update_weight_names: set[str] | None
     _draft_weights_updated: bool
+    _draft_weight_tensor_count: int
+    _draft_weight_bytes: int
 
     def get_specdec_runtime_diagnostics(self) -> dict[str, Any]:
         """Report the TP group that the loaded drafter actually executes in."""
@@ -378,11 +375,15 @@ class VllmInternalWorkerExtension:
         self._pending_draft_weights: list[tuple[str, torch.Tensor]] | None = []
         self._observed_update_weight_names: set[str] | None = set()
         self._draft_weights_updated = False
+        self._draft_weight_tensor_count = 0
+        self._draft_weight_bytes = 0
 
     def _abort_weight_update(self) -> None:
         self._pending_draft_weights = None
         self._observed_update_weight_names = None
         self._draft_weights_updated = False
+        self._draft_weight_tensor_count = 0
+        self._draft_weight_bytes = 0
 
     def _draft_update_requires_atomic_load(self) -> bool:
         vllm_config = getattr(self.model_runner, "vllm_config", None)
@@ -460,6 +461,15 @@ class VllmInternalWorkerExtension:
             self._process_weights_after_update(
                 draft_weights_updated=draft_weights_updated
             )
+            if os.getenv("NRL_VLLM_REFIT_DIAGNOSTICS", "false").lower() == "true":
+                print(
+                    "[refit] "
+                    f"trainer_weight_tensors={len(self.state_dict_info)} "
+                    f"draft_weight_tensors={self._draft_weight_tensor_count} "
+                    f"draft_weight_bytes={self._draft_weight_bytes} "
+                    f"draft_weights_updated={str(draft_weights_updated).lower()}",
+                    flush=True,
+                )
         finally:
             self._abort_weight_update()
 
@@ -694,6 +704,11 @@ class VllmInternalWorkerExtension:
                 weights[idx] = (fix_gemma3_vision_weight_name(key), weight)
 
         policy_weights, draft_weights = self._split_policy_and_draft_weights(weights)
+        if draft_weights:
+            self._draft_weight_tensor_count += len(draft_weights)
+            self._draft_weight_bytes += sum(
+                tensor.numel() * tensor.element_size() for _, tensor in draft_weights
+            )
         if policy_weights:
             if fp8.is_fp8_model(self.model_runner.vllm_config):
                 fp8.load_weights(policy_weights, self.model_runner)
