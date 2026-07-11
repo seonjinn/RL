@@ -270,6 +270,20 @@ def test_ray_launcher_accepts_an_explicit_container_workdir() -> None:
     assert 'COMMON_SRUN_ARGS+=" --container-workdir=$CONTAINER_WORKDIR"' in source
 
 
+def test_ray_launcher_provisions_uv_cache_mount_on_every_allocated_node() -> None:
+    source = (REPO_ROOT / "ray.sub").read_text(encoding="utf-8")
+    provision = (
+        'srun --nodes="${SLURM_JOB_NUM_NODES}" '
+        '--ntasks="${SLURM_JOB_NUM_NODES}" --ntasks-per-node=1 '
+        'mkdir -p -- "${UV_CACHE_DIR_OVERRIDE}"'
+    )
+
+    assert provision in source
+    assert source.index(provision) < source.index(
+        'MOUNTS+=",$UV_CACHE_DIR_OVERRIDE:/root/.cache/uv"'
+    )
+
+
 def test_ray_launcher_completes_final_distributed_log_sync_before_driver_exit() -> None:
     source = (REPO_ROOT / "ray.sub").read_text(encoding="utf-8")
 

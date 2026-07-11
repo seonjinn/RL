@@ -223,7 +223,7 @@ RAY_LOG_SYNC_FREQUENCY=${RAY_LOG_SYNC_FREQUENCY:-}
 unset UV_CACHE_DIR
 
 if [[ -n "${UV_CACHE_DIR_OVERRIDE:-}" ]]; then
-  mkdir -p "$UV_CACHE_DIR_OVERRIDE"
+  srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" --ntasks-per-node=1 mkdir -p -- "${UV_CACHE_DIR_OVERRIDE}"
   if [[ -n $MOUNTS ]]; then
     MOUNTS+=",$UV_CACHE_DIR_OVERRIDE:/root/.cache/uv"
   else
