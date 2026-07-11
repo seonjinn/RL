@@ -36,6 +36,7 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
 POLICY_MODEL_NAME="${POLICY_MODEL_NAME:-}"
+UV_CACHE_DIR="${UV_CACHE_DIR:-}"
 
 if [[ "${REJECTION_SAMPLE_METHOD}" != "standard" ]]; then
   echo "ERROR: REJECTION_SAMPLE_METHOD must be standard (got ${REJECTION_SAMPLE_METHOD})" >&2
@@ -494,6 +495,9 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  if [[ -n "${UV_CACHE_DIR}" ]]; then
+    command_env+=("UV_CACHE_DIR=${UV_CACHE_DIR}")
+  fi
   if [[ "${REFIT_DIAGNOSTICS}" == "true" ]]; then
     command_env+=(
       "NRL_VLLM_REFIT_DIAGNOSTICS=true"
@@ -531,6 +535,9 @@ submit_one() {
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  if [[ -n "${UV_CACHE_DIR}" ]]; then
+    environment+=("UV_CACHE_DIR=${UV_CACHE_DIR}")
+  fi
   if [[ "${model}" == "qwen235b" ]]; then
     environment+=("NRL_DISABLE_VLLM_PORT_OVERRIDE=1")
   fi
