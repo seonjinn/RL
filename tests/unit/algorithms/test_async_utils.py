@@ -1237,6 +1237,39 @@ class TestAsyncTrajectoryCollector:
         assert status["data_exhausted"] is False
         assert status["running"] is False
 
+    def test_collection_loop_does_not_mark_swallowed_batch_failure_as_exhausted(self):
+        """A batch worker can record a fatal error without raising to the loop."""
+        collector = self.create_local_collector()
+        self._prime_collection_loop(collector)
+
+        def _record_failure(_batch):
+            collector._record_fatal_error(RuntimeError("batch failed"), "batch")
+
+        collector._process_batch = _record_failure
+        collector.dataloader = [{"b": 0}]
+
+        collector._collection_loop()
+
+        assert collector.collection_failed is True
+        assert collector.data_exhausted is False
+        with pytest.raises(RuntimeError, match="batch failed"):
+            collector.check_health()
+
+    def test_clean_exhaustion_is_not_reported_as_a_collector_crash(self):
+        collector = self.create_local_collector()
+        self._prime_collection_loop(collector)
+        collector.dataloader = []
+
+        collector._collection_loop()
+
+        collector.check_health()
+        assert collector.get_status() == {
+            "running": False,
+            "data_exhausted": True,
+            "errored": False,
+            "inflight_workers": 0,
+        }
+
     def test_collection_loop_no_exhaustion_on_manual_stop(self):
         """Breaking out (running=False) must not set data_exhausted/errored."""
         collector = self.create_local_collector()

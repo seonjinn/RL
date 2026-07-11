@@ -835,6 +835,11 @@ def test_v2_draft_decode_capture_profile_uses_request_unit_buckets(
             )
             self.decode_query_len = decode_query_len
 
+    class FullMode:
+        @staticmethod
+        def has_full_cudagraphs() -> bool:
+            return True
+
     namespace = {"DecodeSpeculatorCudaGraphManager": DecodeManager}
     exec("def build(self, cudagraph_mode):\n" + patched, namespace)
     compilation_config = SimpleNamespace(
@@ -848,7 +853,7 @@ def test_v2_draft_decode_capture_profile_uses_request_unit_buckets(
     )
     monkeypatch.setenv("NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE", "true")
 
-    namespace["build"](speculator_instance, object())
+    namespace["build"](speculator_instance, FullMode())
 
     assert speculator_instance.decode_cudagraph_manager.capture_sizes == [
         1,
@@ -863,6 +868,62 @@ def test_v2_draft_decode_capture_profile_uses_request_unit_buckets(
 
     patches._patch_vllm_v2_draft_decode_capture_profile(MagicMock())
     assert speculator.read_text() == patched
+
+
+def test_v2_draft_decode_capture_profile_ignores_non_full_graph_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    speculator = tmp_path / "speculator.py"
+    speculator.write_text(
+        "        # Initialize cudagraph manager for draft decodes (draft positions > 0).\n"
+        "        self.decode_cudagraph_manager = DecodeSpeculatorCudaGraphManager(\n"
+        "            self.vllm_config,\n"
+        "            self.device,\n"
+        "            cudagraph_mode,\n"
+        "            decode_query_len=1,\n"
+        "        )\n"
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(speculator))
+    patches._patch_vllm_v2_draft_decode_capture_profile(MagicMock())
+
+    class DecodeManager:
+        def __init__(
+            self,
+            vllm_config: Any,
+            _device: object,
+            _mode: object,
+            *,
+            decode_query_len: int,
+        ) -> None:
+            self.capture_sizes = list(
+                vllm_config.compilation_config.cudagraph_capture_sizes
+            )
+            self.decode_query_len = decode_query_len
+
+    class PiecewiseMode:
+        @staticmethod
+        def has_full_cudagraphs() -> bool:
+            return False
+
+    namespace = {"DecodeSpeculatorCudaGraphManager": DecodeManager}
+    exec("def build(self, cudagraph_mode):\n" + speculator.read_text(), namespace)
+    compilation_config = SimpleNamespace(
+        cudagraph_capture_sizes=[1, 2, 4, 8],
+        max_cudagraph_capture_size=8,
+    )
+    speculator_instance = SimpleNamespace(
+        vllm_config=SimpleNamespace(compilation_config=compilation_config),
+        device=object(),
+        num_speculative_steps=5,
+    )
+    monkeypatch.setenv("NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE", "true")
+
+    namespace["build"](speculator_instance, PiecewiseMode())
+
+    assert speculator_instance.decode_cudagraph_manager.capture_sizes == [1, 2, 4, 8]
+    assert compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8]
+    assert compilation_config.max_cudagraph_capture_size == 8
 
 
 def test_cudagraph_dispatch_metrics_records_graph_and_fallback_calls() -> None:

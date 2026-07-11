@@ -39,6 +39,24 @@ from nemo_rl.utils.venvs import (
 )
 
 
+def _assign_node_local_group_indices(group_node_ids: list[set[str]]) -> list[int]:
+    """Assign the smallest group index unused on every participating node."""
+    used_by_node: dict[str, set[int]] = {}
+    assignments: list[int] = []
+    for node_ids in group_node_ids:
+        if not node_ids:
+            raise ValueError("Worker groups must include at least one node.")
+        group_index = 0
+        while any(
+            group_index in used_by_node.get(node_id, set()) for node_id in node_ids
+        ):
+            group_index += 1
+        assignments.append(group_index)
+        for node_id in node_ids:
+            used_by_node.setdefault(node_id, set()).add(group_index)
+    return assignments
+
+
 @dataclass
 class MultiWorkerFuture:
     """Container for Ray futures with associated worker information."""
@@ -478,6 +496,20 @@ class RayWorkerGroup:
         # Get all placement groups
         placement_groups = self.cluster.get_placement_groups()
 
+        if len(placement_groups) == 1:
+            pg_table = ray.util.placement_group_table(placement_groups[0])
+            bundle_to_node = pg_table["bundles_to_node_id"]
+            group_node_ids = [
+                {str(bundle_to_node[bundle_idx]) for bundle_idx in local_bundle_indices}
+                for _, local_bundle_indices in bundle_indices_list
+            ]
+        else:
+            group_node_ids = [
+                {f"placement-group-{pg_idx}"}
+                for pg_idx, _ in bundle_indices_list
+            ]
+        node_local_group_indices = _assign_node_local_group_indices(group_node_ids)
+
         # Get available address and port for each worker
         pg_bundle_pairs = [
             (pg_idx, bundle_idx)
@@ -514,6 +546,7 @@ class RayWorkerGroup:
 
         for group_idx, (pg_idx, local_bundle_indices) in enumerate(bundle_indices_list):
             current_group = []
+            node_local_group_index = node_local_group_indices[group_idx]
 
             if len(placement_groups) == 1:
                 pg = placement_groups[0]
@@ -552,7 +585,7 @@ class RayWorkerGroup:
                     worker_bundle_indices = (
                         pg_idx,
                         local_bundle_indices,
-                        group_idx,
+                        node_local_group_index,
                     )
                     self.dp_leader_worker_indices.append(global_rank)
 

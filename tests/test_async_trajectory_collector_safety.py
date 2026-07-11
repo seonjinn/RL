@@ -146,15 +146,20 @@ def test_collection_loop_failure_is_reported_by_health_check() -> None:
         collector.check_health()
 
 
-def test_collection_loop_exhaustion_is_reported_by_health_check() -> None:
+def test_collection_loop_exhaustion_is_reported_by_status_not_health_check() -> None:
     collector = _local_collector()
     collector.dataloader = []
     collector.running = True
 
     collector._collection_loop()
 
-    with pytest.raises(RuntimeError, match="stopped before training completed"):
-        collector.check_health()
+    collector.check_health()
+    assert collector.get_status() == {
+        "running": False,
+        "data_exhausted": True,
+        "errored": False,
+        "inflight_workers": 0,
+    }
 
 
 def test_process_batch_failure_is_reported_by_health_check() -> None:

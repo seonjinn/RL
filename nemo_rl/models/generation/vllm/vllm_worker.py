@@ -170,7 +170,8 @@ class BaseVllmGenerationWorker:
             if os.environ.get("NRL_DISABLE_VLLM_PORT_OVERRIDE") != "1":
                 # Give each vLLM engine a deterministic starting port for TP/DP
                 # rendezvous. Topology-aware allocation can produce non-contiguous
-                # bundle lists, so use the global worker-group index when present.
+                # bundle lists, so use the node-local conflict-free group index
+                # supplied by RayWorkerGroup when present.
                 if len(bundle_indices) > 2:
                     engine_index = bundle_indices[2]
                 elif len(local_bundle_indices) == 1:
@@ -180,9 +181,18 @@ class BaseVllmGenerationWorker:
                 port_base = int(
                     os.environ.get("VLLM_PORT", DEFAULT_VLLM_PORT_RANGE_LOW)
                 )
-                env_vars["VLLM_PORT"] = str(
-                    port_base + engine_index * DEFAULT_VLLM_PORTS_PER_ENGINE
-                )
+                engine_port = port_base + engine_index * DEFAULT_VLLM_PORTS_PER_ENGINE
+                if port_base == DEFAULT_VLLM_PORT_RANGE_LOW:
+                    engine_port_high = engine_port + DEFAULT_VLLM_PORTS_PER_ENGINE - 1
+                    if (
+                        engine_port <= 8265 <= engine_port_high
+                        or engine_port_high >= 9000
+                    ):
+                        raise ValueError(
+                            "The vLLM engine index exceeds the safe default range: "
+                            f"index={engine_index}, ports={engine_port}-{engine_port_high}."
+                        )
+                env_vars["VLLM_PORT"] = str(engine_port)
 
         # Check if this worker is part of a parallel group (TP or TP+PP).
         # A worker is part of a parallel group if it's a secondary member (local_bundle_indices is None)

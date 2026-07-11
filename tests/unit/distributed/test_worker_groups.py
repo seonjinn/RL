@@ -1376,3 +1376,25 @@ def test_environment_variable_precedence_full(
                 os.environ[key] = original_env[key]
             else:
                 os.environ.pop(key, None)
+
+
+def test_assign_node_local_group_indices_reuses_ports_on_disjoint_nodes():
+    from nemo_rl.distributed.worker_groups import _assign_node_local_group_indices
+
+    group_nodes = [
+        {"node-a"},
+        {"node-b"},
+        {"node-a"},
+        {"node-a", "node-b"},
+        {"node-c"},
+    ]
+
+    assert _assign_node_local_group_indices(group_nodes) == [0, 0, 1, 2, 0]
+
+
+def test_assign_node_local_group_indices_keeps_large_multinode_jobs_bounded():
+    from nemo_rl.distributed.worker_groups import _assign_node_local_group_indices
+
+    group_nodes = [{f"node-{index}"} for index in range(32)]
+
+    assert _assign_node_local_group_indices(group_nodes) == [0] * 32

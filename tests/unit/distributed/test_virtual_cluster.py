@@ -480,6 +480,20 @@ class TestVllmPortAssignment:
         expected_port = port_base + engine_group_index * DEFAULT_VLLM_PORTS_PER_ENGINE
         assert env_vars["VLLM_PORT"] == str(expected_port)
 
+    @pytest.mark.parametrize("engine_group_index", [12, 20])
+    def test_default_vllm_port_rejects_reserved_or_ephemeral_window(
+        self, engine_group_index
+    ):
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            BaseVllmGenerationWorker,
+        )
+
+        with pytest.raises(ValueError, match="safe default range"):
+            BaseVllmGenerationWorker.configure_worker(
+                num_gpus=1,
+                bundle_indices=(0, [0], engine_group_index),
+            )
+
 
 def test_default_port_ranges_ordered_and_below_ephemeral_floor():
     # Lowest observed ephemeral floor on some GB200 nodes; stock Linux is 32768.

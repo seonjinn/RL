@@ -261,6 +261,7 @@ class AsyncTrajectoryCollector:
             if self._fatal_error is None:
                 self._fatal_error = message
         self.collection_failed = True
+        self.data_exhausted = False
         self.running = False
         self._manual_pause_cleared.set()
         self._refit_pause_cleared.set()
@@ -333,7 +334,7 @@ class AsyncTrajectoryCollector:
                 self._process_batch(batch)
             else:
                 # for-loop completed without break → dataloader iterator exhausted
-                dataloader_exhausted = True
+                dataloader_exhausted = self.running and not self.collection_failed
 
         except Exception as e:
             self._record_fatal_error(e, "trajectory collection loop failed")
@@ -341,7 +342,6 @@ class AsyncTrajectoryCollector:
             import traceback
 
             traceback.print_exc()
-            self.collection_failed = True
         finally:
             self.running = False
             if dataloader_exhausted:
@@ -535,7 +535,7 @@ class AsyncTrajectoryCollector:
             fatal_error = self._fatal_error
         if fatal_error is not None:
             raise RuntimeError(fatal_error)
-        if not self.running:
+        if not self.running and not self.data_exhausted:
             raise RuntimeError(
                 "trajectory collection stopped before training completed"
             )
