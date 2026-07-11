@@ -79,6 +79,33 @@ validate_positive_integer() {
   fi
 }
 
+build_specdec_cudagraph_capture_sizes() {
+  local draft_k="$1"
+  local max_requests="$2"
+  local query_length=$((draft_k + 1))
+  local request_count
+  local -a request_buckets=()
+  local -a token_buckets=()
+
+  for request_count in 1 2 4; do
+    if ((request_count <= max_requests)); then
+      request_buckets+=("${request_count}")
+    fi
+  done
+  for ((request_count = 8; request_count <= max_requests; request_count += 8)); do
+    request_buckets+=("${request_count}")
+  done
+  if ((max_requests > 4 && max_requests % 8 != 0)); then
+    request_buckets+=("${max_requests}")
+  fi
+  for request_count in "${request_buckets[@]}"; do
+    token_buckets+=("$((request_count * query_length))")
+  done
+
+  local IFS=,
+  printf '[%s]' "${token_buckets[*]}"
+}
+
 validate_positive_integer "TAIL_GATE_THRESHOLD" "${TAIL_GATE_THRESHOLD}"
 validate_positive_integer "TAIL_GATE_CONSECUTIVE_CHECKS" "${TAIL_GATE_CONSECUTIVE_CHECKS}"
 
@@ -367,6 +394,10 @@ submit_one() {
   local roofline_hash=""
   local manifest_draft_sample_method="not_applicable"
   local manifest_draft_checkpoint="not_applicable"
+  local local_rollout_capacity
+  local cudagraph_max_requests=""
+  local cudagraph_max_tokens=""
+  local cudagraph_capture_sizes=""
   local job_attempt_id="${ATTEMPT_ID//[^[:alnum:]_.-]/-}"
   local container_path="${CONTAINER}"
   local index
@@ -478,6 +509,21 @@ submit_one() {
       ;;
   esac
 
+  local_rollout_capacity=$(((NUM_PROMPTS * NUM_GENERATIONS + dp - 1) / dp))
+  if [[ "${draft_k}" != "0" ]]; then
+    cudagraph_max_requests="${CUDAGRAPH_MAX_REQUESTS:-${local_rollout_capacity}}"
+    validate_positive_integer "CUDAGRAPH_MAX_REQUESTS" "${cudagraph_max_requests}"
+    if ((cudagraph_max_requests > MAX_NUM_SEQS)); then
+      printf 'ERROR: CUDAGRAPH_MAX_REQUESTS=%s exceeds MAX_NUM_SEQS=%s\n' \
+        "${cudagraph_max_requests}" "${MAX_NUM_SEQS}" >&2
+      exit 2
+    fi
+    cudagraph_max_tokens=$((cudagraph_max_requests * (draft_k + 1)))
+    cudagraph_capture_sizes="$(
+      build_specdec_cudagraph_capture_sizes "${draft_k}" "${cudagraph_max_requests}"
+    )"
+  fi
+
   if [[ "${MODE}" != "dry-run" && ! -f "${REPO_DIR}/${recipe}" ]]; then
     echo "ERROR: recipe not found: ${REPO_DIR}/${recipe}" >&2
     exit 2
@@ -553,6 +599,8 @@ submit_one() {
       "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${draft_tp}"
       "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${SAMPLING}"
       "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
+      "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${cudagraph_max_tokens}"
+      "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${cudagraph_capture_sizes}"
     )
   fi
   if [[ "${variant}" == "stock_dynamic_v1" ]]; then
@@ -679,7 +727,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
+      local manifest_header=$'timestamp\tmodel\tvariant\tgate_mode\tk\tthreshold\tconsecutive_checks\troofline_config_sha256\tcluster\truntime\truntime_version\truntime_commit\tvllm_version\tvllm_commit\ttarget_tp\tdraft_tp\tdp\tep\ttemperature\ttop_p\tmax_osl\tmax_model_len\tmax_sequence_length\tnum_prompts\tnum_generations\ttrain_gbs\tmax_num_batched_tokens\tmax_num_seqs\tcudagraph_max_requests\tcudagraph_max_tokens\tcudagraph_capture_sizes\trecipe\tcontainer\tcontainer_sha256\trunner\tgraph_mode\tsampling\tdraft_sample_method\tjob_id\twandb_run_id\twandb_url\trun_dir\tslurm_log_path\tray_driver_log_path\tray_log_dir\tlauncher_command\tcommand\tcheckout_path\tray_sub_path\ttarget_checkpoint\ttarget_checkpoint_revision\tdraft_checkpoint\tcommand_argv_json\tlauncher_argv_json'
       if [[ -f "${manifest}" && "$(head -n 1 "${manifest}")" != "${manifest_header}" ]]; then
         echo "ERROR: submissions manifest header mismatch: ${manifest}" >&2
         exit 2
@@ -727,6 +775,9 @@ submit_one() {
         "${TRAIN_GBS}"
         "${MAX_NUM_BATCHED_TOKENS}"
         "${MAX_NUM_SEQS}"
+        "${cudagraph_max_requests:-not_applicable}"
+        "${cudagraph_max_tokens:-not_applicable}"
+        "${cudagraph_capture_sizes:-not_applicable}"
         "${recipe}"
         "$(readlink -f "${CONTAINER}")"
         "$(sha256_file "${CONTAINER}")"

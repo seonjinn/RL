@@ -319,6 +319,7 @@ def test_roofline_dry_run_selects_a_separate_config_per_model() -> None:
 
 def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
     output = _dry_run("qwen32b", "always_on_v2_k5")
+    unescaped_output = output.replace("\\", "")
 
     for expected in (
         "grpo.max_num_steps=20",
@@ -331,6 +332,8 @@ def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
         "policy.generation.vllm_cfg.max_model_len=4128",
         "max_num_batched_tokens=16384",
         "max_num_seqs=1024",
+        "compilation_config.max_cudagraph_capture_size=1536",
+        "compilation_config.cudagraph_capture_sizes=[6,12,24,48,96,144,192,240,288,336,384,432,480,528,576,624,672,720,768,816,864,912,960,1008,1056,1104,1152,1200,1248,1296,1344,1392,1440,1488,1536]",
         "tensor_parallel_size=2",
         "draft_tensor_parallel_size=1",
         "moe_backend=triton",
@@ -339,7 +342,14 @@ def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
         "logger.wandb.name=contract-attempt-1-qwen32b-always_on_v2_k5",
         "BASE_LOG_DIR=/lustre/test/tail-gate-runs/qwen32b/always_on_v2_k5",
     ):
-        assert expected in output
+        assert expected in unescaped_output
+
+
+def test_baseline_does_not_override_default_cudagraph_capture_sizes() -> None:
+    output = _dry_run("qwen32b", "baseline_v2")
+
+    assert "compilation_config.max_cudagraph_capture_size=" not in output
+    assert "compilation_config.cudagraph_capture_sizes=" not in output
 
 
 def test_long_output_length_derives_engine_length_with_lookahead_headroom() -> None:
@@ -684,6 +694,9 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "train_gbs",
         "max_num_batched_tokens",
         "max_num_seqs",
+        "cudagraph_max_requests",
+        "cudagraph_max_tokens",
+        "cudagraph_capture_sizes",
         "sampling",
         "draft_sample_method",
         "runner",
@@ -739,6 +752,9 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
         "train_gbs": "512",
         "max_num_batched_tokens": "16384",
         "max_num_seqs": "1024",
+        "cudagraph_max_requests": "256",
+        "cudagraph_max_tokens": "1536",
+        "cudagraph_capture_sizes": "[6,12,24,48,96,144,192,240,288,336,384,432,480,528,576,624,672,720,768,816,864,912,960,1008,1056,1104,1152,1200,1248,1296,1344,1392,1440,1488,1536]",
         "runner": "v2",
         "graph_mode": "FULL_AND_PIECEWISE",
         "sampling": "standard",
