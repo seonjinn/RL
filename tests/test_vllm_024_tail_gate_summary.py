@@ -23,6 +23,7 @@ from typing import Iterable, Mapping
 import pytest
 
 from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
+    CAPTURE_PROFILE_MANIFEST_HEADER,
     COHORT_FIELDS,
     LEGACY_C78A93C8_MANIFEST_HEADER,
     METRIC_KEYS,
@@ -30,6 +31,7 @@ from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import (
     REQUIRED_ROW_FIELDS,
     RunSummary,
     _history_keys,
+    _read_manifest,
     _scan_sparse_history,
     _validate_manifest_rows,
     build_comparison_rows,
@@ -482,6 +484,18 @@ def test_comparison_key_uses_only_complete_explicit_cohort_schema() -> None:
     assert candidate.e2e_time_speedup_vs_baseline == 1.25
 
 
+def test_comparison_rejects_mismatched_cudagraph_request_coverage() -> None:
+    baseline_metadata = _metadata()
+    candidate_metadata = _metadata(variant="always_on_v2_k5")
+    baseline_metadata["cudagraph_max_requests"] = "256"
+    candidate_metadata["cudagraph_max_requests"] = "128"
+
+    with pytest.raises(ValueError, match="missing matched baseline"):
+        build_comparison_rows(
+            [_summary(baseline_metadata), _summary(candidate_metadata)]
+        )
+
+
 def test_comparison_rejects_mixed_nonbaseline_draft_sample_methods() -> None:
     baseline = _metadata()
     always_on = _metadata(variant="always_on_v2_k5")
@@ -624,6 +638,33 @@ def test_c78a93c8_header_fixture_uses_explicit_legacy_sentinels(tmp_path: Path) 
         ]
         == "not_applicable"
     )
+
+
+def test_capture_profile_manifest_schema_is_collectible(tmp_path: Path) -> None:
+    metadata = _metadata(variant="always_on_v2_k5")
+    metadata.update(
+        {
+            "cudagraph_max_requests": "256",
+            "cudagraph_max_tokens": "1536",
+            "cudagraph_capture_sizes": "[6,12,24,1536]",
+            "checkout_path": "/lustre/test/nemo-rl",
+            "ray_sub_path": "/lustre/test/nemo-rl/ray.sub",
+            "target_checkpoint": "/lustre/test/qwen32",
+            "target_checkpoint_revision": "a" * 40,
+            "draft_checkpoint": "/lustre/test/eagle3",
+            "command_argv_json": "[]",
+            "launcher_argv_json": "[]",
+        }
+    )
+    manifest = tmp_path / "capture-profile.tsv"
+    ordered = {field: metadata.get(field, "") for field in CAPTURE_PROFILE_MANIFEST_HEADER}
+    _write_manifest(manifest, [ordered])
+
+    schema, rows = _read_manifest(manifest)
+
+    assert schema.name == "capture_profile_v3"
+    assert rows[0]["cudagraph_max_requests"] == "256"
+    assert rows[0]["cudagraph_max_tokens"] == "1536"
 
 
 @pytest.mark.parametrize("field", ["wandb_run_id", "job_id"])

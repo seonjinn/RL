@@ -140,6 +140,7 @@ COHORT_FIELDS = (
     "sampling",
     "draft_sample_method",
 )
+CAPTURE_PROFILE_COHORT_FIELDS = ("cudagraph_max_requests",)
 LEGACY_COHORT_FIELDS = tuple(
     field for field in COHORT_FIELDS if field != "draft_sample_method"
 )
@@ -150,6 +151,7 @@ LOG_PROVENANCE_FIELDS = (
     "ray_log_dir",
 )
 LEGACY_UNRECORDED_MAX_MODEL_LEN = "legacy_unrecorded"
+LEGACY_UNRECORDED_CAPTURE_PROFILE = "legacy_unrecorded"
 LEGACY_C78A93C8_MANIFEST_HEADER = (
     "timestamp",
     "model",
@@ -249,6 +251,14 @@ IMMUTABLE_CHECKPOINT_MANIFEST_HEADER = (
     "target_checkpoint_revision",
     *STRUCTURED_PROVENANCE_MANIFEST_HEADER[-3:],
 )
+_MAX_NUM_SEQS_INDEX = IMMUTABLE_CHECKPOINT_MANIFEST_HEADER.index("max_num_seqs")
+CAPTURE_PROFILE_MANIFEST_HEADER = (
+    *IMMUTABLE_CHECKPOINT_MANIFEST_HEADER[: _MAX_NUM_SEQS_INDEX + 1],
+    "cudagraph_max_requests",
+    "cudagraph_max_tokens",
+    "cudagraph_capture_sizes",
+    *IMMUTABLE_CHECKPOINT_MANIFEST_HEADER[_MAX_NUM_SEQS_INDEX + 1 :],
+)
 REQUIRED_MANIFEST_FIELDS = (
     *LEGACY_COHORT_FIELDS,
     "variant",
@@ -291,16 +301,26 @@ MANIFEST_SCHEMAS = {
         {
             "max_model_len": LEGACY_UNRECORDED_MAX_MODEL_LEN,
             "draft_sample_method": "",
+            "cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE,
         },
     ),
     MINI_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
-        "mini_provenance_v1", MINI_PROVENANCE_MANIFEST_HEADER, {}
+        "mini_provenance_v1",
+        MINI_PROVENANCE_MANIFEST_HEADER,
+        {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
     ),
     STRUCTURED_PROVENANCE_MANIFEST_HEADER: ManifestSchema(
-        "structured_provenance_v1", STRUCTURED_PROVENANCE_MANIFEST_HEADER, {}
+        "structured_provenance_v1",
+        STRUCTURED_PROVENANCE_MANIFEST_HEADER,
+        {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
     ),
     IMMUTABLE_CHECKPOINT_MANIFEST_HEADER: ManifestSchema(
-        "immutable_checkpoint_v2", IMMUTABLE_CHECKPOINT_MANIFEST_HEADER, {}
+        "immutable_checkpoint_v2",
+        IMMUTABLE_CHECKPOINT_MANIFEST_HEADER,
+        {"cudagraph_max_requests": LEGACY_UNRECORDED_CAPTURE_PROFILE},
+    ),
+    CAPTURE_PROFILE_MANIFEST_HEADER: ManifestSchema(
+        "capture_profile_v3", CAPTURE_PROFILE_MANIFEST_HEADER, {}
     ),
 }
 
@@ -520,7 +540,7 @@ def _comparison_key(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
             if field == "draft_sample_method"
             else metadata.get(field, ""),
         )
-        for field in COHORT_FIELDS
+        for field in (*COHORT_FIELDS, *CAPTURE_PROFILE_COHORT_FIELDS)
     )
 
 
@@ -960,6 +980,24 @@ def _validate_manifest_rows(rows: list[dict[str, str]]) -> str | None:
         if row["wandb_run_id"] in seen_wandb_run_ids:
             return f"duplicate wandb_run_id:{row['wandb_run_id']}"
         seen_wandb_run_ids.add(row["wandb_run_id"])
+        capture_profile = row.get(
+            "cudagraph_max_requests", LEGACY_UNRECORDED_CAPTURE_PROFILE
+        )
+        if capture_profile != LEGACY_UNRECORDED_CAPTURE_PROFILE:
+            missing_capture_fields = [
+                field
+                for field in (
+                    "cudagraph_max_requests",
+                    "cudagraph_max_tokens",
+                    "cudagraph_capture_sizes",
+                )
+                if not row.get(field)
+            ]
+            if missing_capture_fields:
+                return (
+                    "missing CUDA graph capture profile fields:"
+                    f"{','.join(missing_capture_fields)}"
+                )
         draft_sample_method = _draft_sample_method(row)
         if row["variant"].startswith("baseline_"):
             if draft_sample_method != "not_applicable":

@@ -83,6 +83,7 @@ build_specdec_cudagraph_capture_sizes() {
   local draft_k="$1"
   local max_requests="$2"
   local query_length=$((draft_k + 1))
+  local last_bucket_index
   local request_count
   local -a request_buckets=()
   local -a token_buckets=()
@@ -95,7 +96,8 @@ build_specdec_cudagraph_capture_sizes() {
   for ((request_count = 8; request_count <= max_requests; request_count += 8)); do
     request_buckets+=("${request_count}")
   done
-  if ((max_requests > 4 && max_requests % 8 != 0)); then
+  last_bucket_index=$((${#request_buckets[@]} - 1))
+  if ((request_buckets[last_bucket_index] != max_requests)); then
     request_buckets+=("${max_requests}")
   fi
   for request_count in "${request_buckets[@]}"; do
@@ -510,7 +512,7 @@ submit_one() {
   esac
 
   local_rollout_capacity=$(((NUM_PROMPTS * NUM_GENERATIONS + dp - 1) / dp))
-  if [[ "${draft_k}" != "0" ]]; then
+  if [[ "${runner}" == "v2" ]]; then
     cudagraph_max_requests="${CUDAGRAPH_MAX_REQUESTS:-${local_rollout_capacity}}"
     validate_positive_integer "CUDAGRAPH_MAX_REQUESTS" "${cudagraph_max_requests}"
     if ((cudagraph_max_requests > MAX_NUM_SEQS)); then
@@ -519,6 +521,11 @@ submit_one() {
       exit 2
     fi
     cudagraph_max_tokens=$((cudagraph_max_requests * (draft_k + 1)))
+    if ((cudagraph_max_tokens > MAX_NUM_BATCHED_TOKENS)); then
+      printf 'ERROR: CUDA graph token cap %s exceeds MAX_NUM_BATCHED_TOKENS=%s\n' \
+        "${cudagraph_max_tokens}" "${MAX_NUM_BATCHED_TOKENS}" >&2
+      exit 2
+    fi
     cudagraph_capture_sizes="$(
       build_specdec_cudagraph_capture_sizes "${draft_k}" "${cudagraph_max_requests}"
     )"
@@ -599,6 +606,10 @@ submit_one() {
       "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=${draft_tp}"
       "++policy.generation.vllm_kwargs.speculative_config.rejection_sample_method=${SAMPLING}"
       "++policy.generation.vllm_kwargs.speculative_config.draft_sample_method=${DRAFT_SAMPLE_METHOD}"
+    )
+  fi
+  if [[ "${runner}" == "v2" ]]; then
+    overrides+=(
       "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=${cudagraph_max_tokens}"
       "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${cudagraph_capture_sizes}"
     )

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from experiments.vllm_024_upgrade.summarize_tail_gated_specdec import _read_manifest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = (
@@ -345,11 +347,47 @@ def test_matched_recipe_geometry_and_provenance_are_explicit() -> None:
         assert expected in unescaped_output
 
 
-def test_baseline_does_not_override_default_cudagraph_capture_sizes() -> None:
+def test_baseline_uses_the_same_request_coverage_as_specdec() -> None:
     output = _dry_run("qwen32b", "baseline_v2")
+    unescaped_output = output.replace("\\", "")
 
-    assert "compilation_config.max_cudagraph_capture_size=" not in output
-    assert "compilation_config.cudagraph_capture_sizes=" not in output
+    assert "compilation_config.max_cudagraph_capture_size=256" in unescaped_output
+    assert (
+        "compilation_config.cudagraph_capture_sizes="
+        "[1,2,4,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,"
+        "144,152,160,168,176,184,192,200,208,216,224,232,240,248,256]"
+        in unescaped_output
+    )
+
+
+def test_non_bucket_request_limit_is_included_as_the_capture_maximum() -> None:
+    output = _dry_run(
+        "qwen32b",
+        "always_on_v2_k5",
+        CUDAGRAPH_MAX_REQUESTS="3",
+    ).replace("\\", "")
+
+    assert "compilation_config.max_cudagraph_capture_size=18" in output
+    assert "compilation_config.cudagraph_capture_sizes=[6,12,18]" in output
+
+
+def test_capture_profile_rejects_scheduler_token_budget_overflow() -> None:
+    result = _run_launcher(
+        "dry-run",
+        "qwen32b",
+        "always_on_v2_k5",
+        REPO_DIR="/lustre/test/nemo-rl",
+        LYRIS_ROOT="/lustre/test",
+        HF_HOME="/lustre/test/hf_home",
+        CONTAINER="/lustre/test/nemo-rl.sqsh",
+        EXPERIMENT_ROOT="/lustre/test/tail-gate-runs",
+        RUN_TAG="contract",
+        ATTEMPT_ID="attempt-1",
+        MAX_NUM_BATCHED_TOKENS="1024",
+    )
+
+    assert result.returncode == 2
+    assert "CUDA graph token cap 1536 exceeds MAX_NUM_BATCHED_TOKENS=1024" in result.stderr
 
 
 def test_long_output_length_derives_engine_length_with_lookahead_headroom() -> None:
@@ -671,6 +709,8 @@ def test_submit_records_complete_manifest_and_does_not_push(tmp_path: Path) -> N
     manifest_path = experiment_root / "submissions.tsv"
     with manifest_path.open(encoding="utf-8", newline="") as stream:
         manifest_rows = list(csv.DictReader(stream, delimiter="\t"))
+    schema, _ = _read_manifest(manifest_path)
+    assert schema.name == "capture_profile_v3"
     assert len(manifest_rows) == 1
     manifest_row = manifest_rows[0]
     assert {
