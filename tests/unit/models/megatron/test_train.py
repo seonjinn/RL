@@ -206,6 +206,26 @@ class TestApplyTemperatureScaling:
         # Verify in-place: result is the same tensor
         assert result.data_ptr() == logits.data_ptr()
 
+    def test_schedule_temperature_scaling_preserves_leaf_backward(self) -> None:
+        """Deferred schedule scaling is out-of-place for detached leaf logits."""
+        from nemo_rl.models.megatron.train import (
+            _temperature_scaled_post_processing_fn,
+        )
+
+        logits = torch.tensor([2.0, 4.0], requires_grad=True)
+        original = logits.detach().clone()
+        sampling_params = TrainingSamplingParams(temperature=2.0)
+
+        loss = _temperature_scaled_post_processing_fn(
+            lambda scaled_logits: scaled_logits.square().sum(),
+            sampling_params,
+            logits,
+        )
+        loss.backward()
+
+        assert torch.equal(logits.detach(), original)
+        assert torch.allclose(logits.grad, torch.tensor([1.0, 2.0]))
+
 
 class TestForwardWithPostProcessingFn:
     """Tests for forward_with_post_processing_fn function."""
@@ -264,6 +284,107 @@ class TestForwardWithPostProcessingFn:
         # forward_with_post_processing_fn should return a callable
         assert callable(wrapped_fn)
         assert isinstance(output, torch.Tensor)
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_builds_schedule_plan_for_ep_a2a_overlap(
+        self,
+        mock_model_forward,
+        mock_cp_size,
+        mock_cp_group,
+        mock_tp_group,
+        mock_tp_rank,
+    ) -> None:
+        """The combined 1F1B callback builds an MCore GPT schedule plan."""
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        data_dict = MagicMock()
+        data_dict.get_multimodal_dict.return_value = {}
+        processed_mb = ProcessedMicrobatch(
+            data_dict=data_dict,
+            input_ids=torch.tensor([[1, 2, 3]]),
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3]]),
+            attention_mask=torch.ones(1, 3),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            packed_seq_params=MagicMock(),
+            cu_seqlens_padded=None,
+            mtp_loss_mask=torch.ones(1, 3),
+        )
+        model = MagicMock()
+        schedule_plan = MagicMock()
+        model.build_schedule_plan.return_value = schedule_plan
+        post_processor = LossPostProcessor(
+            loss_fn=MagicMock(), cfg={"sequence_packing": {"enabled": False}}
+        )
+
+        output, wrapped_fn = forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=model,
+            post_processing_fn=post_processor,
+            return_schedule_plan=True,
+        )
+
+        assert output is schedule_plan
+        assert callable(wrapped_fn)
+        mock_model_forward.assert_not_called()
+        model.build_schedule_plan.assert_called_once_with(
+            input_ids=processed_mb.input_ids_cp_sharded,
+            position_ids=processed_mb.position_ids,
+            attention_mask=processed_mb.attention_mask,
+            packed_seq_params=processed_mb.packed_seq_params,
+            loss_mask=processed_mb.mtp_loss_mask,
+        )
+
+    @pytest.mark.parametrize(
+        ("unsupported_kwargs", "expected_message"),
+        [
+            ({"defer_fp32_logits": True}, "defer_fp32_logits"),
+            ({"use_fused_linear_logprobs": True}, "use_fused_linear_logprobs"),
+            ({"use_router_replay": True}, "router replay"),
+            ({"enable_hidden_capture": True}, "hidden capture"),
+        ],
+    )
+    def test_schedule_plan_rejects_unsupported_training_modes(
+        self, unsupported_kwargs: dict[str, bool], expected_message: str
+    ) -> None:
+        """Unsupported combined-schedule modes fail before mutating model state."""
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LogprobsPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        processed_mb = ProcessedMicrobatch(
+            data_dict=MagicMock(),
+            input_ids=torch.tensor([[1, 2, 3]]),
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3]]),
+            attention_mask=torch.ones(1, 3),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            packed_seq_params=None,
+            cu_seqlens_padded=None,
+        )
+
+        with pytest.raises(ValueError, match=expected_message):
+            forward_with_post_processing_fn(
+                data_iterator=iter([processed_mb]),
+                model=MagicMock(),
+                post_processing_fn=LogprobsPostProcessor(
+                    cfg={"sequence_packing": {"enabled": False}}
+                ),
+                return_schedule_plan=True,
+                **unsupported_kwargs,
+            )
 
     @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_logprobs_post_processor(self, mock_model_forward):

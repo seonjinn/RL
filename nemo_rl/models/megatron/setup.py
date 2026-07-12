@@ -698,6 +698,17 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         "moe_shared_expert_overlap"
     ]
 
+    if "overlap_moe_expert_parallel_comm" in config["megatron_cfg"]:
+        model_cfg.overlap_moe_expert_parallel_comm = config["megatron_cfg"][
+            "overlap_moe_expert_parallel_comm"
+        ]
+    if "high_priority_a2a_comm_stream" in config["megatron_cfg"]:
+        model_cfg.high_priority_a2a_comm_stream = config["megatron_cfg"][
+            "high_priority_a2a_comm_stream"
+        ]
+    if "delay_wgrad_compute" in config["megatron_cfg"]:
+        model_cfg.delay_wgrad_compute = config["megatron_cfg"]["delay_wgrad_compute"]
+
     # HybridEP settings for MoE expert parallelism
     # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
     if "moe_flex_dispatcher_backend" in config["megatron_cfg"]:
@@ -795,7 +806,15 @@ def _apply_mtp_config(model_cfg: Any, config: PolicyConfig) -> None:
         # In mcore, mtp_num_layers is both the number of MTP layers (when
         # mtp_use_repeated_layer is False) and the number of times the MTP layer
         # is repeated (when mtp_use_repeated_layer is True).
-        model_cfg.mtp_num_layers = megatron_cfg["mtp_num_layers"]
+        mtp_num_layers: int | None = megatron_cfg["mtp_num_layers"]
+        if (
+            megatron_cfg.get("overlap_moe_expert_parallel_comm") is True
+            and mtp_num_layers == 0
+        ):
+            # MCore's combined-1F1B validator accepts disabled MTP only as None,
+            # while NeMo-RL's public config consistently uses 0 to disable it.
+            mtp_num_layers = None
+        model_cfg.mtp_num_layers = mtp_num_layers
     if "mtp_loss_scaling_factor" in megatron_cfg:
         model_cfg.mtp_loss_scaling_factor = megatron_cfg["mtp_loss_scaling_factor"]
     if "mtp_use_repeated_layer" in megatron_cfg:
@@ -1108,6 +1127,12 @@ def _create_megatron_config(
             "use_gloo_process_groups"
         ]
 
+    ddp_optional_kwargs: dict[str, Any] = {}
+    if "delay_wgrad_compute" in config["megatron_cfg"]:
+        ddp_optional_kwargs["delay_wgrad_compute"] = config["megatron_cfg"][
+            "delay_wgrad_compute"
+        ]
+
     return ConfigContainer(
         model=model_cfg,
         checkpoint=checkpoint_config,
@@ -1139,6 +1164,7 @@ def _create_megatron_config(
             ]["data_parallel_sharding_strategy"],
             reuse_grad_buf_for_mxfp8_param_ag=reuse_grad_buf_for_mxfp8_param_ag,
             fp8_param_gather=fp8_param_enabled,
+            **ddp_optional_kwargs,
         ),
         scheduler=SchedulerConfig(**config["megatron_cfg"]["scheduler"]),
         dataset=None,

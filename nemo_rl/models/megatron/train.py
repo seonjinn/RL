@@ -152,6 +152,51 @@ def apply_temperature_scaling(
     return logits
 
 
+def _build_post_processing_fn(
+    post_processing_fn: PostProcessingFunction,
+    data_dict: BatchedDataDict[Any],
+    input_ids: torch.Tensor,
+    packed_seq_params: Optional[PackedSeqParams],
+    cu_seqlens_padded: Optional[torch.Tensor],
+    global_valid_seqs: Optional[torch.Tensor],
+    global_valid_toks: Optional[torch.Tensor],
+) -> Callable[..., Any]:
+    """Bind microbatch metadata to a Megatron schedule loss callback."""
+    if isinstance(post_processing_fn, LossPostProcessor):
+        return post_processing_fn(
+            data_dict=data_dict,
+            packed_seq_params=packed_seq_params,
+            global_valid_seqs=global_valid_seqs,
+            global_valid_toks=global_valid_toks,
+        )
+    if isinstance(post_processing_fn, LogprobsPostProcessor):
+        return post_processing_fn(
+            data_dict=data_dict,
+            input_ids=input_ids,
+            cu_seqlens_padded=cu_seqlens_padded,
+        )
+    if isinstance(post_processing_fn, TopkLogitsPostProcessor):
+        return post_processing_fn(
+            data_dict=data_dict,
+            cu_seqlens_padded=cu_seqlens_padded,
+        )
+    raise TypeError(
+        f"Unknown post-processing function type: {type(post_processing_fn)}"
+    )
+
+
+def _temperature_scaled_post_processing_fn(
+    post_processing_fn: Callable[..., Any],
+    sampling_params: TrainingSamplingParams,
+    output_tensor: torch.Tensor,
+) -> Any:
+    """Apply deferred temperature scaling before schedule loss processing."""
+    scaled_output_tensor = output_tensor
+    if sampling_params.temperature != 1.0:
+        scaled_output_tensor = output_tensor / sampling_params.temperature
+    return post_processing_fn(scaled_output_tensor)
+
+
 def forward_with_post_processing_fn(
     data_iterator: Iterator[ProcessedMicrobatch],
     model: GPTModel,
@@ -166,7 +211,9 @@ def forward_with_post_processing_fn(
     use_fused_linear_logprobs: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
-) -> Tuple[torch.Tensor, Callable]:
+    *,
+    return_schedule_plan: bool = False,
+) -> Tuple[Any, Callable]:
     """Perform forward pass with pre-processed microbatch and return output tensor and post-processing function.
 
     This function takes a pre-processed microbatch (with sequence packing already handled),
@@ -184,10 +231,13 @@ def forward_with_post_processing_fn(
         straggler_timer: Straggler detector for profiling the forward pass
         draft_model: Draft model for online draft model training
         enable_hidden_capture: Whether to enable hidden state capture for draft model training
+        return_schedule_plan: Build the MCore GPT schedule plan required by the
+            combined-1F1B EP A2A overlap scheduler. MCore requests this only for
+            backward-enabled training; forward-only logprob calls use the normal path.
 
     Returns:
         tuple: (output_tensor, post_processing_fn_wrapped)
-            - output_tensor: Raw model outputs (logits)
+            - output_tensor: Raw logits, or an MCore schedule plan when requested
             - post_processing_fn_wrapped: Function to create output post-processing function when called
     """
     # Get the pre-processed microbatch from the iterator
@@ -203,6 +253,64 @@ def forward_with_post_processing_fn(
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
+
+    if return_schedule_plan:
+        unsupported_modes = []
+        if defer_fp32_logits:
+            unsupported_modes.append("defer_fp32_logits")
+        if use_fused_linear_logprobs:
+            unsupported_modes.append("use_fused_linear_logprobs")
+        if use_router_replay:
+            unsupported_modes.append("router replay")
+        if draft_model is not None or enable_hidden_capture:
+            unsupported_modes.append("hidden capture")
+        if unsupported_modes:
+            raise ValueError(
+                "EP A2A overlap schedule-plan training does not yet support: "
+                + ", ".join(unsupported_modes)
+            )
+
+        multimodal_data = data_dict.get_multimodal_dict(
+            as_tensors=True, device=input_ids_cp_sharded.device
+        )
+        if multimodal_data:
+            raise ValueError(
+                "EP A2A overlap schedule-plan training currently supports text-only "
+                "GPT microbatches"
+            )
+        if position_ids is None or attention_mask is None:
+            raise ValueError(
+                "EP A2A overlap schedule-plan training requires position IDs and an "
+                "attention mask"
+            )
+
+        schedule_plan_kwargs: dict[str, Any] = {}
+        if packed_seq_params is not None:
+            schedule_plan_kwargs["packed_seq_params"] = packed_seq_params
+        if mtp_loss_mask is not None:
+            schedule_plan_kwargs["loss_mask"] = mtp_loss_mask
+        schedule_plan = model.build_schedule_plan(
+            input_ids=input_ids_cp_sharded,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            **schedule_plan_kwargs,
+        )
+        wrapped_post_processing_fn = _build_post_processing_fn(
+            post_processing_fn=post_processing_fn,
+            data_dict=data_dict,
+            input_ids=input_ids,
+            packed_seq_params=packed_seq_params,
+            cu_seqlens_padded=cu_seqlens_padded,
+            global_valid_seqs=global_valid_seqs,
+            global_valid_toks=global_valid_toks,
+        )
+        if sampling_params is not None:
+            wrapped_post_processing_fn = partial(
+                _temperature_scaled_post_processing_fn,
+                wrapped_post_processing_fn,
+                sampling_params,
+            )
+        return schedule_plan, wrapped_post_processing_fn
 
     if use_router_replay:
         if routed_experts_cp_sharded is None:
@@ -268,29 +376,15 @@ def forward_with_post_processing_fn(
         # so applying them when gathering logits from vocab parallel (called in LossPostProcessor and LogprobsPostProcessor).
         apply_temperature_scaling(output_tensor, sampling_params)
 
-    # Use type checking to dispatch to the correct post-processing method
-    if isinstance(post_processing_fn, LossPostProcessor):
-        post_processing_fn_wrapped = post_processing_fn(
-            data_dict=data_dict,
-            packed_seq_params=packed_seq_params,
-            global_valid_seqs=global_valid_seqs,
-            global_valid_toks=global_valid_toks,
-        )
-    elif isinstance(post_processing_fn, LogprobsPostProcessor):
-        post_processing_fn_wrapped = post_processing_fn(
-            data_dict=data_dict,
-            input_ids=input_ids,
-            cu_seqlens_padded=cu_seqlens_padded,
-        )
-    elif isinstance(post_processing_fn, TopkLogitsPostProcessor):
-        post_processing_fn_wrapped = post_processing_fn(
-            data_dict=data_dict,
-            cu_seqlens_padded=cu_seqlens_padded,
-        )
-    else:
-        raise TypeError(
-            f"Unknown post-processing function type: {type(post_processing_fn)}"
-        )
+    post_processing_fn_wrapped = _build_post_processing_fn(
+        post_processing_fn=post_processing_fn,
+        data_dict=data_dict,
+        input_ids=input_ids,
+        packed_seq_params=packed_seq_params,
+        cu_seqlens_padded=cu_seqlens_padded,
+        global_valid_seqs=global_valid_seqs,
+        global_valid_toks=global_valid_toks,
+    )
 
     return output_tensor, post_processing_fn_wrapped
 

@@ -203,6 +203,12 @@ policy:
     moe_per_layer_logging: False
     moe_enable_deepep: false
     moe_token_dispatcher_type: "alltoall"
+    # Enable combined-1F1B overlap of EP A2A with another microbatch's compute.
+    overlap_moe_expert_parallel_comm: false
+    # Give the combined-1F1B A2A stream high CUDA priority.
+    high_priority_a2a_comm_stream: false
+    # Defer TE weight-gradient GEMMs for schedule placement. Requires A2A overlap.
+    delay_wgrad_compute: false
     moe_shared_expert_overlap: false
     use_gloo_process_groups: false
     use_transformer_engine_op_fuser: false
