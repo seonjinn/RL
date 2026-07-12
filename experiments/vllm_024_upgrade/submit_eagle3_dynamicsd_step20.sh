@@ -33,6 +33,7 @@ MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE:-}"
 CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES:-}"
 CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-FULL_AND_PIECEWISE}"
 CUDAGRAPH_DISPATCH_METRICS="${CUDAGRAPH_DISPATCH_METRICS:-false}"
+VLLM_ASYNC_SCHEDULING="${VLLM_ASYNC_SCHEDULING:-}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
@@ -86,6 +87,12 @@ if [[ ! "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS}" != "false" ]]; then
   echo "ERROR: CUDAGRAPH_DISPATCH_METRICS must be true or false" >&2
+  exit 2
+fi
+if [[ -n "${VLLM_ASYNC_SCHEDULING}" \
+  && "${VLLM_ASYNC_SCHEDULING}" != "true" \
+  && "${VLLM_ASYNC_SCHEDULING}" != "false" ]]; then
+  echo "ERROR: VLLM_ASYNC_SCHEDULING must be true, false, or unset" >&2
   exit 2
 fi
 case "${CUDAGRAPH_MODE}" in
@@ -409,6 +416,11 @@ submit_one() {
     "++logger.wandb.entity=${WANDB_ENTITY}"
     "logger.log_dir=${run_dir}/nemo_logs"
   )
+  if [[ -n "${VLLM_ASYNC_SCHEDULING}" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_kwargs.async_scheduling=${VLLM_ASYNC_SCHEDULING}"
+    )
+  fi
   if [[ -n "${POLICY_MODEL_NAME}" ]]; then
     overrides+=(
       "policy.model_name=${POLICY_MODEL_NAME}"

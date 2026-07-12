@@ -1067,6 +1067,36 @@ def test_dynamicsd_launcher_keeps_baseline_free_of_specdec() -> None:
     assert "NRL_VLLM_ENABLE_V2_DRAFT_DECODE_CAPTURE_PROFILE" not in output
 
 
+def test_dynamicsd_launcher_can_disable_baseline_async_scheduling() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="contract-test",
+        ATTEMPT_ID="attempt-1",
+        VLLM_ASYNC_SCHEDULING="false",
+    )
+
+    assert "++policy.generation.vllm_kwargs.async_scheduling=false" in output
+
+
+def test_dynamicsd_launcher_rejects_invalid_async_scheduling() -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        VLLM_ASYNC_SCHEDULING="auto",
+    )
+
+    assert result.returncode != 0
+    assert "VLLM_ASYNC_SCHEDULING must be true, false, or unset" in result.stderr
+
+
 def test_long_output_launcher_renders_matched_16k_and_32k_matrix() -> None:
     output = _run_script(
         LONG_OUTPUT_LAUNCHER,
