@@ -138,18 +138,19 @@ def emit_host_memory_event(
         snapshot = _get_host_memory_snapshot()
         message = f"{prefix} process_rss_gib={_format_gib(snapshot.process_rss_gib)}"
         if include_deltas:
-            before_rss = None if before_snapshot is None else before_snapshot.process_rss_gib
+            before_rss = (
+                None if before_snapshot is None else before_snapshot.process_rss_gib
+            )
             message += (
                 " process_rss_delta_gib="
                 f"{_format_delta(snapshot.process_rss_gib, before_rss)}"
             )
-        message += (
-            " system_available_gib="
-            f"{_format_gib(snapshot.system_available_gib)}"
-        )
+        message += f" system_available_gib={_format_gib(snapshot.system_available_gib)}"
         if include_deltas:
             before_available = (
-                None if before_snapshot is None else before_snapshot.system_available_gib
+                None
+                if before_snapshot is None
+                else before_snapshot.system_available_gib
             )
             message += (
                 " system_available_delta_gib="

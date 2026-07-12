@@ -376,9 +376,10 @@ def test_functional_report_is_public_deterministic_and_not_performance_evidence(
     assert (public_run / "functional_gate_summary.json").is_file()
     assert not (public_run / "timing_summary.json").exists()
     assert first_report == (public_run / "report.html").read_bytes()
-    assert "SENTINEL_FUNCTIONAL_TOKEN_116" not in (
-        public_run / "functional_gate_summary.json"
-    ).read_text()
+    assert (
+        "SENTINEL_FUNCTIONAL_TOKEN_116"
+        not in (public_run / "functional_gate_summary.json").read_text()
+    )
     assert "Functional validation only" in html
     assert "not performance evidence" in html
     assert "Completed updates</th><td>3" in html

@@ -22,7 +22,9 @@ def _configure_cgroup(
     proc_self_cgroup = tmp_path / "proc-self-cgroup"
     proc_self_cgroup.write_text(f"0::{relative_path}\n")
     cgroup_root = tmp_path / "sys-fs-cgroup"
-    cgroup_dir = cgroup_root if use_mount_root else cgroup_root / relative_path.lstrip("/")
+    cgroup_dir = (
+        cgroup_root if use_mount_root else cgroup_root / relative_path.lstrip("/")
+    )
     cgroup_dir.mkdir(parents=True)
     (cgroup_dir / "memory.current").write_text(current)
     (cgroup_dir / "memory.max").write_text(maximum)
