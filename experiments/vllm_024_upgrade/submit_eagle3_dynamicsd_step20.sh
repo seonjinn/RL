@@ -44,6 +44,7 @@ MEGATRON_ASYNC_SAVE="${MEGATRON_ASYNC_SAVE:-}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-}"
 UV_CACHE_SEED_DIR="${UV_CACHE_SEED_DIR:-}"
 UV_LOCK_TIMEOUT="${UV_LOCK_TIMEOUT:-900}"
+RAY_OBJECT_STORE_MEMORY_BYTES="${RAY_OBJECT_STORE_MEMORY_BYTES:-}"
 
 if [[ -n "${UV_CACHE_DIR}" && -n "${UV_CACHE_SEED_DIR}" ]]; then
   echo "ERROR: set only one of UV_CACHE_DIR or UV_CACHE_SEED_DIR" >&2
@@ -75,7 +76,8 @@ for numeric_override in \
   MAX_NUM_BATCHED_TOKENS \
   MAX_NUM_SEQS \
   OUTPUT_MAX_MODEL_LEN \
-  MAX_CUDAGRAPH_CAPTURE_SIZE; do
+  MAX_CUDAGRAPH_CAPTURE_SIZE \
+  RAY_OBJECT_STORE_MEMORY_BYTES; do
   numeric_value="${!numeric_override}"
   if [[ -n "${numeric_value}" && ! "${numeric_value}" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: ${numeric_override} must be a positive integer" >&2
@@ -631,6 +633,11 @@ submit_one() {
       "SETUP_COMMAND=${uv_cache_setup_command}"
     )
   fi
+  if [[ -n "${RAY_OBJECT_STORE_MEMORY_BYTES}" ]]; then
+    environment+=(
+      "RAY_OBJECT_STORE_MEMORY_BYTES=${RAY_OBJECT_STORE_MEMORY_BYTES}"
+    )
+  fi
   local sbatch_args=(
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
@@ -666,7 +673,7 @@ submit_one() {
     submit)
       mkdir -p "${run_dir}"
       local manifest="${EXPERIMENT_ROOT}/submissions.tsv"
-      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\tmax_cudagraph_capture_size\tcudagraph_capture_sizes\tnum_prompts_per_step\tnum_generations_per_prompt\ttrain_global_batch_size\tmax_total_sequence_length\tmax_new_tokens\tcommand'
+      local manifest_header=$'timestamp\tmodel\tvariant\tjob_id\tnodes\tsegment\tcommit\twandb_run_id\twandb_url\trecipe\tdraft_model\tcontainer\tcontainer_sha256\tmax_steps\tstatic_k\tdynamic_schedule\trejection_sample_method\tdraft_sample_method\tmax_num_batched_tokens\tmax_num_seqs\toutput_max_model_len\tspecdec_context_headroom_tokens\tmax_cudagraph_capture_size\tcudagraph_capture_sizes\tnum_prompts_per_step\tnum_generations_per_prompt\ttrain_global_batch_size\tmax_total_sequence_length\tmax_new_tokens\tray_object_store_memory_bytes\tcommand'
       if [[ -f "${manifest}" ]]; then
         local existing_manifest_header
         existing_manifest_header="$(head -n 1 "${manifest}")"
@@ -682,7 +689,7 @@ submit_one() {
       fi
       local resolved_container
       resolved_container="$(readlink -f "${CONTAINER}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
         "${nodes}" "${segment_size}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
@@ -695,6 +702,7 @@ submit_one() {
         "${NUM_PROMPTS_PER_STEP}" \
         "${NUM_GENERATIONS_PER_PROMPT}" "${TRAIN_GLOBAL_BATCH_SIZE}" \
         "${MAX_TOTAL_SEQUENCE_LENGTH}" "${MAX_NEW_TOKENS}" \
+        "${RAY_OBJECT_STORE_MEMORY_BYTES}" \
         "${command}" >> "${manifest}"
       ;;
     *)

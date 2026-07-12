@@ -216,6 +216,15 @@ MAX_WORKER_PORT=${MAX_WORKER_PORT:-2999}
 ########################################################
 # Number seconds to sync logs from /tmp/ray/session_*/logs to $LOG_DIR/ray/
 RAY_LOG_SYNC_FREQUENCY=${RAY_LOG_SYNC_FREQUENCY:-}
+RAY_OBJECT_STORE_MEMORY_BYTES=${RAY_OBJECT_STORE_MEMORY_BYTES:-}
+RAY_OBJECT_STORE_MEMORY_ARG=
+if [[ -n "${RAY_OBJECT_STORE_MEMORY_BYTES}" ]]; then
+  if [[ ! "${RAY_OBJECT_STORE_MEMORY_BYTES}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: RAY_OBJECT_STORE_MEMORY_BYTES must be a positive integer." >&2
+    exit 1
+  fi
+  RAY_OBJECT_STORE_MEMORY_ARG="--object-store-memory=${RAY_OBJECT_STORE_MEMORY_BYTES}"
+fi
 ########################################################
 
 # Unset UV_CACHE_DIR to avoid local cache directory interferring with the container cache
@@ -745,6 +754,7 @@ ray start --head \
     --include-dashboard=True \
     --min-worker-port=${MIN_WORKER_PORT} \
     --max-worker-port=${MAX_WORKER_PORT} \
+    $RAY_OBJECT_STORE_MEMORY_ARG \
     \
     --node-manager-port=$((${NODE_MANAGER_PORT} + 1)) \
     --object-manager-port=$((${OBJECT_MANAGER_PORT} + 1)) \
@@ -1012,6 +1022,7 @@ ray start --address "$ip_head" \
           --resources="\$RAY_RESOURCES" \
           --min-worker-port=${MIN_WORKER_PORT} \
           --max-worker-port=${MAX_WORKER_PORT} \
+          $RAY_OBJECT_STORE_MEMORY_ARG \
           \
           --node-manager-port=${NODE_MANAGER_PORT} \
           --object-manager-port=${OBJECT_MANAGER_PORT} \

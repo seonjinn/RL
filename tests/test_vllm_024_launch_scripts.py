@@ -46,7 +46,8 @@ SUBMISSIONS_HEADER = (
     "max_cudagraph_capture_size\tcudagraph_capture_sizes\t"
     "num_prompts_per_step\t"
     "num_generations_per_prompt\ttrain_global_batch_size\t"
-    "max_total_sequence_length\tmax_new_tokens\tcommand"
+    "max_total_sequence_length\tmax_new_tokens\t"
+    "ray_object_store_memory_bytes\tcommand"
 )
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
@@ -72,6 +73,13 @@ def test_ray_launcher_does_not_serialize_jobs_by_name() -> None:
     assert "#SBATCH --dependency=singleton" not in source
 
 
+def test_ray_launcher_supports_explicit_object_store_memory() -> None:
+    source = RAY_SUB.read_text(encoding="utf-8")
+
+    assert "--object-store-memory=${RAY_OBJECT_STORE_MEMORY_BYTES}" in source
+    assert source.count("$RAY_OBJECT_STORE_MEMORY_ARG") == 2
+
+
 def _run_script_unchecked(
     path: Path, *args: str, **environment: str
 ) -> subprocess.CompletedProcess[str]:
@@ -93,6 +101,8 @@ def _prepare_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
         / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
         checkout
         / "examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
+        checkout
+        / "examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml",
         checkout / "experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh",
         checkout / "ray.sub",
     )
@@ -545,6 +555,39 @@ def test_dynamicsd_launcher_propagates_shared_uv_cache() -> None:
     assert "UV_LOCK_TIMEOUT=900" in output
 
 
+def test_dynamicsd_launcher_propagates_explicit_ray_object_store_memory() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="ray-object-store-contract-test",
+        ATTEMPT_ID="attempt-1",
+        RAY_OBJECT_STORE_MEMORY_BYTES="64000000000",
+    )
+
+    assert "RAY_OBJECT_STORE_MEMORY_BYTES=64000000000" in output
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "64GB", "1.5"])
+def test_dynamicsd_launcher_rejects_invalid_ray_object_store_memory(
+    value: str,
+) -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        RAY_OBJECT_STORE_MEMORY_BYTES=value,
+    )
+
+    assert result.returncode == 2
+    assert "RAY_OBJECT_STORE_MEMORY_BYTES must be a positive integer" in result.stderr
+
+
 def test_dynamicsd_launcher_accepts_an_explicit_afterok_dependency() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
@@ -941,7 +984,7 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     lines = manifest.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert lines[0].split("\t") == SUBMISSIONS_HEADER.split("\t")
-    assert all(len(line.split("\t")) == 30 for line in lines)
+    assert all(len(line.split("\t")) == 31 for line in lines)
     assert lines[1].split("\t")[16:18] == ["standard", "probabilistic"]
     manifest_row = dict(
         zip(
@@ -955,6 +998,27 @@ def test_dynamicsd_launcher_submit_writes_a_consistent_sampling_manifest(
     assert manifest_row["train_global_batch_size"] == "256"
     assert manifest_row["max_total_sequence_length"] == "40960"
     assert manifest_row["max_new_tokens"] == "32768"
+    assert manifest_row["ray_object_store_memory_bytes"] == ""
+
+
+def test_dynamicsd_launcher_submit_records_ray_object_store_memory(
+    tmp_path: Path,
+) -> None:
+    environment, manifest = _prepare_submit_environment(tmp_path)
+    environment["RAY_OBJECT_STORE_MEMORY_BYTES"] = "64000000000"
+
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "submit",
+        "qwen235b",
+        "baseline",
+        **environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    header, row = [line.split("\t") for line in manifest.read_text().splitlines()]
+    record = dict(zip(header, row, strict=True))
+    assert record["ray_object_store_memory_bytes"] == "64000000000"
 
 
 def test_dynamicsd_launcher_submit_rejects_a_legacy_manifest_header(
@@ -1061,8 +1125,7 @@ def test_dynamicsd_launcher_allows_qwen235b_recipe_and_node_overrides() -> None:
         RUN_TAG="qwen235b-32n4g-contract-test",
         ATTEMPT_ID="attempt-1",
         QWEN235_RECIPE=(
-            "examples/configs/recipes/llm/performance/"
-            "grpo-qwen3-235b-32n4g.yaml"
+            "examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml"
         ),
         QWEN235_NODES="32",
         CLUSTER_SEGMENT_SIZE="16",
@@ -1107,8 +1170,7 @@ def test_dynamicsd_launcher_records_overridden_qwen235b_segment(tmp_path: Path) 
     environment.update(
         {
             "QWEN235_RECIPE": (
-                "examples/configs/recipes/llm/performance/"
-                "grpo-qwen3-235b-32n4g.yaml"
+                "examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml"
             ),
             "QWEN235_NODES": "32",
             "CLUSTER_SEGMENT_SIZE": "16",
@@ -1208,7 +1270,9 @@ def test_long_output_launcher_renders_matched_16k_and_32k_matrix() -> None:
     assert "policy.generation.vllm_cfg.max_model_len=40968" not in output
     assert output.count("policy.megatron_cfg.activation_checkpointing=true") == 16
     assert output.count("policy.logprob_batch_size=1") == 8
-    assert output.count("policy.generation.vllm_kwargs.max_num_batched_tokens=32768") == 16
+    assert (
+        output.count("policy.generation.vllm_kwargs.max_num_batched_tokens=32768") == 16
+    )
     assert output.count("speculative_config.num_speculative_tokens=3") == 8
     assert output.count("speculative_config.model=") == 8
     assert output.count("compilation_config.cudagraph_mode=FULL_AND_PIECEWISE") == 16
@@ -1337,10 +1401,13 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
     assert output.count("compilation_config.cudagraph_mode=PIECEWISE") == 22
     assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" not in output
     assert output.count("compilation_config.max_cudagraph_capture_size=256") == 22
-    assert output.count(
-        "compilation_config.cudagraph_capture_sizes="
-        "\\[1\\,2\\,4\\,8\\,16\\,32\\,64\\,128\\,256\\]"
-    ) == 11
+    assert (
+        output.count(
+            "compilation_config.cudagraph_capture_sizes="
+            "\\[1\\,2\\,4\\,8\\,16\\,32\\,64\\,128\\,256\\]"
+        )
+        == 11
+    )
     assert "grpo-qwen3-30ba3b-4n8g-40K.yaml" in output
     assert "--nodes=8" in output
     assert "--segment=8" in output
