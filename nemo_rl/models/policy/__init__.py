@@ -349,6 +349,17 @@ class MegatronConfig(TypedDict):
     # Options are 'allgather','alltoall' and 'flex'
     # Use 'flex' when using DeepEP
     moe_token_dispatcher_type: str
+    # Overlap expert-parallel A2A communication from one microbatch with
+    # independent forward/backward computation from another microbatch.
+    # Requires EP > 1, alltoall/flex dispatch, and at least two microbatches.
+    overlap_moe_expert_parallel_comm: NotRequired[bool]
+    # Run the combined-1F1B A2A communication stream at high CUDA priority.
+    # Only affects training when overlap_moe_expert_parallel_comm is enabled.
+    high_priority_a2a_comm_stream: NotRequired[bool]
+    # Defer Transformer Engine weight-gradient GEMMs so the combined-1F1B
+    # schedule can place them in otherwise exposed communication windows.
+    # Requires overlap_moe_expert_parallel_comm.
+    delay_wgrad_compute: NotRequired[bool]
     # Inference-only MoE dispatcher selection.
     # Options are 'nvls' (requires Hopper+ NVLink) and 'nccl' (fallback for non-NVLS systems).
     inference_moe_token_dispatcher_type: NotRequired[str]

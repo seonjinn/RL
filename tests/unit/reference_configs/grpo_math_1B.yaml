@@ -198,6 +198,9 @@ policy:
     moe_per_layer_logging: False
     moe_enable_deepep: false
     moe_token_dispatcher_type: "alltoall"
+    overlap_moe_expert_parallel_comm: false
+    high_priority_a2a_comm_stream: false
+    delay_wgrad_compute: false
     moe_shared_expert_overlap: false
     use_gloo_process_groups: false
     # Multi-Token Prediction (MTP). mtp_num_layers=0 disables MTP.

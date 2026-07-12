@@ -1,0 +1,20 @@
+# Functional 1n4g smoke: two local microbatches exercise combined-1F1B.
+# Use at least 2 nodes with EP8+ for meaningful A2A-overlap performance results;
+# a single NVLink-domain EP4 run proves functionality, not a production speedup.
+# MCore selects this schedule only for backward-enabled policy training. Logprob
+# remains on the existing forward-only schedule and has no claimed direct gain.
+defaults: ./grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml
+grpo:
+  num_generations_per_prompt: 4
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-a2a-overlap
+policy:
+  train_global_batch_size: 8
+  megatron_cfg:
+    overlap_moe_expert_parallel_comm: true
+    high_priority_a2a_comm_stream: true
+    delay_wgrad_compute: true
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-a2a-overlap
+  wandb:
+    name: grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-a2a-overlap

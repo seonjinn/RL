@@ -733,6 +733,37 @@ class TestApplyMoeConfig:
         assert model_cfg.use_transformer_engine_op_fuser == "upstream-op-fuser-default"
         assert model_cfg.moe_mlp_glu_interleave_size == "upstream-interleave-default"
 
+    def test_ep_a2a_overlap_fields_are_applied_when_explicit(self) -> None:
+        """Explicit EP A2A overlap knobs reach the MCore model config."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = MagicMock()
+        megatron_cfg = self._base_moe_megatron_cfg()
+        megatron_cfg["overlap_moe_expert_parallel_comm"] = True
+        megatron_cfg["high_priority_a2a_comm_stream"] = True
+        megatron_cfg["delay_wgrad_compute"] = True
+
+        _apply_moe_config(model_cfg, {"megatron_cfg": megatron_cfg})
+
+        assert model_cfg.overlap_moe_expert_parallel_comm is True
+        assert model_cfg.high_priority_a2a_comm_stream is True
+        assert model_cfg.delay_wgrad_compute is True
+
+    def test_absent_ep_a2a_overlap_fields_keep_upstream_defaults(self) -> None:
+        """Omitted overlap knobs do not overwrite model-provider defaults."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = MagicMock()
+        model_cfg.overlap_moe_expert_parallel_comm = "upstream-overlap-default"
+        model_cfg.high_priority_a2a_comm_stream = "upstream-priority-default"
+        model_cfg.delay_wgrad_compute = "upstream-wgrad-default"
+
+        _apply_moe_config(model_cfg, {"megatron_cfg": self._base_moe_megatron_cfg()})
+
+        assert model_cfg.overlap_moe_expert_parallel_comm == "upstream-overlap-default"
+        assert model_cfg.high_priority_a2a_comm_stream == "upstream-priority-default"
+        assert model_cfg.delay_wgrad_compute == "upstream-wgrad-default"
+
     def test_hybridep_env_vars_auto_set_with_warning(self, monkeypatch):
         """HybridEP backend with no env config: auto-set env vars and emit warnings."""
         from nemo_rl.models.megatron.setup import _apply_moe_config
@@ -873,6 +904,47 @@ class TestApplyMoeConfig:
         assert not hasattr(model_cfg, "moe_hybridep_num_sms")
         assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN" not in os.environ
         assert "USE_MNNVL" not in os.environ
+
+
+@pytest.mark.mcore
+class TestApplyMtpConfig:
+    """Tests for NeMo-RL MTP normalization before MCore validation."""
+
+    def test_a2a_overlap_normalizes_disabled_mtp_zero_to_none(self) -> None:
+        """MCore's overlap validator requires disabled MTP to be None."""
+        from nemo_rl.models.megatron.setup import _apply_mtp_config
+
+        model_cfg = MagicMock()
+
+        _apply_mtp_config(
+            model_cfg,
+            {
+                "megatron_cfg": {
+                    "mtp_num_layers": 0,
+                    "overlap_moe_expert_parallel_comm": True,
+                }
+            },
+        )
+
+        assert model_cfg.mtp_num_layers is None
+
+    def test_mtp_zero_without_a2a_overlap_remains_zero(self) -> None:
+        """Existing non-overlap configurations retain their public value."""
+        from nemo_rl.models.megatron.setup import _apply_mtp_config
+
+        model_cfg = MagicMock()
+
+        _apply_mtp_config(
+            model_cfg,
+            {
+                "megatron_cfg": {
+                    "mtp_num_layers": 0,
+                    "overlap_moe_expert_parallel_comm": False,
+                }
+            },
+        )
+
+        assert model_cfg.mtp_num_layers == 0
 
 
 @pytest.mark.mcore
@@ -1771,6 +1843,63 @@ class TestCreateMegatronConfigGlooProcessGroups:
             dist_config.use_gloo_process_groups
             == DistributedInitConfig().use_gloo_process_groups
         )
+
+
+@pytest.mark.mcore
+class TestCreateMegatronConfigA2AOverlap:
+    """Tests for EP A2A overlap plumbing into the DDP config."""
+
+    @staticmethod
+    def _config(**megatron_overrides):
+        megatron_cfg = {
+            "distributed_data_parallel_config": {
+                "overlap_param_gather": False,
+                "grad_reduce_in_fp32": False,
+                "overlap_grad_reduce": False,
+                "data_parallel_sharding_strategy": "no_shard",
+            },
+            "optimizer": {"use_distributed_optimizer": False},
+            "scheduler": {},
+            "train_iters": 10,
+        }
+        megatron_cfg.update(megatron_overrides)
+        return {"train_global_batch_size": 8, "megatron_cfg": megatron_cfg}
+
+    def _ddp_kwargs(self, config):
+        from nemo_rl.models.megatron.setup import _create_megatron_config
+
+        with (
+            patch("nemo_rl.models.megatron.setup.ConfigContainer"),
+            patch("nemo_rl.models.megatron.setup.TrainingConfig"),
+            patch("nemo_rl.models.megatron.setup.OptimizerConfig"),
+            patch(
+                "nemo_rl.models.megatron.setup.DistributedDataParallelConfig"
+            ) as mock_ddp_config,
+            patch("nemo_rl.models.megatron.setup.SchedulerConfig"),
+            patch("nemo_rl.models.megatron.setup.TokenizerConfig"),
+            patch("nemo_rl.models.megatron.setup.LoggerConfig"),
+        ):
+            _create_megatron_config(
+                model_cfg=MagicMock(),
+                checkpoint_config=MagicMock(),
+                config=config,
+                hf_model_name="test-model",
+                dtype=torch.bfloat16,
+            )
+
+        return mock_ddp_config.call_args.kwargs
+
+    def test_delay_wgrad_compute_is_forwarded_to_ddp_config(self) -> None:
+        """The DDP wrapper receives the flag used to register delayed-wgrad hooks."""
+        ddp_kwargs = self._ddp_kwargs(self._config(delay_wgrad_compute=True))
+
+        assert ddp_kwargs["delay_wgrad_compute"] is True
+
+    def test_absent_delay_wgrad_compute_preserves_upstream_ddp_default(self) -> None:
+        """Omitting the optional flag leaves the Bridge/MCore DDP default untouched."""
+        ddp_kwargs = self._ddp_kwargs(self._config())
+
+        assert "delay_wgrad_compute" not in ddp_kwargs
 
 
 @pytest.mark.mcore
