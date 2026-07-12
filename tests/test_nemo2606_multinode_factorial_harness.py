@@ -414,6 +414,21 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
         assert metric in source
 
 
+def test_matrix_payload_uses_shared_megatron_conversion_cache() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    checkpoint_root = (
+        'MEGATRON_CHECKPOINT_ROOT="${CONTAINER_RUNTIME_DIR}/megatron_checkpoints"'
+    )
+    create_root = 'mkdir -p "${MEGATRON_CHECKPOINT_ROOT}"'
+    export_root = 'export NRL_MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_ROOT}"'
+
+    assert checkpoint_root in source
+    assert create_root in source
+    assert export_root in source
+    assert source.index(checkpoint_root) < source.index(create_root)
+    assert source.index(create_root) < source.index(export_root)
+
+
 def test_functional_payload_fails_closed_before_selecting_one_arm() -> None:
     source = MATRIX_PAYLOAD.read_text()
     required = (
