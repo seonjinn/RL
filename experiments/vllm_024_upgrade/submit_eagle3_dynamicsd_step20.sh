@@ -536,7 +536,9 @@ submit_one() {
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
-    # BaseVllmGenerationWorker assigns a distinct rendezvous window per engine.
+    # vLLM 0.24 allocates several internal ports per engine. A fixed VLLM_PORT
+    # base makes those allocators race during concurrent multi-engine startup.
+    "NRL_DISABLE_VLLM_PORT_OVERRIDE=1"
     "PYTHONPATH=${runtime_pythonpath}"
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"

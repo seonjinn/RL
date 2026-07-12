@@ -432,27 +432,6 @@ class TestVllmPortAssignment:
 
         assert "VLLM_PORT" not in env_vars
 
-    def test_worker_uses_reserved_port_for_its_global_rank(self, monkeypatch):
-        from nemo_rl.models.generation.vllm.vllm_worker import (
-            _resolve_reserved_vllm_port,
-        )
-
-        monkeypatch.setenv("RANK", "2")
-        monkeypatch.setenv("AVAILABLE_PORT_LIST", "[21001, 21002, 21003, 21004]")
-
-        assert _resolve_reserved_vllm_port() == 21003
-
-    def test_worker_rejects_out_of_range_reserved_port_rank(self, monkeypatch):
-        from nemo_rl.models.generation.vllm.vllm_worker import (
-            _resolve_reserved_vllm_port,
-        )
-
-        monkeypatch.setenv("RANK", "4")
-        monkeypatch.setenv("AVAILABLE_PORT_LIST", "[21001, 21002]")
-
-        with pytest.raises(ValueError, match="outside AVAILABLE_PORT_LIST"):
-            _resolve_reserved_vllm_port()
-
     @pytest.mark.parametrize("engine_group_index", [0, 1, 3, 7])
     def test_global_engine_group_index_assigns_unique_port(self, engine_group_index):
         from nemo_rl.distributed.virtual_cluster import (

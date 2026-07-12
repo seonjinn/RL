@@ -1042,7 +1042,7 @@ def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
     assert "--segment=16" in output
     assert "--gres=gpu:4" in output
     assert "VLLM_PORT=" not in output
-    assert "NRL_DISABLE_VLLM_PORT_OVERRIDE=1" not in output
+    assert "NRL_DISABLE_VLLM_PORT_OVERRIDE=1" in output
     assert "NRL_FORCE_REBUILD_VENVS=true" in output
 
 

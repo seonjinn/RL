@@ -54,23 +54,6 @@ from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 logger = logging.getLogger(__name__)
 
 
-def _resolve_reserved_vllm_port() -> Optional[int]:
-    rank_value = os.environ.get("RANK")
-    ports_value = os.environ.get("AVAILABLE_PORT_LIST")
-    if rank_value is None or ports_value is None:
-        return None
-
-    rank = int(rank_value)
-    ports = json.loads(ports_value)
-    if not isinstance(ports, list) or not all(isinstance(port, int) for port in ports):
-        raise ValueError("AVAILABLE_PORT_LIST must be a JSON list of integer ports.")
-    if rank < 0 or rank >= len(ports):
-        raise ValueError(
-            f"Worker rank {rank} is outside AVAILABLE_PORT_LIST with {len(ports)} entries."
-        )
-    return ports[rank]
-
-
 def _all_worker_results_succeeded(
     worker_results: Optional[Sequence[Any]],
 ) -> bool:
@@ -303,16 +286,6 @@ class BaseVllmGenerationWorker:
         self.fraction_of_gpus = fraction_of_gpus
         self.is_model_owner = bundle_indices is not None
         self._extra_env_vars = extra_env_vars
-
-        if self.is_model_owner:
-            reserved_port = _resolve_reserved_vllm_port()
-            if reserved_port is not None:
-                os.environ["VLLM_PORT"] = str(reserved_port)
-                logger.info(
-                    "Resolved vLLM engine rendezvous port %s for worker rank %s.",
-                    reserved_port,
-                    os.environ["RANK"],
-                )
 
         # Store the Python executable being used by this worker
         self.py_executable = sys.executable
