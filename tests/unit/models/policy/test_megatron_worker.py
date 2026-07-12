@@ -88,7 +88,12 @@ def _make_offload_diagnostics_worker(monkeypatch: pytest.MonkeyPatch) -> Any:
     worker.fp8_cfg = None
     worker.cfg = {"megatron_cfg": {"clear_memory_caches_before_refit": False}}
 
-    def move_model(model: Any, device: str, move_params: bool, move_grads: bool) -> Any:
+    def move_model(
+        model: Any,
+        device: str,
+        move_params: bool = True,
+        move_grads: bool = True,
+    ) -> Any:
         print("test_action=grad_move", flush=True)
         return model
 
@@ -229,8 +234,9 @@ def test_megatron_offload_emits_ranked_optimizer_cuda_bytes_each_lifecycle(
     monkeypatch.setattr(
         torch,
         "is_tensor",
-        lambda value: isinstance(value, _FakeTelemetryTensor)
-        or original_is_tensor(value),
+        lambda value: (
+            isinstance(value, _FakeTelemetryTensor) or original_is_tensor(value)
+        ),
     )
     monkeypatch.setattr(
         megatron_policy_worker.parallel_state,
@@ -326,11 +332,116 @@ def test_megatron_offload_optimizer_state_getter_fallback_returns_zero(
     monkeypatch.setattr(
         torch,
         "is_tensor",
-        lambda value: isinstance(value, _FakeTelemetryTensor)
-        or original_is_tensor(value),
+        lambda value: (
+            isinstance(value, _FakeTelemetryTensor) or original_is_tensor(value)
+        ),
     )
 
-    assert megatron_policy_worker._get_optimizer_cuda_tensor_bytes(GetterOptimizer()) == 0
+    assert (
+        megatron_policy_worker._get_optimizer_cuda_tensor_bytes(GetterOptimizer()) == 0
+    )
+
+
+def test_megatron_offload_counts_proxy_dict_chained_optimizer_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    class ProxyDictStyleState:
+        def __init__(self, entries: dict[str, Any]) -> None:
+            self._entries = entries
+
+        def items(self) -> Any:
+            return self._entries.items()
+
+    shared_cuda_tensor = _FakeTelemetryTensor(numel=4, element_size=4, is_cuda=True)
+    expert_cuda_tensor = _FakeTelemetryTensor(numel=8, element_size=4, is_cuda=True)
+
+    class ChainedOptimizerStyle:
+        state = ProxyDictStyleState(
+            {
+                "optimizer_0": {
+                    "dense": shared_cuda_tensor,
+                    "shared": shared_cuda_tensor,
+                },
+                "optimizer_1": {
+                    "expert": expert_cuda_tensor,
+                    "shared": shared_cuda_tensor,
+                },
+            }
+        )
+
+        def _get_state(self) -> object:
+            raise AssertionError("ChainedOptimizer._get_state must not be materialized")
+
+    original_is_tensor = torch.is_tensor
+    monkeypatch.setattr(
+        torch,
+        "is_tensor",
+        lambda value: (
+            isinstance(value, _FakeTelemetryTensor) or original_is_tensor(value)
+        ),
+    )
+
+    assert (
+        megatron_policy_worker._get_optimizer_cuda_tensor_bytes(ChainedOptimizerStyle())
+        == 48
+    )
+
+
+def test_colocated_refit_offload_lifecycle_first_post_update_is_sequence_three(
+    capfd: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.algorithms import grpo
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    class Model:
+        def eval(self) -> None:
+            pass
+
+    worker = _make_offload_diagnostics_worker(monkeypatch)
+    worker.model = Model()
+
+    class PolicyLifecycle:
+        def offload_before_refit(self) -> None:
+            megatron_policy_worker.MegatronPolicyWorkerImpl.offload_before_refit(worker)
+
+        def offload_after_refit(self) -> None:
+            megatron_policy_worker.MegatronPolicyWorkerImpl.offload_after_refit(worker)
+
+        def get_free_memory_bytes(self) -> int:
+            return 1024**3
+
+        def stream_weights_via_ipc_zmq(self, *, buffer_size_bytes: int) -> list[bool]:
+            assert buffer_size_bytes > 0
+            return [True]
+
+    class GenerationLifecycle:
+        def prepare_for_generation(self, *, tags: list[str]) -> bool:
+            assert tags in (["weights"], ["kv_cache"])
+            return True
+
+        def update_weights_via_ipc_zmq(self) -> list[bool]:
+            return [True]
+
+    monkeypatch.setattr(grpo.ray, "get", lambda futures: futures)
+    policy = PolicyLifecycle()
+    generation = GenerationLifecycle()
+
+    grpo.refit_policy_generation(policy, generation, colocated_inference=True)
+    # The optimizer update occurs between the initial stale-generation refit and
+    # this post-update refit.
+    grpo.refit_policy_generation(policy, generation, colocated_inference=True)
+
+    completion_sequences = [
+        int(line.split("offload_sequence=", 1)[1].split()[0])
+        for line in capfd.readouterr().out.splitlines()
+        if line.startswith("event=megatron_policy_offload_memory")
+        and "phase=after_completion" in line
+    ]
+    assert completion_sequences == [1, 2, 3, 4]
+    assert completion_sequences[2] == 3
 
 
 def test_megatron_prepare_for_training_restores_optimizer():

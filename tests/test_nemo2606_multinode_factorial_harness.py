@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from omegaconf import OmegaConf
 
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
@@ -25,12 +26,27 @@ register_omegaconf_resolvers()
 
 
 def _run_functional_summarizer(
-    tmp_path: Path, offload_sequence: int
+    tmp_path: Path,
+    offload_sequence: int,
+    *,
+    cgroup_memory_peak_gib: str = "unavailable",
+    cgroup_memory_max_gib: str = "unavailable",
+    ray_logs: dict[str, str] | None = None,
+    constant_overrides: dict[str, int] | None = None,
+    evidence_suffix: str = "",
 ) -> subprocess.CompletedProcess[str]:
     source = MATRIX_PAYLOAD.read_text()
     summarizer = source.split("# CUTEDSL_FUNCTIONAL_SUMMARIZER_START\n", 1)[1].split(
         "# CUTEDSL_FUNCTIONAL_SUMMARIZER_END", 1
     )[0]
+    for constant, value in (constant_overrides or {}).items():
+        summarizer = re.sub(
+            rf"^{re.escape(constant)} = .+$",
+            f"{constant} = {value}",
+            summarizer,
+            count=1,
+            flags=re.MULTILINE,
+        )
     result_dir = tmp_path / "results"
     arm_dir = result_dir / "functional" / "0-on"
     ray_log_dir = tmp_path / "ray-logs"
@@ -51,10 +67,16 @@ def _run_functional_summarizer(
     evidence_lines = ["kernel=GroupedGemmGluSm100"]
     evidence_lines.extend(
         "event=megatron_policy_offload_memory phase=after_completion "
-        f"global_rank={rank} offload_sequence={offload_sequence}"
+        f"global_rank={rank} offload_sequence={offload_sequence} "
+        f"cgroup_memory_peak_gib={cgroup_memory_peak_gib} "
+        f"cgroup_memory_max_gib={cgroup_memory_max_gib}{evidence_suffix}"
         for rank in range(8)
     )
     (arm_dir / "grpo.log").write_text("\n".join(evidence_lines) + "\n")
+    for relative_path, contents in (ray_logs or {}).items():
+        ray_path = ray_log_dir / relative_path
+        ray_path.parent.mkdir(parents=True, exist_ok=True)
+        ray_path.write_text(contents)
     (result_dir / "benchmark_manifest.json").write_text("{}\n")
     env = os.environ.copy()
     env.update(
@@ -442,7 +464,9 @@ def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> Non
     assert 'os.environ["CUTEDSL_SEGMENT"]' not in manifest_block
 
 
-def test_functional_payload_records_three_update_component_and_runtime_evidence() -> None:
+def test_functional_payload_records_three_update_component_and_runtime_evidence() -> (
+    None
+):
     source = MATRIX_PAYLOAD.read_text()
     required = (
         'if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then',
@@ -457,17 +481,23 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
         'REFIT_METRIC = "timing/train/prepare_for_generation/transfer_and_update_weights"',
         'if completed_updates != int(os.environ["FUNCTIONAL_UPDATES"]):',
         'get("event") == "megatron_policy_offload_memory"',
-        'phase=after_completion',
-        'offload_sequence=2',
-        'global_rank',
-        'RAY_CLUSTER_LOG_DIR',
-        'GroupedGemmGluSm100',
-        'MAX_FUNCTIONAL_EVIDENCE_MATCHES',
+        "phase=after_completion",
+        "offload_sequence=3",
+        "global_rank",
+        "cgroup_memory_peak_gib",
+        "cgroup_memory_max_gib",
+        "MEMORY_LIMIT_FRACTION = 0.95",
+        "RAY_CLUSTER_LOG_DIR",
+        "GroupedGemmGluSm100",
+        "MAX_FUNCTIONAL_EVIDENCE_MATCHES",
         'len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"])',
     )
     for fragment in required:
         assert fragment in source, fragment
-    assert 'if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then' in source
+    assert (
+        'if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then'
+        in source
+    )
 
 
 def test_functional_summarizer_rejects_offload_sequence_prefix(
@@ -480,10 +510,20 @@ def test_functional_summarizer_rejects_offload_sequence_prefix(
     assert not (tmp_path / "results" / "functional_gate_summary.json").exists()
 
 
-def test_functional_summarizer_accepts_exact_offload_sequence(
+def test_functional_summarizer_rejects_initial_stale_generation_sequence(
     tmp_path: Path,
 ) -> None:
     result = _run_functional_summarizer(tmp_path, offload_sequence=2)
+
+    assert result.returncode != 0
+    assert "offload_sequence=3" in result.stderr
+    assert not (tmp_path / "results" / "functional_gate_summary.json").exists()
+
+
+def test_functional_summarizer_accepts_first_post_update_offload_sequence(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(tmp_path, offload_sequence=3)
 
     assert result.returncode == 0, result.stderr
     summary = json.loads(
@@ -492,6 +532,119 @@ def test_functional_summarizer_accepts_exact_offload_sequence(
     assert summary["offload_memory_evidence"]["completed_global_ranks"] == list(
         range(8)
     )
+    assert summary["offload_memory_evidence"]["required_offload_sequence"] == 3
+
+
+def test_functional_summarizer_accepts_finite_cgroup_fraction_below_limit(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        cgroup_memory_peak_gib="94.999",
+        cgroup_memory_max_gib="100.000",
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    memory = summary["offload_memory_evidence"]["cgroup_memory"]
+    assert memory["limit_fraction_exclusive"] == 0.95
+    assert memory["finite_limit_global_ranks"] == list(range(8))
+    assert memory["unavailable_limit_global_ranks"] == []
+
+
+@pytest.mark.parametrize("peak", ["95.000", "95.001"])
+def test_functional_summarizer_rejects_cgroup_fraction_at_or_above_limit(
+    tmp_path: Path, peak: str
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        cgroup_memory_peak_gib=peak,
+        cgroup_memory_max_gib="100.000",
+    )
+
+    assert result.returncode != 0
+    assert "cgroup memory peak/limit must be < 0.95" in result.stderr
+    assert not (tmp_path / "results" / "functional_gate_summary.json").exists()
+
+
+def test_functional_summarizer_classifies_unavailable_cgroup_limit(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        cgroup_memory_peak_gib="unavailable",
+        cgroup_memory_max_gib="unavailable",
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    memory = summary["offload_memory_evidence"]["cgroup_memory"]
+    assert memory["finite_limit_global_ranks"] == []
+    assert memory["unavailable_limit_global_ranks"] == list(range(8))
+    assert summary["post_job_slurm_accounting_required"] is True
+
+
+@pytest.mark.parametrize(
+    ("constant_overrides", "ray_logs", "evidence_suffix", "reason"),
+    [
+        (
+            {"MAX_FUNCTIONAL_EVIDENCE_FILES": 1},
+            {"worker-0.log": "first\n", "worker-1.log": "second\n"},
+            "",
+            "file_count_limit",
+        ),
+        (
+            {"MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE": 64},
+            {},
+            " padding=" + "x" * 128,
+            "per_file_tail_limit",
+        ),
+        (
+            {"MAX_FUNCTIONAL_EVIDENCE_BYTES": 128},
+            {},
+            "",
+            "total_byte_limit",
+        ),
+        (
+            {"MAX_FUNCTIONAL_EVIDENCE_MATCHES": 1},
+            {},
+            "",
+            "match_count_limit",
+        ),
+        (
+            {"MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS": 96},
+            {},
+            " padding=" + "x" * 128,
+            "retained_line_limit",
+        ),
+    ],
+)
+def test_functional_summarizer_rejects_any_bounded_scan_truncation(
+    tmp_path: Path,
+    constant_overrides: dict[str, int],
+    ray_logs: dict[str, str],
+    evidence_suffix: str,
+    reason: str,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        ray_logs=ray_logs,
+        constant_overrides=constant_overrides,
+        evidence_suffix=evidence_suffix,
+    )
+
+    assert result.returncode != 0
+    assert "functional evidence scan was truncated" in result.stderr
+    assert reason in result.stderr
+    assert not (tmp_path / "results" / "functional_gate_summary.json").exists()
 
 
 def test_functional_payload_does_not_emit_timing_or_profile_artifacts() -> None:

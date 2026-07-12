@@ -108,17 +108,34 @@ TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 def _get_optimizer_cuda_tensor_bytes(optimizer: object) -> Optional[int]:
     """Best-effort size of unique CUDA tensors in the live optimizer state."""
     try:
+
+        def dictionary_like_values(value: object) -> Optional[list[object]]:
+            if isinstance(value, Mapping):
+                return list(value.values())
+            try:
+                items = getattr(value, "items")
+            except Exception:
+                return None
+            if not callable(items):
+                return None
+            try:
+                return [item[1] for item in items()]
+            except Exception:
+                return None
+
         try:
             state = getattr(optimizer, "state")
         except Exception:
             state = None
-        if not isinstance(state, Mapping):
+        state_values = dictionary_like_values(state)
+        if state_values is None:
             get_state = getattr(optimizer, "_get_state", None)
             if not callable(get_state):
                 return None
             state = get_state()
-        if not isinstance(state, Mapping):
-            return None
+            state_values = dictionary_like_values(state)
+            if state_values is None:
+                return None
 
         visited_containers: set[int] = set()
         visited_tensors: set[int] = set()
@@ -134,12 +151,13 @@ def _get_optimizer_cuda_tensor_bytes(optimizer: object) -> Optional[int]:
                     return tensor.numel() * tensor.element_size()
                 return 0
 
-            if isinstance(value, Mapping):
+            mapping_values = dictionary_like_values(value)
+            if mapping_values is not None:
                 container_id = id(value)
                 if container_id in visited_containers:
                     return 0
                 visited_containers.add(container_id)
-                return sum(cuda_tensor_bytes(item) for item in value.values())
+                return sum(cuda_tensor_bytes(item) for item in mapping_values)
 
             if isinstance(value, (list, tuple)):
                 container_id = id(value)

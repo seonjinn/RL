@@ -972,6 +972,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
     "${UV_BIN}" run --active --no-sync python - <<'PY'
 # CUTEDSL_FUNCTIONAL_SUMMARIZER_START
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -997,6 +998,8 @@ MAX_FUNCTIONAL_EVIDENCE_FILES = 512
 MAX_FUNCTIONAL_EVIDENCE_BYTES = 256 * 1024 * 1024
 MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE = 16 * 1024 * 1024
 MAX_FUNCTIONAL_EVIDENCE_MATCHES = 4096
+MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS = 4096
+MEMORY_LIMIT_FRACTION = 0.95
 CUTEDSL_ACTIVATION_SIGNATURE = "GroupedGemmGluSm100"
 
 
@@ -1035,16 +1038,21 @@ for component, candidates in COMPONENT_METRICS.items():
     component_series[component] = {"metric": source_name, "steps": steps}
 
 
-def bounded_tail(path: Path, remaining_bytes: int) -> tuple[str, int, bool]:
+def bounded_tail(path: Path, remaining_bytes: int) -> tuple[str, int, set[str]]:
     size = path.stat().st_size
     read_size = min(size, MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE, remaining_bytes)
+    truncation_reasons: set[str] = set()
+    if size > MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE:
+        truncation_reasons.add("per_file_tail_limit")
+    if min(size, MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE) > remaining_bytes:
+        truncation_reasons.add("total_byte_limit")
     if read_size <= 0:
-        return "", 0, size > 0
+        return "", 0, truncation_reasons
     with path.open("rb") as stream:
         if size > read_size:
             stream.seek(-read_size, os.SEEK_END)
         data = stream.read(read_size)
-    return data.decode(errors="replace"), len(data), size > read_size
+    return data.decode(errors="replace"), len(data), truncation_reasons
 
 
 def parse_evidence_fields(line: str) -> dict[str, str]:
@@ -1069,16 +1077,18 @@ ray_log_paths = sorted(
     if path.is_file() and path.suffix.lower() in {".err", ".log", ".out", ".txt"}
 )
 candidate_paths = [driver_log, *ray_log_paths[:MAX_FUNCTIONAL_EVIDENCE_FILES]]
-scan_truncated = len(ray_log_paths) > MAX_FUNCTIONAL_EVIDENCE_FILES
+scan_truncation_reasons: set[str] = set()
+if len(ray_log_paths) > MAX_FUNCTIONAL_EVIDENCE_FILES:
+    scan_truncation_reasons.add("file_count_limit")
 scanned_bytes = 0
 telemetry_matches: list[dict[str, str]] = []
 cutedsl_matches: list[dict[str, str]] = []
-for path in candidate_paths:
-    text, consumed_bytes, file_truncated = bounded_tail(
+for path_index, path in enumerate(candidate_paths):
+    text, consumed_bytes, file_truncation_reasons = bounded_tail(
         path, MAX_FUNCTIONAL_EVIDENCE_BYTES - scanned_bytes
     )
     scanned_bytes += consumed_bytes
-    scan_truncated = scan_truncated or file_truncated
+    scan_truncation_reasons.update(file_truncation_reasons)
     try:
         source = str(path.relative_to(result_dir))
     except ValueError:
@@ -1086,33 +1096,99 @@ for path in candidate_paths:
     for line in text.splitlines():
         if parse_evidence_fields(line).get("event") == "megatron_policy_offload_memory":
             if len(telemetry_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
-                telemetry_matches.append({"source": source, "line": line[-4096:]})
+                if len(line) > MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:
+                    scan_truncation_reasons.add("retained_line_limit")
+                telemetry_matches.append(
+                    {"source": source, "line": line[-MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:]}
+                )
             else:
-                scan_truncated = True
+                scan_truncation_reasons.add("match_count_limit")
         if CUTEDSL_ACTIVATION_SIGNATURE in line:
             if len(cutedsl_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
-                cutedsl_matches.append({"source": source, "line": line[-4096:]})
+                if len(line) > MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:
+                    scan_truncation_reasons.add("retained_line_limit")
+                cutedsl_matches.append(
+                    {"source": source, "line": line[-MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:]}
+                )
             else:
-                scan_truncated = True
+                scan_truncation_reasons.add("match_count_limit")
     if scanned_bytes >= MAX_FUNCTIONAL_EVIDENCE_BYTES:
-        scan_truncated = True
+        if path_index + 1 < len(candidate_paths):
+            scan_truncation_reasons.add("total_byte_limit")
         break
 
+if scan_truncation_reasons:
+    raise ValueError(
+        "functional evidence scan was truncated; bounded evidence cannot prove "
+        f"complete per-rank evidence: {sorted(scan_truncation_reasons)!r}"
+    )
+
 completed_ranks: set[int] = set()
+finite_limit_ranks: set[int] = set()
+unavailable_limit_ranks: set[int] = set()
+cgroup_memory_observations: list[dict[str, object]] = []
 for evidence in telemetry_matches:
     fields = parse_evidence_fields(evidence["line"])
     global_rank = fields.get("global_rank", "")
     if (
         fields.get("phase") == "after_completion"
-        and fields.get("offload_sequence") == "2"
+        and fields.get("offload_sequence") == "3"
         and re.fullmatch(r"[0-9]+", global_rank)
     ):
-        completed_ranks.add(int(global_rank))
+        rank = int(global_rank)
+        completed_ranks.add(rank)
+        max_raw = fields.get("cgroup_memory_max_gib", "unavailable")
+        peak_raw = fields.get("cgroup_memory_peak_gib", "unavailable")
+        if max_raw in {"", "max", "unavailable", "unbounded"}:
+            unavailable_limit_ranks.add(rank)
+            cgroup_memory_observations.append(
+                {
+                    "global_rank": rank,
+                    "status": "limit_unavailable_or_unbounded",
+                    "peak_gib": peak_raw,
+                    "max_gib": max_raw or "unavailable",
+                }
+            )
+            continue
+        try:
+            max_gib = float(max_raw)
+            peak_gib = float(peak_raw)
+        except ValueError as error:
+            raise ValueError(
+                f"rank {rank} has invalid finite cgroup memory evidence: "
+                f"peak={peak_raw!r}, max={max_raw!r}"
+            ) from error
+        if not math.isfinite(max_gib) or max_gib <= 0:
+            raise ValueError(
+                f"rank {rank} cgroup memory max must be finite and positive; "
+                f"observed {max_raw!r}"
+            )
+        if not math.isfinite(peak_gib) or peak_gib < 0:
+            raise ValueError(
+                f"rank {rank} cgroup memory peak must be finite and non-negative "
+                f"when max is finite; observed {peak_raw!r}"
+            )
+        fraction = peak_gib / max_gib
+        if fraction >= MEMORY_LIMIT_FRACTION:
+            raise ValueError(
+                "cgroup memory peak/limit must be < 0.95 for every exact mature "
+                f"completion; rank {rank} observed {peak_gib}/{max_gib}={fraction:.6f}"
+            )
+        finite_limit_ranks.add(rank)
+        cgroup_memory_observations.append(
+            {
+                "global_rank": rank,
+                "status": "finite_limit_below_threshold",
+                "peak_gib": peak_gib,
+                "max_gib": max_gib,
+                "peak_to_limit_fraction": fraction,
+            }
+        )
 expected_ranks = set(range(int(os.environ["TRAINING_GPU_COUNT"])))
 if len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"]):
     raise ValueError(
         "functional offload telemetry requires phase=after_completion "
-        f"offload_sequence=2 for {sorted(expected_ranks)!r}; observed "
+        f"offload_sequence=3 for {sorted(expected_ranks)!r}; observed "
         f"{sorted(completed_ranks)!r}"
     )
 if completed_ranks != expected_ranks:
@@ -1134,8 +1210,14 @@ summary = {
     "component_series": component_series,
     "offload_memory_evidence": {
         "required_phase": "after_completion",
-        "required_offload_sequence": 2,
+        "required_offload_sequence": 3,
         "completed_global_ranks": sorted(completed_ranks),
+        "cgroup_memory": {
+            "limit_fraction_exclusive": MEMORY_LIMIT_FRACTION,
+            "finite_limit_global_ranks": sorted(finite_limit_ranks),
+            "unavailable_limit_global_ranks": sorted(unavailable_limit_ranks),
+            "observations": cgroup_memory_observations,
+        },
         "matches": telemetry_matches,
     },
     "cutedsl_activation_evidence": {
@@ -1147,7 +1229,9 @@ summary = {
         "ray_log_root": str(ray_log_root),
         "files_scanned": min(len(candidate_paths), MAX_FUNCTIONAL_EVIDENCE_FILES + 1),
         "bytes_scanned": scanned_bytes,
-        "truncated": scan_truncated,
+        "truncated": False,
+        "truncation_reasons": [],
+        "max_retained_line_chars": MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS,
         "max_matches_per_evidence_type": MAX_FUNCTIONAL_EVIDENCE_MATCHES,
     },
     "post_job_slurm_accounting_required": True,
