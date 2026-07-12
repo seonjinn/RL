@@ -45,6 +45,7 @@ def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
         "num_nodes": 2,
         "gpus_per_node": 4,
     }
+    assert config["cluster"]["segment_size"] == 2
     assert megatron["expert_model_parallel_size"] == 8
     assert megatron["expert_tensor_parallel_size"] == 1
     assert policy["train_global_batch_size"] == 16
@@ -172,6 +173,7 @@ record = {
     "order": payload["CUTEDSL_BENCHMARK_ORDER"],
     "existing_ray": payload["CUTEDSL_BENCHMARK_EXISTING_RAY"],
     "nodes": payload["CUTEDSL_BENCHMARK_NUM_NODES"],
+    "segment_size": payload["CUTEDSL_BENCHMARK_SEGMENT_SIZE"],
     "gpus_per_node": payload["GPUS_PER_NODE"],
     "command": payload["COMMAND"],
     "container": payload["CONTAINER"],
@@ -216,6 +218,7 @@ print(f"mock-{record['context']}-{record['replicate']}")
     for call in calls:
         assert call["existing_ray"] == "1"
         assert call["nodes"] == "2"
+        assert call["segment_size"] == "2"
         assert call["gpus_per_node"] == "4"
         assert call["command"].endswith("/run_cutedsl_matrix.sbatch")
         assert call["container"].endswith(".sqsh")
@@ -229,6 +232,80 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert "--segment=1" not in call["argv"]
         assert "--test-only" in call["argv"]
         assert call["argv"][-1] == str(PROJECT_ROOT / "ray.sub")
+
+
+def test_functional_submitter_exports_one_fail_closed_job(tmp_path: Path) -> None:
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    calls_path = tmp_path / "calls.jsonl"
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+payload_arg = next(arg for arg in sys.argv[1:] if arg.startswith("--export-file="))
+payload = {}
+for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
+    if entry:
+        key, value = entry.decode().split("=", 1)
+        payload[key] = value
+record = {
+    "argv": ["--export-file=<payload>" if arg == payload_arg else arg for arg in sys.argv[1:]],
+    "functional_gate": payload.get("NEMO2606_FUNCTIONAL_GATE"),
+    "functional_updates": payload.get("NEMO2606_FUNCTIONAL_UPDATES"),
+    "context": payload.get("NEMO2606_FACTORIAL_CONTEXT"),
+    "order": payload.get("CUTEDSL_BENCHMARK_ORDER"),
+    "profile": payload.get("CUTEDSL_BENCHMARK_PROFILE"),
+    "existing_ray": payload.get("CUTEDSL_BENCHMARK_EXISTING_RAY"),
+    "nodes": payload.get("CUTEDSL_BENCHMARK_NUM_NODES"),
+    "segment_size": payload.get("CUTEDSL_BENCHMARK_SEGMENT_SIZE"),
+    "gpus_per_node": payload.get("CUTEDSL_BENCHMARK_GPUS_PER_NODE"),
+    "full_cg": payload.get("NEMO2606_FULL_CG_ENABLED"),
+    "a2a": payload.get("NEMO2606_A2A_ENABLED"),
+}
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(json.dumps(record) + "\\n")
+print("mock-functional")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FUNCTIONAL_GATE": "1",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["functional_gate"] == "1"
+    assert call["functional_updates"] == "3"
+    assert call["context"] == "g0a0"
+    assert call["order"] == "on"
+    assert call["profile"] == "0"
+    assert call["existing_ray"] == "1"
+    assert call["nodes"] == "2"
+    assert call["segment_size"] == "2"
+    assert call["gpus_per_node"] == "4"
+    assert call["full_cg"] == "0"
+    assert call["a2a"] == "0"
+    assert "--nodes=2" in call["argv"]
+    assert "--segment=2" in call["argv"]
+    assert "--test-only" in call["argv"]
 
 
 def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:

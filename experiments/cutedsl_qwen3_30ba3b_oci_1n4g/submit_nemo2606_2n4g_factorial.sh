@@ -25,24 +25,28 @@ REPLICATES="${NEMO2606_FACTORIAL_REPLICATES:-3}"
 WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"
 PROFILE_REPLICATE="${NEMO2606_FACTORIAL_PROFILE_REPLICATE:-0}"
+FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"
 readonly CONTEXTS REPLICATES WARMUP_UPDATES MEASURED_UPDATES PROFILE_REPLICATE
+readonly FUNCTIONAL_GATE
 
-if [[ ! "${REPLICATES}" =~ ^[0-9]+$ ]] || ((REPLICATES < 3)); then
-    echo "[ERROR] NEMO2606_FACTORIAL_REPLICATES must be an integer >= 3." >&2
-    exit 1
-fi
-if [[ ! "${WARMUP_UPDATES}" =~ ^[0-9]+$ ]] || ((WARMUP_UPDATES < 5)); then
-    echo "[ERROR] NEMO2606_FACTORIAL_WARMUP_UPDATES must be an integer >= 5." >&2
-    exit 1
-fi
-if [[ ! "${MEASURED_UPDATES}" =~ ^[0-9]+$ ]] || ((MEASURED_UPDATES < 20)); then
-    echo "[ERROR] NEMO2606_FACTORIAL_MEASURED_UPDATES must be an integer >= 20." >&2
-    exit 1
-fi
-if [[ ! "${PROFILE_REPLICATE}" =~ ^[0-9]+$ ]] || \
-    ((PROFILE_REPLICATE >= REPLICATES)); then
-    echo "[ERROR] NEMO2606_FACTORIAL_PROFILE_REPLICATE must be in [0, REPLICATES)." >&2
-    exit 1
+if [[ "${FUNCTIONAL_GATE}" != "1" ]]; then
+    if [[ ! "${REPLICATES}" =~ ^[0-9]+$ ]] || ((REPLICATES < 3)); then
+        echo "[ERROR] NEMO2606_FACTORIAL_REPLICATES must be an integer >= 3." >&2
+        exit 1
+    fi
+    if [[ ! "${WARMUP_UPDATES}" =~ ^[0-9]+$ ]] || ((WARMUP_UPDATES < 5)); then
+        echo "[ERROR] NEMO2606_FACTORIAL_WARMUP_UPDATES must be an integer >= 5." >&2
+        exit 1
+    fi
+    if [[ ! "${MEASURED_UPDATES}" =~ ^[0-9]+$ ]] || ((MEASURED_UPDATES < 20)); then
+        echo "[ERROR] NEMO2606_FACTORIAL_MEASURED_UPDATES must be an integer >= 20." >&2
+        exit 1
+    fi
+    if [[ ! "${PROFILE_REPLICATE}" =~ ^[0-9]+$ ]] || \
+        ((PROFILE_REPLICATE >= REPLICATES)); then
+        echo "[ERROR] NEMO2606_FACTORIAL_PROFILE_REPLICATE must be in [0, REPLICATES)." >&2
+        exit 1
+    fi
 fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -111,6 +115,68 @@ chmod 600 "${EXPORT_PAYLOAD}"
 if [[ "${TEST_ONLY}" == "0" ]]; then
     mkdir -p "${SUBMISSION_DIR}" "${RUNTIME_ROOT}" "${RAY_LOG_ROOT}"
     printf '%s\n' "${CUTEDSL_SUBMISSION_GIT_SHA}" > "${RUNTIME_CANARY}"
+fi
+
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    env -0 \
+        -u COMMAND \
+        -u CONTAINER \
+        -u MOUNTS \
+        -u SETUP_COMMAND \
+        -u BASE_LOG_DIR \
+        -u GPUS_PER_NODE \
+        -u CUTEDSL_BENCHMARK_EXISTING_RAY \
+        -u CUTEDSL_BENCHMARK_NUM_NODES \
+        -u CUTEDSL_BENCHMARK_GPUS_PER_NODE \
+        -u CUTEDSL_BENCHMARK_SEGMENT_SIZE \
+        -u CUTEDSL_BENCHMARK_ORDER \
+        -u CUTEDSL_BENCHMARK_PROFILE \
+        -u NEMO2606_FUNCTIONAL_GATE \
+        -u NEMO2606_FUNCTIONAL_UPDATES \
+        -u NEMO2606_FACTORIAL_CONTEXT \
+        -u NEMO2606_FULL_CG_ENABLED \
+        -u NEMO2606_A2A_ENABLED \
+        -u SLURM_EXPORT_ENV \
+        "CONTAINER=${CUTEDSL_IMAGE}" \
+        "MOUNTS=${RAY_MOUNTS}" \
+        "SETUP_COMMAND=${RAY_SETUP_COMMAND}" \
+        "COMMAND=exec bash ${MATRIX_PAYLOAD}" \
+        "BASE_LOG_DIR=${RAY_LOG_ROOT}" \
+        "GPUS_PER_NODE=4" \
+        "RAY_LOG_SYNC_FREQUENCY=5" \
+        "CUTEDSL_BENCHMARK_EXISTING_RAY=1" \
+        "CUTEDSL_BENCHMARK_RECIPE=${RECIPE}" \
+        "CUTEDSL_BENCHMARK_NUM_NODES=2" \
+        "CUTEDSL_BENCHMARK_GPUS_PER_NODE=4" \
+        "CUTEDSL_BENCHMARK_SEGMENT_SIZE=2" \
+        "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
+        "CUTEDSL_BENCHMARK_ORDER=on" \
+        "CUTEDSL_BENCHMARK_PROFILE=0" \
+        "CUTEDSL_BENCHMARK_SUBMISSION_GROUP=${SUBMISSION_GROUP}" \
+        "NEMO2606_FUNCTIONAL_GATE=1" \
+        "NEMO2606_FUNCTIONAL_UPDATES=3" \
+        "NEMO2606_FACTORIAL_CONTEXT=g0a0" \
+        "NEMO2606_FULL_CG_ENABLED=0" \
+        "NEMO2606_A2A_ENABLED=0" \
+        "SLURM_EXPORT_ENV=ALL" \
+        > "${EXPORT_PAYLOAD}"
+
+    functional_submission_id=$(sbatch --parsable "${sbatch_args[@]}" \
+        "--job-name=${CUTEDSL_ACCOUNT}-n2606.functional" \
+        "--export-file=${EXPORT_PAYLOAD}" \
+        "${RAY_SUB}")
+    functional_record=$(printf \
+        '{"functional_gate":true,"functional_updates":3,"factorial_context":"g0a0","full_cg_enabled":0,"a2a_enabled":0,"timing_order":"on","profile_enabled":false,"job_id":"%s","submission_group":"%s"}' \
+        "${functional_submission_id}" "${SUBMISSION_GROUP}")
+    printf '%s\n' "${functional_record}"
+    if [[ "${TEST_ONLY}" == "0" ]]; then
+        printf '%s\n' "${functional_record}" \
+            >> "${SUBMISSION_DIR}/${SUBMISSION_GROUP}-functional.jsonl"
+        echo "[INFO] Submitted EP8 functional gate."
+    else
+        echo "[INFO] Validated EP8 functional gate; no job submitted."
+    fi
+    exit 0
 fi
 
 IFS=',' read -r -a contexts <<< "${CONTEXTS}"
@@ -187,6 +253,7 @@ for context in "${contexts[@]}"; do
             -u BASE_LOG_DIR \
             -u GPUS_PER_NODE \
             -u CUTEDSL_BENCHMARK_EXISTING_RAY \
+            -u CUTEDSL_BENCHMARK_SEGMENT_SIZE \
             -u CUTEDSL_BENCHMARK_ORDER \
             -u CUTEDSL_BENCHMARK_REPLICATE \
             -u CUTEDSL_BENCHMARK_PROFILE \
@@ -208,6 +275,7 @@ for context in "${contexts[@]}"; do
             "CUTEDSL_BENCHMARK_RECIPE=${RECIPE}" \
             "CUTEDSL_BENCHMARK_NUM_NODES=2" \
             "CUTEDSL_BENCHMARK_GPUS_PER_NODE=4" \
+            "CUTEDSL_BENCHMARK_SEGMENT_SIZE=2" \
             "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
             "CUTEDSL_BENCHMARK_ORDER=${timing_order}" \
             "CUTEDSL_BENCHMARK_REPLICATE=${replicate_index}" \
