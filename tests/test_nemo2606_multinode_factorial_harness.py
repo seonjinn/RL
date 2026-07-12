@@ -225,6 +225,8 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert ".shared_fs_canary" in call["setup_command"]
         assert "git -C" in call["setup_command"]
         assert "--nodes=2" in call["argv"]
+        assert "--segment=2" in call["argv"]
+        assert "--segment=1" not in call["argv"]
         assert "--test-only" in call["argv"]
         assert call["argv"][-1] == str(PROJECT_ROOT / "ray.sub")
 

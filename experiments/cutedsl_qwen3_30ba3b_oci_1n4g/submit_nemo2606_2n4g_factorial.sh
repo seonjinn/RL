@@ -68,6 +68,13 @@ sbatch_args=()
 while IFS= read -r argument; do
     sbatch_args+=("${argument}")
 done <<< "${CUTEDSL_SBATCH_ARGS}"
+if [[ -n "${CUTEDSL_SEGMENT}" ]]; then
+    for index in "${!sbatch_args[@]}"; do
+        if [[ "${sbatch_args[${index}]}" == --segment=* ]]; then
+            sbatch_args[${index}]="--segment=2"
+        fi
+    done
+fi
 sbatch_args+=(
     "--nodes=2"
     "--exclusive"
