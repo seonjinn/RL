@@ -128,6 +128,36 @@ class FullCudaGraphCallSignature:
             )
 
 
+class FullCudaGraphAuxLossScaleBuffer:
+    """Keep the MoE/MTP gradient scale at one graph-stable address."""
+
+    def __init__(self) -> None:
+        self._value: Optional[torch.Tensor] = None
+        self._signature: Optional[TensorSignature] = None
+
+    def update(self, global_valid_toks: torch.Tensor) -> torch.Tensor:
+        """Update the reciprocal token count without replacing captured storage."""
+        if global_valid_toks.ndim != 0:
+            raise ValueError(
+                "full-iteration CUDA graph requires scalar global_valid_toks for "
+                "MoE/MTP auxiliary loss scaling"
+            )
+
+        updated = global_valid_toks.detach().clamp(min=1).to(torch.float32).reciprocal()
+        signature = TensorSignature.from_tensor(updated)
+        if self._value is None:
+            self._value = updated.clone()
+            self._signature = signature
+        else:
+            if signature != self._signature:
+                raise ValueError(
+                    "full-iteration CUDA graph auxiliary loss scale signature changed: "
+                    f"expected {self._signature}, got {signature}"
+                )
+            self._value.copy_(updated)
+        return self._value
+
+
 class ProcessedMicrobatchStaticBufferLoader:
     """Copy processed NeMo-RL microbatches into stable tensor allocations."""
 

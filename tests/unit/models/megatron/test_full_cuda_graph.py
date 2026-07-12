@@ -69,6 +69,29 @@ def _processed_microbatch(seq_length: int = 4) -> _ProcessedMicrobatch:
     )
 
 
+def test_aux_loss_scale_buffer_keeps_graph_visible_storage_stable():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+
+    buffer = FullCudaGraphAuxLossScaleBuffer()
+
+    first = buffer.update(torch.tensor(10))
+    second = buffer.update(torch.tensor(5))
+
+    assert second is first
+    assert second.item() == pytest.approx(0.2)
+
+
+def test_aux_loss_scale_buffer_rejects_non_scalar_counts():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+
+    with pytest.raises(ValueError, match="scalar global_valid_toks"):
+        FullCudaGraphAuxLossScaleBuffer().update(torch.ones(2))
+
+
 def test_full_cuda_graph_policy_config_accepts_fixed_shape_noncolocated_training():
     from nemo_rl.models.megatron.full_cuda_graph import (
         validate_full_cuda_graph_policy_config,

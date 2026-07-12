@@ -138,6 +138,30 @@ def test_full_cuda_graph_worker_rejects_eval_train_before_launching_schedule():
         )
 
 
+def test_full_cuda_graph_aux_loss_scale_keeps_same_tensor_across_steps():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    model_config = SimpleNamespace()
+    worker.model = SimpleNamespace(config=model_config)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_aux_loss_scale = FullCudaGraphAuxLossScaleBuffer()
+
+    worker._set_aux_loss_grad_scale_funcs(torch.tensor(10))
+    first = model_config.moe_grad_scale_func()
+    worker._set_aux_loss_grad_scale_funcs(torch.tensor(5))
+    second = model_config.moe_grad_scale_func()
+
+    assert first is second
+    assert second is model_config.mtp_grad_scale_func()
+    assert second.item() == pytest.approx(0.2)
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
