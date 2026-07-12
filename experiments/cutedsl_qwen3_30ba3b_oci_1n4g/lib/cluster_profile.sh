@@ -15,17 +15,20 @@
 
 readonly CUTEDSL_EXPERIMENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly CUTEDSL_CLUSTER_PROFILE_DIR="${CUTEDSL_EXPERIMENT_DIR}/cluster_profiles"
-readonly CUTEDSL_REQUIRED_GIT_BRANCH="sna/nemo-2606-cutedsl-20260710"
+CUTEDSL_REQUIRED_GIT_BRANCH="${CUTEDSL_REQUIRED_GIT_BRANCH:-}"
 
 capture_cutedsl_submission_source() {
     local repo_root="${1:?capture_cutedsl_submission_source requires a repository root}"
     CUTEDSL_SUBMISSION_GIT_BRANCH=$(git -C "${repo_root}" branch --show-current)
     CUTEDSL_SUBMISSION_GIT_SHA=$(git -C "${repo_root}" rev-parse HEAD)
-    if [[ "${CUTEDSL_SUBMISSION_GIT_BRANCH}" != "${CUTEDSL_REQUIRED_GIT_BRANCH}" ]]; then
+    if [[ -n "${CUTEDSL_REQUIRED_GIT_BRANCH}" && \
+        "${CUTEDSL_SUBMISSION_GIT_BRANCH}" != "${CUTEDSL_REQUIRED_GIT_BRANCH}" ]]; then
         echo "[ERROR] Submission source branch ${CUTEDSL_SUBMISSION_GIT_BRANCH} is not required branch ${CUTEDSL_REQUIRED_GIT_BRANCH}." >&2
         return 1
     fi
-    export CUTEDSL_SUBMISSION_GIT_BRANCH CUTEDSL_SUBMISSION_GIT_SHA
+    CUTEDSL_REQUIRED_GIT_BRANCH="${CUTEDSL_SUBMISSION_GIT_BRANCH}"
+    export CUTEDSL_REQUIRED_GIT_BRANCH CUTEDSL_SUBMISSION_GIT_BRANCH
+    export CUTEDSL_SUBMISSION_GIT_SHA
 }
 
 validate_cutedsl_runtime_source() {
@@ -33,13 +36,14 @@ validate_cutedsl_runtime_source() {
     local runtime_sha="${2:?validate_cutedsl_runtime_source requires a runtime SHA}"
     local submission_branch="${CUTEDSL_SUBMISSION_GIT_BRANCH:?missing submission source branch}"
     local submission_sha="${CUTEDSL_SUBMISSION_GIT_SHA:?missing submission source SHA}"
+    local required_branch="${CUTEDSL_REQUIRED_GIT_BRANCH:-${submission_branch}}"
 
-    if [[ "${submission_branch}" != "${CUTEDSL_REQUIRED_GIT_BRANCH}" ]]; then
-        echo "[ERROR] Submission source branch ${submission_branch} is not required branch ${CUTEDSL_REQUIRED_GIT_BRANCH}." >&2
+    if [[ "${submission_branch}" != "${required_branch}" ]]; then
+        echo "[ERROR] Submission source branch ${submission_branch} is not required branch ${required_branch}." >&2
         return 1
     fi
-    if [[ "${runtime_branch}" != "${CUTEDSL_REQUIRED_GIT_BRANCH}" ]]; then
-        echo "[ERROR] Runtime source branch ${runtime_branch} is not required branch ${CUTEDSL_REQUIRED_GIT_BRANCH}." >&2
+    if [[ "${runtime_branch}" != "${required_branch}" ]]; then
+        echo "[ERROR] Runtime source branch ${runtime_branch} is not required branch ${required_branch}." >&2
         return 1
     fi
     if [[ "${runtime_branch}" != "${submission_branch}" || "${runtime_sha}" != "${submission_sha}" ]]; then

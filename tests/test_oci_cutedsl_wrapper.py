@@ -476,7 +476,6 @@ def test_payloads_require_and_record_effective_cluster_profile() -> None:
 
 
 def test_submitters_capture_source_and_payloads_reject_checkout_drift() -> None:
-    required_branch = "sna/nemo-2606-cutedsl-20260710"
     for submitter in (
         (EXPERIMENT_DIR / "submit_cutedsl_functional.sh").read_text(),
         BENCHMARK_SUBMIT_SCRIPT,
@@ -485,7 +484,9 @@ def test_submitters_capture_source_and_payloads_reject_checkout_drift() -> None:
     for payload in (SCRIPT, BENCHMARK_SCRIPT):
         assert 'source "${EXPERIMENT_DIR}/lib/cluster_profile.sh"' in payload
         assert "validate_cutedsl_runtime_source" in payload
-    assert required_branch in (EXPERIMENT_DIR / "lib/cluster_profile.sh").read_text()
+    loader = (EXPERIMENT_DIR / "lib/cluster_profile.sh").read_text()
+    assert 'CUTEDSL_REQUIRED_GIT_BRANCH="${CUTEDSL_REQUIRED_GIT_BRANCH:-}"' in loader
+    assert 'CUTEDSL_REQUIRED_GIT_BRANCH="${CUTEDSL_SUBMISSION_GIT_BRANCH}"' in loader
 
 
 def test_payloads_have_no_static_cluster_or_image_directives() -> None:
@@ -954,8 +955,12 @@ def test_benchmark_separates_profiling_and_collects_raw_timing() -> None:
         "unset NRL_NSYS_WORKER_PATTERNS",
         "unset NRL_NSYS_PROFILE_STEP_RANGE",
         "unset NRL_NSYS_EXTRA_OPTIONS",
-        'profile_overrides+=("grpo.max_num_steps=2")',
-        'export NRL_NSYS_PROFILE_STEP_RANGE="1:2"',
+        "profile_max_steps=2",
+        'profile_step_range="1:2"',
+        'if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]',
+        "profile_max_steps=$((CUDA_GRAPH_WARMUP_STEPS + 2))",
+        'profile_overrides+=("grpo.max_num_steps=${profile_max_steps}")',
+        'export NRL_NSYS_PROFILE_STEP_RANGE="${profile_step_range}"',
         '"raw_timing.json"',
         '"raw_timing.csv"',
         '"timing/train/policy_training"',
@@ -1100,8 +1105,10 @@ def test_functional_profile_pass_occurs_only_after_attribution_validation() -> N
 def test_benchmark_reuses_pinned_image_and_node_local_bootstrap() -> None:
     required_fragments = (
         'IMAGE="${CUTEDSL_IMAGE}"',
-        'readonly CONTAINER_RUNTIME_DIR="/runtime"',
-        'readonly HOST_RUNTIME_DIR="/tmp/${USER}/nemo-2606-cutedsl-benchmark/${RUN_ID}"',
+        'CONTAINER_RUNTIME_DIR="/runtime"',
+        'HOST_RUNTIME_DIR="/tmp/${USER}/nemo-2606-cutedsl-benchmark/${RUN_ID}"',
+        'runtime_root="${CUTEDSL_BENCHMARK_RUNTIME_ROOT:',
+        'CONTAINER_RUNTIME_DIR="${HOST_RUNTIME_DIR}"',
         "${HOST_RUNTIME_DIR}:${CONTAINER_RUNTIME_DIR}",
         'export UV_VERSION="0.11.6"',
         'export UV_PYTHON_VERSION="3.13.13"',
@@ -1201,6 +1208,7 @@ def _run_metric_extractor(
             "RUN_ID": "fake-run",
             "BENCHMARK_ARM": "on",
             "BENCHMARK_ORDER_INDEX": "0",
+            "TRAINING_GPU_COUNT": "4",
         }
     )
     return subprocess.run(
@@ -1381,6 +1389,8 @@ def _run_kernel_attribution(
     off_evidence: str,
     grouped_gemm: bool = True,
     op_fuser: bool = True,
+    full_cg_enabled: bool = False,
+    a2a_enabled: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     result_dir = tmp_path / "result"
     (result_dir / "profiles/0-on").mkdir(parents=True)
@@ -1395,13 +1405,47 @@ def _run_kernel_attribution(
         for arm in ("on", "off")
     }
     (result_dir / "benchmark_manifest.json").write_text(
-        json.dumps({"fixed_config_evidence": config_evidence})
+        json.dumps(
+            {
+                "fixed_config_evidence": config_evidence,
+                "feature_context": "g0a0",
+                "full_cg_enabled": full_cg_enabled,
+                "a2a_enabled": a2a_enabled,
+            }
+        )
     )
     return subprocess.run(
         [sys.executable, "-c", _kernel_attribution_source(), str(result_dir)],
         capture_output=True,
         text=True,
     )
+
+
+def test_benchmark_feature_attribution_requires_graph_and_a2a_evidence(
+    tmp_path: Path,
+) -> None:
+    result = _run_kernel_attribution(
+        tmp_path,
+        on_evidence=(
+            "ForwardGroupedMLP_CuTeGEMMSwiGLU_MXFP8\n"
+            "BlockScaledMoEGroupedGemmDgluDbiasKernel\n"
+            "cudaGraphLaunch\n"
+            "ncclDevKernel_SendRecv\n"
+        ),
+        off_evidence=(
+            "cutlass grouped_gemm universal kernel\n"
+            "cudaGraphLaunch_ptsz\n"
+            "ncclDevKernel_SendRecv\n"
+        ),
+        full_cg_enabled=True,
+        a2a_enabled=True,
+    )
+    assert result.returncode == 0, result.stderr
+    attribution = json.loads((tmp_path / "result/feature_attribution.json").read_text())
+    assert attribution["passed"] is True
+    for arm in ("on", "off"):
+        assert attribution["counts"][arm]["cuda_graph_launch_api"] == 1
+        assert attribution["counts"][arm]["nccl_a2a_kernel"] == 1
 
 
 def test_benchmark_kernel_attribution_requires_fused_on_and_grouped_both(
@@ -1618,9 +1662,14 @@ print(f"mock-{record['replicate']}")
     assert [call["profile_enabled"] for call in calls] == ["1", "0", "0"]
     assert len({call["submission_group"] for call in calls}) == 1
     assert calls[0]["submission_group"] != "stale-group"
-    assert [call["submission_branch"] for call in calls] == [
-        "sna/nemo-2606-cutedsl-20260710"
-    ] * 3
+    expected_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=Path(__file__).parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert [call["submission_branch"] for call in calls] == [expected_branch] * 3
     expected_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=Path(__file__).parents[1],

@@ -86,7 +86,9 @@ PROFILE_EXPORT_KEYS = {
     "CUTEDSL_FUNCTIONAL_TIME",
     "CUTEDSL_BENCHMARK_TIME",
 }
-REQUIRED_GIT_BRANCH = "sna/nemo-2606-cutedsl-20260710"
+REQUIRED_GIT_BRANCH = subprocess.check_output(
+    ["git", "branch", "--show-current"], text=True
+).strip()
 
 
 def load_profile(profile_name: str) -> dict[str, object]:

@@ -2,6 +2,23 @@
 
 This experiment is the first Linux/GB200 gate for the CuTeDSL fused grouped-MLP policy-training slice. It runs three synchronous GRPO steps on one OCI-HSG node with four GPUs, including Megatron-to-HF export and rollout refit. No GPU run has been performed from this worktree yet.
 
+## NeMo 26.06 two-node factorial harness
+
+`submit_nemo2606_2n4g_factorial.sh` adds the portable performance path. It submits the repository `ray.sub` launcher, whose head process starts the Ray GCS, whose second-node task joins as a Ray worker, and whose driver starts only after all eight `worker_units` are visible. The matrix payload switches to existing-Ray mode, so it executes directly in the head container and never starts a nested one-task local Ray cluster. The locked driver environment and result artifacts use the shared repository filesystem, while per-node Ray actor environments use a run-scoped node-local `/tmp` root to avoid concurrent rebuilds of one shared venv.
+
+The fixed workload is Qwen3-30B-A3B on two GB200 nodes with four GPUs per node, TP1/PP1/CP1/ETP1/EP8, GBS16, and MBS1. World-size-derived DP8 therefore receives two local microbatches, the minimum useful combined-1F1B A2A-overlap shape. Each timing arm runs five warmup plus twenty measured updates. Four `(full-CG, A2A)` contexts each run an alternating CuTeDSL OFF/ON pair for at least three replicas, covering all eight binary-factor cells without duplicating the existing timing extractor or replicate collector.
+
+Use the same command on Pre-Tyche, Lyris, or AWS-DFW by selecting a cluster profile:
+
+```bash
+CUTEDSL_CLUSTER_PROFILE=pre_tyche \
+  ./experiments/cutedsl_qwen3_30ba3b_oci_1n4g/submit_nemo2606_2n4g_factorial.sh --test-only
+```
+
+The default contexts are `g0a0,g1a0,g0a1,g1a1`. For the current CuTeDSL-only branch, use `NEMO2606_FACTORIAL_CONTEXTS=g0a0` to validate only baseline versus CuTeDSL. A2A contexts fail before training unless the source contains both the NeMo-RL schedule-plan adapter and Bridge/MCore config propagation. Full-CG contexts additionally fail when the source still rejects colocated generation/refit: EP8 consumes all eight GPUs in a 2x4 allocation, so the current non-colocated-only full-CG slice needs either colocated support or extra generation GPUs. This is an explicit remaining functional gate; the harness never records a silent no-op full-CG result.
+
+Each context writes a separate submission JSONL. Run `collect_cutedsl_ab_replicates.py` once per context JSONL against the common `results/` root. The collector retains the existing E2E, generation, generation-finalize, logprob, policy-training, refit, and normalized-throughput series. Its current aggregation scope is only the context-local CuTeDSL OFF/ON pair; it does not yet calculate cross-context full-CG or A2A main effects and interactions. Those effects require a follow-up factorial aggregate over the four accepted context summaries before any full-CG/A2A speedup claim. The manifest records this limitation explicitly. Profile jobs are separate from accepted timing samples and fail closed unless CuTeDSL ON/OFF kernel attribution passes; enabled full-CG contexts additionally require policy-worker `cudaGraphLaunch` evidence, and enabled A2A contexts require NCCL A2A kernel evidence. Raw artifact listings are capped at 200 paths and Nsight reports at 16 per arm.
+
 ## Fixed request and runtime
 
 | Item | Value |

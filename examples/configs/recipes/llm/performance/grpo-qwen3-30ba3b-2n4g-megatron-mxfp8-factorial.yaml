@@ -1,0 +1,21 @@
+defaults: ./grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml
+grpo:
+  num_prompts_per_step: 8
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
+policy:
+  train_global_batch_size: 16
+  megatron_cfg:
+    expert_model_parallel_size: 8
+    cuda_graph_impl: none
+    cuda_graph_warmup_steps: 3
+    cuda_graph_use_single_mempool: true
+    overlap_moe_expert_parallel_comm: false
+    high_priority_a2a_comm_stream: false
+    delay_wgrad_compute: false
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
+  wandb:
+    name: grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
+cluster:
+  num_nodes: 2

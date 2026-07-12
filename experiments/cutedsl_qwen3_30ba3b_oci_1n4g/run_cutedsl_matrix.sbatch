@@ -24,14 +24,18 @@
 
 set -euo pipefail
 
-readonly RECIPE="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml"
-readonly CONTAINER_REPO_ROOT="/workspace/nemo-rl"
-readonly CONTAINER_RESULT_DIR="/results"
-readonly CONTAINER_RUNTIME_DIR="/runtime"
+RECIPE="${CUTEDSL_BENCHMARK_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml}"
+EXISTING_RAY="${CUTEDSL_BENCHMARK_EXISTING_RAY:-0}"
+BENCHMARK_NUM_NODES="${CUTEDSL_BENCHMARK_NUM_NODES:-1}"
+BENCHMARK_GPUS_PER_NODE="${CUTEDSL_BENCHMARK_GPUS_PER_NODE:-4}"
+NEMO2606_FULL_CG_ENABLED="${NEMO2606_FULL_CG_ENABLED:-0}"
+NEMO2606_A2A_ENABLED="${NEMO2606_A2A_ENABLED:-0}"
+FEATURE_CONTEXT="${NEMO2606_FACTORIAL_CONTEXT:-g0a0}"
+readonly RECIPE EXISTING_RAY BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE
+readonly NEMO2606_FULL_CG_ENABLED NEMO2606_A2A_ENABLED FEATURE_CONTEXT
 readonly CUTEDSL_SELECTOR_PATH="policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP"
 readonly EXPECTED_ON_SELECTOR="1"
 readonly OFF_OVERRIDE="${CUTEDSL_SELECTOR_PATH}=\"0\""
-export CONTAINER_REPO_ROOT CONTAINER_RESULT_DIR CONTAINER_RUNTIME_DIR
 export RECIPE CUTEDSL_SELECTOR_PATH EXPECTED_ON_SELECTOR OFF_OVERRIDE
 
 readonly SLURM_SUBMIT_DIR="${SLURM_SUBMIT_DIR:?submit this benchmark with sbatch from the repository checkout}"
@@ -44,7 +48,21 @@ load_cutedsl_cluster_profile
 readonly IMAGE="${CUTEDSL_IMAGE}"
 readonly RUN_ID="${SLURM_JOB_ID:?submit this benchmark with sbatch}${SLURM_RESTART_COUNT:+-r${SLURM_RESTART_COUNT}}"
 readonly RESULT_DIR="${EXPERIMENT_DIR}/results/${RUN_ID}"
-readonly HOST_RUNTIME_DIR="/tmp/${USER}/nemo-2606-cutedsl-benchmark/${RUN_ID}"
+if [[ "${EXISTING_RAY}" == "1" ]]; then
+    CONTAINER_REPO_ROOT="${REPO_ROOT}"
+    CONTAINER_RESULT_DIR="${RESULT_DIR}"
+    runtime_root="${CUTEDSL_BENCHMARK_RUNTIME_ROOT:?existing-Ray mode requires CUTEDSL_BENCHMARK_RUNTIME_ROOT}"
+    HOST_RUNTIME_DIR="${runtime_root}/${RUN_ID}"
+    CONTAINER_RUNTIME_DIR="${HOST_RUNTIME_DIR}"
+else
+    CONTAINER_REPO_ROOT="/workspace/nemo-rl"
+    CONTAINER_RESULT_DIR="/results"
+    HOST_RUNTIME_DIR="/tmp/${USER}/nemo-2606-cutedsl-benchmark/${RUN_ID}"
+    CONTAINER_RUNTIME_DIR="/runtime"
+fi
+readonly CONTAINER_REPO_ROOT CONTAINER_RESULT_DIR HOST_RUNTIME_DIR
+readonly CONTAINER_RUNTIME_DIR
+export CONTAINER_REPO_ROOT CONTAINER_RESULT_DIR CONTAINER_RUNTIME_DIR
 
 WARMUP_UPDATES="${CUTEDSL_BENCHMARK_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${CUTEDSL_BENCHMARK_MEASURED_UPDATES:-20}"
@@ -97,6 +115,53 @@ if [[ ! "${REPLICATE_INDEX}" =~ ^[0-9]+$ ]]; then
     echo "[ERROR] CUTEDSL_BENCHMARK_REPLICATE must be a non-negative integer." >&2
     exit 1
 fi
+for boolean_value in "${EXISTING_RAY}" "${NEMO2606_FULL_CG_ENABLED}" \
+    "${NEMO2606_A2A_ENABLED}"; do
+    if [[ "${boolean_value}" != "0" && "${boolean_value}" != "1" ]]; then
+        echo "[ERROR] Existing-Ray and feature selectors must be 0 or 1." >&2
+        exit 1
+    fi
+done
+if [[ ! "${BENCHMARK_NUM_NODES}" =~ ^[0-9]+$ ]] || \
+    [[ ! "${BENCHMARK_GPUS_PER_NODE}" =~ ^[0-9]+$ ]]; then
+    echo "[ERROR] Benchmark node and GPU counts must be positive integers." >&2
+    exit 1
+fi
+if ((BENCHMARK_NUM_NODES < 1 || BENCHMARK_GPUS_PER_NODE < 1)); then
+    echo "[ERROR] Benchmark node and GPU counts must be positive integers." >&2
+    exit 1
+fi
+if [[ "${EXISTING_RAY}" == "1" ]] && \
+    ((BENCHMARK_NUM_NODES != 2 || BENCHMARK_GPUS_PER_NODE != 4)); then
+    echo "[ERROR] The NeMo 26.06 multinode gate requires exactly 2 nodes x 4 GPUs." >&2
+    exit 1
+fi
+
+require_source_feature() {
+    local source_path=$1
+    local pattern=$2
+    local feature_name=$3
+    if [[ ! -r "${source_path}" ]] || ! grep -q "${pattern}" "${source_path}"; then
+        echo "[ERROR] ${feature_name} was requested but its NeMo-RL implementation is absent: ${source_path} / ${pattern}" >&2
+        exit 1
+    fi
+}
+
+if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    full_cg_source="${REPO_ROOT}/nemo_rl/models/megatron/full_cuda_graph.py"
+    require_source_feature "${full_cg_source}" "build_full_cuda_graph_schedule" \
+        "full-iteration CUDA Graph"
+    if grep -q "colocated generation/refit is not supported" "${full_cg_source}"; then
+        echo "[ERROR] full-iteration CUDA Graph currently rejects colocated generation/refit. A 2x4 EP8 policy occupies all GPUs, so this context requires either colocated support or additional generation GPUs." >&2
+        exit 1
+    fi
+fi
+if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
+    require_source_feature "${REPO_ROOT}/nemo_rl/models/megatron/train.py" \
+        "return_schedule_plan" "EP A2A overlap"
+    require_source_feature "${REPO_ROOT}/nemo_rl/models/megatron/setup.py" \
+        "overlap_moe_expert_parallel_comm" "EP A2A overlap"
+fi
 
 IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
 if [[ ${#timing_arms[@]} -ne 2 ]]; then
@@ -121,9 +186,31 @@ if [[ ${on_count} -ne 1 || ${off_count} -ne 1 ]]; then
 fi
 
 TOTAL_UPDATES=$((WARMUP_UPDATES + MEASURED_UPDATES))
-readonly TOTAL_UPDATES
+TRAINING_GPU_COUNT=$((BENCHMARK_NUM_NODES * BENCHMARK_GPUS_PER_NODE))
+CUDA_GRAPH_WARMUP_STEPS=3
+readonly TOTAL_UPDATES TRAINING_GPU_COUNT CUDA_GRAPH_WARMUP_STEPS
 export RUN_ID WARMUP_UPDATES MEASURED_UPDATES TIMING_ORDER TOTAL_UPDATES PROFILE_ENABLED
 export REPLICATE_INDEX SUBMISSION_GROUP
+export TRAINING_GPU_COUNT FEATURE_CONTEXT NEMO2606_FULL_CG_ENABLED
+export NEMO2606_A2A_ENABLED
+export BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE
+export EXISTING_RAY CUDA_GRAPH_WARMUP_STEPS
+
+if [[ "${EXISTING_RAY}" == "1" ]]; then
+    RAY_LOG_ATTEMPT_ID="${SLURM_JOB_ID}"
+    if [[ -n "${SLURM_RESTART_COUNT:-}" ]]; then
+        RAY_LOG_ATTEMPT_ID="${SLURM_JOB_ID}-${SLURM_RESTART_COUNT}"
+    fi
+    RAY_CLUSTER_LOG_DIR="${BASE_LOG_DIR:?existing-Ray mode requires BASE_LOG_DIR}/${RAY_LOG_ATTEMPT_ID}-logs/ray"
+    export RAY_LOG_ATTEMPT_ID RAY_CLUSTER_LOG_DIR
+    ray status > "${RESULT_DIR}/ray_status.txt"
+    worker_units=$(grep "worker_units" "${RESULT_DIR}/ray_status.txt" | \
+        awk -F'[/. ]' '{print $4}' || echo 0)
+    if [[ "${worker_units}" != "${TRAINING_GPU_COUNT}" ]]; then
+        echo "[ERROR] Existing Ray cluster has ${worker_units} worker units; expected ${TRAINING_GPU_COUNT}." >&2
+        exit 1
+    fi
+fi
 
 cat > "${HOST_RUNTIME_DIR}/log_runtime_environment.sh" <<'BASH'
 printf '[INFO] Runtime environment: VIRTUAL_ENV=%s UV_PROJECT_ENVIRONMENT=%s RUNTIME_PYTHON=%s\n' \
@@ -200,10 +287,34 @@ cutedsl_write_event preflight pass 0 \
     "Benchmark controls, source, submodules, upstream, and image are immutable" \
     benchmark_manifest.json
 
+FULL_CG_OVERRIDE="policy.megatron_cfg.cuda_graph_impl=none"
+if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    FULL_CG_OVERRIDE="policy.megatron_cfg.cuda_graph_impl=full_iteration"
+fi
+A2A_OVERLAP_OVERRIDE="policy.megatron_cfg.overlap_moe_expert_parallel_comm=false"
+A2A_HIGH_PRIORITY_OVERRIDE="policy.megatron_cfg.high_priority_a2a_comm_stream=false"
+A2A_DELAY_WGRAD_OVERRIDE="policy.megatron_cfg.delay_wgrad_compute=false"
+if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
+    A2A_OVERLAP_OVERRIDE="policy.megatron_cfg.overlap_moe_expert_parallel_comm=true"
+    A2A_HIGH_PRIORITY_OVERRIDE="policy.megatron_cfg.high_priority_a2a_comm_stream=true"
+    A2A_DELAY_WGRAD_OVERRIDE="policy.megatron_cfg.delay_wgrad_compute=true"
+fi
+readonly FULL_CG_OVERRIDE A2A_OVERLAP_OVERRIDE A2A_HIGH_PRIORITY_OVERRIDE
+readonly A2A_DELAY_WGRAD_OVERRIDE
+
 readonly -a COMMON_OVERRIDES=(
     "grpo.max_num_steps=${TOTAL_UPDATES}"
-    "cluster.num_nodes=1"
-    "cluster.gpus_per_node=4"
+    "cluster.num_nodes=${BENCHMARK_NUM_NODES}"
+    "cluster.gpus_per_node=${BENCHMARK_GPUS_PER_NODE}"
+    "policy.train_global_batch_size=$((TRAINING_GPU_COUNT * 2))"
+    "policy.train_micro_batch_size=1"
+    "policy.megatron_cfg.expert_model_parallel_size=${TRAINING_GPU_COUNT}"
+    "${FULL_CG_OVERRIDE}"
+    "policy.megatron_cfg.cuda_graph_warmup_steps=${CUDA_GRAPH_WARMUP_STEPS}"
+    "policy.megatron_cfg.cuda_graph_use_single_mempool=true"
+    "${A2A_OVERLAP_OVERRIDE}"
+    "${A2A_HIGH_PRIORITY_OVERRIDE}"
+    "${A2A_DELAY_WGRAD_OVERRIDE}"
     "logger.log_dir=${CONTAINER_RUNTIME_DIR}/benchmark_logs"
     "logger.wandb_enabled=false"
     "logger.tensorboard_enabled=true"
@@ -216,7 +327,13 @@ printf '%s\n' "${timing_arms[@]}" > "${RESULT_DIR}/timing_order.txt"
 
 export CUDA_HOME="/usr/local/cuda"
 export NVTE_CUDA_ARCHS="100"
-export NEMO_RL_VENV_DIR="${CONTAINER_RUNTIME_DIR}/worker_venvs"
+if [[ "${EXISTING_RAY}" == "1" ]]; then
+    NODE_LOCAL_WORKER_VENV_ROOT="/tmp/${USER}/nemo2606-factorial/${RUN_ID}/worker_venvs"
+else
+    NODE_LOCAL_WORKER_VENV_ROOT="${CONTAINER_RUNTIME_DIR}/worker_venvs"
+fi
+readonly NODE_LOCAL_WORKER_VENV_ROOT
+export NEMO_RL_VENV_DIR="${NODE_LOCAL_WORKER_VENV_ROOT}"
 export NRL_FORCE_REBUILD_VENVS="true"
 export NRL_IGNORE_VERSION_MISMATCH="1"
 export PYTHONPATH="${CONTAINER_REPO_ROOT}:${PYTHONPATH:-}"
@@ -233,19 +350,22 @@ export UV_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-bin"
 export UV_PYTHON_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-python"
 export UV_BIN="${UV_INSTALL_DIR}/uv"
 
-SRUN=(
-    srun
-    --nodes=1
-    --ntasks=1
-    --cpus-per-task=72
-    --mpi=pmix
-    --container-image="${IMAGE}"
-    --container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS
-    --container-mounts="${REPO_ROOT}:${CONTAINER_REPO_ROOT},${RESULT_DIR}:${CONTAINER_RESULT_DIR},${HOST_RUNTIME_DIR}:${CONTAINER_RUNTIME_DIR}"
-    --container-workdir="${CONTAINER_REPO_ROOT}"
-)
-if [[ -n "${CUTEDSL_GRES}" ]]; then
-    SRUN+=("--gres=${CUTEDSL_GRES}")
+SRUN=()
+if [[ "${EXISTING_RAY}" == "0" ]]; then
+    SRUN=(
+        srun
+        --nodes=1
+        --ntasks=1
+        --cpus-per-task=72
+        --mpi=pmix
+        --container-image="${IMAGE}"
+        --container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS
+        --container-mounts="${REPO_ROOT}:${CONTAINER_REPO_ROOT},${RESULT_DIR}:${CONTAINER_RESULT_DIR},${HOST_RUNTIME_DIR}:${CONTAINER_RUNTIME_DIR}"
+        --container-workdir="${CONTAINER_REPO_ROOT}"
+    )
+    if [[ -n "${CUTEDSL_GRES}" ]]; then
+        SRUN+=("--gres=${CUTEDSL_GRES}")
+    fi
 fi
 readonly -a SRUN
 
@@ -366,27 +486,48 @@ topology = {
     "expert_model_parallel_size": megatron_config["expert_model_parallel_size"],
 }
 assert topology == {
-    "num_nodes": 1,
-    "gpus_per_node": 4,
+    "num_nodes": int(os.environ["BENCHMARK_NUM_NODES"]),
+    "gpus_per_node": int(os.environ["BENCHMARK_GPUS_PER_NODE"]),
     "tensor_model_parallel_size": 1,
     "pipeline_model_parallel_size": 1,
     "context_parallel_size": 1,
     "expert_tensor_parallel_size": 1,
-    "expert_model_parallel_size": 4,
+    "expert_model_parallel_size": int(os.environ["TRAINING_GPU_COUNT"]),
 }, topology
 fixed_config_paths = (
     "policy.megatron_cfg.moe_grouped_gemm",
     "policy.megatron_cfg.use_transformer_engine_op_fuser",
+    "policy.megatron_cfg.cuda_graph_impl",
+    "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
+    "policy.megatron_cfg.high_priority_a2a_comm_stream",
+    "policy.megatron_cfg.delay_wgrad_compute",
 )
 fixed_config_evidence = {
     "on": {path: value_at(on_config, path) for path in fixed_config_paths},
     "off": {path: value_at(off_config, path) for path in fixed_config_paths},
 }
-assert all(
-    fixed_config_evidence[arm][path] is True
-    for arm in ("on", "off")
-    for path in fixed_config_paths
-), fixed_config_evidence
+for arm in ("on", "off"):
+    assert fixed_config_evidence[arm] == fixed_config_evidence["on"]
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_grouped_gemm"] is True
+    assert (
+        fixed_config_evidence[arm][
+            "policy.megatron_cfg.use_transformer_engine_op_fuser"
+        ]
+        is True
+    )
+expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
+expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
+for arm in ("on", "off"):
+    assert (
+        fixed_config_evidence[arm]["policy.megatron_cfg.cuda_graph_impl"]
+        == ("full_iteration" if expected_full_cg else "none")
+    )
+    for path in (
+        "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
+        "policy.megatron_cfg.high_priority_a2a_comm_stream",
+        "policy.megatron_cfg.delay_wgrad_compute",
+    ):
+        assert fixed_config_evidence[arm][path] is expected_a2a
 manifest = {
     "run_id": os.environ["RUN_ID"],
     "cluster_profile": os.environ["CUTEDSL_PROFILE_NAME"],
@@ -397,6 +538,11 @@ manifest = {
     "measured_updates": int(os.environ["MEASURED_UPDATES"]),
     "total_updates": int(os.environ["TOTAL_UPDATES"]),
     "profile_enabled": os.environ["PROFILE_ENABLED"] == "1",
+    "feature_context": os.environ["FEATURE_CONTEXT"],
+    "full_cg_enabled": os.environ["NEMO2606_FULL_CG_ENABLED"] == "1",
+    "a2a_enabled": os.environ["NEMO2606_A2A_ENABLED"] == "1",
+    "aggregation_scope": "context_local_cutedsl_pair",
+    "cross_context_factorial_aggregate_available": False,
     "build_environment": {
         "NVTE_CUDA_ARCHS": os.environ["NVTE_CUDA_ARCHS"],
         "TMPDIR": os.environ["TMPDIR"],
@@ -529,7 +675,7 @@ GENERATION_THROUGHPUT_METRIC = "performance/generation_tokens_per_sec_per_gpu"
 LOGPROB_THROUGHPUT_METRIC = (
     "performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu"
 )
-TRAINING_GPU_COUNT = 4
+TRAINING_GPU_COUNT = int(os.environ["TRAINING_GPU_COUNT"])
 METRIC_ALIASES = {
     TOTAL_STEP_METRIC: (TOTAL_STEP_METRIC,),
     GENERATION_METRIC: (GENERATION_METRIC,),
@@ -847,7 +993,13 @@ for override in "${common_timing_overrides[@]}"; do
         profile_overrides+=("${override}")
     fi
 done
-profile_overrides+=("grpo.max_num_steps=2")
+profile_max_steps=2
+profile_step_range="1:2"
+if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    profile_max_steps=$((CUDA_GRAPH_WARMUP_STEPS + 2))
+    profile_step_range="$((CUDA_GRAPH_WARMUP_STEPS + 1)):$((CUDA_GRAPH_WARMUP_STEPS + 2))"
+fi
+profile_overrides+=("grpo.max_num_steps=${profile_max_steps}")
 IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
 
 run_profile_arm() {
@@ -864,10 +1016,12 @@ run_profile_arm() {
         "${CONTAINER_RUNTIME_DIR}/ray_profile"
     mkdir -p "${arm_dir}/nsight" "${CONTAINER_RUNTIME_DIR}/ray_profile" \
         "${CONTAINER_RUNTIME_DIR}/tmp"
+    local profile_marker="${arm_dir}/profile_start.marker"
+    touch "${profile_marker}"
     export RAY_TMPDIR="${CONTAINER_RUNTIME_DIR}/ray_profile"
     export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
     export NRL_NSYS_WORKER_PATTERNS="megatron_policy_worker"
-    export NRL_NSYS_PROFILE_STEP_RANGE="1:2"
+    export NRL_NSYS_PROFILE_STEP_RANGE="${profile_step_range}"
     export NRL_NSYS_EXTRA_OPTIONS='{"cuda-memory-usage":"true","cpuctxsw":"none"}'
 
     set +e
@@ -877,14 +1031,30 @@ run_profile_arm() {
         2>&1 | tee "${arm_dir}/grpo_profile.log"
     local grpo_exit_code=${PIPESTATUS[0]}
 
+    local profile_search_root="${RAY_TMPDIR}"
+    if [[ "${EXISTING_RAY}" == "1" ]]; then
+        profile_search_root="${RAY_CLUSTER_LOG_DIR}"
+        sleep 10
+    fi
+    mapfile -d '' -t nsight_reports < <(
+        find "${profile_search_root}" -type f -path '*/logs/nsight/*.nsys-rep' \
+            -newer "${profile_marker}" -print0 2>/dev/null | sort -z
+    )
+    if ((${#nsight_reports[@]} > 16)); then
+        echo "[ERROR] Profiling arm ${arm} produced ${#nsight_reports[@]} reports; bounded limit is 16." >&2
+        return 1
+    fi
     : > "${arm_dir}/kernel_evidence.txt"
-    while IFS= read -r -d "" report; do
+    for report in "${nsight_reports[@]}"; do
         cp -a "${report}" "${arm_dir}/nsight/"
         printf '\n===== %s =====\n' "${report}" >> "${arm_dir}/kernel_evidence.txt"
-        nsys stats --report cuda_gpu_kern_sum "${report}" \
+        nsys stats --report cuda_gpu_kern_sum --format csv "${report}" \
             >> "${arm_dir}/kernel_evidence.txt" 2>&1 || true
-    done < <(find "${RAY_TMPDIR}" -type f -path '*/logs/nsight/*.nsys-rep' -print0 2>/dev/null)
-    find "${RAY_TMPDIR}" -type f -print > "${arm_dir}/ray_artifacts.txt" 2>/dev/null || true
+        nsys stats --report cuda_api_sum --format csv "${report}" \
+            >> "${arm_dir}/kernel_evidence.txt" 2>&1 || true
+    done
+    find "${profile_search_root}" -type f -print | head -n 200 \
+        > "${arm_dir}/ray_artifacts.txt" 2>/dev/null || true
     local report_count
     local profile_artifact_exit_code=0
     report_count=$(find "${arm_dir}/nsight" -type f -name "*.nsys-rep" | wc -l | tr -d " ")
@@ -969,6 +1139,7 @@ manifest = json.loads(manifest_path.read_text())
 config_evidence = manifest.get("fixed_config_evidence", {})
 failures: list[str] = []
 arm_results: dict[str, dict[str, object]] = {}
+evidence_by_arm: dict[str, str] = {}
 
 for arm in ("on", "off"):
     evidence_paths = sorted((result_dir / "profiles").glob(f"*-{arm}/kernel_evidence.txt"))
@@ -982,6 +1153,7 @@ for arm in ("on", "off"):
         evidence_path = evidence_paths[0]
         evidence = evidence_path.read_text()
         evidence_file = str(evidence_path.relative_to(result_dir))
+    evidence_by_arm[arm] = evidence
 
     category_counts = {
         category: signature_counts(evidence, signatures)
@@ -1019,6 +1191,28 @@ for arm in ("on", "off"):
         if config_evidence.get(arm, {}).get(path) is not True:
             failures.append(f"{arm.upper()} {label} config evidence is not true")
 
+feature_counts = {
+    arm: {
+        "cuda_graph_launch_api": len(
+            re.findall(r"\bcudaGraphLaunch(?:_ptsz)?\b", evidence, re.IGNORECASE)
+        ),
+        "nccl_a2a_kernel": len(
+            re.findall(
+                r"\bnccl\w*(?:AllToAll|SendRecv)\w*\b", evidence, re.IGNORECASE
+            )
+        ),
+    }
+    for arm, evidence in evidence_by_arm.items()
+}
+if manifest["full_cg_enabled"]:
+    for arm in ("on", "off"):
+        if feature_counts[arm]["cuda_graph_launch_api"] == 0:
+            failures.append(f"{arm.upper()} full-CG cudaGraphLaunch evidence was not found")
+if manifest["a2a_enabled"]:
+    for arm in ("on", "off"):
+        if feature_counts[arm]["nccl_a2a_kernel"] == 0:
+            failures.append(f"{arm.upper()} NCCL A2A kernel evidence was not found")
+
 attribution = {
     "passed": not failures,
     "signature_regexes": SIGNATURE_REGEXES,
@@ -1033,6 +1227,16 @@ manifest["kernel_attribution"] = {
     **attribution,
     "artifact": "kernel_attribution.json",
 }
+manifest["feature_attribution"] = {
+    "feature_context": manifest["feature_context"],
+    "full_cg_enabled": manifest["full_cg_enabled"],
+    "a2a_enabled": manifest["a2a_enabled"],
+    "counts": feature_counts,
+    "passed": not failures,
+}
+(result_dir / "feature_attribution.json").write_text(
+    json.dumps(manifest["feature_attribution"], indent=2, sort_keys=True) + "\n"
+)
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 if failures:
     raise RuntimeError("kernel attribution failed: " + "; ".join(failures))
