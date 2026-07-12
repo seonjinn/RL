@@ -17,6 +17,7 @@ PARTITION="${PARTITION:-batch_long}"
 USE_GRES="${USE_GRES:-true}"
 SBATCH_DEPENDENCY="${SBATCH_DEPENDENCY:-}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
+CLUSTER_SEGMENT_SIZE="${CLUSTER_SEGMENT_SIZE:-}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemorl-vllm024-dynamicsd-aws-dfw}"
 NUM_PROMPTS_PER_STEP="${NUM_PROMPTS_PER_STEP:-}"
 NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-}"
@@ -83,6 +84,11 @@ for numeric_override in \
 done
 if [[ ! "${SPECDEC_CONTEXT_HEADROOM_TOKENS}" =~ ^[0-9]+$ ]]; then
   echo "ERROR: SPECDEC_CONTEXT_HEADROOM_TOKENS must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "${CLUSTER_SEGMENT_SIZE}" \
+  && ! "${CLUSTER_SEGMENT_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: CLUSTER_SEGMENT_SIZE must be a positive integer" >&2
   exit 2
 fi
 if [[ "${CUDAGRAPH_DISPATCH_METRICS}" != "true" && "${CUDAGRAPH_DISPATCH_METRICS}" != "false" ]]; then
@@ -273,11 +279,12 @@ submit_one() {
       nodes=4
       ;;
     qwen235b)
-      recipe="examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml"
+      recipe="${QWEN235_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml}"
       draft_model="${QWEN235_DRAFT_MODEL:-${HF_HOME}/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba}"
-      nodes=16
+      nodes="${QWEN235_NODES:-16}"
       ;;
   esac
+  local segment_size="${CLUSTER_SEGMENT_SIZE:-${nodes}}"
 
   if [[ "${MODE}" != "dry-run" && ! -f "${REPO_DIR}/${recipe}" ]]; then
     echo "ERROR: recipe not found: ${REPO_DIR}/${recipe}" >&2
@@ -408,7 +415,7 @@ submit_one() {
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${CUDAGRAPH_MODE}"
     "cluster.gpus_per_node=${GPUS_PER_NODE}"
     "cluster.num_nodes=${nodes}"
-    "cluster.segment_size=${nodes}"
+    "cluster.segment_size=${segment_size}"
     "logger.wandb_enabled=true"
     "logger.tensorboard_enabled=false"
     "logger.wandb.project=${WANDB_PROJECT}"
@@ -620,7 +627,7 @@ submit_one() {
     --ntasks-per-node=1
     --exclusive
     --time="${WALLTIME}"
-    --segment="${nodes}"
+    --segment="${segment_size}"
     --dependency="${SBATCH_DEPENDENCY}"
     --job-name="${ACCOUNT}-nemorl.dynamicsd-${model}-${variant}"
     --output="${run_dir}/slurm-%j.out"
@@ -666,7 +673,7 @@ submit_one() {
       resolved_container="$(readlink -f "${CONTAINER}")"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date --iso-8601=seconds)" "${model}" "${variant}" "${job_id}" \
-        "${nodes}" "${nodes}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
+        "${nodes}" "${segment_size}" "$(git -C "${REPO_DIR}" rev-parse HEAD)" \
         "${wandb_run_id}" "https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${wandb_run_id}" \
         "${recipe}" "${draft_model}" "${resolved_container}" "${CONTAINER_SHA256}" \
         "${MAX_STEPS}" "${draft_k}" "${DYNAMIC_SCHEDULE}" \

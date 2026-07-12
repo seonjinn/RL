@@ -1046,6 +1046,34 @@ def test_dynamicsd_launcher_renders_qwen235b_performance_topology() -> None:
     assert "NRL_FORCE_REBUILD_VENVS=true" in output
 
 
+def test_dynamicsd_launcher_allows_qwen235b_recipe_and_node_overrides() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "eagle3_k3",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="qwen235b-32n4g-contract-test",
+        ATTEMPT_ID="attempt-1",
+        QWEN235_RECIPE=(
+            "examples/configs/recipes/llm/performance/"
+            "grpo-qwen3-235b-32n4g.yaml"
+        ),
+        QWEN235_NODES="32",
+        CLUSTER_SEGMENT_SIZE="16",
+        USE_GRES="false",
+    )
+
+    assert "grpo-qwen3-235b-32n4g.yaml" in output
+    assert "cluster.num_nodes=32" in output
+    assert "cluster.segment_size=16" in output
+    assert "--nodes=32" in output
+    assert "--segment=16" in output
+    assert "--gres=" not in output
+
+
 def test_dynamicsd_launcher_renders_dynamic_schedule() -> None:
     output = _dry_run_dynamicsd("qwen32b", "dynamic")
 
