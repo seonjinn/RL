@@ -51,6 +51,7 @@ SUBMISSIONS_HEADER = (
 PARITY_LAUNCHER = (
     REPO_ROOT / "experiments" / "vllm_024_upgrade" / "submit_generation_parity.sh"
 )
+RAY_SUB = REPO_ROOT / "ray.sub"
 
 
 def _run_script(path: Path, *args: str, **environment: str) -> str:
@@ -63,6 +64,12 @@ def _run_script(path: Path, *args: str, **environment: str) -> str:
         text=True,
     )
     return result.stdout
+
+
+def test_ray_launcher_does_not_serialize_jobs_by_name() -> None:
+    source = RAY_SUB.read_text(encoding="utf-8")
+
+    assert "#SBATCH --dependency=singleton" not in source
 
 
 def _run_script_unchecked(
