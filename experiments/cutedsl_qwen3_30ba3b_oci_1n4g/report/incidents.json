@@ -208,5 +208,35 @@
     "timestamp_utc": "2026-07-12T07:17:32Z",
     "verification_evidence": "The run proves fused forward/dgrad activation and repeated host OOM, not speedup. The next run must show actual runtime level/RSS lines and cross the step-2 boundary before any timing matrix is submitted.",
     "verification_job": "pending"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2364431 passed immutable source/image preflight, the locked Linux bootstrap, and 11 general lifecycle tests. Pyrefly 0.24.2 then rejected psutil.Process().memory_info() as a missing-self call, so the run stopped before GPU smoke. Inspection of the pytest summary also proved that the mcore-marked policy offload tests were silently excluded from the default lifecycle invocation.",
+    "fix_commit": "173136922e9c325e4c8ce0454f768de93be2fa37",
+    "hypothesis": "Calling the psutil method with an explicit Process instance will avoid Pyrefly's decorated-method binding error, while a separate --mcore-only invocation will execute the policy telemetry tests instead of silently filtering them.",
+    "report_path": "evidence/job-2364431.txt",
+    "reproduction": "At source b9abdca71, run the Pre-Tyche functional gate. Observe 11 general lifecycle passes, no policy telemetry test names in the terminal summary, and Pyrefly missing-argument at nemo_rl/utils/host_memory.py before GPU smoke.",
+    "root_cause": "Pyrefly 0.24.2 did not bind psutil's decorated memory_info method through the instance expression. Independently, NeMo-RL's pytest_collection_modifyitems excludes pytest.mark.mcore tests unless --mcore-only is supplied, but the wrapper had placed policy telemetry tests in the default invocation.",
+    "run_id": "2364431",
+    "symptom": "The Linux lifecycle tests passed, but the functional gate failed in Pyrefly and never executed the policy offload telemetry tests.",
+    "tested_change": "Call psutil.Process.memory_info(process) explicitly, update the mocks at the same class-method boundary, and split the policy telemetry regressions into a dedicated --mcore-only pytest invocation.",
+    "timestamp_utc": "2026-07-12T07:55:53Z",
+    "verification_evidence": "Focused Pyrefly reports zero errors for host_memory.py; Ruff 0.9.9, bash syntax, three local vLLM tests, and all 52 wrapper regressions pass. Remote MCore and functional verification remain pending; this job provides no speedup evidence.",
+    "verification_job": "pending"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Pre-submit review found that the fixed 2-node EP8 harness inherited --segment=1 from the single-node cluster profile. The corrected source emitted --segment=2, and Pre-Tyche test-only requests 2364786-2364788 were accepted with the forecast node pair ptyche[0285-0286]; no GPU jobs were submitted.",
+    "fix_commit": "b434c4dc596e996dd77a161d435520c17a75b483",
+    "hypothesis": "A 2-node benchmark-specific segment override can preserve --segment=1 for the one-node functional gate while requesting one two-node NVLink placement segment for factorial measurements.",
+    "report_path": "evidence/job-preflight-segment-20260712.txt",
+    "reproduction": "Run the 2-node factorial submitter against the pre_tyche profile before b434c4dc5 and inspect mocked sbatch argv: --nodes=2 is paired with --segment=1.",
+    "root_cause": "The cluster profile was originally shared by one-node functional and two-node factorial submitters. Its valid one-node --segment=1 value was copied unchanged into the 2-node sbatch request, so the scheduler could place each node as a separate segment and invalidate topology-sensitive A2A comparisons.",
+    "run_id": "preflight-segment-20260712",
+    "symptom": "The planned EP8 A2A experiment did not guarantee that its two GB200 nodes shared the requested placement segment.",
+    "tested_change": "Replace the segment argument with --segment=2 only in the fixed 2-node factorial submitter; retain profile --segment=1 for functional jobs and assert the exact argv in the mocked submission contract.",
+    "timestamp_utc": "2026-07-12T08:16:45Z",
+    "verification_evidence": "The new assertion failed against --segment=1 before the fix. After the fix, 153 related harness/profile/wrapper/report tests, Ruff 0.9.9, bash syntax, and diff checks passed. Pre-Tyche accepted three test-only g0a0 requests; this is scheduler/preflight evidence, not a performance result.",
+    "verification_job": "2364786-2364788 (test-only; no jobs submitted)"
   }
 ]
