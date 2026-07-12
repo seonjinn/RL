@@ -75,6 +75,69 @@ def test_megatron_prepare_for_training_restores_optimizer():
     assert restored_devices == ["cuda"]
 
 
+@pytest.mark.parametrize(
+    ("method_name", "args", "kwargs", "match"),
+    [
+        ("begin_train_step", (), {"loss_fn": object()}, "split/async PolicyTraining"),
+        (
+            "get_logprobs",
+            (),
+            {"data": BatchedDataDict()},
+            "Logprob",
+        ),
+        (
+            "get_reference_policy_logprobs",
+            (),
+            {"data": BatchedDataDict()},
+            "Logprob",
+        ),
+        ("offload_before_refit", (), {}, "colocated refit/offload"),
+        ("finish_inference", (), {}, "colocated refit/offload"),
+        (
+            "get_topk_logits",
+            (),
+            {"data": BatchedDataDict(), "k": 4},
+            "evaluation",
+        ),
+        (
+            "calibrate_qkv_fp8_scales",
+            (),
+            {"data": BatchedDataDict()},
+            "evaluation",
+        ),
+    ],
+)
+def test_full_cuda_graph_worker_rejects_unsupported_runtime_operations(
+    method_name, args, kwargs, match
+):
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+
+    with pytest.raises(RuntimeError, match=match):
+        getattr(MegatronPolicyWorkerImpl, method_name)(worker, *args, **kwargs)
+
+
+def test_full_cuda_graph_worker_rejects_eval_train_before_launching_schedule():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+
+    with pytest.raises(RuntimeError, match="evaluation"):
+        MegatronPolicyWorkerImpl.train(
+            worker,
+            BatchedDataDict(),
+            loss_fn=object(),
+            eval_mode=True,
+        )
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (

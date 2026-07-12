@@ -85,6 +85,9 @@ policy:
     enabled: true
     force_reconvert_from_hf: False # Set to True to force reconvert of the model from Hugging Face
     empty_unused_memory_level: 1  # 1 is the minimum recommendation for RL since we almost always need to offload before beginning generation. Setting to 0 is faster, but you are more likely to run out of GPU memory.
+    cuda_graph_impl: "none"  # Set full_iteration only with fixed-shape batching, sequence_packing=false, and non-colocated vLLM generation.
+    cuda_graph_warmup_steps: 3
+    cuda_graph_use_single_mempool: true
     activation_checkpointing: false
     # recompute_granularity controls activation checkpointing depth.
     # "full": recompute all activations (default, max memory savings).
@@ -114,6 +117,11 @@ policy:
     moe_enable_deepep: false
     moe_token_dispatcher_type: "alltoall"
     moe_shared_expert_overlap: false
+    moe_expert_rank_capacity_factor: null
+    moe_paged_stash: false
+    moe_paged_stash_page_size: 64
+    moe_paged_stash_buffer_size_factor_cuda: 1.10
+    moe_paged_stash_buffer_size_factor_cpu: 0.0
     use_gloo_process_groups: false
     #gives ~20% training perf speedup with sequence packing
     apply_rope_fusion: True

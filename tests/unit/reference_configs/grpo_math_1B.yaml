@@ -164,6 +164,9 @@ policy:
     fused_linear_logprobs_chunk_size: 256
     force_reconvert_from_hf: False # Set to True to force reconvert of the model from Hugging Face
     empty_unused_memory_level: 1  # 1 is the minimum recommendation for RL since we almost always need to offload before beginning generation. Setting to 0 is faster, but you are more likely to run out of GPU memory.
+    cuda_graph_impl: "none"  # Training graph implementation. full_iteration currently requires fixed-shape, synchronous, non-colocated PolicyTraining.
+    cuda_graph_warmup_steps: 3  # Eager PolicyTraining iterations before full-iteration graph capture.
+    cuda_graph_use_single_mempool: true  # Share one graph pool with compatible future optimizer captures.
     activation_checkpointing: false
     # recompute_granularity controls activation checkpointing depth.
     # "full": recompute all activations (default, max memory savings).
@@ -200,6 +203,11 @@ policy:
     moe_token_dispatcher_type: "alltoall"
     moe_shared_expert_overlap: false
     use_gloo_process_groups: false
+    moe_expert_rank_capacity_factor: null  # HybridEP static token budget; null disables PagedStashRunner composition.
+    moe_paged_stash: false  # Fixed-address routed-expert activation stash for full-iteration graph capture.
+    moe_paged_stash_page_size: 64
+    moe_paged_stash_buffer_size_factor_cuda: 1.10
+    moe_paged_stash_buffer_size_factor_cpu: 0.0
     # Multi-Token Prediction (MTP). mtp_num_layers=0 disables MTP.
     mtp_num_layers: 0
     # MTP loss weight added to the main next-token loss (0.0 disables the MTP loss contribution).

@@ -13,11 +13,34 @@
 # limitations under the License.
 
 import enum
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Protocol
 
 import torch
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+_FULL_CUDA_GRAPH_METRICS: ContextVar[bool] = ContextVar(
+    "full_cuda_graph_metrics", default=False
+)
+
+
+@contextmanager
+def full_cuda_graph_metrics():
+    """Keep scalar metrics as device tensors while CUDA graph capture is active."""
+    token = _FULL_CUDA_GRAPH_METRICS.set(True)
+    try:
+        yield
+    finally:
+        _FULL_CUDA_GRAPH_METRICS.reset(token)
+
+
+def scalar_metric(value: torch.Tensor) -> torch.Tensor | int | float:
+    """Convert a scalar tensor for logging unless graph capture needs its device slot."""
+    if _FULL_CUDA_GRAPH_METRICS.get():
+        return value
+    return value.item()
 
 
 class LossType(enum.Enum):

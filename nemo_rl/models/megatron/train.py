@@ -42,6 +42,7 @@ from nemo_rl.algorithms.loss import (
     wrap_loss_fn_with_input_preparation,
 )
 from nemo_rl.algorithms.loss.interfaces import LossFunction
+from nemo_rl.algorithms.loss.interfaces import full_cuda_graph_metrics
 from nemo_rl.algorithms.utils import mask_out_neg_inf_logprobs
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import (
@@ -54,6 +55,13 @@ from nemo_rl.models.megatron.config import MegatronModule
 from nemo_rl.models.megatron.data import ProcessedMicrobatch
 from nemo_rl.models.megatron.draft.hidden_capture import (
     get_capture_context,
+)
+from nemo_rl.models.megatron.full_cuda_graph import (
+    FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS,
+    FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS,
+    FullCudaGraphCallSignature,
+    attach_full_cuda_graph_normalizers,
+    full_cuda_graph_loss_signature,
 )
 from nemo_rl.models.megatron.router_replay import (
     clear_router_replay,
@@ -166,6 +174,7 @@ def forward_with_post_processing_fn(
     use_fused_linear_logprobs: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
+    full_cuda_graph: bool = False,
 ) -> Tuple[torch.Tensor, Callable]:
     """Perform forward pass with pre-processed microbatch and return output tensor and post-processing function.
 
@@ -203,6 +212,10 @@ def forward_with_post_processing_fn(
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
+
+    if full_cuda_graph:
+        global_valid_seqs = data_dict[FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS]
+        global_valid_toks = data_dict[FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS]
 
     if use_router_replay:
         if routed_experts_cp_sharded is None:
@@ -313,6 +326,7 @@ def megatron_forward_backward(
     use_fused_linear_logprobs: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
+    forward_backward_func: Optional[Callable[..., Any]] = None,
 ) -> Any:
     """Execute forward and backward passes using Megatron's utilities.
 
@@ -339,6 +353,34 @@ def megatron_forward_backward(
     Returns:
         Results from the forward/backward execution
     """
+    full_cuda_graph = forward_backward_func is not None
+    if full_cuda_graph:
+        if forward_only:
+            raise RuntimeError(
+                "NeMo-RL full-iteration CUDA graph supports PolicyTraining only"
+            )
+        if global_valid_seqs is None or global_valid_toks is None:
+            raise ValueError(
+                "full-iteration CUDA graph PolicyTraining requires global valid counts"
+            )
+        if use_router_replay:
+            raise RuntimeError(
+                "full-iteration CUDA graph PolicyTraining does not support router replay"
+            )
+        if draft_model is not None or enable_hidden_capture:
+            raise RuntimeError(
+                "full-iteration CUDA graph PolicyTraining does not support draft hidden capture"
+            )
+        if need_top_k_or_top_p_filtering(sampling_params):
+            raise RuntimeError(
+                "full-iteration CUDA graph PolicyTraining does not support top-k/top-p filtering"
+            )
+        data_iterator = attach_full_cuda_graph_normalizers(
+            data_iterator,
+            global_valid_seqs=global_valid_seqs,
+            global_valid_toks=global_valid_toks,
+        )
+
     forward_step = partial(
         forward_with_post_processing_fn,
         post_processing_fn=post_processing_fn,
@@ -352,20 +394,33 @@ def megatron_forward_backward(
         use_fused_linear_logprobs=use_fused_linear_logprobs,
         use_router_replay=use_router_replay,
         router_replay_train=router_replay_train,
+        full_cuda_graph=full_cuda_graph,
     )
-    forward_backward_func = get_forward_backward_func()
+    schedule_func = forward_backward_func or get_forward_backward_func()
     if use_router_replay:
         clear_router_replay(model)
     try:
-        return forward_backward_func(
-            forward_step_func=forward_step,
-            data_iterator=data_iterator,
-            model=model,
-            num_microbatches=num_microbatches,
-            seq_length=seq_length,
-            micro_batch_size=mbs,
-            decoder_seq_length=seq_length,
-            forward_only=forward_only,
+        schedule_kwargs = {
+            "forward_step_func": forward_step,
+            "data_iterator": data_iterator,
+            "model": model,
+            "num_microbatches": num_microbatches,
+            "seq_length": seq_length,
+            "micro_batch_size": mbs,
+            "decoder_seq_length": seq_length,
+            "forward_only": forward_only,
+        }
+        if full_cuda_graph:
+            schedule_kwargs["nemo_rl_signature"] = FullCudaGraphCallSignature(
+                num_microbatches=num_microbatches,
+                seq_length=seq_length,
+                micro_batch_size=mbs,
+                loss_signature=full_cuda_graph_loss_signature(
+                    post_processing_fn.loss_fn
+                ),
+            )
+        return schedule_func(
+            **schedule_kwargs,
         )
     finally:
         if use_router_replay:
@@ -382,6 +437,7 @@ class LossPostProcessor:
         sampling_params: Optional[TrainingSamplingParams] = None,
         draft_model: Optional[MegatronModule] = None,
         prepare_fn: Optional[Callable[..., Any]] = None,
+        full_cuda_graph: bool = False,
     ):
         """Build a per-microbatch loss post-processor for the Megatron train loop.
 
@@ -405,6 +461,7 @@ class LossPostProcessor:
         self.cp_normalize = cp_normalize
         self.sampling_params = sampling_params
         self.prepare_fn = prepare_fn
+        self.full_cuda_graph = full_cuda_graph
         if draft_model is not None and draft_model.eagle_module is not None:
             self.d2t = getattr(draft_model.eagle_module, "d2t", None)
         else:
@@ -524,6 +581,15 @@ class LossPostProcessor:
             return loss * num_microbatches / cp_size, metrics
 
         loss_fn_wrapped = _counteract_mcore_loss_averaging
+
+        if self.full_cuda_graph:
+            graph_loss_fn = loss_fn_wrapped
+
+            def _graph_safe_metrics(*args: Any, **kwargs: Any) -> Any:
+                with full_cuda_graph_metrics():
+                    return graph_loss_fn(*args, **kwargs)
+
+            loss_fn_wrapped = _graph_safe_metrics
 
         return loss_fn_wrapped
 
