@@ -46,6 +46,7 @@ source "${EXPERIMENT_DIR}/lib/cluster_profile.sh"
 source "${EXPERIMENT_DIR}/lib/events.sh"
 load_cutedsl_cluster_profile
 readonly IMAGE="${CUTEDSL_IMAGE}"
+BENCHMARK_SEGMENT_SIZE="${CUTEDSL_BENCHMARK_SEGMENT_SIZE:-${CUTEDSL_SEGMENT:-1}}"
 readonly RUN_ID="${SLURM_JOB_ID:?submit this benchmark with sbatch}${SLURM_RESTART_COUNT:+-r${SLURM_RESTART_COUNT}}"
 readonly RESULT_DIR="${EXPERIMENT_DIR}/results/${RUN_ID}"
 if [[ "${EXISTING_RAY}" == "1" ]]; then
@@ -68,9 +69,10 @@ WARMUP_UPDATES="${CUTEDSL_BENCHMARK_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${CUTEDSL_BENCHMARK_MEASURED_UPDATES:-20}"
 TIMING_ORDER="${CUTEDSL_BENCHMARK_ORDER:-on,off}"
 PROFILE_ENABLED="${CUTEDSL_BENCHMARK_PROFILE:-1}"
+FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"
+FUNCTIONAL_UPDATES="${NEMO2606_FUNCTIONAL_UPDATES:-3}"
 REPLICATE_INDEX="${CUTEDSL_BENCHMARK_REPLICATE:-0}"
 SUBMISSION_GROUP="${CUTEDSL_BENCHMARK_SUBMISSION_GROUP:-direct}"
-readonly WARMUP_UPDATES MEASURED_UPDATES TIMING_ORDER PROFILE_ENABLED
 readonly REPLICATE_INDEX SUBMISSION_GROUP
 
 # CUTEDSL_RUNTIME_TMPDIR_START
@@ -99,12 +101,8 @@ cutedsl_install_signal_traps
 
 cutedsl_write_event preflight start '' "Validate benchmark controls, source, and image" slurm.out
 
-if [[ ! "${WARMUP_UPDATES}" =~ ^[0-9]+$ ]] || ((WARMUP_UPDATES < 5)); then
-    echo "[ERROR] CUTEDSL_BENCHMARK_WARMUP_UPDATES must be an integer >= 5." >&2
-    exit 1
-fi
-if [[ ! "${MEASURED_UPDATES}" =~ ^[0-9]+$ ]] || ((MEASURED_UPDATES < 10)); then
-    echo "[ERROR] CUTEDSL_BENCHMARK_MEASURED_UPDATES must be an integer >= 10." >&2
+if ! [[ "${FUNCTIONAL_GATE}" == "0" || "${FUNCTIONAL_GATE}" == "1" ]]; then
+    echo "[ERROR] NEMO2606_FUNCTIONAL_GATE must be 0 or 1." >&2
     exit 1
 fi
 if [[ "${PROFILE_ENABLED}" != "0" && "${PROFILE_ENABLED}" != "1" ]]; then
@@ -123,12 +121,13 @@ for boolean_value in "${EXISTING_RAY}" "${NEMO2606_FULL_CG_ENABLED}" \
     fi
 done
 if [[ ! "${BENCHMARK_NUM_NODES}" =~ ^[0-9]+$ ]] || \
-    [[ ! "${BENCHMARK_GPUS_PER_NODE}" =~ ^[0-9]+$ ]]; then
-    echo "[ERROR] Benchmark node and GPU counts must be positive integers." >&2
+    [[ ! "${BENCHMARK_GPUS_PER_NODE}" =~ ^[0-9]+$ ]] || \
+    [[ ! "${BENCHMARK_SEGMENT_SIZE}" =~ ^[0-9]+$ ]]; then
+    echo "[ERROR] Benchmark node, GPU, and segment counts must be positive integers." >&2
     exit 1
 fi
-if ((BENCHMARK_NUM_NODES < 1 || BENCHMARK_GPUS_PER_NODE < 1)); then
-    echo "[ERROR] Benchmark node and GPU counts must be positive integers." >&2
+if ((BENCHMARK_NUM_NODES < 1 || BENCHMARK_GPUS_PER_NODE < 1 || BENCHMARK_SEGMENT_SIZE < 1)); then
+    echo "[ERROR] Benchmark node, GPU, and segment counts must be positive integers." >&2
     exit 1
 fi
 if [[ "${EXISTING_RAY}" == "1" ]] && \
@@ -163,38 +162,85 @@ if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
         "overlap_moe_expert_parallel_comm" "EP A2A overlap"
 fi
 
-IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
-if [[ ${#timing_arms[@]} -ne 2 ]]; then
-    echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain exactly two comma-separated arms." >&2
-    exit 1
-fi
-on_count=0
-off_count=0
-for arm in "${timing_arms[@]}"; do
-    case "${arm}" in
-        on) on_count=$((on_count + 1)) ;;
-        off) off_count=$((off_count + 1)) ;;
-        *)
-            echo "[ERROR] Unknown benchmark arm in order: ${arm}" >&2
-            exit 1
-            ;;
-    esac
-done
-if [[ ${on_count} -ne 1 || ${off_count} -ne 1 ]]; then
-    echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain on and off exactly once." >&2
-    exit 1
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    if ! [[ "${FUNCTIONAL_UPDATES}" == "3" ]]; then
+        echo "[ERROR] Functional gate requires NEMO2606_FUNCTIONAL_UPDATES=3." >&2
+        exit 1
+    fi
+    if ! [[ "${TIMING_ORDER}" == "on" ]]; then
+        echo "[ERROR] Functional gate requires CUTEDSL_BENCHMARK_ORDER=on." >&2
+        exit 1
+    fi
+    if ! [[ "${PROFILE_ENABLED}" == "0" ]]; then
+        echo "[ERROR] Functional gate requires CUTEDSL_BENCHMARK_PROFILE=0." >&2
+        exit 1
+    fi
+    if ! [[ "${FEATURE_CONTEXT}" == "g0a0" ]]; then
+        echo "[ERROR] Functional gate requires NEMO2606_FACTORIAL_CONTEXT=g0a0." >&2
+        exit 1
+    fi
+    if ! [[ "${NEMO2606_FULL_CG_ENABLED}" == "0" ]]; then
+        echo "[ERROR] Functional gate requires NEMO2606_FULL_CG_ENABLED=0." >&2
+        exit 1
+    fi
+    if ! [[ "${NEMO2606_A2A_ENABLED}" == "0" ]]; then
+        echo "[ERROR] Functional gate requires NEMO2606_A2A_ENABLED=0." >&2
+        exit 1
+    fi
+    if [[ "${EXISTING_RAY}" != "1" || "${BENCHMARK_NUM_NODES}" != "2" || \
+        "${BENCHMARK_GPUS_PER_NODE}" != "4" || "${BENCHMARK_SEGMENT_SIZE}" != "2" ]]; then
+        echo "[ERROR] Functional gate requires existing Ray with 2 nodes x 4 GPUs and segment size 2." >&2
+        exit 1
+    fi
+    timing_arms=(on)
+    WARMUP_UPDATES=0
+    MEASURED_UPDATES=0
+    TOTAL_UPDATES="${FUNCTIONAL_UPDATES}"
+else
+    if [[ ! "${WARMUP_UPDATES}" =~ ^[0-9]+$ ]] || ((WARMUP_UPDATES < 5)); then
+        echo "[ERROR] CUTEDSL_BENCHMARK_WARMUP_UPDATES must be an integer >= 5." >&2
+        exit 1
+    fi
+    if [[ ! "${MEASURED_UPDATES}" =~ ^[0-9]+$ ]] || ((MEASURED_UPDATES < 10)); then
+        echo "[ERROR] CUTEDSL_BENCHMARK_MEASURED_UPDATES must be an integer >= 10." >&2
+        exit 1
+    fi
+    IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
+    if [[ ${#timing_arms[@]} -ne 2 ]]; then
+        echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain exactly two comma-separated arms." >&2
+        exit 1
+    fi
+    on_count=0
+    off_count=0
+    for arm in "${timing_arms[@]}"; do
+        case "${arm}" in
+            on) on_count=$((on_count + 1)) ;;
+            off) off_count=$((off_count + 1)) ;;
+            *)
+                echo "[ERROR] Unknown benchmark arm in order: ${arm}" >&2
+                exit 1
+                ;;
+        esac
+    done
+    if [[ ${on_count} -ne 1 || ${off_count} -ne 1 ]]; then
+        echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain on and off exactly once." >&2
+        exit 1
+    fi
+    TOTAL_UPDATES=$((WARMUP_UPDATES + MEASURED_UPDATES))
 fi
 
-TOTAL_UPDATES=$((WARMUP_UPDATES + MEASURED_UPDATES))
 TRAINING_GPU_COUNT=$((BENCHMARK_NUM_NODES * BENCHMARK_GPUS_PER_NODE))
 CUDA_GRAPH_WARMUP_STEPS=3
+readonly BENCHMARK_SEGMENT_SIZE FUNCTIONAL_GATE FUNCTIONAL_UPDATES
+readonly WARMUP_UPDATES MEASURED_UPDATES TIMING_ORDER PROFILE_ENABLED
 readonly TOTAL_UPDATES TRAINING_GPU_COUNT CUDA_GRAPH_WARMUP_STEPS
 export RUN_ID WARMUP_UPDATES MEASURED_UPDATES TIMING_ORDER TOTAL_UPDATES PROFILE_ENABLED
 export REPLICATE_INDEX SUBMISSION_GROUP
 export TRAINING_GPU_COUNT FEATURE_CONTEXT NEMO2606_FULL_CG_ENABLED
 export NEMO2606_A2A_ENABLED
-export BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE
+export BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE BENCHMARK_SEGMENT_SIZE
 export EXISTING_RAY CUDA_GRAPH_WARMUP_STEPS
+export FUNCTIONAL_GATE FUNCTIONAL_UPDATES
 
 if [[ "${EXISTING_RAY}" == "1" ]]; then
     RAY_LOG_ATTEMPT_ID="${SLURM_JOB_ID}"
@@ -306,6 +352,7 @@ readonly -a COMMON_OVERRIDES=(
     "grpo.max_num_steps=${TOTAL_UPDATES}"
     "cluster.num_nodes=${BENCHMARK_NUM_NODES}"
     "cluster.gpus_per_node=${BENCHMARK_GPUS_PER_NODE}"
+    "cluster.segment_size=${BENCHMARK_SEGMENT_SIZE}"
     "policy.train_global_batch_size=$((TRAINING_GPU_COUNT * 2))"
     "policy.train_micro_batch_size=1"
     "policy.megatron_cfg.expert_model_parallel_size=${TRAINING_GPU_COUNT}"
@@ -459,19 +506,21 @@ def resolve(overrides: list[str]) -> dict[str, Any]:
 
 
 on_config = resolve(common_overrides)
-off_config = resolve([*common_overrides, off_override])
 on_selector = value_at(on_config, selector_path)
-off_selector = value_at(off_config, selector_path)
 assert on_selector == "1", on_selector
-assert off_selector == "0", off_selector
-differences = collect_differences(on_config, off_config)
-assert differences == {selector_path: {"on": "1", "off": "0"}}, differences
-
 OmegaConf.save(OmegaConf.create(on_config), result_dir / "effective_config_on.yaml")
-OmegaConf.save(OmegaConf.create(off_config), result_dir / "effective_config_off.yaml")
-(result_dir / "matched_config_diff.json").write_text(
-    json.dumps(differences, indent=2) + "\n"
-)
+configs_by_arm = {"on": on_config}
+if os.environ["FUNCTIONAL_GATE"] != "1":
+    off_config = resolve([*common_overrides, off_override])
+    off_selector = value_at(off_config, selector_path)
+    assert off_selector == "0", off_selector
+    differences = collect_differences(on_config, off_config)
+    assert differences == {selector_path: {"on": "1", "off": "0"}}, differences
+    configs_by_arm["off"] = off_config
+    OmegaConf.save(OmegaConf.create(off_config), result_dir / "effective_config_off.yaml")
+    (result_dir / "matched_config_diff.json").write_text(
+        json.dumps(differences, indent=2) + "\n"
+    )
 
 timing_order = os.environ["TIMING_ORDER"].split(",")
 cluster_config = on_config["cluster"]
@@ -479,6 +528,7 @@ megatron_config = on_config["policy"]["megatron_cfg"]
 topology = {
     "num_nodes": cluster_config["num_nodes"],
     "gpus_per_node": cluster_config["gpus_per_node"],
+    "segment_size": cluster_config["segment_size"],
     "tensor_model_parallel_size": megatron_config["tensor_model_parallel_size"],
     "pipeline_model_parallel_size": megatron_config["pipeline_model_parallel_size"],
     "context_parallel_size": megatron_config["context_parallel_size"],
@@ -488,6 +538,7 @@ topology = {
 assert topology == {
     "num_nodes": int(os.environ["BENCHMARK_NUM_NODES"]),
     "gpus_per_node": int(os.environ["BENCHMARK_GPUS_PER_NODE"]),
+    "segment_size": int(os.environ["BENCHMARK_SEGMENT_SIZE"]),
     "tensor_model_parallel_size": 1,
     "pipeline_model_parallel_size": 1,
     "context_parallel_size": 1,
@@ -502,11 +553,18 @@ fixed_config_paths = (
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
 )
-fixed_config_evidence = {
-    "on": {path: value_at(on_config, path) for path in fixed_config_paths},
-    "off": {path: value_at(off_config, path) for path in fixed_config_paths},
+fixed_config_by_arm = {
+    arm: {path: value_at(config, path) for path in fixed_config_paths}
+    for arm, config in configs_by_arm.items()
 }
-for arm in ("on", "off"):
+if os.environ["FUNCTIONAL_GATE"] == "1":
+    fixed_config_evidence = {"on": fixed_config_by_arm["on"]}
+else:
+    fixed_config_evidence = {
+        "on": fixed_config_by_arm["on"],
+        "off": fixed_config_by_arm["off"],
+    }
+for arm in timing_order:
     assert fixed_config_evidence[arm] == fixed_config_evidence["on"]
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_grouped_gemm"] is True
     assert (
@@ -517,7 +575,7 @@ for arm in ("on", "off"):
     )
 expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
 expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
-for arm in ("on", "off"):
+for arm in timing_order:
     assert (
         fixed_config_evidence[arm]["policy.megatron_cfg.cuda_graph_impl"]
         == ("full_iteration" if expected_full_cg else "none")
@@ -529,6 +587,8 @@ for arm in ("on", "off"):
     ):
         assert fixed_config_evidence[arm][path] is expected_a2a
 manifest = {
+    "functional_gate": os.environ["FUNCTIONAL_GATE"] == "1",
+    "performance_eligible": os.environ["FUNCTIONAL_GATE"] != "1",
     "run_id": os.environ["RUN_ID"],
     "cluster_profile": os.environ["CUTEDSL_PROFILE_NAME"],
     "replicate_index": int(os.environ["REPLICATE_INDEX"]),
@@ -557,7 +617,7 @@ manifest = {
         "account": os.environ["CUTEDSL_ACCOUNT"],
         "partition": os.environ["CUTEDSL_PARTITION"],
         "gres": os.environ["CUTEDSL_GRES"],
-        "segment": os.environ["CUTEDSL_SEGMENT"],
+        "segment": int(os.environ["BENCHMARK_SEGMENT_SIZE"]),
     },
     "topology": topology,
     "fixed_config_evidence": fixed_config_evidence,
@@ -573,20 +633,34 @@ PY
 BASH
 cutedsl_write_event runtime_bootstrap pass 0 \
     "Locked runtime environment is active" uv_lock_check.log
-cutedsl_write_event config_validation start '' \
-    "Verify matched ON/OFF configs differ only by the selector" matched_config_diff.json
-cutedsl_write_event config_validation pass 0 \
-    "Matched config and benchmark manifest recorded" benchmark_manifest.json
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    cutedsl_write_event config_validation start '' \
+        "Verify fixed CuTeDSL ON configuration and exact topology" benchmark_manifest.json
+    cutedsl_write_event config_validation pass 0 \
+        "Functional configuration and benchmark manifest recorded" benchmark_manifest.json
+else
+    cutedsl_write_event config_validation start '' \
+        "Verify matched ON/OFF configs differ only by the selector" matched_config_diff.json
+    cutedsl_write_event config_validation pass 0 \
+        "Matched config and benchmark manifest recorded" benchmark_manifest.json
+fi
 cutedsl_write_event focused_tests skip 0 \
     "Focused tests are enforced by run_cutedsl_functional.sbatch" ''
 cutedsl_write_event gpu_smoke skip 0 \
     "GPU smoke is enforced by run_cutedsl_functional.sbatch" ''
-cutedsl_write_event functional_grpo skip 0 \
-    "Functional GRPO is enforced by run_cutedsl_functional.sbatch" ''
-
-echo "[INFO] Running timing-only arms without profiling instrumentation."
-cutedsl_write_event timing start '' \
-    "Run matched CuTeDSL ON/OFF timing arms" timing_summary.json
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    cutedsl_write_event functional_grpo start '' \
+        "Run three-update EP8 CuTeDSL ON functional arm" functional_gate_summary.json
+    cutedsl_write_event timing skip 0 \
+        "Functional gate is not performance eligible" ''
+    echo "[INFO] Running one functional CuTeDSL ON arm without performance extraction."
+else
+    cutedsl_write_event functional_grpo skip 0 \
+        "Functional GRPO is enforced by the staged gate" ''
+    echo "[INFO] Running timing-only arms without profiling instrumentation."
+    cutedsl_write_event timing start '' \
+        "Run matched CuTeDSL ON/OFF timing arms" timing_summary.json
+fi
 "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
 set -euo pipefail
@@ -610,7 +684,12 @@ IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
 run_timing_arm() {
     local arm=$1
     local order_index=$2
-    local arm_dir="${CONTAINER_RESULT_DIR}/timing/${order_index}-${arm}"
+    local arm_dir
+    if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+        arm_dir="${CONTAINER_RESULT_DIR}/functional/${order_index}-${arm}"
+    else
+        arm_dir="${CONTAINER_RESULT_DIR}/timing/${order_index}-${arm}"
+    fi
     local -a arm_overrides=()
     if [[ "${arm}" == "off" ]]; then
         arm_overrides=("${OFF_OVERRIDE}")
@@ -647,6 +726,10 @@ run_timing_arm() {
     "${UV_BIN}" run --active --no-sync tests/json_dump_tb_logs.py \
         "${CONTAINER_RUNTIME_DIR}/benchmark_logs" \
         --output_path "${arm_dir}/metrics.json"
+
+    if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+        return 0
+    fi
 
     "${UV_BIN}" run --active --no-sync python - "${arm_dir}" <<'PY'
 # CUTEDSL_METRIC_EXTRACTOR_START
@@ -882,6 +965,191 @@ for order_index in "${!timing_arms[@]}"; do
     run_timing_arm "${timing_arms[order_index]}" "${order_index}"
 done
 
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    if [[ "${EXISTING_RAY}" == "1" ]]; then
+        sleep 10
+    fi
+    "${UV_BIN}" run --active --no-sync python - <<'PY'
+# CUTEDSL_FUNCTIONAL_SUMMARIZER_START
+import json
+import os
+import re
+from pathlib import Path
+
+result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
+arm_dir = result_dir / "functional" / "0-on"
+metrics = json.loads((arm_dir / "metrics.json").read_text())
+TOTAL_STEP_METRIC = "timing/train/total_step_time"
+GENERATION_METRIC = "timing/train/generation"
+LOGPROB_METRIC = "timing/train/get_logprobs"
+POLICY_TIME_METRIC = "timing/train/policy_training"
+REFIT_METRIC = "timing/train/prepare_for_generation/transfer_and_update_weights"
+COMPONENT_METRICS = {
+    "generation": (GENERATION_METRIC,),
+    "policy_and_reference_logprobs": (
+        LOGPROB_METRIC,
+        "timing/train/policy_and_reference_logprobs",
+    ),
+    "policy_training": (POLICY_TIME_METRIC,),
+    "refit": (REFIT_METRIC,),
+}
+MAX_FUNCTIONAL_EVIDENCE_FILES = 512
+MAX_FUNCTIONAL_EVIDENCE_BYTES = 256 * 1024 * 1024
+MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE = 16 * 1024 * 1024
+MAX_FUNCTIONAL_EVIDENCE_MATCHES = 4096
+CUTEDSL_ACTIVATION_SIGNATURE = "GroupedGemmGluSm100"
+
+
+def resolve_metric_name(candidates: tuple[str, ...]) -> str:
+    resolved = [name for name in candidates if name in metrics]
+    if len(resolved) != 1:
+        raise ValueError(
+            f"required functional metric candidates {candidates!r} resolved to "
+            f"{resolved!r}; available metrics: {sorted(metrics)!r}"
+        )
+    return resolved[0]
+
+
+def metric_steps(metric_name: str) -> list[int]:
+    return sorted(int(step) for step in metrics[metric_name])
+
+
+total_step_name = resolve_metric_name((TOTAL_STEP_METRIC,))
+completed_steps = metric_steps(total_step_name)
+completed_updates = len(completed_steps)
+if completed_updates != int(os.environ["FUNCTIONAL_UPDATES"]):
+    raise ValueError(
+        f"functional total-step series has {completed_updates} updates; "
+        f"expected {os.environ['FUNCTIONAL_UPDATES']}: {completed_steps!r}"
+    )
+
+component_series = {}
+for component, candidates in COMPONENT_METRICS.items():
+    source_name = resolve_metric_name(candidates)
+    steps = metric_steps(source_name)
+    if len(steps) != completed_updates or steps != completed_steps:
+        raise ValueError(
+            f"functional component {component!r} from {source_name!r} must contain "
+            f"all updates {completed_steps!r}; observed {steps!r}"
+        )
+    component_series[component] = {"metric": source_name, "steps": steps}
+
+
+def bounded_tail(path: Path, remaining_bytes: int) -> tuple[str, int, bool]:
+    size = path.stat().st_size
+    read_size = min(size, MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE, remaining_bytes)
+    if read_size <= 0:
+        return "", 0, size > 0
+    with path.open("rb") as stream:
+        if size > read_size:
+            stream.seek(-read_size, os.SEEK_END)
+        data = stream.read(read_size)
+    return data.decode(errors="replace"), len(data), size > read_size
+
+
+driver_log = arm_dir / "grpo.log"
+ray_log_root = Path(os.environ["RAY_CLUSTER_LOG_DIR"])
+if not driver_log.is_file() or not ray_log_root.is_dir():
+    raise FileNotFoundError(
+        f"functional evidence requires driver log {driver_log} and Ray log root "
+        f"{ray_log_root}"
+    )
+ray_log_paths = sorted(
+    path
+    for path in ray_log_root.rglob("*")
+    if path.is_file() and path.suffix.lower() in {".err", ".log", ".out", ".txt"}
+)
+candidate_paths = [driver_log, *ray_log_paths[:MAX_FUNCTIONAL_EVIDENCE_FILES]]
+scan_truncated = len(ray_log_paths) > MAX_FUNCTIONAL_EVIDENCE_FILES
+scanned_bytes = 0
+telemetry_matches: list[dict[str, str]] = []
+cutedsl_matches: list[dict[str, str]] = []
+for path in candidate_paths:
+    text, consumed_bytes, file_truncated = bounded_tail(
+        path, MAX_FUNCTIONAL_EVIDENCE_BYTES - scanned_bytes
+    )
+    scanned_bytes += consumed_bytes
+    scan_truncated = scan_truncated or file_truncated
+    try:
+        source = str(path.relative_to(result_dir))
+    except ValueError:
+        source = str(path)
+    for line in text.splitlines():
+        if "event=megatron_policy_offload_memory" in line:
+            if len(telemetry_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
+                telemetry_matches.append({"source": source, "line": line[-4096:]})
+            else:
+                scan_truncated = True
+        if CUTEDSL_ACTIVATION_SIGNATURE in line:
+            if len(cutedsl_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
+                cutedsl_matches.append({"source": source, "line": line[-4096:]})
+            else:
+                scan_truncated = True
+    if scanned_bytes >= MAX_FUNCTIONAL_EVIDENCE_BYTES:
+        scan_truncated = True
+        break
+
+completed_ranks = {
+    int(match.group(1))
+    for evidence in telemetry_matches
+    if "phase=after_completion" in evidence["line"]
+    and "offload_sequence=2" in evidence["line"]
+    if (match := re.search(r"\bglobal_rank=(\d+)\b", evidence["line"]))
+}
+expected_ranks = set(range(int(os.environ["TRAINING_GPU_COUNT"])))
+if len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"]):
+    raise ValueError(
+        "functional offload telemetry requires phase=after_completion "
+        f"offload_sequence=2 for {sorted(expected_ranks)!r}; observed "
+        f"{sorted(completed_ranks)!r}"
+    )
+if completed_ranks != expected_ranks:
+    raise ValueError(
+        f"functional offload telemetry ranks must be {sorted(expected_ranks)!r}; "
+        f"observed {sorted(completed_ranks)!r}"
+    )
+if not cutedsl_matches:
+    raise ValueError(
+        f"functional CuTeDSL activation signature {CUTEDSL_ACTIVATION_SIGNATURE!r} "
+        "was not found in driver or Ray logs"
+    )
+
+summary = {
+    "functional_gate": True,
+    "completed_updates": completed_updates,
+    "performance_eligible": False,
+    "arm": "on",
+    "component_series": component_series,
+    "offload_memory_evidence": {
+        "required_phase": "after_completion",
+        "required_offload_sequence": 2,
+        "completed_global_ranks": sorted(completed_ranks),
+        "matches": telemetry_matches,
+    },
+    "cutedsl_activation_evidence": {
+        "signature": CUTEDSL_ACTIVATION_SIGNATURE,
+        "matches": cutedsl_matches,
+    },
+    "evidence_scan": {
+        "driver_log": str(driver_log.relative_to(result_dir)),
+        "ray_log_root": str(ray_log_root),
+        "files_scanned": min(len(candidate_paths), MAX_FUNCTIONAL_EVIDENCE_FILES + 1),
+        "bytes_scanned": scanned_bytes,
+        "truncated": scan_truncated,
+        "max_matches_per_evidence_type": MAX_FUNCTIONAL_EVIDENCE_MATCHES,
+    },
+    "post_job_slurm_accounting_required": True,
+}
+(result_dir / "functional_gate_summary.json").write_text(
+    json.dumps(summary, indent=2, sort_keys=True) + "\n"
+)
+manifest_path = result_dir / "benchmark_manifest.json"
+manifest = json.loads(manifest_path.read_text())
+manifest["functional_gate_summary"] = "functional_gate_summary.json"
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+# CUTEDSL_FUNCTIONAL_SUMMARIZER_END
+PY
+else
 "${UV_BIN}" run --active --no-sync python - <<'PY'
 # CUTEDSL_TIMING_SUMMARIZER_START
 import json
@@ -961,11 +1229,22 @@ manifest["resolved_metric_names"] = {
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 # CUTEDSL_TIMING_SUMMARIZER_END
 PY
+fi
 BASH
-cutedsl_write_event timing pass 0 \
-    "Matched timing and normalized throughput summary recorded" timing_summary.json
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    [[ ! -e "${CONTAINER_RESULT_DIR}/timing_summary.json" ]]
+    [[ ! -e "${CONTAINER_RESULT_DIR}/profiles" ]]
+    [[ ! -e "${CONTAINER_RESULT_DIR}/kernel_attribution.json" ]]
+    [[ ! -e "${CONTAINER_RESULT_DIR}/feature_attribution.json" ]]
+    cutedsl_write_event functional_grpo pass 0 \
+        "Three-update functional arm and runtime evidence passed" \
+        functional_gate_summary.json
+else
+    cutedsl_write_event timing pass 0 \
+        "Matched timing and normalized throughput summary recorded" timing_summary.json
+fi
 
-if [[ "${PROFILE_ENABLED}" == "1" ]]; then
+if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then
     cutedsl_write_event profile start '' \
         "Run separate profiling-only ON/OFF arms" profiles
     echo "[INFO] Timing is complete; running separate profiling-only arms."
@@ -1251,9 +1530,16 @@ else
         "Profiling disabled by CUTEDSL_BENCHMARK_PROFILE=0" ''
 fi
 
-cutedsl_write_event metrics_export start '' \
-    "Publish benchmark timing and profile summaries" timing_summary.json
-cutedsl_write_event metrics_export pass 0 \
-    "Benchmark evidence is ready for report rendering" timing_summary.json
-
-echo "[PASS] Matched CuTeDSL ON/OFF benchmark completed: ${RESULT_DIR}"
+if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    cutedsl_write_event metrics_export start '' \
+        "Publish functional gate summary" functional_gate_summary.json
+    cutedsl_write_event metrics_export pass 0 \
+        "Functional evidence is ready for report rendering" functional_gate_summary.json
+    echo "[PASS] Three-update EP8 CuTeDSL functional gate completed: ${RESULT_DIR}"
+else
+    cutedsl_write_event metrics_export start '' \
+        "Publish benchmark timing and profile summaries" timing_summary.json
+    cutedsl_write_event metrics_export pass 0 \
+        "Benchmark evidence is ready for report rendering" timing_summary.json
+    echo "[PASS] Matched CuTeDSL ON/OFF benchmark completed: ${RESULT_DIR}"
+fi

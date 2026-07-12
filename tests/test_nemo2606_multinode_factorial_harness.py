@@ -342,6 +342,96 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
         assert metric in source
 
 
+def test_functional_payload_fails_closed_before_selecting_one_arm() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    required = (
+        'FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"',
+        'FUNCTIONAL_UPDATES="${NEMO2606_FUNCTIONAL_UPDATES:-3}"',
+        '[[ "${FUNCTIONAL_GATE}" == "0" || "${FUNCTIONAL_GATE}" == "1" ]]',
+        '[[ "${FUNCTIONAL_UPDATES}" == "3" ]]',
+        '[[ "${TIMING_ORDER}" == "on" ]]',
+        '[[ "${PROFILE_ENABLED}" == "0" ]]',
+        '[[ "${FEATURE_CONTEXT}" == "g0a0" ]]',
+        '[[ "${NEMO2606_FULL_CG_ENABLED}" == "0" ]]',
+        '[[ "${NEMO2606_A2A_ENABLED}" == "0" ]]',
+        "timing_arms=(on)",
+        "WARMUP_UPDATES=0",
+        "MEASURED_UPDATES=0",
+        'TOTAL_UPDATES="${FUNCTIONAL_UPDATES}"',
+        "else",
+    )
+    for fragment in required:
+        assert fragment in source, fragment
+
+    functional_branch = source.index('if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then')
+    timing_branch = source.index("else", functional_branch)
+    timing_order_validation = source.index(
+        "CUTEDSL_BENCHMARK_ORDER must contain on and off exactly once."
+    )
+    assert functional_branch < timing_branch < timing_order_validation
+    assert source.index("WARMUP_UPDATES < 5") > timing_branch
+    assert source.index("MEASURED_UPDATES < 10") > timing_branch
+
+
+def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    required = (
+        'BENCHMARK_SEGMENT_SIZE="${CUTEDSL_BENCHMARK_SEGMENT_SIZE:-${CUTEDSL_SEGMENT:-1}}"',
+        '"cluster.segment_size=${BENCHMARK_SEGMENT_SIZE}"',
+        '"functional_gate": os.environ["FUNCTIONAL_GATE"] == "1"',
+        '"performance_eligible": os.environ["FUNCTIONAL_GATE"] != "1"',
+        '"segment_size": cluster_config["segment_size"]',
+        '"segment": int(os.environ["BENCHMARK_SEGMENT_SIZE"])',
+        'if os.environ["FUNCTIONAL_GATE"] != "1":',
+        'fixed_config_evidence = {"on": fixed_config_by_arm["on"]}',
+        '"arms": [',
+    )
+    for fragment in required:
+        assert fragment in source, fragment
+    manifest_block = source.split("manifest = {", 1)[1].split("}\n(", 1)[0]
+    assert 'os.environ["CUTEDSL_SEGMENT"]' not in manifest_block
+
+
+def test_functional_payload_records_three_update_component_and_runtime_evidence() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    required = (
+        'if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then',
+        '"functional_gate_summary.json"',
+        '"completed_updates": completed_updates',
+        '"performance_eligible": False',
+        '"arm": "on"',
+        'TOTAL_STEP_METRIC = "timing/train/total_step_time"',
+        'GENERATION_METRIC = "timing/train/generation"',
+        'LOGPROB_METRIC = "timing/train/get_logprobs"',
+        'POLICY_TIME_METRIC = "timing/train/policy_training"',
+        'REFIT_METRIC = "timing/train/prepare_for_generation/transfer_and_update_weights"',
+        'if completed_updates != int(os.environ["FUNCTIONAL_UPDATES"]):',
+        'event=megatron_policy_offload_memory',
+        'phase=after_completion',
+        'offload_sequence=2',
+        'global_rank',
+        'RAY_CLUSTER_LOG_DIR',
+        'GroupedGemmGluSm100',
+        'MAX_FUNCTIONAL_EVIDENCE_MATCHES',
+        'len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"])',
+    )
+    for fragment in required:
+        assert fragment in source, fragment
+    assert 'if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then' in source
+
+
+def test_functional_payload_does_not_emit_timing_or_profile_artifacts() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    required = (
+        '[[ ! -e "${CONTAINER_RESULT_DIR}/timing_summary.json" ]]',
+        '[[ ! -e "${CONTAINER_RESULT_DIR}/profiles" ]]',
+        '[[ ! -e "${CONTAINER_RESULT_DIR}/kernel_attribution.json" ]]',
+        '[[ ! -e "${CONTAINER_RESULT_DIR}/feature_attribution.json" ]]',
+    )
+    for fragment in required:
+        assert fragment in source, fragment
+
+
 def test_matrix_payload_fails_closed_on_missing_feature_implementations() -> None:
     source = MATRIX_PAYLOAD.read_text()
     required = (
