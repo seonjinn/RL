@@ -1177,6 +1177,25 @@ def test_long_output_launcher_renders_qwen30_drafter_distribution_matrix() -> No
     assert "UV_LOCK_TIMEOUT=900" in output
 
 
+def test_long_output_launcher_allows_greedy_draft_sampling_override() -> None:
+    output = _run_script(
+        LONG_OUTPUT_LAUNCHER,
+        "dry-run",
+        REPO_DIR="/lustre/users/sna/RL",
+        LYRIS_ROOT="/lustre/users/sna",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="qwen30-drafter-greedy-contract-test",
+        ATTEMPT_ID="attempt-greedy",
+        MATRIX_SELECTION="qwen30-drafter",
+        MAX_STEPS="3",
+        DRAFT_SAMPLE_METHOD="greedy",
+    )
+
+    assert "speculative_config.draft_sample_method=greedy" in output
+    assert "speculative_config.draft_sample_method=probabilistic" not in output
+
+
 def test_qwen30_drafter_final_submit_requires_calibrated_dynamic_schedule() -> None:
     result = _run_script_unchecked(
         LONG_OUTPUT_LAUNCHER,

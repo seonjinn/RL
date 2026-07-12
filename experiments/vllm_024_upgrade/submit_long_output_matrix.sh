@@ -28,6 +28,7 @@ MATRIX_SELECTION="${MATRIX_SELECTION:-standard}"
 MODEL_SELECTION="${MODEL_SELECTION:-core}"
 OUTPUT_LENGTH_SELECTION="${OUTPUT_LENGTH_SELECTION:-all}"
 VARIANT_SELECTION="${VARIANT_SELECTION:-core}"
+DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
 
 qwen30_draft="${QWEN30_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf}"
 qwen32_draft="${QWEN32_DRAFT_MODEL:-${HF_HOME}/hub/models--RedHatAI--Qwen3-32B-Thinking-speculator.eagle3/snapshots/a1403e07b73a66fc9ef561463631c31864616933}"
@@ -220,7 +221,7 @@ for identity in "${identities[@]}"; do
         TEMPERATURE=1.0 \
         TOP_P=1.0 \
         REJECTION_SAMPLE_METHOD=standard \
-        DRAFT_SAMPLE_METHOD=probabilistic \
+        DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD}" \
         REFIT_DIAGNOSTICS=true \
         CUDAGRAPH_DISPATCH_METRICS=true \
         MAX_NUM_SEQS=64 \
