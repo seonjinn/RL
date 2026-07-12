@@ -285,6 +285,17 @@ submit_one() {
       ;;
   esac
   local segment_size="${CLUSTER_SEGMENT_SIZE:-${nodes}}"
+  local nodes_label="node count"
+  [[ "${model}" == "qwen30ba3b" ]] && nodes_label="QWEN30_NODES"
+  [[ "${model}" == "qwen235b" ]] && nodes_label="QWEN235_NODES"
+  if [[ ! "${nodes}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: ${nodes_label} must be a positive integer" >&2
+    exit 2
+  fi
+  if ((nodes % segment_size != 0)); then
+    echo "ERROR: CLUSTER_SEGMENT_SIZE must evenly divide ${nodes} nodes" >&2
+    exit 2
+  fi
 
   if [[ "${MODE}" != "dry-run" && ! -f "${REPO_DIR}/${recipe}" ]]; then
     echo "ERROR: recipe not found: ${REPO_DIR}/${recipe}" >&2

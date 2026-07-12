@@ -91,6 +91,8 @@ def _prepare_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     tracked_files = (
         checkout
         / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+        checkout
+        / "examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
         checkout / "experiments/vllm_024_upgrade/submit_eagle3_dynamicsd_step20.sh",
         checkout / "ray.sub",
     )
@@ -159,6 +161,7 @@ def _prepare_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
         "REPO_DIR": str(checkout),
         "CONTAINER": str(container),
         "QWEN30_DRAFT_MODEL": str(draft_model),
+        "QWEN235_DRAFT_MODEL": str(draft_model),
         "EXPERIMENT_ROOT": str(experiment_root),
         "RUN_TAG": "submit-contract",
         "ATTEMPT_ID": "attempt-1",
@@ -1072,6 +1075,59 @@ def test_dynamicsd_launcher_allows_qwen235b_recipe_and_node_overrides() -> None:
     assert "--nodes=32" in output
     assert "--segment=16" in output
     assert "--gres=" not in output
+
+
+@pytest.mark.parametrize(
+    ("nodes", "segment", "expected_message"),
+    [
+        ("invalid", "16", "QWEN235_NODES must be a positive integer"),
+        ("32", "15", "CLUSTER_SEGMENT_SIZE must evenly divide 32 nodes"),
+    ],
+)
+def test_dynamicsd_launcher_rejects_invalid_qwen235b_topology(
+    nodes: str,
+    segment: str,
+    expected_message: str,
+) -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        QWEN235_NODES=nodes,
+        CLUSTER_SEGMENT_SIZE=segment,
+    )
+
+    assert result.returncode == 2
+    assert expected_message in result.stderr
+
+
+def test_dynamicsd_launcher_records_overridden_qwen235b_segment(tmp_path: Path) -> None:
+    environment, manifest = _prepare_submit_environment(tmp_path)
+    environment.update(
+        {
+            "QWEN235_RECIPE": (
+                "examples/configs/recipes/llm/performance/"
+                "grpo-qwen3-235b-32n4g.yaml"
+            ),
+            "QWEN235_NODES": "32",
+            "CLUSTER_SEGMENT_SIZE": "16",
+            "USE_GRES": "false",
+        }
+    )
+
+    _run_script(
+        DYNAMICSD_LAUNCHER,
+        "submit",
+        "qwen235b",
+        "eagle3_k3",
+        **environment,
+    )
+
+    header, row = [line.split("\t") for line in manifest.read_text().splitlines()]
+    record = dict(zip(header, row, strict=True))
+    assert record["nodes"] == "32"
+    assert record["segment"] == "16"
 
 
 def test_dynamicsd_launcher_renders_dynamic_schedule() -> None:
