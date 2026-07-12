@@ -309,6 +309,85 @@ def test_renderer_outputs_metric_profile_and_reproducibility_sections(
     assert "profiles/0-on/kernel_evidence.txt" in html
     assert "kernel_attribution.json" in html
     assert "Reproducibility" in html
+    assert "Functional validation only" not in html
+
+
+def test_functional_report_is_public_deterministic_and_not_performance_evidence(
+    tmp_path: Path,
+) -> None:
+    """Functional-only runs publish bounded facts without a speedup claim."""
+    source_run = tmp_path / "source-functional"
+    public_run = tmp_path / "public-functional"
+    source_run.mkdir()
+    (source_run / "events.jsonl").write_text("")
+    write_json(
+        source_run / "status.json",
+        {"run_id": "functional-123", "job_id": "123", "exit_code": 0},
+    )
+    write_json(
+        source_run / "benchmark_manifest.json",
+        {
+            "run_id": "functional-123",
+            "functional_gate": True,
+            "performance_eligible": False,
+            "functional_gate_summary": "functional_gate_summary.json",
+        },
+    )
+    write_json(
+        source_run / "functional_gate_summary.json",
+        {
+            "functional_gate": True,
+            "performance_eligible": False,
+            "completed_updates": 3,
+            "offload_memory_evidence": {
+                "completed_global_ranks": list(range(8)),
+                "cgroup_memory": {
+                    "finite_limit_global_ranks": [0, 1, 2, 3],
+                    "unavailable_limit_global_ranks": [4, 5, 6, 7],
+                },
+            },
+            "cutedsl_activation_evidence": {
+                "signature": "GroupedGemmGluSm100",
+                "matches": [
+                    {
+                        "source": "ray/session/logs/worker.log",
+                        "line": "BUILD_TOKEN=SENTINEL_FUNCTIONAL_TOKEN_116",
+                    }
+                    for _ in range(8)
+                ],
+            },
+            "post_job_slurm_accounting_required": True,
+        },
+    )
+    write_json(
+        source_run / "timing_summary.json",
+        {
+            "median_policy_training_seconds": {"on": 4.0, "off": 5.0},
+            "primary_on_over_off_speedup": 1.25,
+        },
+    )
+
+    renderer = load_renderer()
+    renderer.stage_public_run(source_run, public_run)
+    first_report = (public_run / "report.html").read_bytes()
+    renderer.stage_public_run(source_run, public_run)
+    html = (public_run / "report.html").read_text()
+
+    assert (public_run / "functional_gate_summary.json").is_file()
+    assert first_report == (public_run / "report.html").read_bytes()
+    assert "SENTINEL_FUNCTIONAL_TOKEN_116" not in (
+        public_run / "functional_gate_summary.json"
+    ).read_text()
+    assert "Functional validation only" in html
+    assert "not performance evidence" in html
+    assert "Completed updates</th><td>3" in html
+    assert "Completed ranks</th><td>0, 1, 2, 3, 4, 5, 6, 7" in html
+    assert "Finite cgroup limit ranks</th><td>0, 1, 2, 3" in html
+    assert "Unavailable or unbounded cgroup limit ranks</th><td>4, 5, 6, 7" in html
+    assert "CuTeDSL signature</th><td>GroupedGemmGluSm100" in html
+    assert "CuTeDSL evidence count</th><td>8" in html
+    assert "Post-job Slurm accounting required</th><td>yes" in html
+    assert "speedup" not in html.lower()
 
 
 def test_event_writer_emits_schema_and_root_cause_record(tmp_path: Path) -> None:

@@ -39,6 +39,7 @@ PUBLIC_JSON_ALLOWLIST = (
     "status.json",
     "metadata.json",
     "benchmark_manifest.json",
+    "functional_gate_summary.json",
     "timing_summary.json",
     "metrics_summary.json",
     "matched_config_diff.json",
@@ -90,6 +91,8 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#111827; color:#e
 a { color:var(--accent); } .timeline { border-left:3px solid var(--line); margin-left:8px; padding-left:20px; }
 .event { margin:0 0 18px; } .event time { color:var(--muted); font-family:ui-monospace,monospace; }
 .event.fail-event { border-left:4px solid var(--fail); padding-left:10px; }
+.functional-only { margin:18px 0; padding:16px; border:2px solid var(--accent); border-radius:8px;
+  background:#eef6ff; } .functional-only h2 { margin:0 0 8px; border:0; padding:0; }
 """
 
 
@@ -356,6 +359,56 @@ def timing_section(timing: dict[str, Any], metrics: dict[str, Any]) -> str:
     return '<h2>Component timing</h2><p class="muted">No timing summary recorded.</p>'
 
 
+def functional_validation_section(summary: dict[str, Any]) -> str:
+    """Render bounded aggregate facts for a functional-only validation run."""
+    offload = summary.get("offload_memory_evidence", {})
+    if not isinstance(offload, dict):
+        offload = {}
+    cgroup = offload.get("cgroup_memory", {})
+    if not isinstance(cgroup, dict):
+        cgroup = {}
+    activation = summary.get("cutedsl_activation_evidence", {})
+    if not isinstance(activation, dict):
+        activation = {}
+    matches = activation.get("matches", [])
+    evidence_count = len(matches) if isinstance(matches, list) else "not recorded"
+
+    def rank_list(value: Any) -> str:
+        if not isinstance(value, list):
+            return "not recorded"
+        return ", ".join(str(rank) for rank in sorted(value)) or "none"
+
+    accounting = summary.get("post_job_slurm_accounting_required")
+    accounting_label = (
+        "yes" if accounting is True else "no" if accounting is False else "not recorded"
+    )
+    rows = [
+        ("Completed updates", summary.get("completed_updates", "not recorded")),
+        ("Completed ranks", rank_list(offload.get("completed_global_ranks"))),
+        (
+            "Finite cgroup limit ranks",
+            rank_list(cgroup.get("finite_limit_global_ranks")),
+        ),
+        (
+            "Unavailable or unbounded cgroup limit ranks",
+            rank_list(cgroup.get("unavailable_limit_global_ranks")),
+        ),
+        ("CuTeDSL signature", activation.get("signature", "not recorded")),
+        ("CuTeDSL evidence count", evidence_count),
+        ("Post-job Slurm accounting required", accounting_label),
+    ]
+    evidence_rows = "".join(
+        f"<tr><th>{label}</th><td>{escape(value)}</td></tr>" for label, value in rows
+    )
+    return (
+        '<section class="functional-only"><h2>Functional validation only</h2>'
+        "<p>This run is <strong>not performance evidence</strong>. Timing and "
+        "throughput comparisons are intentionally suppressed.</p></section>"
+        "<h2>Functional validation evidence</h2><table><tbody>"
+        f"{evidence_rows}</tbody></table>"
+    )
+
+
 def profile_section(run_dir: Path, metrics: dict[str, Any]) -> str:
     """Render Nsight report counts and kernel-evidence links."""
     rows: list[str] = []
@@ -462,6 +515,7 @@ def reproducibility_section(
         "events.jsonl",
         "metadata.json",
         "benchmark_manifest.json",
+        "functional_gate_summary.json",
         "effective_config.yaml",
         "effective_config_on.yaml",
         "effective_config_off.yaml",
@@ -498,7 +552,12 @@ def render_run(run_dir: Path) -> Path:
     manifest = read_json(run_dir / "benchmark_manifest.json")
     metrics = read_json(run_dir / "metrics_summary.json")
     timing = read_json(run_dir / "timing_summary.json")
+    functional_summary = read_json(run_dir / "functional_gate_summary.json")
     events = read_events(run_dir / "events.jsonl")
+    functional_only = (
+        manifest.get("functional_gate") is True
+        and manifest.get("performance_eligible") is False
+    )
     failed = status.get("exit_code") != 0
     run_id = status.get(
         "run_id",
@@ -511,9 +570,17 @@ def render_run(run_dir: Path) -> Path:
     body = "".join(
         [
             f"<h1>CuTeDSL run {escape(run_id)}</h1>",
-            '<p class="lede">Self-contained functional and performance evidence.</p>',
+            (
+                '<p class="lede">Self-contained functional validation evidence.</p>'
+                if functional_only
+                else '<p class="lede">Self-contained functional and performance evidence.</p>'
+            ),
             summary_cards(status, metadata, manifest),
-            timing_section(timing, metrics),
+            (
+                functional_validation_section(functional_summary)
+                if functional_only
+                else timing_section(timing, metrics)
+            ),
             profile_section(run_dir, metrics),
             root_cause_section(events, failed),
             completeness_section(events),
