@@ -19,6 +19,7 @@ import re
 import time
 import warnings
 from collections import defaultdict
+from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
 
@@ -102,6 +103,64 @@ from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 from nemo_rl.utils.timer import Timer
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _get_optimizer_cuda_tensor_bytes(optimizer: object) -> Optional[int]:
+    """Best-effort size of unique CUDA tensors in the live optimizer state."""
+    try:
+        try:
+            state = getattr(optimizer, "state")
+        except Exception:
+            state = None
+        if not isinstance(state, Mapping):
+            get_state = getattr(optimizer, "_get_state", None)
+            if not callable(get_state):
+                return None
+            state = get_state()
+        if not isinstance(state, Mapping):
+            return None
+
+        visited_containers: set[int] = set()
+        visited_tensors: set[int] = set()
+
+        def cuda_tensor_bytes(value: object) -> int:
+            if torch.is_tensor(value):
+                tensor_id = id(value)
+                if tensor_id in visited_tensors:
+                    return 0
+                visited_tensors.add(tensor_id)
+                tensor = cast(torch.Tensor, value)
+                if tensor.is_cuda:
+                    return tensor.numel() * tensor.element_size()
+                return 0
+
+            if isinstance(value, Mapping):
+                container_id = id(value)
+                if container_id in visited_containers:
+                    return 0
+                visited_containers.add(container_id)
+                return sum(cuda_tensor_bytes(item) for item in value.values())
+
+            if isinstance(value, (list, tuple)):
+                container_id = id(value)
+                if container_id in visited_containers:
+                    return 0
+                visited_containers.add(container_id)
+                return sum(cuda_tensor_bytes(item) for item in value)
+
+            return 0
+
+        return cuda_tensor_bytes(state)
+    except Exception:
+        return None
+
+
+def _get_expert_parallel_rank_for_telemetry() -> object:
+    try:
+        ep_rank = parallel_state.get_expert_model_parallel_rank()
+    except Exception:
+        return "unavailable"
+    return "unavailable" if ep_rank is None else ep_rank
 
 
 def _should_use_router_replay(
@@ -293,6 +352,7 @@ class MegatronPolicyWorkerImpl(
 
         # Set rank for non-collocated to check which ranks to broadcast from
         self.rank = get_rank_safe()
+        self._nemo2606_offload_sequence = 0
         self.timer = Timer(context={"worker": "megatron_policy", "rank": self.rank})
 
         # Step 1: Setup distributed
@@ -2004,6 +2064,32 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload the optimizer and buffers to the CPU."""
+        self._nemo2606_offload_sequence = (
+            getattr(self, "_nemo2606_offload_sequence", 0) + 1
+        )
+
+        def lifecycle_fields() -> dict[str, object]:
+            try:
+                optimizer = getattr(self, "optimizer")
+            except Exception:
+                optimizer = None
+            try:
+                global_rank = getattr(self, "rank")
+            except Exception:
+                global_rank = None
+            optimizer_cuda_tensor_bytes = _get_optimizer_cuda_tensor_bytes(optimizer)
+            return {
+                "global_rank": "unavailable" if global_rank is None else global_rank,
+                "ep_rank": _get_expert_parallel_rank_for_telemetry(),
+                "offload_sequence": self._nemo2606_offload_sequence,
+                "lifecycle_action": "offload_before_refit",
+                "optimizer_cuda_tensor_bytes": (
+                    "unavailable"
+                    if optimizer_cuda_tensor_bytes is None
+                    else optimizer_cuda_tensor_bytes
+                ),
+            }
+
         no_grad = torch.no_grad()
         no_grad.__enter__()
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
@@ -2014,6 +2100,7 @@ class MegatronPolicyWorkerImpl(
         emit_host_memory_event(
             event="megatron_policy_offload_memory",
             phase="before_grad_move",
+            fields=lifecycle_fields(),
         )
         self.model = self.move_model(
             self.model, "cpu", move_params=False, move_grads=True
@@ -2086,6 +2173,7 @@ class MegatronPolicyWorkerImpl(
             emit_host_memory_event(
                 event="megatron_policy_offload_memory",
                 phase="before_optimizer_move",
+                fields=lifecycle_fields(),
             )
             self.move_optimizer("cpu")
 
@@ -2101,6 +2189,7 @@ class MegatronPolicyWorkerImpl(
         emit_host_memory_event(
             event="megatron_policy_offload_memory",
             phase="after_completion",
+            fields=lifecycle_fields(),
         )
         no_grad.__exit__(None, None, None)
 

@@ -54,14 +54,36 @@ class _FakeTrainableModel:
         self.train_called = True
 
 
+class _FakeTelemetryTensor:
+    def __init__(self, *, numel: int, element_size: int, is_cuda: bool) -> None:
+        self._numel = numel
+        self._element_size = element_size
+        self.is_cuda = is_cuda
+
+    def numel(self) -> int:
+        return self._numel
+
+    def element_size(self) -> int:
+        return self._element_size
+
+
+class _FakeTelemetryOptimizer:
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.state = state
+
+    def state_dict(self) -> dict[str, Any]:
+        raise AssertionError("telemetry must not materialize optimizer state_dict")
+
+
 def _make_offload_diagnostics_worker(monkeypatch: pytest.MonkeyPatch) -> Any:
-    from nemo_rl.models.policy.workers.megatron_policy_worker import (
-        MegatronPolicyWorkerImpl,
-    )
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    MegatronPolicyWorkerImpl = megatron_policy_worker.MegatronPolicyWorkerImpl
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.model = object()
     worker.optimizer = object()
+    worker.rank = 7
     worker.optimizer_cpu_offload = False
     worker.fp8_cfg = None
     worker.cfg = {"megatron_cfg": {"clear_memory_caches_before_refit": False}}
@@ -78,8 +100,15 @@ def _make_offload_diagnostics_worker(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(torch.cuda, "memory_allocated", lambda: 0)
     monkeypatch.setattr(torch.cuda, "memory_reserved", lambda: 0)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
     monkeypatch.setattr(
         torch, "randn", lambda *_args, **_kwargs: SimpleNamespace(cuda=lambda: None)
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.parallel_state,
+        "get_expert_model_parallel_rank",
+        lambda: (_ for _ in ()).throw(RuntimeError("parallel state unavailable")),
     )
     return worker
 
@@ -107,18 +136,28 @@ def test_megatron_offload_emits_host_memory_at_oom_boundaries(
     MegatronPolicyWorkerImpl.offload_before_refit(worker)
 
     output = capfd.readouterr().out.splitlines()
-    before_grad = (
-        "event=megatron_policy_offload_memory phase=before_grad_move "
-        "process_rss_gib=5.000 system_available_gib=10.000"
-    )
-    before_optimizer = (
-        "event=megatron_policy_offload_memory phase=before_optimizer_move "
-        "process_rss_gib=5.000 system_available_gib=10.000"
-    )
-    after_completion = (
-        "event=megatron_policy_offload_memory phase=after_completion "
-        "process_rss_gib=5.000 system_available_gib=10.000"
-    )
+    lifecycle_lines = [
+        line
+        for line in output
+        if line.startswith("event=megatron_policy_offload_memory")
+    ]
+    before_grad, before_optimizer, after_completion = lifecycle_lines
+    assert [line.split()[1] for line in lifecycle_lines] == [
+        "phase=before_grad_move",
+        "phase=before_optimizer_move",
+        "phase=after_completion",
+    ]
+    for line in lifecycle_lines:
+        assert (
+            "global_rank=7 ep_rank=unavailable offload_sequence=1 "
+            "lifecycle_action=offload_before_refit "
+            "optimizer_cuda_tensor_bytes=unavailable"
+        ) in line
+        assert "process_rss_gib=5.000" in line
+        assert "system_available_gib=10.000" in line
+        assert "cgroup_memory_current_gib=" in line
+        assert "cgroup_memory_max_gib=" in line
+        assert "cgroup_memory_peak_gib=" in line
     assert output.index(before_grad) < output.index("test_action=grad_move")
     assert output.index("test_action=grad_move") < output.index(before_optimizer)
     assert output.index(before_optimizer) < output.index("test_action=optimizer_move")
@@ -142,12 +181,156 @@ def test_megatron_offload_memory_diagnostics_are_best_effort(
 
     MegatronPolicyWorkerImpl.offload_before_refit(worker)
 
-    output = capfd.readouterr().out
-    for phase in ("before_grad_move", "before_optimizer_move", "after_completion"):
-        assert (
+    lifecycle_lines = [
+        line
+        for line in capfd.readouterr().out.splitlines()
+        if line.startswith("event=megatron_policy_offload_memory")
+    ]
+    assert len(lifecycle_lines) == 3
+    for phase, line in zip(
+        ("before_grad_move", "before_optimizer_move", "after_completion"),
+        lifecycle_lines,
+        strict=True,
+    ):
+        assert line.startswith(
             f"event=megatron_policy_offload_memory phase={phase} "
-            "process_rss_gib=unavailable system_available_gib=unavailable"
-        ) in output
+            "global_rank=7 ep_rank=unavailable offload_sequence=1 "
+            "lifecycle_action=offload_before_refit "
+            "optimizer_cuda_tensor_bytes=unavailable"
+        )
+        assert "process_rss_gib=unavailable" in line
+        assert "system_available_gib=" in line
+        assert "cgroup_memory_current_gib=" in line
+        assert "cgroup_memory_max_gib=" in line
+        assert "cgroup_memory_peak_gib=" in line
+
+
+def test_megatron_offload_emits_ranked_optimizer_cuda_bytes_each_lifecycle(
+    capfd: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    worker = _make_offload_diagnostics_worker(monkeypatch)
+    cuda_tensor = _FakeTelemetryTensor(numel=4, element_size=4, is_cuda=True)
+    cpu_tensor = _FakeTelemetryTensor(numel=32, element_size=4, is_cuda=False)
+    nested_state: list[Any] = [cuda_tensor, (cpu_tensor,)]
+    nested_state.append(nested_state)
+    worker.optimizer = _FakeTelemetryOptimizer(
+        {
+            "parameter": {
+                "momentum": cuda_tensor,
+                "nested": nested_state,
+                "shared_nested": nested_state,
+            }
+        }
+    )
+    original_is_tensor = torch.is_tensor
+    monkeypatch.setattr(
+        torch,
+        "is_tensor",
+        lambda value: isinstance(value, _FakeTelemetryTensor)
+        or original_is_tensor(value),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.parallel_state,
+        "get_expert_model_parallel_rank",
+        lambda: 3,
+    )
+
+    def move_optimizer(device: str) -> None:
+        assert device == "cpu"
+        cuda_tensor.is_cuda = False
+        print("test_action=optimizer_move", flush=True)
+
+    worker.move_optimizer = move_optimizer
+
+    megatron_policy_worker.MegatronPolicyWorkerImpl.offload_before_refit(worker)
+    megatron_policy_worker.MegatronPolicyWorkerImpl.offload_before_refit(worker)
+
+    lifecycle_lines = [
+        line
+        for line in capfd.readouterr().out.splitlines()
+        if line.startswith("event=megatron_policy_offload_memory")
+    ]
+    assert len(lifecycle_lines) == 6
+    for sequence, lines in ((1, lifecycle_lines[:3]), (2, lifecycle_lines[3:])):
+        assert [line.split()[1] for line in lines] == [
+            "phase=before_grad_move",
+            "phase=before_optimizer_move",
+            "phase=after_completion",
+        ]
+        for line in lines:
+            assert "global_rank=7" in line
+            assert "ep_rank=3" in line
+            assert f"offload_sequence={sequence}" in line
+            assert "lifecycle_action=offload_before_refit" in line
+
+    assert "optimizer_cuda_tensor_bytes=16" in lifecycle_lines[1]
+    assert "optimizer_cuda_tensor_bytes=0" in lifecycle_lines[2]
+    assert all("optimizer_cuda_tensor_bytes=0" in line for line in lifecycle_lines[3:])
+
+
+def test_megatron_offload_tolerates_inaccessible_optimizer_state(
+    capfd: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    class InaccessibleOptimizer:
+        @property
+        def state(self) -> object:
+            raise RuntimeError("optimizer state unavailable")
+
+        def _get_state(self) -> object:
+            raise RuntimeError("optimizer state unavailable")
+
+    worker = _make_offload_diagnostics_worker(monkeypatch)
+    worker.optimizer = InaccessibleOptimizer()
+    del worker.rank
+    monkeypatch.setattr(
+        megatron_policy_worker.parallel_state,
+        "get_expert_model_parallel_rank",
+        lambda: (_ for _ in ()).throw(RuntimeError("parallel state unavailable")),
+    )
+
+    megatron_policy_worker.MegatronPolicyWorkerImpl.offload_before_refit(worker)
+
+    lifecycle_lines = [
+        line
+        for line in capfd.readouterr().out.splitlines()
+        if line.startswith("event=megatron_policy_offload_memory")
+    ]
+    assert len(lifecycle_lines) == 3
+    for line in lifecycle_lines:
+        assert "global_rank=unavailable" in line
+        assert "ep_rank=unavailable" in line
+        assert "offload_sequence=1" in line
+        assert "lifecycle_action=offload_before_refit" in line
+        assert "optimizer_cuda_tensor_bytes=unavailable" in line
+    assert lifecycle_lines[-1].split()[1] == "phase=after_completion"
+
+
+def test_megatron_offload_optimizer_state_getter_fallback_returns_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    cpu_tensor = _FakeTelemetryTensor(numel=4, element_size=4, is_cuda=False)
+
+    class GetterOptimizer:
+        def _get_state(self) -> dict[str, Any]:
+            return {"parameter": {"momentum": cpu_tensor}}
+
+    original_is_tensor = torch.is_tensor
+    monkeypatch.setattr(
+        torch,
+        "is_tensor",
+        lambda value: isinstance(value, _FakeTelemetryTensor)
+        or original_is_tensor(value),
+    )
+
+    assert megatron_policy_worker._get_optimizer_cuda_tensor_bytes(GetterOptimizer()) == 0
 
 
 def test_megatron_prepare_for_training_restores_optimizer():
