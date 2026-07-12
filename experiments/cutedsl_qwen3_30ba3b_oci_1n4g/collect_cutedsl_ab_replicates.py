@@ -218,6 +218,13 @@ def _require_sha(value: Any, *, length: int, label: str) -> str:
 
 
 def _validate_manifest_identity(manifest: dict[str, Any], job_id: str) -> None:
+    if (
+        manifest.get("functional_gate") is True
+        or manifest.get("performance_eligible") is False
+    ):
+        raise CollectorError(
+            f"job {job_id} functional-gate evidence is not performance eligible"
+        )
     _require_sha(manifest.get("source_sha"), length=40, label="source_sha")
     _require_string(manifest.get("upstream_ref"), "upstream_ref")
     _require_sha(manifest.get("upstream_sha"), length=40, label="upstream_sha")
@@ -591,6 +598,26 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
     )
     job_dir, run_id = _find_completed_run(root, job_id)
 
+    manifest_path = job_dir / "benchmark_manifest.json"
+    manifest_path = _contained_file(
+        root, manifest_path, f"job {job_id} benchmark manifest"
+    )
+    manifest = _read_json(manifest_path, f"job {job_id} benchmark manifest")
+    manifest_contracts = {
+        "run_id": run_id,
+        "replicate_index": replicate_index,
+        "timing_order": timing_order.split(","),
+        "profile_enabled": profile_enabled,
+        "submission_group": record.get("submission_group"),
+    }
+    for field, expected in manifest_contracts.items():
+        if manifest.get(field) != expected:
+            raise CollectorError(
+                f"job {job_id} manifest {field} differs from submission: "
+                f"{manifest.get(field)!r} != {expected!r}"
+            )
+    _validate_manifest_identity(manifest, job_id)
+
     timing_paths = sorted(job_dir.rglob("timing_summary.json"))
     if len(timing_paths) != 1:
         raise CollectorError(
@@ -616,26 +643,6 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
             f"job {job_id} workload metric must be train/total_num_tokens"
         )
 
-    manifest_path = job_dir / "benchmark_manifest.json"
-    manifest_path = _contained_file(
-        root, manifest_path, f"job {job_id} benchmark manifest"
-    )
-    manifest = _read_json(manifest_path, f"job {job_id} benchmark manifest")
-    manifest_contracts = {
-        "run_id": run_id,
-        "replicate_index": replicate_index,
-        "timing_order": timing_order.split(","),
-        "profile_enabled": profile_enabled,
-        "submission_group": record.get("submission_group"),
-    }
-    for field, expected in manifest_contracts.items():
-        if manifest.get(field) != expected:
-            raise CollectorError(
-                f"job {job_id} manifest {field} differs from submission: "
-                f"{manifest.get(field)!r} != {expected!r}"
-            )
-
-    _validate_manifest_identity(manifest, job_id)
     by_arm = _load_raw_timing(root, job_dir, summary, manifest, job_id, run_id)
     measured_workload_identity = _measured_workload_identity(by_arm, job_id)
     ratios = _paired_ratios(by_arm, job_id)

@@ -371,6 +371,23 @@ def test_collector_requires_exactly_one_timing_summary_per_job(tmp_path: Path) -
     assert "job 100 expected exactly one timing_summary.json, found 2" in result.stderr
 
 
+def test_collector_rejects_functional_gate_before_loading_timing_artifacts(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    manifest_path = result_root / "100/benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["functional_gate"] = True
+    manifest["performance_eligible"] = False
+    _write_json(manifest_path, manifest)
+    (result_root / "100/timing_summary.json").write_text("not JSON\n")
+
+    result = _run_collector(submission, result_root, tmp_path / "output")
+
+    assert result.returncode != 0
+    assert "functional-gate evidence is not performance eligible" in result.stderr
+
+
 def test_collector_requires_both_alternating_orders(tmp_path: Path) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
     records = [json.loads(line) for line in submission.read_text().splitlines()]
