@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import types
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -109,6 +110,21 @@ def test_init_fp8_rejects_non_pow2_mxfp8_scales(fp8_module, monkeypatch, field, 
             "dummy-model",
             model_parallel_size=1,
         )
+
+
+def test_load_weights_returns_the_model_loader_receipt(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    receipt = {"model.weight"}
+    model = types.SimpleNamespace(load_weights=MagicMock(return_value=receipt))
+    model_runner = types.SimpleNamespace(model=model)
+    weight = object()
+    fp8.global_fp8_config = types.SimpleNamespace(is_mx=False)
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: False)
+
+    result = fp8.load_weights([("model.weight", weight)], model_runner)
+
+    assert result is receipt
+    model.load_weights.assert_called_once_with([("model.weight", weight)])
 
 
 def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(

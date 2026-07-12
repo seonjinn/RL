@@ -427,7 +427,7 @@ def _is_fp8_weight(name, model):
     return name in fp8_state.fp8_param_names
 
 
-def load_weights(weights, model_runner):
+def load_weights(weights, model_runner) -> set[str] | None:
     global global_fp8_config
     weights_quantized = []
     model = model_runner.model
@@ -456,7 +456,7 @@ def load_weights(weights, model_runner):
             weights_quantized.append([k, param_lp])
             weights_quantized.append([k + "_scale_inv", param_scale])
     # Finally load the weights into vllm
-    model.load_weights(weights_quantized)
+    return model.load_weights(weights_quantized)
 
 
 def cast_tensor_to_fp8_blockwise(

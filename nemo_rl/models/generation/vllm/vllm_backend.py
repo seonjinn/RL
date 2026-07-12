@@ -103,7 +103,9 @@ def fix_gemma3_vision_weight_name(key: str) -> str:
     )
 
 
-def _validate_draft_weight_load_result(load_result: object) -> None:
+def _validate_draft_weight_load_result(
+    load_result: object,
+) -> set[str] | None:
     """Fail when a vLLM loader reports that required draft weights were not loaded."""
     if load_result is None:
         raise RuntimeError(
@@ -112,13 +114,11 @@ def _validate_draft_weight_load_result(load_result: object) -> None:
         )
 
     if isinstance(load_result, (set, frozenset)):
-        if not load_result:
-            raise RuntimeError("The vLLM drafter loader reported no loaded weights.")
-        return
+        return set(load_result)
 
     if isinstance(load_result, bool):
         if load_result:
-            return
+            return None
         raise RuntimeError("The vLLM drafter loader returned failure.")
 
     if not hasattr(load_result, "missing_keys") or not hasattr(
@@ -140,6 +140,88 @@ def _validate_draft_weight_load_result(load_result: object) -> None:
         raise RuntimeError(
             "The vLLM drafter loader reported unexpected weights: "
             f"{sorted(unexpected_keys)}"
+        )
+    return None
+
+
+def _named_parameters_with_aliases(model: Any) -> list[tuple[str, Any]]:
+    named_parameters = getattr(model, "named_parameters", None)
+    if named_parameters is None:
+        return []
+    try:
+        return list(named_parameters(remove_duplicate=False))
+    except TypeError:
+        return list(named_parameters())
+
+
+def _required_model_weight_alias_groups(model: Any) -> dict[int, set[str]]:
+    """Return local refit-owned parameters grouped by shared tensor identity."""
+    named_parameters = _named_parameters_with_aliases(model)
+    parameter_names = {name for name, _ in named_parameters}
+    derived_names: set[str] = set()
+    for checkpoint_name in parameter_names:
+        for suffix in ("_inv", "_from_checkpoint"):
+            if not checkpoint_name.endswith(suffix):
+                continue
+            runtime_name = checkpoint_name.removesuffix(suffix)
+            if runtime_name in parameter_names:
+                derived_names.add(runtime_name)
+
+    try:
+        from vllm.model_executor.models.utils import is_pp_missing_parameter
+    except ImportError:
+        is_pp_missing_parameter = None
+
+    alias_groups: dict[int, set[str]] = {}
+    for name, parameter in named_parameters:
+        if name in derived_names:
+            continue
+        if is_pp_missing_parameter is not None:
+            try:
+                if is_pp_missing_parameter(name, model):
+                    continue
+            except (AttributeError, TypeError):
+                pass
+        alias_groups.setdefault(id(parameter), set()).add(name)
+    return alias_groups
+
+
+def _shared_model_parameter_ids(target_model: Any, draft_model: Any) -> set[int]:
+    target_parameter_ids = set(_required_model_weight_alias_groups(target_model))
+    draft_parameter_ids = set(_required_model_weight_alias_groups(draft_model))
+    return target_parameter_ids & draft_parameter_ids
+
+
+def _validate_model_weight_coverage(
+    model: Any,
+    loaded_names: set[str],
+    *,
+    component: str,
+    named_receipt_available: bool,
+    shared_loaded_parameter_ids: set[int] | None = None,
+) -> None:
+    """Fail when a refit transaction cannot prove local parameter coverage."""
+    required_alias_groups = _required_model_weight_alias_groups(model)
+    if not required_alias_groups:
+        return
+    if not named_receipt_available:
+        raise RuntimeError(
+            f"The vLLM {component} loader did not return named load receipts; "
+            "local weight coverage cannot be verified."
+        )
+
+    shared_loaded_parameter_ids = shared_loaded_parameter_ids or set()
+    missing_alias_groups = [
+        names
+        for parameter_id, names in required_alias_groups.items()
+        if parameter_id not in shared_loaded_parameter_ids
+        and names.isdisjoint(loaded_names)
+    ]
+    if missing_alias_groups:
+        missing_names = sorted(min(names) for names in missing_alias_groups)
+        raise RuntimeError(
+            f"The vLLM {component} loader did not initialize local weights: "
+            f"{missing_names}"
         )
 
 
@@ -225,6 +307,10 @@ class VllmInternalWorkerExtension:
     _draft_weights_updated: bool
     _draft_weight_tensor_count: int
     _draft_weight_bytes: int
+    _loaded_policy_weight_names: set[str] | None
+    _loaded_draft_weight_names: set[str] | None
+    _policy_named_receipt_available: bool
+    _draft_named_receipt_available: bool
 
     def get_specdec_runtime_diagnostics(self) -> dict[str, Any]:
         """Report the TP group that the loaded drafter actually executes in."""
@@ -377,6 +463,10 @@ class VllmInternalWorkerExtension:
         self._draft_weights_updated = False
         self._draft_weight_tensor_count = 0
         self._draft_weight_bytes = 0
+        self._loaded_policy_weight_names = set()
+        self._loaded_draft_weight_names = set()
+        self._policy_named_receipt_available = True
+        self._draft_named_receipt_available = True
 
     def _abort_weight_update(self) -> None:
         self._pending_draft_weights = None
@@ -384,6 +474,10 @@ class VllmInternalWorkerExtension:
         self._draft_weights_updated = False
         self._draft_weight_tensor_count = 0
         self._draft_weight_bytes = 0
+        self._loaded_policy_weight_names = None
+        self._loaded_draft_weight_names = None
+        self._policy_named_receipt_available = False
+        self._draft_named_receipt_available = False
 
     def _draft_update_requires_atomic_load(self) -> bool:
         vllm_config = getattr(self.model_runner, "vllm_config", None)
@@ -458,6 +552,28 @@ class VllmInternalWorkerExtension:
                         "pipeline rank. Check the trainer export names and MTP routing."
                     )
             self._load_draft_weights(pending_draft_weights)
+            loaded_policy_names = self._loaded_policy_weight_names or set()
+            _validate_model_weight_coverage(
+                self.model_runner.model,
+                loaded_policy_names,
+                component="target",
+                named_receipt_available=self._policy_named_receipt_available,
+            )
+            if draft_weights_updated:
+                draft_model = self._get_draft_model()
+                if draft_model is None:
+                    raise RuntimeError(
+                        "Draft weights were updated but the vLLM drafter is unavailable."
+                    )
+                _validate_model_weight_coverage(
+                    draft_model,
+                    self._loaded_draft_weight_names or set(),
+                    component="drafter",
+                    named_receipt_available=self._draft_named_receipt_available,
+                    shared_loaded_parameter_ids=_shared_model_parameter_ids(
+                        self.model_runner.model, draft_model
+                    ),
+                )
             self._process_weights_after_update(
                 draft_weights_updated=draft_weights_updated
             )
@@ -626,7 +742,23 @@ class VllmInternalWorkerExtension:
             )
         draft_weights = self._trim_vocab_padding(draft_model, draft_weights)
         load_result = draft_model.load_weights(weights=draft_weights)
-        _validate_draft_weight_load_result(load_result)
+        loaded_names = _validate_draft_weight_load_result(load_result)
+        transaction_names = getattr(self, "_loaded_draft_weight_names", None)
+        if transaction_names is not None:
+            if loaded_names is None:
+                self._draft_named_receipt_available = False
+            else:
+                transaction_names.update(loaded_names)
+        else:
+            _validate_model_weight_coverage(
+                draft_model,
+                loaded_names or set(),
+                component="drafter",
+                named_receipt_available=loaded_names is not None,
+                shared_loaded_parameter_ids=_shared_model_parameter_ids(
+                    getattr(self.model_runner, "model", None), draft_model
+                ),
+            )
 
     def load_mtp_weights_from_disk(self, model_path: str) -> bool | None:
         """Load only the MTP (multi-token-prediction) draft weights from disk.
@@ -711,9 +843,20 @@ class VllmInternalWorkerExtension:
             )
         if policy_weights:
             if fp8.is_fp8_model(self.model_runner.vllm_config):
-                fp8.load_weights(policy_weights, self.model_runner)
+                load_result = fp8.load_weights(policy_weights, self.model_runner)
             else:
-                self.model_runner.model.load_weights(weights=policy_weights)
+                load_result = self.model_runner.model.load_weights(
+                    weights=policy_weights
+                )
+            loaded_names = (
+                set(load_result) if isinstance(load_result, (set, frozenset)) else None
+            )
+            transaction_names = getattr(self, "_loaded_policy_weight_names", None)
+            if transaction_names is not None:
+                if loaded_names is None:
+                    self._policy_named_receipt_available = False
+                else:
+                    transaction_names.update(loaded_names)
 
         if draft_weights:
             draft_model = self._get_draft_model()
