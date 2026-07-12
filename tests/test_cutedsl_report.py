@@ -374,6 +374,7 @@ def test_functional_report_is_public_deterministic_and_not_performance_evidence(
     html = (public_run / "report.html").read_text()
 
     assert (public_run / "functional_gate_summary.json").is_file()
+    assert not (public_run / "timing_summary.json").exists()
     assert first_report == (public_run / "report.html").read_bytes()
     assert "SENTINEL_FUNCTIONAL_TOKEN_116" not in (
         public_run / "functional_gate_summary.json"
@@ -387,7 +388,24 @@ def test_functional_report_is_public_deterministic_and_not_performance_evidence(
     assert "CuTeDSL signature</th><td>GroupedGemmGluSm100" in html
     assert "CuTeDSL evidence count</th><td>8" in html
     assert "Post-job Slurm accounting required</th><td>yes" in html
+    assert "timing_summary.json" not in html
     assert "speedup" not in html.lower()
+
+    write_json(
+        source_run / "benchmark_manifest.json",
+        {
+            "run_id": "timing-123",
+            "functional_gate": False,
+            "performance_eligible": True,
+        },
+    )
+    timing_public_run = tmp_path / "public-timing"
+    renderer.stage_public_run(source_run, timing_public_run)
+    timing_html = (timing_public_run / "report.html").read_text()
+
+    assert (timing_public_run / "timing_summary.json").is_file()
+    assert "timing_summary.json" in timing_html
+    assert "Primary ON/OFF speedup: <strong>1.25</strong>" in timing_html
 
 
 def test_event_writer_emits_schema_and_root_cause_record(tmp_path: Path) -> None:

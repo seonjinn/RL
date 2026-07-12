@@ -359,6 +359,14 @@ def timing_section(timing: dict[str, Any], metrics: dict[str, Any]) -> str:
     return '<h2>Component timing</h2><p class="muted">No timing summary recorded.</p>'
 
 
+def is_functional_only(manifest: dict[str, Any]) -> bool:
+    """Return whether a manifest explicitly excludes a functional run from timing."""
+    return (
+        manifest.get("functional_gate") is True
+        and manifest.get("performance_eligible") is False
+    )
+
+
 def functional_validation_section(summary: dict[str, Any]) -> str:
     """Render bounded aggregate facts for a functional-only validation run."""
     offload = summary.get("offload_memory_evidence", {})
@@ -525,6 +533,8 @@ def reproducibility_section(
         "nemo_unit_results.json",
         "slurm.out",
     ]
+    if is_functional_only(manifest):
+        candidates.remove("timing_summary.json")
     linked = [candidate for candidate in candidates if (run_dir / candidate).exists()]
     event_artifacts = set()
     for event in events:
@@ -554,10 +564,7 @@ def render_run(run_dir: Path) -> Path:
     timing = read_json(run_dir / "timing_summary.json")
     functional_summary = read_json(run_dir / "functional_gate_summary.json")
     events = read_events(run_dir / "events.jsonl")
-    functional_only = (
-        manifest.get("functional_gate") is True
-        and manifest.get("performance_eligible") is False
-    )
+    functional_only = is_functional_only(manifest)
     failed = status.get("exit_code") != 0
     run_id = status.get(
         "run_id",
@@ -727,8 +734,18 @@ def stage_public_run(source_run: Path, public_run: Path) -> Path:
     public_run.mkdir(parents=True)
 
     for name in PUBLIC_JSON_ALLOWLIST:
+        if name == "timing_summary.json":
+            continue
         source = source_run / name
         write_public_json(source_run, source, public_run / name)
+    manifest = read_json(public_run / "benchmark_manifest.json")
+    if not is_functional_only(manifest):
+        timing_name = "timing_summary.json"
+        write_public_json(
+            source_run,
+            source_run / timing_name,
+            public_run / timing_name,
+        )
     events_source = source_run / "events.jsonl"
     write_public_events(source_run, events_source, public_run / "events.jsonl")
     slurm_source = source_run / "slurm.out"
