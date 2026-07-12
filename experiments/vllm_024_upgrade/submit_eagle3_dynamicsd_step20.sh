@@ -37,6 +37,8 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 REFIT_DIAGNOSTICS="${REFIT_DIAGNOSTICS:-false}"
 POLICY_MODEL_NAME="${POLICY_MODEL_NAME:-}"
+WORKER_VENV_MODE="${WORKER_VENV_MODE:-rebuild}"
+MEGATRON_ASYNC_SAVE="${MEGATRON_ASYNC_SAVE:-}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-}"
 UV_CACHE_SEED_DIR="${UV_CACHE_SEED_DIR:-}"
 UV_LOCK_TIMEOUT="${UV_LOCK_TIMEOUT:-900}"
@@ -100,6 +102,16 @@ if ! awk -v value="${TOP_P}" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && v
 fi
 if [[ "${REFIT_DIAGNOSTICS}" != "true" && "${REFIT_DIAGNOSTICS}" != "false" ]]; then
   echo "ERROR: REFIT_DIAGNOSTICS must be true or false" >&2
+  exit 2
+fi
+if [[ "${WORKER_VENV_MODE}" != "rebuild" && "${WORKER_VENV_MODE}" != "prebuilt" ]]; then
+  echo "ERROR: WORKER_VENV_MODE must be rebuild or prebuilt" >&2
+  exit 2
+fi
+if [[ -n "${MEGATRON_ASYNC_SAVE}" \
+  && "${MEGATRON_ASYNC_SAVE}" != "true" \
+  && "${MEGATRON_ASYNC_SAVE}" != "false" ]]; then
+  echo "ERROR: MEGATRON_ASYNC_SAVE must be true, false, or unset" >&2
   exit 2
 fi
 if [[ -n "${ACTIVATION_CHECKPOINTING}" \
@@ -457,6 +469,11 @@ submit_one() {
       "policy.megatron_cfg.activation_checkpointing=${ACTIVATION_CHECKPOINTING}"
     )
   fi
+  if [[ -n "${MEGATRON_ASYNC_SAVE}" ]]; then
+    overrides+=(
+      "policy.megatron_cfg.checkpoint.async_save=${MEGATRON_ASYNC_SAVE}"
+    )
+  fi
   case "${variant}" in
     baseline)
       ;;
@@ -519,13 +536,17 @@ submit_one() {
     "WANDB_RUN_ID=${wandb_run_id}"
     "WANDB_RUN_GROUP=${RUN_TAG}"
     "WANDB_RESUME=never"
-    "NEMO_RL_VENV_DIR=${venv_dir}"
-    "NRL_FORCE_REBUILD_VENVS=true"
     # BaseVllmGenerationWorker assigns a distinct rendezvous window per engine.
     "PYTHONPATH=${runtime_pythonpath}"
     "TRITON_CACHE_DIR=${triton_cache_dir}"
     "TORCHINDUCTOR_CACHE_DIR=${inductor_cache_dir}"
   )
+  if [[ "${WORKER_VENV_MODE}" == "rebuild" ]]; then
+    command_env+=(
+      "NEMO_RL_VENV_DIR=${venv_dir}"
+      "NRL_FORCE_REBUILD_VENVS=true"
+    )
+  fi
   if [[ -n "${effective_uv_cache_dir}" ]]; then
     command_env+=(
       "UV_CACHE_DIR=${effective_uv_cache_dir}"

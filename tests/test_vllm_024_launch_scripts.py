@@ -465,6 +465,58 @@ def test_dynamicsd_launcher_rebuilds_the_vllm_024_worker_runtime() -> None:
     assert "uv run" not in output
 
 
+def test_dynamicsd_launcher_can_reuse_the_prebuilt_worker_runtime() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="prebuilt-runtime-contract-test",
+        ATTEMPT_ID="attempt-1",
+        WORKER_VENV_MODE="prebuilt",
+    )
+
+    assert "/opt/nemo_rl_venv/bin/python" in output
+    assert "NEMO_RL_VENV_DIR=" not in output
+    assert "NRL_FORCE_REBUILD_VENVS=" not in output
+
+
+def test_dynamicsd_launcher_can_disable_megatron_async_save() -> None:
+    output = _run_script(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        REPO_DIR="/lustre/users/sna/RL",
+        HF_HOME="/lustre/users/sna/hf_home",
+        CONTAINER="/lustre/users/sna/nemo-rl.sqsh",
+        RUN_TAG="sync-checkpoint-contract-test",
+        ATTEMPT_ID="attempt-1",
+        MEGATRON_ASYNC_SAVE="false",
+    )
+
+    assert "policy.megatron_cfg.checkpoint.async_save=false" in output
+
+
+@pytest.mark.parametrize("worker_venv_mode", ["shared", "invalid"])
+def test_dynamicsd_launcher_rejects_invalid_worker_venv_mode(
+    worker_venv_mode: str,
+) -> None:
+    result = _run_script_unchecked(
+        DYNAMICSD_LAUNCHER,
+        "dry-run",
+        "qwen235b",
+        "baseline",
+        WORKER_VENV_MODE=worker_venv_mode,
+    )
+
+    assert result.returncode == 2
+    assert "WORKER_VENV_MODE must be rebuild or prebuilt" in result.stderr
+
+
 def test_dynamicsd_launcher_propagates_shared_uv_cache() -> None:
     output = _run_script(
         DYNAMICSD_LAUNCHER,
