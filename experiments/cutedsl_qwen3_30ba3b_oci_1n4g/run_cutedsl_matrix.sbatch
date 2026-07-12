@@ -1047,6 +1047,15 @@ def bounded_tail(path: Path, remaining_bytes: int) -> tuple[str, int, bool]:
     return data.decode(errors="replace"), len(data), size > read_size
 
 
+def parse_evidence_fields(line: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for token in line.split():
+        key, separator, value = token.partition("=")
+        if separator:
+            fields[key] = value
+    return fields
+
+
 driver_log = arm_dir / "grpo.log"
 ray_log_root = Path(os.environ["RAY_CLUSTER_LOG_DIR"])
 if not driver_log.is_file() or not ray_log_root.is_dir():
@@ -1075,7 +1084,7 @@ for path in candidate_paths:
     except ValueError:
         source = str(path)
     for line in text.splitlines():
-        if "event=megatron_policy_offload_memory" in line:
+        if parse_evidence_fields(line).get("event") == "megatron_policy_offload_memory":
             if len(telemetry_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
                 telemetry_matches.append({"source": source, "line": line[-4096:]})
             else:
@@ -1089,13 +1098,16 @@ for path in candidate_paths:
         scan_truncated = True
         break
 
-completed_ranks = {
-    int(match.group(1))
-    for evidence in telemetry_matches
-    if "phase=after_completion" in evidence["line"]
-    and "offload_sequence=2" in evidence["line"]
-    if (match := re.search(r"\bglobal_rank=(\d+)\b", evidence["line"]))
-}
+completed_ranks: set[int] = set()
+for evidence in telemetry_matches:
+    fields = parse_evidence_fields(evidence["line"])
+    global_rank = fields.get("global_rank", "")
+    if (
+        fields.get("phase") == "after_completion"
+        and fields.get("offload_sequence") == "2"
+        and re.fullmatch(r"[0-9]+", global_rank)
+    ):
+        completed_ranks.add(int(global_rank))
 expected_ranks = set(range(int(os.environ["TRAINING_GPU_COUNT"])))
 if len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"]):
     raise ValueError(

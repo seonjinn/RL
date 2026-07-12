@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from omegaconf import OmegaConf
@@ -21,6 +22,55 @@ RECIPE = (
 )
 
 register_omegaconf_resolvers()
+
+
+def _run_functional_summarizer(
+    tmp_path: Path, offload_sequence: int
+) -> subprocess.CompletedProcess[str]:
+    source = MATRIX_PAYLOAD.read_text()
+    summarizer = source.split("# CUTEDSL_FUNCTIONAL_SUMMARIZER_START\n", 1)[1].split(
+        "# CUTEDSL_FUNCTIONAL_SUMMARIZER_END", 1
+    )[0]
+    result_dir = tmp_path / "results"
+    arm_dir = result_dir / "functional" / "0-on"
+    ray_log_dir = tmp_path / "ray-logs"
+    arm_dir.mkdir(parents=True)
+    ray_log_dir.mkdir()
+    metric_steps = {str(step): float(step + 1) for step in range(3)}
+    metrics = {
+        metric: metric_steps
+        for metric in (
+            "timing/train/total_step_time",
+            "timing/train/generation",
+            "timing/train/get_logprobs",
+            "timing/train/policy_training",
+            "timing/train/prepare_for_generation/transfer_and_update_weights",
+        )
+    }
+    (arm_dir / "metrics.json").write_text(json.dumps(metrics))
+    evidence_lines = ["kernel=GroupedGemmGluSm100"]
+    evidence_lines.extend(
+        "event=megatron_policy_offload_memory phase=after_completion "
+        f"global_rank={rank} offload_sequence={offload_sequence}"
+        for rank in range(8)
+    )
+    (arm_dir / "grpo.log").write_text("\n".join(evidence_lines) + "\n")
+    (result_dir / "benchmark_manifest.json").write_text("{}\n")
+    env = os.environ.copy()
+    env.update(
+        {
+            "CONTAINER_RESULT_DIR": str(result_dir),
+            "FUNCTIONAL_UPDATES": "3",
+            "RAY_CLUSTER_LOG_DIR": str(ray_log_dir),
+            "TRAINING_GPU_COUNT": "8",
+        }
+    )
+    return subprocess.run(
+        [sys.executable, "-c", summarizer],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
@@ -406,7 +456,7 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
         'POLICY_TIME_METRIC = "timing/train/policy_training"',
         'REFIT_METRIC = "timing/train/prepare_for_generation/transfer_and_update_weights"',
         'if completed_updates != int(os.environ["FUNCTIONAL_UPDATES"]):',
-        'event=megatron_policy_offload_memory',
+        'get("event") == "megatron_policy_offload_memory"',
         'phase=after_completion',
         'offload_sequence=2',
         'global_rank',
@@ -418,6 +468,30 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
     for fragment in required:
         assert fragment in source, fragment
     assert 'if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then' in source
+
+
+def test_functional_summarizer_rejects_offload_sequence_prefix(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(tmp_path, offload_sequence=20)
+
+    assert result.returncode != 0
+    assert "functional offload telemetry requires" in result.stderr
+    assert not (tmp_path / "results" / "functional_gate_summary.json").exists()
+
+
+def test_functional_summarizer_accepts_exact_offload_sequence(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(tmp_path, offload_sequence=2)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    assert summary["offload_memory_evidence"]["completed_global_ranks"] == list(
+        range(8)
+    )
 
 
 def test_functional_payload_does_not_emit_timing_or_profile_artifacts() -> None:
