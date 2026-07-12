@@ -599,9 +599,6 @@ submit_one() {
       "SETUP_COMMAND=${uv_cache_setup_command}"
     )
   fi
-  if [[ "${model}" == "qwen235b" ]]; then
-    environment+=("NRL_DISABLE_VLLM_PORT_OVERRIDE=1")
-  fi
   local sbatch_args=(
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
