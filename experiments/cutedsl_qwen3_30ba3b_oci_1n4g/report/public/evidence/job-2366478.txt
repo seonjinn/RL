@@ -1,0 +1,30 @@
+Pre-Tyche functional gate job 2366478
+Run ID: 2366478
+Timestamp (UTC): 2026-07-12T23:12:26Z
+Source: ad8e8e2d97a56b04cfc48273c28c4559a8fae0af
+Fix commit: bcd1f5ca0b24f54e6d0b9bb337de5765d491d534
+Original remote log: results/2366478/slurm.out and events.jsonl on Pre-Tyche Lustre.
+
+Purpose
+- Qwen3-30B-A3B, MXFP8, EP8, 2 nodes x 4 GB200, CuTeDSL ON.
+- Full-iteration CUDA Graph and A2A overlap OFF; three functional updates requested.
+- The functional gate was explicitly not performance eligible.
+
+Observed boundary
+- Image/source preflight, locked runtime, and exact configuration validation passed.
+- Eight vLLM workers initialized and finished MXFP8/MoE autotuning.
+- Rank 0 converted and saved iteration 0 under /root/.cache/huggingface/nemo_rl.
+- Ranks 4-7 on node 1 raised FileNotFoundError for iter_0000000/run_config.yaml.
+- Job FAILED, exit 1:0, elapsed 00:40:18; no OOM was reported.
+- Driver-step MaxRSS values were 78,525,568K and 85,640,960K.
+
+Root cause
+- The payload omitted NeMo-RL's existing NRL_MEGATRON_CHECKPOINT_DIR interface.
+- get_megatron_checkpoint_dir() therefore selected node-local /root/.cache.
+- Node 1 could not observe node 0's successful conversion output.
+
+Fix and verification
+- Export a job-specific shared Lustre cache under CONTAINER_RUNTIME_DIR.
+- The new regression was RED before the change and GREEN after it.
+- Related harness/collector/report tests: 104 passed; Bash, Ruff 0.9.9, and diff checks passed.
+- A real two-node rerun is pending; this job supports no speedup or throughput claim.

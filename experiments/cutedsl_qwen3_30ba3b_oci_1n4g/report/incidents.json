@@ -253,5 +253,20 @@
     "timestamp_utc": "2026-07-12T08:28:54Z",
     "verification_evidence": "The remote failure is the RED reproduction. Ruff 0.9.9, Python compilation, and 52 wrapper regressions pass after the fixture change. macOS cannot import the pinned MCore because Triton is unavailable, so authoritative Linux verification remains pending; this job provides no GPU or performance evidence.",
     "verification_job": "pending Linux rerun"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2366478 passed immutable source/image preflight, the locked runtime bootstrap, exact EP8/CuTeDSL configuration validation, and eight-worker vLLM initialization. Rank 0 saved the converted Qwen3-30B-A3B checkpoint under /root/.cache on node 0; ranks 4-7 on node 1 then failed because iter_0000000/run_config.yaml was absent from their node-local /root/.cache.",
+    "fix_commit": "bcd1f5ca0b24f54e6d0b9bb337de5765d491d534",
+    "hypothesis": "Exporting NeMo-RL's existing NRL_MEGATRON_CHECKPOINT_DIR interface to a job-specific shared Lustre path will make the rank-0 conversion visible to ranks on both nodes without changing policy code.",
+    "report_path": "evidence/job-2366478.txt",
+    "reproduction": "At source ad8e8e2d9, run the two-node EP8 functional gate and observe rank 0 save to /root/.cache/huggingface/nemo_rl while ranks 4-7 raise FileNotFoundError for the same run_config.yaml path on node 1.",
+    "root_cause": "The multinode payload omitted NRL_MEGATRON_CHECKPOINT_DIR. NeMo-RL therefore selected container-local /root/.cache for HF-to-Megatron conversion even though its API requires a path mounted on every node; node 1 could not see node 0's successful conversion output.",
+    "run_id": "2366478",
+    "symptom": "The first two-node CuTeDSL ON gate failed during policy initialization before any training update because second-node ranks could not load the converted Megatron run configuration.",
+    "tested_change": "Create CONTAINER_RUNTIME_DIR/megatron_checkpoints on shared Lustre and export it through NRL_MEGATRON_CHECKPOINT_DIR before Ray worker creation; add a source-contract regression that proves the shared path is created and exported in order.",
+    "timestamp_utc": "2026-07-12T23:12:26Z",
+    "verification_evidence": "The regression was RED before the change and GREEN afterward. The related harness, collector, and report suites pass 104 tests; Bash syntax, Ruff 0.9.9, and diff checks pass. A real two-node rerun is still required, so this job supports no performance claim.",
+    "verification_job": "pending Pre-Tyche functional rerun"
   }
 ]
