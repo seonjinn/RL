@@ -23,4 +23,17 @@ rm -rf vllm/v1/worker/gpu/__pycache__
 
 Already applied to `/lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/vllm025`
 on Lyris (original kept as `cudagraph_utils.py.orig`). Upstream report
-pending.
+pending. The patch also adds the plain K=0 decode shape to the per-K capture
+set, so a runtime K=0 selection (schedule range or depth cap) stays on FULL
+graphs.
+
+## vllm0250_depth_aware_dynamic_sd.patch
+
+Local extension (not upstream): depth-aware K cap for DynamicSD in
+`vllm/v1/core/sched/scheduler.py`. When the mean generated depth of running
+requests exceeds `VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS`, the scheduler caps
+K to `VLLM_DYNAMIC_SD_DEPTH_K` (default 0). Motivation: EAGLE3 acceptance
+collapses with generation depth on 32K rollouts, and the stock
+batch-size-indexed schedule cannot express depth. Enable via the two env vars
+(threshold 0 = disabled). Requires the K=0 capture fix above to stay on FULL
+cudagraphs while capped.

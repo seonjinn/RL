@@ -1,0 +1,35 @@
+# Apply by exact-string replacement (see patches/README.md); hunks below are
+# illustrative unified diffs of the two edits.
+
+--- a/vllm/v1/core/sched/scheduler.py (init)
++++ b/vllm/v1/core/sched/scheduler.py (init)
+@@ -1 +1,12 @@
+-        self.dynamic_sd_lookup: list[int] | None = None+        self.dynamic_sd_lookup: list[int] | None = None
++        # Local extension: depth-aware K cap for dynamic SD. When the mean
++        # generated depth of running requests exceeds the threshold, cap K
++        # (draft acceptance collapses with depth for shallow-trained EAGLE3
++        # heads, so batch-size-indexed schedules overspend on long tails).
++        import os as _os
++        self.dynamic_sd_depth_threshold = int(
++            _os.environ.get("VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS", "0")
++        )
++        self.dynamic_sd_depth_k = int(
++            _os.environ.get("VLLM_DYNAMIC_SD_DEPTH_K", "0")
++        )
+--- a/vllm/v1/core/sched/scheduler.py (select)
++++ b/vllm/v1/core/sched/scheduler.py (select)
+@@ -1,4 +1,14 @@
+         if self.dynamic_sd_lookup is not None and len(num_scheduled_tokens) > 0:
+             num_spec_tokens_to_schedule = self.dynamic_sd_lookup[
+                 len(num_scheduled_tokens)
+-            ]+            ]
++            if (
++                self.dynamic_sd_depth_threshold > 0
++                and num_spec_tokens_to_schedule > self.dynamic_sd_depth_k
++                and self.running
++            ):
++                mean_depth = sum(
++                    req.num_output_tokens for req in self.running
++                ) / len(self.running)
++                if mean_depth > self.dynamic_sd_depth_threshold:
++                    num_spec_tokens_to_schedule = self.dynamic_sd_depth_k
