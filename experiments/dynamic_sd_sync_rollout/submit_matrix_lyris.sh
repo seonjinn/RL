@@ -43,6 +43,35 @@ case "${PRESET}" in
     export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64 128}"
     export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
     ;;
+  nemotron3_super)
+    # Nemotron3 Super 120B-A12B FP8, in-checkpoint MTP (1 head; K>1 = chained
+    # reuse). No NeMo-RL recipe yet; reuse the 30B rollout shape.
+    export MODEL="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
+    export MODEL_LABEL="nemotron3_super"
+    export SPEC_METHOD="mtp"
+    export TP=4
+    export NUM_PROMPTS_PER_STEP=4
+    export NUM_GENERATIONS_PER_PROMPT=32
+    export MAX_NUM_SEQS=128
+    export MAX_TOKENS=4096
+    export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64 128}"
+    export K_VALUES="${K_VALUES:-0 1 2 3}"
+    export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
+    ;;
+  nemotron3_ultra)
+    # Nemotron3 Ultra 550B-A55B NVFP4 (only single-node ckpt), MTP as above.
+    export MODEL="nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
+    export MODEL_LABEL="nemotron3_ultra"
+    export SPEC_METHOD="mtp"
+    export TP=4
+    export NUM_PROMPTS_PER_STEP=2
+    export NUM_GENERATIONS_PER_PROMPT=32
+    export MAX_NUM_SEQS=64
+    export MAX_TOKENS=4096
+    export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64}"
+    export K_VALUES="${K_VALUES:-0 1 2 3}"
+    export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
+    ;;
   qwen3_32b)
     export MODEL="Qwen/Qwen3-32B"
     export MODEL_LABEL="qwen3_32b"
