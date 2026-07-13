@@ -135,12 +135,13 @@ def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
     )
 
 
-def test_multinode_recipe_disables_vllm_standalone_compile() -> None:
+def test_multinode_recipe_uses_unpacked_vllm_compile_cache() -> None:
     config = OmegaConf.to_container(load_config(RECIPE), resolve=True)
     assert isinstance(config, dict)
 
     vllm_env = config["policy"]["generation"]["vllm_cfg"]["env_vars"]
-    assert vllm_env["VLLM_USE_STANDALONE_COMPILE"] == "0"
+    assert vllm_env["VLLM_COMPILE_CACHE_SAVE_FORMAT"] == "unpacked"
+    assert "VLLM_USE_STANDALONE_COMPILE" not in vllm_env
 
 
 def test_submitter_launches_real_two_node_ray_sub_cluster() -> None:
