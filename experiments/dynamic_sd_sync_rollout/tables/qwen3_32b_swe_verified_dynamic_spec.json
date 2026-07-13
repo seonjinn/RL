@@ -1,0 +1,34 @@
+{
+  "draft_sample_method": "greedy",
+  "draft_tensor_parallel_size": 1,
+  "method": "eagle3",
+  "model": "RedHatAI/Qwen3-32B-Thinking-speculator.eagle3",
+  "num_speculative_tokens": 5,
+  "num_speculative_tokens_per_batch_size": [
+    [
+      1,
+      7,
+      5
+    ],
+    [
+      8,
+      31,
+      3
+    ],
+    [
+      32,
+      63,
+      2
+    ],
+    [
+      64,
+      255,
+      1
+    ],
+    [
+      256,
+      256,
+      0
+    ]
+  ]
+}
