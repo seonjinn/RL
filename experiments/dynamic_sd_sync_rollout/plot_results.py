@@ -26,10 +26,10 @@ VARIANT_ORDER = [
 
 
 def style_axes(ax, xlabel: str, ylabel: str) -> None:
-    ax.set_xlabel(xlabel, fontsize=11)
-    ax.set_ylabel(ylabel, fontsize=11)
-    ax.tick_params(axis="x", labelsize=10)
-    ax.tick_params(axis="y", labelsize=10)
+    ax.set_xlabel(xlabel, fontsize=9)
+    ax.set_ylabel(ylabel, fontsize=9)
+    ax.tick_params(axis="x", labelsize=8)
+    ax.tick_params(axis="y", labelsize=8)
     ax.grid(True, linestyle="--", dashes=(6, 6), linewidth=1.1, axis="y", zorder=0)
     for side in ("left", "right", "top", "bottom"):
         ax.spines[side].set_linewidth(1.4)
@@ -49,7 +49,7 @@ def finish(fig, ax, out_base: Path, ncol: int | None = None) -> None:
             frameon=False,
             bbox_to_anchor=(0.5, 1.02),
             ncol=ncol or len(labels),
-            fontsize=10,
+            fontsize=9,
         )
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     out_base.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +79,7 @@ def plot_profile_grids(profile_csv: Path, out_dir: Path) -> None:
             group["K"].unique(), key=lambda s: int(s.split("=")[1].split()[0])
         )
         order = sorted(group["batch_size"].unique())
-        fig, ax = plt.subplots(figsize=(max(5.5, 0.62 * len(order)), 2.4))
+        fig, ax = plt.subplots(figsize=(max(4.6, 0.52 * len(order)), 2.0))
         sns.barplot(
             data=group,
             x="batch_size",
@@ -93,7 +93,7 @@ def plot_profile_grids(profile_csv: Path, out_dir: Path) -> None:
             zorder=10,
             ax=ax,
         )
-        style_axes(ax, "Concurrent batch size", "Output tokens/s")
+        style_axes(ax, "Batch size", "Tokens/s")
         finish(fig, ax, out_dir / f"profile_tok_s_{slug(model)}_{bench}")
 
 
@@ -113,7 +113,7 @@ def plot_profile_speedup(profile_csv: Path, out_dir: Path) -> None:
     for (model, bench), group in merged.groupby(["model", "bench"]):
         hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
         order = sorted(group["batch_size"].unique())
-        fig, ax = plt.subplots(figsize=(max(5.5, 0.62 * len(order)), 2.4))
+        fig, ax = plt.subplots(figsize=(max(4.6, 0.52 * len(order)), 2.0))
         sns.barplot(
             data=group,
             x="batch_size",
@@ -128,7 +128,7 @@ def plot_profile_speedup(profile_csv: Path, out_dir: Path) -> None:
             ax=ax,
         )
         ax.axhline(y=1, linestyle="--", linewidth=1.1, color="black")
-        style_axes(ax, "Concurrent batch size", "Tokens/s/GPU speedup vs no-SD")
+        style_axes(ax, "Batch size", "Speedup vs no-SD")
         finish(fig, ax, out_dir / f"profile_speedup_per_gpu_{slug(model)}_{bench}")
 
 
@@ -139,7 +139,7 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
     df["setting"] = df["model"] + "\n" + df["bench"]
     hue_order = [v for v in VARIANT_ORDER if v in set(df["variant"])]
     order = sorted(df["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(4.5, 1.1 * len(order)), 2.4))
+    fig, ax = plt.subplots(figsize=(max(3.8, 0.95 * len(order)), 2.0))
     sns.barplot(
         data=df,
         x="setting",
@@ -153,7 +153,7 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
         zorder=10,
         ax=ax,
     )
-    style_axes(ax, "", "Rollout tokens/s/GPU")
+    style_axes(ax, "", "Tokens/s/GPU")
     finish(fig, ax, out_dir / "rollout_tok_s_per_gpu")
 
 
@@ -172,7 +172,7 @@ def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
     hue_order = sorted(agg["K"].unique(), key=lambda s: int(s.split("=")[1]))
     greedy = agg[agg["sample_method"] == "greedy"]
     order = sorted(greedy["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(4.5, 1.0 * len(order)), 2.4))
+    fig, ax = plt.subplots(figsize=(max(3.8, 0.9 * len(order)), 2.0))
     sns.barplot(
         data=greedy,
         x="setting",
@@ -186,7 +186,7 @@ def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
         zorder=10,
         ax=ax,
     )
-    style_axes(ax, "", "Mean acceptance length")
+    style_axes(ax, "", "Accept length")
     finish(fig, ax, out_dir / "profile_acceptance_length")
 
 
@@ -201,7 +201,7 @@ def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:
     merged["setting"] = merged["model"] + "\n" + merged["bench"]
     hue_order = [v for v in VARIANT_ORDER if v in set(merged["variant"])]
     order = sorted(merged["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(4.5, 1.1 * len(order)), 2.4))
+    fig, ax = plt.subplots(figsize=(max(3.8, 0.95 * len(order)), 2.0))
     sns.barplot(
         data=merged,
         x="setting",
@@ -216,7 +216,7 @@ def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:
         ax=ax,
     )
     ax.axhline(y=1, linestyle="--", linewidth=1.1, color="black")
-    style_axes(ax, "", "Rollout-step speedup vs baseline")
+    style_axes(ax, "", "Step speedup")
     finish(fig, ax, out_dir / "rollout_speedup")
 
 
@@ -230,7 +230,7 @@ def plot_drain_curves(drain_csv: Path, out_dir: Path) -> None:
     for (model, bench), group in df.groupby(["model", "bench"]):
         variants = [v for v in VARIANT_ORDER if v in set(group["variant"])]
         palette = sns.color_palette("Paired", n_colors=len(variants))
-        fig, ax = plt.subplots(figsize=(5.5, 2.4))
+        fig, ax = plt.subplots(figsize=(4.4, 2.0))
         for color, variant in zip(palette, variants):
             sub = group[group["variant"] == variant]
             steps = sub["step"].nunique() or 1
@@ -240,7 +240,7 @@ def plot_drain_curves(drain_csv: Path, out_dir: Path) -> None:
             ax.plot(
                 times, remaining, label=variant, linewidth=2.2, color=color, zorder=10
             )
-        style_axes(ax, "Time within rollout step (s)", "Sequences still running")
+        style_axes(ax, "Time in step (s)", "Seqs in flight")
         finish(
             fig,
             ax,

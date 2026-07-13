@@ -10,8 +10,8 @@ p.note { color: #444; }
 table { border-collapse: collapse; margin: 12px 0; font-size: 14px; }
 th, td { border: 1px solid #8a93a6; padding: 5px 10px; text-align: right; }
 th { background: #eef1f6; } td:first-child, th:first-child { text-align: left; }
-.chart-card { margin: 14px 0; }
-.chart-card img { max-width: 100%; border: 1px solid #d4d9e2; }
+.chart-card { display: inline-block; vertical-align: top; margin: 6px 14px 6px 0; }
+.chart-card img { max-width: 540px; width: 100%; border: 1px solid #d4d9e2; }
 code { background: #eef1f6; padding: 1px 5px; }
 .tag { display: inline-block; background: #eef1f6; border: 1px solid #8a93a6;
        padding: 1px 8px; margin-right: 6px; font-size: 12px; }
@@ -25,27 +25,25 @@ generations per step with barrier semantics. DynamicSD =
 <code>speculative_config.num_speculative_tokens_per_batch_size</code>, the
 batch-size&rarr;K schedule derived from the Phase-1 grid below.</p>
 
-<h2>Phase 1 &mdash; Profiling grid: tokens/s across batch size &times; K</h2>
-<p class="note">Fixed-length generation (ignore_eos), each K is a separate
-engine; K=0 disables speculation. The K=5 collapse at BS=128 is the
-cudagraph-capture cliff (128&times;6 = 768 tokens/step &gt; default 512 max
-capture size): exactly the regime cost DynamicSD avoids.</p>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_openmath.png" alt="profile_tok_s_qwen3-30b-a3b_openmath.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_swe_verified.png" alt="profile_tok_s_qwen3-30b-a3b_swe_verified.png"></div>
+<h2>Cross-model summary &mdash; synchronous rollout: baseline vs fixed-K vs DynamicSD</h2>
+<p class="note">Per-engine sync rollout (N&times;32 generations, barrier per
+step). Charts and table are per model &times; benchmark; tokens/s/GPU
+normalizes TP differences (TP1/2/4).</p>
+<table><tr><th>Model</th><th>Bench</th><th>Variant</th><th>Mean step wall (s)</th><th>Mean gen tok/s</th><th>Tokens/s/GPU</th><th>Speedup vs baseline</th></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>baseline</td><td>48.2</td><td>8299.5</td><td>8299.5</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>dynamic</td><td>45.7</td><td>9091.6</td><td>9091.6</td><td>1.055x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>fixed_k3</td><td>24.1</td><td>16589.7</td><td>16589.7</td><td>1.996x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>baseline</td><td>50.9</td><td>8625.0</td><td>8625.0</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>dynamic</td><td>37.4</td><td>12013.9</td><td>12013.9</td><td>1.361x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>fixed_k3</td><td>25.4</td><td>17323.9</td><td>17323.9</td><td>2.004x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>baseline</td><td>42.5</td><td>6441.6</td><td>6441.6</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>dynamic</td><td>25.3</td><td>10442.9</td><td>10442.9</td><td>1.681x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>fixed_k3</td><td>23.0</td><td>11490.3</td><td>11490.3</td><td>1.849x</td></tr></table>
+<p class="note"><b>Known issue in the first dynamic runs (20260712):</b> the
+v1 K-table carried K=5 forward into BS 86-127 where 86&times;6 &gt; 512 exceeds
+the cudagraph capture budget, forcing eager-mode decode for most of each step -
+that is why "dynamic" trails fixed-K3 here. Tables are now derived with an
+analytic bs&times;(K+1) &le; capture-budget cap and the dynamic runs are being
+repeated; numbers will refresh on the next harvest.</p>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_speedup.png" alt="rollout_speedup.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu.png" alt="rollout_tok_s_per_gpu.png"></div>
 
-<h2>Tokens/s/GPU speedup vs no-SD baseline</h2>
-<p class="note">Same grid normalized per GPU (TP={1,2,4} across models) and
-divided by the K=0 baseline at the same batch size; the dashed line at 1.0 is
-break-even. Bars below 1.0 mark regimes where fixed-K speculation actively
-hurts - the DynamicSD schedule assigns K=0 or a smaller K there.</p>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png"></div>
-
-<h2>Acceptance length (temperature 1.0)</h2>
+<h2>Acceptance length by model (temperature 1.0)</h2>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length.png" alt="profile_acceptance_length.png"></div>
 
 <h2>Derived DynamicSD schedules</h2>
-<table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-127 &rarr; K=5, BS 128-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr></table>
+<table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr></table>
 
 <h2>Draft sampling: greedy vs probabilistic</h2>
 <p class="note">vLLM 0.24's <code>draft_sample_method="probabilistic"</code>
@@ -54,18 +52,27 @@ sampling) showed no acceptance-length gain over greedy drafting on
 Qwen3-30B-A3B/openmath (AL 2.99 vs 3.01 at K=3) and 3-10% lower tok/s from the
 logits-caching overhead, so the main matrix uses greedy drafting.</p>
 
-<h2>Phase 3 &mdash; Synchronous rollout: baseline vs fixed-K vs DynamicSD</h2>
-<p class='note'>Rollout results pending.</p>
-
-
-<h2>Rollout drain curves</h2>
-<p class="note">Sequences still in flight over time within a rollout step
-(steps &gt; 0). The long right tail at low concurrency is where DynamicSD can
-raise K beyond the fixed-K compromise.</p>
-
+<h1>Per-model results</h1>
+<p class="note">Profiling grids use fixed-length generation (ignore_eos); each
+K is a separate engine, K=0 disables speculation. The K=5 collapse at BS=128 is
+the cudagraph-capture cliff (128&times;6 = 768 tokens/step &gt; default 512 max
+capture size) - exactly the regime cost DynamicSD avoids. Drain curves show
+sequences still in flight within a rollout step; the long low-concurrency tail
+is where DynamicSD raises K beyond the fixed-K compromise.</p>
+<h2>Qwen3-30B-A3B (TP1)</h2>
+<h3>Tokens/s across batch size &times; K</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_openmath.png" alt="profile_tok_s_qwen3-30b-a3b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_swe_verified.png" alt="profile_tok_s_qwen3-30b-a3b_swe_verified.png"></div>
+<h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png"></div>
+<h3>Rollout drain curves (sequences in flight over time)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_math500.png" alt="drain_qwen3-30b-a3b_math500.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_openmath.png" alt="drain_qwen3-30b-a3b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_swe_verified.png" alt="drain_qwen3-30b-a3b_swe_verified.png"></div>
 
 <h2>Data</h2>
-<p><a class="tag" href="dynamic_sd_data/profile_grid.csv">profile_grid.csv</a></p>
+<p><a class="tag" href="dynamic_sd_data/drain_curves.csv">drain_curves.csv</a> <a class="tag" href="dynamic_sd_data/profile_grid.csv">profile_grid.csv</a> <a class="tag" href="dynamic_sd_data/rollout_steps.csv">rollout_steps.csv</a> <a class="tag" href="dynamic_sd_data/rollout_summary.csv">rollout_summary.csv</a></p>
 <p class="note">Source: <code>experiments/dynamic_sd_sync_rollout/</code>
 (harness, tables, report data). Jobs run in
 <code>vllm-benchmark/dynamic_sd_runs/</code> on Lyris.</p>

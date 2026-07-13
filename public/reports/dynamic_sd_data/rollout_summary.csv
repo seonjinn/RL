@@ -1,0 +1,10 @@
+model,bench,variant,k,sample_method,tp,tag,num_steps,mean_step_wall_s,mean_output_tok_s,mean_output_tok_s_per_gpu,partial
+Qwen3-30B-A3B,math500,baseline,0,-,1,qwen3_30ba3b_math500_rollout_baseline_20260712,4,48.18865037988871,8299.549819218208,8299.549819218208,False
+Qwen3-30B-A3B,math500,dynamic,5,greedy,1,qwen3_30ba3b_math500_rollout_dynamic_20260712,4,45.674661421249766,9091.636708494585,9091.636708494585,False
+Qwen3-30B-A3B,math500,fixed_k3,3,greedy,1,qwen3_30ba3b_math500_rollout_fixed_k3_20260712,4,24.147056825007894,16589.719255000942,16589.719255000942,False
+Qwen3-30B-A3B,openmath,baseline,0,-,1,qwen3_30ba3b_openmath_rollout_baseline_20260712,4,50.89499117474975,8624.982480179373,8624.982480179373,False
+Qwen3-30B-A3B,openmath,dynamic,5,greedy,1,qwen3_30ba3b_openmath_rollout_dynamic_20260712,4,37.39202443724935,12013.902825039078,12013.902825039078,False
+Qwen3-30B-A3B,openmath,fixed_k3,3,greedy,1,qwen3_30ba3b_openmath_rollout_fixed_k3_20260712,4,25.395248613203876,17323.94338871132,17323.94338871132,False
+Qwen3-30B-A3B,swe_verified,baseline,0,-,1,qwen3_30ba3b_swe_verified_rollout_baseline_20260712,4,42.525885910959914,6441.593844280947,6441.593844280947,False
+Qwen3-30B-A3B,swe_verified,dynamic,5,greedy,1,qwen3_30ba3b_swe_verified_rollout_dynamic_20260712,4,25.29948102074559,10442.875440509819,10442.875440509819,False
+Qwen3-30B-A3B,swe_verified,fixed_k3,3,greedy,1,qwen3_30ba3b_swe_verified_rollout_fixed_k3_20260712,4,22.99934398500045,11490.316823677616,11490.316823677616,False

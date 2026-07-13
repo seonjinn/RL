@@ -33,8 +33,8 @@ p.note { color: #444; }
 table { border-collapse: collapse; margin: 12px 0; font-size: 14px; }
 th, td { border: 1px solid #8a93a6; padding: 5px 10px; text-align: right; }
 th { background: #eef1f6; } td:first-child, th:first-child { text-align: left; }
-.chart-card { margin: 14px 0; }
-.chart-card img { max-width: 100%; border: 1px solid #d4d9e2; }
+.chart-card { display: inline-block; vertical-align: top; margin: 6px 14px 6px 0; }
+.chart-card img { max-width: 540px; width: 100%; border: 1px solid #d4d9e2; }
 code { background: #eef1f6; padding: 1px 5px; }
 .tag { display: inline-block; background: #eef1f6; border: 1px solid #8a93a6;
        padding: 1px 8px; margin-right: 6px; font-size: 12px; }
@@ -120,11 +120,58 @@ def build() -> None:
     for csv_file in sorted(REPORT_DATA.glob("*.csv")):
         shutil.copy2(csv_file, DATA_OUT / csv_file.name)
 
-    profile_imgs = [n for n in plot_names if n.startswith("profile_tok_s_")]
-    speedup_imgs = [n for n in plot_names if n.startswith("profile_speedup_per_gpu_")]
     accept_imgs = [n for n in plot_names if n.startswith("profile_acceptance")]
     rollout_imgs = [n for n in plot_names if n.startswith("rollout_")]
-    drain_imgs = [n for n in plot_names if n.startswith("drain_")]
+
+    model_slugs = [
+        (
+            "qwen3-30b-a3b_40k",
+            "Qwen3-30B-A3B &mdash; 40K long-tail (TP2, 32K max_tokens)",
+        ),
+        ("qwen3-30b-a3b", "Qwen3-30B-A3B (TP1)"),
+        ("qwen3-32b", "Qwen3-32B (TP2)"),
+        ("qwen3-235b-a22b", "Qwen3-235B-A22B (TP4)"),
+    ]
+
+    def model_of(name: str) -> str:
+        for slug_key, _ in model_slugs:
+            if slug_key in name:
+                return slug_key
+        return "other"
+
+    model_sections = []
+    claimed: set[str] = set()
+    for slug_key, title in model_slugs:
+        grids = [
+            n
+            for n in plot_names
+            if n.startswith("profile_tok_s_") and model_of(n) == slug_key
+        ]
+        speedups = [
+            n
+            for n in plot_names
+            if n.startswith("profile_speedup_per_gpu_") and model_of(n) == slug_key
+        ]
+        drains = [
+            n for n in plot_names if n.startswith("drain_") and model_of(n) == slug_key
+        ]
+        claimed.update(grids + speedups + drains)
+        if not (grids or speedups or drains):
+            continue
+        parts = [f"<h2>{title}</h2>"]
+        if grids:
+            parts.append("<h3>Tokens/s across batch size &times; K</h3>")
+            parts.append(img_cards(grids))
+        if speedups:
+            parts.append("<h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>")
+            parts.append(img_cards(speedups))
+        if drains:
+            parts.append(
+                "<h3>Rollout drain curves (sequences in flight over time)</h3>"
+            )
+            parts.append(img_cards(drains))
+        model_sections.append("\n".join(parts))
+    per_model_html = "\n".join(model_sections)
 
     data_links = " ".join(
         f'<a class="tag" href="dynamic_sd_data/{f.name}">{f.name}</a>'
@@ -144,21 +191,20 @@ generations per step with barrier semantics. DynamicSD =
 <code>speculative_config.num_speculative_tokens_per_batch_size</code>, the
 batch-size&rarr;K schedule derived from the Phase-1 grid below.</p>
 
-<h2>Phase 1 &mdash; Profiling grid: tokens/s across batch size &times; K</h2>
-<p class="note">Fixed-length generation (ignore_eos), each K is a separate
-engine; K=0 disables speculation. The K=5 collapse at BS=128 is the
-cudagraph-capture cliff (128&times;6 = 768 tokens/step &gt; default 512 max
-capture size): exactly the regime cost DynamicSD avoids.</p>
-{img_cards(profile_imgs)}
+<h2>Cross-model summary &mdash; synchronous rollout: baseline vs fixed-K vs DynamicSD</h2>
+<p class="note">Per-engine sync rollout (N&times;32 generations, barrier per
+step). Charts and table are per model &times; benchmark; tokens/s/GPU
+normalizes TP differences (TP1/2/4).</p>
+{rollout_table()}
+<p class="note"><b>Known issue in the first dynamic runs (20260712):</b> the
+v1 K-table carried K=5 forward into BS 86-127 where 86&times;6 &gt; 512 exceeds
+the cudagraph capture budget, forcing eager-mode decode for most of each step -
+that is why "dynamic" trails fixed-K3 here. Tables are now derived with an
+analytic bs&times;(K+1) &le; capture-budget cap and the dynamic runs are being
+repeated; numbers will refresh on the next harvest.</p>
+{img_cards(rollout_imgs)}
 
-<h2>Tokens/s/GPU speedup vs no-SD baseline</h2>
-<p class="note">Same grid normalized per GPU (TP={{1,2,4}} across models) and
-divided by the K=0 baseline at the same batch size; the dashed line at 1.0 is
-break-even. Bars below 1.0 mark regimes where fixed-K speculation actively
-hurts - the DynamicSD schedule assigns K=0 or a smaller K there.</p>
-{img_cards(speedup_imgs)}
-
-<h2>Acceptance length (temperature 1.0)</h2>
+<h2>Acceptance length by model (temperature 1.0)</h2>
 {img_cards(accept_imgs)}
 
 <h2>Derived DynamicSD schedules</h2>
@@ -171,15 +217,14 @@ sampling) showed no acceptance-length gain over greedy drafting on
 Qwen3-30B-A3B/openmath (AL 2.99 vs 3.01 at K=3) and 3-10% lower tok/s from the
 logits-caching overhead, so the main matrix uses greedy drafting.</p>
 
-<h2>Phase 3 &mdash; Synchronous rollout: baseline vs fixed-K vs DynamicSD</h2>
-{rollout_table()}
-{img_cards(rollout_imgs)}
-
-<h2>Rollout drain curves</h2>
-<p class="note">Sequences still in flight over time within a rollout step
-(steps &gt; 0). The long right tail at low concurrency is where DynamicSD can
-raise K beyond the fixed-K compromise.</p>
-{img_cards(drain_imgs)}
+<h1>Per-model results</h1>
+<p class="note">Profiling grids use fixed-length generation (ignore_eos); each
+K is a separate engine, K=0 disables speculation. The K=5 collapse at BS=128 is
+the cudagraph-capture cliff (128&times;6 = 768 tokens/step &gt; default 512 max
+capture size) - exactly the regime cost DynamicSD avoids. Drain curves show
+sequences still in flight within a rollout step; the long low-concurrency tail
+is where DynamicSD raises K beyond the fixed-K compromise.</p>
+{per_model_html}
 
 <h2>Data</h2>
 <p>{data_links}</p>

@@ -5,8 +5,4 @@ draft=RedHatAI/Qwen3-30B-A3B-Thinking-2507-speculator.eagle3
 bench=swe_verified prompts=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/swebench_verified_prompts_all.jsonl
 temperature=1.0 tp=1 max_num_seqs=128
 csv_header=job_id,tag,model,bench,logs_dir
-2356213,qwen3_30ba3b_swe_verified_profile_k0_20260712,Qwen/Qwen3-30B-A3B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_30ba3b_swe_verified_profile_k0_20260712
-2356215,qwen3_30ba3b_swe_verified_profile_k1_20260712,Qwen/Qwen3-30B-A3B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_30ba3b_swe_verified_profile_k1_20260712
-2356216,qwen3_30ba3b_swe_verified_profile_k2_20260712,Qwen/Qwen3-30B-A3B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_30ba3b_swe_verified_profile_k2_20260712
-2356218,qwen3_30ba3b_swe_verified_profile_k3_20260712,Qwen/Qwen3-30B-A3B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_30ba3b_swe_verified_profile_k3_20260712
-2356219,qwen3_30ba3b_swe_verified_profile_k5_20260712,Qwen/Qwen3-30B-A3B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_30ba3b_swe_verified_profile_k5_20260712
+2357437,qwen3_30ba3b_swe_verified_profile_k7_20260712,Qwen/Qwen3-30B-A3B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_30ba3b_swe_verified_profile_k7_20260712
