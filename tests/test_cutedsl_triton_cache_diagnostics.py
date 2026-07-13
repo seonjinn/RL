@@ -138,6 +138,57 @@ def test_collect_cache_diagnostics_handles_an_empty_cache(
     assert result["files"] == []
 
 
+def test_collect_cache_diagnostics_classifies_json_and_marks_partial_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_diagnostic_module()
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "3.6.0")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    payloads = {
+        "a-valid.json": b'{"payload": "valid-content-marker"}',
+        "b-malformed.json": b'{"payload": "malformed-content-marker"',
+        "c-empty.json": b"",
+        "d-oversized.json": b"must-not-leak-" + b"x" * 1_048_576,
+    }
+    for name, payload in payloads.items():
+        (cache / name).write_bytes(payload)
+
+    result = module.collect_cache_diagnostics(
+        cache, node_index=0, limits=module.DiagnosticLimits()
+    )
+
+    records = {record["relative_name_sha256"]: record for record in result["files"]}
+    valid = records[hashlib.sha256(b"a-valid.json").hexdigest()]
+    malformed = records[hashlib.sha256(b"b-malformed.json").hexdigest()]
+    empty = records[hashlib.sha256(b"c-empty.json").hexdigest()]
+    oversized = records[hashlib.sha256(b"d-oversized.json").hexdigest()]
+    assert valid["json_valid"] is True
+    assert valid["bytes_read"] == len(payloads["a-valid.json"])
+    assert malformed["json_valid"] is False
+    assert malformed["bytes_read"] == len(payloads["b-malformed.json"])
+    assert empty["json_valid"] is False
+    assert empty["bytes_read"] == 0
+    expected_oversized_bytes = 1_048_576 - sum(
+        len(payloads[name])
+        for name in ("a-valid.json", "b-malformed.json", "c-empty.json")
+    )
+    assert oversized["bytes_read"] == expected_oversized_bytes
+    assert oversized["bytes_read"] < oversized["size"]
+    assert result["total_bytes_read"] == 1_048_576
+    assert result["total_bytes_read"] <= module.DiagnosticLimits().max_total_bytes
+    assert result["truncated"] is True
+    serialized = json.dumps(result)
+    for marker in (
+        "valid-content-marker",
+        "malformed-content-marker",
+        "must-not-leak",
+    ):
+        assert marker not in serialized
+    for name in payloads:
+        assert name not in serialized
+
+
 @pytest.mark.parametrize(
     ("node_index", "max_files", "max_total_bytes", "message"),
     [
@@ -185,6 +236,17 @@ def test_merge_cache_diagnostics_reports_missing_nodes(tmp_path: Path) -> None:
     assert result["timed_out"] is True
     assert result["truncated"] is False
     assert [node["node_index"] for node in result["nodes"]] == [0, 2]
+
+
+def test_merge_rejects_node_indexes_outside_expected_range(tmp_path: Path) -> None:
+    module = load_diagnostic_module()
+    summaries = tmp_path / "summaries"
+    summaries.mkdir()
+    write_node_summary(summaries / "node-2.json", node_index=2)
+    write_node_summary(summaries / "node-3.json", node_index=3)
+
+    with pytest.raises(ValueError, match="node_index is outside expected range"):
+        module.merge_cache_diagnostics(summaries, expected_nodes=2)
 
 
 def test_merge_rejects_duplicate_nonfinite_and_symlinked_summaries(

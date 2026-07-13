@@ -125,6 +125,7 @@ def collect_cache_diagnostics(
 
     files: list[dict[str, int | str | bool]] = []
     total_bytes_read = 0
+    partial_read = False
     for path in candidates[: limits.max_files]:
         remaining = limits.max_total_bytes - total_bytes_read
         if remaining <= 0:
@@ -133,6 +134,7 @@ def collect_cache_diagnostics(
             payload = stream.read(remaining)
         total_bytes_read += len(payload)
         stat = path.stat(follow_symlinks=False)
+        partial_read = partial_read or len(payload) < stat.st_size
         try:
             json.loads(payload)
             json_valid = True
@@ -166,7 +168,7 @@ def collect_cache_diagnostics(
         "scanned_count": len(files),
         "rejected_symlink_count": rejected_symlink_count,
         "total_bytes_read": total_bytes_read,
-        "truncated": len(files) < len(candidates),
+        "truncated": len(files) < len(candidates) or partial_read,
         "files": files,
     }
     _validate_summary_schema(result)
@@ -260,13 +262,16 @@ def merge_cache_diagnostics(summary_dir: Path, expected_nodes: int) -> dict[str,
         if node_index in nodes:
             raise ValueError(f"duplicate node_index: {node_index}")
         _validate_summary_schema(value)
+        if node_index >= expected_nodes:
+            raise ValueError("node_index is outside expected range")
         nodes[node_index] = value
+    missing_nodes = sorted(set(range(expected_nodes)) - set(nodes))
     return {
         "schema_version": 1,
         "expected_nodes": expected_nodes,
         "observed_nodes": sorted(nodes),
-        "missing_nodes": sorted(set(range(expected_nodes)) - set(nodes)),
-        "timed_out": len(nodes) != expected_nodes,
+        "missing_nodes": missing_nodes,
+        "timed_out": bool(missing_nodes),
         "truncated": any(value["truncated"] for value in nodes.values()),
         "nodes": [nodes[index] for index in sorted(nodes)],
     }
