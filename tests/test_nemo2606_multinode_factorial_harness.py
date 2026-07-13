@@ -769,10 +769,6 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
     assert 'EXISTING_RAY="${CUTEDSL_BENCHMARK_EXISTING_RAY:-0}"' in source
     assert 'if [[ "${EXISTING_RAY}" == "1" ]]; then' in source
     assert "SRUN=()" in source
-    assert (
-        'NODE_LOCAL_WORKER_VENV_ROOT="/tmp/${USER}/nemo2606-factorial/${RUN_ID}/worker_venvs"'
-        in source
-    )
     assert 'export NEMO_RL_VENV_DIR="${NODE_LOCAL_WORKER_VENV_ROOT}"' in source
     assert 'RAY_LOG_ATTEMPT_ID="${SLURM_JOB_ID}-${SLURM_RESTART_COUNT}"' in source
     assert 'RAY_CLUSTER_LOG_DIR="${BASE_LOG_DIR:' in source
@@ -805,6 +801,41 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
         "performance/policy_training_tokens_per_sec_per_gpu",
     ):
         assert metric in source
+
+
+def test_existing_ray_uses_job_scoped_node_local_triton_cache() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    assert (
+        'NODE_LOCAL_RUNTIME_ROOT="/tmp/${USER}/nemo2606-factorial/${RUN_ID}"' in source
+    )
+    assert (
+        'NODE_LOCAL_WORKER_VENV_ROOT="${NODE_LOCAL_RUNTIME_ROOT}/worker_venvs"'
+        in source
+    )
+    assert 'TRITON_CACHE_DIR="${NODE_LOCAL_RUNTIME_ROOT}/triton_cache"' in source
+    assert 'NEMO2606_TRITON_CACHE_SCOPE="job_node_local"' in source
+    assert '"triton_cache_scope": os.environ["NEMO2606_TRITON_CACHE_SCOPE"]' in source
+
+
+def test_non_existing_ray_retains_run_local_container_cache() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    assert 'TRITON_CACHE_DIR="${CONTAINER_RUNTIME_DIR}/triton_cache"' in source
+    assert 'NEMO2606_TRITON_CACHE_SCOPE="run_local_container"' in source
+
+
+def test_existing_ray_triton_cache_is_not_under_shared_roots() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    runtime_block = source.split('export NVTE_CUDA_ARCHS="100"', 1)[1]
+    existing_ray = runtime_block.split('if [[ "${EXISTING_RAY}" == "1" ]]', 1)[1].split(
+        "else", 1
+    )[0]
+    assert 'TRITON_CACHE_DIR="${NODE_LOCAL_RUNTIME_ROOT}/triton_cache"' in existing_ray
+    triton_cache_assignment = existing_ray.split("TRITON_CACHE_DIR=", 1)[
+        1
+    ].splitlines()[0]
+    assert "CONTAINER_RUNTIME_DIR" not in triton_cache_assignment
+    assert "RESULT_DIR" not in triton_cache_assignment
+    assert "MEGATRON_CHECKPOINT_ROOT" not in triton_cache_assignment
 
 
 def test_matrix_payload_uses_shared_megatron_conversion_cache() -> None:
@@ -956,7 +987,8 @@ def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> Non
         '"segment": int(os.environ["BENCHMARK_SEGMENT_SIZE"])',
         'expected_arms = os.environ["TIMING_ORDER"].split(",")',
         'if "off" in expected_arms:',
-        "fixed_config_evidence = {arm: fixed_config_by_arm[arm] for arm in expected_arms}",
+        "fixed_config_evidence = {",
+        '"NEMO2606_TRITON_CACHE_SCOPE": os.environ["NEMO2606_TRITON_CACHE_SCOPE"]',
         '"available_arms": expected_arms',
         '"arms": [',
     )

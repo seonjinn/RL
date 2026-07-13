@@ -404,12 +404,20 @@ printf '%s\n' "${timing_arms[@]}" > "${RESULT_DIR}/timing_order.txt"
 export CUDA_HOME="/usr/local/cuda"
 export NVTE_CUDA_ARCHS="100"
 if [[ "${EXISTING_RAY}" == "1" ]]; then
-    NODE_LOCAL_WORKER_VENV_ROOT="/tmp/${USER}/nemo2606-factorial/${RUN_ID}/worker_venvs"
+    NODE_LOCAL_RUNTIME_ROOT="/tmp/${USER}/nemo2606-factorial/${RUN_ID}"
+    NODE_LOCAL_WORKER_VENV_ROOT="${NODE_LOCAL_RUNTIME_ROOT}/worker_venvs"
+    TRITON_CACHE_DIR="${NODE_LOCAL_RUNTIME_ROOT}/triton_cache"
+    NEMO2606_TRITON_CACHE_SCOPE="job_node_local"
 else
+    NODE_LOCAL_RUNTIME_ROOT="${CONTAINER_RUNTIME_DIR}"
     NODE_LOCAL_WORKER_VENV_ROOT="${CONTAINER_RUNTIME_DIR}/worker_venvs"
+    TRITON_CACHE_DIR="${CONTAINER_RUNTIME_DIR}/triton_cache"
+    NEMO2606_TRITON_CACHE_SCOPE="run_local_container"
 fi
-readonly NODE_LOCAL_WORKER_VENV_ROOT
+readonly NODE_LOCAL_RUNTIME_ROOT NODE_LOCAL_WORKER_VENV_ROOT
 export NEMO_RL_VENV_DIR="${NODE_LOCAL_WORKER_VENV_ROOT}"
+export TRITON_CACHE_DIR NEMO2606_TRITON_CACHE_SCOPE
+mkdir -p "${TRITON_CACHE_DIR}"
 MEGATRON_CHECKPOINT_ROOT="${CONTAINER_RUNTIME_DIR}/megatron_checkpoints"
 readonly MEGATRON_CHECKPOINT_ROOT
 mkdir -p "${MEGATRON_CHECKPOINT_ROOT}"
@@ -418,7 +426,6 @@ export NRL_FORCE_REBUILD_VENVS="true"
 export NRL_IGNORE_VERSION_MISMATCH="1"
 export PYTHONPATH="${CONTAINER_REPO_ROOT}:${PYTHONPATH:-}"
 export TORCH_EXTENSIONS_DIR="${CONTAINER_RUNTIME_DIR}/torch_extensions"
-export TRITON_CACHE_DIR="${CONTAINER_RUNTIME_DIR}/triton_cache"
 export UV_PROJECT_ENVIRONMENT="${CONTAINER_RUNTIME_DIR}/venv"
 export VIRTUAL_ENV="${UV_PROJECT_ENVIRONMENT}"
 export RUNTIME_PYTHON="${UV_PROJECT_ENVIRONMENT}/bin/python"
@@ -657,9 +664,19 @@ fixed_config_by_arm = {
     arm: {path: value_at(config, path) for path in fixed_config_paths}
     for arm, config in configs_by_arm.items()
 }
-fixed_config_evidence = {arm: fixed_config_by_arm[arm] for arm in expected_arms}
+fixed_config_evidence = {
+    arm: {
+        **fixed_config_by_arm[arm],
+        "NEMO2606_TRITON_CACHE_SCOPE": os.environ["NEMO2606_TRITON_CACHE_SCOPE"],
+    }
+    for arm in expected_arms
+}
 for arm in timing_order:
     assert fixed_config_evidence[arm] == fixed_config_evidence["on"]
+    assert (
+        fixed_config_evidence[arm]["NEMO2606_TRITON_CACHE_SCOPE"]
+        == os.environ["NEMO2606_TRITON_CACHE_SCOPE"]
+    )
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_grouped_gemm"] is True
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_router_dtype"] == "fp32"
     assert (
@@ -701,6 +718,9 @@ for arm in timing_order:
     assert fixed_config_evidence[arm]["grpo.val_period"] == expected_val_period
     assert fixed_config_evidence[arm]["grpo.val_at_start"] is False
     assert fixed_config_evidence[arm]["grpo.val_at_end"] is False
+(result_dir / "config_equivalence.json").write_text(
+    json.dumps(fixed_config_evidence, indent=2) + "\n"
+)
 expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
 expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
 full_cg_config_evidence = {
@@ -777,6 +797,7 @@ manifest = {
     "feature_context": os.environ["FEATURE_CONTEXT"],
     "full_cg_enabled": os.environ["NEMO2606_FULL_CG_ENABLED"] == "1",
     "a2a_enabled": os.environ["NEMO2606_A2A_ENABLED"] == "1",
+    "triton_cache_scope": os.environ["NEMO2606_TRITON_CACHE_SCOPE"],
     "base_config_sha256": base_config_sha256,
     "artifact_revisions": artifact_revisions,
     "hf_cache_manifest": "hf_cache_manifest.json",
