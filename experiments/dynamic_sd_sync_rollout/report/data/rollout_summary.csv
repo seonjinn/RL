@@ -1,4 +1,13 @@
 model,bench,variant,k,sample_method,tp,tag,num_steps,mean_step_wall_s,mean_output_tok_s,mean_output_tok_s_per_gpu,partial
+Qwen3-235B-A22B,dapo,baseline,0,-,4,qwen3_235b_dapo_rollout_baseline_20260712,4,157.91807906300528,3079.0520874572935,769.7630218643234,False
+Qwen3-235B-A22B,dapo,dynamic,5,greedy,4,qwen3_235b_dapo_rollout_dynamic_20260712,4,296.8393443945679,1870.9573187494552,467.7393296873638,False
+Qwen3-235B-A22B,math500,baseline,0,-,4,qwen3_235b_math500_rollout_baseline_20260712,4,118.26174940672354,2297.721254923971,574.4303137309928,False
+Qwen3-235B-A22B,math500,dynamic,5,greedy,4,qwen3_235b_math500_rollout_dynamic_20260712,4,232.85000546075003,1231.481496874197,307.8703742185493,False
+Qwen3-235B-A22B,math500,fixed_k3,3,greedy,4,qwen3_235b_math500_rollout_fixed_k3_20260712,4,271.7989272342529,1055.0483465531763,263.7620866382941,False
+Qwen3-235B-A22B,swe_verified,baseline,0,-,4,qwen3_235b_swe_verified_rollout_baseline_20260712,4,142.53465943556512,2226.436422000723,556.6091055001807,False
+Qwen3-30B-A3B (40K),openmath,baseline,0,-,2,qwen3_30ba3b_40k_openmath_rollout_baseline_20260712,2,155.91744272247888,7746.6295743229275,3873.3147871614638,False
+Qwen3-30B-A3B (40K),openmath,dynamic,5,greedy,2,qwen3_30ba3b_40k_openmath_rollout_dynamic_20260712,2,245.77295057300944,5147.718069127538,2573.859034563769,False
+Qwen3-30B-A3B (40K),openmath,fixed_k3,3,greedy,2,qwen3_30ba3b_40k_openmath_rollout_fixed_k3_20260712,2,131.45122110500233,9679.190394394976,4839.595197197488,False
 Qwen3-30B-A3B,dapo,baseline,0,-,1,qwen3_30ba3b_dapo_rollout_baseline_20260712b,4,54.270854849746684,9657.117055089591,9657.117055089591,False
 Qwen3-30B-A3B,dapo,dynamic,5,greedy,1,qwen3_30ba3b_dapo_rollout_dynamic_20260712b,4,31.68041196752165,16550.13244703082,16550.13244703082,False
 Qwen3-30B-A3B,dapo,fixed_k3,3,greedy,1,qwen3_30ba3b_dapo_rollout_fixed_k3_20260712b,4,29.10169926423987,18017.393961204616,18017.393961204616,False
@@ -11,3 +20,13 @@ Qwen3-30B-A3B,openmath,fixed_k3,3,greedy,1,qwen3_30ba3b_openmath_rollout_fixed_k
 Qwen3-30B-A3B,swe_verified,baseline,0,-,1,qwen3_30ba3b_swe_verified_rollout_baseline_20260712,4,42.525885910959914,6441.593844280947,6441.593844280947,False
 Qwen3-30B-A3B,swe_verified,dynamic,5,greedy,1,qwen3_30ba3b_swe_verified_rollout_dynamic_20260712,4,25.29948102074559,10442.875440509819,10442.875440509819,False
 Qwen3-30B-A3B,swe_verified,fixed_k3,3,greedy,1,qwen3_30ba3b_swe_verified_rollout_fixed_k3_20260712,4,22.99934398500045,11490.316823677616,11490.316823677616,False
+Qwen3-32B,dapo,dynamic,5,greedy,2,qwen3_32b_dapo_rollout_dynamic_20260712,4,80.64489152449823,12986.178201738681,6493.089100869341,False
+Qwen3-32B,dapo,fixed_k3,3,greedy,2,qwen3_32b_dapo_rollout_fixed_k3_20260712,4,73.51256194600137,14225.23091659381,7112.615458296905,False
+Qwen3-32B,math500,baseline,0,-,2,qwen3_32b_math500_rollout_baseline_20260712,4,67.80187591574213,11619.520142175246,5809.760071087623,False
+Qwen3-32B,math500,dynamic,5,greedy,2,qwen3_32b_math500_rollout_dynamic_20260712,4,58.45930157175462,13495.329552946332,6747.664776473166,False
+Qwen3-32B,openmath,baseline,0,-,2,qwen3_32b_openmath_rollout_baseline_20260712,4,69.22633576199769,11482.250023483291,5741.125011741646,False
+Qwen3-32B,openmath,dynamic,5,greedy,2,qwen3_32b_openmath_rollout_dynamic_20260712,4,62.740346215010504,12719.992660069987,6359.996330034994,False
+Qwen3-32B,openmath,fixed_k3,3,greedy,2,qwen3_32b_openmath_rollout_fixed_k3_20260712,4,62.03697594429832,12813.335543454737,6406.667771727369,False
+Qwen3-32B,swe_verified,baseline,0,-,2,qwen3_32b_swe_verified_rollout_baseline_20260712,4,64.54721289724944,9736.390778958379,4868.1953894791895,False
+Qwen3-32B,swe_verified,dynamic,5,greedy,2,qwen3_32b_swe_verified_rollout_dynamic_20260712,4,60.00268610374769,10391.788491386222,5195.894245693111,False
+Qwen3-32B,swe_verified,fixed_k3,3,greedy,2,qwen3_32b_swe_verified_rollout_fixed_k3_20260712,4,67.4027711724998,9123.651180623085,4561.825590311542,False
