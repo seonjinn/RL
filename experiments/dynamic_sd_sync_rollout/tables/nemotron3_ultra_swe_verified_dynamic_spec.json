@@ -1,0 +1,11 @@
+{
+  "method": "mtp",
+  "num_speculative_tokens": 3,
+  "num_speculative_tokens_per_batch_size": [
+    [
+      1,
+      64,
+      3
+    ]
+  ]
+}
