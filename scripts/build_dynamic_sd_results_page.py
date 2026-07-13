@@ -196,12 +196,20 @@ batch-size&rarr;K schedule derived from the Phase-1 grid below.</p>
 step). Charts and table are per model &times; benchmark; tokens/s/GPU
 normalizes TP differences (TP1/2/4).</p>
 {rollout_table()}
-<p class="note"><b>Known issue in the first dynamic runs (20260712):</b> the
-v1 K-table carried K=5 forward into BS 86-127 where 86&times;6 &gt; 512 exceeds
-the cudagraph capture budget, forcing eager-mode decode for most of each step -
-that is why "dynamic" trails fixed-K3 here. Tables are now derived with an
-analytic bs&times;(K+1) &le; capture-budget cap and the dynamic runs are being
-repeated; numbers will refresh on the next harvest.</p>
+<p class="note"><b>Capture-cliff lesson:</b> the first dynamic tables carried
+K=5 into BS 86-127 where bs&times;(K+1) &gt; 512 exceeds the cudagraph capture
+budget, forcing eager-mode decode (openmath dynamic 37.4s vs fixed-K3 25.4s).
+Tables are now derived with an analytic bs&times;(K+1) &le; capture-budget cap;
+capture-aware dynamic recovers to within ~5% of fixed-K3 on 30B-A3B
+(1.87-1.90x vs 2.00x). In this 4K-generation regime most wall time sits at
+high concurrency where K=3 is already optimal, so fixed-K3 keeps a small edge -
+the settings where the derived schedule turns speculation off at high BS
+(Qwen3-32B SWE, Qwen3-235B) and the 32K long-tail preset are where DynamicSD
+is expected to pull ahead.</p>
+<p class="note"><b>Deeper K is not the memory-bound answer here:</b> K=7
+raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
+decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
+(607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
 {img_cards(rollout_imgs)}
 
 <h2>Acceptance length by model (temperature 1.0)</h2>

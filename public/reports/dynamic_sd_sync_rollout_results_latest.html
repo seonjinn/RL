@@ -29,13 +29,21 @@ batch-size&rarr;K schedule derived from the Phase-1 grid below.</p>
 <p class="note">Per-engine sync rollout (N&times;32 generations, barrier per
 step). Charts and table are per model &times; benchmark; tokens/s/GPU
 normalizes TP differences (TP1/2/4).</p>
-<table><tr><th>Model</th><th>Bench</th><th>Variant</th><th>Mean step wall (s)</th><th>Mean gen tok/s</th><th>Tokens/s/GPU</th><th>Speedup vs baseline</th></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>baseline</td><td>48.2</td><td>8299.5</td><td>8299.5</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>dynamic</td><td>45.7</td><td>9091.6</td><td>9091.6</td><td>1.055x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>fixed_k3</td><td>24.1</td><td>16589.7</td><td>16589.7</td><td>1.996x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>baseline</td><td>50.9</td><td>8625.0</td><td>8625.0</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>dynamic</td><td>37.4</td><td>12013.9</td><td>12013.9</td><td>1.361x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>fixed_k3</td><td>25.4</td><td>17323.9</td><td>17323.9</td><td>2.004x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>baseline</td><td>42.5</td><td>6441.6</td><td>6441.6</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>dynamic</td><td>25.3</td><td>10442.9</td><td>10442.9</td><td>1.681x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>fixed_k3</td><td>23.0</td><td>11490.3</td><td>11490.3</td><td>1.849x</td></tr></table>
-<p class="note"><b>Known issue in the first dynamic runs (20260712):</b> the
-v1 K-table carried K=5 forward into BS 86-127 where 86&times;6 &gt; 512 exceeds
-the cudagraph capture budget, forcing eager-mode decode for most of each step -
-that is why "dynamic" trails fixed-K3 here. Tables are now derived with an
-analytic bs&times;(K+1) &le; capture-budget cap and the dynamic runs are being
-repeated; numbers will refresh on the next harvest.</p>
+<table><tr><th>Model</th><th>Bench</th><th>Variant</th><th>Mean step wall (s)</th><th>Mean gen tok/s</th><th>Tokens/s/GPU</th><th>Speedup vs baseline</th></tr><tr><td>Qwen3-30B-A3B</td><td>dapo</td><td>baseline</td><td>54.3</td><td>9657.1</td><td>9657.1</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>dapo</td><td>dynamic</td><td>31.7</td><td>16550.1</td><td>16550.1</td><td>1.713x</td></tr><tr><td>Qwen3-30B-A3B</td><td>dapo</td><td>fixed_k3</td><td>29.1</td><td>18017.4</td><td>18017.4</td><td>1.865x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>baseline</td><td>48.2</td><td>8299.5</td><td>8299.5</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>dynamic</td><td>25.7</td><td>15653.6</td><td>15653.6</td><td>1.872x</td></tr><tr><td>Qwen3-30B-A3B</td><td>math500</td><td>fixed_k3</td><td>24.1</td><td>16589.7</td><td>16589.7</td><td>1.996x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>baseline</td><td>50.9</td><td>8625.0</td><td>8625.0</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>dynamic</td><td>26.8</td><td>16456.0</td><td>16456.0</td><td>1.897x</td></tr><tr><td>Qwen3-30B-A3B</td><td>openmath</td><td>fixed_k3</td><td>25.4</td><td>17323.9</td><td>17323.9</td><td>2.004x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>baseline</td><td>42.5</td><td>6441.6</td><td>6441.6</td><td>1.000x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>dynamic</td><td>25.3</td><td>10442.9</td><td>10442.9</td><td>1.681x</td></tr><tr><td>Qwen3-30B-A3B</td><td>swe_verified</td><td>fixed_k3</td><td>23.0</td><td>11490.3</td><td>11490.3</td><td>1.849x</td></tr></table>
+<p class="note"><b>Capture-cliff lesson:</b> the first dynamic tables carried
+K=5 into BS 86-127 where bs&times;(K+1) &gt; 512 exceeds the cudagraph capture
+budget, forcing eager-mode decode (openmath dynamic 37.4s vs fixed-K3 25.4s).
+Tables are now derived with an analytic bs&times;(K+1) &le; capture-budget cap;
+capture-aware dynamic recovers to within ~5% of fixed-K3 on 30B-A3B
+(1.87-1.90x vs 2.00x). In this 4K-generation regime most wall time sits at
+high concurrency where K=3 is already optimal, so fixed-K3 keeps a small edge -
+the settings where the derived schedule turns speculation off at high BS
+(Qwen3-32B SWE, Qwen3-235B) and the 32K long-tail preset are where DynamicSD
+is expected to pull ahead.</p>
+<p class="note"><b>Deeper K is not the memory-bound answer here:</b> K=7
+raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
+decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
+(607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
 <div class="chart-card"><img src="dynamic_sd_plots/rollout_speedup.png" alt="rollout_speedup.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu.png" alt="rollout_tok_s_per_gpu.png"></div>
 
@@ -43,7 +51,7 @@ repeated; numbers will refresh on the next harvest.</p>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length.png" alt="profile_acceptance_length.png"></div>
 
 <h2>Derived DynamicSD schedules</h2>
-<table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr></table>
+<table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>qwen3_235b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=5, BS 2-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_235b_swe_verified</td><td style='text-align:left'>BS 1-3 &rarr; K=2, BS 4-7 &rarr; K=1, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_30ba3b_40k_openmath</td><td style='text-align:left'>BS 1-3 &rarr; K=3, BS 4-7 &rarr; K=5, BS 8-15 &rarr; K=3, BS 16-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr><tr><td>qwen3_32b_openmath</td><td style='text-align:left'>BS 1-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-256 &rarr; K=1</td></tr><tr><td>qwen3_32b_swe_verified</td><td style='text-align:left'>BS 1-7 &rarr; K=5, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=2, BS 64-255 &rarr; K=1, BS 256-256 &rarr; K=0</td></tr></table>
 
 <h2>Draft sampling: greedy vs probabilistic</h2>
 <p class="note">vLLM 0.24's <code>draft_sample_method="probabilistic"</code>
@@ -59,6 +67,11 @@ the cudagraph-capture cliff (128&times;6 = 768 tokens/step &gt; default 512 max
 capture size) - exactly the regime cost DynamicSD avoids. Drain curves show
 sequences still in flight within a rollout step; the long low-concurrency tail
 is where DynamicSD raises K beyond the fixed-K compromise.</p>
+<h2>Qwen3-30B-A3B &mdash; 40K long-tail (TP2, 32K max_tokens)</h2>
+<h3>Tokens/s across batch size &times; K</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_40k_openmath.png" alt="profile_tok_s_qwen3-30b-a3b_40k_openmath.png"></div>
+<h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_40k_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_40k_openmath.png"></div>
 <h2>Qwen3-30B-A3B (TP1)</h2>
 <h3>Tokens/s across batch size &times; K</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_openmath.png" alt="profile_tok_s_qwen3-30b-a3b_openmath.png"></div>
@@ -67,9 +80,24 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_dapo.png" alt="drain_qwen3-30b-a3b_dapo.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_math500.png" alt="drain_qwen3-30b-a3b_math500.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_openmath.png" alt="drain_qwen3-30b-a3b_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_swe_verified.png" alt="drain_qwen3-30b-a3b_swe_verified.png"></div>
+<h2>Qwen3-32B (TP2)</h2>
+<h3>Tokens/s across batch size &times; K</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-32b_openmath.png" alt="profile_tok_s_qwen3-32b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-32b_swe_verified.png" alt="profile_tok_s_qwen3-32b_swe_verified.png"></div>
+<h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-32b_openmath.png" alt="profile_speedup_per_gpu_qwen3-32b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-32b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-32b_swe_verified.png"></div>
+<h2>Qwen3-235B-A22B (TP4)</h2>
+<h3>Tokens/s across batch size &times; K</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-235b-a22b_openmath.png" alt="profile_tok_s_qwen3-235b-a22b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-235b-a22b_swe_verified.png" alt="profile_tok_s_qwen3-235b-a22b_swe_verified.png"></div>
+<h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-235b-a22b_openmath.png" alt="profile_speedup_per_gpu_qwen3-235b-a22b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-235b-a22b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-235b-a22b_swe_verified.png"></div>
 
 <h2>Data</h2>
 <p><a class="tag" href="dynamic_sd_data/drain_curves.csv">drain_curves.csv</a> <a class="tag" href="dynamic_sd_data/profile_grid.csv">profile_grid.csv</a> <a class="tag" href="dynamic_sd_data/rollout_steps.csv">rollout_steps.csv</a> <a class="tag" href="dynamic_sd_data/rollout_summary.csv">rollout_summary.csv</a></p>
