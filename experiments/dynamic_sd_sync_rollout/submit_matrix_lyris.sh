@@ -72,6 +72,42 @@ case "${PRESET}" in
     export K_VALUES="${K_VALUES:-0 1 2 3}"
     export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
     ;;
+  nemotron3_super_32k)
+    # Long-tail: 32K generations. Mamba-hybrid keeps long-context state cheap;
+    # tests whether in-checkpoint MTP acceptance survives depth (EAGLE3 dies
+    # at ~10K generated tokens).
+    export MODEL="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
+    export MODEL_LABEL="nemotron3_super_32k"
+    export SPEC_METHOD="mtp"
+    export TP=4
+    export NUM_PROMPTS_PER_STEP=4
+    export NUM_GENERATIONS_PER_PROMPT=32
+    export MAX_NUM_SEQS=128
+    export MAX_TOKENS=32768
+    export MAX_MODEL_LEN="${MAX_MODEL_LEN:-40960}"
+    export NUM_STEPS="${NUM_STEPS:-2}"
+    export OSL="${OSL:-2048}"
+    export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64 128}"
+    export K_VALUES="${K_VALUES:-0 1 2 3}"
+    export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
+    ;;
+  nemotron3_super_64k)
+    # Long-tail: 64K generations, 64 seqs to bound step wall time.
+    export MODEL="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
+    export MODEL_LABEL="nemotron3_super_64k"
+    export SPEC_METHOD="mtp"
+    export TP=4
+    export NUM_PROMPTS_PER_STEP=2
+    export NUM_GENERATIONS_PER_PROMPT=32
+    export MAX_NUM_SEQS=64
+    export MAX_TOKENS=65536
+    export MAX_MODEL_LEN="${MAX_MODEL_LEN:-73728}"
+    export NUM_STEPS="${NUM_STEPS:-2}"
+    export OSL="${OSL:-2048}"
+    export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64}"
+    export K_VALUES="${K_VALUES:-0 1 2 3}"
+    export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
+    ;;
   qwen3_32b)
     export MODEL="Qwen/Qwen3-32B"
     export MODEL_LABEL="qwen3_32b"
