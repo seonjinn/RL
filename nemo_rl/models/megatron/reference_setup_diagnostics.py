@@ -61,6 +61,103 @@ def buffer_memory_metadata(buffer: Any) -> dict[str, int]:
     return metadata
 
 
+def _numa_memory_metadata(
+    node_root: str | os.PathLike[str] = "/sys/devices/system/node",
+) -> dict[str, int]:
+    """Return per-NUMA-node memory totals from Linux sysfs."""
+    metadata: dict[str, int] = {}
+    try:
+        entries = os.listdir(node_root)
+    except OSError:
+        return metadata
+
+    field_names = {
+        "MemFree": "free",
+        "MemTotal": "total",
+        "MemUsed": "used",
+    }
+    for entry in sorted(entries):
+        match = re.fullmatch(r"node(\d+)", entry)
+        if match is None:
+            continue
+        node_id = match.group(1)
+        meminfo_path = os.path.join(os.fspath(node_root), entry, "meminfo")
+        try:
+            with open(meminfo_path) as meminfo_file:
+                for line in meminfo_file:
+                    key, separator, value = line.partition(":")
+                    field_name = key.split()[-1] if key.split() else ""
+                    if not separator or field_name not in field_names:
+                        continue
+                    metadata[
+                        f"numa_{node_id}_mem_{field_names[field_name]}_kb"
+                    ] = int(value.split()[0])
+        except (OSError, ValueError):
+            continue
+    return metadata
+
+
+def _cgroup_memory_metadata(
+    proc_self_cgroup: str | os.PathLike[str] = "/proc/self/cgroup",
+    cgroup_root: str | os.PathLike[str] = "/sys/fs/cgroup",
+) -> dict[str, int]:
+    """Return cgroup-v2 memory usage, limits, events, and NUMA accounting."""
+    metadata: dict[str, int] = {}
+    try:
+        with open(proc_self_cgroup) as cgroup_file:
+            cgroup_path = next(
+                (
+                    line.rstrip("\n").split("::", 1)[1]
+                    for line in cgroup_file
+                    if line.startswith("0::")
+                ),
+                None,
+            )
+    except OSError:
+        return metadata
+    if cgroup_path is None:
+        return metadata
+
+    memory_dir = os.path.join(os.fspath(cgroup_root), cgroup_path.lstrip("/"))
+    for filename, field_name in (
+        ("memory.current", "cgroup_memory_current_bytes"),
+        ("memory.peak", "cgroup_memory_peak_bytes"),
+        ("memory.max", "cgroup_memory_max_bytes"),
+    ):
+        try:
+            with open(os.path.join(memory_dir, filename)) as memory_file:
+                metadata[field_name] = int(memory_file.read().strip())
+        except (OSError, ValueError):
+            continue
+
+    try:
+        with open(os.path.join(memory_dir, "memory.events")) as events_file:
+            for line in events_file:
+                field_name, value = line.split()
+                if field_name in {"high", "max", "oom", "oom_kill"}:
+                    metadata[f"cgroup_memory_event_{field_name}"] = int(value)
+    except (OSError, ValueError):
+        pass
+
+    try:
+        with open(os.path.join(memory_dir, "memory.numa_stat")) as numa_file:
+            for line in numa_file:
+                fields = line.split()
+                if not fields or fields[0] not in {"anon", "file"}:
+                    continue
+                memory_kind = fields[0]
+                for field in fields[1:]:
+                    node, value = field.split("=", 1)
+                    if re.fullmatch(r"N\d+", node) is None:
+                        continue
+                    metadata[
+                        f"cgroup_memory_numa_{memory_kind}_{node.lower()}_bytes"
+                    ] = int(value)
+    except (OSError, ValueError):
+        pass
+    return metadata
+
+
 def _linux_memory_metadata() -> dict[str, int]:
     metadata: dict[str, int] = {}
     proc_files = (
@@ -91,6 +188,8 @@ def _linux_memory_metadata() -> dict[str, int]:
                     metadata[field_names[key]] = int(value.split()[0])
         except (OSError, ValueError):
             continue
+    metadata.update(_numa_memory_metadata())
+    metadata.update(_cgroup_memory_metadata())
     return metadata
 
 
