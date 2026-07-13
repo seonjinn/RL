@@ -23,7 +23,7 @@ for marker in metadata.json run_config.yaml; do
   fi
 done
 
-mkdir -p "${RUN_DIR}/torch_nccl"
+mkdir -p "${RUN_DIR}/reference_offload_locks" "${RUN_DIR}/torch_nccl"
 
 COMMAND="env \
 WANDB_RUN_GROUP=${RUN_TAG} \
@@ -32,6 +32,7 @@ NRL_DISABLE_VLLM_PORT_OVERRIDE=1 \
 NRL_DEBUG_REFERENCE_MODEL_SETUP=1 \
 NRL_SERIALIZE_REFERENCE_CPU_OFFLOAD=1 \
 NRL_USE_PAGEABLE_REFERENCE_CPU_OFFLOAD=1 \
+NRL_REFERENCE_CPU_OFFLOAD_LOCK_DIR=${RUN_DIR}/reference_offload_locks \
 NRL_REFERENCE_SETUP_STACK_DUMP_SECONDS=300 \
 NRL_REFERENCE_SETUP_MARKER_DIR=${RUN_DIR}/reference_setup \
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=1800 \
