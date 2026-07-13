@@ -46,6 +46,13 @@ def main() -> None:
         help="output speculative_config JSON with the dynamic table",
     )
     parser.add_argument("--grid-csv", help="optional CSV dump of the full BS x K grid")
+    parser.add_argument(
+        "--max-capture-tokens",
+        type=int,
+        default=512,
+        help="cudagraph capture budget: cap K so bs*(K+1) <= this "
+        "(vLLM default max_cudagraph_capture_size; 0 disables the cap)",
+    )
     args = parser.parse_args()
 
     by_k: dict[int, dict[int, dict[str, Any]]] = {}
@@ -104,16 +111,24 @@ def main() -> None:
             f"--extend-to {extend_to} < max profiled batch size {profiled[-1]}; "
             "this would emit an inverted range that vLLM rejects"
         )
+    # Dense bs -> K, carrying the profiled optimum forward between grid points,
+    # then capped so bs*(K+1) never exceeds the cudagraph capture budget. The
+    # profiled grid is too coarse to see the eager-fallback cliff between
+    # points (e.g. K=5 optimal at BS=64 but 86*(5+1) > 512 at BS=86), so the
+    # hardware constraint must be enforced analytically.
+    dense: list[int] = [0] * (extend_to + 1)
+    for bs in range(1, extend_to + 1):
+        anchor = max((p for p in profiled if p <= bs), default=profiled[0])
+        k = optimal[anchor]
+        if args.max_capture_tokens > 0:
+            k = min(k, max(0, args.max_capture_tokens // bs - 1))
+        dense[bs] = k
     ranges: list[list[int]] = []
-    for idx, bs in enumerate(profiled):
-        hi = profiled[idx + 1] - 1 if idx + 1 < len(profiled) else extend_to
-        k = optimal[bs]
-        if ranges and ranges[-1][2] == k:
-            ranges[-1][1] = hi
+    for bs in range(1, extend_to + 1):
+        if ranges and ranges[-1][2] == dense[bs]:
+            ranges[-1][1] = bs
         else:
-            ranges.append([bs, hi, k])
-    if ranges and ranges[0][0] > 1:
-        ranges[0][0] = 1
+            ranges.append([bs, bs, dense[bs]])
 
     spec_out = dict(spec_base)
     spec_out["num_speculative_tokens"] = max(

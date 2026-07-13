@@ -31,8 +31,10 @@ def load_json_arg(value: str) -> dict[str, Any]:
 
 
 def extract_prompt_messages(row: dict[str, Any]) -> list[dict[str, str]]:
-    messages = row.get("messages")
-    if isinstance(messages, list):
+    for key in ("messages", "prompt", "conversation"):
+        messages = row.get(key)
+        if not isinstance(messages, list):
+            continue
         prompt_messages: list[dict[str, str]] = []
         for message in messages:
             if not isinstance(message, dict):
