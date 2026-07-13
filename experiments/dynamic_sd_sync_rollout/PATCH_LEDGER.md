@@ -17,6 +17,7 @@ mean step-wall speedup vs no-SD baseline.
 | 4 | K=0 capture extension: add plain decode shape to per-K capture set | vLLM patch, **REVERTED** | negative: V2 dispatcher mis-matched spec batches; 40K step-0 wall 116s -> 191s; overall 0.35x -> 0.42x only | Do not send as-is. Evidence for #6 design discussion |
 | 5 | Depth-aware K cap: scheduler caps K when mean generated depth > threshold (`VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS`) | vLLM patch, prototype (`patches/vllm0250_depth_aware_dynamic_sd.patch`), disabled | negative in current form: 40K dynamic 0.68x -> 0.35-0.42x (runtime K=0 shape uncaptured / dispatch mismatch) | Feature request material: depth-conditioned K needs dispatch-aware upstream design. Attach 40K depth-collapse data (acceptance 2.9-3.7% at depth 10K+) |
 | 6 | (open) Dispatch-correct runtime K=0 / off-schedule K support | upstream design gap | blocks #5; also affects any schedule with K=0 ranges under V2 | Issue candidate with #4/#5 measurements |
+| 7 | Mamba-hybrid per-K capture fix: relax `mamba_attn.py:183` strict `max_query_len == 1+max_K` assert to `<=` | vLLM patch (NemotronH + DynamicSD crashed when schedule contains K < max) | blocker -> runs (Nemotron3 Super dynamic) | Upstream bug: Mamba backend not updated for per-K capture (PR #45953 follow-up). PR candidate |
 
 ---
 
