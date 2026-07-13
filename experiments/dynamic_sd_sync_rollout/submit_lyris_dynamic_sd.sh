@@ -60,12 +60,30 @@ NUM_STEPS="${NUM_STEPS:-4}"
 MAX_TOKENS="${MAX_TOKENS:-4096}"
 DYNAMIC_SPEC_JSON="${DYNAMIC_SPEC_JSON:-}"
 
+# vLLM 0.24: how the drafter samples ("greedy" argmax vs "probabilistic"
+# stochastic sampling with cached draft logits for exact rejection sampling).
+DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-greedy}"
+TAG_SUFFIX=""
+if [[ "${DRAFT_SAMPLE_METHOD}" != "greedy" ]]; then
+  TAG_SUFFIX="_${DRAFT_SAMPLE_METHOD}"
+fi
+
 # EAGLE3 heads are single-layer: draft TP=1 regardless of target TP (matches
 # prior specdec scripts in this repo).
 spec_json_fixed() {
   local k="$1"
-  printf '{"method": "eagle3", "model": "%s", "num_speculative_tokens": %d, "draft_tensor_parallel_size": 1}' \
-    "${DRAFT_MODEL}" "${k}"
+  printf '{"method": "eagle3", "model": "%s", "num_speculative_tokens": %d, "draft_tensor_parallel_size": 1, "draft_sample_method": "%s"}' \
+    "${DRAFT_MODEL}" "${k}" "${DRAFT_SAMPLE_METHOD}"
+}
+
+spec_json_with_sample_method() {
+  local json_path="$1"
+  python3 - "$json_path" "${DRAFT_SAMPLE_METHOD}" <<'PY'
+import json, sys
+spec = json.loads(open(sys.argv[1]).read())
+spec["draft_sample_method"] = sys.argv[2]
+print(json.dumps(spec))
+PY
 }
 
 sync_harness() {
@@ -160,7 +178,7 @@ sync_harness
 
   if [[ "${MODE}" == "profile" ]]; then
     for k in ${K_VALUES}; do
-      tag="${MODEL_LABEL}_${BENCH}_profile_k${k}_${RUN_TAG_DATE}"
+      tag="${MODEL_LABEL}_${BENCH}_profile_k${k}${TAG_SUFFIX}_${RUN_TAG_DATE}"
       spec_json=""
       if [[ "${k}" != "0" ]]; then
         spec_json="$(spec_json_fixed "${k}")"
@@ -176,7 +194,7 @@ sync_harness
           submit_job "${MODEL_LABEL}_${BENCH}_rollout_baseline_${RUN_TAG_DATE}" "" "${mode_args}"
           ;;
         fixed)
-          submit_job "${MODEL_LABEL}_${BENCH}_rollout_fixed_k${FIXED_K}_${RUN_TAG_DATE}" \
+          submit_job "${MODEL_LABEL}_${BENCH}_rollout_fixed_k${FIXED_K}${TAG_SUFFIX}_${RUN_TAG_DATE}" \
             "$(spec_json_fixed "${FIXED_K}")" "${mode_args}"
           ;;
         suffix)
@@ -189,8 +207,8 @@ sync_harness
             echo "ERROR: dynamic variant needs DYNAMIC_SPEC_JSON=<local path>" >&2
             exit 2
           fi
-          submit_job "${MODEL_LABEL}_${BENCH}_rollout_dynamic_${RUN_TAG_DATE}" \
-            "$(cat "${DYNAMIC_SPEC_JSON}")" "${mode_args}"
+          submit_job "${MODEL_LABEL}_${BENCH}_rollout_dynamic${TAG_SUFFIX}_${RUN_TAG_DATE}" \
+            "$(spec_json_with_sample_method "${DYNAMIC_SPEC_JSON}")" "${mode_args}"
           ;;
         *)
           echo "ERROR: unknown variant '${variant}'" >&2
