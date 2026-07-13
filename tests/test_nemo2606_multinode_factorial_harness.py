@@ -615,6 +615,26 @@ def test_functional_summarizer_classifies_unavailable_cgroup_limit(
     assert summary["post_job_slurm_accounting_required"] is True
 
 
+def test_functional_summarizer_strips_ray_ansi_dedup_suffix(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        cgroup_memory_peak_gib="94.999",
+        cgroup_memory_max_gib="100.000",
+        evidence_suffix="\x1b[32m [repeated 7x across cluster]\x1b[0m",
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    matches = summary["offload_memory_evidence"]["matches"]
+    assert matches
+    assert all("\x1b" not in match["line"] for match in matches)
+
+
 def test_functional_summarizer_ignores_ray_control_plane_log_fanout(
     tmp_path: Path,
 ) -> None:

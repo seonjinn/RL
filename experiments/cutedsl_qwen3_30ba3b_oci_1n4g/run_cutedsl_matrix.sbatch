@@ -1005,6 +1005,7 @@ MAX_FUNCTIONAL_EVIDENCE_MATCHES = 4096
 MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS = 4096
 MEMORY_LIMIT_FRACTION = 0.95
 CUTEDSL_ACTIVATION_SIGNATURE = "GroupedGemmGluSm100"
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 RAY_WORKER_EVIDENCE_BASENAME = re.compile(
     r"worker-[0-9a-f]+-[0-9a-f]+-[0-9]+\.(?:out|err)", re.IGNORECASE
 )
@@ -1103,21 +1104,28 @@ for path_index, path in enumerate(candidate_paths):
     except ValueError:
         source = str(path)
     for line in text.splitlines():
-        if parse_evidence_fields(line).get("event") == "megatron_policy_offload_memory":
+        clean_line = ANSI_ESCAPE_PATTERN.sub("", line)
+        if parse_evidence_fields(clean_line).get("event") == "megatron_policy_offload_memory":
             if len(telemetry_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
-                if len(line) > MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:
+                if len(clean_line) > MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:
                     scan_truncation_reasons.add("retained_line_limit")
                 telemetry_matches.append(
-                    {"source": source, "line": line[-MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:]}
+                    {
+                        "source": source,
+                        "line": clean_line[-MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:],
+                    }
                 )
             else:
                 scan_truncation_reasons.add("match_count_limit")
-        if CUTEDSL_ACTIVATION_SIGNATURE in line:
+        if CUTEDSL_ACTIVATION_SIGNATURE in clean_line:
             if len(cutedsl_matches) < MAX_FUNCTIONAL_EVIDENCE_MATCHES:
-                if len(line) > MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:
+                if len(clean_line) > MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:
                     scan_truncation_reasons.add("retained_line_limit")
                 cutedsl_matches.append(
-                    {"source": source, "line": line[-MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:]}
+                    {
+                        "source": source,
+                        "line": clean_line[-MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS:],
+                    }
                 )
             else:
                 scan_truncation_reasons.add("match_count_limit")
