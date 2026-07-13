@@ -77,6 +77,28 @@ RAY_WORKER_PATTERN = re.compile(
 )
 PID_ASSIGNMENT_PATTERN = re.compile(r"\bpid=\d+\b", re.IGNORECASE)
 INCIDENT_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+INCIDENT_JOB_ID_PATTERN = re.compile(r"[0-9]{1,32}\Z")
+VALID_TRITON_CACHE_SCOPES = {"job_node_local", "run_local_container"}
+COMPACT_MATCHER_INCIDENT_KEYS = {
+    "job_id",
+    "classification",
+    "on_kernel_stat_rows",
+    "off_kernel_stat_rows",
+    "on_fused_glu_instances",
+    "on_fused_dglu_instances",
+    "on_fused_quant_instances",
+    "off_fused_instances",
+    "performance_claim_impact",
+}
+COMPACT_CACHE_INCIDENT_KEYS = {
+    "job_id",
+    "classification",
+    "failure_boundary",
+    "cache_scope",
+    "cause_boundary",
+    "performance_claim_impact",
+}
+PUBLIC_CACHE_DIAGNOSTIC_NAME = "triton_cache_diagnostics.json"
 REFRESH_COMMAND = (
     "uv run --no-project python "
     "experiments/cutedsl_qwen3_30ba3b_oci_1n4g/render_cutedsl_report.py "
@@ -317,6 +339,9 @@ def summary_cards(
         "NVTE_CUTEDSL_FUSED_GROUPED_MLP",
         default=manifest.get("timing_order", "unknown"),
     )
+    triton_cache_scope = manifest.get("triton_cache_scope")
+    if triton_cache_scope not in VALID_TRITON_CACHE_SCOPES:
+        triton_cache_scope = "not recorded"
     values = [
         (
             "Status",
@@ -349,6 +374,7 @@ def summary_cards(
             f"Qwen3 30B-A3B · {escape(nodes)} node · {escape(gpus)} GPUs · {escape(topology_label)}",
         ),
         ("Feature cell", escape(feature_cell)),
+        ("Triton cache scope", escape(triton_cache_scope)),
     ]
     return (
         '<div class="grid">'
@@ -560,6 +586,29 @@ def root_cause_section(events: list[dict[str, Any]], failed: bool) -> str:
     )
 
 
+def triton_cache_diagnostic_section(diagnostic: dict[str, Any]) -> str:
+    """Render only the already-sanitized cache diagnostic count projection."""
+    if not diagnostic:
+        return ""
+    fields = (
+        ("Cache scope", "cache_scope"),
+        ("Expected nodes", "expected_node_count"),
+        ("Observed nodes", "observed_node_count"),
+        ("Missing nodes", "missing_node_count"),
+        ("Candidates", "candidate_count"),
+        ("Scanned", "scanned_count"),
+        ("Invalid JSON", "invalid_json_count"),
+        ("Rejected symlinks", "rejected_symlink_count"),
+        ("Timed out", "timed_out"),
+        ("Truncated", "truncated"),
+    )
+    rows = "".join(
+        f"<tr><th>{escape(label)}</th><td>{escape(diagnostic.get(key))}</td></tr>"
+        for label, key in fields
+    )
+    return f"<h2>Triton cache failure diagnostics</h2><table>{rows}</table>"
+
+
 def completeness_section(events: list[dict[str, Any]]) -> str:
     """Render whether every required phase has at least one event record."""
     observed = {str(event.get("phase")) for event in events}
@@ -612,6 +661,7 @@ def reproducibility_section(
         "timing_summary.json",
         "metrics_summary.json",
         "kernel_attribution.json",
+        PUBLIC_CACHE_DIAGNOSTIC_NAME,
         "nemo_unit_results.json",
         "slurm.out",
     ]
@@ -645,6 +695,7 @@ def render_run(run_dir: Path) -> Path:
     metrics = read_json(run_dir / "metrics_summary.json")
     timing = read_json(run_dir / "timing_summary.json")
     functional_summary = read_json(run_dir / "functional_gate_summary.json")
+    cache_diagnostic = read_json(run_dir / PUBLIC_CACHE_DIAGNOSTIC_NAME)
     events = read_events(run_dir / "events.jsonl")
     functional_only = is_functional_only(manifest)
     failed = status.get("exit_code") != 0
@@ -672,6 +723,7 @@ def render_run(run_dir: Path) -> Path:
             ),
             profile_section(run_dir, metrics),
             root_cause_section(events, failed),
+            triton_cache_diagnostic_section(cache_diagnostic if failed else {}),
             completeness_section(events),
             timeline_section(run_dir, events),
             excerpt_section,
@@ -719,6 +771,65 @@ def is_manual_incident(incident: dict[str, Any]) -> bool:
         and INCIDENT_RUN_ID_PATTERN.fullmatch(run_id) is not None
         and report_path == f"evidence/job-{run_id}.txt"
     )
+
+
+def _is_nonnegative_integer(value: Any) -> bool:
+    """Return whether a JSON value is a finite nonnegative integer."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def is_compact_incident(incident: dict[str, Any]) -> bool:
+    """Return whether an incident matches one bounded report-only schema."""
+    job_id = incident.get("job_id")
+    if not isinstance(job_id, str) or INCIDENT_JOB_ID_PATTERN.fullmatch(job_id) is None:
+        return False
+    classification = incident.get("classification")
+    if classification == "kernel_matcher_false_negative":
+        count_keys = COMPACT_MATCHER_INCIDENT_KEYS - {
+            "job_id",
+            "classification",
+            "performance_claim_impact",
+        }
+        return (
+            set(incident) == COMPACT_MATCHER_INCIDENT_KEYS
+            and all(_is_nonnegative_integer(incident.get(key)) for key in count_keys)
+            and incident.get("performance_claim_impact")
+            == "recollect_after_matcher_fix"
+        )
+    if classification == "triton_group_metadata_json_decode_error":
+        text_keys = {"failure_boundary", "cause_boundary"}
+        return (
+            set(incident) == COMPACT_CACHE_INCIDENT_KEYS
+            and incident.get("cache_scope") == "shared_job_lustre"
+            and incident.get("performance_claim_impact")
+            == "excluded_initialization_failure"
+            and all(
+                isinstance(incident.get(key), str) and 1 <= len(incident[key]) <= 512
+                for key in text_keys
+            )
+        )
+    return False
+
+
+def compact_incident_details(incident: dict[str, Any]) -> dict[str, Any]:
+    """Return the bounded details displayed for a validated compact incident."""
+    if incident["classification"] == "kernel_matcher_false_negative":
+        return {
+            key: incident[key]
+            for key in (
+                "on_kernel_stat_rows",
+                "off_kernel_stat_rows",
+                "on_fused_glu_instances",
+                "on_fused_dglu_instances",
+                "on_fused_quant_instances",
+                "off_fused_instances",
+            )
+        }
+    return {
+        "failure_boundary": incident["failure_boundary"],
+        "cache_scope": incident["cache_scope"],
+        "cause_boundary": incident["cause_boundary"],
+    }
 
 
 def feature_cell(metadata: dict[str, Any], manifest: dict[str, Any]) -> str:
@@ -875,6 +986,138 @@ def bounded_utf8_tail(value: str, maximum_bytes: int) -> str:
     return encoded[-maximum_bytes:].decode(errors="ignore")
 
 
+def _diagnostic_nonnegative_integer(value: Any, label: str) -> int:
+    """Validate one bounded cache-diagnostic count."""
+    if not _is_nonnegative_integer(value):
+        raise ValueError(f"{label} must be a nonnegative integer")
+    return value
+
+
+def public_cache_diagnostic_projection(
+    value: dict[str, Any], manifest_scope: Any
+) -> dict[str, Any]:
+    """Validate merged cache diagnostics and retain only public aggregate counts."""
+    required = {
+        "schema_version",
+        "expected_nodes",
+        "observed_nodes",
+        "missing_nodes",
+        "timed_out",
+        "truncated",
+        "nodes",
+    }
+    if set(value) != required or value.get("schema_version") != 1:
+        raise ValueError("invalid merged cache-diagnostic schema")
+    if manifest_scope not in VALID_TRITON_CACHE_SCOPES:
+        raise ValueError("invalid manifest Triton cache scope")
+    expected = _diagnostic_nonnegative_integer(
+        value.get("expected_nodes"), "expected_nodes"
+    )
+    if expected < 1:
+        raise ValueError("expected_nodes must be positive")
+    observed_value = value.get("observed_nodes")
+    missing_value = value.get("missing_nodes")
+    nodes_value = value.get("nodes")
+    if (
+        not isinstance(observed_value, list)
+        or not isinstance(missing_value, list)
+        or not isinstance(nodes_value, list)
+    ):
+        raise ValueError("cache-diagnostic node fields must be lists")
+    observed: list[Any] = observed_value
+    missing: list[Any] = missing_value
+    nodes: list[Any] = nodes_value
+    if not all(_is_nonnegative_integer(index) for index in observed + missing):
+        raise ValueError("cache-diagnostic node indexes must be nonnegative integers")
+    if (
+        observed != sorted(set(observed))
+        or missing != sorted(set(missing))
+        or set(observed) & set(missing)
+        or set(observed) | set(missing) != set(range(expected))
+        or len(nodes) != len(observed)
+    ):
+        raise ValueError("cache-diagnostic node coverage is inconsistent")
+    if not isinstance(value.get("timed_out"), bool) or value["timed_out"] != bool(
+        missing
+    ):
+        raise ValueError("cache-diagnostic timeout state is inconsistent")
+    if not isinstance(value.get("truncated"), bool):
+        raise ValueError("cache-diagnostic truncation state must be boolean")
+
+    candidate_count = 0
+    scanned_count = 0
+    invalid_json_count = 0
+    rejected_symlink_count = 0
+    node_truncated = False
+    for expected_index, node in zip(observed, nodes, strict=True):
+        if not isinstance(node, dict) or node.get("node_index") != expected_index:
+            raise ValueError("cache-diagnostic node record is inconsistent")
+        if node.get("cache_scope") != manifest_scope:
+            raise ValueError("cache-diagnostic scope differs from the manifest")
+        candidates = _diagnostic_nonnegative_integer(
+            node.get("candidate_count"), "candidate_count"
+        )
+        scanned = _diagnostic_nonnegative_integer(
+            node.get("scanned_count"), "scanned_count"
+        )
+        rejected = _diagnostic_nonnegative_integer(
+            node.get("rejected_symlink_count"), "rejected_symlink_count"
+        )
+        files = node.get("files")
+        if (
+            not isinstance(files, list)
+            or scanned != len(files)
+            or scanned > candidates
+            or scanned > 256
+        ):
+            raise ValueError("cache-diagnostic scanned-file count is inconsistent")
+        invalid = 0
+        for record in files:
+            if not isinstance(record, dict) or not isinstance(
+                record.get("json_valid"), bool
+            ):
+                raise ValueError("cache-diagnostic JSON-validity record is invalid")
+            invalid += int(not record["json_valid"])
+        if not isinstance(node.get("truncated"), bool):
+            raise ValueError("node cache-diagnostic truncation state must be boolean")
+        node_truncated = node_truncated or node["truncated"]
+        candidate_count += candidates
+        scanned_count += scanned
+        invalid_json_count += invalid
+        rejected_symlink_count += rejected
+    if node_truncated != value["truncated"]:
+        raise ValueError("merged cache-diagnostic truncation state is inconsistent")
+    return {
+        "cache_scope": manifest_scope,
+        "expected_node_count": expected,
+        "observed_node_count": len(observed),
+        "missing_node_count": len(missing),
+        "candidate_count": candidate_count,
+        "scanned_count": scanned_count,
+        "invalid_json_count": invalid_json_count,
+        "rejected_symlink_count": rejected_symlink_count,
+        "timed_out": value["timed_out"],
+        "truncated": value["truncated"],
+    }
+
+
+def write_public_cache_diagnostics(
+    source_run: Path,
+    destination: Path,
+    manifest_scope: Any,
+) -> bool:
+    """Publish a count-only projection of one contained merged diagnostic."""
+    source = source_run / "triton_cache_diagnostics/summary.json"
+    if not is_contained_regular_file(source_run, source):
+        return False
+    if source.stat().st_size > MAX_PUBLIC_STRUCTURED_BYTES:
+        raise ValueError(f"Structured public artifact exceeds size bound: {source}")
+    value = read_json(source)
+    projection = public_cache_diagnostic_projection(value, manifest_scope)
+    destination.write_text(json.dumps(projection, indent=2, sort_keys=True) + "\n")
+    return True
+
+
 def stage_public_run(source_run: Path, public_run: Path) -> Path:
     """Build a redacted, allowlisted public run tree and render its report."""
     if public_run.exists():
@@ -887,6 +1130,13 @@ def stage_public_run(source_run: Path, public_run: Path) -> Path:
         source = source_run / name
         write_public_json(source_run, source, public_run / name)
     manifest = read_json(public_run / "benchmark_manifest.json")
+    status = read_json(public_run / "status.json")
+    if status.get("exit_code") != 0:
+        write_public_cache_diagnostics(
+            source_run,
+            public_run / PUBLIC_CACHE_DIAGNOSTIC_NAME,
+            manifest.get("triton_cache_scope"),
+        )
     if is_functional_only(manifest):
         write_public_functional_summary(
             source_run,
@@ -932,7 +1182,7 @@ def refresh_aggregate(experiment_dir: Path) -> Path:
     incidents = [
         incident
         for incident in read_incidents(report_dir / "incidents.json")
-        if is_manual_incident(incident)
+        if is_manual_incident(incident) or is_compact_incident(incident)
     ]
     incident_fields = [
         "timestamp_utc",
@@ -1235,6 +1485,8 @@ def render_aggregate(report_dir: Path) -> Path:
         read_incidents(report_dir / "incidents.json"),
         key=lambda incident: str(incident.get("timestamp_utc", "")),
     )
+    compact_incidents = [item for item in incidents if is_compact_incident(item)]
+    legacy_incidents = [item for item in incidents if not is_compact_incident(item)]
     runs = read_run_index(report_dir / "run_index.tsv")
     run_rows = (
         "".join(
@@ -1255,15 +1507,29 @@ def render_aggregate(report_dir: Path) -> Path:
             f"<td>{escape(item.get('reproduction'))}</td><td>{escape(item.get('hypothesis'))}</td>"
             f"<td>{escape(item.get('tested_change'))}</td>"
             f"<td>{escape(item.get('verification_evidence'))}</td></tr>"
-            for item in incidents
+            for item in legacy_incidents
         )
         or '<tr><td colspan="10" class="muted">No incidents recorded yet.</td></tr>'
+    )
+    compact_rows = (
+        "".join(
+            "<tr>"
+            f"<td>{escape(item.get('job_id'))}</td>"
+            f"<td>{escape(item.get('classification'))}</td>"
+            f"<td>{escape(compact_incident_details(item))}</td>"
+            f"<td>{escape(item.get('performance_claim_impact'))}</td></tr>"
+            for item in compact_incidents
+        )
+        or '<tr><td colspan="4" class="muted">No compact incidents recorded yet.</td></tr>'
     )
     body = (
         "<h1>CuTeDSL experiment report</h1>"
         '<p class="lede">Portable Qwen3 30B-A3B functional and factorial evidence.</p>'
         "<h2>Runs and reproducibility</h2><table><thead><tr><th>Run</th><th>Status</th>"
         f"<th>Cluster</th><th>Feature cell</th><th>Reproducibility</th></tr></thead><tbody>{run_rows}</tbody></table>"
+        "<h2>Bounded incident classifications</h2><table><thead><tr><th>Job</th>"
+        "<th>Classification</th><th>Sanitized evidence</th><th>Performance impact</th>"
+        f"</tr></thead><tbody>{compact_rows}</tbody></table>"
         "<h2>Root-cause timeline</h2><table><thead><tr><th>Time</th><th>Symptom</th>"
         "<th>Boundary evidence</th><th>Root cause / one fix</th><th>Fix commit</th>"
         "<th>Verification job</th><th>Reproduction</th><th>Hypothesis</th>"

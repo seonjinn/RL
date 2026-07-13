@@ -1809,37 +1809,34 @@ import sys
 from pathlib import Path
 
 FUSED_GLU_SIGNATURES = {
-    "transformer_engine_forward_grouped_mlp": (
-        r"\bForwardGroupedMLP_CuTeGEMMSwiGLU_MXFP8\b"
+    "cudnn_frontend_fused_glu": (
+        r"BlockScaledMoEGroupedGemmGluBiasKernel(?:_|\b)"
     ),
-    "cudnn_frontend_glu_bias_kernel": (
-        r"\bBlockScaledMoEGroupedGemmGluBiasKernel\b"
-    ),
-    "cudnn_frontend_glu_wrapper_sm100": r"\bgrouped_gemm_glu_wrapper_sm100\b",
 }
 FUSED_DGLU_SIGNATURES = {
-    "cudnn_frontend_dglu_dbias_kernel": (
-        r"\bBlockScaledMoEGroupedGemmDgluDbiasKernel\b"
-    ),
-    "cudnn_frontend_dglu_wrapper_sm100": (
-        r"\bgrouped_gemm_dglu(?:_dbias)?_wrapper_sm100\b"
+    "cudnn_frontend_fused_dglu": (
+        r"BlockScaledMoEGroupedGemmDgluDbiasKernel(?:_|\b)"
     ),
 }
-QUANT_SIGNATURES = {
-    "cudnn_frontend_quant_kernel": r"\bBlockScaledMoEGroupedGemmQuantKernel\b",
-    "cudnn_frontend_quant_wrapper_sm100": r"\bgrouped_gemm_quant_wrapper_sm100\b",
+FUSED_QUANT_SIGNATURES = {
+    "cudnn_frontend_fused_quant": (
+        r"BlockScaledMoEGroupedGemmQuantKernel(?:_|\b)"
+    ),
 }
-GROUPED_GEMM_SIGNATURES = {
-    "grouped_gemm_text": r"\bgrouped[_ ]?gemm\w*\b",
-    "cudnn_frontend_grouped_gemm_class": r"\bBlockScaledMoEGroupedGemm\w*Kernel\b",
-    "transformer_engine_grouped_mlp_cute_gemm": r"\bForwardGroupedMLP_CuTeGEMM\w*\b",
-    "moe_gemm_text": r"\b(?:moe\w*gemm|gemm\w*moe)\b",
+FUSED_GROUPED_GEMM_SIGNATURES = {
+    "cudnn_frontend_grouped_gemm": (
+        r"BlockScaledMoEGroupedGemm\w*Kernel(?:_|\b)"
+    ),
+}
+BASELINE_EXPERT_GEMM_SIGNATURES = {
+    "nvjet_sm100": r"(?:^|[^A-Za-z0-9])nvjet_sm100_[A-Za-z0-9_]*",
 }
 SIGNATURE_REGEXES = {
     "fused_glu": FUSED_GLU_SIGNATURES,
     "fused_dglu": FUSED_DGLU_SIGNATURES,
-    "quant": QUANT_SIGNATURES,
-    "grouped_gemm": GROUPED_GEMM_SIGNATURES,
+    "fused_quant": FUSED_QUANT_SIGNATURES,
+    "fused_grouped_gemm": FUSED_GROUPED_GEMM_SIGNATURES,
+    "baseline_expert_gemm": BASELINE_EXPERT_GEMM_SIGNATURES,
 }
 
 
@@ -1881,13 +1878,28 @@ for arm in expected_arms:
         category: signature_counts(evidence, signatures)
         for category, signatures in SIGNATURE_REGEXES.items()
     }
+    arm_config = config_evidence.get(arm, {})
+    baseline_config_eligible = (
+        arm_config.get("policy.megatron_cfg.moe_grouped_gemm") is True
+        and arm_config.get(
+            "policy.megatron_cfg.use_transformer_engine_op_fuser"
+        )
+        is True
+    )
     arm_results[arm] = {
         "kernel_evidence": evidence_file,
         "signature_match_counts": category_counts,
         "fused_glu_match_count": total_matches(category_counts["fused_glu"]),
         "fused_dglu_match_count": total_matches(category_counts["fused_dglu"]),
-        "quant_match_count": total_matches(category_counts["quant"]),
-        "grouped_gemm_match_count": total_matches(category_counts["grouped_gemm"]),
+        "fused_quant_match_count": total_matches(category_counts["fused_quant"]),
+        "fused_grouped_gemm_match_count": total_matches(
+            category_counts["fused_grouped_gemm"]
+        ),
+        "baseline_expert_gemm_match_count": (
+            total_matches(category_counts["baseline_expert_gemm"])
+            if baseline_config_eligible
+            else 0
+        ),
     }
 
 on_result = arm_results["on"]
@@ -1895,15 +1907,24 @@ if on_result["fused_glu_match_count"] == 0:
     failures.append("ON fused GLU kernel signature was not found")
 if on_result["fused_dglu_match_count"] == 0:
     failures.append("ON fused dGLU kernel signature was not found")
+if on_result["fused_quant_match_count"] == 0:
+    failures.append("ON fused quant kernel signature was not found")
+if on_result["fused_grouped_gemm_match_count"] == 0:
+    failures.append("ON fused grouped-GEMM kernel signature was not found")
 if "off" in expected_arms:
     off_result = arm_results["off"]
     if off_result["fused_glu_match_count"] != 0:
         failures.append("OFF fused GLU kernel signature must be absent")
     if off_result["fused_dglu_match_count"] != 0:
         failures.append("OFF fused dGLU kernel signature must be absent")
-for arm in expected_arms:
-    if arm_results[arm]["grouped_gemm_match_count"] == 0:
-        failures.append(f"{arm.upper()} grouped-GEMM path signature was not found")
+    if off_result["fused_quant_match_count"] != 0:
+        failures.append("OFF fused quant kernel signature must be absent")
+    if off_result["fused_grouped_gemm_match_count"] != 0:
+        failures.append("OFF fused grouped-GEMM kernel signature must be absent")
+    if off_result["baseline_expert_gemm_match_count"] == 0:
+        failures.append(
+            "OFF baseline expert-GEMM signature with fixed config predicates was not found"
+        )
 
 config_contracts = {
     "policy.megatron_cfg.moe_grouped_gemm": "grouped GEMM",

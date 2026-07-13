@@ -99,6 +99,151 @@ def _run_timing_summarizer(
     )
 
 
+def _run_kernel_attribution_fixture(
+    tmp_path: Path,
+    *,
+    on: str,
+    off: str,
+    off_moe_grouped_gemm: bool = True,
+    off_op_fuser: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+    """Execute the embedded kernel-attribution program on bounded fixtures."""
+    source = MATRIX_PAYLOAD.read_text()
+    attribution = source.split("# CUTEDSL_KERNEL_ATTRIBUTION_START\n", 1)[1].split(
+        "# CUTEDSL_KERNEL_ATTRIBUTION_END", 1
+    )[0]
+    result_dir = tmp_path / "results"
+    for order_index, (arm, evidence) in enumerate((("on", on), ("off", off))):
+        profile_dir = result_dir / "profiles" / f"{order_index}-{arm}"
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "kernel_evidence.txt").write_text(evidence)
+    config_evidence = {
+        "on": {
+            "policy.megatron_cfg.moe_grouped_gemm": True,
+            "policy.megatron_cfg.use_transformer_engine_op_fuser": True,
+        },
+        "off": {
+            "policy.megatron_cfg.moe_grouped_gemm": off_moe_grouped_gemm,
+            "policy.megatron_cfg.use_transformer_engine_op_fuser": off_op_fuser,
+        },
+    }
+    manifest = {
+        "available_arms": ["on", "off"],
+        "fixed_config_evidence": config_evidence,
+        "feature_context": "g0a0",
+        "full_cg_enabled": False,
+        "a2a_enabled": False,
+    }
+    (result_dir / "benchmark_manifest.json").write_text(json.dumps(manifest))
+
+    result = subprocess.run(
+        [sys.executable, "-c", attribution, str(result_dir)],
+        capture_output=True,
+        text=True,
+    )
+    output_path = result_dir / "kernel_attribution.json"
+    output: dict[str, object] = (
+        json.loads(output_path.read_text()) if output_path.is_file() else {}
+    )
+    return result, output
+
+
+def _actual_cudnn_fused_kernel_evidence() -> str:
+    """Return the exact object-suffixed kernel-name shape seen in job 2369786."""
+    return "\n".join(
+        (
+            "kernel_cutlass_kernel_cudnngrouped_gemm_"
+            "BlockScaledMoEGroupedGemmQuantKernel_object_at_0x1",
+            "kernel_cutlass_kernel_cudnngrouped_gemm_"
+            "BlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x2",
+            "kernel_cutlass_kernel_cudnngrouped_gemm_"
+            "BlockScaledMoEGroupedGemmDgluDbiasKernel_object_at_0x3",
+        )
+    )
+
+
+def test_kernel_matchers_accept_cudnn_object_suffix_and_reject_off_arm(
+    tmp_path: Path,
+) -> None:
+    result, attribution = _run_kernel_attribution_fixture(
+        tmp_path,
+        on=_actual_cudnn_fused_kernel_evidence(),
+        off="nvjet_sm100_128x128",
+    )
+
+    assert result.returncode == 0, result.stderr
+    arms = attribution["arms"]
+    assert isinstance(arms, dict)
+    assert arms["on"]["fused_glu_match_count"] == 1
+    assert arms["on"]["fused_dglu_match_count"] == 1
+    assert arms["on"]["fused_quant_match_count"] == 1
+    assert arms["on"]["fused_grouped_gemm_match_count"] == 3
+    assert arms["off"]["fused_glu_match_count"] == 0
+    assert arms["off"]["fused_dglu_match_count"] == 0
+    assert arms["off"]["fused_quant_match_count"] == 0
+    assert arms["off"]["fused_grouped_gemm_match_count"] == 0
+    assert arms["off"]["baseline_expert_gemm_match_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("off_moe_grouped_gemm", "off_op_fuser", "failure"),
+    [
+        (False, True, "OFF grouped GEMM config evidence is not true"),
+        (True, False, "OFF op fuser config evidence is not true"),
+    ],
+)
+def test_off_baseline_attribution_requires_fixed_config_predicates(
+    tmp_path: Path,
+    off_moe_grouped_gemm: bool,
+    off_op_fuser: bool,
+    failure: str,
+) -> None:
+    result, attribution = _run_kernel_attribution_fixture(
+        tmp_path,
+        on=_actual_cudnn_fused_kernel_evidence(),
+        off="nvjet_sm100_128x128",
+        off_moe_grouped_gemm=off_moe_grouped_gemm,
+        off_op_fuser=off_op_fuser,
+    )
+
+    assert result.returncode != 0
+    assert failure in result.stderr
+    arms = attribution["arms"]
+    assert isinstance(arms, dict)
+    assert arms["off"]["baseline_expert_gemm_match_count"] == 0
+
+
+def test_kernel_attribution_rejects_fused_kernel_in_off_arm(tmp_path: Path) -> None:
+    result, attribution = _run_kernel_attribution_fixture(
+        tmp_path,
+        on=_actual_cudnn_fused_kernel_evidence(),
+        off=(
+            "nvjet_sm100_128x128\nBlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x4"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "OFF fused GLU kernel signature must be absent" in result.stderr
+    assert attribution["passed"] is False
+
+
+def test_kernel_attribution_rejects_on_arm_without_fused_quant(
+    tmp_path: Path,
+) -> None:
+    on = _actual_cudnn_fused_kernel_evidence().replace(
+        "BlockScaledMoEGroupedGemmQuantKernel_object_at_0x1", ""
+    )
+    result, attribution = _run_kernel_attribution_fixture(
+        tmp_path,
+        on=on,
+        off="nvjet_sm100_128x128",
+    )
+
+    assert result.returncode != 0
+    assert "ON fused quant kernel signature was not found" in result.stderr
+    assert attribution["passed"] is False
+
+
 def _run_functional_summarizer(
     tmp_path: Path,
     offload_sequence: int,

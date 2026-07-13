@@ -88,6 +88,7 @@ def render_fixture(
     *,
     status: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    manifest: dict[str, Any] | None = None,
     slurm_output: str | None = None,
 ) -> str:
     """Render a run fixture and return the generated HTML."""
@@ -134,6 +135,8 @@ def render_fixture(
             },
         },
     )
+    if manifest is not None:
+        write_json(run_dir / "benchmark_manifest.json", manifest)
     renderer = load_renderer()
     renderer.render_run(run_dir)
     return (run_dir / "report.html").read_text()
@@ -684,12 +687,165 @@ def test_aggregate_report_uses_local_assets_and_incident_timeline() -> None:
         "2362916",
         "2363067",
         "2363339",
+        "2369786",
+        "2369788",
         "local-refresh-20260712",
     ):
         assert job_id in incident_text
         assert job_id in index
     assert "stale login-image TMPDIR" in incident_text
     assert "/runtime/tmp" in incident_text
+
+
+def test_compact_incidents_survive_refresh_without_report_paths(tmp_path: Path) -> None:
+    """Refresh preserves validated compact incidents alongside legacy records."""
+    experiment_dir = tmp_path / "experiment"
+    report_dir = experiment_dir / "report"
+    report_dir.mkdir(parents=True)
+    compact_incident = {
+        "job_id": "2369786",
+        "classification": "kernel_matcher_false_negative",
+        "on_kernel_stat_rows": 4664,
+        "off_kernel_stat_rows": 4765,
+        "on_fused_glu_instances": 241152,
+        "on_fused_dglu_instances": 161280,
+        "on_fused_quant_instances": 402432,
+        "off_fused_instances": 0,
+        "performance_claim_impact": "recollect_after_matcher_fix",
+    }
+    write_json(report_dir / "incidents.json", [compact_incident])
+
+    renderer = load_renderer()
+    renderer.refresh_aggregate(experiment_dir)
+
+    incidents = json.loads((report_dir / "incidents.json").read_text())
+    assert incidents == [compact_incident]
+    index = (report_dir / "public/index.html").read_text()
+    assert "2369786" in index
+    assert "kernel_matcher_false_negative" in index
+    assert "recollect_after_matcher_fix" in index
+    assert "evidence snapshot" not in index
+
+
+def test_committed_matcher_and_cache_incidents_are_bounded_compact_objects() -> None:
+    incidents = json.loads((EXPERIMENT_DIR / "report/incidents.json").read_text())
+    matcher = next(item for item in incidents if item.get("job_id") == "2369786")
+    assert matcher == {
+        "job_id": "2369786",
+        "classification": "kernel_matcher_false_negative",
+        "on_kernel_stat_rows": 4664,
+        "off_kernel_stat_rows": 4765,
+        "on_fused_glu_instances": 241152,
+        "on_fused_dglu_instances": 161280,
+        "on_fused_quant_instances": 402432,
+        "off_fused_instances": 0,
+        "performance_claim_impact": "recollect_after_matcher_fix",
+    }
+    cache = next(item for item in incidents if item.get("job_id") == "2369788")
+    assert cache["classification"] == "triton_group_metadata_json_decode_error"
+    assert cache["cache_scope"] == "shared_job_lustre"
+    assert cache["performance_claim_impact"] == "excluded_initialization_failure"
+    assert "ordinary writer race" not in cache["cause_boundary"]
+    assert "writer mechanism is unproven" in cache["cause_boundary"]
+    assert "report_path" not in cache
+    serialized = json.dumps([matcher, cache], sort_keys=True)
+    for forbidden in ("/lustre/", "ptyche", "10.0.0.1", "TOKEN=", "raw cache"):
+        assert forbidden not in serialized
+
+
+def test_success_report_exposes_cache_scope_without_failure_diagnostics(
+    tmp_path: Path,
+) -> None:
+    html = render_fixture(
+        tmp_path,
+        [],
+        status={"run_id": "run-123", "job_id": "123", "exit_code": 0},
+        manifest={"triton_cache_scope": "job_node_local"},
+    )
+
+    assert "Triton cache scope" in html
+    assert "job_node_local" in html
+    assert "Triton cache failure diagnostics" not in html
+
+
+def test_failed_public_run_projects_only_bounded_cache_diagnostic_counts(
+    tmp_path: Path,
+) -> None:
+    source_run = tmp_path / "source-run"
+    diagnostic_dir = source_run / "triton_cache_diagnostics"
+    diagnostic_dir.mkdir(parents=True)
+    write_json(
+        source_run / "status.json",
+        {"run_id": "failure-123", "job_id": "123", "exit_code": 1},
+    )
+    write_json(source_run / "metadata.json", {})
+    write_json(
+        source_run / "benchmark_manifest.json",
+        {"triton_cache_scope": "job_node_local"},
+    )
+    (source_run / "events.jsonl").write_text("")
+    write_json(
+        diagnostic_dir / "summary.json",
+        {
+            "schema_version": 1,
+            "expected_nodes": 2,
+            "observed_nodes": [0],
+            "missing_nodes": [1],
+            "timed_out": True,
+            "truncated": False,
+            "nodes": [
+                {
+                    "node_index": 0,
+                    "cache_scope": "job_node_local",
+                    "candidate_count": 3,
+                    "scanned_count": 2,
+                    "rejected_symlink_count": 1,
+                    "truncated": False,
+                    "files": [
+                        {
+                            "json_valid": False,
+                            "relative_name_sha256": "a" * 64,
+                            "prefix_sha256": "b" * 64,
+                            "raw_path": "/lustre/private/cache/__grp__SENTINEL",
+                            "raw_bytes": "SENTINEL_RAW_CACHE_BYTES",
+                            "hostname": "ptyche123",
+                        },
+                        {"json_valid": True},
+                    ],
+                }
+            ],
+        },
+    )
+
+    public_run = tmp_path / "public-run"
+    renderer = load_renderer()
+    renderer.stage_public_run(source_run, public_run)
+
+    projection = json.loads((public_run / "triton_cache_diagnostics.json").read_text())
+    assert projection == {
+        "cache_scope": "job_node_local",
+        "expected_node_count": 2,
+        "observed_node_count": 1,
+        "missing_node_count": 1,
+        "candidate_count": 3,
+        "scanned_count": 2,
+        "invalid_json_count": 1,
+        "rejected_symlink_count": 1,
+        "timed_out": True,
+        "truncated": False,
+    }
+    public_text = "\n".join(
+        path.read_text() for path in public_run.rglob("*") if path.is_file()
+    )
+    assert "Triton cache failure diagnostics" in public_text
+    for forbidden in (
+        "/lustre/private/cache",
+        "ptyche123",
+        "SENTINEL_RAW_CACHE_BYTES",
+        "relative_name_sha256",
+        "prefix_sha256",
+    ):
+        assert forbidden not in public_text
 
 
 def test_refresh_preserves_manual_incident_evidence_without_run_directories(
@@ -728,10 +884,12 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
     report_dir = EXPERIMENT_DIR / "report"
     index_path = report_dir / "public/index.html"
     incidents = json.loads((report_dir / "incidents.json").read_text())
+    legacy_incidents = [incident for incident in incidents if "run_id" in incident]
+    compact_incidents = [incident for incident in incidents if "job_id" in incident]
     collector = LinkCollector()
     collector.feed(index_path.read_text())
 
-    assert {incident["run_id"] for incident in incidents} == {
+    assert {incident["run_id"] for incident in legacy_incidents} == {
         "1910599",
         "1911208",
         "2362239",
@@ -760,7 +918,11 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "local-refresh-20260712",
         "preflight-segment-20260712",
     }
-    for incident in incidents:
+    assert {incident["job_id"] for incident in compact_incidents} == {
+        "2369786",
+        "2369788",
+    }
+    for incident in legacy_incidents:
         relative_path = Path(incident["report_path"])
         assert not relative_path.is_absolute()
         assert ".." not in relative_path.parts

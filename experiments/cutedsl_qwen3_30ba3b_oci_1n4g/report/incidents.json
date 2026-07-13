@@ -403,5 +403,24 @@
     "timestamp_utc": "2026-07-13T12:09:03Z",
     "verification_evidence": "The root cause is bounded by three identical 429 tracebacks, zero completed steps, and absence of OOM/CUDA/source/image failures. Local cache/revision/collector regressions pass; clean remote verification is pending, and these jobs support no speedup claim.",
     "verification_job": "pending clean three-replica rerun"
+  },
+  {
+    "classification": "kernel_matcher_false_negative",
+    "job_id": "2369786",
+    "off_fused_instances": 0,
+    "off_kernel_stat_rows": 4765,
+    "on_fused_dglu_instances": 161280,
+    "on_fused_glu_instances": 241152,
+    "on_fused_quant_instances": 402432,
+    "on_kernel_stat_rows": 4664,
+    "performance_claim_impact": "recollect_after_matcher_fix"
+  },
+  {
+    "cache_scope": "shared_job_lustre",
+    "cause_boundary": "One reader observed invalid Triton group metadata in a cache shared across the job's nodes; the writer mechanism is unproven.",
+    "classification": "triton_group_metadata_json_decode_error",
+    "failure_boundary": "Step 1 generation completed before the first reference-logprob MoE forward failed while reading group metadata JSON.",
+    "job_id": "2369788",
+    "performance_claim_impact": "excluded_initialization_failure"
   }
 ]
