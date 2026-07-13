@@ -463,14 +463,12 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             TokenizeCompletionRequest,
             TokenizeResponse,
         )
-        from vllm.entrypoints.serve.render.serving import (
-            OpenAIServingRender,
-        )
         from vllm.entrypoints.serve.tokenize.serving import (
             ServingTokenization,
         )
         from vllm.exceptions import VLLMValidationError
         from vllm.reasoning.abs_reasoning_parsers import ReasoningParserManager
+        from vllm.renderers.online_renderer import OnlineRenderer
         from vllm.tool_parsers.abstract_tool_parser import ToolParserManager
         from vllm.v1.engine.async_llm import logger as vllm_async_llm_logger
 
@@ -543,9 +541,9 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 max_tokens = min(request_max_tokens, remaining)
                 self._set_max_tokens(request, max_tokens)
 
-            # vLLM 0.20 moved chat preprocessing from
-            # OpenAIServing._preprocess_chat to OpenAIServingRender.preprocess_chat,
-            # and vLLM 0.24 consolidated tool/reasoning parsers into `parser`.
+            # vLLM 0.25 routes chat preprocessing through
+            # OnlineRenderer.preprocess_chat and consolidates tool/reasoning
+            # parsers into `parser`.
             async def preprocess_chat(
                 self,
                 request,
@@ -677,9 +675,8 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         ):
             required_prefix_token_ids: Optional[List[int]] = None
 
-        # vLLM routes both /v1/chat/completions and /tokenize through
-        # OpenAIServingRender.preprocess_chat, so the prefix-token override
-        # belongs on the render subclass.
+        # vLLM routes both /v1/chat/completions and /tokenize through the same
+        # OnlineRenderer, so the prefix-token override belongs on that class.
         worker_self = self
 
         class NeMoRLOpenAIServingChatMixin:
@@ -721,7 +718,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         class NeMoRLOpenAIServingChat(NeMoRLOpenAIServingChatMixin, OpenAIServingChat):
             pass
 
-        class NeMoRLOpenAIServingRender(NeMoRLOpenAIServingMixin, OpenAIServingRender):
+        class NeMoRLOnlineRenderer(NeMoRLOpenAIServingMixin, OnlineRenderer):
             pass
 
         serving_chat_default_kwargs = dict(
@@ -734,22 +731,32 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         serving_chat_kwargs = serving_chat_default_kwargs | self.cfg["vllm_cfg"].get(
             "http_server_serving_chat_kwargs", dict()
         )
-        openai_serving_render = NeMoRLOpenAIServingRender(
+        online_renderer = NeMoRLOnlineRenderer(
             model_config=engine_client.model_config,
             renderer=engine_client.renderer,
-            model_registry=openai_serving_models.registry,
             request_logger=serving_chat_kwargs["request_logger"],
             chat_template=serving_chat_kwargs["chat_template"],
             chat_template_content_format=serving_chat_kwargs[
                 "chat_template_content_format"
             ],
+            trust_request_chat_template=serving_chat_kwargs.get(
+                "trust_request_chat_template", False
+            ),
             enable_auto_tools=serving_chat_kwargs["enable_auto_tools"],
+            exclude_tools_when_tool_choice_none=serving_chat_kwargs.get(
+                "exclude_tools_when_tool_choice_none", False
+            ),
+            tool_parser=serving_chat_kwargs.get("tool_parser"),
+            reasoning_parser=serving_chat_kwargs.get("reasoning_parser"),
+            default_chat_template_kwargs=serving_chat_kwargs.get(
+                "default_chat_template_kwargs"
+            ),
         )
         serving_chat_kwargs.update(
             dict(
                 engine_client=engine_client,
                 models=openai_serving_models,
-                openai_serving_render=openai_serving_render,
+                online_renderer=online_renderer,
                 return_tokens_as_token_ids=True,
             )
         )
@@ -820,8 +827,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             TokenizeCompletionRequest, NeMoRLTokenizeChatRequest
         ]
 
-        # Tokenize path delegates to OpenAIServingRender.preprocess_chat, where
-        # the prefix-token override lives.
+        # Tokenize and chat share the renderer carrying the prefix override.
         class NeMoRLServingTokenization(ServingTokenization):
             pass
 
@@ -832,7 +838,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
                 "chat_template_content_format"
             ],
             models=serving_chat_kwargs["models"],
-            openai_serving_render=openai_serving_render,
+            online_renderer=online_renderer,
         )
         openai_serving_tokenization = NeMoRLServingTokenization(
             **serving_tokenization_kwargs
