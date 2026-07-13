@@ -211,11 +211,11 @@ def _write_manifest_atomically(path: Path, manifest: dict[str, Any]) -> None:
             suffix=".tmp",
             delete=False,
         ) as temporary:
+            temporary_path = Path(temporary.name)
             json.dump(manifest, temporary, indent=2, sort_keys=True)
             temporary.write("\n")
             temporary.flush()
             os.fsync(temporary.fileno())
-            temporary_path = Path(temporary.name)
         assert temporary_path is not None
         os.replace(temporary_path, path)
         temporary_path = None

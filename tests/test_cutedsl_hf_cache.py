@@ -267,6 +267,83 @@ def test_offline_missing_manifest_bootstraps_from_local_cache_atomically(
     assert not replacements[0][0].exists()
 
 
+@pytest.mark.parametrize("failure_stage", ("dump", "write", "flush", "fsync", "replace"))
+def test_atomic_manifest_failure_removes_temporary_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    module = _load_preparer()
+    manifest_path = tmp_path / "nemo2606_qwen3_30ba3b_manifest.json"
+    real_named_temporary_file = module.tempfile.NamedTemporaryFile
+
+    class FailingTemporaryFile:
+        def __init__(self, delegate: Any) -> None:
+            self.delegate = delegate
+            self.name = delegate.name
+
+        def __enter__(self) -> "FailingTemporaryFile":
+            self.delegate.__enter__()
+            return self
+
+        def __exit__(
+            self,
+            exception_type: Any,
+            exception: Any,
+            traceback: Any,
+        ) -> Any:
+            return self.delegate.__exit__(exception_type, exception, traceback)
+
+        def write(self, value: str) -> int:
+            if failure_stage == "write":
+                raise OSError("injected temporary write failure")
+            return self.delegate.write(value)
+
+        def flush(self) -> None:
+            if failure_stage == "flush":
+                raise OSError("injected temporary flush failure")
+            self.delegate.flush()
+
+        def fileno(self) -> int:
+            return self.delegate.fileno()
+
+    def make_failing_temporary_file(*args: Any, **kwargs: Any) -> FailingTemporaryFile:
+        return FailingTemporaryFile(real_named_temporary_file(*args, **kwargs))
+
+    monkeypatch.setattr(
+        module.tempfile,
+        "NamedTemporaryFile",
+        make_failing_temporary_file,
+    )
+    if failure_stage == "dump":
+
+        def fail_dump(*_: Any, **__: Any) -> None:
+            raise OSError("injected JSON dump failure")
+
+        monkeypatch.setattr(module.json, "dump", fail_dump)
+    elif failure_stage == "fsync":
+
+        def fail_fsync(_: int) -> None:
+            raise OSError("injected fsync failure")
+
+        monkeypatch.setattr(module.os, "fsync", fail_fsync)
+    elif failure_stage == "replace":
+
+        def fail_replace(_: Path, __: Path) -> None:
+            raise OSError("injected replace failure")
+
+        monkeypatch.setattr(module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="injected"):
+        module._write_manifest_atomically(
+            manifest_path,
+            {"schema_version": 1, "repositories": {}},
+        )
+
+    assert not manifest_path.exists()
+    assert not list(tmp_path.glob(f".{manifest_path.name}.*.tmp"))
+
+
 @pytest.mark.parametrize("failure", ("missing_snapshot", "wrong_row_count"))
 def test_offline_bootstrap_rejects_incomplete_local_cache_without_manifest(
     tmp_path: Path,
