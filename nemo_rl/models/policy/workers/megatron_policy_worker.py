@@ -77,6 +77,10 @@ from nemo_rl.models.megatron.setup import (
     validate_and_set_config,
     validate_model_paths,
 )
+from nemo_rl.models.megatron.reference_setup_diagnostics import (
+    log_reference_setup_stage,
+    reference_setup_stack_dumps,
+)
 from nemo_rl.models.megatron.train import (
     LogprobsPostProcessor,
     LossPostProcessor,
@@ -404,16 +408,21 @@ class MegatronPolicyWorkerImpl(
 
         # Step 5: Setup reference model if needed
         if init_reference_model:
-            self.model = self.move_model(self.model, "cpu")
-            self.reference_state_dict = setup_reference_model_state(
-                config,
-                self.megatron_cfg,
-                pretrained_path,
-                pre_load_checkpoint_hook=getattr(
-                    self, "_pre_load_checkpoint_hook", None
-                ),
-            )
-            self.model = self.move_model(self.model, "cuda")
+            with reference_setup_stack_dumps():
+                log_reference_setup_stage("worker.before_move_policy_to_cpu")
+                self.model = self.move_model(self.model, "cpu")
+                log_reference_setup_stage("worker.after_move_policy_to_cpu")
+                self.reference_state_dict = setup_reference_model_state(
+                    config,
+                    self.megatron_cfg,
+                    pretrained_path,
+                    pre_load_checkpoint_hook=getattr(
+                        self, "_pre_load_checkpoint_hook", None
+                    ),
+                )
+                log_reference_setup_stage("worker.before_move_policy_to_cuda")
+                self.model = self.move_model(self.model, "cuda")
+                log_reference_setup_stage("worker.after_move_policy_to_cuda")
             log_gpu_memory_diagnostics(
                 label="after_ref_model", worker_type="MegatronPolicyWorker"
             )
