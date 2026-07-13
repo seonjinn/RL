@@ -80,6 +80,8 @@ from nemo_rl.models.megatron.setup import (
 from nemo_rl.models.megatron.reference_setup_diagnostics import (
     buffer_memory_metadata,
     log_reference_setup_stage,
+    reference_cpu_offload_lock,
+    reference_cpu_offload_serialization_enabled,
     reference_setup_stack_dumps,
 )
 from nemo_rl.models.megatron.train import (
@@ -411,7 +413,11 @@ class MegatronPolicyWorkerImpl(
         if init_reference_model:
             with reference_setup_stack_dumps():
                 log_reference_setup_stage("worker.before_move_policy_to_cpu")
-                self.model = self.move_model(self.model, "cpu")
+                self.model = self.move_model(
+                    self.model,
+                    "cpu",
+                    serialize_cpu_offload=reference_cpu_offload_serialization_enabled(),
+                )
                 log_reference_setup_stage("worker.after_move_policy_to_cpu")
                 self.reference_state_dict = setup_reference_model_state(
                     config,
@@ -2118,6 +2124,7 @@ class MegatronPolicyWorkerImpl(
         device: str,
         move_params: bool = True,
         move_grads: bool = True,
+        serialize_cpu_offload: bool = False,
     ) -> torch.nn.Module:
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
@@ -2136,9 +2143,10 @@ class MegatronPolicyWorkerImpl(
                             buffer_index=buffer_idx,
                             **buffer_memory_metadata(buffer),
                         )
-                        buffer.offload_to_cpu(
-                            move_params=move_params, move_grads=move_grads
-                        )
+                        with reference_cpu_offload_lock(enabled=serialize_cpu_offload):
+                            buffer.offload_to_cpu(
+                                move_params=move_params, move_grads=move_grads
+                            )
                         log_reference_setup_stage(
                             "worker.after_buffer_offload",
                             buffer_group=buffer_group,

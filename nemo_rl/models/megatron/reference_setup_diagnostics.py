@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import faulthandler
+import fcntl
 import json
 import os
 import re
@@ -28,6 +29,8 @@ from typing import Any
 _DEBUG_ENV = "NRL_DEBUG_REFERENCE_MODEL_SETUP"
 _DISTRIBUTED_TIMEOUT_ENV = "NRL_MEGATRON_NCCL_TIMEOUT_SECONDS"
 _MARKER_DIR_ENV = "NRL_REFERENCE_SETUP_MARKER_DIR"
+_OFFLOAD_LOCK_DIR_ENV = "NRL_REFERENCE_CPU_OFFLOAD_LOCK_DIR"
+_SERIALIZE_OFFLOAD_ENV = "NRL_SERIALIZE_REFERENCE_CPU_OFFLOAD"
 _STACK_DUMP_INTERVAL_ENV = "NRL_REFERENCE_SETUP_STACK_DUMP_SECONDS"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CHECKPOINT_MARKERS = (
@@ -59,6 +62,36 @@ def buffer_memory_metadata(buffer: Any) -> dict[str, int]:
         metadata[f"{field_prefix}_numel"] = numel
         metadata[f"{field_prefix}_bytes"] = numel * int(tensor.element_size())
     return metadata
+
+
+def reference_cpu_offload_serialization_enabled() -> bool:
+    """Return whether initial reference setup should serialize CPU offload per host."""
+    return os.getenv(_SERIALIZE_OFFLOAD_ENV, "").strip().lower() in _TRUE_VALUES
+
+
+@contextmanager
+def reference_cpu_offload_lock(*, enabled: bool) -> Iterator[None]:
+    """Serialize large pinned-memory allocations among ranks on the same host."""
+    if not enabled:
+        yield
+        return
+
+    lock_dir = os.getenv(_OFFLOAD_LOCK_DIR_ENV, "/tmp")
+    hostname = re.sub(r"[^A-Za-z0-9_.-]", "_", socket.gethostname())
+    lock_path = os.path.join(lock_dir, f"nrl-reference-offload-{hostname}.lock")
+    os.makedirs(lock_dir, exist_ok=True)
+    log_reference_setup_stage("worker.before_reference_offload_lock")
+    with open(lock_path, "a") as lock_file:
+        wait_started = time.monotonic()
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        log_reference_setup_stage(
+            "worker.after_reference_offload_lock",
+            lock_wait_s=f"{time.monotonic() - wait_started:.6f}",
+        )
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def _linux_memory_metadata() -> dict[str, int]:

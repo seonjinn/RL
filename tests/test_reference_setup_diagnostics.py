@@ -8,6 +8,8 @@ from nemo_rl.models.megatron.reference_setup_diagnostics import (
     checkpoint_marker_metadata,
     distributed_timeout_override,
     log_reference_setup_stage,
+    reference_cpu_offload_lock,
+    reference_cpu_offload_serialization_enabled,
     reference_setup_stack_dumps,
 )
 
@@ -116,6 +118,35 @@ def test_buffer_memory_metadata_reports_param_grad_and_cpu_bytes() -> None:
         "param_cpu_numel": 8,
         "param_numel": 10,
     }
+
+
+def test_reference_cpu_offload_serialization_is_disabled_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("NRL_SERIALIZE_REFERENCE_CPU_OFFLOAD", raising=False)
+
+    assert reference_cpu_offload_serialization_enabled() is False
+
+
+def test_reference_cpu_offload_lock_serializes_when_enabled(
+    monkeypatch, tmp_path
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setenv("NRL_SERIALIZE_REFERENCE_CPU_OFFLOAD", "1")
+    monkeypatch.setenv("NRL_REFERENCE_CPU_OFFLOAD_LOCK_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        diagnostics.fcntl,
+        "flock",
+        lambda _file, operation: calls.append(operation),
+    )
+
+    with reference_cpu_offload_lock(
+        enabled=reference_cpu_offload_serialization_enabled()
+    ):
+        calls.append("body")
+
+    assert calls == [diagnostics.fcntl.LOCK_EX, "body", diagnostics.fcntl.LOCK_UN]
+    assert len(list(tmp_path.glob("*.lock"))) == 1
 
 
 def test_reference_setup_stack_dump_worker_repeats_until_stopped(monkeypatch) -> None:
