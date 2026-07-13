@@ -80,8 +80,11 @@ from nemo_rl.models.megatron.setup import (
 from nemo_rl.models.megatron.reference_setup_diagnostics import (
     buffer_memory_metadata,
     log_reference_setup_stage,
+    offload_buffer_to_pageable_cpu,
+    reference_cpu_offload_pageable_enabled,
     reference_cpu_offload_lock,
     reference_cpu_offload_serialization_enabled,
+    reload_buffer_from_pageable_cpu,
     reference_setup_stack_dumps,
 )
 from nemo_rl.models.megatron.train import (
@@ -411,12 +414,14 @@ class MegatronPolicyWorkerImpl(
 
         # Step 5: Setup reference model if needed
         if init_reference_model:
+            pageable_reference_offload = reference_cpu_offload_pageable_enabled()
             with reference_setup_stack_dumps():
                 log_reference_setup_stage("worker.before_move_policy_to_cpu")
                 self.model = self.move_model(
                     self.model,
                     "cpu",
                     serialize_cpu_offload=reference_cpu_offload_serialization_enabled(),
+                    use_pageable_cpu_offload=pageable_reference_offload,
                 )
                 log_reference_setup_stage("worker.after_move_policy_to_cpu")
                 self.reference_state_dict = setup_reference_model_state(
@@ -428,7 +433,11 @@ class MegatronPolicyWorkerImpl(
                     ),
                 )
                 log_reference_setup_stage("worker.before_move_policy_to_cuda")
-                self.model = self.move_model(self.model, "cuda")
+                self.model = self.move_model(
+                    self.model,
+                    "cuda",
+                    use_pageable_cpu_offload=pageable_reference_offload,
+                )
                 log_reference_setup_stage("worker.after_move_policy_to_cuda")
             log_gpu_memory_diagnostics(
                 label="after_ref_model", worker_type="MegatronPolicyWorker"
@@ -2125,6 +2134,7 @@ class MegatronPolicyWorkerImpl(
         move_params: bool = True,
         move_grads: bool = True,
         serialize_cpu_offload: bool = False,
+        use_pageable_cpu_offload: bool = False,
     ) -> torch.nn.Module:
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
@@ -2144,9 +2154,16 @@ class MegatronPolicyWorkerImpl(
                             **buffer_memory_metadata(buffer),
                         )
                         with reference_cpu_offload_lock(enabled=serialize_cpu_offload):
-                            buffer.offload_to_cpu(
-                                move_params=move_params, move_grads=move_grads
-                            )
+                            if use_pageable_cpu_offload:
+                                offload_buffer_to_pageable_cpu(
+                                    buffer,
+                                    move_params=move_params,
+                                    move_grads=move_grads,
+                                )
+                            else:
+                                buffer.offload_to_cpu(
+                                    move_params=move_params, move_grads=move_grads
+                                )
                         log_reference_setup_stage(
                             "worker.after_buffer_offload",
                             buffer_group=buffer_group,
@@ -2154,9 +2171,17 @@ class MegatronPolicyWorkerImpl(
                             **buffer_memory_metadata(buffer),
                         )
                     elif device == "cuda":
-                        buffers[buffer_idx].reload_from_cpu(
-                            move_params=move_params, move_grads=move_grads
-                        )
+                        buffer = buffers[buffer_idx]
+                        if use_pageable_cpu_offload:
+                            reload_buffer_from_pageable_cpu(
+                                buffer,
+                                move_params=move_params,
+                                move_grads=move_grads,
+                            )
+                        else:
+                            buffer.reload_from_cpu(
+                                move_params=move_params, move_grads=move_grads
+                            )
                     else:
                         raise ValueError(
                             f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."

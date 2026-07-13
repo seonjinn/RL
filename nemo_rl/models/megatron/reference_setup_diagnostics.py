@@ -30,6 +30,7 @@ _DEBUG_ENV = "NRL_DEBUG_REFERENCE_MODEL_SETUP"
 _DISTRIBUTED_TIMEOUT_ENV = "NRL_MEGATRON_NCCL_TIMEOUT_SECONDS"
 _MARKER_DIR_ENV = "NRL_REFERENCE_SETUP_MARKER_DIR"
 _OFFLOAD_LOCK_DIR_ENV = "NRL_REFERENCE_CPU_OFFLOAD_LOCK_DIR"
+_PAGEABLE_OFFLOAD_ENV = "NRL_USE_PAGEABLE_REFERENCE_CPU_OFFLOAD"
 _SERIALIZE_OFFLOAD_ENV = "NRL_SERIALIZE_REFERENCE_CPU_OFFLOAD"
 _STACK_DUMP_INTERVAL_ENV = "NRL_REFERENCE_SETUP_STACK_DUMP_SECONDS"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -62,6 +63,57 @@ def buffer_memory_metadata(buffer: Any) -> dict[str, int]:
         metadata[f"{field_prefix}_numel"] = numel
         metadata[f"{field_prefix}_bytes"] = numel * int(tensor.element_size())
     return metadata
+
+
+def reference_cpu_offload_pageable_enabled() -> bool:
+    """Return whether initial reference setup should avoid pinned CPU buffers."""
+    return os.getenv(_PAGEABLE_OFFLOAD_ENV, "").strip().lower() in _TRUE_VALUES
+
+
+def offload_buffer_to_pageable_cpu(
+    buffer: Any, *, move_params: bool = True, move_grads: bool = True
+) -> None:
+    """Temporarily offload an MCore buffer without a large pin-memory allocation."""
+    grad_data = buffer.grad_data
+    if move_grads and grad_data is not None and grad_data.storage().size() > 0:
+        buffer.grad_data_size = grad_data.storage().size()
+        grad_data.storage().resize_(0)
+
+    param_data = buffer.param_data
+    if move_params and param_data is not None and param_data.storage().size() > 0:
+        buffer.param_data_size = param_data.storage().size()
+        if buffer.param_data_cpu is None:
+            buffer.param_data_cpu = param_data.cpu()
+        else:
+            buffer.param_data_cpu.copy_(param_data, non_blocking=False)
+        log_reference_setup_stage(
+            "worker.after_pageable_param_copy",
+            **buffer_memory_metadata(buffer),
+        )
+        param_data.storage().resize_(0)
+
+
+def reload_buffer_from_pageable_cpu(
+    buffer: Any, *, move_params: bool = True, move_grads: bool = True
+) -> None:
+    """Restore a temporary pageable backup synchronously and release it."""
+    param_data = buffer.param_data
+    param_data_cpu = buffer.param_data_cpu
+    if (
+        move_params
+        and param_data is not None
+        and param_data_cpu is not None
+        and param_data.storage().size() == 0
+    ):
+        param_data.storage().resize_(buffer.param_data_size)
+        param_data.copy_(param_data_cpu, non_blocking=False)
+        buffer.param_data_cpu = None
+
+    grad_data = buffer.grad_data
+    if move_grads and grad_data is not None and buffer.grad_data_size > 0:
+        grad_data.storage().resize_(buffer.grad_data_size)
+        grad_data.zero_()
+        buffer.grad_data_size = 0
 
 
 def reference_cpu_offload_serialization_enabled() -> bool:

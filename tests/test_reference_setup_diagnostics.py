@@ -8,8 +8,11 @@ from nemo_rl.models.megatron.reference_setup_diagnostics import (
     checkpoint_marker_metadata,
     distributed_timeout_override,
     log_reference_setup_stage,
+    offload_buffer_to_pageable_cpu,
+    reference_cpu_offload_pageable_enabled,
     reference_cpu_offload_lock,
     reference_cpu_offload_serialization_enabled,
+    reload_buffer_from_pageable_cpu,
     reference_setup_stack_dumps,
 )
 
@@ -24,6 +27,46 @@ class _FakeTensor:
 
     def element_size(self) -> int:
         return self._element_size
+
+
+class _FakeStorage:
+    def __init__(self, size: int) -> None:
+        self._size = size
+        self.resize_calls: list[int] = []
+
+    def size(self) -> int:
+        return self._size
+
+    def resize_(self, size: int) -> None:
+        self.resize_calls.append(size)
+        self._size = size
+
+
+class _FakeOffloadTensor:
+    def __init__(self, storage_size: int) -> None:
+        self._storage = _FakeStorage(storage_size)
+        self.cpu_calls = 0
+        self.copy_calls: list[tuple[object, bool]] = []
+        self.zero_calls = 0
+
+    def storage(self) -> _FakeStorage:
+        return self._storage
+
+    def numel(self) -> int:
+        return self._storage.size()
+
+    def element_size(self) -> int:
+        return 1
+
+    def cpu(self) -> "_FakeOffloadTensor":
+        self.cpu_calls += 1
+        return _FakeOffloadTensor(self._storage.size())
+
+    def copy_(self, source: object, *, non_blocking: bool) -> None:
+        self.copy_calls.append((source, non_blocking))
+
+    def zero_(self) -> None:
+        self.zero_calls += 1
 
 
 def test_reference_setup_diagnostics_are_disabled_by_default(
@@ -126,6 +169,45 @@ def test_reference_cpu_offload_serialization_is_disabled_by_default(
     monkeypatch.delenv("NRL_SERIALIZE_REFERENCE_CPU_OFFLOAD", raising=False)
 
     assert reference_cpu_offload_serialization_enabled() is False
+
+
+def test_reference_cpu_pageable_offload_is_disabled_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("NRL_USE_PAGEABLE_REFERENCE_CPU_OFFLOAD", raising=False)
+
+    assert reference_cpu_offload_pageable_enabled() is False
+
+
+def test_pageable_offload_and_reload_avoid_pinning_and_clear_backup() -> None:
+    param_data = _FakeOffloadTensor(24)
+    grad_data = _FakeOffloadTensor(12)
+    buffer = type(
+        "FakeBuffer",
+        (),
+        {
+            "param_data": param_data,
+            "param_data_cpu": None,
+            "grad_data": grad_data,
+            "grad_data_size": 0,
+        },
+    )()
+
+    offload_buffer_to_pageable_cpu(buffer)
+
+    pageable_backup = buffer.param_data_cpu
+    assert param_data.cpu_calls == 1
+    assert buffer.param_data_size == 24
+    assert buffer.grad_data_size == 12
+    assert param_data.storage().resize_calls == [0]
+    assert grad_data.storage().resize_calls == [0]
+
+    reload_buffer_from_pageable_cpu(buffer)
+
+    assert param_data.storage().resize_calls == [0, 24]
+    assert param_data.copy_calls == [(pageable_backup, False)]
+    assert grad_data.storage().resize_calls == [0, 12]
+    assert grad_data.zero_calls == 1
+    assert buffer.grad_data_size == 0
+    assert buffer.param_data_cpu is None
 
 
 def test_reference_cpu_offload_lock_serializes_when_enabled(
