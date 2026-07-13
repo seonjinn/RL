@@ -136,5 +136,7 @@ confidently picks poisoned points.
 
 Data: `data/` (profile grid, rollout summaries, drain curves). Plots:
 `plots/`. Live page: `docs/dynamic_sd_sync_rollout_results_latest.html`.
+Every vLLM patch/change and its measured perf impact is tracked in
+[`../PATCH_LEDGER.md`](../PATCH_LEDGER.md) for upstream PR conversion.
 Open items: 235B/40K dynamic regression diagnosis, 3 transient-node retries,
 suffix-decoding composition.
