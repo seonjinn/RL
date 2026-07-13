@@ -1,13 +1,27 @@
 import faulthandler
+import json
 from datetime import timedelta
 
 from nemo_rl.models.megatron import reference_setup_diagnostics as diagnostics
 from nemo_rl.models.megatron.reference_setup_diagnostics import (
+    buffer_memory_metadata,
     checkpoint_marker_metadata,
     distributed_timeout_override,
     log_reference_setup_stage,
     reference_setup_stack_dumps,
 )
+
+
+class _FakeTensor:
+    def __init__(self, numel: int, element_size: int) -> None:
+        self._numel = numel
+        self._element_size = element_size
+
+    def numel(self) -> int:
+        return self._numel
+
+    def element_size(self) -> int:
+        return self._element_size
 
 
 def test_reference_setup_diagnostics_are_disabled_by_default(
@@ -57,6 +71,51 @@ def test_reference_setup_stage_includes_rank_and_process_metadata(
     assert "pid=" in output
     assert "host=" in output
     assert "epoch_s=" in output
+
+
+def test_reference_setup_stage_writes_rank_local_jsonl_marker(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("NRL_DEBUG_REFERENCE_MODEL_SETUP", "1")
+    monkeypatch.setenv("NRL_REFERENCE_SETUP_MARKER_DIR", str(tmp_path))
+    monkeypatch.setenv("RANK", "17")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "64")
+
+    log_reference_setup_stage(
+        "worker.before_buffer_offload",
+        buffer_group="dense",
+        buffer_index=3,
+    )
+
+    marker_path = tmp_path / "rank-17.jsonl"
+    marker = json.loads(marker_path.read_text().strip())
+    assert marker["stage"] == "worker.before_buffer_offload"
+    assert marker["rank"] == "17"
+    assert marker["buffer_group"] == "dense"
+    assert marker["buffer_index"] == 3
+    assert marker["pid"] > 0
+
+
+def test_buffer_memory_metadata_reports_param_grad_and_cpu_bytes() -> None:
+    buffer = type(
+        "FakeBuffer",
+        (),
+        {
+            "param_data": _FakeTensor(10, 2),
+            "grad_data": _FakeTensor(12, 4),
+            "param_data_cpu": _FakeTensor(8, 2),
+        },
+    )()
+
+    assert buffer_memory_metadata(buffer) == {
+        "grad_bytes": 48,
+        "grad_numel": 12,
+        "param_bytes": 20,
+        "param_cpu_bytes": 16,
+        "param_cpu_numel": 8,
+        "param_numel": 10,
+    }
 
 
 def test_reference_setup_stack_dump_worker_repeats_until_stopped(monkeypatch) -> None:

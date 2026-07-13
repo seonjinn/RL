@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import faulthandler
+import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -25,6 +27,7 @@ from typing import Any
 
 _DEBUG_ENV = "NRL_DEBUG_REFERENCE_MODEL_SETUP"
 _DISTRIBUTED_TIMEOUT_ENV = "NRL_MEGATRON_NCCL_TIMEOUT_SECONDS"
+_MARKER_DIR_ENV = "NRL_REFERENCE_SETUP_MARKER_DIR"
 _STACK_DUMP_INTERVAL_ENV = "NRL_REFERENCE_SETUP_STACK_DUMP_SECONDS"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CHECKPOINT_MARKERS = (
@@ -41,6 +44,76 @@ def _diagnostics_enabled() -> bool:
     return os.getenv(_DEBUG_ENV, "").strip().lower() in _TRUE_VALUES
 
 
+def buffer_memory_metadata(buffer: Any) -> dict[str, int]:
+    """Return tensor sizes without touching buffer storage or devices."""
+    metadata: dict[str, int] = {}
+    for attribute, field_prefix in (
+        ("param_data", "param"),
+        ("grad_data", "grad"),
+        ("param_data_cpu", "param_cpu"),
+    ):
+        tensor = getattr(buffer, attribute, None)
+        if tensor is None:
+            continue
+        numel = int(tensor.numel())
+        metadata[f"{field_prefix}_numel"] = numel
+        metadata[f"{field_prefix}_bytes"] = numel * int(tensor.element_size())
+    return metadata
+
+
+def _linux_memory_metadata() -> dict[str, int]:
+    metadata: dict[str, int] = {}
+    proc_files = (
+        (
+            "/proc/self/status",
+            {
+                "VmHWM": "process_vmhwm_kb",
+                "VmLck": "process_vmlck_kb",
+                "VmPin": "process_vmpin_kb",
+                "VmRSS": "process_vmrss_kb",
+            },
+        ),
+        (
+            "/proc/meminfo",
+            {
+                "MemAvailable": "node_mem_available_kb",
+                "MemFree": "node_mem_free_kb",
+            },
+        ),
+    )
+    for path, field_names in proc_files:
+        try:
+            with open(path) as proc_file:
+                for line in proc_file:
+                    key, separator, value = line.partition(":")
+                    if not separator or key not in field_names:
+                        continue
+                    metadata[field_names[key]] = int(value.split()[0])
+        except (OSError, ValueError):
+            continue
+    return metadata
+
+
+def _write_rank_marker(metadata: dict[str, Any]) -> None:
+    marker_dir = os.getenv(_MARKER_DIR_ENV)
+    if not marker_dir:
+        return
+
+    rank = re.sub(r"[^A-Za-z0-9_.-]", "_", str(metadata["rank"]))
+    marker_path = os.path.join(marker_dir, f"rank-{rank}.jsonl")
+    try:
+        os.makedirs(marker_dir, exist_ok=True)
+        with open(marker_path, "a") as marker_file:
+            marker_file.write(json.dumps(metadata, sort_keys=True, default=str))
+            marker_file.write("\n")
+    except OSError as error:
+        print(
+            f"NRL_REFERENCE_SETUP_MARKER_ERROR path={marker_path} error={error}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def log_reference_setup_stage(stage: str, **fields: Any) -> None:
     """Emit one process-local reference setup marker when diagnostics are enabled."""
     if not _diagnostics_enabled():
@@ -54,10 +127,12 @@ def log_reference_setup_stage(stage: str, **fields: Any) -> None:
         "rank": os.getenv("RANK", "unknown"),
         "stage": stage,
         "world_size": os.getenv("WORLD_SIZE", "unknown"),
+        **_linux_memory_metadata(),
         **fields,
     }
     payload = " ".join(f"{key}={value}" for key, value in metadata.items())
     print(f"NRL_REFERENCE_SETUP {payload}", file=sys.stderr, flush=True)
+    _write_rank_marker(metadata)
 
 
 def distributed_timeout_override() -> timedelta | None:

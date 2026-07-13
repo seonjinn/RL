@@ -78,6 +78,7 @@ from nemo_rl.models.megatron.setup import (
     validate_model_paths,
 )
 from nemo_rl.models.megatron.reference_setup_diagnostics import (
+    buffer_memory_metadata,
     log_reference_setup_stage,
     reference_setup_stack_dumps,
 )
@@ -2121,11 +2122,28 @@ class MegatronPolicyWorkerImpl(
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
             # DDP case
-            for buffers in [model.buffers, model.expert_parallel_buffers]:
+            buffer_groups = (
+                ("dense", model.buffers),
+                ("expert_parallel", model.expert_parallel_buffers),
+            )
+            for buffer_group, buffers in buffer_groups:
                 for buffer_idx in range(len(buffers)):
                     if device == "cpu":
-                        buffers[buffer_idx].offload_to_cpu(
+                        buffer = buffers[buffer_idx]
+                        log_reference_setup_stage(
+                            "worker.before_buffer_offload",
+                            buffer_group=buffer_group,
+                            buffer_index=buffer_idx,
+                            **buffer_memory_metadata(buffer),
+                        )
+                        buffer.offload_to_cpu(
                             move_params=move_params, move_grads=move_grads
+                        )
+                        log_reference_setup_stage(
+                            "worker.after_buffer_offload",
+                            buffer_group=buffer_group,
+                            buffer_index=buffer_idx,
+                            **buffer_memory_metadata(buffer),
                         )
                     elif device == "cuda":
                         buffers[buffer_idx].reload_from_cpu(
