@@ -615,12 +615,37 @@ def test_functional_summarizer_classifies_unavailable_cgroup_limit(
     assert summary["post_job_slurm_accounting_required"] is True
 
 
+def test_functional_summarizer_ignores_ray_control_plane_log_fanout(
+    tmp_path: Path,
+) -> None:
+    ray_logs = {
+        f"session/logs/events/event_EXPORT_TASK_{index}.log": "control plane\n"
+        for index in range(600)
+    }
+    ray_logs["session/logs/worker-acde-01000000-42.out"] = "policy worker\n"
+
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        ray_logs=ray_logs,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    assert summary["evidence_scan"]["files_scanned"] == 2
+
+
 @pytest.mark.parametrize(
     ("constant_overrides", "ray_logs", "evidence_suffix", "reason"),
     [
         (
             {"MAX_FUNCTIONAL_EVIDENCE_FILES": 1},
-            {"worker-0.log": "first\n", "worker-1.log": "second\n"},
+            {
+                "worker-a-01000000-1.out": "first\n",
+                "worker-b-01000000-2.err": "second\n",
+            },
             "",
             "file_count_limit",
         ),

@@ -1005,6 +1005,9 @@ MAX_FUNCTIONAL_EVIDENCE_MATCHES = 4096
 MAX_FUNCTIONAL_EVIDENCE_LINE_CHARS = 4096
 MEMORY_LIMIT_FRACTION = 0.95
 CUTEDSL_ACTIVATION_SIGNATURE = "GroupedGemmGluSm100"
+RAY_WORKER_EVIDENCE_BASENAME = re.compile(
+    r"worker-[0-9a-f]+-[0-9a-f]+-[0-9]+\.(?:out|err)", re.IGNORECASE
+)
 
 
 def resolve_metric_name(candidates: tuple[str, ...]) -> str:
@@ -1078,7 +1081,9 @@ if not driver_log.is_file() or not ray_log_root.is_dir():
 ray_log_paths = sorted(
     path
     for path in ray_log_root.rglob("*")
-    if path.is_file() and path.suffix.lower() in {".err", ".log", ".out", ".txt"}
+    if path.is_file()
+    and not path.is_symlink()
+    and RAY_WORKER_EVIDENCE_BASENAME.fullmatch(path.name)
 )
 candidate_paths = [driver_log, *ray_log_paths[:MAX_FUNCTIONAL_EVIDENCE_FILES]]
 scan_truncation_reasons: set[str] = set()
