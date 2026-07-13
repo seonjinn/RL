@@ -32,6 +32,7 @@ SUITE_SCRIPT = (
     / "grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl.sh"
 )
 GB200_SUITE = PROJECT_ROOT / "tests/test_suites/performance_gb200.txt"
+LAUNCH = PROJECT_ROOT / "tools/launch"
 
 register_omegaconf_resolvers()
 
@@ -71,7 +72,28 @@ def test_qwen3_235b_cutedsl_overlay_is_policy_only() -> None:
 
 def test_qwen3_235b_cutedsl_recipe_is_registered_for_performance() -> None:
     assert SUITE_SCRIPT.is_file()
-    completed = subprocess.run(
+    launch_env = {
+        **os.environ,
+        "DRYRUN": "1",
+        "HF_HOME": "...",
+        "HF_DATASETS_CACHE": "...",
+        "CONTAINER": "",
+        "ACCOUNT": "",
+        "PARTITION": "",
+    }
+    launcher = subprocess.run(
+        [str(LAUNCH), str(SUITE_SCRIPT)],
+        cwd=PROJECT_ROOT,
+        env=launch_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert launcher.returncode == 0, launcher.stderr
+    assert f"[INFO]: 106 GPUhrs to run {SUITE_SCRIPT}" in launcher.stdout
+    assert launcher.stdout.rstrip().endswith("[INFO]: Total GPU hours: 106")
+
+    runner = subprocess.run(
         ["bash", str(SUITE_SCRIPT)],
         cwd=PROJECT_ROOT,
         env={**os.environ, "TEST_DRYRUN": "1"},
@@ -79,7 +101,7 @@ def test_qwen3_235b_cutedsl_recipe_is_registered_for_performance() -> None:
         text=True,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr
+    assert runner.returncode == 0, runner.stderr
 
     suite_entry = (
         "tests/test_suites/llm/performance/"
