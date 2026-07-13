@@ -26,6 +26,23 @@ case "${PRESET}" in
     export MAX_TOKENS=4096
     export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64 128}"
     ;;
+  qwen3_30ba3b_40k)
+    # grpo-qwen3-30ba3b-4n8g-40K.yaml: max_total_sequence_length=40960, vLLM
+    # TP2, 64x32 over 16 engines -> 128 seqs/engine. 32K-generation long tail
+    # is the DynamicSD showcase: the drain phase spends most wall time at BS<8.
+    export MODEL="Qwen/Qwen3-30B-A3B"
+    export MODEL_LABEL="qwen3_30ba3b_40k"
+    export DRAFT_MODEL="RedHatAI/Qwen3-30B-A3B-Thinking-2507-speculator.eagle3"
+    export TP=2
+    export NUM_PROMPTS_PER_STEP=4
+    export NUM_GENERATIONS_PER_PROMPT=32
+    export MAX_NUM_SEQS=128
+    export MAX_TOKENS=32768
+    export MAX_MODEL_LEN="${MAX_MODEL_LEN:-40960}"
+    export NUM_STEPS="${NUM_STEPS:-2}"
+    export BATCH_SIZES="${BATCH_SIZES:-1 2 4 8 16 32 64 128}"
+    export TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
+    ;;
   qwen3_32b)
     export MODEL="Qwen/Qwen3-32B"
     export MODEL_LABEL="qwen3_32b"

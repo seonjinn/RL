@@ -59,6 +59,17 @@ MODE=rollout DYNAMIC_SPEC_JSON=dynamic_spec.json \
   bash experiments/dynamic_sd_sync_rollout/submit_matrix_lyris.sh qwen3_30ba3b math
 ```
 
+### Long-tail scenario (32K OSL)
+
+Preset `qwen3_30ba3b_40k` mirrors `grpo-qwen3-30ba3b-4n8g-40K.yaml`
+(max_total_sequence_length 40960, vLLM TP2, 128 seqs/engine) with
+max_tokens=32768. With natural stopping, only the tail of the generation-length
+distribution reaches 32K, so the barrier wall time is dominated by a handful of
+long sequences running at BS<8 - exactly the regime where DynamicSD can raise K
+far above the fixed-K compromise. Caveat: the K table is profiled at short OSL;
+deep-context ITL growth is not captured in the table (the rollout comparison
+itself measures it directly).
+
 ## Key questions
 
 - Does the fixed-K optimum differ between the batch-launch phase (BS=128) and
