@@ -702,8 +702,8 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
   # RAY_FAILURE_HOOK_START
   if [[ "\$exit_code" -ne 0 ]] && [[ -n "$FAILURE_COMMAND_FILE" ]]; then
     FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=\${FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS:-60}
-    if ! [[ "\$FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
-      echo "[ERROR] FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS must be a positive integer." >&2 || true
+    if ! [[ "\$FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS" =~ ^([1-9]|[1-5][0-9]|60)$ ]]; then
+      echo "[ERROR] FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS must be an integer from 1 to 60." >&2 || true
     else
       run-failure-command-until() {
         local command_deadline="\$1"

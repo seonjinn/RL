@@ -435,7 +435,7 @@ def test_ray_sub_runs_failure_hook_before_ended_cleanup() -> None:
         r"FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS="
         r"\${FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS:-60}" in driver_failure_block
     )
-    assert r"^[1-9][0-9]*$" in driver_failure_block
+    assert r"^([1-9]|[1-5][0-9]|60)$" in driver_failure_block
     assert "run-failure-command-until()" in driver_failure_block
     assert 'bash "$FAILURE_COMMAND_FILE" &' in driver_failure_block
     assert r'kill -0 "\$command_pid"' in driver_failure_block
@@ -718,6 +718,41 @@ def test_generated_head_failure_hook_rejects_invalid_timeout_and_cleans_up(
     assert (log_dir / "ENDED").is_file()
 
 
+def test_generated_head_failure_hook_rejects_timeout_above_sixty_seconds(
+    tmp_path: Path,
+) -> None:
+    hook = _ray_template_block("# RAY_FAILURE_HOOK_START\n", "# RAY_FAILURE_HOOK_END\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    invocation = tmp_path / "invocation"
+    failure_command = tmp_path / "failure-command.sh"
+    failure_command.write_text(f"touch {shlex.quote(str(invocation))}\n")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    f"FAILURE_COMMAND_FILE={shlex.quote(str(failure_command))}",
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=61",
+                    "SLURM_JOB_NUM_NODES=1",
+                    "exit_code=37",
+                    hook,
+                    'exit "$exit_code"',
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 37
+    assert not invocation.exists()
+    assert (log_dir / "ENDED").is_file()
+
+
 def test_generated_head_failure_hook_cleans_up_after_polling_command_failure(
     tmp_path: Path,
 ) -> None:
@@ -771,8 +806,15 @@ def test_submitter_wires_sanitized_triton_failure_command() -> None:
     assert "printf -v FAILURE_COMMAND" in source
     assert "exec python3 %q" in source
     assert source.count("-u FAILURE_COMMAND") == 2
+    assert source.count("-u FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS") == 2
     assert source.count("-u CUTEDSL_BENCHMARK_RESULT_ROOT") == 2
     assert source.count('"FAILURE_COMMAND=${FAILURE_COMMAND}"') == 2
+    assert (
+        source.count(
+            '"FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=${FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS}"'
+        )
+        == 2
+    )
     assert source.count('"CUTEDSL_BENCHMARK_RESULT_ROOT=${RESULT_ROOT}"') == 2
 
 
@@ -866,6 +908,7 @@ record = {
     "mounts": payload["MOUNTS"],
     "setup_command": payload["SETUP_COMMAND"],
     "failure_command": payload["FAILURE_COMMAND"],
+    "failure_diagnostic_timeout_seconds": payload["FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS"],
     "result_root": payload["CUTEDSL_BENCHMARK_RESULT_ROOT"],
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
@@ -880,6 +923,7 @@ print(f"mock-{record['context']}-{record['replicate']}")
             "PATH": f"{mock_bin}:{env['PATH']}",
             "MOCK_SBATCH_CALLS": str(calls_path),
             "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS": "600",
         }
     )
     result = subprocess.run(
@@ -925,6 +969,7 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert "collect_triton_cache_diagnostics.py" in call["failure_command"]
         assert "--from-slurm-env" in call["failure_command"]
         assert ".venv" not in call["failure_command"]
+        assert call["failure_diagnostic_timeout_seconds"] == "60"
         syntax = subprocess.run(
             ["bash", "-n", "-c", call["failure_command"]],
             capture_output=True,
@@ -1104,6 +1149,7 @@ record = {
     "expert_model_parallel_size": payload.get("CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE"),
     "full_cg": payload.get("NEMO2606_FULL_CG_ENABLED"),
     "a2a": payload.get("NEMO2606_A2A_ENABLED"),
+    "failure_diagnostic_timeout_seconds": payload.get("FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS"),
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -1117,6 +1163,7 @@ print("mock-functional")
             "PATH": f"{mock_bin}:{env['PATH']}",
             "MOCK_SBATCH_CALLS": str(calls_path),
             "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS": "600",
             "NEMO2606_FUNCTIONAL_GATE": "1",
         }
     )
@@ -1144,6 +1191,7 @@ print("mock-functional")
     assert call["expert_model_parallel_size"] == expected_expert_model_parallel_size
     assert call["full_cg"] == "0"
     assert call["a2a"] == "0"
+    assert call["failure_diagnostic_timeout_seconds"] == "60"
     assert f"--nodes={expected_nodes}" in call["argv"]
     assert f"--segment={expected_segment_size}" in call["argv"]
     assert "--test-only" in call["argv"]
