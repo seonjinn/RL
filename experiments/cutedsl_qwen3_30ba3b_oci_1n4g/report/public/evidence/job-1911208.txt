@@ -14,7 +14,7 @@ Provenance: bounded snapshot from live sacct metadata and the original remote di
 
 Key host/container boundary lines:
 host before srun: export TMPDIR=/runtime/tmp
-inside bash -lc: TMPDIR=</lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna/tmp>
+inside bash -lc: TMPDIR=<[INTERNAL_PATH]>
 uid=0(root) gid=0(root)
 drwxr-xr-x root root /runtime
 drwxr-xr-x root root /runtime/tmp

@@ -1,0 +1,86 @@
+{
+  "a2a_enabled": false,
+  "aggregation_scope": "context_local_cutedsl_pair",
+  "arms": [
+    {
+      "arm": "on",
+      "order_index": 0
+    }
+  ],
+  "build_environment": {
+    "NVTE_CUDA_ARCHS": "100",
+    "TMPDIR": "[INTERNAL_PATH]"
+  },
+  "cluster_profile": "pre_tyche",
+  "cross_context_factorial_aggregate_available": false,
+  "feature_context": "g0a0",
+  "fixed_config_evidence": {
+    "on": {
+      "grpo.num_generations_per_prompt": 32,
+      "grpo.num_prompts_per_step": 64,
+      "policy.generation.vllm_cfg.precision": "bfloat16",
+      "policy.logprob_batch_size": 2,
+      "policy.max_total_sequence_length": 4096,
+      "policy.megatron_cfg.delay_wgrad_compute": false,
+      "policy.megatron_cfg.expert_tensor_parallel_size": 1,
+      "policy.megatron_cfg.fp8_cfg.enabled": true,
+      "policy.megatron_cfg.fp8_cfg.fp8_param": false,
+      "policy.megatron_cfg.fp8_cfg.fp8_recipe": "mxfp8",
+      "policy.megatron_cfg.high_priority_a2a_comm_stream": false,
+      "policy.megatron_cfg.moe_grouped_gemm": true,
+      "policy.megatron_cfg.moe_mlp_glu_interleave_size": 32,
+      "policy.megatron_cfg.moe_router_dtype": "fp32",
+      "policy.megatron_cfg.overlap_moe_expert_parallel_comm": false,
+      "policy.megatron_cfg.use_transformer_engine_op_fuser": true,
+      "policy.sequence_packing.enabled": true,
+      "policy.train_global_batch_size": 2048,
+      "policy.train_micro_batch_size": 1
+    }
+  },
+  "full_cg_enabled": false,
+  "functional_gate": true,
+  "functional_gate_summary": "functional_gate_summary.json",
+  "image": "[INTERNAL_PATH]",
+  "image_sha256": "dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be",
+  "measured_updates": 0,
+  "performance_eligible": false,
+  "profile_enabled": false,
+  "recipe": "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl.yaml",
+  "replicate_index": 0,
+  "run_id": "2368223",
+  "scheduler": {
+    "account": "coreai_dlalgo_llm",
+    "gres": "",
+    "partition": "batch",
+    "segment": 4
+  },
+  "source_sha": "0ea93915fbac02d4463a22f1c3c5e034df36c122",
+  "submission_group": "20260713T052347Z-971135",
+  "timing_order": [
+    "on"
+  ],
+  "topology": {
+    "context_parallel_size": 1,
+    "expert_model_parallel_size": 16,
+    "expert_tensor_parallel_size": 1,
+    "gpus_per_node": 4,
+    "num_nodes": 4,
+    "pipeline_model_parallel_size": 1,
+    "segment_size": 4,
+    "tensor_model_parallel_size": 1
+  },
+  "total_updates": 3,
+  "upstream_ref": "origin/sna/nemo-2606-cutedsl-a2a-factorial-20260712",
+  "upstream_sha": "0ea93915fbac02d4463a22f1c3c5e034df36c122",
+  "warmup_updates": 0,
+  "workload": {
+    "logprob_batch_size": 2,
+    "max_total_sequence_length": 4096,
+    "num_generations_per_prompt": 32,
+    "num_prompts_per_step": 64,
+    "rollout_precision": "bfloat16",
+    "sequence_packing_enabled": true,
+    "train_global_batch_size": 2048,
+    "train_micro_batch_size": 1
+  }
+}

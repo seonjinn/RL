@@ -255,17 +255,23 @@ def test_report_bounds_error_excerpt_to_recent_lines(tmp_path: Path) -> None:
     (run_dir / "slurm.out").write_text(
         "old-secret-like-value\n"
         + "".join(f"recent-{index:03d}\n" for index in range(300))
+        + "rich-table-cell-with-padding   \n"
         + "Authorization: Bearer credential-that-must-not-render\n"
     )
 
+    public_run = tmp_path / "public-benchmark-123"
     renderer = load_renderer()
-    renderer.render_run(run_dir)
-    html = (run_dir / "report.html").read_text()
+    renderer.stage_public_run(run_dir, public_run)
+    html = (public_run / "report.html").read_text()
 
     assert "old-secret-like-value" not in html
     assert "recent-299" in html
     assert "credential-that-must-not-render" not in html
     assert "Authorization: [REDACTED]" in html
+    assert not any(
+        line.endswith((" ", "\t"))
+        for line in (public_run / "slurm.out").read_text().splitlines()
+    )
     assert len(html) < 60_000
 
 
@@ -297,10 +303,24 @@ def test_renderer_outputs_metric_profile_and_reproducibility_sections(
         run_dir / "kernel_attribution.json",
         {"passed": True, "signature_regexes": {"fused_glu": {"te": "pattern"}}},
     )
+    write_json(
+        run_dir / "feature_attribution.json",
+        {
+            "kernel_presence_passed": True,
+            "full_iteration_replay_verified": False,
+            "a2a_temporal_overlap_verified": False,
+            "performance_claim_eligible": False,
+            "limitations": [
+                "cudaGraphLaunch presence does not prove full-iteration replay",
+                "NCCL A2A kernel presence does not prove temporal overlap with GEMM",
+            ],
+        },
+    )
 
+    public_run = tmp_path / "public-benchmark-123"
     renderer = load_renderer()
-    renderer.render_run(run_dir)
-    html = (run_dir / "report.html").read_text()
+    renderer.stage_public_run(run_dir, public_run)
+    html = (public_run / "report.html").read_text()
 
     assert "Component timing" in html
     assert "Normalized throughput" in html
@@ -308,8 +328,32 @@ def test_renderer_outputs_metric_profile_and_reproducibility_sections(
     assert "Nsight evidence" in html
     assert "profiles/0-on/kernel_evidence.txt" in html
     assert "kernel_attribution.json" in html
+    assert "Feature verification boundary" in html
+    assert "Full-iteration replay verified</th><td>no" in html
+    assert "A2A temporal overlap verified</th><td>no" in html
+    assert "does not prove temporal overlap with GEMM" in html
+    assert (public_run / "feature_attribution.json").is_file()
     assert "Reproducibility" in html
     assert "Functional validation only" not in html
+
+
+def test_timing_section_renders_structural_na_for_full_cg_single_arm() -> None:
+    renderer = load_renderer()
+    html = renderer.timing_section(
+        {
+            "median_policy_training_seconds": {"on": 4.0},
+            "median_normalized_throughput": {"on": 12.5},
+            "not_applicable_contrasts": {
+                "cutedsl_on_over_off": (
+                    "full-iteration CUDA Graph requires device-initiated CuTeDSL"
+                )
+            },
+        },
+        {},
+    )
+
+    assert "N/A — full-iteration CUDA Graph requires device-initiated CuTeDSL" in html
+    assert "not recorded" not in html
 
 
 def test_functional_report_is_public_deterministic_and_not_performance_evidence(
@@ -331,7 +375,20 @@ def test_functional_report_is_public_deterministic_and_not_performance_evidence(
             "functional_gate": True,
             "performance_eligible": False,
             "functional_gate_summary": "functional_gate_summary.json",
+            "image": "/lustre/internal/containers/nightly.sqsh",
+            "build_environment": {"TMPDIR": "/lustre/internal/runtime/tmp"},
+            "scheduler": {"node_list": "ptyche[0280-0282,0285]"},
         },
+    )
+    (source_run / "image.sha256").write_text(
+        f"{'d' * 64}  /lustre/internal/containers/nightly.sqsh\n"
+    )
+    (source_run / "slurm.out").write_text(
+        "ptyche0280 ip=10.52.103.176 pid=1234 "
+        "/lustre/internal/ray/session_abc/logs/worker-deadbeef-cafebabe-1234.out\n"
+        "/lustre/internal/src\n"
+        "/RL-worktrees/ep8-functional-ad8e8e2d9/experiments/cutedsl\n"
+        "/results/2368223/functional/0-on/metrics.json\n"
     )
     write_json(
         source_run / "functional_gate_summary.json",
@@ -350,11 +407,21 @@ def test_functional_report_is_public_deterministic_and_not_performance_evidence(
                 "signature": "GroupedGemmGluSm100",
                 "matches": [
                     {
-                        "source": "ray/session/logs/worker.log",
-                        "line": "BUILD_TOKEN=SENTINEL_FUNCTIONAL_TOKEN_116",
+                        "source": (
+                            "/lustre/internal/ray/session_abc/logs/"
+                            "worker-deadbeef-1234.out"
+                        ),
+                        "line": (
+                            "worker pid=1234 ip=10.52.103.176 "
+                            "BUILD_TOKEN=SENTINEL_FUNCTIONAL_TOKEN_116"
+                        ),
                     }
                     for _ in range(8)
                 ],
+            },
+            "evidence_scan": {
+                "ray_log_root": "/lustre/internal/ray/session_abc",
+                "files_scanned": 427,
             },
             "post_job_slurm_accounting_required": True,
         },
@@ -380,6 +447,38 @@ def test_functional_report_is_public_deterministic_and_not_performance_evidence(
         "SENTINEL_FUNCTIONAL_TOKEN_116"
         not in (public_run / "functional_gate_summary.json").read_text()
     )
+    public_summary = json.loads(
+        (public_run / "functional_gate_summary.json").read_text()
+    )
+    assert set(public_summary) == {
+        "completed_updates",
+        "cutedsl_activation_evidence",
+        "functional_gate",
+        "offload_memory_evidence",
+        "performance_eligible",
+        "post_job_slurm_accounting_required",
+    }
+    assert public_summary["cutedsl_activation_evidence"] == {
+        "match_count": 8,
+        "signature": "GroupedGemmGluSm100",
+    }
+    assert "matches" not in public_summary["cutedsl_activation_evidence"]
+    public_summary_text = json.dumps(public_summary)
+    for internal_value in (
+        "/lustre",
+        "10.52.103.176",
+        "session_abc",
+        "worker-deadbeef",
+        "pid=1234",
+        "ptyche0280",
+        "ptyche[0280-0282,0285]",
+        "RL-worktrees/ep8-functional-ad8e8e2d9",
+        "results/2368223/functional/0-on/metrics.json",
+    ):
+        assert internal_value not in public_summary_text
+        assert internal_value not in b"\n".join(
+            path.read_bytes() for path in public_run.rglob("*") if path.is_file()
+        ).decode(errors="replace")
     assert "Functional validation only" in html
     assert "not performance evidence" in html
     assert "Completed updates</th><td>3" in html
@@ -625,6 +724,7 @@ def test_refresh_preserves_manual_incident_evidence_without_run_directories(
 
 def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
     """Committed live-job snapshots are small, local, and linked from the index."""
+    renderer = load_renderer()
     report_dir = EXPERIMENT_DIR / "report"
     index_path = report_dir / "public/index.html"
     incidents = json.loads((report_dir / "incidents.json").read_text())
@@ -651,6 +751,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2366566",
         "2366655",
         "2366769",
+        "2367073",
         "2367079",
         "local-refresh-20260712",
         "preflight-segment-20260712",
@@ -679,7 +780,9 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
                 "TOKEN=",
             ):
                 assert secret_fragment not in text
-        assert source.read_bytes() == public.read_bytes()
+        assert public.read_text() == renderer.normalize_public_text(
+            renderer.redact_text(source.read_text())
+        )
 
 
 def test_job_2362916_reports_host_oom_without_perf_claim() -> None:

@@ -1159,7 +1159,8 @@ def test_benchmark_records_workload_and_normalized_throughput_as_primary() -> No
         '"total_num_tokens"',
         '"global_valid_toks"',
         '"policy_training_tokens_per_sec_per_gpu"',
-        '"workload_equality_required": True',
+        "workload_equality_required = len(expected_arms) > 1",
+        '"workload_equality_required": workload_equality_required',
         '"workload_equality_observed"',
         '"primary_metric": NORMALIZED_THROUGHPUT_METRIC',
         '"secondary_metric": POLICY_TIME_METRIC',
@@ -1346,7 +1347,11 @@ def _run_timing_summarizer(
         }
         (arm_dir / "raw_timing.json").write_text(json.dumps(raw))
     (result_dir / "benchmark_manifest.json").write_text("{}")
-    env = {**os.environ, "CONTAINER_RESULT_DIR": str(result_dir)}
+    env = {
+        **os.environ,
+        "CONTAINER_RESULT_DIR": str(result_dir),
+        "TIMING_ORDER": "on,off",
+    }
     return subprocess.run(
         [sys.executable, "-c", _timing_summarizer_source()],
         env=env,
@@ -1403,16 +1408,18 @@ def _run_kernel_attribution(
     a2a_enabled: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     result_dir = tmp_path / "result"
-    (result_dir / "profiles/0-on").mkdir(parents=True)
-    (result_dir / "profiles/1-off").mkdir(parents=True)
-    (result_dir / "profiles/0-on/kernel_evidence.txt").write_text(on_evidence)
-    (result_dir / "profiles/1-off/kernel_evidence.txt").write_text(off_evidence)
+    available_arms = ["on"] if full_cg_enabled else ["on", "off"]
+    evidence_by_arm = {"on": on_evidence, "off": off_evidence}
+    for order_index, arm in enumerate(available_arms):
+        profile_dir = result_dir / "profiles" / f"{order_index}-{arm}"
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "kernel_evidence.txt").write_text(evidence_by_arm[arm])
     config_evidence = {
         arm: {
             "policy.megatron_cfg.moe_grouped_gemm": grouped_gemm,
             "policy.megatron_cfg.use_transformer_engine_op_fuser": op_fuser,
         }
-        for arm in ("on", "off")
+        for arm in available_arms
     }
     (result_dir / "benchmark_manifest.json").write_text(
         json.dumps(
@@ -1421,6 +1428,7 @@ def _run_kernel_attribution(
                 "feature_context": "g0a0",
                 "full_cg_enabled": full_cg_enabled,
                 "a2a_enabled": a2a_enabled,
+                "available_arms": available_arms,
             }
         )
     )
@@ -1431,7 +1439,7 @@ def _run_kernel_attribution(
     )
 
 
-def test_benchmark_feature_attribution_requires_graph_and_a2a_evidence(
+def test_benchmark_feature_presence_does_not_claim_graph_replay_or_a2a_overlap(
     tmp_path: Path,
 ) -> None:
     result = _run_kernel_attribution(
@@ -1452,10 +1460,14 @@ def test_benchmark_feature_attribution_requires_graph_and_a2a_evidence(
     )
     assert result.returncode == 0, result.stderr
     attribution = json.loads((tmp_path / "result/feature_attribution.json").read_text())
-    assert attribution["passed"] is True
-    for arm in ("on", "off"):
-        assert attribution["counts"][arm]["cuda_graph_launch_api"] == 1
-        assert attribution["counts"][arm]["nccl_a2a_kernel"] == 1
+    assert attribution["kernel_presence_passed"] is True
+    assert attribution["full_iteration_replay_verified"] is False
+    assert attribution["a2a_temporal_overlap_verified"] is False
+    assert attribution["performance_claim_eligible"] is False
+    assert len(attribution["limitations"]) == 3
+    assert set(attribution["counts"]) == {"on"}
+    assert attribution["counts"]["on"]["cuda_graph_launch_api"] == 1
+    assert attribution["counts"]["on"]["nccl_a2a_kernel"] == 1
 
 
 def test_benchmark_kernel_attribution_requires_fused_on_and_grouped_both(
@@ -1486,6 +1498,10 @@ def test_benchmark_kernel_attribution_requires_fused_on_and_grouped_both(
         manifest["kernel_attribution"]["signature_regexes"]
         == attribution["signature_regexes"]
     )
+    feature = json.loads((tmp_path / "result/feature_attribution.json").read_text())
+    assert feature["kernel_presence_passed"] is True
+    assert feature["performance_claim_eligible"] is False
+    assert "single profile job" in feature["limitations"][0]
 
 
 def test_benchmark_kernel_attribution_writes_diagnostics_before_failure(

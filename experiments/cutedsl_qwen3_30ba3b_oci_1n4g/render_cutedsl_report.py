@@ -39,10 +39,10 @@ PUBLIC_JSON_ALLOWLIST = (
     "status.json",
     "metadata.json",
     "benchmark_manifest.json",
-    "functional_gate_summary.json",
     "timing_summary.json",
     "metrics_summary.json",
     "matched_config_diff.json",
+    "feature_attribution.json",
     "kernel_attribution.json",
     "nemo_unit_results.json",
 )
@@ -63,6 +63,19 @@ SECRET_ASSIGNMENT_PATTERN = re.compile(
 )
 AUTH_VALUE_PATTERN = re.compile(r"(?i)\b(Bearer|Basic)\s+\S+")
 URL_USERINFO_PATTERN = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s]+@")
+INTERNAL_LUSTRE_PATH_PATTERN = re.compile(r"/lustre/[^\s\"'<>]*")
+ABSOLUTE_PATH_LINE_PATTERN = re.compile(r"(?m)^[ \t]*/(?!/)[^\r\n]*")
+INTERNAL_IPV4_PATTERN = re.compile(
+    r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|"
+    r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b"
+)
+INTERNAL_HOST_PATTERN = re.compile(r"\bptyche(?:\[[^\]\s]+\]|\d+)")
+RAY_SESSION_PATTERN = re.compile(r"\bsession_[A-Za-z0-9_-]+\b")
+RAY_WORKER_PATTERN = re.compile(
+    r"\bworker-[0-9a-f]+(?:-[0-9a-f]+)?(?:-\d+)?(?:\.(?:out|err))?\b",
+    re.IGNORECASE,
+)
+PID_ASSIGNMENT_PATTERN = re.compile(r"\bpid=\d+\b", re.IGNORECASE)
 INCIDENT_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 REFRESH_COMMAND = (
     "uv run --no-project python "
@@ -98,9 +111,23 @@ a { color:var(--accent); } .timeline { border-left:3px solid var(--line); margin
 
 def redact_text(value: str) -> str:
     """Redact concrete common credential forms from display text."""
-    redacted = URL_USERINFO_PATTERN.sub(r"\1[REDACTED]@", value)
+    redacted = INTERNAL_LUSTRE_PATH_PATTERN.sub("[INTERNAL_PATH]", value)
+    redacted = ABSOLUTE_PATH_LINE_PATTERN.sub("[INTERNAL_PATH_CONTINUATION]", redacted)
+    redacted = INTERNAL_IPV4_PATTERN.sub("[INTERNAL_IP]", redacted)
+    redacted = INTERNAL_HOST_PATTERN.sub("[INTERNAL_HOST]", redacted)
+    redacted = RAY_SESSION_PATTERN.sub("session_[REDACTED]", redacted)
+    redacted = RAY_WORKER_PATTERN.sub("worker-[REDACTED]", redacted)
+    redacted = PID_ASSIGNMENT_PATTERN.sub("pid=[REDACTED]", redacted)
+    redacted = URL_USERINFO_PATTERN.sub(r"\1[REDACTED]@", redacted)
     redacted = AUTH_VALUE_PATTERN.sub(r"\1 [REDACTED]", redacted)
     return SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2[REDACTED]", redacted)
+
+
+def normalize_public_text(value: str) -> str:
+    """Remove line-ending padding while preserving the final newline contract."""
+    has_final_newline = value.endswith(("\n", "\r"))
+    normalized = "\n".join(line.rstrip() for line in value.splitlines())
+    return normalized + ("\n" if has_final_newline else "")
 
 
 def redact_value(value: Any) -> Any:
@@ -227,7 +254,7 @@ def read_bounded_excerpt(path: Path) -> str:
     if size > MAX_EXCERPT_BYTES and "\n" in text:
         text = text.split("\n", 1)[1]
     lines = text.splitlines()[-MAX_EXCERPT_LINES:]
-    redacted = [redact_text(line) for line in lines]
+    redacted = [redact_text(line).rstrip() for line in lines]
     return "\n".join(redacted)
 
 
@@ -342,7 +369,15 @@ def timing_section(timing: dict[str, Any], metrics: dict[str, Any]) -> str:
             f"<tr><td>{escape(arm)}</td><td>{escape(seconds)}</td><td>{escape(throughput_values.get(arm) if isinstance(throughput_values, dict) else None)}</td></tr>"
             for arm, seconds in sorted(timing_values.items())
         )
-        speedup = timing.get("primary_on_over_off_speedup", "not recorded")
+        speedup = timing.get("primary_on_over_off_speedup")
+        if speedup is None:
+            unavailable = timing.get("not_applicable_contrasts", {})
+            reason = (
+                unavailable.get("cutedsl_on_over_off")
+                if isinstance(unavailable, dict)
+                else None
+            )
+            speedup = f"N/A — {reason}" if reason else "not recorded"
         return (
             "<h2>Component timing</h2>"
             "<table><thead><tr><th>Feature cell</th><th>Median policy training (s)</th>"
@@ -379,7 +414,9 @@ def functional_validation_section(summary: dict[str, Any]) -> str:
     if not isinstance(activation, dict):
         activation = {}
     matches = activation.get("matches", [])
-    evidence_count = len(matches) if isinstance(matches, list) else "not recorded"
+    evidence_count = activation.get("match_count")
+    if not isinstance(evidence_count, int):
+        evidence_count = len(matches) if isinstance(matches, list) else "not recorded"
 
     def rank_list(value: Any) -> str:
         if not isinstance(value, list):
@@ -437,12 +474,57 @@ def profile_section(run_dir: Path, metrics: dict[str, Any]) -> str:
             f"<td>{existing_artifact_link(run_dir, str(evidence) if evidence else None)}</td></tr>"
         )
     if not rows:
-        return (
+        profile_html = (
             '<h2>Nsight evidence</h2><p class="muted">No Nsight evidence recorded.</p>'
         )
+    else:
+        profile_html = (
+            "<h2>Nsight evidence</h2><table><thead><tr><th>Cell</th><th>Reports</th>"
+            f"<th>Kernel evidence</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
+
+    feature_path = run_dir / "feature_attribution.json"
+    if not feature_path.is_file():
+        return profile_html
+    feature = read_json(feature_path)
+
+    def verification_label(value: Any) -> str:
+        if value is True:
+            return "yes"
+        if value is False:
+            return "no"
+        return "not applicable"
+
+    limitations = feature.get("limitations", [])
+    if not isinstance(limitations, list):
+        limitations = []
+    boundary_rows = (
+        ("Kernel presence passed", feature.get("kernel_presence_passed")),
+        (
+            "Full-iteration replay verified",
+            feature.get("full_iteration_replay_verified"),
+        ),
+        (
+            "A2A temporal overlap verified",
+            feature.get("a2a_temporal_overlap_verified"),
+        ),
+        ("Performance claim eligible", feature.get("performance_claim_eligible")),
+    )
+    rows_html = "".join(
+        f"<tr><th>{escape(label)}</th><td>{escape(verification_label(value))}</td></tr>"
+        for label, value in boundary_rows
+    )
+    limitations_html = (
+        "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in limitations) + "</ul>"
+        if limitations
+        else '<p class="muted">No feature-verification limitations recorded.</p>'
+    )
     return (
-        "<h2>Nsight evidence</h2><table><thead><tr><th>Cell</th><th>Reports</th>"
-        f"<th>Kernel evidence</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        profile_html
+        + "<h2>Feature verification boundary</h2><table><tbody>"
+        + rows_html
+        + "</tbody></table>"
+        + limitations_html
     )
 
 
@@ -703,6 +785,72 @@ def write_public_events(source_run: Path, source: Path, destination: Path) -> bo
     return True
 
 
+def write_public_functional_summary(
+    source_run: Path, source: Path, destination: Path
+) -> bool:
+    """Publish only aggregate functional facts, never raw worker evidence."""
+    if (
+        not is_contained_regular_file(source_run, source)
+        or source.stat().st_size > MAX_PUBLIC_STRUCTURED_BYTES
+    ):
+        return False
+    summary = read_json(source)
+    offload = summary.get("offload_memory_evidence", {})
+    if not isinstance(offload, dict):
+        offload = {}
+    cgroup = offload.get("cgroup_memory", {})
+    if not isinstance(cgroup, dict):
+        cgroup = {}
+    activation = summary.get("cutedsl_activation_evidence", {})
+    if not isinstance(activation, dict):
+        activation = {}
+    matches = activation.get("matches", [])
+
+    def public_rank_list(value: Any) -> list[int]:
+        if not isinstance(value, list):
+            return []
+        return [
+            rank
+            for rank in value
+            if isinstance(rank, int) and not isinstance(rank, bool)
+        ]
+
+    signature = activation.get("signature")
+    if not isinstance(signature, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.+-]{1,128}", signature
+    ):
+        signature = "not recorded"
+    public_summary = {
+        "functional_gate": summary.get("functional_gate") is True,
+        "performance_eligible": summary.get("performance_eligible") is True,
+        "completed_updates": summary.get("completed_updates"),
+        "offload_memory_evidence": {
+            "completed_global_ranks": public_rank_list(
+                offload.get("completed_global_ranks")
+            ),
+            "cgroup_memory": {
+                "finite_limit_global_ranks": public_rank_list(
+                    cgroup.get("finite_limit_global_ranks")
+                ),
+                "unavailable_limit_global_ranks": public_rank_list(
+                    cgroup.get("unavailable_limit_global_ranks")
+                ),
+            },
+        },
+        "cutedsl_activation_evidence": {
+            "signature": signature,
+            "match_count": len(matches) if isinstance(matches, list) else 0,
+        },
+        "post_job_slurm_accounting_required": summary.get(
+            "post_job_slurm_accounting_required"
+        )
+        is True,
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(public_summary, indent=2, sort_keys=True) + "\n")
+    return True
+
+
 def copy_public_text(source_run: Path, source: Path, destination: Path) -> bool:
     """Copy one allowlisted UTF-8 text artifact when it is within the size bound."""
     if (
@@ -715,7 +863,7 @@ def copy_public_text(source_run: Path, source: Path, destination: Path) -> bool:
     except UnicodeDecodeError:
         return False
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(redact_text(content))
+    destination.write_text(normalize_public_text(redact_text(content)))
     return True
 
 
@@ -739,7 +887,13 @@ def stage_public_run(source_run: Path, public_run: Path) -> Path:
         source = source_run / name
         write_public_json(source_run, source, public_run / name)
     manifest = read_json(public_run / "benchmark_manifest.json")
-    if not is_functional_only(manifest):
+    if is_functional_only(manifest):
+        write_public_functional_summary(
+            source_run,
+            source_run / "functional_gate_summary.json",
+            public_run / "functional_gate_summary.json",
+        )
+    else:
         timing_name = "timing_summary.json"
         write_public_json(
             source_run,

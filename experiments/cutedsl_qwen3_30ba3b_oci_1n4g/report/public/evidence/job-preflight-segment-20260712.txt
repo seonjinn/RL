@@ -25,6 +25,6 @@ Verification
 - Regression: 153 harness/profile/wrapper/report tests passed.
 - Ruff 0.9.9, bash syntax, and git diff checks passed.
 - Pre-Tyche accepted test-only requests 2364786, 2364787, and 2364788.
-- Forecast node pair: ptyche[0285-0286].
+- Forecast node pair: [INTERNAL_HOST].
 - No GPU jobs were submitted by the test-only requests.
 - This evidence validates submission topology and scheduler feasibility only; it supports no performance claim.

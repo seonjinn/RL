@@ -120,6 +120,13 @@ for boolean_value in "${EXISTING_RAY}" "${NEMO2606_FULL_CG_ENABLED}" \
         exit 1
     fi
 done
+case "${FEATURE_CONTEXT}:${NEMO2606_FULL_CG_ENABLED}:${NEMO2606_A2A_ENABLED}" in
+    g0a0:0:0|g1a0:1:0|g0a1:0:1|g1a1:1:1) ;;
+    *)
+        echo "[ERROR] Feature context does not match full-CG/A2A selectors." >&2
+        exit 1
+        ;;
+esac
 if [[ ! "${BENCHMARK_NUM_NODES}" =~ ^[0-9]+$ ]] || \
     [[ ! "${BENCHMARK_GPUS_PER_NODE}" =~ ^[0-9]+$ ]] || \
     [[ ! "${BENCHMARK_SEGMENT_SIZE}" =~ ^[0-9]+$ ]]; then
@@ -198,26 +205,34 @@ else
         echo "[ERROR] CUTEDSL_BENCHMARK_MEASURED_UPDATES must be an integer >= 10." >&2
         exit 1
     fi
-    IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
-    if [[ ${#timing_arms[@]} -ne 2 ]]; then
-        echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain exactly two comma-separated arms." >&2
-        exit 1
-    fi
-    on_count=0
-    off_count=0
-    for arm in "${timing_arms[@]}"; do
-        case "${arm}" in
-            on) on_count=$((on_count + 1)) ;;
-            off) off_count=$((off_count + 1)) ;;
-            *)
-                echo "[ERROR] Unknown benchmark arm in order: ${arm}" >&2
-                exit 1
-                ;;
-        esac
-    done
-    if [[ ${on_count} -ne 1 || ${off_count} -ne 1 ]]; then
-        echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain on and off exactly once." >&2
-        exit 1
+    if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+        if ! [[ "${TIMING_ORDER}" == "on" ]]; then
+            echo "[ERROR] Full-iteration CUDA Graph requires CUTEDSL_BENCHMARK_ORDER=on because CuTeDSL-OFF is not applicable." >&2
+            exit 1
+        fi
+        timing_arms=(on)
+    else
+        IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
+        if [[ ${#timing_arms[@]} -ne 2 ]]; then
+            echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain exactly two comma-separated arms." >&2
+            exit 1
+        fi
+        on_count=0
+        off_count=0
+        for arm in "${timing_arms[@]}"; do
+            case "${arm}" in
+                on) on_count=$((on_count + 1)) ;;
+                off) off_count=$((off_count + 1)) ;;
+                *)
+                    echo "[ERROR] Unknown benchmark arm in order: ${arm}" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+        if [[ ${on_count} -ne 1 || ${off_count} -ne 1 ]]; then
+            echo "[ERROR] CUTEDSL_BENCHMARK_ORDER must contain on and off exactly once." >&2
+            exit 1
+        fi
     fi
     TOTAL_UPDATES=$((WARMUP_UPDATES + MEASURED_UPDATES))
 fi
@@ -458,6 +473,7 @@ runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print
 "${UV_BIN}" lock --check 2>&1 | tee "${CONTAINER_RESULT_DIR}/uv_lock_check.log"
 
 "${UV_BIN}" run --active --no-sync python - <<'PY'
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -499,11 +515,50 @@ def value_at(config: dict[str, Any], dotted_path: str) -> Any:
     return value
 
 
+# NEMO2606_BASE_CONFIG_IDENTITY_START
+NORMALIZED_FEATURE_PATHS = (
+    "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP",
+    "policy.megatron_cfg.cuda_graph_impl",
+    "policy.megatron_cfg.cuda_graph_warmup_steps",
+    "policy.megatron_cfg.cuda_graph_use_single_mempool",
+    "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
+    "policy.megatron_cfg.high_priority_a2a_comm_stream",
+    "policy.megatron_cfg.delay_wgrad_compute",
+)
+NORMALIZED_OPERATIONAL_PATHS = (
+    "logger.log_dir",
+    "checkpointing.checkpoint_dir",
+)
+
+
+def _set_normalized_value(config: dict[str, Any], dotted_path: str) -> None:
+    parent: dict[str, Any] = config
+    keys = dotted_path.split(".")
+    for key in keys[:-1]:
+        child = parent.get(key)
+        if child is None:
+            child = {}
+            parent[key] = child
+        assert isinstance(child, dict), dotted_path
+        parent = child
+    parent[keys[-1]] = "<normalized-feature-or-operational-value>"
+
+
+def canonical_base_config_sha256(config: dict[str, Any]) -> str:
+    normalized = json.loads(json.dumps(config))
+    for path in (*NORMALIZED_FEATURE_PATHS, *NORMALIZED_OPERATIONAL_PATHS):
+        _set_normalized_value(normalized, path)
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+# NEMO2606_BASE_CONFIG_IDENTITY_END
+
+
 result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
 recipe = os.environ["RECIPE"]
 common_overrides = (result_dir / "common_overrides.txt").read_text().splitlines()
 selector_path = os.environ["CUTEDSL_SELECTOR_PATH"]
 off_override = os.environ["OFF_OVERRIDE"]
+expected_arms = os.environ["TIMING_ORDER"].split(",")
 
 register_omegaconf_resolvers()
 
@@ -519,7 +574,7 @@ on_selector = value_at(on_config, selector_path)
 assert on_selector == "1", on_selector
 OmegaConf.save(OmegaConf.create(on_config), result_dir / "effective_config_on.yaml")
 configs_by_arm = {"on": on_config}
-if os.environ["FUNCTIONAL_GATE"] != "1":
+if "off" in expected_arms:
     off_config = resolve([*common_overrides, off_override])
     off_selector = value_at(off_config, selector_path)
     assert off_selector == "0", off_selector
@@ -579,13 +634,7 @@ fixed_config_by_arm = {
     arm: {path: value_at(config, path) for path in fixed_config_paths}
     for arm, config in configs_by_arm.items()
 }
-if os.environ["FUNCTIONAL_GATE"] == "1":
-    fixed_config_evidence = {"on": fixed_config_by_arm["on"]}
-else:
-    fixed_config_evidence = {
-        "on": fixed_config_by_arm["on"],
-        "off": fixed_config_by_arm["off"],
-    }
+fixed_config_evidence = {arm: fixed_config_by_arm[arm] for arm in expected_arms}
 for arm in timing_order:
     assert fixed_config_evidence[arm] == fixed_config_evidence["on"]
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_grouped_gemm"] is True
@@ -627,19 +676,40 @@ for arm in timing_order:
     assert rollout_batch_size == int(os.environ["TRAIN_GLOBAL_BATCH_SIZE"])
 expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
 expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
+full_cg_config_evidence = {
+    arm: {
+        "cuda_graph_impl": configs_by_arm[arm]["policy"]["megatron_cfg"].get(
+            "cuda_graph_impl"
+        ),
+        "cuda_graph_warmup_steps": configs_by_arm[arm]["policy"][
+            "megatron_cfg"
+        ].get("cuda_graph_warmup_steps"),
+        "cuda_graph_use_single_mempool": configs_by_arm[arm]["policy"][
+            "megatron_cfg"
+        ].get("cuda_graph_use_single_mempool"),
+    }
+    for arm in timing_order
+}
 for arm in timing_order:
-    graph_impl = configs_by_arm[arm]["policy"]["megatron_cfg"].get(
-        "cuda_graph_impl"
-    )
+    graph_impl = full_cg_config_evidence[arm]["cuda_graph_impl"]
     assert graph_impl == ("full_iteration" if expected_full_cg else None) or (
         not expected_full_cg and graph_impl == "none"
     )
+    if expected_full_cg:
+        assert full_cg_config_evidence[arm]["cuda_graph_warmup_steps"] == int(
+            os.environ["CUDA_GRAPH_WARMUP_STEPS"]
+        )
+        assert (
+            full_cg_config_evidence[arm]["cuda_graph_use_single_mempool"] is True
+        )
     for path in (
         "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
         "policy.megatron_cfg.high_priority_a2a_comm_stream",
         "policy.megatron_cfg.delay_wgrad_compute",
     ):
         assert fixed_config_evidence[arm][path] is expected_a2a
+assert selector_path == NORMALIZED_FEATURE_PATHS[0], selector_path
+base_config_sha256 = canonical_base_config_sha256(on_config)
 manifest = {
     "functional_gate": os.environ["FUNCTIONAL_GATE"] == "1",
     "performance_eligible": os.environ["FUNCTIONAL_GATE"] != "1",
@@ -655,7 +725,17 @@ manifest = {
     "feature_context": os.environ["FEATURE_CONTEXT"],
     "full_cg_enabled": os.environ["NEMO2606_FULL_CG_ENABLED"] == "1",
     "a2a_enabled": os.environ["NEMO2606_A2A_ENABLED"] == "1",
-    "aggregation_scope": "context_local_cutedsl_pair",
+    "base_config_sha256": base_config_sha256,
+    "available_arms": expected_arms,
+    "not_applicable_arms": {
+        "off": "full-iteration CUDA Graph requires device-initiated CuTeDSL"
+    }
+    if os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
+    else {},
+    "aggregation_scope": (
+        "context_single_arm" if expected_full_cg else "context_local_cutedsl_pair"
+    ),
+    "full_cg_config_evidence": full_cg_config_evidence,
     "cross_context_factorial_aggregate_available": False,
     "build_environment": {
         "NVTE_CUDA_ARCHS": os.environ["NVTE_CUDA_ARCHS"],
@@ -710,6 +790,11 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "Verify fixed CuTeDSL ON configuration and exact topology" benchmark_manifest.json
     cutedsl_write_event config_validation pass 0 \
         "Functional configuration and benchmark manifest recorded" benchmark_manifest.json
+elif [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    cutedsl_write_event config_validation start '' \
+        "Verify CuTeDSL ON config for the full-CG-dependent context" benchmark_manifest.json
+    cutedsl_write_event config_validation pass 0 \
+        "Single-arm config and benchmark manifest recorded" benchmark_manifest.json
 else
     cutedsl_write_event config_validation start '' \
         "Verify matched ON/OFF configs differ only by the selector" matched_config_diff.json
@@ -732,7 +817,7 @@ else
         "Functional GRPO is enforced by the staged gate" ''
     echo "[INFO] Running timing-only arms without profiling instrumentation."
     cutedsl_write_event timing start '' \
-        "Run matched CuTeDSL ON/OFF timing arms" timing_summary.json
+        "Run timing for the manifest-declared available arms" timing_summary.json
 fi
 "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
@@ -1348,25 +1433,28 @@ arm_results = [
     json.loads(path.read_text())
     for path in sorted((result_dir / "timing").glob("*-*/raw_timing.json"))
 ]
-assert {result["arm"] for result in arm_results} == {"on", "off"}, arm_results
+expected_arms = os.environ["TIMING_ORDER"].split(",")
+assert {result["arm"] for result in arm_results} == set(expected_arms), arm_results
 by_arm = {result["arm"]: result for result in arm_results}
-on_values = by_arm["on"]["policy_training_seconds"]
-off_values = by_arm["off"]["policy_training_seconds"]
-on_workload = [
-    item["total_num_tokens"] for item in by_arm["on"]["measured_step_workload"]
-]
-off_workload = [
-    item["total_num_tokens"] for item in by_arm["off"]["measured_step_workload"]
-]
-on_throughput = [
-    item["policy_training_tokens_per_sec_per_gpu"]
-    for item in by_arm["on"]["measured_step_workload"]
-]
-off_throughput = [
-    item["policy_training_tokens_per_sec_per_gpu"]
-    for item in by_arm["off"]["measured_step_workload"]
-]
-workload_equality_observed = on_workload == off_workload
+policy_seconds = {
+    arm: by_arm[arm]["policy_training_seconds"] for arm in expected_arms
+}
+workload = {
+    arm: [
+        item["total_num_tokens"]
+        for item in by_arm[arm]["measured_step_workload"]
+    ]
+    for arm in expected_arms
+}
+throughput = {
+    arm: [
+        item["policy_training_tokens_per_sec_per_gpu"]
+        for item in by_arm[arm]["measured_step_workload"]
+    ]
+    for arm in expected_arms
+}
+workload_equality_required = len(expected_arms) > 1
+workload_equality_observed = len({tuple(values) for values in workload.values()}) == 1
 summary = {
     "run_id": arm_results[0]["run_id"],
     "timing_order": [
@@ -1376,38 +1464,40 @@ summary = {
         str(path.relative_to(result_dir))
         for path in sorted((result_dir / "timing").glob("*-*/raw_timing.json"))
     ],
+    "available_arms": expected_arms,
     "median_policy_training_seconds": {
-        "on": statistics.median(on_values),
-        "off": statistics.median(off_values),
+        arm: statistics.median(policy_seconds[arm]) for arm in expected_arms
     },
     "workload_metric": TOKEN_COUNT_METRIC,
-    "workload_equality_required": True,
+    "workload_equality_required": workload_equality_required,
     "workload_equality_observed": workload_equality_observed,
-    "measured_total_num_tokens": {"on": on_workload, "off": off_workload},
+    "measured_total_num_tokens": workload,
     "primary_metric": NORMALIZED_THROUGHPUT_METRIC,
     "primary_metric_normalized_by": "train/total_num_tokens and training GPU count",
     "median_normalized_throughput": {
-        "on": statistics.median(on_throughput),
-        "off": statistics.median(off_throughput),
+        arm: statistics.median(throughput[arm]) for arm in expected_arms
     },
-    "primary_on_over_off_speedup": statistics.median(on_throughput)
-    / statistics.median(off_throughput),
     "secondary_metric": POLICY_TIME_METRIC,
     "secondary_metric_confounded_by_live_workload": True,
-    "secondary_policy_time_on_over_off_speedup": statistics.median(off_values)
-    / statistics.median(on_values),
+    "cutedsl_contrast_available": "off" in expected_arms,
 }
+if "off" in expected_arms:
+    summary["primary_on_over_off_speedup"] = statistics.median(throughput["on"]) / statistics.median(throughput["off"])
+    summary["secondary_policy_time_on_over_off_speedup"] = statistics.median(policy_seconds["off"]) / statistics.median(policy_seconds["on"])
+else:
+    summary["not_applicable_contrasts"] = {
+        "cutedsl_on_over_off": "full-iteration CUDA Graph requires device-initiated CuTeDSL"
+    }
 (result_dir / "timing_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-if not workload_equality_observed:
+if workload_equality_required and not workload_equality_observed:
     raise ValueError(
         "measured workload equality failed: "
-        f"ON train/total_num_tokens={on_workload!r}; "
-        f"OFF train/total_num_tokens={off_workload!r}"
+        f"per-arm train/total_num_tokens={workload!r}"
     )
 manifest_path = result_dir / "benchmark_manifest.json"
 manifest = json.loads(manifest_path.read_text())
 manifest["resolved_metric_names"] = {
-    arm: by_arm[arm]["resolved_metric_names"] for arm in ("on", "off")
+    arm: by_arm[arm]["resolved_metric_names"] for arm in expected_arms
 }
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 # CUTEDSL_TIMING_SUMMARIZER_END
@@ -1424,7 +1514,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         functional_gate_summary.json
 else
     cutedsl_write_event timing pass 0 \
-        "Matched timing and normalized throughput summary recorded" timing_summary.json
+        "Available-arm timing and normalized throughput summary recorded" timing_summary.json
 fi
 
 if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then
@@ -1599,11 +1689,12 @@ result_dir = Path(sys.argv[1])
 manifest_path = result_dir / "benchmark_manifest.json"
 manifest = json.loads(manifest_path.read_text())
 config_evidence = manifest.get("fixed_config_evidence", {})
+expected_arms = manifest["available_arms"]
 failures: list[str] = []
 arm_results: dict[str, dict[str, object]] = {}
 evidence_by_arm: dict[str, str] = {}
 
-for arm in ("on", "off"):
+for arm in expected_arms:
     evidence_paths = sorted((result_dir / "profiles").glob(f"*-{arm}/kernel_evidence.txt"))
     if len(evidence_paths) != 1:
         failures.append(
@@ -1631,16 +1722,17 @@ for arm in ("on", "off"):
     }
 
 on_result = arm_results["on"]
-off_result = arm_results["off"]
 if on_result["fused_glu_match_count"] == 0:
     failures.append("ON fused GLU kernel signature was not found")
 if on_result["fused_dglu_match_count"] == 0:
     failures.append("ON fused dGLU kernel signature was not found")
-if off_result["fused_glu_match_count"] != 0:
-    failures.append("OFF fused GLU kernel signature must be absent")
-if off_result["fused_dglu_match_count"] != 0:
-    failures.append("OFF fused dGLU kernel signature must be absent")
-for arm in ("on", "off"):
+if "off" in expected_arms:
+    off_result = arm_results["off"]
+    if off_result["fused_glu_match_count"] != 0:
+        failures.append("OFF fused GLU kernel signature must be absent")
+    if off_result["fused_dglu_match_count"] != 0:
+        failures.append("OFF fused dGLU kernel signature must be absent")
+for arm in expected_arms:
     if arm_results[arm]["grouped_gemm_match_count"] == 0:
         failures.append(f"{arm.upper()} grouped-GEMM path signature was not found")
 
@@ -1648,7 +1740,7 @@ config_contracts = {
     "policy.megatron_cfg.moe_grouped_gemm": "grouped GEMM",
     "policy.megatron_cfg.use_transformer_engine_op_fuser": "op fuser",
 }
-for arm in ("on", "off"):
+for arm in expected_arms:
     for path, label in config_contracts.items():
         if config_evidence.get(arm, {}).get(path) is not True:
             failures.append(f"{arm.upper()} {label} config evidence is not true")
@@ -1667,11 +1759,11 @@ feature_counts = {
     for arm, evidence in evidence_by_arm.items()
 }
 if manifest["full_cg_enabled"]:
-    for arm in ("on", "off"):
+    for arm in expected_arms:
         if feature_counts[arm]["cuda_graph_launch_api"] == 0:
             failures.append(f"{arm.upper()} full-CG cudaGraphLaunch evidence was not found")
 if manifest["a2a_enabled"]:
-    for arm in ("on", "off"):
+    for arm in expected_arms:
         if feature_counts[arm]["nccl_a2a_kernel"] == 0:
             failures.append(f"{arm.upper()} NCCL A2A kernel evidence was not found")
 
@@ -1689,12 +1781,29 @@ manifest["kernel_attribution"] = {
     **attribution,
     "artifact": "kernel_attribution.json",
 }
+feature_limitations = [
+    "a single profile job cannot establish the required replicated performance aggregate"
+]
+if manifest["full_cg_enabled"]:
+    feature_limitations.append(
+        "cudaGraphLaunch presence does not prove full-iteration replay"
+    )
+if manifest["a2a_enabled"]:
+    feature_limitations.append(
+        "NCCL A2A kernel presence does not prove temporal overlap with GEMM"
+    )
 manifest["feature_attribution"] = {
     "feature_context": manifest["feature_context"],
     "full_cg_enabled": manifest["full_cg_enabled"],
     "a2a_enabled": manifest["a2a_enabled"],
     "counts": feature_counts,
-    "passed": not failures,
+    "kernel_presence_passed": not failures,
+    "full_iteration_replay_verified": (
+        False if manifest["full_cg_enabled"] else None
+    ),
+    "a2a_temporal_overlap_verified": False if manifest["a2a_enabled"] else None,
+    "performance_claim_eligible": False,
+    "limitations": feature_limitations,
 }
 (result_dir / "feature_attribution.json").write_text(
     json.dumps(manifest["feature_attribution"], indent=2, sort_keys=True) + "\n"
@@ -1706,7 +1815,7 @@ if failures:
 PY
 BASH
     cutedsl_write_event profile pass 0 \
-        "Nsight reports and CuTeDSL kernel attribution passed for both arms" \
+        "Nsight reports and kernel-presence attribution passed for available arms; temporal overlap remains a separate gate" \
         kernel_attribution.json
 else
     cutedsl_write_event profile skip 0 \
@@ -1724,5 +1833,5 @@ else
         "Publish benchmark timing and profile summaries" timing_summary.json
     cutedsl_write_event metrics_export pass 0 \
         "Benchmark evidence is ready for report rendering" timing_summary.json
-    echo "[PASS] Matched CuTeDSL ON/OFF benchmark completed: ${RESULT_DIR}"
+    echo "[PASS] NeMo 26.06 feature benchmark completed: ${RESULT_DIR}"
 fi

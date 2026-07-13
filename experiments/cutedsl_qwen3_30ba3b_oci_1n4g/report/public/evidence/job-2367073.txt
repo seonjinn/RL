@@ -1,0 +1,35 @@
+Job: 2367073
+Cluster: Pre-Tyche
+State: FAILED 1:0 after 00:01:22
+Started: 2026-07-13T01:31:53Z
+Failed preflight: 2026-07-13T01:33:13Z
+Source: 063b8c7da087795b0497022369340ebb35a3745b
+Feature cell: CuTeDSL ON, full-iteration CUDA Graph OFF, EP A2A overlap OFF
+Original remote log: Pre-Tyche job 2367073 slurm.out, ray-driver.log, and Slurm accounting
+
+Observed failure
+
+- The immutable recursive-source preflight stopped with `Refusing to benchmark a dirty parent checkout` and reported Megatron-Bridge modified.
+- Runtime bootstrap, config validation, GPU work, and GRPO did not run. This job contains no performance evidence.
+
+Root cause
+
+- Prior job 2366769 logged `python3-config: No such file or directory` and then compiled `helpers.cpp -o helpers_cpp` from two policy ranks.
+- MCore's Makefile obtains the extension suffix from `python3-config`. With that executable unavailable, the suffix was empty and the build wrote `megatron/core/datasets/helpers_cpp` directly into the shared nested MCore checkout.
+- The suffixless file was an untracked 331,896-byte ARM aarch64 ELF. It dirtied MCore, then Megatron-Bridge, then the parent checkout. Job 2367073's fail-closed source guard correctly rejected that state.
+
+Recovery and verification
+
+- The ELF was moved, not deleted, to the run-scoped quarantine outside the checkout at `quarantine/generated-submodule-artifacts/2367073/helpers_cpp`.
+- Quarantined SHA256: `d2061851edea02d0394801f6f50a585a4b0f1a9e228ddc8817971256d616f435`.
+- Parent, Bridge, and nested MCore status were clean afterward, and the original generated path was absent.
+- Job 2367079 used the same source and pinned image, passed image-hash plus recursive clean-source preflight, and completed all three GRPO updates. Its later ANSI parsing failure was unrelated.
+
+Provenance
+
+- Job name: `coreai_dlalgo_llm-n2606.functional`
+- Placement: one two-node Pre-Tyche segment
+- Submission group: `20260713T013152Z-996251`
+- Bridge gitlink: `3e3cdf11bc151022668524f9ff39c76ee3f84c98`
+- MCore gitlink: `002255075c3728fded9a2e435677840b08560d55`
+- Pinned image SHA256: `dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be`

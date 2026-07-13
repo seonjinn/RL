@@ -20,7 +20,7 @@ if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--test-only" ) ]]; then
     exit 2
 fi
 
-CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0,g1a0,g0a1,g1a1}"
+CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0,g0a1}"
 REPLICATES="${NEMO2606_FACTORIAL_REPLICATES:-3}"
 WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"
@@ -260,12 +260,15 @@ if [[ "${TEST_ONLY}" == "0" && "${needs_full_cg}" == "1" ]]; then
     fi
 fi
 
-for context in "${contexts[@]}"; do
-    resolve_context "${context}"
-
-    submission_record="${SUBMISSION_DIR}/${SUBMISSION_GROUP}-${context}.jsonl"
-    for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
-        if ((replicate_index % 2 == 0)); then
+for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
+    for ((context_offset = 0; context_offset < ${#contexts[@]}; context_offset++)); do
+        context_index=$(((replicate_index + context_offset) % ${#contexts[@]}))
+        context="${contexts[context_index]}"
+        resolve_context "${context}"
+        submission_record="${SUBMISSION_DIR}/${SUBMISSION_GROUP}-${context}.jsonl"
+        if [[ "${full_cg_enabled}" == "1" ]]; then
+            timing_order="on"
+        elif ((replicate_index % 2 == 0)); then
             timing_order="on,off"
         else
             timing_order="off,on"
@@ -340,8 +343,8 @@ for context in "${contexts[@]}"; do
 done
 
 if [[ "${TEST_ONLY}" == "1" ]]; then
-    echo "[INFO] Validated ${#contexts[@]} contexts x ${REPLICATES} replicas; no jobs submitted."
+    echo "[INFO] Scheduler/export preflighted ${#contexts[@]} contexts x ${REPLICATES} replicas; feature-source checks were skipped and no jobs were submitted."
 else
     echo "[INFO] Submitted ${#contexts[@]} contexts x ${REPLICATES} replicas."
-    echo "[INFO] Collect each context with collect_cutedsl_ab_replicates.py and its context JSONL."
+    echo "[INFO] Collect paired g0 contexts with collect_cutedsl_ab_replicates.py; ON-only g1 contexts require the dependency-constrained collector."
 fi

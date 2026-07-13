@@ -316,6 +316,21 @@
   },
   {
     "cluster": "pre_tyche",
+    "evidence": "Job 2367073 failed immutable source preflight before runtime bootstrap: ray-driver.log reported `Refusing to benchmark a dirty parent checkout` and marked Megatron-Bridge modified. Prior job 2366769 had logged `python3-config: No such file or directory` followed by `g++ ... helpers.cpp -o helpers_cpp` in nested MCore on both nodes, leaving a 331896-byte untracked ARM ELF in the shared checkout.",
+    "fix_commit": "operational quarantine; no source commit",
+    "hypothesis": "Moving only the generated suffixless helpers_cpp ELF outside the checkout would restore recursive cleanliness without discarding evidence or changing source.",
+    "report_path": "evidence/job-2367073.txt",
+    "reproduction": "After a functional run compiles nested MCore's dataset helper with python3-config absent, run the EP8 functional payload from source 063b8c7d without removing the resulting megatron/core/datasets/helpers_cpp; the recursive immutable-source guard marks Megatron-Bridge dirty and exits before bootstrap.",
+    "root_cause": "The prior run built MCore's dataset helper inside the shared Git submodule. Because python3-config was absent, Makefile LIBEXT resolved empty and produced suffixless helpers_cpp. The output is neither tracked nor ignored, so it dirtied nested MCore, Megatron-Bridge, and the parent checkout; the fail-closed benchmark preflight correctly rejected it.",
+    "run_id": "2367073",
+    "symptom": "The two-node CuTeDSL-ON functional job failed 1:0 after 00:01:22 during image_hash/source preflight; runtime bootstrap, config validation, GPU work, and GRPO were not reached.",
+    "tested_change": "Move the single generated ELF, without deleting it, to a run-scoped quarantine outside the checkout, then recheck parent and recursive submodule status.",
+    "timestamp_utc": "2026-07-13T01:33:13Z",
+    "verification_evidence": "After quarantine, parent, Bridge, and MCore status were clean and the original path was absent. Job 2367079 on the same source 063b8c7d and pinned image passed image hash plus recursive clean-source preflight, then completed all three GRPO updates; its later ANSI summarizer failure is unrelated. Job 2367073 contains no performance evidence.",
+    "verification_job": "2367079 (preflight/workload verification; unrelated post-run summarizer failure)"
+  },
+  {
+    "cluster": "pre_tyche",
     "evidence": "Job 2367079 completed all three Qwen3-30B-A3B EP8 CuTeDSL-ON updates and wrote metrics.json. Its post-run summarizer then failed while converting the ANSI-contaminated numeric token 670.182\\x1b[32m to float, so Slurm reported FAILED 1:0 after 00:45:50.",
     "fix_commit": "00062bc39cbfe09d40ac222209696db93eef6059",
     "hypothesis": "Removing terminal ANSI control sequences before parsing structured worker evidence will preserve numeric fields while retaining the existing bounded and exact-rank validation.",

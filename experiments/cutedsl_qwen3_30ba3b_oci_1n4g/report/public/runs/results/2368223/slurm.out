@@ -1,0 +1,120 @@
+  1        1        1
+
+
+🔹 train/probs_ratio_max - 3 steps
+Min: 1   Max: 1   Avg: 1
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  1        1        1
+
+
+🔹 train/probs_ratio_min - 3 steps
+Min: 1   Max: 1   Avg: 1
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  1        1        1
+
+
+🔹 train/reward - 3 steps
+Min: 0.468262   Max: 0.591309   Avg: 0.517904
+
+  Step 1     Step 2     Step 3
+ ────────────────────────────────
+  0.591309   0.494141   0.468262
+
+
+🔹 train/sampling_importance_ratio - 3 steps
+Min: 0.999942   Max: 1.00003   Avg: 1
+
+  Step 1    Step 2    Step 3
+ ──────────────────────────────
+  1.00003   1.00003   0.999942
+
+
+🔹 train/token_mult_prob_error - 3 steps
+Min: 1.04358   Max: 1.09333   Avg: 1.06461
+
+  Step 1    Step 2    Step 3
+ ─────────────────────────────
+  1.09333   1.05691   1.04358
+
+
+🔹 train/total_num_tokens - 3 steps
+Min: 6.53804e+06   Max: 6.9811e+06   Avg: 6.76731e+06
+
+  Step 1       Step 2        Step 3
+ ───────────────────────────────────────
+  6.7828e+06   6.53804e+06   6.9811e+06
+
+
+🔹 train/total_turns - 3 steps
+Min: 2048   Max: 2048   Avg: 2048
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  2048     2048     2048
+
+
+🔹 train/truncation_rate - 3 steps
+Min: 0.571289   Max: 0.648926   Avg: 0.598958
+
+  Step 1    Step 2     Step 3
+ ───────────────────────────────
+  0.57666   0.571289   0.648926
+
+
+🔹 train/vllm/spec_acceptance_length - 3 steps
+Min: 1   Max: 1   Avg: 1
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  1        1        1
+
+
+🔹 train/vllm/spec_acceptance_rate - 3 steps
+Min: 0   Max: 0   Avg: 0
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  0        0        0
+
+
+🔹 train/vllm/spec_num_accepted_tokens - 3 steps
+Min: 0   Max: 0   Avg: 0
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  0        0        0
+
+
+🔹 train/vllm/spec_num_draft_tokens - 3 steps
+Min: 0   Max: 0   Avg: 0
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  0        0        0
+
+
+🔹 train/vllm/spec_num_drafts - 3 steps
+Min: 0   Max: 0   Avg: 0
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  0        0        0
+
+
+🔹 train/wd - 3 steps
+Min: 0.01   Max: 0.01   Avg: 0.01
+
+  Step 1   Step 2   Step 3
+ ──────────────────────────
+  0.01     0.01     0.01
+
+
+✓ Merged data written to
+[INTERNAL_PATH]
+[INTERNAL_PATH_CONTINUATION]
+[INTERNAL_PATH_CONTINUATION]
+[PASS] Three-update EP16 CuTeDSL functional gate completed: [INTERNAL_PATH]

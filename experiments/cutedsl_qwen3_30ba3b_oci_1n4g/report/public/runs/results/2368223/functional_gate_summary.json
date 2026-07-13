@@ -1,0 +1,51 @@
+{
+  "completed_updates": 3,
+  "cutedsl_activation_evidence": {
+    "match_count": 17,
+    "signature": "GroupedGemmGluSm100"
+  },
+  "functional_gate": true,
+  "offload_memory_evidence": {
+    "cgroup_memory": {
+      "finite_limit_global_ranks": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "unavailable_limit_global_ranks": []
+    },
+    "completed_global_ranks": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ]
+  },
+  "performance_eligible": false,
+  "post_job_slurm_accounting_required": true
+}

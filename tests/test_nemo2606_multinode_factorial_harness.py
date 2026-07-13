@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -329,15 +330,17 @@ printf '%s@%s\n' "$CUTEDSL_SUBMISSION_GIT_BRANCH" "$CUTEDSL_SUBMISSION_GIT_SHA"
     assert result.stdout.strip() == f"{expected_branch}@{expected_sha}"
 
 
-def test_submitter_covers_four_contexts_with_alternating_replicas() -> None:
+def test_submitter_marks_full_cg_cutedsl_off_as_not_applicable() -> None:
     source = SUBMITTER.read_text()
-    assert 'CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0,g1a0,g0a1,g1a1}"' in source
+    assert 'CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0,g0a1}"' in source
     assert 'REPLICATES="${NEMO2606_FACTORIAL_REPLICATES:-3}"' in source
     assert 'WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"' in source
     assert 'MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"' in source
     assert "((REPLICATES < 3))" in source
     assert 'timing_order="on,off"' in source
     assert 'timing_order="off,on"' in source
+    assert 'if [[ "${full_cg_enabled}" == "1" ]]; then' in source
+    assert 'timing_order="on"' in source
     assert '"NEMO2606_FULL_CG_ENABLED=${full_cg_enabled}"' in source
     assert '"NEMO2606_A2A_ENABLED=${a2a_enabled}"' in source
     assert '"CUTEDSL_BENCHMARK_ORDER=${timing_order}"' in source
@@ -346,7 +349,7 @@ def test_submitter_covers_four_contexts_with_alternating_replicas() -> None:
     assert source.index('needs_full_cg="0"') < source.index("job_id=$(sbatch")
 
 
-def test_submitter_test_only_exports_twelve_ray_jobs(tmp_path: Path) -> None:
+def test_submitter_test_only_exports_runnable_default_contexts(tmp_path: Path) -> None:
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
     calls_path = tmp_path / "calls.jsonl"
@@ -406,11 +409,16 @@ print(f"mock-{record['context']}-{record['replicate']}")
     )
     assert result.returncode == 0, result.stderr
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
-    assert len(calls) == 12
+    assert len(calls) == 6
     assert [call["context"] for call in calls] == [
-        context for context in ("g0a0", "g1a0", "g0a1", "g1a1") for _ in range(3)
+        "g0a0",
+        "g0a1",
+        "g0a1",
+        "g0a0",
+        "g0a0",
+        "g0a1",
     ]
-    for context in ("g0a0", "g1a0", "g0a1", "g1a1"):
+    for context in ("g0a0", "g0a1"):
         context_calls = [call for call in calls if call["context"] == context]
         assert [call["order"] for call in context_calls] == [
             "on,off",
@@ -435,6 +443,28 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert "--segment=1" not in call["argv"]
         assert "--test-only" in call["argv"]
         assert call["argv"][-1] == str(PROJECT_ROOT / "ray.sub")
+
+    calls_path.unlink()
+    env["NEMO2606_FACTORIAL_CONTEXTS"] = "g0a0,g1a0,g0a1,g1a1"
+    all_contexts = subprocess.run(
+        ["bash", str(SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert all_contexts.returncode == 0, all_contexts.stderr
+    all_calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+    assert len(all_calls) == 12
+    for context in ("g0a0", "g1a0", "g0a1", "g1a1"):
+        context_calls = [call for call in all_calls if call["context"] == context]
+        expected_orders = (
+            ["on", "on", "on"]
+            if context.startswith("g1")
+            else ["on,off", "off,on", "on,off"]
+        )
+        assert [call["order"] for call in context_calls] == expected_orders
+        assert [call["replicate"] for call in context_calls] == ["0", "1", "2"]
 
 
 def test_official_submitter_exports_matched_4n4g_performance_jobs(
@@ -715,6 +745,87 @@ def test_functional_payload_fails_closed_before_selecting_one_arm() -> None:
     assert source.index("MEASURED_UPDATES < 10") > timing_branch
 
 
+def test_performance_payload_accepts_only_cutedsl_on_for_full_cg() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    required = (
+        'if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then',
+        '[[ "${TIMING_ORDER}" == "on" ]]',
+        "timing_arms=(on)",
+        'expected_arms = os.environ["TIMING_ORDER"].split(",")',
+        'if "off" in expected_arms:',
+        '"available_arms": expected_arms',
+        '"not_applicable_arms": {',
+        '"off": "full-iteration CUDA Graph requires device-initiated CuTeDSL"',
+        '"base_config_sha256": base_config_sha256',
+        '"context_single_arm" if expected_full_cg else "context_local_cutedsl_pair"',
+        '"policy.megatron_cfg.cuda_graph_impl"',
+        '"policy.megatron_cfg.overlap_moe_expert_parallel_comm"',
+        '"policy.megatron_cfg.high_priority_a2a_comm_stream"',
+        '"policy.megatron_cfg.delay_wgrad_compute"',
+        '"full_cg_config_evidence": full_cg_config_evidence',
+        '"cuda_graph_warmup_steps"',
+        '"cuda_graph_use_single_mempool"',
+        'os.environ["CUDA_GRAPH_WARMUP_STEPS"]',
+    )
+    for fragment in required:
+        assert fragment in source, fragment
+
+
+def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    start_marker = "# NEMO2606_BASE_CONFIG_IDENTITY_START"
+    end_marker = "# NEMO2606_BASE_CONFIG_IDENTITY_END"
+    assert start_marker in source
+    assert end_marker in source
+    code = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    namespace: dict[str, object] = {}
+    exec(
+        "import hashlib\nimport json\nfrom typing import Any\n" + code,
+        namespace,
+    )
+    digest = namespace["canonical_base_config_sha256"]
+    baseline = {
+        "logger": {"log_dir": "/runtime/job-a/logs"},
+        "checkpointing": {"checkpoint_dir": "/runtime/job-a/checkpoints"},
+        "policy": {
+            "train_global_batch_size": 2048,
+            "megatron_cfg": {
+                "env_vars": {"NVTE_CUTEDSL_FUSED_GROUPED_MLP": "1"},
+                "overlap_moe_expert_parallel_comm": False,
+                "high_priority_a2a_comm_stream": False,
+                "delay_wgrad_compute": False,
+            },
+        },
+    }
+    full_cg = copy.deepcopy(baseline)
+    full_cg["logger"]["log_dir"] = "/runtime/job-b/logs"
+    full_cg["checkpointing"]["checkpoint_dir"] = "/runtime/job-b/checkpoints"
+    full_cg["policy"]["megatron_cfg"].update(
+        {
+            "cuda_graph_impl": "full_iteration",
+            "cuda_graph_warmup_steps": 3,
+            "cuda_graph_use_single_mempool": True,
+            "overlap_moe_expert_parallel_comm": True,
+            "high_priority_a2a_comm_stream": True,
+            "delay_wgrad_compute": True,
+        }
+    )
+    assert digest(baseline) == digest(full_cg)
+    changed_workload = copy.deepcopy(full_cg)
+    changed_workload["policy"]["train_global_batch_size"] = 1024
+    assert digest(baseline) != digest(changed_workload)
+
+
+def test_payload_rejects_feature_context_boolean_mismatch() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    assert (
+        'case "${FEATURE_CONTEXT}:${NEMO2606_FULL_CG_ENABLED}:${NEMO2606_A2A_ENABLED}" in'
+        in source
+    )
+    assert "g0a0:0:0|g1a0:1:0|g0a1:0:1|g1a1:1:1)" in source
+    assert "Feature context does not match full-CG/A2A selectors" in source
+
+
 def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> None:
     source = MATRIX_PAYLOAD.read_text()
     required = (
@@ -724,8 +835,10 @@ def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> Non
         '"performance_eligible": os.environ["FUNCTIONAL_GATE"] != "1"',
         '"segment_size": cluster_config["segment_size"]',
         '"segment": int(os.environ["BENCHMARK_SEGMENT_SIZE"])',
-        'if os.environ["FUNCTIONAL_GATE"] != "1":',
-        'fixed_config_evidence = {"on": fixed_config_by_arm["on"]}',
+        'expected_arms = os.environ["TIMING_ORDER"].split(",")',
+        'if "off" in expected_arms:',
+        "fixed_config_evidence = {arm: fixed_config_by_arm[arm] for arm in expected_arms}",
+        '"available_arms": expected_arms',
         '"arms": [',
     )
     for fragment in required:
@@ -1016,7 +1129,7 @@ def test_matrix_payload_fails_closed_on_missing_feature_implementations() -> Non
         '"feature_context"',
         '"full_cg_enabled"',
         '"a2a_enabled"',
-        '"aggregation_scope": "context_local_cutedsl_pair"',
+        '"context_single_arm" if expected_full_cg else "context_local_cutedsl_pair"',
         '"cross_context_factorial_aggregate_available": False',
         '"kernel_attribution"',
     )
