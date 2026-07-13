@@ -143,6 +143,11 @@ from nemo_rl.models.megatron.router_replay import (
     router_replay_enabled,
     validate_router_replay_config,
 )
+from nemo_rl.models.megatron.reference_setup_diagnostics import (
+    checkpoint_marker_metadata,
+    distributed_timeout_override,
+    log_reference_setup_stage,
+)
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.utils import (
     configure_dynamo_cache,
@@ -213,7 +218,14 @@ def setup_distributed() -> None:
     # Ensure clean slate before import
     destroy_parallel_state()
     # Initialize process group
-    torch.distributed.init_process_group("nccl")
+    timeout = distributed_timeout_override()
+    init_process_group_kwargs = {"timeout": timeout} if timeout is not None else {}
+    log_reference_setup_stage(
+        "distributed.before_init_process_group",
+        timeout_seconds=timeout.total_seconds() if timeout is not None else "default",
+    )
+    torch.distributed.init_process_group("nccl", **init_process_group_kwargs)
+    log_reference_setup_stage("distributed.after_init_process_group")
 
 
 def validate_and_set_config(
@@ -1523,6 +1535,8 @@ def setup_reference_model_state(
     pre_load_checkpoint_hook: Optional[Callable] = None,
 ) -> dict:
     """Setup the reference model for inference and return its state dict."""
+    log_reference_setup_stage("setup.enter", pretrained_path=pretrained_path)
+
     # Create reference checkpoint config
     ref_checkpoint_config = CheckpointConfig(
         pretrained_checkpoint=pretrained_path,
@@ -1532,7 +1546,9 @@ def setup_reference_model_state(
         load_rng=False,
     )
 
+    log_reference_setup_stage("setup.before_checkpoint_context")
     ref_ckpt_context = init_checkpointing_context(ref_checkpoint_config)
+    log_reference_setup_stage("setup.after_checkpoint_context")
 
     # Create a separate megatron config for the reference model
     ref_megatron_cfg = ConfigContainer(
@@ -1597,6 +1613,7 @@ def setup_reference_model_state(
         ref_pre_wrap_hooks.extend([composed_peft_hook])
 
     try:
+        log_reference_setup_stage("setup.before_get_model")
         reference_model = get_model(
             megatron_cfg.model,
             megatron_cfg.ddp,
@@ -1607,20 +1624,40 @@ def setup_reference_model_state(
             mixed_precision_wrapper=ref_mixed_precision_wrapper,
             pg_collection=ProcessGroupCollection.use_mpu_process_groups(),
         )
+        log_reference_setup_stage("setup.after_get_model")
 
         # If use_peft, the pretrained checkpoint weights are already loaded inside of the pre_wrap_hook
         # so they only need to be loaded here if use_peft is False
+        log_reference_setup_stage("setup.before_checkpoint_marker_metadata")
+        checkpoint_markers = checkpoint_marker_metadata(pretrained_path)
+        log_reference_setup_stage(
+            "setup.after_checkpoint_marker_metadata",
+            checkpoint_markers=json.dumps(
+                checkpoint_markers,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        log_reference_setup_stage("setup.before_checkpoint_exists")
         should_load_checkpoint = (
             not use_peft
             and ref_checkpoint_config.pretrained_checkpoint is not None
             and checkpoint_exists(ref_checkpoint_config.pretrained_checkpoint)
+        )
+        log_reference_setup_stage(
+            "setup.after_checkpoint_exists",
+            should_load_checkpoint=should_load_checkpoint,
+            use_peft=use_peft,
         )
 
         print("Loading the Reference Model")
 
         if should_load_checkpoint:
             if pre_load_checkpoint_hook is not None:
+                log_reference_setup_stage("setup.before_pre_load_checkpoint_hook")
                 pre_load_checkpoint_hook(ref_state, reference_model)
+                log_reference_setup_stage("setup.after_pre_load_checkpoint_hook")
+            log_reference_setup_stage("setup.before_load_checkpoint")
             load_checkpoint(
                 ref_state,
                 reference_model,
@@ -1630,6 +1667,7 @@ def setup_reference_model_state(
                 skip_load_to_model_and_opt=HAVE_FSDP2
                 and megatron_cfg.dist.use_torch_fsdp2,
             )
+            log_reference_setup_stage("setup.after_load_checkpoint")
 
         reference_state_dict = {}
 
@@ -1637,6 +1675,7 @@ def setup_reference_model_state(
             reference_model = reference_model[0]
             reference_model.eval()
             # Store reference state dict on CPU
+            log_reference_setup_stage("setup.before_state_dict_to_cpu")
             for name, item in reference_model.state_dict().items():
                 if isinstance(item, torch.Tensor):
                     cpu_item = item.detach().to(
@@ -1646,12 +1685,16 @@ def setup_reference_model_state(
                 else:
                     cpu_item = item
                 reference_state_dict[name] = cpu_item
+            log_reference_setup_stage("setup.after_state_dict_to_cpu")
             print("Reference model loaded")
         else:
             print("Reference model not loaded")
     finally:
+        log_reference_setup_stage("setup.before_router_replay_cleanup")
         clear_global_router_replay_instances()
+        log_reference_setup_stage("setup.after_router_replay_cleanup")
 
+    log_reference_setup_stage("setup.exit")
     return reference_state_dict
 
 
