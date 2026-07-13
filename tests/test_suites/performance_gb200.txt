@@ -27,3 +27,4 @@ tests/test_suites/llm/performance/grpo-qwen3-32b-4n4g-mxfp8-rollout.sh
 tests/test_suites/llm/performance/grpo-qwen3-32b-8n4g-async-1off-mxfp8-rollout.sh
 tests/test_suites/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.sh
 tests/test_suites/llm/performance/grpo-qwen3-235b-32n4g-async-1off-mxfp8-rollout.sh
+tests/test_suites/llm/performance/grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl.sh
