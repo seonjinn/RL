@@ -1,0 +1,33 @@
+Job: 2367079
+Cluster: pre_tyche
+Source: 063b8c7da087795b0497022369340ebb35a3745b
+Image SHA256: dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be
+Topology: 2 nodes x 4 GB200, TP1 PP1 CP1 EP8 ETP1
+Feature cell: CuTeDSL ON, full-iteration CUDA Graph OFF, EP A2A overlap OFF
+Original remote log: Pre-Tyche job 2367079 slurm.out, grpo.log, metrics.json, and retained Ray worker logs
+Slurm: 2367079|FAILED|1:0|00:45:50
+Workload boundary:
+- Qwen3-30B-A3B completed exactly three GRPO updates and wrote metrics.json.
+- Every update reported a successful optimizer update and finite policy metrics.
+- The functional summarizer failed after workload completion while parsing memory evidence.
+Observed post-processing error:
+- could not convert string to float: '670.182\x1b[32m'
+- rank 0 has invalid finite cgroup memory evidence: peak='670.182\x1b[32m', max='890.430'
+Functional smoke observations in seconds:
+component,step_1,step_2,step_3
+generation,5.35104,3.18778,3.31619
+policy_and_reference_logprobs,23.03587,4.34728,4.42356
+policy_training,21.15534,2.11861,2.14918
+refit_transfer_and_update_weights,11.62506,11.01385,11.26048
+total_step,65.98055,38.85664,29.41695
+Root cause and fix:
+- Ray appended an ANSI color sequence to the final numeric key/value token before its deduplication suffix.
+- The evidence scanner bounded the correct worker files but parsed raw colored lines as structured fields.
+- Commit 00062bc39cbfe09d40ac222209696db93eef6059 removes ANSI control sequences before field parsing and retained evidence.
+Verification:
+- The regression failed on 100.000\x1b[32m before the fix and the full harness passes 30 tests afterward.
+- A read-only replay on preserved job artifacts completed 3 updates, selected ranks 0 through 7, found 9 CuTeDSL matches, scanned 375 files and 1,380,937 bytes, and reported no truncation.
+Claim boundary:
+- This remains a reduced functional smoke run with one ON arm.
+- It has no paired OFF arm, official 4n4g workload, five-step warm-up, twenty-step measured window, or three replicates.
+- It supports no performance or speedup conclusion.

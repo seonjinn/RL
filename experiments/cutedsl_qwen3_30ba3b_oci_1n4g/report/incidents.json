@@ -313,5 +313,20 @@
     "timestamp_utc": "2026-07-13T01:20:17Z",
     "verification_evidence": "A read-only replay on the preserved artifacts selected 374 files, scanned 1,385,859 bytes, found mature sequence-3 ranks 0 through 7 and 9 CuTeDSL matches, with zero truncation reasons. The related local suite passes 198 tests. A clean remote gate rerun is still required; the three smoke steps support no speedup claim.",
     "verification_job": "pending Pre-Tyche functional rerun"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2367079 completed all three Qwen3-30B-A3B EP8 CuTeDSL-ON updates and wrote metrics.json. Its post-run summarizer then failed while converting the ANSI-contaminated numeric token 670.182\\x1b[32m to float, so Slurm reported FAILED 1:0 after 00:45:50.",
+    "fix_commit": "00062bc39cbfe09d40ac222209696db93eef6059",
+    "hypothesis": "Removing terminal ANSI control sequences before parsing structured worker evidence will preserve numeric fields while retaining the existing bounded and exact-rank validation.",
+    "report_path": "evidence/job-2367079.txt",
+    "reproduction": "Run the three-update gate at source 063b8c7da, then parse the Ray-deduplicated final memory key/value token without removing its color suffix; float conversion receives 670.182\\x1b[32m.",
+    "root_cause": "Ray log coloring appended a CSI color escape to the last numeric field before a deduplication suffix. The semantic worker-file selection was correct, but parse_evidence_fields consumed the raw colored line, making an otherwise valid finite cgroup-memory observation nonnumeric.",
+    "run_id": "2367079",
+    "symptom": "A second completed three-update CuTeDSL functional workload was classified as failed only during final memory-evidence parsing.",
+    "tested_change": "Strip ANSI CSI sequences from each bounded worker line before structured parsing, signature matching, length checks, and retained evidence; keep all existing file, byte, match, exact-rank, and memory-threshold checks.",
+    "timestamp_utc": "2026-07-13T02:19:00Z",
+    "verification_evidence": "The regression was RED on an ANSI-suffixed finite limit and GREEN afterward. The full harness passes 30 tests. Read-only replay on job 2367079 found all ranks 0 through 7 and 9 CuTeDSL matches with no truncation. This functional-only run supports no speedup claim.",
+    "verification_job": "pending official 4n4g functional gate"
   }
 ]
