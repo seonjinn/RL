@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -413,6 +414,170 @@ def test_ray_sub_gates_driver_on_all_workers_and_shared_setup() -> None:
     )
 
 
+def _ray_template_block(start_marker: str, end_marker: str) -> str:
+    source = RAY_SUB.read_text()
+    assert start_marker in source
+    assert end_marker in source
+    return source.split(start_marker, 1)[1].split(end_marker, 1)[0].replace(r"\$", "$")
+
+
+def test_ray_sub_runs_failure_hook_before_ended_cleanup() -> None:
+    source = RAY_SUB.read_text()
+    driver_failure_block = source.split('bash "$DRIVER_COMMAND_FILE"', 1)[1].split(
+        "else\n  # Interactive", 1
+    )[0]
+
+    assert 'FAILURE_COMMAND_FILE=""' in source
+    assert 'touch "$LOG_DIR/DRIVER_FAILED"' in driver_failure_block
+    assert "FAILURE_DIAGNOSTIC_DONE_0" in driver_failure_block
+    assert r"FAILURE_DIAGNOSTIC_DEADLINE=\$((SECONDS + 60))" in driver_failure_block
+    assert "export FAILURE_DIAGNOSTIC_MERGE=1" in driver_failure_block
+    assert driver_failure_block.index('touch "$LOG_DIR/DRIVER_FAILED"') < (
+        driver_failure_block.index('touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_0"')
+    )
+    assert driver_failure_block.index(
+        'touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_0"'
+    ) < driver_failure_block.index("export FAILURE_DIAGNOSTIC_MERGE=1")
+    assert driver_failure_block.index("export FAILURE_DIAGNOSTIC_MERGE=1") < (
+        driver_failure_block.index('touch "$LOG_DIR/ENDED"')
+    )
+
+
+def test_ray_sub_worker_failure_sidecar_is_one_shot_and_non_destructive() -> None:
+    source = RAY_SUB.read_text()
+    worker_block = source.split("worker_cmd=$(cat <<EOF", 1)[1].split("\nEOF\n)", 1)[0]
+
+    assert "failure-diagnostic-sidecar()" in worker_block
+    assert '[[ -f "$LOG_DIR/DRIVER_FAILED" ]]' in worker_block
+    assert r"FAILURE_DIAGNOSTIC_NODE_INDEX=\$((SLURM_PROCID + 1))" in worker_block
+    assert 'bash "$FAILURE_COMMAND_FILE" || true' in worker_block
+    assert r"FAILURE_DIAGNOSTIC_DONE_\${FAILURE_DIAGNOSTIC_NODE_INDEX}" in worker_block
+    sidecar_start = worker_block.index("failure-diagnostic-sidecar &")
+    assert sidecar_start < worker_block.index('ray start --address "$ip_head"')
+    sidecar_block = worker_block.split("failure-diagnostic-sidecar()", 1)[1].split(
+        "failure-diagnostic-sidecar &", 1
+    )[0]
+    assert "exit-dramatically" not in sidecar_block
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "hook_enabled"),
+    ((0, True), (17, True), (17, False)),
+)
+def test_generated_head_failure_hook_is_opt_in_and_ordered(
+    tmp_path: Path, exit_code: int, hook_enabled: bool
+) -> None:
+    hook = _ray_template_block("# RAY_FAILURE_HOOK_START\n", "# RAY_FAILURE_HOOK_END\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    invocations = tmp_path / "invocations"
+    failure_command = tmp_path / "failure-command.sh"
+    failure_command.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s:%s\\n' \"$FAILURE_DIAGNOSTIC_NODE_INDEX\" "
+        f'"${{FAILURE_DIAGNOSTIC_MERGE:-0}}" >> {shlex.quote(str(invocations))}\n'
+        'if [[ -z "${FAILURE_DIAGNOSTIC_MERGE:-}" ]]; then\n'
+        f"  touch {shlex.quote(str(log_dir / 'FAILURE_DIAGNOSTIC_DONE_1'))}\n"
+        "fi\n"
+        "exit 9\n"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    "FAILURE_COMMAND_FILE="
+                    + (shlex.quote(str(failure_command)) if hook_enabled else "''"),
+                    "SLURM_JOB_NUM_NODES=2",
+                    f"exit_code={exit_code}",
+                    hook,
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    if exit_code == 0 or not hook_enabled:
+        assert not invocations.exists()
+        assert not (log_dir / "DRIVER_FAILED").exists()
+        assert not list(log_dir.glob("FAILURE_DIAGNOSTIC_DONE_*"))
+        assert not (log_dir / "ENDED").exists()
+    else:
+        assert invocations.read_text().splitlines() == ["0:0", "0:1"]
+        assert (log_dir / "DRIVER_FAILED").is_file()
+        assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_0").is_file()
+        assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_1").is_file()
+        assert (log_dir / "ENDED").is_file()
+
+
+def test_generated_worker_failure_sidecar_touches_done_after_command_failure(
+    tmp_path: Path,
+) -> None:
+    sidecar = _ray_template_block(
+        "# RAY_WORKER_FAILURE_SIDECAR_START\n",
+        "# RAY_WORKER_FAILURE_SIDECAR_END\n",
+    )
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "DRIVER_FAILED").touch()
+    invocation = tmp_path / "invocation"
+    failure_command = tmp_path / "failure-command.sh"
+    failure_command.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' \"$FAILURE_DIAGNOSTIC_NODE_INDEX\" > {shlex.quote(str(invocation))}\n"
+        "exit 23\n"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    f"FAILURE_COMMAND_FILE={shlex.quote(str(failure_command))}",
+                    "SLURM_PROCID=2",
+                    sidecar,
+                    "wait",
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert invocation.read_text() == "3\n"
+    assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_3").is_file()
+    assert not (log_dir / "ENDED").exists()
+
+
+def test_submitter_wires_sanitized_triton_failure_command() -> None:
+    source = SUBMITTER.read_text()
+    assert "collect_triton_cache_diagnostics.py" in source
+    assert "--from-slurm-env" in source
+    assert "printf -v FAILURE_COMMAND" in source
+    assert "exec python3 %q" in source
+    assert source.count("-u FAILURE_COMMAND") == 2
+    assert source.count("-u CUTEDSL_BENCHMARK_RESULT_ROOT") == 2
+    assert source.count('"FAILURE_COMMAND=${FAILURE_COMMAND}"') == 2
+    assert source.count('"CUTEDSL_BENCHMARK_RESULT_ROOT=${RESULT_ROOT}"') == 2
+
+
+def test_matrix_result_root_matches_failure_diagnostic_root() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    assert (
+        'RESULT_ROOT="${CUTEDSL_BENCHMARK_RESULT_ROOT:-${EXPERIMENT_DIR}/results}"'
+        in source
+    )
+    assert 'readonly RESULT_DIR="${RESULT_ROOT}/${RUN_ID}"' in source
+
+
 def test_source_pin_is_portable_across_isolated_feature_branches() -> None:
     source = PROFILE_LOADER.read_text()
     assert 'CUTEDSL_REQUIRED_GIT_BRANCH="sna/nemo-2606-cutedsl-20260710"' not in source
@@ -493,6 +658,8 @@ record = {
     "container": payload["CONTAINER"],
     "mounts": payload["MOUNTS"],
     "setup_command": payload["SETUP_COMMAND"],
+    "failure_command": payload["FAILURE_COMMAND"],
+    "result_root": payload["CUTEDSL_BENCHMARK_RESULT_ROOT"],
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -546,6 +713,17 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert call["mounts"].endswith(image_mount)
         assert ".shared_fs_canary" in call["setup_command"]
         assert "git -C" in call["setup_command"]
+        assert call["result_root"] == str(EXPERIMENT_DIR / "results")
+        assert "exec python3" in call["failure_command"]
+        assert "collect_triton_cache_diagnostics.py" in call["failure_command"]
+        assert "--from-slurm-env" in call["failure_command"]
+        assert ".venv" not in call["failure_command"]
+        syntax = subprocess.run(
+            ["bash", "-n", "-c", call["failure_command"]],
+            capture_output=True,
+            text=True,
+        )
+        assert syntax.returncode == 0, syntax.stderr
         assert "--nodes=2" in call["argv"]
         assert "--segment=2" in call["argv"]
         assert "--segment=1" not in call["argv"]

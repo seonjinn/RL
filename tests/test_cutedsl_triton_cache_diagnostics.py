@@ -138,6 +138,26 @@ def test_collect_cache_diagnostics_handles_an_empty_cache(
     assert result["files"] == []
 
 
+def test_collect_cache_diagnostics_tolerates_missing_triton_distribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_diagnostic_module()
+    package_not_found = module.importlib.metadata.PackageNotFoundError("triton")
+    monkeypatch.setattr(
+        module.importlib.metadata,
+        "version",
+        lambda _: (_ for _ in ()).throw(package_not_found),
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    result = module.collect_cache_diagnostics(
+        cache, node_index=0, limits=module.DiagnosticLimits()
+    )
+
+    assert result["triton_version"] == "unavailable"
+
+
 def test_collect_cache_diagnostics_classifies_json_and_marks_partial_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -306,6 +326,38 @@ def test_direct_cli_writes_its_node_summary_atomically(
     assert list(output_dir.iterdir()) == [output]
 
 
+@pytest.mark.parametrize(
+    ("restart_count", "run_id"),
+    ((None, "12345"), ("2", "12345-r2")),
+)
+def test_slurm_paths_match_matrix_run_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restart_count: str | None,
+    run_id: str,
+) -> None:
+    module = load_diagnostic_module()
+    result_root = tmp_path / "benchmark-results"
+    monkeypatch.setenv("USER", "cache-diagnostics-test")
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    if restart_count is None:
+        monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
+    else:
+        monkeypatch.setenv("SLURM_RESTART_COUNT", restart_count)
+    monkeypatch.setenv("CUTEDSL_BENCHMARK_RESULT_ROOT", str(result_root))
+
+    cache_root, output_dir = module._slurm_paths()
+
+    assert cache_root == (
+        Path("/tmp")
+        / "cache-diagnostics-test"
+        / "nemo2606-factorial"
+        / run_id
+        / "triton_cache"
+    )
+    assert output_dir == result_root / run_id / "triton_cache_diagnostics"
+
+
 def test_slurm_cli_derives_job_local_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -313,7 +365,7 @@ def test_slurm_cli_derives_job_local_paths(
     monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "3.6.0")
     synthetic_user = f"cache-diagnostics-test-{os.getpid()}-{tmp_path.name}"
     runtime_root = Path("/tmp") / synthetic_user
-    cache = runtime_root / "nemo2606-factorial" / "12345-2" / "triton_cache"
+    cache = runtime_root / "nemo2606-factorial" / "12345-r2" / "triton_cache"
     cache.mkdir(parents=True)
     (cache / "entry.json").write_text('{"ok": true}')
     output_dir = tmp_path / "benchmark-results"
@@ -330,7 +382,78 @@ def test_slurm_cli_derives_job_local_paths(
         shutil.rmtree(runtime_root)
 
     assert exit_code == 0
-    value = json.loads((output_dir / "node-1.json").read_text())
+    value = json.loads(
+        (
+            output_dir / "12345-r2" / "triton_cache_diagnostics" / "node-1.json"
+        ).read_text()
+    )
     assert value["job_id"] == "12345"
     assert value["restart_count"] == 2
     assert value["slurm_procid"] == 7
+
+
+def test_slurm_merge_mode_writes_summary_without_overwriting_nodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_diagnostic_module()
+    result_root = tmp_path / "benchmark-results"
+    output_dir = result_root / "12345" / "triton_cache_diagnostics"
+    output_dir.mkdir(parents=True)
+    node_zero = output_dir / "node-0.json"
+    node_one = output_dir / "node-1.json"
+    write_node_summary(node_zero, node_index=0)
+    write_node_summary(node_one, node_index=1)
+    node_contents = {
+        node_zero: node_zero.read_bytes(),
+        node_one: node_one.read_bytes(),
+    }
+    merge_calls: list[tuple[Path, int]] = []
+    merge = module.merge_cache_diagnostics
+
+    def record_merge(summary_dir: Path, expected_nodes: int) -> dict[str, object]:
+        merge_calls.append((summary_dir, expected_nodes))
+        return merge(summary_dir, expected_nodes)
+
+    monkeypatch.setattr(module, "merge_cache_diagnostics", record_merge)
+    monkeypatch.setenv("USER", "cache-diagnostics-test")
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
+    monkeypatch.setenv("FAILURE_DIAGNOSTIC_NODE_INDEX", "0")
+    monkeypatch.setenv("FAILURE_DIAGNOSTIC_MERGE", "1")
+    monkeypatch.setenv("SLURM_JOB_NUM_NODES", "2")
+    monkeypatch.setenv("CUTEDSL_BENCHMARK_RESULT_ROOT", str(result_root))
+
+    exit_code = module.main(["--from-slurm-env"])
+
+    assert exit_code == 0
+    assert merge_calls == [(output_dir, 2)]
+    assert json.loads((output_dir / "summary.json").read_text()) == merge(output_dir, 2)
+    assert {path: path.read_bytes() for path in node_contents} == node_contents
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "node-0.json",
+        "node-1.json",
+        "summary.json",
+    ]
+
+
+def test_slurm_merge_mode_reports_all_nodes_missing_without_node_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_diagnostic_module()
+    result_root = tmp_path / "benchmark-results"
+    output_dir = result_root / "12345" / "triton_cache_diagnostics"
+    monkeypatch.setenv("USER", "cache-diagnostics-test")
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
+    monkeypatch.setenv("FAILURE_DIAGNOSTIC_MERGE", "1")
+    monkeypatch.setenv("SLURM_JOB_NUM_NODES", "2")
+    monkeypatch.setenv("CUTEDSL_BENCHMARK_RESULT_ROOT", str(result_root))
+
+    exit_code = module.main(["--from-slurm-env"])
+
+    assert exit_code == 0
+    summary = json.loads((output_dir / "summary.json").read_text())
+    assert summary["expected_nodes"] == 2
+    assert summary["observed_nodes"] == []
+    assert summary["missing_nodes"] == [0, 1]
+    assert summary["timed_out"] is True

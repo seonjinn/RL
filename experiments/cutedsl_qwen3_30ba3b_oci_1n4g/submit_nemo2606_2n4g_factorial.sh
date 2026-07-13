@@ -123,6 +123,9 @@ readonly RESULT_ROOT="${EXPERIMENT_DIR}/results"
 readonly RUNTIME_ROOT="${RESULT_ROOT}/multinode_runtime/${SUBMISSION_GROUP}"
 readonly RAY_LOG_ROOT="${RESULT_ROOT}/ray_logs/${SUBMISSION_GROUP}"
 readonly SUBMISSION_DIR="${RESULT_ROOT}/factorial/submissions"
+readonly CACHE_DIAGNOSTIC="${EXPERIMENT_DIR}/collect_triton_cache_diagnostics.py"
+printf -v FAILURE_COMMAND 'export TRITON_CACHE_DIR="/tmp/${USER}/nemo2606-factorial/${SLURM_JOB_ID}${SLURM_RESTART_COUNT:+-r${SLURM_RESTART_COUNT}}/triton_cache"; exec python3 %q --from-slurm-env' "${CACHE_DIAGNOSTIC}"
+readonly FAILURE_COMMAND
 GIT_COMMON_DIR=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
 readonly GIT_COMMON_DIR
 RAY_MOUNTS="${REPO_ROOT}:${REPO_ROOT}"
@@ -149,6 +152,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         -u CONTAINER \
         -u MOUNTS \
         -u SETUP_COMMAND \
+        -u FAILURE_COMMAND \
         -u BASE_LOG_DIR \
         -u GPUS_PER_NODE \
         -u CUTEDSL_BENCHMARK_EXISTING_RAY \
@@ -159,6 +163,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
         -u CUTEDSL_BENCHMARK_ORDER \
         -u CUTEDSL_BENCHMARK_PROFILE \
+        -u CUTEDSL_BENCHMARK_RESULT_ROOT \
         -u NEMO2606_FUNCTIONAL_GATE \
         -u NEMO2606_FUNCTIONAL_UPDATES \
         -u NEMO2606_FACTORIAL_CONTEXT \
@@ -168,6 +173,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "CONTAINER=${CUTEDSL_IMAGE}" \
         "MOUNTS=${RAY_MOUNTS}" \
         "SETUP_COMMAND=${RAY_SETUP_COMMAND}" \
+        "FAILURE_COMMAND=${FAILURE_COMMAND}" \
         "COMMAND=exec bash ${MATRIX_PAYLOAD}" \
         "BASE_LOG_DIR=${RAY_LOG_ROOT}" \
         "GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}" \
@@ -182,6 +188,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
         "CUTEDSL_BENCHMARK_ORDER=on" \
         "CUTEDSL_BENCHMARK_PROFILE=0" \
+        "CUTEDSL_BENCHMARK_RESULT_ROOT=${RESULT_ROOT}" \
         "CUTEDSL_BENCHMARK_SUBMISSION_GROUP=${SUBMISSION_GROUP}" \
         "NEMO2606_FUNCTIONAL_GATE=1" \
         "NEMO2606_FUNCTIONAL_UPDATES=3" \
@@ -283,6 +290,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             -u CONTAINER \
             -u MOUNTS \
             -u SETUP_COMMAND \
+            -u FAILURE_COMMAND \
             -u BASE_LOG_DIR \
             -u GPUS_PER_NODE \
             -u CUTEDSL_BENCHMARK_EXISTING_RAY \
@@ -292,6 +300,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             -u CUTEDSL_BENCHMARK_ORDER \
             -u CUTEDSL_BENCHMARK_REPLICATE \
             -u CUTEDSL_BENCHMARK_PROFILE \
+            -u CUTEDSL_BENCHMARK_RESULT_ROOT \
             -u CUTEDSL_BENCHMARK_SUBMISSION_GROUP \
             -u CUTEDSL_BENCHMARK_WARMUP_UPDATES \
             -u CUTEDSL_BENCHMARK_MEASURED_UPDATES \
@@ -302,6 +311,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             "CONTAINER=${CUTEDSL_IMAGE}" \
             "MOUNTS=${RAY_MOUNTS}" \
             "SETUP_COMMAND=${RAY_SETUP_COMMAND}" \
+            "FAILURE_COMMAND=${FAILURE_COMMAND}" \
             "COMMAND=exec bash ${MATRIX_PAYLOAD}" \
             "BASE_LOG_DIR=${RAY_LOG_ROOT}" \
             "GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}" \
@@ -317,6 +327,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             "CUTEDSL_BENCHMARK_ORDER=${timing_order}" \
             "CUTEDSL_BENCHMARK_REPLICATE=${replicate_index}" \
             "CUTEDSL_BENCHMARK_PROFILE=${profile_enabled}" \
+            "CUTEDSL_BENCHMARK_RESULT_ROOT=${RESULT_ROOT}" \
             "CUTEDSL_BENCHMARK_SUBMISSION_GROUP=${SUBMISSION_GROUP}" \
             "CUTEDSL_BENCHMARK_WARMUP_UPDATES=${WARMUP_UPDATES}" \
             "CUTEDSL_BENCHMARK_MEASURED_UPDATES=${MEASURED_UPDATES}" \

@@ -154,6 +154,11 @@ def collect_cache_diagnostics(
             }
         )
 
+    try:
+        triton_version = importlib.metadata.version("triton")
+    except importlib.metadata.PackageNotFoundError:
+        triton_version = "unavailable"
+
     result: dict[str, Any] = {
         "schema_version": 1,
         "node_index": node_index,
@@ -163,7 +168,7 @@ def collect_cache_diagnostics(
             "SLURM_PROCID", str(node_index)
         ),
         "cache_scope": os.environ.get("NEMO2606_TRITON_CACHE_SCOPE", "job_node_local"),
-        "triton_version": importlib.metadata.version("triton"),
+        "triton_version": triton_version,
         "candidate_count": len(candidates),
         "scanned_count": len(files),
         "rejected_symlink_count": rejected_symlink_count,
@@ -295,16 +300,19 @@ def _slurm_paths() -> tuple[Path, Path]:
     job_id = os.environ.get("SLURM_JOB_ID")
     if job_id is None or re.fullmatch(r"[0-9]+", job_id) is None:
         raise ValueError("SLURM_JOB_ID must contain only decimal digits")
-    restart_count = _environment_nonnegative_integer("SLURM_RESTART_COUNT", "0")
+    restart = os.environ.get("SLURM_RESTART_COUNT")
+    if restart:
+        _environment_nonnegative_integer("SLURM_RESTART_COUNT")
     user = os.environ.get("USER")
     if user is None or re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", user) is None:
         raise ValueError("USER must be a safe path component")
     result_root = os.environ.get("CUTEDSL_BENCHMARK_RESULT_ROOT")
     if result_root is None or not result_root:
         raise ValueError("CUTEDSL_BENCHMARK_RESULT_ROOT is required")
-    run_id = f"{job_id}-{restart_count}"
+    run_id = job_id + (f"-r{restart}" if restart else "")
     cache_root = Path("/tmp") / user / "nemo2606-factorial" / run_id / "triton_cache"
-    return cache_root, Path(result_root)
+    output_dir = Path(result_root) / run_id / "triton_cache_diagnostics"
+    return cache_root, output_dir
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -328,6 +336,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--cache-root and --output-dir are required together")
         cache_root = args.cache_root
         output_dir = args.output_dir
+
+    if args.from_slurm_env and os.environ.get("FAILURE_DIAGNOSTIC_MERGE") == "1":
+        expected_nodes = int(os.environ["SLURM_JOB_NUM_NODES"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        result = merge_cache_diagnostics(output_dir, expected_nodes)
+        _write_json_atomic(output_dir / "summary.json", result)
+        return 0
 
     node_index = _environment_nonnegative_integer("FAILURE_DIAGNOSTIC_NODE_INDEX")
     result = collect_cache_diagnostics(

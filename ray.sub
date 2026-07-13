@@ -7,7 +7,7 @@
 #SBATCH --time=1:0:0
 #SBATCH --dependency=singleton
 
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -200,6 +200,15 @@ if [[ -n "$COMMAND" ]]; then
   DRIVER_COMMAND_FILE="$LOG_DIR/driver_command.sh"
   printf '%s' "$COMMAND" > "$DRIVER_COMMAND_FILE"
   chmod +x "$DRIVER_COMMAND_FILE"
+fi
+
+# An optional failure hook is copied to the shared log directory before any
+# containers start so the head and worker sidecars execute identical content.
+FAILURE_COMMAND_FILE=""
+if [[ -n "${FAILURE_COMMAND:-}" ]]; then
+  FAILURE_COMMAND_FILE="$LOG_DIR/failure_command.sh"
+  printf '%s' "$FAILURE_COMMAND" > "$FAILURE_COMMAND_FILE"
+  chmod +x "$FAILURE_COMMAND_FILE"
 fi
 
 # Number of GPUs per worker node
@@ -690,6 +699,24 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
   bash "$DRIVER_COMMAND_FILE" > "$LOG_DIR/ray-driver.log" 2>&1
   exit_code=\$?
   set -e
+  # RAY_FAILURE_HOOK_START
+  if [[ "\$exit_code" -ne 0 ]] && [[ -n "$FAILURE_COMMAND_FILE" ]]; then
+    touch "$LOG_DIR/DRIVER_FAILED"
+    export FAILURE_DIAGNOSTIC_NODE_INDEX=0
+    bash "$FAILURE_COMMAND_FILE" || true
+    touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_0"
+    FAILURE_DIAGNOSTIC_DEADLINE=\$((SECONDS + 60))
+    while (( SECONDS <= FAILURE_DIAGNOSTIC_DEADLINE )); do
+      done_count=\$(find "$LOG_DIR" -maxdepth 1 -name 'FAILURE_DIAGNOSTIC_DONE_*' -type f | wc -l)
+      [[ "\$done_count" -ge "$SLURM_JOB_NUM_NODES" ]] && break
+      sleep 1
+    done
+    export FAILURE_DIAGNOSTIC_MERGE=1
+    bash "$FAILURE_COMMAND_FILE" || true
+    unset FAILURE_DIAGNOSTIC_MERGE
+    touch "$LOG_DIR/ENDED"
+  fi
+  # RAY_FAILURE_HOOK_END
   exit \$exit_code
 else
   # Interactive: keep the head container alive for user attachment via the attach
@@ -766,6 +793,27 @@ log-sync-sidecar() {
   done
 }
 log-sync-sidecar &
+
+# RAY_WORKER_FAILURE_SIDECAR_START
+if [[ -n "$FAILURE_COMMAND_FILE" ]]; then
+  failure-diagnostic-sidecar() {
+    set +x
+    export FAILURE_DIAGNOSTIC_NODE_INDEX=\$((SLURM_PROCID + 1))
+    while true; do
+      if [[ -f "$LOG_DIR/DRIVER_FAILED" ]]; then
+        break
+      fi
+      if [[ -f "$LOG_DIR/ENDED" ]]; then
+        return
+      fi
+      sleep 1
+    done
+    bash "$FAILURE_COMMAND_FILE" || true
+    touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_\${FAILURE_DIAGNOSTIC_NODE_INDEX}"
+  }
+  failure-diagnostic-sidecar &
+fi
+# RAY_WORKER_FAILURE_SIDECAR_END
 
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
