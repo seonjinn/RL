@@ -1,0 +1,40 @@
+Job: 2366769
+Cluster: pre_tyche
+Source: 49fe00ae5e3b2d0e27da1879f375173fda2b4ddf
+Image SHA256: dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be
+Topology: 2 nodes x 4 GB200, TP1 PP1 CP1 EP8 ETP1
+Feature cell: CuTeDSL ON, full-iteration CUDA Graph OFF, EP A2A overlap OFF
+Original remote log: Pre-Tyche Slurm job 2366769 slurm.out and retained Ray session logs
+Slurm accounting:
+2366769|FAILED|1:0|00:43:26
+2366769.0|FAILED|1:0|00:43:05|62237952K
+2366769.1|CANCELLED|0:15|00:43:09|409921856K
+Workload boundary:
+- Qwen3-30B-A3B completed exactly three GRPO updates.
+- metrics.json was written before the wrapper failed.
+- The final functional evidence summarizer raised only:
+  functional evidence scan was truncated; bounded evidence cannot prove complete per-rank evidence: ['file_count_limit']
+Functional smoke observations in seconds:
+component,step_1,step_2,step_3
+generation,5.36445,3.34720,3.39693
+policy_and_reference_logprobs,21.71165,4.05244,4.12009
+policy_training,21.13206,2.30007,2.17889
+refit_transfer_and_update_weights,11.36907,11.18795,11.26091
+total_step,64.05972,31.24293,28.58037
+
+Root-cause evidence:
+- The generic Ray inventory contained 1,012 scannable log files.
+- The required evidence was in 374 standard worker-<hex>-<hex>-<pid>.out/.err streams.
+- All eight exact mature offload ranks and all eight per-rank CuTeDSL activation signatures were present.
+- The generic sorted 512-file boundary landed in python-core-worker logs, so unrelated Ray control-plane/event logs caused a false truncation result.
+
+Fix and read-only replay:
+- Commit 11f5c07735ee64a1cb9d1fa09406e912cfde8c05 limits the evidence universe to regular, non-symlink standard Ray worker stdout/stderr files.
+- Existing file, byte, per-file, line, match, exact-rank, memory, and CuTeDSL-signature fail-closed checks remain active.
+- Replay selected 374 files, scanned 1,385,859 bytes, found mature sequence-3 ranks 0 through 7 and 9 total CuTeDSL matches, and produced zero truncation reasons.
+- Local related harness, collector, wrapper, and report validation passed 198 tests; Bash syntax and git diff checks passed.
+
+Claim boundary:
+- This is functional smoke evidence for the CuTeDSL-ON path only.
+- It has no paired OFF arm, no five-step warm-up exclusion, and no 20-step measured window or three replicates.
+- It supports no performance or speedup conclusion.

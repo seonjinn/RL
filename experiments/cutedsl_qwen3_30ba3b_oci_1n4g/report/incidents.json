@@ -298,5 +298,20 @@
     "timestamp_utc": "2026-07-13T00:35:43Z",
     "verification_evidence": "The replacement recipe contract was RED before the change and GREEN afterward. The related harness, collector, and report suites pass 105 tests; Ruff 0.9.9 and diff checks pass. A remote rerun is required and this job supports no performance claim.",
     "verification_job": "pending Pre-Tyche functional rerun"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2366769 completed all three Qwen3-30B-A3B EP8 CuTeDSL-ON updates and wrote metrics.json. The post-run functional evidence summarizer then failed closed only with file_count_limit; Slurm therefore reported FAILED 1:0 after 00:43:26 even though the workload had completed.",
+    "fix_commit": "11f5c07735ee64a1cb9d1fa09406e912cfde8c05",
+    "hypothesis": "The evidence limit should apply to the semantic Ray policy-worker stdout/stderr universe, not unrelated Ray control-plane, event, dashboard, and python-core logs.",
+    "report_path": "evidence/job-2366769.txt",
+    "reproduction": "At source 49fe00ae5, run the two-node three-update functional gate. After metrics merge, enumerate every .err/.log/.out/.txt under both Ray sessions; 1,012 candidates exceed MAX_FUNCTIONAL_EVIDENCE_FILES=512 before exact-rank and CuTeDSL evidence is evaluated.",
+    "root_cause": "The summarizer treated every Ray text log as possible policy evidence. Ray produced hundreds of event and python-core files, while all required telemetry and CuTeDSL signatures were confined to 374 standard worker-<hex>-<hex>-<pid>.out/.err streams. The unrelated log fanout caused a validator false negative, not a training or CuTeDSL failure.",
+    "run_id": "2366769",
+    "symptom": "A completed three-update CuTeDSL functional workload was classified as failed during final bounded evidence collection.",
+    "tested_change": "Select only regular, non-symlink Ray files whose basenames fully match the standard worker stdout/stderr form; retain all existing file, byte, line, match, exact-rank, memory, and signature fail-closed checks.",
+    "timestamp_utc": "2026-07-13T01:20:17Z",
+    "verification_evidence": "A read-only replay on the preserved artifacts selected 374 files, scanned 1,385,859 bytes, found mature sequence-3 ranks 0 through 7 and 9 CuTeDSL matches, with zero truncation reasons. The related local suite passes 198 tests. A clean remote gate rerun is still required; the three smoke steps support no speedup claim.",
+    "verification_job": "pending Pre-Tyche functional rerun"
   }
 ]
