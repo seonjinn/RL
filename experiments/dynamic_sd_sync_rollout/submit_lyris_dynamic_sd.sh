@@ -33,6 +33,10 @@ TOP_P="${TOP_P:-1.0}"
 TOP_K="${TOP_K:--1}"
 SEED="${SEED:-42}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+# Pin backends so baseline/fixed/dynamic jobs can never diverge via vLLM auto
+# selection. FLASHINFER is the smoke-validated default on GB200 + vllm024 venv.
+ATTENTION_BACKEND="${ATTENTION_BACKEND:-FLASHINFER}"
+MOE_BACKEND="${MOE_BACKEND:-}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 CUDAGRAPH_SIZES="${CUDAGRAPH_SIZES:-}"
@@ -56,9 +60,11 @@ NUM_STEPS="${NUM_STEPS:-4}"
 MAX_TOKENS="${MAX_TOKENS:-4096}"
 DYNAMIC_SPEC_JSON="${DYNAMIC_SPEC_JSON:-}"
 
+# EAGLE3 heads are single-layer: draft TP=1 regardless of target TP (matches
+# prior specdec scripts in this repo).
 spec_json_fixed() {
   local k="$1"
-  printf '{"method": "eagle3", "model": "%s", "num_speculative_tokens": %d}' \
+  printf '{"method": "eagle3", "model": "%s", "num_speculative_tokens": %d, "draft_tensor_parallel_size": 1}' \
     "${DRAFT_MODEL}" "${k}"
 }
 
@@ -77,8 +83,15 @@ submit_job() {
   local logs_dir="${LOG_ROOT}/${tag}"
   local spec_arg=""
   local cudagraph_arg=""
+  local backend_args=""
   if [[ -n "${CUDAGRAPH_SIZES}" ]]; then
     cudagraph_arg="--cudagraph-capture-sizes ${CUDAGRAPH_SIZES}"
+  fi
+  if [[ -n "${ATTENTION_BACKEND}" ]]; then
+    backend_args="--attention-backend ${ATTENTION_BACKEND}"
+  fi
+  if [[ -n "${MOE_BACKEND}" ]]; then
+    backend_args="${backend_args} --moe-backend ${MOE_BACKEND}"
   fi
   ssh "${REMOTE_HOST}" "mkdir -p '${logs_dir}'"
   if [[ -n "${spec_json}" ]]; then
@@ -119,6 +132,7 @@ srun --nodes=1 --ntasks=1 bash -lc "set -euo pipefail; \\
     --temperature ${TEMPERATURE} --top-p ${TOP_P} --top-k ${TOP_K} \\
     --seed ${SEED} \\
     ${cudagraph_arg} \\
+    ${backend_args} \\
     ${mode_args} \\
     --output '${logs_dir}/results.json' \\
     --tag '${tag}'"

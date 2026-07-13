@@ -214,25 +214,29 @@ def summarize_lengths(lengths: list[int]) -> dict[str, Any]:
     }
 
 
-def extract_request_timing(outputs: list[Any], t_start: float) -> list[dict[str, Any]]:
+def extract_request_timing(
+    outputs: list[Any], monotonic_anchor: float
+) -> list[dict[str, Any]]:
     """Per-request finish times relative to batch start, for the drain curve.
 
-    vLLM v1 populates RequestOutput.metrics best-effort; rows without metrics
-    are skipped.
+    vLLM 0.24 v1 RequestOutput.metrics is a RequestStateStats whose
+    first_token_ts / last_token_ts are absolute monotonic-clock timestamps, so
+    the anchor must come from time.monotonic() taken just before generate().
+    Rows without metrics are kept with token counts only.
     """
     rows: list[dict[str, Any]] = []
     for output in outputs:
         metrics = getattr(output, "metrics", None)
-        finished = getattr(metrics, "finished_time", None) if metrics else None
-        first_token = getattr(metrics, "first_token_time", None) if metrics else None
+        first_token = getattr(metrics, "first_token_ts", None) if metrics else None
+        last_token = getattr(metrics, "last_token_ts", None) if metrics else None
         row: dict[str, Any] = {
             "request_id": str(getattr(output, "request_id", "")),
             "output_tokens": sum(len(o.token_ids) for o in output.outputs),
         }
-        if finished is not None:
-            row["finished_s"] = finished - t_start
         if first_token is not None:
-            row["first_token_s"] = first_token - t_start
+            row["first_token_s"] = first_token - monotonic_anchor
+        if last_token is not None:
+            row["finished_s"] = last_token - monotonic_anchor
         rows.append(row)
     return rows
 
@@ -346,7 +350,9 @@ def run_profile(args: argparse.Namespace, llm: Any) -> None:
             "wall_times_s": wall_times,
             "mean_wall_s": mean_wall,
             "output_tok_s": total_output_tokens / mean_wall,
-            "itl_ms_per_token": mean_wall * 1000.0 / args.osl,
+            # includes prefill (full generate() wall / OSL); apples-to-apples
+            # across K at a fixed BS, but not decode-only ITL
+            "wall_ms_per_output_token": mean_wall * 1000.0 / args.osl,
         }
         if spec_totals.get("num_drafts", 0) > 0:
             row["mean_acceptance_length"] = 1.0 + (
@@ -406,7 +412,7 @@ def run_rollout(args: argparse.Namespace, llm: Any) -> None:
         )
         before = read_spec_decode_metrics(llm)
         t_start = time.perf_counter()
-        wall_anchor = time.time()
+        monotonic_anchor = time.monotonic()
         outputs = llm.generate(prompts, sampling, use_tqdm=False)
         wall = time.perf_counter() - t_start
         after = read_spec_decode_metrics(llm)
@@ -423,7 +429,7 @@ def run_rollout(args: argparse.Namespace, llm: Any) -> None:
             "output_tok_s": total_tokens / wall if wall > 0 else 0.0,
             "output_lengths": summarize_lengths(lengths),
             "spec_decode": diff_spec_decode_metrics(after, before),
-            "request_timing": extract_request_timing(outputs, wall_anchor),
+            "request_timing": extract_request_timing(outputs, monotonic_anchor),
         }
         results.append(row)
         flush(partial=True)

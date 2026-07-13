@@ -50,8 +50,9 @@ and vs fixed-K EAGLE3 for Qwen3-30B-A3B / Qwen3-32B / Qwen3-235B-A22B
 MODE=profile bash experiments/dynamic_sd_sync_rollout/submit_matrix_lyris.sh qwen3_30ba3b math
 
 # Phase 2: derive the table from harvested profile JSONs
+# (--extend-to optional; must be >= the preset's max profiled batch size)
 python experiments/dynamic_sd_sync_rollout/derive_dynamic_k_table.py \
-  results/.../profile_k*.json --extend-to 128 --output dynamic_spec.json
+  results/.../profile_k*.json --output dynamic_spec.json
 
 # Phase 3: rollout comparison (baseline / fixed-K / dynamic)
 MODE=rollout DYNAMIC_SPEC_JSON=dynamic_spec.json \

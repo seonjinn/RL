@@ -36,8 +36,9 @@ def main() -> None:
     parser.add_argument(
         "--extend-to",
         type=int,
-        default=256,
-        help="upper bound of the last range (set to max_num_seqs)",
+        default=None,
+        help="upper bound of the last range (>= max profiled BS; default: max "
+        "profiled BS; vLLM carries the last K forward anyway)",
     )
     parser.add_argument(
         "--output",
@@ -60,6 +61,12 @@ def main() -> None:
     if not spec_base:
         raise ValueError("need at least one K>0 profile to supply the draft config")
 
+    if 0 not in by_k:
+        print(
+            "WARNING: no K=0 baseline profile provided; speculation can never "
+            "be disabled in the derived table"
+        )
+
     batch_sizes = sorted({bs for rows in by_k.values() for bs in rows})
     grid: list[dict[str, Any]] = []
     optimal: dict[int, int] = {}
@@ -69,6 +76,12 @@ def main() -> None:
         }
         if not candidates:
             continue
+        missing = sorted(set(by_k) - set(candidates))
+        if missing:
+            print(
+                f"WARNING: bs={bs} missing profiles for K={missing}; "
+                "optimum picked from a subset"
+            )
         best_k = max(candidates, key=lambda k: candidates[k])
         optimal[bs] = best_k
         for k, tok_s in sorted(candidates.items()):
@@ -78,16 +91,22 @@ def main() -> None:
                     "batch_size": bs,
                     "k": k,
                     "output_tok_s": tok_s,
-                    "itl_ms_per_token": row.get("itl_ms_per_token"),
+                    "wall_ms_per_output_token": row.get("wall_ms_per_output_token"),
                     "mean_acceptance_length": row.get("mean_acceptance_length"),
                     "optimal": k == best_k,
                 }
             )
 
-    ranges: list[list[int]] = []
     profiled = sorted(optimal)
+    extend_to = args.extend_to if args.extend_to is not None else profiled[-1]
+    if extend_to < profiled[-1]:
+        raise ValueError(
+            f"--extend-to {extend_to} < max profiled batch size {profiled[-1]}; "
+            "this would emit an inverted range that vLLM rejects"
+        )
+    ranges: list[list[int]] = []
     for idx, bs in enumerate(profiled):
-        hi = profiled[idx + 1] - 1 if idx + 1 < len(profiled) else args.extend_to
+        hi = profiled[idx + 1] - 1 if idx + 1 < len(profiled) else extend_to
         k = optimal[bs]
         if ranges and ranges[-1][2] == k:
             ranges[-1][1] = hi
