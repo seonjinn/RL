@@ -193,9 +193,9 @@ def _install_fake_vllm_openai_modules(monkeypatch):
         "vllm.entrypoints.openai.engine",
         "vllm.entrypoints.openai.models",
         "vllm.entrypoints.serve",
-        "vllm.entrypoints.serve.render",
         "vllm.entrypoints.serve.tokenize",
         "vllm.reasoning",
+        "vllm.renderers",
         "vllm.tool_parsers",
         "vllm.v1",
         "vllm.v1.engine",
@@ -218,7 +218,7 @@ def _install_fake_vllm_openai_modules(monkeypatch):
             self.kwargs = kwargs
             self.registry = "registry"
 
-    class OpenAIServingRender:
+    class OnlineRenderer:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.renderer = kwargs["renderer"]
@@ -236,7 +236,7 @@ def _install_fake_vllm_openai_modules(monkeypatch):
         def __init__(
             self,
             models,
-            openai_serving_render,
+            online_renderer,
             *,
             request_logger,
             chat_template,
@@ -244,7 +244,7 @@ def _install_fake_vllm_openai_modules(monkeypatch):
         ):
             self.kwargs = {
                 "models": models,
-                "openai_serving_render": openai_serving_render,
+                "online_renderer": online_renderer,
                 "request_logger": request_logger,
                 "chat_template": chat_template,
                 "chat_template_content_format": chat_template_content_format,
@@ -288,10 +288,6 @@ def _install_fake_vllm_openai_modules(monkeypatch):
         TokenizeResponse=type("TokenizeResponse", (), {}),
     )
     make_module(
-        "vllm.entrypoints.serve.render.serving",
-        OpenAIServingRender=OpenAIServingRender,
-    )
-    make_module(
         "vllm.entrypoints.serve.tokenize.serving",
         ServingTokenization=ServingTokenization,
     )
@@ -299,6 +295,10 @@ def _install_fake_vllm_openai_modules(monkeypatch):
     make_module(
         "vllm.reasoning.abs_reasoning_parsers",
         ReasoningParserManager=ReasoningParserManager,
+    )
+    make_module(
+        "vllm.renderers.online_renderer",
+        OnlineRenderer=OnlineRenderer,
     )
     make_module(
         "vllm.tool_parsers.abstract_tool_parser",

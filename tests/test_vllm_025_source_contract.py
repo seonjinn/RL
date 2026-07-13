@@ -22,7 +22,7 @@ def load_patches_module():
     return module
 
 
-def test_async_http_adapter_imports_vllm_024_tokenization_service() -> None:
+def test_async_http_adapter_imports_vllm_025_rendering_services() -> None:
     imports = {
         (node.module, alias.name)
         for node in ast.walk(load_tree())
@@ -38,9 +38,14 @@ def test_async_http_adapter_imports_vllm_024_tokenization_service() -> None:
         "vllm.entrypoints.serve.tokenize.serving",
         "OpenAIServingTokenization",
     ) not in imports
+    assert ("vllm.renderers.online_renderer", "OnlineRenderer") in imports
+    assert (
+        "vllm.entrypoints.serve.render.serving",
+        "OpenAIServingRender",
+    ) not in imports
 
 
-def test_async_render_override_uses_vllm_024_parser_argument() -> None:
+def test_async_render_override_uses_vllm_025_parser_argument() -> None:
     preprocess_chat = next(
         node
         for node in ast.walk(load_tree())
@@ -62,8 +67,7 @@ def test_tokenization_service_constructor_does_not_receive_engine_client() -> No
         for node in ast.walk(load_tree())
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name)
-            and target.id == "serving_tokenization_kwargs"
+            isinstance(target, ast.Name) and target.id == "serving_tokenization_kwargs"
             for target in node.targets
         )
     )
@@ -73,11 +77,12 @@ def test_tokenization_service_constructor_does_not_receive_engine_client() -> No
     keyword_names = {keyword.arg for keyword in assignment.value.keywords}
 
     assert "models" in keyword_names
-    assert "openai_serving_render" in keyword_names
+    assert "online_renderer" in keyword_names
+    assert "openai_serving_render" not in keyword_names
     assert "engine_client" not in keyword_names
 
 
-def test_ray_patch_uses_vllm_024_extra_env_contract(
+def test_ray_patch_uses_vllm_025_extra_env_contract(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -98,10 +103,10 @@ def test_ray_patch_uses_vllm_024_extra_env_contract(
     )
 
     patched = ray_executor.read_text(encoding="utf-8")
-    assert '_init_workers_ray(placement_group, runtime_env={"py_executable": ' in patched
-    assert set(
-        patches.os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"].split(",")
-    ) == {
+    assert (
+        '_init_workers_ray(placement_group, runtime_env={"py_executable": ' in patched
+    )
+    assert set(patches.os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"].split(",")) == {
         "CUSTOM_ENV",
         "EXISTING_ENV",
         "HF_TOKEN",
