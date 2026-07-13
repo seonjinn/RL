@@ -130,12 +130,6 @@ if ((BENCHMARK_NUM_NODES < 1 || BENCHMARK_GPUS_PER_NODE < 1 || BENCHMARK_SEGMENT
     echo "[ERROR] Benchmark node, GPU, and segment counts must be positive integers." >&2
     exit 1
 fi
-if [[ "${EXISTING_RAY}" == "1" ]] && \
-    ((BENCHMARK_NUM_NODES != 2 || BENCHMARK_GPUS_PER_NODE != 4)); then
-    echo "[ERROR] The NeMo 26.06 multinode gate requires exactly 2 nodes x 4 GPUs." >&2
-    exit 1
-fi
-
 require_source_feature() {
     local source_path=$1
     local pattern=$2
@@ -151,7 +145,7 @@ if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
     require_source_feature "${full_cg_source}" "build_full_cuda_graph_schedule" \
         "full-iteration CUDA Graph"
     if grep -q "colocated generation/refit is not supported" "${full_cg_source}"; then
-        echo "[ERROR] full-iteration CUDA Graph currently rejects colocated generation/refit. A 2x4 EP8 policy occupies all GPUs, so this context requires either colocated support or additional generation GPUs." >&2
+        echo "[ERROR] full-iteration CUDA Graph currently rejects colocated generation/refit. This policy occupies all GPUs, so this context requires either colocated support or additional generation GPUs." >&2
         exit 1
     fi
 fi
@@ -187,9 +181,8 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         echo "[ERROR] Functional gate requires NEMO2606_A2A_ENABLED=0." >&2
         exit 1
     fi
-    if [[ "${EXISTING_RAY}" != "1" || "${BENCHMARK_NUM_NODES}" != "2" || \
-        "${BENCHMARK_GPUS_PER_NODE}" != "4" || "${BENCHMARK_SEGMENT_SIZE}" != "2" ]]; then
-        echo "[ERROR] Functional gate requires existing Ray with 2 nodes x 4 GPUs and segment size 2." >&2
+    if [[ "${EXISTING_RAY}" != "1" ]]; then
+        echo "[ERROR] Multinode functional gate requires an existing Ray cluster." >&2
         exit 1
     fi
     timing_arms=(on)
@@ -230,14 +223,25 @@ else
 fi
 
 TRAINING_GPU_COUNT=$((BENCHMARK_NUM_NODES * BENCHMARK_GPUS_PER_NODE))
+TRAIN_GLOBAL_BATCH_SIZE="${CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE:-$((TRAINING_GPU_COUNT * 2))}"
+EXPERT_MODEL_PARALLEL_SIZE="${CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE:-${TRAINING_GPU_COUNT}}"
+if [[ ! "${TRAIN_GLOBAL_BATCH_SIZE}" =~ ^[0-9]+$ ]] || \
+    [[ ! "${EXPERT_MODEL_PARALLEL_SIZE}" =~ ^[0-9]+$ ]] || \
+    ((TRAIN_GLOBAL_BATCH_SIZE < 1 || EXPERT_MODEL_PARALLEL_SIZE < 1)) || \
+    ((TRAINING_GPU_COUNT % EXPERT_MODEL_PARALLEL_SIZE != 0)); then
+    echo "[ERROR] Invalid train global batch or expert model parallel size." >&2
+    exit 1
+fi
 CUDA_GRAPH_WARMUP_STEPS=3
 readonly BENCHMARK_SEGMENT_SIZE FUNCTIONAL_GATE FUNCTIONAL_UPDATES
 readonly WARMUP_UPDATES MEASURED_UPDATES TIMING_ORDER PROFILE_ENABLED
-readonly TOTAL_UPDATES TRAINING_GPU_COUNT CUDA_GRAPH_WARMUP_STEPS
+readonly TOTAL_UPDATES TRAINING_GPU_COUNT TRAIN_GLOBAL_BATCH_SIZE
+readonly EXPERT_MODEL_PARALLEL_SIZE CUDA_GRAPH_WARMUP_STEPS
 export RUN_ID WARMUP_UPDATES MEASURED_UPDATES TIMING_ORDER TOTAL_UPDATES PROFILE_ENABLED
 export REPLICATE_INDEX SUBMISSION_GROUP
 export TRAINING_GPU_COUNT FEATURE_CONTEXT NEMO2606_FULL_CG_ENABLED
 export NEMO2606_A2A_ENABLED
+export TRAIN_GLOBAL_BATCH_SIZE EXPERT_MODEL_PARALLEL_SIZE
 export BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE BENCHMARK_SEGMENT_SIZE
 export EXISTING_RAY CUDA_GRAPH_WARMUP_STEPS
 export FUNCTIONAL_GATE FUNCTIONAL_UPDATES
@@ -333,10 +337,6 @@ cutedsl_write_event preflight pass 0 \
     "Benchmark controls, source, submodules, upstream, and image are immutable" \
     benchmark_manifest.json
 
-FULL_CG_OVERRIDE="policy.megatron_cfg.cuda_graph_impl=none"
-if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
-    FULL_CG_OVERRIDE="policy.megatron_cfg.cuda_graph_impl=full_iteration"
-fi
 A2A_OVERLAP_OVERRIDE="policy.megatron_cfg.overlap_moe_expert_parallel_comm=false"
 A2A_HIGH_PRIORITY_OVERRIDE="policy.megatron_cfg.high_priority_a2a_comm_stream=false"
 A2A_DELAY_WGRAD_OVERRIDE="policy.megatron_cfg.delay_wgrad_compute=false"
@@ -345,20 +345,17 @@ if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
     A2A_HIGH_PRIORITY_OVERRIDE="policy.megatron_cfg.high_priority_a2a_comm_stream=true"
     A2A_DELAY_WGRAD_OVERRIDE="policy.megatron_cfg.delay_wgrad_compute=true"
 fi
-readonly FULL_CG_OVERRIDE A2A_OVERLAP_OVERRIDE A2A_HIGH_PRIORITY_OVERRIDE
+readonly A2A_OVERLAP_OVERRIDE A2A_HIGH_PRIORITY_OVERRIDE
 readonly A2A_DELAY_WGRAD_OVERRIDE
 
-readonly -a COMMON_OVERRIDES=(
+COMMON_OVERRIDES=(
     "grpo.max_num_steps=${TOTAL_UPDATES}"
     "cluster.num_nodes=${BENCHMARK_NUM_NODES}"
     "cluster.gpus_per_node=${BENCHMARK_GPUS_PER_NODE}"
     "cluster.segment_size=${BENCHMARK_SEGMENT_SIZE}"
-    "policy.train_global_batch_size=$((TRAINING_GPU_COUNT * 2))"
+    "policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}"
     "policy.train_micro_batch_size=1"
-    "policy.megatron_cfg.expert_model_parallel_size=${TRAINING_GPU_COUNT}"
-    "${FULL_CG_OVERRIDE}"
-    "policy.megatron_cfg.cuda_graph_warmup_steps=${CUDA_GRAPH_WARMUP_STEPS}"
-    "policy.megatron_cfg.cuda_graph_use_single_mempool=true"
+    "policy.megatron_cfg.expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE}"
     "${A2A_OVERLAP_OVERRIDE}"
     "${A2A_HIGH_PRIORITY_OVERRIDE}"
     "${A2A_DELAY_WGRAD_OVERRIDE}"
@@ -369,6 +366,14 @@ readonly -a COMMON_OVERRIDES=(
     "checkpointing.enabled=false"
     "checkpointing.checkpoint_dir=${CONTAINER_RUNTIME_DIR}/benchmark_checkpoints"
 )
+if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    COMMON_OVERRIDES+=(
+        "policy.megatron_cfg.cuda_graph_impl=full_iteration"
+        "policy.megatron_cfg.cuda_graph_warmup_steps=${CUDA_GRAPH_WARMUP_STEPS}"
+        "policy.megatron_cfg.cuda_graph_use_single_mempool=true"
+    )
+fi
+readonly -a COMMON_OVERRIDES
 printf '%s\n' "${COMMON_OVERRIDES[@]}" > "${RESULT_DIR}/common_overrides.txt"
 printf '%s\n' "${timing_arms[@]}" > "${RESULT_DIR}/timing_order.txt"
 
@@ -547,15 +552,28 @@ assert topology == {
     "pipeline_model_parallel_size": 1,
     "context_parallel_size": 1,
     "expert_tensor_parallel_size": 1,
-    "expert_model_parallel_size": int(os.environ["TRAINING_GPU_COUNT"]),
+    "expert_model_parallel_size": int(os.environ["EXPERT_MODEL_PARALLEL_SIZE"]),
 }, topology
 fixed_config_paths = (
     "policy.megatron_cfg.moe_grouped_gemm",
+    "policy.megatron_cfg.moe_router_dtype",
     "policy.megatron_cfg.use_transformer_engine_op_fuser",
-    "policy.megatron_cfg.cuda_graph_impl",
+    "policy.megatron_cfg.moe_mlp_glu_interleave_size",
+    "policy.megatron_cfg.expert_tensor_parallel_size",
+    "policy.megatron_cfg.fp8_cfg.enabled",
+    "policy.megatron_cfg.fp8_cfg.fp8_recipe",
+    "policy.megatron_cfg.fp8_cfg.fp8_param",
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
+    "policy.train_global_batch_size",
+    "policy.train_micro_batch_size",
+    "policy.logprob_batch_size",
+    "policy.max_total_sequence_length",
+    "policy.sequence_packing.enabled",
+    "policy.generation.vllm_cfg.precision",
+    "grpo.num_prompts_per_step",
+    "grpo.num_generations_per_prompt",
 )
 fixed_config_by_arm = {
     arm: {path: value_at(config, path) for path in fixed_config_paths}
@@ -571,18 +589,50 @@ else:
 for arm in timing_order:
     assert fixed_config_evidence[arm] == fixed_config_evidence["on"]
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_grouped_gemm"] is True
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_router_dtype"] == "fp32"
     assert (
         fixed_config_evidence[arm][
             "policy.megatron_cfg.use_transformer_engine_op_fuser"
         ]
         is True
     )
+    assert (
+        fixed_config_evidence[arm][
+            "policy.megatron_cfg.moe_mlp_glu_interleave_size"
+        ]
+        == 32
+    )
+    assert (
+        fixed_config_evidence[arm][
+            "policy.megatron_cfg.expert_tensor_parallel_size"
+        ]
+        == 1
+    )
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.fp8_cfg.enabled"] is True
+    assert (
+        fixed_config_evidence[arm]["policy.megatron_cfg.fp8_cfg.fp8_recipe"]
+        == "mxfp8"
+    )
+    assert (
+        fixed_config_evidence[arm]["policy.megatron_cfg.fp8_cfg.fp8_param"]
+        is False
+    )
+    assert fixed_config_evidence[arm]["policy.train_global_batch_size"] == int(
+        os.environ["TRAIN_GLOBAL_BATCH_SIZE"]
+    )
+    rollout_batch_size = (
+        fixed_config_evidence[arm]["grpo.num_prompts_per_step"]
+        * fixed_config_evidence[arm]["grpo.num_generations_per_prompt"]
+    )
+    assert rollout_batch_size == int(os.environ["TRAIN_GLOBAL_BATCH_SIZE"])
 expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
 expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
 for arm in timing_order:
-    assert (
-        fixed_config_evidence[arm]["policy.megatron_cfg.cuda_graph_impl"]
-        == ("full_iteration" if expected_full_cg else "none")
+    graph_impl = configs_by_arm[arm]["policy"]["megatron_cfg"].get(
+        "cuda_graph_impl"
+    )
+    assert graph_impl == ("full_iteration" if expected_full_cg else None) or (
+        not expected_full_cg and graph_impl == "none"
     )
     for path in (
         "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
@@ -624,6 +674,24 @@ manifest = {
         "segment": int(os.environ["BENCHMARK_SEGMENT_SIZE"]),
     },
     "topology": topology,
+    "workload": {
+        "train_global_batch_size": on_config["policy"]["train_global_batch_size"],
+        "train_micro_batch_size": on_config["policy"]["train_micro_batch_size"],
+        "logprob_batch_size": on_config["policy"]["logprob_batch_size"],
+        "max_total_sequence_length": on_config["policy"][
+            "max_total_sequence_length"
+        ],
+        "sequence_packing_enabled": on_config["policy"]["sequence_packing"][
+            "enabled"
+        ],
+        "rollout_precision": on_config["policy"]["generation"]["vllm_cfg"][
+            "precision"
+        ],
+        "num_prompts_per_step": on_config["grpo"]["num_prompts_per_step"],
+        "num_generations_per_prompt": on_config["grpo"][
+            "num_generations_per_prompt"
+        ],
+    },
     "fixed_config_evidence": fixed_config_evidence,
     "arms": [
         {"arm": arm, "order_index": order_index}
@@ -654,7 +722,8 @@ cutedsl_write_event gpu_smoke skip 0 \
     "GPU smoke is enforced by run_cutedsl_functional.sbatch" ''
 if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
     cutedsl_write_event functional_grpo start '' \
-        "Run three-update EP8 CuTeDSL ON functional arm" functional_gate_summary.json
+        "Run three-update EP${EXPERT_MODEL_PARALLEL_SIZE} CuTeDSL ON functional arm" \
+        functional_gate_summary.json
     cutedsl_write_event timing skip 0 \
         "Functional gate is not performance eligible" ''
     echo "[INFO] Running one functional CuTeDSL ON arm without performance extraction."
@@ -998,7 +1067,8 @@ COMPONENT_METRICS = {
     "policy_training": (POLICY_TIME_METRIC,),
     "refit": (REFIT_METRIC,),
 }
-MAX_FUNCTIONAL_EVIDENCE_FILES = 512
+TRAINING_GPU_COUNT = int(os.environ["TRAINING_GPU_COUNT"])
+MAX_FUNCTIONAL_EVIDENCE_FILES = max(512, 64 * TRAINING_GPU_COUNT)
 MAX_FUNCTIONAL_EVIDENCE_BYTES = 256 * 1024 * 1024
 MAX_FUNCTIONAL_EVIDENCE_BYTES_PER_FILE = 16 * 1024 * 1024
 MAX_FUNCTIONAL_EVIDENCE_MATCHES = 4096
@@ -1648,7 +1718,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "Publish functional gate summary" functional_gate_summary.json
     cutedsl_write_event metrics_export pass 0 \
         "Functional evidence is ready for report rendering" functional_gate_summary.json
-    echo "[PASS] Three-update EP8 CuTeDSL functional gate completed: ${RESULT_DIR}"
+    echo "[PASS] Three-update EP${EXPERT_MODEL_PARALLEL_SIZE} CuTeDSL functional gate completed: ${RESULT_DIR}"
 else
     cutedsl_write_event metrics_export start '' \
         "Publish benchmark timing and profile summaries" timing_summary.json

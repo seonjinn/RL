@@ -8,11 +8,16 @@ from pathlib import Path
 import pytest
 from omegaconf import OmegaConf
 
-from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
+from nemo_rl.utils.config import (
+    load_config,
+    parse_hydra_overrides,
+    register_omegaconf_resolvers,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_2n4g_factorial.sh"
+OFFICIAL_SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_4n4g_performance.sh"
 MATRIX_PAYLOAD = EXPERIMENT_DIR / "run_cutedsl_matrix.sbatch"
 PROFILE_LOADER = EXPERIMENT_DIR / "lib/cluster_profile.sh"
 RAY_SUB = PROJECT_ROOT / "ray.sub"
@@ -20,6 +25,16 @@ RECIPE = (
     PROJECT_ROOT
     / "examples/configs/recipes/llm/performance"
     / "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml"
+)
+OFFICIAL_RECIPE = (
+    PROJECT_ROOT
+    / "examples/configs/recipes/llm/performance"
+    / "grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl.yaml"
+)
+OFFICIAL_BASE_RECIPE = (
+    PROJECT_ROOT
+    / "examples/configs/recipes/llm/performance"
+    / "grpo-qwen3-30ba3b-4n4g.yaml"
 )
 
 register_omegaconf_resolvers()
@@ -34,6 +49,7 @@ def _run_functional_summarizer(
     ray_logs: dict[str, str] | None = None,
     constant_overrides: dict[str, int] | None = None,
     evidence_suffix: str = "",
+    training_gpu_count: int = 8,
 ) -> subprocess.CompletedProcess[str]:
     source = MATRIX_PAYLOAD.read_text()
     summarizer = source.split("# CUTEDSL_FUNCTIONAL_SUMMARIZER_START\n", 1)[1].split(
@@ -70,7 +86,7 @@ def _run_functional_summarizer(
         f"global_rank={rank} offload_sequence={offload_sequence} "
         f"cgroup_memory_peak_gib={cgroup_memory_peak_gib} "
         f"cgroup_memory_max_gib={cgroup_memory_max_gib}{evidence_suffix}"
-        for rank in range(8)
+        for rank in range(training_gpu_count)
     )
     (arm_dir / "grpo.log").write_text("\n".join(evidence_lines) + "\n")
     for relative_path, contents in (ray_logs or {}).items():
@@ -84,7 +100,7 @@ def _run_functional_summarizer(
             "CONTAINER_RESULT_DIR": str(result_dir),
             "FUNCTIONAL_UPDATES": "3",
             "RAY_CLUSTER_LOG_DIR": str(ray_log_dir),
-            "TRAINING_GPU_COUNT": "8",
+            "TRAINING_GPU_COUNT": str(training_gpu_count),
         }
     )
     return subprocess.run(
@@ -135,6 +151,109 @@ def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
     )
 
 
+def test_official_performance_recipe_preserves_workload_and_enables_policy_mxfp8() -> (
+    None
+):
+    config = OmegaConf.to_container(load_config(OFFICIAL_RECIPE), resolve=True)
+    assert isinstance(config, dict)
+    policy = config["policy"]
+    megatron = policy["megatron_cfg"]
+
+    assert config["cluster"]["num_nodes"] == 4
+    assert config["cluster"]["gpus_per_node"] == 4
+    assert config["cluster"]["segment_size"] == 4
+    assert config["grpo"]["num_prompts_per_step"] == 64
+    assert config["grpo"]["num_generations_per_prompt"] == 32
+    assert policy["model_name"] == "Qwen/Qwen3-30B-A3B"
+    assert policy["train_global_batch_size"] == 2048
+    assert policy["train_micro_batch_size"] == 1
+    assert policy["logprob_batch_size"] == 2
+    assert policy["max_total_sequence_length"] == 4096
+    assert policy["dynamic_batching"]["enabled"] is False
+    assert policy["sequence_packing"]["enabled"] is True
+
+    assert megatron["tensor_model_parallel_size"] == 1
+    assert megatron["pipeline_model_parallel_size"] == 1
+    assert megatron["context_parallel_size"] == 1
+    assert megatron["expert_tensor_parallel_size"] == 1
+    assert megatron["expert_model_parallel_size"] == 16
+    assert megatron["moe_grouped_gemm"] is True
+    assert megatron["moe_router_dtype"] == "fp32"
+    assert megatron["use_transformer_engine_op_fuser"] is True
+    assert megatron["moe_mlp_glu_interleave_size"] == 32
+    assert megatron["fp8_cfg"] == {
+        **megatron["fp8_cfg"],
+        "enabled": True,
+        "fp8": "e4m3",
+        "fp8_recipe": "mxfp8",
+        "fp8_param": False,
+    }
+    assert megatron["env_vars"]["PYTORCH_CUDA_ALLOC_CONF"] == (
+        "expandable_segments:False"
+    )
+    assert megatron["env_vars"]["NVTE_CUTEDSL_FUSED_GROUPED_MLP"] == "1"
+
+    vllm = policy["generation"]["vllm_cfg"]
+    assert vllm["precision"] == "bfloat16"
+    assert vllm["tensor_parallel_size"] == 1
+    assert vllm["env_vars"]["VLLM_COMPILE_CACHE_SAVE_FORMAT"] == "unpacked"
+    assert "VLLM_USE_STANDALONE_COMPILE" not in vllm["env_vars"]
+
+
+def test_official_performance_overlay_has_only_reviewed_deviations() -> None:
+    base = OmegaConf.to_container(load_config(OFFICIAL_BASE_RECIPE), resolve=True)
+    overlay = OmegaConf.to_container(load_config(OFFICIAL_RECIPE), resolve=True)
+    assert isinstance(base, dict)
+    assert isinstance(overlay, dict)
+
+    def difference_paths(left: object, right: object, path: str = "") -> set[str]:
+        if isinstance(left, dict) and isinstance(right, dict):
+            differences = set()
+            for key in set(left) | set(right):
+                child_path = f"{path}.{key}" if path else key
+                if key not in left or key not in right:
+                    differences.add(child_path)
+                else:
+                    differences.update(
+                        difference_paths(left[key], right[key], child_path)
+                    )
+            return differences
+        return set() if left == right else {path}
+
+    assert difference_paths(base, overlay) == {
+        "checkpointing.checkpoint_dir",
+        "logger.log_dir",
+        "logger.wandb.name",
+        "policy.generation.vllm_cfg.env_vars",
+        "policy.megatron_cfg.cuda_graph_impl",
+        "policy.megatron_cfg.cuda_graph_use_single_mempool",
+        "policy.megatron_cfg.cuda_graph_warmup_steps",
+        "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP",
+        "policy.megatron_cfg.fp8_cfg.enabled",
+        "policy.megatron_cfg.fp8_cfg.fp8_recipe",
+        "policy.megatron_cfg.moe_mlp_glu_interleave_size",
+        "policy.megatron_cfg.moe_router_dtype",
+        "policy.megatron_cfg.use_transformer_engine_op_fuser",
+    }
+
+
+def test_official_performance_recipe_accepts_full_iteration_overrides() -> None:
+    config = parse_hydra_overrides(
+        load_config(OFFICIAL_RECIPE),
+        [
+            "policy.megatron_cfg.cuda_graph_impl=full_iteration",
+            "policy.megatron_cfg.cuda_graph_warmup_steps=3",
+            "policy.megatron_cfg.cuda_graph_use_single_mempool=true",
+        ],
+    )
+    resolved = OmegaConf.to_container(config, resolve=True)
+    assert isinstance(resolved, dict)
+    megatron = resolved["policy"]["megatron_cfg"]
+    assert megatron["cuda_graph_impl"] == "full_iteration"
+    assert megatron["cuda_graph_warmup_steps"] == 3
+    assert megatron["cuda_graph_use_single_mempool"] is True
+
+
 def test_multinode_recipe_uses_unpacked_vllm_compile_cache() -> None:
     config = OmegaConf.to_container(load_config(RECIPE), resolve=True)
     assert isinstance(config, dict)
@@ -148,9 +267,9 @@ def test_submitter_launches_real_two_node_ray_sub_cluster() -> None:
     source = SUBMITTER.read_text()
     required = (
         'readonly RAY_SUB="${REPO_ROOT}/ray.sub"',
-        '"--nodes=2"',
+        '"--nodes=${BENCHMARK_NUM_NODES}"',
         '"CONTAINER=${CUTEDSL_IMAGE}"',
-        '"GPUS_PER_NODE=4"',
+        '"GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}"',
         '"COMMAND=exec bash ${MATRIX_PAYLOAD}"',
         '"CUTEDSL_BENCHMARK_EXISTING_RAY=1"',
         '"RAY_LOG_SYNC_FREQUENCY=5"',
@@ -252,6 +371,9 @@ record = {
     "a2a": payload["NEMO2606_A2A_ENABLED"],
     "replicate": payload["CUTEDSL_BENCHMARK_REPLICATE"],
     "order": payload["CUTEDSL_BENCHMARK_ORDER"],
+    "profile": payload["CUTEDSL_BENCHMARK_PROFILE"],
+    "warmup_updates": payload["CUTEDSL_BENCHMARK_WARMUP_UPDATES"],
+    "measured_updates": payload["CUTEDSL_BENCHMARK_MEASURED_UPDATES"],
     "existing_ray": payload["CUTEDSL_BENCHMARK_EXISTING_RAY"],
     "nodes": payload["CUTEDSL_BENCHMARK_NUM_NODES"],
     "segment_size": payload["CUTEDSL_BENCHMARK_SEGMENT_SIZE"],
@@ -315,7 +437,118 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert call["argv"][-1] == str(PROJECT_ROOT / "ray.sub")
 
 
-def test_functional_submitter_exports_one_fail_closed_job(tmp_path: Path) -> None:
+def test_official_submitter_exports_matched_4n4g_performance_jobs(
+    tmp_path: Path,
+) -> None:
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    calls_path = tmp_path / "calls.jsonl"
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+payload_arg = next(arg for arg in sys.argv[1:] if arg.startswith("--export-file="))
+payload = {}
+for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
+    if entry:
+        key, value = entry.decode().split("=", 1)
+        payload[key] = value
+record = {
+    "argv": ["--export-file=<payload>" if arg == payload_arg else arg for arg in sys.argv[1:]],
+    "context": payload["NEMO2606_FACTORIAL_CONTEXT"],
+    "recipe": payload["CUTEDSL_BENCHMARK_RECIPE"],
+    "nodes": payload["CUTEDSL_BENCHMARK_NUM_NODES"],
+    "gpus_per_node": payload["CUTEDSL_BENCHMARK_GPUS_PER_NODE"],
+    "segment_size": payload["CUTEDSL_BENCHMARK_SEGMENT_SIZE"],
+    "train_global_batch_size": payload["CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE"],
+    "expert_model_parallel_size": payload["CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE"],
+    "replicate": payload["CUTEDSL_BENCHMARK_REPLICATE"],
+    "order": payload["CUTEDSL_BENCHMARK_ORDER"],
+    "profile": payload["CUTEDSL_BENCHMARK_PROFILE"],
+    "warmup_updates": payload["CUTEDSL_BENCHMARK_WARMUP_UPDATES"],
+    "measured_updates": payload["CUTEDSL_BENCHMARK_MEASURED_UPDATES"],
+    "full_cg": payload["NEMO2606_FULL_CG_ENABLED"],
+    "a2a": payload["NEMO2606_A2A_ENABLED"],
+    "existing_ray": payload["CUTEDSL_BENCHMARK_EXISTING_RAY"],
+}
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(json.dumps(record) + "\\n")
+print(f"mock-{record['context']}-{record['replicate']}")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(OFFICIAL_SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+    assert len(calls) == 3
+    assert [call["context"] for call in calls] == ["g0a0", "g0a0", "g0a0"]
+    assert [call["replicate"] for call in calls] == ["0", "1", "2"]
+    assert [call["order"] for call in calls] == ["on,off", "off,on", "on,off"]
+    assert [call["profile"] for call in calls] == ["1", "0", "0"]
+    for call in calls:
+        assert call["recipe"].endswith(
+            "grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl.yaml"
+        )
+        assert call["nodes"] == "4"
+        assert call["gpus_per_node"] == "4"
+        assert call["segment_size"] == "4"
+        assert call["train_global_batch_size"] == "2048"
+        assert call["expert_model_parallel_size"] == "16"
+        assert call["warmup_updates"] == "5"
+        assert call["measured_updates"] == "20"
+        assert call["full_cg"] == "0"
+        assert call["a2a"] == "0"
+        assert call["existing_ray"] == "1"
+        assert "--nodes=4" in call["argv"]
+        assert "--segment=4" in call["argv"]
+        assert "--segment=1" not in call["argv"]
+        assert "--exclusive" in call["argv"]
+        assert "--time=05:00:00" in call["argv"]
+        assert "--account=coreai_dlalgo_llm" in call["argv"]
+        assert "--partition=batch" in call["argv"]
+        assert "--comment=metrics" in call["argv"]
+        assert "--test-only" in call["argv"]
+
+
+@pytest.mark.parametrize(
+    (
+        "submitter",
+        "expected_nodes",
+        "expected_segment_size",
+        "expected_train_global_batch_size",
+        "expected_expert_model_parallel_size",
+    ),
+    (
+        (SUBMITTER, "2", "2", "16", "8"),
+        (OFFICIAL_SUBMITTER, "4", "4", "2048", "16"),
+    ),
+)
+def test_functional_submitter_exports_one_fail_closed_job(
+    tmp_path: Path,
+    submitter: Path,
+    expected_nodes: str,
+    expected_segment_size: str,
+    expected_train_global_batch_size: str,
+    expected_expert_model_parallel_size: str,
+) -> None:
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
     calls_path = tmp_path / "calls.jsonl"
@@ -344,6 +577,8 @@ record = {
     "nodes": payload.get("CUTEDSL_BENCHMARK_NUM_NODES"),
     "segment_size": payload.get("CUTEDSL_BENCHMARK_SEGMENT_SIZE"),
     "gpus_per_node": payload.get("CUTEDSL_BENCHMARK_GPUS_PER_NODE"),
+    "train_global_batch_size": payload.get("CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE"),
+    "expert_model_parallel_size": payload.get("CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE"),
     "full_cg": payload.get("NEMO2606_FULL_CG_ENABLED"),
     "a2a": payload.get("NEMO2606_A2A_ENABLED"),
 }
@@ -363,7 +598,7 @@ print("mock-functional")
         }
     )
     result = subprocess.run(
-        ["bash", str(SUBMITTER), "--test-only"],
+        ["bash", str(submitter), "--test-only"],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -379,13 +614,15 @@ print("mock-functional")
     assert call["order"] == "on"
     assert call["profile"] == "0"
     assert call["existing_ray"] == "1"
-    assert call["nodes"] == "2"
-    assert call["segment_size"] == "2"
+    assert call["nodes"] == expected_nodes
+    assert call["segment_size"] == expected_segment_size
     assert call["gpus_per_node"] == "4"
+    assert call["train_global_batch_size"] == expected_train_global_batch_size
+    assert call["expert_model_parallel_size"] == expected_expert_model_parallel_size
     assert call["full_cg"] == "0"
     assert call["a2a"] == "0"
-    assert "--nodes=2" in call["argv"]
-    assert "--segment=2" in call["argv"]
+    assert f"--nodes={expected_nodes}" in call["argv"]
+    assert f"--segment={expected_segment_size}" in call["argv"]
     assert "--test-only" in call["argv"]
 
 
@@ -405,9 +642,18 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
     assert "cluster.num_nodes=${BENCHMARK_NUM_NODES}" in source
     assert "cluster.gpus_per_node=${BENCHMARK_GPUS_PER_NODE}" in source
     assert (
-        "policy.megatron_cfg.expert_model_parallel_size=${TRAINING_GPU_COUNT}" in source
+        "policy.megatron_cfg.expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE}"
+        in source
     )
-    assert "policy.train_global_batch_size=$((TRAINING_GPU_COUNT * 2))" in source
+    assert "policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}" in source
+    assert (
+        'TRAIN_GLOBAL_BATCH_SIZE="${CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE:'
+        in source
+    )
+    assert (
+        'EXPERT_MODEL_PARALLEL_SIZE="${CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE:'
+        in source
+    )
     assert 'TRAINING_GPU_COUNT = int(os.environ["TRAINING_GPU_COUNT"])' in source
     for metric in (
         "timing/train/total_step_time",
@@ -514,6 +760,7 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
         "RAY_CLUSTER_LOG_DIR",
         "GroupedGemmGluSm100",
         "MAX_FUNCTIONAL_EVIDENCE_MATCHES",
+        '"Run three-update EP${EXPERT_MODEL_PARALLEL_SIZE} CuTeDSL ON functional arm"',
         'len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"])',
     )
     for fragment in required:
@@ -657,6 +904,31 @@ def test_functional_summarizer_ignores_ray_control_plane_log_fanout(
     assert summary["evidence_scan"]["files_scanned"] == 2
 
 
+def test_functional_summarizer_scales_worker_file_bound_for_sixteen_ranks(
+    tmp_path: Path,
+) -> None:
+    ray_logs = {
+        f"session/logs/worker-{index:08x}-01000000-{index}.out": "policy worker\n"
+        for index in range(600)
+    }
+
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        ray_logs=ray_logs,
+        training_gpu_count=16,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    assert summary["evidence_scan"]["files_scanned"] == 601
+    assert summary["offload_memory_evidence"]["completed_global_ranks"] == list(
+        range(16)
+    )
+
+
 @pytest.mark.parametrize(
     ("constant_overrides", "ray_logs", "evidence_suffix", "reason"),
     [
@@ -761,7 +1033,7 @@ def test_matrix_payload_fails_closed_on_missing_feature_implementations() -> Non
 
 
 def test_shell_entrypoints_are_parseable() -> None:
-    for path in (SUBMITTER, MATRIX_PAYLOAD):
+    for path in (SUBMITTER, OFFICIAL_SUBMITTER, MATRIX_PAYLOAD):
         result = subprocess.run(
             ["bash", "-n", str(path)],
             capture_output=True,

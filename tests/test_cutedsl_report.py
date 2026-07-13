@@ -1593,7 +1593,7 @@ def test_matrix_report_renders_scheduler_and_complete_parallel_topology(
         "CUTEDSL_GRES",
         "CUTEDSL_SEGMENT",
         '"tensor_model_parallel_size": 1',
-        '"expert_model_parallel_size": int(os.environ["TRAINING_GPU_COUNT"])',
+        '"expert_model_parallel_size": int(os.environ["EXPERT_MODEL_PARALLEL_SIZE"])',
     ):
         assert key in matrix
 

@@ -26,8 +26,34 @@ WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"
 PROFILE_REPLICATE="${NEMO2606_FACTORIAL_PROFILE_REPLICATE:-0}"
 FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"
+BENCHMARK_RECIPE="${NEMO2606_FACTORIAL_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml}"
+BENCHMARK_NUM_NODES="${NEMO2606_FACTORIAL_NUM_NODES:-2}"
+BENCHMARK_GPUS_PER_NODE="${NEMO2606_FACTORIAL_GPUS_PER_NODE:-4}"
+BENCHMARK_SEGMENT_SIZE="${NEMO2606_FACTORIAL_SEGMENT_SIZE:-2}"
+TRAIN_GLOBAL_BATCH_SIZE="${NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE:-16}"
+EXPERT_MODEL_PARALLEL_SIZE="${NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE:-8}"
 readonly CONTEXTS REPLICATES WARMUP_UPDATES MEASURED_UPDATES PROFILE_REPLICATE
 readonly FUNCTIONAL_GATE
+readonly BENCHMARK_RECIPE BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE
+readonly BENCHMARK_SEGMENT_SIZE TRAIN_GLOBAL_BATCH_SIZE
+readonly EXPERT_MODEL_PARALLEL_SIZE
+
+for positive_integer in \
+    "${BENCHMARK_NUM_NODES}" \
+    "${BENCHMARK_GPUS_PER_NODE}" \
+    "${BENCHMARK_SEGMENT_SIZE}" \
+    "${TRAIN_GLOBAL_BATCH_SIZE}" \
+    "${EXPERT_MODEL_PARALLEL_SIZE}"; do
+    if [[ ! "${positive_integer}" =~ ^[0-9]+$ ]] || ((positive_integer < 1)); then
+        echo "[ERROR] Official workload topology and batch controls must be positive integers." >&2
+        exit 1
+    fi
+done
+readonly WORLD_SIZE=$((BENCHMARK_NUM_NODES * BENCHMARK_GPUS_PER_NODE))
+if ((WORLD_SIZE % EXPERT_MODEL_PARALLEL_SIZE != 0)); then
+    echo "[ERROR] Expert model parallel size must divide the benchmark world size." >&2
+    exit 1
+fi
 
 if [[ "${FUNCTIONAL_GATE}" != "1" ]]; then
     if [[ ! "${REPLICATES}" =~ ^[0-9]+$ ]] || ((REPLICATES < 3)); then
@@ -54,7 +80,7 @@ readonly REPO_ROOT
 readonly EXPERIMENT_DIR="${REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 readonly MATRIX_PAYLOAD="${EXPERIMENT_DIR}/run_cutedsl_matrix.sbatch"
 readonly RAY_SUB="${REPO_ROOT}/ray.sub"
-readonly RECIPE="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml"
+readonly RECIPE="${BENCHMARK_RECIPE}"
 source "${EXPERIMENT_DIR}/lib/cluster_profile.sh"
 capture_cutedsl_submission_source "${REPO_ROOT}"
 load_cutedsl_cluster_profile
@@ -75,12 +101,12 @@ done <<< "${CUTEDSL_SBATCH_ARGS}"
 if [[ -n "${CUTEDSL_SEGMENT}" ]]; then
     for index in "${!sbatch_args[@]}"; do
         if [[ "${sbatch_args[${index}]}" == --segment=* ]]; then
-            sbatch_args[${index}]="--segment=2"
+            sbatch_args[${index}]="--segment=${BENCHMARK_SEGMENT_SIZE}"
         fi
     done
 fi
 sbatch_args+=(
-    "--nodes=2"
+    "--nodes=${BENCHMARK_NUM_NODES}"
     "--exclusive"
     "--time=${CUTEDSL_BENCHMARK_TIME}"
 )
@@ -129,6 +155,8 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         -u CUTEDSL_BENCHMARK_NUM_NODES \
         -u CUTEDSL_BENCHMARK_GPUS_PER_NODE \
         -u CUTEDSL_BENCHMARK_SEGMENT_SIZE \
+        -u CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE \
+        -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
         -u CUTEDSL_BENCHMARK_ORDER \
         -u CUTEDSL_BENCHMARK_PROFILE \
         -u NEMO2606_FUNCTIONAL_GATE \
@@ -142,13 +170,15 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "SETUP_COMMAND=${RAY_SETUP_COMMAND}" \
         "COMMAND=exec bash ${MATRIX_PAYLOAD}" \
         "BASE_LOG_DIR=${RAY_LOG_ROOT}" \
-        "GPUS_PER_NODE=4" \
+        "GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}" \
         "RAY_LOG_SYNC_FREQUENCY=5" \
         "CUTEDSL_BENCHMARK_EXISTING_RAY=1" \
         "CUTEDSL_BENCHMARK_RECIPE=${RECIPE}" \
-        "CUTEDSL_BENCHMARK_NUM_NODES=2" \
-        "CUTEDSL_BENCHMARK_GPUS_PER_NODE=4" \
-        "CUTEDSL_BENCHMARK_SEGMENT_SIZE=2" \
+        "CUTEDSL_BENCHMARK_NUM_NODES=${BENCHMARK_NUM_NODES}" \
+        "CUTEDSL_BENCHMARK_GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}" \
+        "CUTEDSL_BENCHMARK_SEGMENT_SIZE=${BENCHMARK_SEGMENT_SIZE}" \
+        "CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE}" \
+        "CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE=${EXPERT_MODEL_PARALLEL_SIZE}" \
         "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
         "CUTEDSL_BENCHMARK_ORDER=on" \
         "CUTEDSL_BENCHMARK_PROFILE=0" \
@@ -172,9 +202,9 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
     if [[ "${TEST_ONLY}" == "0" ]]; then
         printf '%s\n' "${functional_record}" \
             >> "${SUBMISSION_DIR}/${SUBMISSION_GROUP}-functional.jsonl"
-        echo "[INFO] Submitted EP8 functional gate."
+        echo "[INFO] Submitted EP${EXPERT_MODEL_PARALLEL_SIZE} functional gate."
     else
-        echo "[INFO] Validated EP8 functional gate; no job submitted."
+        echo "[INFO] Validated EP${EXPERT_MODEL_PARALLEL_SIZE} functional gate; no job submitted."
     fi
     exit 0
 fi
@@ -225,7 +255,7 @@ if [[ "${TEST_ONLY}" == "0" && "${needs_full_cg}" == "1" ]]; then
         exit 1
     fi
     if grep -q "colocated generation/refit is not supported" "${full_cg_source}"; then
-        echo "[ERROR] Requested full-CG contexts cannot use the 2x4 EP8 E2E allocation until colocated generation/refit is supported or generation GPUs are added." >&2
+        echo "[ERROR] Requested full-CG contexts cannot use this colocated E2E allocation until colocated generation/refit is supported or generation GPUs are added." >&2
         exit 1
     fi
 fi
@@ -254,6 +284,8 @@ for context in "${contexts[@]}"; do
             -u GPUS_PER_NODE \
             -u CUTEDSL_BENCHMARK_EXISTING_RAY \
             -u CUTEDSL_BENCHMARK_SEGMENT_SIZE \
+            -u CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE \
+            -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
             -u CUTEDSL_BENCHMARK_ORDER \
             -u CUTEDSL_BENCHMARK_REPLICATE \
             -u CUTEDSL_BENCHMARK_PROFILE \
@@ -269,13 +301,15 @@ for context in "${contexts[@]}"; do
             "SETUP_COMMAND=${RAY_SETUP_COMMAND}" \
             "COMMAND=exec bash ${MATRIX_PAYLOAD}" \
             "BASE_LOG_DIR=${RAY_LOG_ROOT}" \
-            "GPUS_PER_NODE=4" \
+            "GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}" \
             "RAY_LOG_SYNC_FREQUENCY=5" \
             "CUTEDSL_BENCHMARK_EXISTING_RAY=1" \
             "CUTEDSL_BENCHMARK_RECIPE=${RECIPE}" \
-            "CUTEDSL_BENCHMARK_NUM_NODES=2" \
-            "CUTEDSL_BENCHMARK_GPUS_PER_NODE=4" \
-            "CUTEDSL_BENCHMARK_SEGMENT_SIZE=2" \
+            "CUTEDSL_BENCHMARK_NUM_NODES=${BENCHMARK_NUM_NODES}" \
+            "CUTEDSL_BENCHMARK_GPUS_PER_NODE=${BENCHMARK_GPUS_PER_NODE}" \
+            "CUTEDSL_BENCHMARK_SEGMENT_SIZE=${BENCHMARK_SEGMENT_SIZE}" \
+            "CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE}" \
+            "CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE=${EXPERT_MODEL_PARALLEL_SIZE}" \
             "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
             "CUTEDSL_BENCHMARK_ORDER=${timing_order}" \
             "CUTEDSL_BENCHMARK_REPLICATE=${replicate_index}" \

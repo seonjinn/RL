@@ -251,9 +251,19 @@ import os
 import sys
 from pathlib import Path
 
+payload = {}
+for argument in sys.argv[1:]:
+    if argument.startswith("--export-file="):
+        export_path = Path(argument.split("=", 1)[1])
+        for entry in export_path.read_bytes().split(b"\\0"):
+            if entry:
+                key, value = entry.decode().split("=", 1)
+                payload[key] = value
+
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps({
         "argv": sys.argv[1:],
+        "payload": payload,
         "submission_branch": os.environ.get("CUTEDSL_SUBMISSION_GIT_BRANCH"),
         "submission_sha": os.environ.get("CUTEDSL_SUBMISSION_GIT_SHA"),
     }) + "\\n")
@@ -403,6 +413,8 @@ def test_benchmark_submitter_passes_exact_profile_argv(
                 text=True,
             ).stdout.strip()
         )
+        assert call["payload"]["CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE"] == "4"
+        assert call["payload"]["CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE"] == "4"
 
     records_dir = tmp_path / "records"
     if test_only:

@@ -94,6 +94,8 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
         -u CUTEDSL_BENCHMARK_MEASURED_UPDATES \
         -u CUTEDSL_BENCHMARK_PROFILE \
         -u CUTEDSL_BENCHMARK_PROFILE_REPLICATE \
+        -u CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE \
+        -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
         -u SLURM_EXPORT_ENV \
         "CUTEDSL_BENCHMARK_REPLICATE=${replicate_index}" \
         "CUTEDSL_BENCHMARK_ORDER=${timing_order}" \
@@ -101,6 +103,8 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
         "CUTEDSL_BENCHMARK_WARMUP_UPDATES=${WARMUP_UPDATES}" \
         "CUTEDSL_BENCHMARK_MEASURED_UPDATES=${MEASURED_UPDATES}" \
         "CUTEDSL_BENCHMARK_PROFILE=${replicate_profile_enabled}" \
+        "CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE=4" \
+        "CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE=4" \
         "SLURM_EXPORT_ENV=ALL" \
         > "${EXPORT_PAYLOAD}"
 

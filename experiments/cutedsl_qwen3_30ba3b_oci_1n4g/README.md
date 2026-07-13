@@ -1,6 +1,36 @@
 # Qwen3-30B-A3B CuTeDSL OCI-HSG 1n4g gate
 
-This experiment is the first Linux/GB200 gate for the CuTeDSL fused grouped-MLP policy-training slice. It runs three synchronous GRPO steps on one OCI-HSG node with four GPUs, including Megatron-to-HF export and rollout refit. No GPU run has been performed from this worktree yet.
+This experiment is the Linux/GB200 validation and performance path for the CuTeDSL fused grouped-MLP policy-training slice. The reduced two-node gate has completed three synchronous GRPO updates on Pre-Tyche; official-workload performance evidence is still pending.
+
+## Official Qwen3-30B-A3B 4n4g performance path
+
+`submit_nemo2606_4n4g_performance.sh` preserves the official `grpo-qwen3-30ba3b-4n4g.yaml` workload while enabling policy-training MXFP8 and the CuTeDSL prerequisites. It keeps the official BF16 rollout, 64 prompts x 32 generations, GBS2048, MBS1, logprob batch size 2, 4096-token limit, sequence packing, TP1/PP1/CP1/ETP1/EP16, and 4-node x 4-GPU segment. Router precision is fixed to FP32 in both arms because job 2362710 proved that the inherited FP64 router reaches Transformer Engine `Fp8Padding` as an unsupported Double tensor. The matched OFF arm changes only `policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP` from string `"1"` to `"0"`.
+
+The performance contract is three paired replicas with alternating order (`ON/OFF`, `OFF/ON`, `ON/OFF`), five warmup updates, and twenty measured updates per arm. Exactly the first replicate also runs separate two-update Nsight ON/OFF diagnostic arms after its timing arms; profile samples are never included in accepted timing statistics. This designated profile replicate is required by the fail-closed aggregate collector.
+
+Validate scheduler placement without consuming GPUs:
+
+```bash
+CUTEDSL_CLUSTER_PROFILE=pre_tyche \
+  ./experiments/cutedsl_qwen3_30ba3b_oci_1n4g/submit_nemo2606_4n4g_performance.sh --test-only
+```
+
+Run the fail-closed three-update CuTeDSL-ON functional gate first:
+
+```bash
+CUTEDSL_CLUSTER_PROFILE=pre_tyche \
+NEMO2606_FUNCTIONAL_GATE=1 \
+  ./experiments/cutedsl_qwen3_30ba3b_oci_1n4g/submit_nemo2606_4n4g_performance.sh
+```
+
+After the functional gate passes, submit the default three-replica CuTeDSL OFF/ON timing matrix:
+
+```bash
+CUTEDSL_CLUSTER_PROFILE=pre_tyche \
+  ./experiments/cutedsl_qwen3_30ba3b_oci_1n4g/submit_nemo2606_4n4g_performance.sh
+```
+
+The manifest records the resolved workload as well as topology and fixed-feature evidence. The primary CuTeDSL endpoint is policy-training tokens/s/GPU; E2E, generation, logprob, refit, and component step times are secondary endpoints. No speedup is reported until all three paired replicas pass exact ON/OFF config-diff validation and the aggregate collector accepts them.
 
 ## NeMo 26.06 two-node factorial harness
 
