@@ -818,17 +818,25 @@ def _validate_profile_attribution(root: Path, job_dir: Path, job_id: str) -> Non
             result.get("kernel_evidence"),
             f"designated profile job {job_id} {arm.upper()} kernel evidence",
         )
-        if (
-            _require_nonnegative_integer(
-                result.get("grouped_gemm_match_count"),
-                f"designated profile job {job_id} {arm.upper()} grouped GEMM match count",
-            )
-            == 0
-        ):
-            raise CollectorError(
-                f"designated profile job {job_id} {arm.upper()} lacks grouped GEMM attribution"
-            )
-    for field in ("fused_glu_match_count", "fused_dglu_match_count"):
+        for deprecated_field in ("quant_match_count", "grouped_gemm_match_count"):
+            if deprecated_field in result:
+                raise CollectorError(
+                    f"designated profile job {job_id} {arm.upper()} attribution "
+                    f"uses deprecated field {deprecated_field}"
+                )
+        _require_nonnegative_integer(
+            result.get("baseline_expert_gemm_match_count"),
+            f"designated profile job {job_id} {arm.upper()} "
+            "baseline_expert_gemm_match_count",
+        )
+
+    fused_fields = (
+        "fused_glu_match_count",
+        "fused_dglu_match_count",
+        "fused_quant_match_count",
+        "fused_grouped_gemm_match_count",
+    )
+    for field in fused_fields:
         on_count = _require_nonnegative_integer(
             arms["on"].get(field),
             f"designated profile job {job_id} ON {field}",
@@ -841,6 +849,11 @@ def _validate_profile_attribution(root: Path, job_dir: Path, job_id: str) -> Non
             raise CollectorError(
                 f"designated profile job {job_id} has invalid {field} attribution"
             )
+    if arms["off"]["baseline_expert_gemm_match_count"] == 0:
+        raise CollectorError(
+            f"designated profile job {job_id} has invalid "
+            "baseline_expert_gemm_match_count attribution"
+        )
 
     profile_paths = sorted(job_dir.glob("profiles/*/profile_summary.json"))
     if len(profile_paths) != 2:

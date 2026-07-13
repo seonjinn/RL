@@ -1401,9 +1401,7 @@ def test_benchmark_timing_summary_enforces_bounded_live_workload_equivalence(
         "observed": True,
     }
     assert (
-        passing_summary["workload_equivalence"][
-            "prompt_sequence_identity_verified"
-        ]
+        passing_summary["workload_equivalence"]["prompt_sequence_identity_verified"]
         is False
     )
 
@@ -1477,8 +1475,9 @@ def test_benchmark_feature_presence_does_not_claim_graph_replay_or_a2a_overlap(
     result = _run_kernel_attribution(
         tmp_path,
         on_evidence=(
-            "ForwardGroupedMLP_CuTeGEMMSwiGLU_MXFP8\n"
-            "BlockScaledMoEGroupedGemmDgluDbiasKernel\n"
+            "BlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x1\n"
+            "BlockScaledMoEGroupedGemmDgluDbiasKernel_object_at_0x2\n"
+            "BlockScaledMoEGroupedGemmQuantKernel_object_at_0x3\n"
             "cudaGraphLaunch\n"
             "ncclDevKernel_SendRecv\n"
         ),
@@ -1502,27 +1501,30 @@ def test_benchmark_feature_presence_does_not_claim_graph_replay_or_a2a_overlap(
     assert attribution["counts"]["on"]["nccl_a2a_kernel"] == 1
 
 
-def test_benchmark_kernel_attribution_requires_fused_on_and_grouped_both(
+def test_benchmark_kernel_attribution_requires_fused_on_and_baseline_off(
     tmp_path: Path,
 ) -> None:
     result = _run_kernel_attribution(
         tmp_path,
         on_evidence=(
-            "ForwardGroupedMLP_CuTeGEMMSwiGLU_MXFP8\n"
-            "BlockScaledMoEGroupedGemmDgluDbiasKernel\n"
-            "BlockScaledMoEGroupedGemmQuantKernel\n"
+            "BlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x1\n"
+            "BlockScaledMoEGroupedGemmDgluDbiasKernel_object_at_0x2\n"
+            "BlockScaledMoEGroupedGemmQuantKernel_object_at_0x3\n"
         ),
-        off_evidence="cutlass grouped_gemm universal kernel\n",
+        off_evidence="nvjet_sm100_128x128\n",
     )
     assert result.returncode == 0, result.stderr
     attribution = json.loads((tmp_path / "result/kernel_attribution.json").read_text())
     assert attribution["passed"] is True
     assert attribution["arms"]["on"]["fused_glu_match_count"] > 0
     assert attribution["arms"]["on"]["fused_dglu_match_count"] > 0
+    assert attribution["arms"]["on"]["fused_quant_match_count"] > 0
+    assert attribution["arms"]["on"]["fused_grouped_gemm_match_count"] > 0
     assert attribution["arms"]["off"]["fused_glu_match_count"] == 0
     assert attribution["arms"]["off"]["fused_dglu_match_count"] == 0
-    assert attribution["arms"]["on"]["grouped_gemm_match_count"] > 0
-    assert attribution["arms"]["off"]["grouped_gemm_match_count"] > 0
+    assert attribution["arms"]["off"]["fused_quant_match_count"] == 0
+    assert attribution["arms"]["off"]["fused_grouped_gemm_match_count"] == 0
+    assert attribution["arms"]["off"]["baseline_expert_gemm_match_count"] > 0
     assert "signature_regexes" in attribution
     manifest = json.loads((tmp_path / "result/benchmark_manifest.json").read_text())
     assert manifest["kernel_attribution"]["passed"] is True
@@ -1541,8 +1543,8 @@ def test_benchmark_kernel_attribution_writes_diagnostics_before_failure(
 ) -> None:
     result = _run_kernel_attribution(
         tmp_path,
-        on_evidence="ForwardGroupedMLP_CuTeGEMMSwiGLU_MXFP8\n",
-        off_evidence="BlockScaledMoEGroupedGemmGluBiasKernel\n",
+        on_evidence="BlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x1\n",
+        off_evidence="BlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x2\n",
         op_fuser=False,
     )
     assert result.returncode != 0

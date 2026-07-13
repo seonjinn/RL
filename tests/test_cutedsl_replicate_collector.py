@@ -372,13 +372,17 @@ def _create_job(
                         "kernel_evidence": "profiles/0-on/kernel_evidence.txt",
                         "fused_glu_match_count": 3,
                         "fused_dglu_match_count": 2,
-                        "grouped_gemm_match_count": 4,
+                        "fused_quant_match_count": 4,
+                        "fused_grouped_gemm_match_count": 9,
+                        "baseline_expert_gemm_match_count": 0,
                     },
                     "off": {
                         "kernel_evidence": "profiles/1-off/kernel_evidence.txt",
                         "fused_glu_match_count": 0,
                         "fused_dglu_match_count": 0,
-                        "grouped_gemm_match_count": 2,
+                        "fused_quant_match_count": 0,
+                        "fused_grouped_gemm_match_count": 0,
+                        "baseline_expert_gemm_match_count": 2,
                     },
                 },
                 "failures": [],
@@ -395,9 +399,14 @@ def _create_job(
                     "kernel_evidence": "kernel_evidence.txt",
                 },
             )
-            (profile_dir / "kernel_evidence.txt").write_text(
-                f"{arm} grouped gemm evidence\n"
+            evidence = (
+                "BlockScaledMoEGroupedGemmGluBiasKernel_object_at_0x1\n"
+                "BlockScaledMoEGroupedGemmDgluDbiasKernel_object_at_0x2\n"
+                "BlockScaledMoEGroupedGemmQuantKernel_object_at_0x3\n"
+                if arm == "on"
+                else "nvjet_sm100_128x128\n"
             )
+            (profile_dir / "kernel_evidence.txt").write_text(evidence)
     return job_dir
 
 
@@ -835,6 +844,40 @@ def test_collector_requires_profile_and_kernel_attribution_for_designated_job(
     failed_result = _run_collector(submission, result_root, tmp_path / "output")
     assert failed_result.returncode != 0
     assert "kernel attribution did not pass" in failed_result.stderr
+
+
+@pytest.mark.parametrize(
+    ("arm", "field", "invalid_value"),
+    (
+        ("on", "fused_glu_match_count", 0),
+        ("on", "fused_dglu_match_count", 0),
+        ("on", "fused_quant_match_count", 0),
+        ("on", "fused_grouped_gemm_match_count", 0),
+        ("off", "fused_glu_match_count", 1),
+        ("off", "fused_dglu_match_count", 1),
+        ("off", "fused_quant_match_count", 1),
+        ("off", "fused_grouped_gemm_match_count", 1),
+        ("off", "baseline_expert_gemm_match_count", 0),
+        ("on", "quant_match_count", 4),
+        ("off", "grouped_gemm_match_count", 2),
+    ),
+)
+def test_collector_rejects_invalid_exact_kernel_attribution_schema(
+    tmp_path: Path,
+    arm: str,
+    field: str,
+    invalid_value: int,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    attribution_path = result_root / "100/kernel_attribution.json"
+    attribution = json.loads(attribution_path.read_text())
+    attribution["arms"][arm][field] = invalid_value
+    _write_json(attribution_path, attribution)
+
+    result = _run_collector(submission, result_root, tmp_path / "output")
+
+    assert result.returncode != 0
+    assert field in result.stderr
 
 
 @pytest.mark.parametrize("unsafe_job_id", ("../outside", "/tmp/outside", "nested/job"))
