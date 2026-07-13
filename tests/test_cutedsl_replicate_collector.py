@@ -237,8 +237,7 @@ def _refresh_summary_projections(
     summary: dict[str, Any], raw_by_arm: dict[str, dict[str, Any]]
 ) -> None:
     summary["median_policy_training_seconds"] = {
-        arm: raw_by_arm[arm]["policy_training_seconds"][1]
-        for arm in ("on", "off")
+        arm: raw_by_arm[arm]["policy_training_seconds"][1] for arm in ("on", "off")
     }
     summary["median_normalized_throughput"] = {
         arm: raw_by_arm[arm]["measured_step_workload"][1][
@@ -248,8 +247,7 @@ def _refresh_summary_projections(
     }
     summary["measured_total_num_tokens"] = {
         arm: [
-            row["total_num_tokens"]
-            for row in raw_by_arm[arm]["measured_step_workload"]
+            row["total_num_tokens"] for row in raw_by_arm[arm]["measured_step_workload"]
         ]
         for arm in ("on", "off")
     }
@@ -301,6 +299,20 @@ def _create_job(
             "image": "/images/nemo.sqsh",
             "image_sha256": "b" * 64,
             "base_config_sha256": "c" * 64,
+            "artifact_revisions": {
+                "model": {
+                    "repo_id": "Qwen/Qwen3-30B-A3B",
+                    "repo_type": None,
+                    "revision": "d" * 40,
+                },
+                "dataset": {
+                    "repo_id": "nvidia/OpenMathInstruct-2",
+                    "repo_type": "dataset",
+                    "revision": "e" * 40,
+                    "split": "train_1M",
+                    "num_rows": 1000000,
+                },
+            },
             "recipe": "recipes/cutedsl.yaml",
             "topology": {"num_nodes": 1, "gpus_per_node": 4},
             "fixed_config_evidence": {
@@ -794,6 +806,18 @@ def test_collector_rejects_mixed_base_config_hashes(tmp_path: Path) -> None:
     assert "workload identity differs across replicates" in result.stderr
 
 
+def test_collector_rejects_mixed_model_revisions(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    manifest_path = result_root / "102/benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifact_revisions"]["model"]["revision"] = "f" * 40
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "output")
+    assert result.returncode != 0
+    assert "workload identity differs across replicates" in result.stderr
+
+
 def test_collector_requires_profile_and_kernel_attribution_for_designated_job(
     tmp_path: Path,
 ) -> None:
@@ -897,6 +921,11 @@ def test_collector_rejects_mismatched_on_off_fixed_config_evidence(
     (
         ("source_sha", None, "source_sha must be a 40-character hexadecimal SHA"),
         ("image_sha256", "bad", "image_sha256 must be a 64-character hexadecimal SHA"),
+        (
+            "artifact_revisions",
+            {},
+            "artifact_revisions must contain model and dataset",
+        ),
         ("recipe", "", "recipe must be a nonempty string"),
         ("topology", {}, "topology must be a nonempty object"),
         (

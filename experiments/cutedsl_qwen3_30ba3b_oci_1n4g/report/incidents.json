@@ -388,5 +388,20 @@
     "timestamp_utc": "2026-07-13T11:18:25Z",
     "verification_evidence": "The per-step mean_prompt_length series, num_valid_samples, and total_turns were exact across all six arms; required metric series had no missing measured steps. Prompt IDs and individual prompt-length vectors were not fingerprinted. A clean three-replica rerun is required, and the observed speedups remain preliminary and non-claim-ready.",
     "verification_job": "pending clean three-replica rerun"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Jobs 2369616-2369618 passed immutable source/image and matched-config gates, then all failed in the first arm during 16-worker vLLM initialization. ON-first jobs 2369616 and 2369618 and OFF-first job 2369617 each ended FAILED 1:0 with zero training steps after an unauthenticated Hugging Face Hub repository-list request returned HTTP 429.",
+    "fix_commit": "pending shared Hugging Face cache/offline commit",
+    "hypothesis": "Warming one locked shared cache for the exact Qwen3-30B-A3B model and OpenMathInstruct-2 dataset revisions, materializing the required train_1M split, then forcing the actual benchmark offline, will remove concurrent Hub API calls without changing measured training work.",
+    "report_path": "evidence/job-2369616-2369618.txt",
+    "reproduction": "Start three official 4n4g replicas simultaneously without HF credentials or a shared persistent cache; during the first arm, concurrent vLLM workers list the model repository and the fixed two-attempt retry path propagates HfHubHTTPError after HTTP 429.",
+    "root_cause": "The benchmark used ephemeral per-container Hugging Face caches and no HF credential. Forty-eight concurrently starting vLLM workers therefore queried the same public repository through a shared egress quota. vLLM 0.20's repository-list wrapper used two fixed short retries instead of the service Retry-After interval, so the transient quota boundary became a fatal initialization error. This occurred before policy training and is independent of CuTeDSL ON/OFF.",
+    "run_id": "2369616-2369618",
+    "symptom": "The clean three-replica rerun failed before Step 1 in both ON-first and OFF-first jobs, so no feature-effect measurement was produced.",
+    "tested_change": "Add a file-locked shared HF_HOME, cache and record exact model/dataset revisions once, materialize and record the train_1M processed dataset, retry cache preparation according to HTTP Retry-After, validate snapshots and processed data locally, and set HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE, and HF_DATASETS_OFFLINE before GRPO starts.",
+    "timestamp_utc": "2026-07-13T12:09:03Z",
+    "verification_evidence": "The root cause is bounded by three identical 429 tracebacks, zero completed steps, and absence of OOM/CUDA/source/image failures. Local cache/revision/collector regressions pass; clean remote verification is pending, and these jobs support no speedup claim.",
+    "verification_job": "pending clean three-replica rerun"
   }
 ]

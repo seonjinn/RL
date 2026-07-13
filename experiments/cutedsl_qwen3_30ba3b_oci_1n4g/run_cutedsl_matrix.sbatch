@@ -429,6 +429,12 @@ export UV_NO_MODIFY_PATH=1
 export UV_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-bin"
 export UV_PYTHON_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-python"
 export UV_BIN="${UV_INSTALL_DIR}/uv"
+SHARED_HF_HOME="${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/results/hf_home"
+SHARED_HF_MANIFEST="${SHARED_HF_HOME}/nemo2606_qwen3_30ba3b_manifest.json"
+readonly SHARED_HF_HOME SHARED_HF_MANIFEST
+export HF_HOME="${SHARED_HF_HOME}"
+export SHARED_HF_MANIFEST
+unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
 
 SRUN=()
 if [[ "${EXISTING_RAY}" == "0" ]]; then
@@ -480,6 +486,11 @@ runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print
 [[ "${runtime_python}" == "${expected_runtime_python}" ]]
 [[ "${runtime_prefix}" == "${VIRTUAL_ENV}" ]]
 "${UV_BIN}" lock --check 2>&1 | tee "${CONTAINER_RESULT_DIR}/uv_lock_check.log"
+"${UV_BIN}" run --active --no-sync python \
+    "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py" \
+    --hf-home "${HF_HOME}" \
+    --shared-manifest "${SHARED_HF_MANIFEST}" \
+    --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
 
 "${UV_BIN}" run --active --no-sync python - <<'PY'
 import hashlib
@@ -726,6 +737,31 @@ for arm in timing_order:
         assert fixed_config_evidence[arm][path] is expected_a2a
 assert selector_path == NORMALIZED_FEATURE_PATHS[0], selector_path
 base_config_sha256 = canonical_base_config_sha256(on_config)
+hf_cache_manifest = json.loads((result_dir / "hf_cache_manifest.json").read_text())
+expected_artifacts = {
+    "model": ("Qwen/Qwen3-30B-A3B", None),
+    "dataset": ("nvidia/OpenMathInstruct-2", "dataset"),
+}
+artifact_revisions = {}
+for label, (expected_repo_id, expected_repo_type) in expected_artifacts.items():
+    repository = hf_cache_manifest["repositories"][label]
+    assert repository["repo_id"] == expected_repo_id
+    assert repository["repo_type"] == expected_repo_type
+    revision = repository["revision"]
+    assert len(revision) == 40
+    int(revision, 16)
+    artifact_revisions[label] = {
+        "repo_id": expected_repo_id,
+        "repo_type": expected_repo_type,
+        "revision": revision,
+    }
+    if label == "dataset":
+        assert repository["split"] == "train_1M"
+        assert isinstance(repository["num_rows"], int)
+        assert repository["num_rows"] > 0
+        artifact_revisions[label].update(
+            {"split": repository["split"], "num_rows": repository["num_rows"]}
+        )
 manifest = {
     "functional_gate": os.environ["FUNCTIONAL_GATE"] == "1",
     "performance_eligible": os.environ["FUNCTIONAL_GATE"] != "1",
@@ -742,6 +778,8 @@ manifest = {
     "full_cg_enabled": os.environ["NEMO2606_FULL_CG_ENABLED"] == "1",
     "a2a_enabled": os.environ["NEMO2606_A2A_ENABLED"] == "1",
     "base_config_sha256": base_config_sha256,
+    "artifact_revisions": artifact_revisions,
+    "hf_cache_manifest": "hf_cache_manifest.json",
     "available_arms": expected_arms,
     "not_applicable_arms": {
         "off": "full-iteration CUDA Graph requires device-initiated CuTeDSL"
@@ -857,6 +895,14 @@ runtime_python=$("${UV_BIN}" run --active --no-sync python -c 'import os, sys; p
 runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print(sys.prefix)')
 [[ "${runtime_python}" == "${expected_runtime_python}" ]]
 [[ "${runtime_prefix}" == "${VIRTUAL_ENV}" ]]
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+"${UV_BIN}" run --active --no-sync python \
+    "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py" \
+    --hf-home "${HF_HOME}" \
+    --shared-manifest "${SHARED_HF_MANIFEST}" \
+    --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
 mapfile -t COMMON_OVERRIDES < "${CONTAINER_RESULT_DIR}/common_overrides.txt"
 IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
 

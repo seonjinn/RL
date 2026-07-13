@@ -756,6 +756,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2368475",
         "2368477",
         "2368704-2368706",
+        "2369616-2369618",
         "local-refresh-20260712",
         "preflight-segment-20260712",
     }

@@ -1,0 +1,18 @@
+Evidence snapshot: jobs 2369616-2369618
+Original remote log: Pre-Tyche jobs 2369616-2369618 status, event, and Ray driver records
+
+- All three jobs used the official Qwen3-30B-A3B 4-node x 4-GPU EP16 performance recipe.
+- Job 2369616 started with CuTeDSL ON; job 2369617 started with OFF; job 2369618 started with ON.
+- All jobs passed immutable source/image preflight, locked runtime bootstrap, and matched-config validation.
+- All jobs failed during initialization of the first arm before Step 1/25.
+- Each job recorded one driver traceback from a vLLM generation worker.
+- The common exception was Hugging Face Hub HTTP 429 while listing Qwen/Qwen3-30B-A3B repository files.
+- The request was unauthenticated and the service supplied a Retry-After interval.
+- vLLM 0.20 retried its repository listing only twice with fixed short delays, then propagated HfHubHTTPError.
+- Job 2369616: FAILED 1:0, zero training steps.
+- Job 2369617: FAILED 1:0, zero training steps.
+- Job 2369618: FAILED 1:0, zero training steps.
+- No OOM, CUDA failure, source mismatch, or image checksum mismatch was present.
+- Both ON-first and OFF-first jobs failed at the same pre-training boundary, so this is independent of the CuTeDSL selector.
+- These jobs contain no performance result and are excluded from aggregation.
+- Planned remediation: one locked shared Hugging Face cache for the exact model and dataset revisions, followed by offline benchmark execution.

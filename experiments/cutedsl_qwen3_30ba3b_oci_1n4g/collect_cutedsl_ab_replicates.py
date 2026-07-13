@@ -262,6 +262,43 @@ def _require_sha(value: Any, *, length: int, label: str) -> str:
     return value
 
 
+def _validate_artifact_revisions(manifest: dict[str, Any], job_id: str) -> None:
+    revisions = manifest.get("artifact_revisions")
+    expected = {
+        "model": ("Qwen/Qwen3-30B-A3B", None),
+        "dataset": ("nvidia/OpenMathInstruct-2", "dataset"),
+    }
+    if not isinstance(revisions, dict) or set(revisions) != set(expected):
+        raise CollectorError(
+            f"job {job_id} artifact_revisions must contain model and dataset"
+        )
+    for label, (repo_id, repo_type) in expected.items():
+        repository = revisions[label]
+        if not isinstance(repository, dict):
+            raise CollectorError(f"job {job_id} {label} revision must be an object")
+        if (
+            repository.get("repo_id") != repo_id
+            or repository.get("repo_type") != repo_type
+        ):
+            raise CollectorError(f"job {job_id} {label} repository identity differs")
+        _require_sha(
+            repository.get("revision"),
+            length=40,
+            label=f"job {job_id} {label} revision",
+        )
+        if label == "dataset":
+            if repository.get("split") != "train_1M":
+                raise CollectorError(f"job {job_id} dataset split differs")
+            if (
+                _require_nonnegative_integer(
+                    repository.get("num_rows"),
+                    f"job {job_id} dataset num_rows",
+                )
+                == 0
+            ):
+                raise CollectorError(f"job {job_id} dataset num_rows must be positive")
+
+
 def _validate_manifest_identity(manifest: dict[str, Any], job_id: str) -> None:
     if (
         manifest.get("functional_gate") is True
@@ -280,6 +317,7 @@ def _validate_manifest_identity(manifest: dict[str, Any], job_id: str) -> None:
         length=64,
         label="base_config_sha256",
     )
+    _validate_artifact_revisions(manifest, job_id)
     _require_string(manifest.get("recipe"), "recipe")
     warmup_updates = _require_nonnegative_integer(
         manifest.get("warmup_updates"), f"job {job_id} warmup_updates"
@@ -416,9 +454,7 @@ def _validate_component_series(
                 "differs from manifest"
             )
     policy_seconds = raw.get("policy_training_seconds")
-    expected_policy_seconds = [
-        row["policy_training_seconds"] for row in workload
-    ]
+    expected_policy_seconds = [row["policy_training_seconds"] for row in workload]
     if policy_seconds != expected_policy_seconds:
         raise CollectorError(
             f"job {job_id} {arm.upper()} policy_training_seconds differs from measured rows"
@@ -557,7 +593,10 @@ def _workload_equivalence(
             for field, value in zip(
                 WORKLOAD_EXACT_OBSERVED_FIELDS, exact_rows[-1], strict=True
             ):
-                if field in ("num_valid_samples", "total_turns") and not value.is_integer():
+                if (
+                    field in ("num_valid_samples", "total_turns")
+                    and not value.is_integer()
+                ):
                     raise CollectorError(
                         f"job {job_id} {arm.upper()} {field} step {step} "
                         "must be an integral count"
@@ -715,10 +754,7 @@ def _validate_summary_projections(
     job_id: str,
 ) -> None:
     expected_tokens = {
-        arm: [
-            row["total_num_tokens"]
-            for row in by_arm[arm]["measured_step_workload"]
-        ]
+        arm: [row["total_num_tokens"] for row in by_arm[arm]["measured_step_workload"]]
         for arm in ("on", "off")
     }
     if summary.get("measured_total_num_tokens") != expected_tokens:
@@ -998,6 +1034,7 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
             for field in (
                 "recipe",
                 "base_config_sha256",
+                "artifact_revisions",
                 "warmup_updates",
                 "measured_updates",
                 "total_updates",
