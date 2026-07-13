@@ -9,8 +9,19 @@ TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260704.sqsh}"
 MOUNTS="${MOUNTS:-/lustre:/lustre}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm024-fresh-main-ad23-20260712}"
+HF_HOME="${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
+NRL_MEGATRON_CHECKPOINT_DIR="${NRL_MEGATRON_CHECKPOINT_DIR:-${HF_HOME}/nemo_rl}"
 RUN_TAG="${RUN_TAG:-q235-v024-ref-init-diag-ptyche-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR:-${REPO_DIR}/experiments/vllm_024_fresh_main_oom/runs/${RUN_TAG}}"
+
+PRETRAINED_CHECKPOINT="${NRL_MEGATRON_CHECKPOINT_DIR}/Qwen/Qwen3-235B-A22B/iter_0000000"
+for marker in metadata.json run_config.yaml; do
+  if [[ ! -f "${PRETRAINED_CHECKPOINT}/${marker}" ]]; then
+    printf 'Missing shared pretrained checkpoint marker: %s\n' \
+      "${PRETRAINED_CHECKPOINT}/${marker}" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "${RUN_DIR}/torch_nccl"
 
@@ -31,6 +42,8 @@ TORCH_FR_DUMP_TEMP_FILE=${RUN_DIR}/torch_nccl/trace_rank_ \
 TORCH_NCCL_DEBUG_INFO_TEMP_FILE=${RUN_DIR}/torch_nccl/trace_rank_ \
 TORCH_INCLUDE_STACK_TRACE=1 \
 TORCH_INCLUDE_ONLY_ACTIVE=0 \
+HF_HOME=${HF_HOME} \
+NRL_MEGATRON_CHECKPOINT_DIR=${NRL_MEGATRON_CHECKPOINT_DIR} \
 PYTHONPATH=${REPO_DIR} \
 NEMO_RL_VENV_DIR=/tmp/nemorl-v024-ref-init-diag-${RUN_TAG} \
 NRL_FORCE_REBUILD_VENVS=true \
