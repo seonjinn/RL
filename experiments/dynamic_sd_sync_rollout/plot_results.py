@@ -136,25 +136,29 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
     df = pd.read_csv(summary_csv)
     if df.empty or "mean_output_tok_s_per_gpu" not in df.columns:
         return
-    df["setting"] = df["model"] + "\n" + df["bench"]
-    hue_order = [v for v in VARIANT_ORDER if v in set(df["variant"])]
-    order = sorted(df["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(9.0, 1.9 * len(order)), 2.2))
-    sns.barplot(
-        data=df,
-        x="setting",
-        y="mean_output_tok_s_per_gpu",
-        hue="variant",
-        order=order,
-        hue_order=hue_order,
-        palette=sns.color_palette("Paired", n_colors=len(hue_order)),
-        edgecolor=EDGE,
-        linewidth=2.0,
-        zorder=10,
-        ax=ax,
-    )
-    style_axes(ax, "", "Tokens/s/GPU")
-    finish(fig, ax, out_dir / "rollout_tok_s_per_gpu")
+    for old_png in out_dir.glob("rollout_tok_s_per_gpu*.png"):
+        old_png.unlink()
+        old_png.with_suffix(".pdf").unlink(missing_ok=True)
+    hue_order_all = [v for v in VARIANT_ORDER if v in set(df["variant"])]
+    for model, group in df.groupby("model"):
+        hue_order = [v for v in hue_order_all if v in set(group["variant"])]
+        order = sorted(group["bench"].unique())
+        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 2.0))
+        sns.barplot(
+            data=group,
+            x="bench",
+            y="mean_output_tok_s_per_gpu",
+            hue="variant",
+            order=order,
+            hue_order=hue_order,
+            palette=sns.color_palette("Paired", n_colors=len(hue_order)),
+            edgecolor=EDGE,
+            linewidth=2.0,
+            zorder=10,
+            ax=ax,
+        )
+        style_axes(ax, "", "Tokens/s/GPU")
+        finish(fig, ax, out_dir / f"rollout_tok_s_per_gpu_{slug(model)}")
 
 
 def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
@@ -197,30 +201,34 @@ def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:
     df = pd.read_csv(summary_csv)
     if df.empty:
         return
+    for old_png in out_dir.glob("rollout_speedup*.png"):
+        old_png.unlink()
+        old_png.with_suffix(".pdf").unlink(missing_ok=True)
     base = df[df["variant"] == "baseline"][["model", "bench", "mean_step_wall_s"]]
     base = base.rename(columns={"mean_step_wall_s": "baseline_wall_s"})
     merged = df.merge(base, on=["model", "bench"])
     merged["speedup"] = merged["baseline_wall_s"] / merged["mean_step_wall_s"]
-    merged["setting"] = merged["model"] + "\n" + merged["bench"]
-    hue_order = [v for v in VARIANT_ORDER if v in set(merged["variant"])]
-    order = sorted(merged["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(9.0, 1.9 * len(order)), 2.2))
-    sns.barplot(
-        data=merged,
-        x="setting",
-        y="speedup",
-        hue="variant",
-        order=order,
-        hue_order=hue_order,
-        palette=sns.color_palette("Paired", n_colors=len(hue_order)),
-        edgecolor=EDGE,
-        linewidth=2.0,
-        zorder=10,
-        ax=ax,
-    )
-    ax.axhline(y=1, linestyle="--", linewidth=1.1, color="black")
-    style_axes(ax, "", "Step speedup")
-    finish(fig, ax, out_dir / "rollout_speedup")
+    hue_order_all = [v for v in VARIANT_ORDER if v in set(merged["variant"])]
+    for model, group in merged.groupby("model"):
+        hue_order = [v for v in hue_order_all if v in set(group["variant"])]
+        order = sorted(group["bench"].unique())
+        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 2.0))
+        sns.barplot(
+            data=group,
+            x="bench",
+            y="speedup",
+            hue="variant",
+            order=order,
+            hue_order=hue_order,
+            palette=sns.color_palette("Paired", n_colors=len(hue_order)),
+            edgecolor=EDGE,
+            linewidth=2.0,
+            zorder=10,
+            ax=ax,
+        )
+        ax.axhline(y=1, linestyle="--", linewidth=1.1, color="black")
+        style_axes(ax, "", "Step speedup")
+        finish(fig, ax, out_dir / f"rollout_speedup_{slug(model)}")
 
 
 def plot_drain_curves(drain_csv: Path, out_dir: Path) -> None:

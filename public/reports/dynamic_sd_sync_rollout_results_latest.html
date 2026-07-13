@@ -46,8 +46,14 @@ is expected to pull ahead.</p>
 raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
 decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 (607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
-<div class="chart-wide"><img src="dynamic_sd_plots/rollout_speedup.png" alt="rollout_speedup.png"></div>
-<div class="chart-wide"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu.png" alt="rollout_tok_s_per_gpu.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_speedup_qwen3-235b-a22b.png" alt="rollout_speedup_qwen3-235b-a22b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_speedup_qwen3-30b-a3b.png" alt="rollout_speedup_qwen3-30b-a3b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_speedup_qwen3-30b-a3b_40k.png" alt="rollout_speedup_qwen3-30b-a3b_40k.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_speedup_qwen3-32b.png" alt="rollout_speedup_qwen3-32b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu_qwen3-235b-a22b.png" alt="rollout_tok_s_per_gpu_qwen3-235b-a22b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu_qwen3-30b-a3b.png" alt="rollout_tok_s_per_gpu_qwen3-30b-a3b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu_qwen3-30b-a3b_40k.png" alt="rollout_tok_s_per_gpu_qwen3-30b-a3b_40k.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu_qwen3-32b.png" alt="rollout_tok_s_per_gpu_qwen3-32b.png"></div>
 
 <h2>Acceptance length by model (temperature 1.0)</h2>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-235b-a22b.png" alt="profile_acceptance_length_qwen3-235b-a22b.png"></div>

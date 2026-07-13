@@ -213,7 +213,7 @@ is expected to pull ahead.</p>
 raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
 decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 (607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
-{img_cards(rollout_imgs, wide=True)}
+{img_cards(rollout_imgs)}
 
 <h2>Acceptance length by model (temperature 1.0)</h2>
 {img_cards(accept_imgs)}
