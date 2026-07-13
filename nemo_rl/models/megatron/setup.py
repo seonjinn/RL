@@ -147,6 +147,8 @@ from nemo_rl.models.megatron.reference_setup_diagnostics import (
     checkpoint_marker_metadata,
     distributed_timeout_override,
     log_reference_setup_stage,
+    reference_cpu_offload_lock,
+    reference_cpu_offload_serialization_enabled,
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.utils import (
@@ -1676,15 +1678,19 @@ def setup_reference_model_state(
             reference_model.eval()
             # Store reference state dict on CPU
             log_reference_setup_stage("setup.before_state_dict_to_cpu")
-            for name, item in reference_model.state_dict().items():
-                if isinstance(item, torch.Tensor):
-                    cpu_item = item.detach().to(
-                        device="cpu", non_blocking=True, copy=True
-                    )
-                    del item
-                else:
-                    cpu_item = item
-                reference_state_dict[name] = cpu_item
+            serialize_cpu_copy = reference_cpu_offload_serialization_enabled()
+            with reference_cpu_offload_lock(enabled=serialize_cpu_copy):
+                for name, item in reference_model.state_dict().items():
+                    if isinstance(item, torch.Tensor):
+                        cpu_item = item.detach().to(
+                            device="cpu",
+                            non_blocking=not serialize_cpu_copy,
+                            copy=True,
+                        )
+                        del item
+                    else:
+                        cpu_item = item
+                    reference_state_dict[name] = cpu_item
             log_reference_setup_stage("setup.after_state_dict_to_cpu")
             print("Reference model loaded")
         else:
