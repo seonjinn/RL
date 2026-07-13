@@ -17,13 +17,25 @@ with RedHatAI EAGLE3 Thinking drafters.
 |---|---|---|---|
 | 30B-A3B math (openmath/math500/dapo, TP1) | 1.00x | **1.86-2.00x** | 1.71-1.90x |
 | 30B-A3B swe_verified (TP1) | 1.00x | **1.85x** | 1.68x |
-| 32B openmath (TP2) | 1.00x | 1.12x | 1.10x |
+| 32B openmath / dapo (TP2) | 1.00x | **1.12-1.16x** | 1.06-1.10x |
+| 32B math500 (TP2) | 1.00x | 1.13x | **1.16x** |
 | 32B swe_verified (TP2) | 1.00x | 0.96x | **1.08x** |
-| 32B math500 (TP2) | 1.00x | pending | 1.16x |
-| 235B math500 (TP4) | 1.00x | 0.44x | 0.51x |
+| 235B all benches (TP4) | 1.00x | 0.31-0.44x | 0.47-0.53x (swe 0.30x) |
 | 30B-A3B 40K long-tail (TP2, 32K gen) | 1.00x | **1.19x** | 0.63x |
 
 Speedups are mean rollout-step wall-time ratios over 4 steps (2 for 40K).
+On 235B, where speculation is a net loss everywhere, the dynamic schedule
+consistently *mitigates* the damage vs fixed-K3 (0.47-0.53x vs 0.31-0.44x on
+math benches) but cannot cross 1.0x - the right call there is no speculation
+at all, which only an operator (or a K=0-everywhere schedule) can make.
+
+**vLLM 0.24 caveat discovered after these runs:** the runtime has a single
+`uniform_decode_query_len = 1 + max K`, so any step where DynamicSD selects
+K &lt; max falls off the FULL cudagraph path onto piecewise graphs, while a
+fixed-K engine always runs FULL. Every dynamic number above therefore carries
+a version handicap that PR #45953 (v0.25, per-K graph capture) removes; a
+0.25 rerun is the required follow-up before concluding dynamic cannot match
+fixed-K on the 30B/32B math settings.
 
 At 4K generations the step spends most wall time at high concurrency, and the
 per-BS optimum there is exactly K=3, so a fixed K=3 already sits on the
