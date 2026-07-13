@@ -62,7 +62,7 @@ decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 <div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-32b.png" alt="profile_acceptance_length_qwen3-32b.png"></div>
 
 <h2>Derived DynamicSD schedules</h2>
-<table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>qwen3_235b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=5, BS 2-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_235b_swe_verified</td><td style='text-align:left'>BS 1-3 &rarr; K=2, BS 4-7 &rarr; K=1, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_30ba3b_40k_openmath</td><td style='text-align:left'>BS 1-3 &rarr; K=3, BS 4-7 &rarr; K=5, BS 8-15 &rarr; K=3, BS 16-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr><tr><td>qwen3_32b_openmath</td><td style='text-align:left'>BS 1-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-256 &rarr; K=1</td></tr><tr><td>qwen3_32b_swe_verified</td><td style='text-align:left'>BS 1-7 &rarr; K=5, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=2, BS 64-255 &rarr; K=1, BS 256-256 &rarr; K=0</td></tr></table>
+<table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>nemotron3_super_openmath</td><td style='text-align:left'>BS 1-127 &rarr; K=3, BS 128-128 &rarr; K=1</td></tr><tr><td>nemotron3_super_swe_verified</td><td style='text-align:left'>BS 1-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>nemotron3_ultra_openmath</td><td style='text-align:left'>BS 1-64 &rarr; K=3</td></tr><tr><td>nemotron3_ultra_swe_verified</td><td style='text-align:left'>BS 1-64 &rarr; K=3</td></tr><tr><td>qwen3_235b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=5, BS 2-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_235b_swe_verified</td><td style='text-align:left'>BS 1-3 &rarr; K=2, BS 4-7 &rarr; K=1, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_30ba3b_40k_openmath</td><td style='text-align:left'>BS 1-3 &rarr; K=3, BS 4-7 &rarr; K=5, BS 8-15 &rarr; K=3, BS 16-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr><tr><td>qwen3_32b_openmath</td><td style='text-align:left'>BS 1-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-256 &rarr; K=1</td></tr><tr><td>qwen3_32b_swe_verified</td><td style='text-align:left'>BS 1-7 &rarr; K=5, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=2, BS 64-255 &rarr; K=1, BS 256-256 &rarr; K=0</td></tr></table>
 
 <h2>Draft sampling: greedy vs probabilistic</h2>
 <p class="note">vLLM 0.24's <code>draft_sample_method="probabilistic"</code>
@@ -70,6 +70,66 @@ decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 sampling) showed no acceptance-length gain over greedy drafting on
 Qwen3-30B-A3B/openmath (AL 2.99 vs 3.01 at K=3) and 3-10% lower tok/s from the
 logits-caching overhead, so the main matrix uses greedy drafting.</p>
+
+<h2>vLLM patch &amp; change tracking (0.24 vs 0.25, per-change perf impact)</h2>
+<p class='note'>Running log of every change we made to make vLLM DynamicSD work well, with the measured performance impact of each. Purpose: each entry should be directly convertible into an upstream vLLM issue/PR with its evidence attached. Update this file whenever a new change lands or new measurements arrive.</p>
+<p class='note'>Baseline workload for all numbers unless stated: Qwen3-30B-A3B + EAGLE3 Thinking drafter, openmath sync-rollout (4x32 gens, temp 1.0, GB200 TP1), mean step-wall speedup vs no-SD baseline.</p>
+<table>
+<tr><th>#</th><th>Change</th><th>Layer</th><th>Perf impact (measured)</th><th>Upstream status</th></tr>
+<tr><td>1</td><td>Capture-aware K-table derivation: cap K so bs x (K+1) &lt;= max_cudagraph_capture_size when building `num_speculative_tokens_per_batch_size`</td><td>our tooling (`derive_dynamic_k_table.py --max-capture-tokens`)</td><td>dynamic **1.36x -&gt; 1.90x** (+40%) on vLLM 0.24</td><td>PR-able as: validation warning / auto-cap in `SpeculativeConfig`, + docs. Not sent yet</td></tr>
+<tr><td>2</td><td>vLLM 0.25.0 crash fix: drafter cudagraph manager ZeroDivisionError under DynamicSD</td><td>vLLM patch (`vllm/v1/worker/gpu/cudagraph_utils.py`, `patches/vllm0250_dynamic_sd_drafter_cudagraph_zerodiv.patch`)</td><td>blocker -&gt; runs at all; unlocked #3</td><td>**Bug present in upstream main (checked 2026-07-13). Strong PR candidate, 1-line + test**</td></tr>
+<tr><td>3</td><td>vLLM 0.25 + V2 model runner (per-K FULL cudagraph, PR #45953) with `VLLM_USE_V2_MODEL_RUNNER=1`</td><td>config discovery (no code)</td><td>dynamic **1.90x -&gt; 2.01x** (step wall 26.8 -&gt; 23.4s, -13%); fixed-K3 also 2.00x -&gt; 2.19x</td><td>PR-able as: docs fix + auto-enable Qwen3MoeForCausalLM in `DEFAULT_V2_MODEL_RUNNER_ARCHITECTURES` (currently silent PIECEWISE downgrade)</td></tr>
+<tr><td>4</td><td>K=0 capture extension: add plain decode shape to per-K capture set</td><td>vLLM patch, **REVERTED**</td><td>negative: V2 dispatcher mis-matched spec batches; 40K step-0 wall 116s -&gt; 191s; overall 0.35x -&gt; 0.42x only</td><td>Do not send as-is. Evidence for #6 design discussion</td></tr>
+<tr><td>5</td><td>Depth-aware K cap: scheduler caps K when mean generated depth &gt; threshold (`VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS`)</td><td>vLLM patch, prototype (`patches/vllm0250_depth_aware_dynamic_sd.patch`), disabled</td><td>negative in current form: 40K dynamic 0.68x -&gt; 0.35-0.42x (runtime K=0 shape uncaptured / dispatch mismatch)</td><td>Feature request material: depth-conditioned K needs dispatch-aware upstream design. Attach 40K depth-collapse data (acceptance 2.9-3.7% at depth 10K+)</td></tr>
+<tr><td>6</td><td>(open) Dispatch-correct runtime K=0 / off-schedule K support</td><td>upstream design gap</td><td>blocks #5; also affects any schedule with K=0 ranges under V2</td><td>Issue candidate with #4/#5 measurements</td></tr>
+</table>
+<h3>Detail per change</h3>
+<h4>1. Capture-aware table (tooling)</h4>
+<p class='note'>The profiled BS grid {1,2,...,64,128} cannot see that bs x (K+1) crosses the 512-token cudagraph capture budget between grid points (K=5 fine at BS 64, eager fallback from BS 86). The naive argmax table carried K=5 into BS 86-127 and dynamic ran slower than fixed (37.4s vs 25.4s per step). Enforcing `K &lt;= 512/bs - 1` analytically in the derivation recovered it. Upstream angle: vLLM accepts such schedules silently; a validation warning or auto-cap at `SpeculativeConfig` level would prevent the whole failure class.</p>
+<h4>2. Drafter ZeroDivisionError (vLLM 0.25.0 bug)</h4>
+<p class='note'>`_init_candidates()` recovers `num_new_sampled = decode_query_len - max_K`, correct for the target manager (query_len = 1+max_K) but negative for the drafter manager (query_len = 1), yielding a per-K query length of 0 used as a `round_up` divisor. Any DynamicSD schedule + EAGLE3/MTP crashes at engine init. Verified still broken in upstream main as of 2026-07-13.</p>
+<p class='note'>Code change (`vllm/v1/worker/gpu/cudagraph_utils.py`, ~line 221):</p>
+<pre style='background:#eef1f6;padding:8px;font-size:12px;overflow-x:auto'># before
+decode_query_lens = [
+    x[2] + num_new_sampled_tokens_per_step for x in num_spec_per_batch_size
+]
+# after
+if num_new_sampled_tokens_per_step &gt; 0:          # target manager
+    decode_query_lens = [
+        max(1, x[2] + num_new_sampled_tokens_per_step)
+        for x in num_spec_per_batch_size
+    ]
+else:                                            # drafter manager: query len
+    decode_query_lens = [self.decode_query_len]  # does not vary with K</pre>
+<h4>3. V2 runner requirement (docs/config gap)</h4>
+<p class='note'>0.24 has a single `uniform_decode_query_len = 1 + max_K`; any dynamic K &lt; max silently runs piecewise while fixed-K runs FULL - a systematic handicap on every 0.24 dynamic number. 0.25 fixes this only under Model Runner V2, and Qwen3MoE is not in the auto-enable list, so without `VLLM_USE_V2_MODEL_RUNNER=1` vLLM silently downgrades DynamicSD to piecewise (warning only in logs). Measured effect of getting FULL per-K graphs: -13% dynamic step wall.</p>
+<h4>4. K=0 capture extension (reverted) - code change</h4>
+<p class='note'>`cudagraph_utils.py`: added `| {num_new_sampled_tokens_per_step}` (the plain non-spec decode shape, query_len 1) to the per-K `decode_query_lens` set so a runtime K=0 stays on FULL graphs. Reverted: the extra query_len-1 uniform descriptor made the V2 dispatcher match speculative decode batches to the wrong graph shape.</p>
+<h4>5. Depth-aware K cap (prototype, disabled) - code change</h4>
+<p class='note'>`vllm/v1/core/sched/scheduler.py`, two edits (~15 lines, `patches/vllm0250_depth_aware_dynamic_sd.patch`): 1. `__init__`: read `VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS` / `VLLM_DYNAMIC_SD_DEPTH_K` env vars. 2. In the dynamic-K selection block (after the batch-size lookup): if the mean `num_output_tokens` over `self.running` exceeds the threshold, override `num_spec_tokens_to_schedule` with the depth K.</p>
+<h4>4-5. Negative results (kept for upstream design discussion)</h4>
+<p class='note'>Depth-aware K is the right diagnosis for 32K long tails (EAGLE3 acceptance collapses to ~3% beyond ~10K generated tokens; batch-size-indexed schedules cannot express depth), but a scheduler-only patch is insufficient: a runtime K=0 needs its decode shape captured, and naively adding that shape makes the V2 dispatcher mis-match speculative batches. The correct implementation must coordinate schedule, capture set, and dispatch keys - an upstream-level change.</p>
+<h3>vLLM 0.24 vs 0.25 (same tables, same prompts, same hardware)</h3>
+<table>
+<tr><th>Setting</th><th>variant</th><th>vLLM 0.24</th><th>vLLM 0.25 + patches</th></tr>
+<tr><td>30B-A3B openmath</td><td>baseline wall</td><td>50.9s</td><td>47.1s</td></tr>
+<tr><td>30B-A3B openmath</td><td>fixed-K3</td><td>2.00x</td><td>**2.19x**</td></tr>
+<tr><td>30B-A3B openmath</td><td>dynamic</td><td>1.90x</td><td>**2.01x**</td></tr>
+<tr><td>32B swe_verified</td><td>fixed-K3</td><td>0.96x</td><td>0.92x</td></tr>
+<tr><td>32B swe_verified</td><td>dynamic</td><td>1.08x</td><td>0.96x</td></tr>
+<tr><td>40K long-tail</td><td>fixed-K3</td><td>1.19x</td><td>**1.33x**</td></tr>
+<tr><td>40K long-tail</td><td>dynamic</td><td>0.63x</td><td>0.67x</td></tr>
+</table>
+<p class='note'>0.25 is faster across the board in absolute terms (baseline included), and per-K FULL graphs lift dynamic specifically; rankings between variants do not change. The 32B SWE flip below 1.0x on 0.25 comes from the baseline itself speeding up more than the SD variants.</p>
+<h3>Cumulative effect (Qwen3-30B-A3B openmath rollout, dynamic variant)</h3>
+<table>
+<tr><th>Stage</th><th>dynamic speedup</th><th>step wall</th></tr>
+<tr><td>naive table, vLLM 0.24</td><td>1.36x</td><td>37.4s</td></tr>
+<tr><td>+ capture-aware table (#1)</td><td>1.90x</td><td>26.8s</td></tr>
+<tr><td>+ 0.25 crash fix (#2) + V2 per-K graphs (#3)</td><td>**2.01x**</td><td>23.4s</td></tr>
+<tr><td>reference: best fixed-K3 on same stack</td><td>2.19x</td><td>21.5s</td></tr>
+</table>
+<p class='note'>Net: **+48% dynamic throughput from our changes**; remaining 8% gap to fixed-K3 is workload-structural (K=3 already optimal at the dominant batch sizes), not an implementation deficit we have identified.</p>
 
 <h1>Per-model results</h1>
 <p class="note">Profiling grids use fixed-length generation (ignore_eos); each

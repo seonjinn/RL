@@ -68,6 +68,80 @@ def img_cards(names: list[str], wide: bool = False) -> str:
     return "\n".join(cards)
 
 
+def render_markdown_lite(md_path: Path) -> str:
+    """Minimal markdown -> HTML for the patch ledger (headers, pipe tables,
+    fenced code, paragraphs)."""
+    if not md_path.exists():
+        return ""
+    out: list[str] = []
+    table: list[str] = []
+    code: list[str] | None = None
+    para: list[str] = []
+
+    def flush_para() -> None:
+        if para:
+            out.append("<p class='note'>" + html.escape(" ".join(para)) + "</p>")
+            para.clear()
+
+    def flush_table() -> None:
+        if not table:
+            return
+        rows = [
+            [c.strip() for c in line.strip().strip("|").split("|")]
+            for line in table
+            if not set(line.replace("|", "").strip()) <= {"-", " ", ":"}
+        ]
+        out.append("<table>")
+        for idx, cells in enumerate(rows):
+            tag = "th" if idx == 0 else "td"
+            out.append(
+                "<tr>"
+                + "".join(f"<{tag}>{html.escape(c)}</{tag}>" for c in cells)
+                + "</tr>"
+            )
+        out.append("</table>")
+        table.clear()
+
+    for line in md_path.read_text(encoding="utf-8").splitlines():
+        if code is not None:
+            if line.startswith("```"):
+                out.append(
+                    "<pre style='background:#eef1f6;padding:8px;font-size:12px;"
+                    "overflow-x:auto'>" + html.escape("\n".join(code)) + "</pre>"
+                )
+                code = None
+            else:
+                code.append(line)
+            continue
+        if line.startswith("```"):
+            flush_para()
+            flush_table()
+            code = []
+        elif line.startswith("|"):
+            flush_para()
+            table.append(line)
+        elif line.startswith("# "):
+            flush_para()
+            flush_table()
+        elif line.startswith("## "):
+            flush_para()
+            flush_table()
+            out.append(f"<h3>{html.escape(line[3:])}</h3>")
+        elif line.startswith("### "):
+            flush_para()
+            flush_table()
+            out.append(f"<h4>{html.escape(line[4:])}</h4>")
+        elif line.strip() in ("", "---"):
+            flush_para()
+            flush_table()
+        else:
+            flush_table()
+            para.append(line.strip())
+    flush_para()
+    flush_table()
+    return "\n".join(out)
+
+
 def tables_section() -> str:
     rows = []
     for spec_path in sorted(TABLES_DIR.glob("*_dynamic_spec.json")):
@@ -235,6 +309,9 @@ decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 sampling) showed no acceptance-length gain over greedy drafting on
 Qwen3-30B-A3B/openmath (AL 2.99 vs 3.01 at K=3) and 3-10% lower tok/s from the
 logits-caching overhead, so the main matrix uses greedy drafting.</p>
+
+<h2>vLLM patch &amp; change tracking (0.24 vs 0.25, per-change perf impact)</h2>
+{render_markdown_lite(EXP / "PATCH_LEDGER.md")}
 
 <h1>Per-model results</h1>
 <p class="note">Profiling grids use fixed-length generation (ignore_eos); each

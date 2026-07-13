@@ -38,8 +38,24 @@ vLLM accepts such schedules silently; a validation warning or auto-cap at
 correct for the target manager (query_len = 1+max_K) but negative for the
 drafter manager (query_len = 1), yielding a per-K query length of 0 used as a
 `round_up` divisor. Any DynamicSD schedule + EAGLE3/MTP crashes at engine
-init. Fix: only expand per-K lens when `num_new > 0`. Verified still broken
-in upstream main as of 2026-07-13.
+init. Verified still broken in upstream main as of 2026-07-13.
+
+Code change (`vllm/v1/worker/gpu/cudagraph_utils.py`, ~line 221):
+
+```python
+# before
+decode_query_lens = [
+    x[2] + num_new_sampled_tokens_per_step for x in num_spec_per_batch_size
+]
+# after
+if num_new_sampled_tokens_per_step > 0:          # target manager
+    decode_query_lens = [
+        max(1, x[2] + num_new_sampled_tokens_per_step)
+        for x in num_spec_per_batch_size
+    ]
+else:                                            # drafter manager: query len
+    decode_query_lens = [self.decode_query_len]  # does not vary with K
+```
 
 ### 3. V2 runner requirement (docs/config gap)
 
@@ -50,6 +66,24 @@ Qwen3MoE is not in the auto-enable list, so without
 `VLLM_USE_V2_MODEL_RUNNER=1` vLLM silently downgrades DynamicSD to piecewise
 (warning only in logs). Measured effect of getting FULL per-K graphs:
 -13% dynamic step wall.
+
+### 4. K=0 capture extension (reverted) - code change
+
+`cudagraph_utils.py`: added `| {num_new_sampled_tokens_per_step}` (the plain
+non-spec decode shape, query_len 1) to the per-K `decode_query_lens` set so a
+runtime K=0 stays on FULL graphs. Reverted: the extra query_len-1 uniform
+descriptor made the V2 dispatcher match speculative decode batches to the
+wrong graph shape.
+
+### 5. Depth-aware K cap (prototype, disabled) - code change
+
+`vllm/v1/core/sched/scheduler.py`, two edits (~15 lines,
+`patches/vllm0250_depth_aware_dynamic_sd.patch`):
+1. `__init__`: read `VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS` /
+   `VLLM_DYNAMIC_SD_DEPTH_K` env vars.
+2. In the dynamic-K selection block (after the batch-size lookup): if the
+   mean `num_output_tokens` over `self.running` exceeds the threshold,
+   override `num_spec_tokens_to_schedule` with the depth K.
 
 ### 4-5. Negative results (kept for upstream design discussion)
 
@@ -62,6 +96,23 @@ coordinate schedule, capture set, and dispatch keys - an upstream-level
 change.
 
 ---
+
+## vLLM 0.24 vs 0.25 (same tables, same prompts, same hardware)
+
+| Setting | variant | vLLM 0.24 | vLLM 0.25 + patches |
+|---|---|---|---|
+| 30B-A3B openmath | baseline wall | 50.9s | 47.1s |
+| 30B-A3B openmath | fixed-K3 | 2.00x | **2.19x** |
+| 30B-A3B openmath | dynamic | 1.90x | **2.01x** |
+| 32B swe_verified | fixed-K3 | 0.96x | 0.92x |
+| 32B swe_verified | dynamic | 1.08x | 0.96x |
+| 40K long-tail | fixed-K3 | 1.19x | **1.33x** |
+| 40K long-tail | dynamic | 0.63x | 0.67x |
+
+0.25 is faster across the board in absolute terms (baseline included), and
+per-K FULL graphs lift dynamic specifically; rankings between variants do not
+change. The 32B SWE flip below 1.0x on 0.25 comes from the baseline itself
+speeding up more than the SD variants.
 
 ## Cumulative effect (Qwen3-30B-A3B openmath rollout, dynamic variant)
 
