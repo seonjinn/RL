@@ -160,34 +160,37 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
 def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
     df = pd.read_csv(profile_csv)
     df = df[(df["k"] > 0) & df["mean_acceptance_length"].notna()]
+    df = df[df["sample_method"] == "greedy"]
     if df.empty:
         return
+    for old_png in out_dir.glob("profile_acceptance_length*.png"):
+        old_png.unlink()
+        old_png.with_suffix(".pdf").unlink(missing_ok=True)
     agg = (
-        df.groupby(["model", "bench", "k", "sample_method"])["mean_acceptance_length"]
+        df.groupby(["model", "bench", "k"])["mean_acceptance_length"]
         .mean()
         .reset_index()
     )
     agg["K"] = "K=" + agg["k"].astype(str)
-    agg["setting"] = agg["model"] + "\n" + agg["bench"]
-    hue_order = sorted(agg["K"].unique(), key=lambda s: int(s.split("=")[1]))
-    greedy = agg[agg["sample_method"] == "greedy"]
-    order = sorted(greedy["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(9.0, 1.7 * len(order)), 2.2))
-    sns.barplot(
-        data=greedy,
-        x="setting",
-        y="mean_acceptance_length",
-        hue="K",
-        order=order,
-        hue_order=hue_order,
-        palette=sns.color_palette("Paired", n_colors=len(hue_order)),
-        edgecolor=EDGE,
-        linewidth=2.0,
-        zorder=10,
-        ax=ax,
-    )
-    style_axes(ax, "", "Accept length")
-    finish(fig, ax, out_dir / "profile_acceptance_length")
+    for model, group in agg.groupby("model"):
+        hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
+        order = sorted(group["bench"].unique())
+        fig, ax = plt.subplots(figsize=(max(3.6, 1.1 * len(order)), 2.0))
+        sns.barplot(
+            data=group,
+            x="bench",
+            y="mean_acceptance_length",
+            hue="K",
+            order=order,
+            hue_order=hue_order,
+            palette=sns.color_palette("Paired", n_colors=len(hue_order)),
+            edgecolor=EDGE,
+            linewidth=2.0,
+            zorder=10,
+            ax=ax,
+        )
+        style_axes(ax, "", "Accept length")
+        finish(fig, ax, out_dir / f"profile_acceptance_length_{slug(model)}")
 
 
 def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:

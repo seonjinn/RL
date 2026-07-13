@@ -216,7 +216,7 @@ decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 {img_cards(rollout_imgs, wide=True)}
 
 <h2>Acceptance length by model (temperature 1.0)</h2>
-{img_cards(accept_imgs, wide=True)}
+{img_cards(accept_imgs)}
 
 <h2>Derived DynamicSD schedules</h2>
 {tables_section()}

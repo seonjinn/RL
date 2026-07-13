@@ -50,7 +50,10 @@ decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 <div class="chart-wide"><img src="dynamic_sd_plots/rollout_tok_s_per_gpu.png" alt="rollout_tok_s_per_gpu.png"></div>
 
 <h2>Acceptance length by model (temperature 1.0)</h2>
-<div class="chart-wide"><img src="dynamic_sd_plots/profile_acceptance_length.png" alt="profile_acceptance_length.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-235b-a22b.png" alt="profile_acceptance_length_qwen3-235b-a22b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-30b-a3b.png" alt="profile_acceptance_length_qwen3-30b-a3b.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-30b-a3b_40k.png" alt="profile_acceptance_length_qwen3-30b-a3b_40k.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-32b.png" alt="profile_acceptance_length_qwen3-32b.png"></div>
 
 <h2>Derived DynamicSD schedules</h2>
 <table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>qwen3_235b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=5, BS 2-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_235b_swe_verified</td><td style='text-align:left'>BS 1-3 &rarr; K=2, BS 4-7 &rarr; K=1, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_30ba3b_40k_openmath</td><td style='text-align:left'>BS 1-3 &rarr; K=3, BS 4-7 &rarr; K=5, BS 8-15 &rarr; K=3, BS 16-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr><tr><td>qwen3_32b_openmath</td><td style='text-align:left'>BS 1-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-256 &rarr; K=1</td></tr><tr><td>qwen3_32b_swe_verified</td><td style='text-align:left'>BS 1-7 &rarr; K=5, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=2, BS 64-255 &rarr; K=1, BS 256-256 &rarr; K=0</td></tr></table>
