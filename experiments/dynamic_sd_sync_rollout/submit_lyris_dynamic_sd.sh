@@ -141,6 +141,7 @@ srun --nodes=1 --ntasks=1 bash -lc "set -euo pipefail; \\
     --model '${MODEL}' \\
     ${spec_arg} \\
     --tp ${TP} \\
+    --disable-custom-all-reduce \\
     --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION} \\
     --max-model-len ${MAX_MODEL_LEN} \\
     --max-num-seqs ${MAX_NUM_SEQS} \\
