@@ -5,6 +5,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -430,8 +431,27 @@ def test_ray_sub_runs_failure_hook_before_ended_cleanup() -> None:
     assert 'FAILURE_COMMAND_FILE=""' in source
     assert 'touch "$LOG_DIR/DRIVER_FAILED"' in driver_failure_block
     assert "FAILURE_DIAGNOSTIC_DONE_0" in driver_failure_block
-    assert r"FAILURE_DIAGNOSTIC_DEADLINE=\$((SECONDS + 60))" in driver_failure_block
+    assert (
+        r"FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS="
+        r"\${FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS:-60}" in driver_failure_block
+    )
+    assert r"^[1-9][0-9]*$" in driver_failure_block
+    assert "run-failure-command-until()" in driver_failure_block
+    assert 'bash "$FAILURE_COMMAND_FILE" &' in driver_failure_block
+    assert r'kill -0 "\$command_pid"' in driver_failure_block
+    assert r'kill -TERM "\$command_pid"' in driver_failure_block
+    assert r'kill -KILL "\$command_pid"' in driver_failure_block
+    assert r'wait "\$command_pid"' in driver_failure_block
+    assert r"FAILURE_DIAGNOSTIC_DEADLINE=\$((" in driver_failure_block
+    assert r"FAILURE_DIAGNOSTIC_COLLECTION_DEADLINE=\$((" in driver_failure_block
     assert "export FAILURE_DIAGNOSTIC_MERGE=1" in driver_failure_block
+    assert "SECONDS < FAILURE_DIAGNOSTIC_COLLECTION_DEADLINE" in driver_failure_block
+    assert "SECONDS <=" not in driver_failure_block
+    aggregate_deadline = driver_failure_block.index(r"FAILURE_DIAGNOSTIC_DEADLINE=\$((")
+    assert aggregate_deadline < driver_failure_block.index(
+        'touch "$LOG_DIR/DRIVER_FAILED"'
+    )
+    assert driver_failure_block.count("run-failure-command-until") == 3
     assert driver_failure_block.index('touch "$LOG_DIR/DRIVER_FAILED"') < (
         driver_failure_block.index('touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_0"')
     )
@@ -441,6 +461,12 @@ def test_ray_sub_runs_failure_hook_before_ended_cleanup() -> None:
     assert driver_failure_block.index("export FAILURE_DIAGNOSTIC_MERGE=1") < (
         driver_failure_block.index('touch "$LOG_DIR/ENDED"')
     )
+    ended_line = next(
+        line
+        for line in driver_failure_block.splitlines()
+        if 'touch "$LOG_DIR/ENDED"' in line
+    )
+    assert ended_line.endswith("2>/dev/null || true")
 
 
 def test_ray_sub_worker_failure_sidecar_is_one_shot_and_non_destructive() -> None:
@@ -555,6 +581,187 @@ def test_generated_worker_failure_sidecar_touches_done_after_command_failure(
     assert invocation.read_text() == "3\n"
     assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_3").is_file()
     assert not (log_dir / "ENDED").exists()
+
+
+def test_generated_head_failure_hook_bounds_slow_collection_and_merge(
+    tmp_path: Path,
+) -> None:
+    hook = _ray_template_block("# RAY_FAILURE_HOOK_START\n", "# RAY_FAILURE_HOOK_END\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    invocations = tmp_path / "invocations"
+    failure_command = tmp_path / "slow-failure-command.sh"
+    failure_command.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' \"${{FAILURE_DIAGNOSTIC_MERGE:-0}}\" >> {shlex.quote(str(invocations))}\n"
+        "command_deadline=$((SECONDS + 3))\n"
+        "while (( SECONDS < command_deadline )); do :; done\n"
+        f"touch {shlex.quote(str(log_dir / 'FAILURE_DIAGNOSTIC_DONE_1'))}\n"
+    )
+    started = time.monotonic()
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    f"FAILURE_COMMAND_FILE={shlex.quote(str(failure_command))}",
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=2",
+                    "SLURM_JOB_NUM_NODES=2",
+                    "exit_code=17",
+                    hook,
+                    'exit "$exit_code"',
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 17, result.stderr
+    assert elapsed < 4
+    assert invocations.read_text().splitlines() == ["0", "1"]
+    assert (log_dir / "ENDED").is_file()
+
+
+def test_generated_head_failure_hook_merges_while_worker_diagnostic_hangs(
+    tmp_path: Path,
+) -> None:
+    hook = _ray_template_block("# RAY_FAILURE_HOOK_START\n", "# RAY_FAILURE_HOOK_END\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    invocations = tmp_path / "invocations"
+    summary = tmp_path / "summary.json"
+    failure_command = tmp_path / "failure-command.sh"
+    failure_command.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' \"${{FAILURE_DIAGNOSTIC_MERGE:-0}}\" >> {shlex.quote(str(invocations))}\n"
+        'if [[ "${FAILURE_DIAGNOSTIC_MERGE:-0}" == "1" ]]; then\n'
+        f"  printf '%s\\n' '{{\"missing_nodes\":[1]}}' > {shlex.quote(str(summary))}\n"
+        "fi\n"
+    )
+    started = time.monotonic()
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    f"FAILURE_COMMAND_FILE={shlex.quote(str(failure_command))}",
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=2",
+                    "SLURM_JOB_NUM_NODES=2",
+                    "exit_code=19",
+                    "(worker_deadline=$((SECONDS + 4)); "
+                    "while (( SECONDS < worker_deadline )); do :; done; "
+                    f"touch {shlex.quote(str(log_dir / 'FAILURE_DIAGNOSTIC_DONE_1'))}) &",
+                    "late_worker_pid=$!",
+                    hook,
+                    'kill "$late_worker_pid" 2>/dev/null || true',
+                    'wait "$late_worker_pid" 2>/dev/null || true',
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 0, result.stderr
+    assert elapsed < 3.5
+    assert invocations.read_text().splitlines() == ["0", "1"]
+    assert json.loads(summary.read_text()) == {"missing_nodes": [1]}
+    assert (log_dir / "ENDED").is_file()
+
+
+def test_generated_head_failure_hook_rejects_invalid_timeout_and_cleans_up(
+    tmp_path: Path,
+) -> None:
+    hook = _ray_template_block("# RAY_FAILURE_HOOK_START\n", "# RAY_FAILURE_HOOK_END\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    invocation = tmp_path / "invocation"
+    failure_command = tmp_path / "failure-command.sh"
+    failure_command.write_text(
+        f"touch {shlex.quote(str(invocation))}\n"
+        f"touch {shlex.quote(str(log_dir / 'FAILURE_DIAGNOSTIC_DONE_1'))}\n"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    f"FAILURE_COMMAND_FILE={shlex.quote(str(failure_command))}",
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=invalid",
+                    "SLURM_JOB_NUM_NODES=2",
+                    "exit_code=29",
+                    hook,
+                    'exit "$exit_code"',
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 29
+    assert not invocation.exists()
+    assert (log_dir / "ENDED").is_file()
+
+
+def test_generated_head_failure_hook_cleans_up_after_polling_command_failure(
+    tmp_path: Path,
+) -> None:
+    hook = _ray_template_block("# RAY_FAILURE_HOOK_START\n", "# RAY_FAILURE_HOOK_END\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    invocations = tmp_path / "invocations"
+    failure_command = tmp_path / "failure-command.sh"
+    failure_command.write_text(
+        f"printf '%s\\n' \"${{FAILURE_DIAGNOSTIC_MERGE:-0}}\" >> {shlex.quote(str(invocations))}\n"
+    )
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    for command in ("find", "sleep"):
+        executable = mock_bin / command
+        executable.write_text("#!/bin/bash\nexit 7\n")
+        executable.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{mock_bin}:{env['PATH']}"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"LOG_DIR={shlex.quote(str(log_dir))}",
+                    f"FAILURE_COMMAND_FILE={shlex.quote(str(failure_command))}",
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=4",
+                    "SLURM_JOB_NUM_NODES=2",
+                    "exit_code=31",
+                    hook,
+                    'exit "$exit_code"',
+                )
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 31, result.stderr
+    assert invocations.read_text().splitlines() == ["0", "1"]
+    assert (log_dir / "ENDED").is_file()
 
 
 def test_submitter_wires_sanitized_triton_failure_command() -> None:
