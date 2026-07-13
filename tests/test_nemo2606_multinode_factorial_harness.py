@@ -165,6 +165,9 @@ def test_official_performance_recipe_preserves_workload_and_enables_policy_mxfp8
     assert config["cluster"]["segment_size"] == 4
     assert config["grpo"]["num_prompts_per_step"] == 64
     assert config["grpo"]["num_generations_per_prompt"] == 32
+    assert config["grpo"]["val_period"] == 10
+    assert config["grpo"]["val_at_start"] is False
+    assert config["grpo"]["val_at_end"] is False
     assert policy["model_name"] == "Qwen/Qwen3-30B-A3B"
     assert policy["train_global_batch_size"] == 2048
     assert policy["train_micro_batch_size"] == 1
@@ -206,6 +209,12 @@ def test_official_performance_overlay_has_only_reviewed_deviations() -> None:
     overlay = OmegaConf.to_container(load_config(OFFICIAL_RECIPE), resolve=True)
     assert isinstance(base, dict)
     assert isinstance(overlay, dict)
+    for config in (base, overlay):
+        assert (
+            config["grpo"]["val_period"],
+            config["grpo"]["val_at_start"],
+            config["grpo"]["val_at_end"],
+        ) == (10, False, False)
 
     def difference_paths(left: object, right: object, path: str = "") -> set[str]:
         if isinstance(left, dict) and isinstance(right, dict):
@@ -236,6 +245,49 @@ def test_official_performance_overlay_has_only_reviewed_deviations() -> None:
         "policy.megatron_cfg.moe_router_dtype",
         "policy.megatron_cfg.use_transformer_engine_op_fuser",
     }
+
+
+def test_matrix_disables_validation_only_for_performance_arms() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    start_marker = "# NEMO2606_PERFORMANCE_VALIDATION_OVERRIDES_START"
+    end_marker = "# NEMO2606_PERFORMANCE_VALIDATION_OVERRIDES_END"
+    assert start_marker in source
+    assert end_marker in source
+    performance_block = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    assert 'if [[ "${FUNCTIONAL_GATE}" == "0" ]]; then' in performance_block
+    assert '"grpo.val_period=0"' in performance_block
+    assert '"grpo.val_at_start=false"' in performance_block
+    assert '"grpo.val_at_end=false"' in performance_block
+
+    initializer = source.split("COMMON_OVERRIDES=(", 1)[1].split(")\n", 1)[0]
+    assert "grpo.val_period" not in initializer
+    assert "grpo.val_at_start" not in initializer
+    assert "grpo.val_at_end" not in initializer
+
+    functional = OmegaConf.to_container(load_config(OFFICIAL_RECIPE), resolve=True)
+    timing = OmegaConf.to_container(
+        parse_hydra_overrides(
+            load_config(OFFICIAL_RECIPE),
+            [
+                "grpo.val_period=0",
+                "grpo.val_at_start=false",
+                "grpo.val_at_end=false",
+            ],
+        ),
+        resolve=True,
+    )
+    assert isinstance(functional, dict)
+    assert isinstance(timing, dict)
+    assert (
+        functional["grpo"]["val_period"],
+        functional["grpo"]["val_at_start"],
+        functional["grpo"]["val_at_end"],
+    ) == (10, False, False)
+    assert (
+        timing["grpo"]["val_period"],
+        timing["grpo"]["val_at_start"],
+        timing["grpo"]["val_at_end"],
+    ) == (0, False, False)
 
 
 def test_official_performance_recipe_accepts_full_iteration_overrides() -> None:
@@ -762,6 +814,9 @@ def test_performance_payload_accepts_only_cutedsl_on_for_full_cg() -> None:
         '"policy.megatron_cfg.overlap_moe_expert_parallel_comm"',
         '"policy.megatron_cfg.high_priority_a2a_comm_stream"',
         '"policy.megatron_cfg.delay_wgrad_compute"',
+        '"grpo.val_period"',
+        '"grpo.val_at_start"',
+        '"grpo.val_at_end"',
         '"full_cg_config_evidence": full_cg_config_evidence',
         '"cuda_graph_warmup_steps"',
         '"cuda_graph_use_single_mempool"',
@@ -785,6 +840,11 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
     )
     digest = namespace["canonical_base_config_sha256"]
     baseline = {
+        "grpo": {
+            "val_period": 0,
+            "val_at_start": False,
+            "val_at_end": False,
+        },
         "logger": {"log_dir": "/runtime/job-a/logs"},
         "checkpointing": {"checkpoint_dir": "/runtime/job-a/checkpoints"},
         "policy": {
@@ -814,6 +874,9 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
     changed_workload = copy.deepcopy(full_cg)
     changed_workload["policy"]["train_global_batch_size"] = 1024
     assert digest(baseline) != digest(changed_workload)
+    changed_validation = copy.deepcopy(full_cg)
+    changed_validation["grpo"]["val_period"] = 10
+    assert digest(baseline) != digest(changed_validation)
 
 
 def test_payload_rejects_feature_context_boolean_mismatch() -> None:

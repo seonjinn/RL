@@ -753,6 +753,8 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2366769",
         "2367073",
         "2367079",
+        "2368475",
+        "2368477",
         "local-refresh-20260712",
         "preflight-segment-20260712",
     }
@@ -848,6 +850,35 @@ def test_job_2363067_disproves_profile_overlap_as_sufficient_cause() -> None:
     assert evidence == public_evidence
     assert "2363067" in index
     assert "No ON/OFF speedup or performance conclusion" in index
+
+
+def test_official_validation_oom_incidents_do_not_claim_cutedsl_effect() -> None:
+    report_dir = EXPERIMENT_DIR / "report"
+    incidents = json.loads((report_dir / "incidents.json").read_text())
+    index = (report_dir / "public/index.html").read_text()
+
+    for job_id, representative_cgroup in (
+        ("2368475", "744.500/890.430 GiB"),
+        ("2368477", "720.242/890.430 GiB"),
+    ):
+        incident = next(item for item in incidents if item["run_id"] == job_id)
+        evidence = (report_dir / incident["report_path"]).read_text()
+        public_evidence = (report_dir / "public" / incident["report_path"]).read_text()
+        for fragment in (
+            "Step 10 validation",
+            "56.88 GiB",
+            "76.29 GiB",
+            representative_cgroup,
+            "OUT_OF_MEMORY",
+            "0:125",
+            "CuTeDSL contribution is unproven",
+            "No speedup or ON/OFF memory-effect conclusion",
+        ):
+            assert fragment in evidence, fragment
+            assert fragment in public_evidence, fragment
+        assert "CuTeDSL contribution is unproven" in incident["root_cause"]
+        assert incident["verification_job"] == "pending"
+        assert job_id in index
 
 
 @pytest.mark.parametrize(

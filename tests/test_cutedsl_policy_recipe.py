@@ -68,6 +68,9 @@ def test_cutedsl_policy_recipe_contract() -> None:
     assert config["grpo"]["num_prompts_per_step"] == 2
     assert config["grpo"]["num_generations_per_prompt"] == 2
     assert config["grpo"]["max_num_steps"] == 3
+    assert config["grpo"]["val_period"] == 10
+    assert config["grpo"]["val_at_start"] is False
+    assert config["grpo"]["val_at_end"] is False
     assert RECIPE_NAME in config["checkpointing"]["checkpoint_dir"]
     assert RECIPE_NAME in config["logger"]["log_dir"]
     assert config["logger"]["wandb"]["name"] == RECIPE_NAME

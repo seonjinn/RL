@@ -151,8 +151,18 @@ def _create_job(
             "recipe": "recipes/cutedsl.yaml",
             "topology": {"num_nodes": 1, "gpus_per_node": 4},
             "fixed_config_evidence": {
-                "on": {"moe_grouped_gemm": True},
-                "off": {"moe_grouped_gemm": True},
+                "on": {
+                    "moe_grouped_gemm": True,
+                    "grpo.val_period": 0,
+                    "grpo.val_at_start": False,
+                    "grpo.val_at_end": False,
+                },
+                "off": {
+                    "moe_grouped_gemm": True,
+                    "grpo.val_period": 0,
+                    "grpo.val_at_start": False,
+                    "grpo.val_at_end": False,
+                },
             },
             "resolved_metric_names": {
                 "on": CANONICAL_METRICS,
@@ -547,6 +557,21 @@ def test_collector_requires_identical_nonempty_on_off_metric_names(
     assert empty.returncode != 0
     assert "resolved metric name" in empty.stderr
     assert "nonempty string" in empty.stderr
+
+
+def test_collector_rejects_mismatched_on_off_fixed_config_evidence(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    for manifest_path in result_root.glob("*/benchmark_manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        manifest["fixed_config_evidence"]["off"]["grpo.val_period"] = 10
+        _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "output")
+
+    assert result.returncode != 0
+    assert "ON/OFF fixed_config_evidence must match" in result.stderr
 
 
 @pytest.mark.parametrize(

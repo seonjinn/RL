@@ -381,6 +381,15 @@ COMMON_OVERRIDES=(
     "checkpointing.enabled=false"
     "checkpointing.checkpoint_dir=${CONTAINER_RUNTIME_DIR}/benchmark_checkpoints"
 )
+# NEMO2606_PERFORMANCE_VALIDATION_OVERRIDES_START
+if [[ "${FUNCTIONAL_GATE}" == "0" ]]; then
+    COMMON_OVERRIDES+=(
+        "grpo.val_period=0"
+        "grpo.val_at_start=false"
+        "grpo.val_at_end=false"
+    )
+fi
+# NEMO2606_PERFORMANCE_VALIDATION_OVERRIDES_END
 if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
     COMMON_OVERRIDES+=(
         "policy.megatron_cfg.cuda_graph_impl=full_iteration"
@@ -629,6 +638,9 @@ fixed_config_paths = (
     "policy.generation.vllm_cfg.precision",
     "grpo.num_prompts_per_step",
     "grpo.num_generations_per_prompt",
+    "grpo.val_period",
+    "grpo.val_at_start",
+    "grpo.val_at_end",
 )
 fixed_config_by_arm = {
     arm: {path: value_at(config, path) for path in fixed_config_paths}
@@ -674,6 +686,10 @@ for arm in timing_order:
         * fixed_config_evidence[arm]["grpo.num_generations_per_prompt"]
     )
     assert rollout_batch_size == int(os.environ["TRAIN_GLOBAL_BATCH_SIZE"])
+    expected_val_period = 10 if os.environ["FUNCTIONAL_GATE"] == "1" else 0
+    assert fixed_config_evidence[arm]["grpo.val_period"] == expected_val_period
+    assert fixed_config_evidence[arm]["grpo.val_at_start"] is False
+    assert fixed_config_evidence[arm]["grpo.val_at_end"] is False
 expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
 expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
 full_cg_config_evidence = {
@@ -771,6 +787,11 @@ manifest = {
         "num_generations_per_prompt": on_config["grpo"][
             "num_generations_per_prompt"
         ],
+        "validation": {
+            "period": on_config["grpo"]["val_period"],
+            "at_start": on_config["grpo"]["val_at_start"],
+            "at_end": on_config["grpo"]["val_at_end"],
+        },
     },
     "fixed_config_evidence": fixed_config_evidence,
     "arms": [

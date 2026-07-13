@@ -343,5 +343,35 @@
     "timestamp_utc": "2026-07-13T02:19:00Z",
     "verification_evidence": "The regression was RED on an ANSI-suffixed finite limit and GREEN afterward. The full harness passes 30 tests. Read-only replay on job 2367079 found all ranks 0 through 7 and 9 CuTeDSL matches with no truncation. This functional-only run supports no speedup claim.",
     "verification_job": "pending official 4n4g functional gate"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2368475 reached update 10 in the first CuTeDSL-ON timing arm and completed 256-sample validation. The following vLLM level-1 sleep backed up 56.88 GiB per successful worker on CPU; representative RSS increased 76.29 GiB and cgroup usage reached 744.500/890.430 GiB before Ray actor death. Slurm classified step 0 OUT_OF_MEMORY 0:125 and the job FAILED 1:0 before OFF began.",
+    "fix_commit": "pending timing-only validation exclusion commit",
+    "hypothesis": "Disabling periodic, start, and end validation identically for timing arms removes the level-1 CPU-backup boundary while preserving matched policy-training work.",
+    "report_path": "evidence/job-2368475.txt",
+    "reproduction": "Run the 4n4g EP16 g0a0 recipe at source 8a8060f96 with inherited val_period=10 and ON-first order; after update-10 validation observe vLLM level-1 CPU backup followed by host cgroup OOM.",
+    "root_cause": "Periodic validation's post-validation vLLM level-1 sleep retained CPU weight backups concurrently and exhausted the host-memory cgroup. CuTeDSL contribution is unproven because no OFF arm ran.",
+    "run_id": "2368475",
+    "symptom": "The ON-first official timing arm completed update-10 validation, then generation actors died during post-validation sleep and the job exited before OFF.",
+    "tested_change": "Apply and record val_period=0, val_at_start=false, and val_at_end=false only when FUNCTIONAL_GATE=0; require identical ON/OFF fixed-config evidence and leave functional recipes unchanged.",
+    "timestamp_utc": "2026-07-13T07:35:54Z",
+    "verification_evidence": "Local config, manifest, collector, and workload-identity regressions pass. Remote fixed-config verification is pending; this failed first arm provides no performance or ON/OFF memory-effect result.",
+    "verification_job": "pending"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Independent job 2368477 reached update 10 in the first CuTeDSL-ON timing arm and completed 256-sample validation. The following vLLM level-1 sleep backed up 56.88 GiB per successful worker on CPU; representative RSS increased 76.29 GiB and cgroup usage reached 720.242/890.430 GiB before Ray actor death. Slurm classified step 0 OUT_OF_MEMORY 0:125 and the job FAILED 1:0 before OFF began.",
+    "fix_commit": "pending timing-only validation exclusion commit",
+    "hypothesis": "Disabling periodic, start, and end validation identically for timing arms removes the level-1 CPU-backup boundary while preserving matched policy-training work.",
+    "report_path": "evidence/job-2368477.txt",
+    "reproduction": "Run the 4n4g EP16 g0a0 recipe at source 8a8060f96 with inherited val_period=10 and ON-first order; after update-10 validation observe vLLM level-1 CPU backup followed by host cgroup OOM.",
+    "root_cause": "Periodic validation's post-validation vLLM level-1 sleep retained CPU weight backups concurrently and exhausted the host-memory cgroup. CuTeDSL contribution is unproven because no OFF arm ran.",
+    "run_id": "2368477",
+    "symptom": "A second ON-first official timing arm completed update-10 validation, then generation actors died during post-validation sleep and the job exited before OFF.",
+    "tested_change": "Apply and record val_period=0, val_at_start=false, and val_at_end=false only when FUNCTIONAL_GATE=0; require identical ON/OFF fixed-config evidence and leave functional recipes unchanged.",
+    "timestamp_utc": "2026-07-13T07:36:08Z",
+    "verification_evidence": "Local config, manifest, collector, and workload-identity regressions pass. Remote fixed-config verification is pending; this failed first arm provides no performance or ON/OFF memory-effect result.",
+    "verification_job": "pending"
   }
 ]

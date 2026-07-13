@@ -1,0 +1,28 @@
+Job: 2368475
+Cluster: pre_tyche
+Source: 8a8060f96a49841b286f76e725477a501aaa3a93
+Image SHA256: dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be
+Topology: 4 nodes x 4 GB200, TP1 PP1 CP1 EP16 ETP1
+Feature cell: CuTeDSL ON first, full-iteration CUDA Graph OFF, EP A2A overlap OFF
+Original remote log: Pre-Tyche job 2368475 slurm.out, ON-arm grpo.log, and Slurm accounting
+Slurm accounting:
+- job: FAILED 1:0 after 01:09:37
+- step 0: OUT_OF_MEMORY 0:125 after 01:08:56
+Observed boundary:
+- The ON-first arm reached update 10 of 25 and completed its 256-sample Step 10 validation.
+- Ordinary training boundaries requested discard_weights=True and vLLM sleep level 2.
+- Level 2 freed 105.73 GiB per worker with 0.00 GiB backed up on CPU; training continued.
+- Post-validation finish requested discard_weights=False and vLLM sleep level 1.
+- Level 1 backed up 56.88 GiB per successful worker on CPU.
+- Representative worker RSS rose by 76.29 GiB to about 79.8 GiB.
+- Representative cgroup usage reached 744.500/890.430 GiB while concurrent workers were backing up weights.
+- Ray then reported actor death, and Slurm classified the job step as host OUT_OF_MEMORY.
+Root cause and bounded fix:
+- Periodic validation's post-validation level-1 sleep retained CPU weight backups concurrently and exhausted the host-memory cgroup.
+- The timing-only harness now applies val_period=0, val_at_start=false, and val_at_end=false equally to ON and OFF.
+- Functional gates and reusable recipes retain their original validation settings.
+Verification boundary:
+- Local config, manifest, collector, and workload-identity regressions pass.
+- A remote fixed-config paired rerun is pending.
+- CuTeDSL contribution is unproven because the OFF arm never ran.
+- No speedup or ON/OFF memory-effect conclusion is supported.

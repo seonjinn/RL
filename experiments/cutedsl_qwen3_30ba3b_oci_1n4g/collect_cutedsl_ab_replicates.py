@@ -261,6 +261,8 @@ def _validate_manifest_identity(manifest: dict[str, Any], job_id: str) -> None:
         )
     ):
         raise CollectorError("fixed_config_evidence must contain ON/OFF objects")
+    if fixed_config["on"] != fixed_config["off"]:
+        raise CollectorError("ON/OFF fixed_config_evidence must match")
 
 
 def _validate_manifest_metrics(
