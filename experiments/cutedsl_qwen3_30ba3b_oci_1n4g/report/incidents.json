@@ -268,5 +268,20 @@
     "timestamp_utc": "2026-07-12T23:12:26Z",
     "verification_evidence": "The regression was RED before the change and GREEN afterward. The related harness, collector, and report suites pass 104 tests; Bash syntax, Ruff 0.9.9, and diff checks pass. A real two-node rerun is still required, so this job supports no performance claim.",
     "verification_job": "pending Pre-Tyche functional rerun"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2366566 verified the shared Megatron conversion cache on all eight policy ranks and crossed the earlier FileNotFound boundary. At first rollout execution, two node-1 vLLM workers loaded generated standalone-compile modules whose static Triton launchers referenced absent cubin files, then raised CUDA driver error: file not found.",
+    "fix_commit": "8e27a08758d2b57013d79d184603311e2d611d6e",
+    "hypothesis": "Disabling vLLM's optional standalone-compile path will bypass the incomplete static-Triton cubin artifact while retaining the normal Inductor execution path; applying it identically to ON and OFF keeps the CuTeDSL comparison matched.",
+    "report_path": "evidence/job-2366566.txt",
+    "reproduction": "At source 639a5518c, run the two-node functional gate. Verify all ranks use the shared megatron_checkpoints path, then observe first generation fail in torch/_inductor/runtime/static_triton_launcher.py when _load_kernel receives a nonexistent cubin path from vLLM's binary standalone compile cache.",
+    "root_cause": "vLLM 0.20.0 enabled standalone compile by default with Torch 2.11, and the generated binary artifact referenced a static-Triton cubin that was absent at first execution. This was a generation compile-artifact failure, not a CuTeDSL policy failure or host OOM.",
+    "run_id": "2366566",
+    "symptom": "The repaired two-node policy setup reached Step 1, but rollout generation failed before logprob or PolicyTraining with a CUDA file-not-found error.",
+    "tested_change": "Set only policy.generation.vllm_cfg.env_vars.VLLM_USE_STANDALONE_COMPILE=0 in the shared factorial recipe and add a resolved-config regression proving the value reaches both CuTeDSL arms.",
+    "timestamp_utc": "2026-07-12T23:56:41Z",
+    "verification_evidence": "The resolved recipe regression was RED before the change and GREEN afterward. The related harness, collector, and report suites pass 105 tests; Bash syntax, Ruff 0.9.9, and diff checks pass. Remote verification is pending, so this failed functional run supports no performance claim.",
+    "verification_job": "pending Pre-Tyche functional rerun"
   }
 ]

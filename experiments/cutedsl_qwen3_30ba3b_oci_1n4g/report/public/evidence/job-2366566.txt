@@ -1,0 +1,31 @@
+Pre-Tyche functional gate job 2366566
+Run ID: 2366566
+Timestamp (UTC): 2026-07-12T23:56:41Z
+Source: 639a5518c0f59c45b49ed4b8e9290c028c613da2
+Fix commit: 8e27a08758d2b57013d79d184603311e2d611d6e
+Original remote log: results/2366566/slurm.out and events.jsonl on Pre-Tyche Lustre.
+
+Purpose
+- Qwen3-30B-A3B, MXFP8, EP8, 2 nodes x 4 GB200, CuTeDSL ON.
+- Full-iteration CUDA Graph and A2A overlap OFF; three functional updates requested.
+- The functional gate was explicitly not performance eligible.
+
+Verified prior fix
+- Every policy rank selected the job-local shared Lustre megatron_checkpoints path.
+- FileNotFoundError count was zero; all eight ranks completed initial policy offload.
+- Initial cgroup peak was about 454.6 GiB of an 890.4 GiB limit, with no OOM.
+
+New failure boundary
+- Step 1 reached rollout generation after policy/refit initialization.
+- Two node-1 vLLM workers failed in torch Inductor static_triton_launcher.py.
+- Generated compile-cache modules called _load_kernel with a cubin path that did not exist.
+- The terminal error was RuntimeError: CUDA driver error: file not found.
+- Job FAILED, exit 1:0, elapsed 00:40:39; no OOM was reported.
+
+Root cause and one-variable test
+- vLLM 0.20.0 enabled standalone compile by default with Torch 2.11.
+- Its binary standalone artifact referenced an absent static-Triton cubin at first execution.
+- Set only VLLM_USE_STANDALONE_COMPILE=0 in the shared ON/OFF benchmark recipe.
+- The recipe regression was RED before the change and GREEN after it.
+- Related harness/collector/report tests: 105 passed; Bash, Ruff 0.9.9, and diff checks passed.
+- A real two-node rerun is pending; this job supports no speedup or throughput claim.
