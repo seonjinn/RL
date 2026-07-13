@@ -187,6 +187,41 @@ def rollout_table() -> str:
     return "".join(out)
 
 
+
+def rollout_table_rows(model_filter: str | None = None) -> str:
+    rows = read_csv_rows(REPORT_DATA / "rollout_summary.csv")
+    if model_filter is not None:
+        rows = [r for r in rows if slug_model(r["model"]) == model_filter]
+    if not rows:
+        return ""
+    baselines = {
+        (r["model"], r["bench"]): float(r["mean_step_wall_s"])
+        for r in rows
+        if r["variant"] == "baseline"
+    }
+    out = [
+        "<table><tr><th>Bench</th><th>Variant</th>"
+        "<th>Mean step wall (s)</th><th>Tokens/s/GPU</th><th>Speedup</th></tr>"
+    ]
+    for r in sorted(rows, key=lambda x: (x["bench"], x["variant"])):
+        base = baselines.get((r["model"], r["bench"]))
+        speedup = f"{base / float(r['mean_step_wall_s']):.3f}x" if base else "-"
+        out.append(
+            f"<tr><td>{html.escape(r['bench'])}</td>"
+            f"<td>{html.escape(r['variant'])}</td><td>{fmt(r['mean_step_wall_s'])}</td>"
+            f"<td>{fmt(r.get('mean_output_tok_s_per_gpu', ''))}</td><td>{speedup}</td></tr>"
+        )
+    out.append("</table>")
+    return "".join(out)
+
+
+def slug_model(label: str) -> str:
+    return (
+        label.lower().replace(" ", "_").replace("/", "_")
+        .replace("(", "").replace(")", "")
+    )
+
+
 def build() -> None:
     PLOTS_OUT.mkdir(parents=True, exist_ok=True)
     DATA_OUT.mkdir(parents=True, exist_ok=True)
@@ -240,10 +275,23 @@ def build() -> None:
         drains = [
             n for n in plot_names if n.startswith("drain_") and model_of(n) == slug_key
         ]
-        claimed.update(grids + speedups + drains)
-        if not (grids or speedups or drains):
+        rollouts = [
+            n for n in plot_names
+            if n.startswith("rollout_") and model_of(n) == slug_key
+        ]
+        claimed.update(grids + speedups + drains + rollouts)
+        if not (grids or speedups or drains or rollouts):
             continue
         parts = [f"<h2>{title}</h2>"]
+        if rollouts:
+            parts.append("<h3>Sync rollout: baseline vs fixed-K vs DynamicSD</h3>")
+            parts.append(img_cards(rollouts))
+            raw = rollout_table_rows(slug_key)
+            if raw:
+                parts.append(
+                    "<details><summary>Raw rollout numbers for this model"
+                    "</summary>" + raw + "</details>"
+                )
         if grids:
             parts.append("<h3>Tokens/s across batch size &times; K</h3>")
             parts.append(img_cards(grids))
@@ -280,7 +328,9 @@ batch-size&rarr;K schedule derived from the Phase-1 grid below.</p>
 <p class="note">Per-engine sync rollout (N&times;32 generations, barrier per
 step). Charts and table are per model &times; benchmark; tokens/s/GPU
 normalizes TP differences (TP1/2/4).</p>
+<details><summary><b>Full cross-model summary table (click to expand)</b></summary>
 {rollout_table()}
+</details>
 <p class="note"><b>Capture-cliff lesson:</b> the first dynamic tables carried
 K=5 into BS 86-127 where bs&times;(K+1) &gt; 512 exceeds the cudagraph capture
 budget, forcing eager-mode decode (openmath dynamic 37.4s vs fixed-K3 25.4s).
@@ -295,7 +345,6 @@ is expected to pull ahead.</p>
 raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
 decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 (607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
-{img_cards(rollout_imgs)}
 
 <h2>Acceptance length by model (temperature 1.0)</h2>
 {img_cards(accept_imgs)}
