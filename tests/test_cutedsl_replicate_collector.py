@@ -827,6 +827,18 @@ def test_collector_rejects_mixed_model_revisions(tmp_path: Path) -> None:
     assert "workload identity differs across replicates" in result.stderr
 
 
+def test_collector_rejects_noncanonical_dataset_row_count(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    manifest_path = result_root / "102/benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifact_revisions"]["dataset"]["num_rows"] = 999_999
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "output")
+    assert result.returncode != 0
+    assert "dataset num_rows must equal 1000000" in result.stderr
+
+
 def test_collector_requires_profile_and_kernel_attribution_for_designated_job(
     tmp_path: Path,
 ) -> None:

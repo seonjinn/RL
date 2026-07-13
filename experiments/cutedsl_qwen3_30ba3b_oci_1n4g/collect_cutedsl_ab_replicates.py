@@ -294,9 +294,11 @@ def _validate_artifact_revisions(manifest: dict[str, Any], job_id: str) -> None:
                     repository.get("num_rows"),
                     f"job {job_id} dataset num_rows",
                 )
-                == 0
+                != 1_000_000
             ):
-                raise CollectorError(f"job {job_id} dataset num_rows must be positive")
+                raise CollectorError(
+                    f"job {job_id} dataset num_rows must equal 1000000"
+                )
 
 
 def _validate_manifest_identity(manifest: dict[str, Any], job_id: str) -> None:

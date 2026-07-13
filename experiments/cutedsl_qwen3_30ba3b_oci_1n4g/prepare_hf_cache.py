@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import re
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +31,7 @@ from typing import Any
 MODEL_REPO_ID = "Qwen/Qwen3-30B-A3B"
 DATASET_REPO_ID = "nvidia/OpenMathInstruct-2"
 DATASET_SPLIT = "train_1M"
+EXPECTED_DATASET_ROWS = 1_000_000
 REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 REPOSITORIES = (
     ("model", MODEL_REPO_ID, None),
@@ -137,7 +139,11 @@ def _download_repository(
         )
     ).resolve()
     resolved_revision = _validate_revision(snapshot)
-    if local_files_only and resolved_revision != revision:
+    if (
+        local_files_only
+        and REVISION_PATTERN.fullmatch(revision) is not None
+        and resolved_revision != revision
+    ):
         raise ValueError(
             f"Cached revision for {repo_id} changed: {resolved_revision} != {revision}"
         )
@@ -182,11 +188,40 @@ def _load_required_dataset(
         label=f"{DATASET_REPO_ID}:{DATASET_SPLIT}",
     )
     num_rows = len(dataset)
-    if not isinstance(num_rows, int) or isinstance(num_rows, bool) or num_rows <= 0:
+    if (
+        not isinstance(num_rows, int)
+        or isinstance(num_rows, bool)
+        or num_rows != EXPECTED_DATASET_ROWS
+    ):
         raise ValueError(
-            f"Materialized dataset {DATASET_REPO_ID}:{DATASET_SPLIT} is empty"
+            f"Materialized dataset {DATASET_REPO_ID}:{DATASET_SPLIT} must contain "
+            f"exactly {EXPECTED_DATASET_ROWS} rows, found {num_rows!r}"
         )
     return num_rows
+
+
+def _write_manifest_atomically(path: Path, manifest: dict[str, Any]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            json.dump(manifest, temporary, indent=2, sort_keys=True)
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        assert temporary_path is not None
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def prepare_cache(
@@ -196,13 +231,13 @@ def prepare_cache(
     load_dataset: DatasetLoad,
 ) -> dict[str, Any]:
     """Populate or verify the shared model and dataset snapshots."""
-    hf_home.mkdir(parents=True, exist_ok=True)
-    completed = _read_completed_manifest(shared_manifest)
     offline = _offline_mode_enabled()
-    if offline and completed is None:
-        raise ValueError(
-            "Offline Hugging Face verification requires a completed shared manifest"
-        )
+    if offline:
+        if not hf_home.is_dir():
+            raise ValueError("Offline Hugging Face cache root must already exist")
+    else:
+        hf_home.mkdir(parents=True, exist_ok=True)
+    completed = _read_completed_manifest(shared_manifest)
     repositories: dict[str, dict[str, Any]] = {}
     for label, repo_id, repo_type in REPOSITORIES:
         existing = completed.get("repositories", {}).get(label) if completed else None
@@ -237,7 +272,7 @@ def prepare_cache(
                 repo_type,
                 snapshot_download,
                 revision="main",
-                local_files_only=False,
+                local_files_only=offline,
             )
         repository = {
             "repo_id": repo_id,
@@ -253,7 +288,7 @@ def prepare_cache(
                 if (
                     not isinstance(expected_num_rows, int)
                     or isinstance(expected_num_rows, bool)
-                    or expected_num_rows <= 0
+                    or expected_num_rows != EXPECTED_DATASET_ROWS
                 ):
                     raise ValueError("Invalid cached dataset row count")
                 if offline:
@@ -270,7 +305,7 @@ def prepare_cache(
                 num_rows = _load_required_dataset(
                     hf_home,
                     load_dataset,
-                    revision=resolved_revision,
+                    revision=None if offline else resolved_revision,
                 )
             repository.update({"split": DATASET_SPLIT, "num_rows": num_rows})
         repositories[label] = repository
@@ -281,9 +316,7 @@ def prepare_cache(
             "Shared Hugging Face cache manifest changed during verification"
         )
     if completed is None:
-        temporary = shared_manifest.with_suffix(".tmp")
-        temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        os.replace(temporary, shared_manifest)
+        _write_manifest_atomically(shared_manifest, manifest)
     return manifest
 
 
@@ -300,7 +333,8 @@ def main() -> int:
     from datasets import load_dataset
     from huggingface_hub import snapshot_download
 
-    if _offline_mode_enabled():
+    offline = _offline_mode_enabled()
+    if offline and args.shared_manifest.is_file():
         manifest = prepare_cache(
             args.hf_home,
             args.shared_manifest,
@@ -308,7 +342,11 @@ def main() -> int:
             load_dataset,
         )
     else:
-        args.hf_home.mkdir(parents=True, exist_ok=True)
+        if offline:
+            if not args.hf_home.is_dir():
+                raise ValueError("Offline Hugging Face cache root must already exist")
+        else:
+            args.hf_home.mkdir(parents=True, exist_ok=True)
         lock_path = args.hf_home / ".nemo2606-cache.lock"
         with lock_path.open("w") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)

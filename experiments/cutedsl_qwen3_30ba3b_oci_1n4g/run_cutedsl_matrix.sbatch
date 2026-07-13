@@ -450,11 +450,6 @@ if [[ ! -d "${SHARED_HF_HOME}" || ! -r "${SHARED_HF_HOME}" || \
     echo "[ERROR] shared Hugging Face cache root must already exist and be readable." >&2
     exit 1
 fi
-if [[ ! -f "${SHARED_HF_MANIFEST}" || ! -r "${SHARED_HF_MANIFEST}" || \
-    ! -s "${SHARED_HF_MANIFEST}" ]]; then
-    echo "[ERROR] shared Hugging Face cache requires a completed manifest." >&2
-    exit 1
-fi
 readonly SHARED_HF_HOME SHARED_HF_MANIFEST
 export HF_HOME="${SHARED_HF_HOME}"
 export SHARED_HF_MANIFEST
@@ -499,6 +494,19 @@ printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
 [[ -d "${TMPDIR}" && -w "${TMPDIR}" ]]
 cd "${CONTAINER_REPO_ROOT}"
 [[ "${NVTE_CUDA_ARCHS}" == "100" ]]
+if ! command -v python3 >/dev/null; then
+    echo "[ERROR] Pinned image does not provide python3 for offline cache verification." >&2
+    exit 1
+fi
+if ! python3 -c 'import datasets, huggingface_hub'; then
+    echo "[ERROR] Pinned image lacks datasets or huggingface_hub for offline cache verification." >&2
+    exit 1
+fi
+python3 \
+    "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py" \
+    --hf-home "${HF_HOME}" \
+    --shared-manifest "${SHARED_HF_MANIFEST}" \
+    --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
 curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 [[ "$("${UV_BIN}" --version)" == "uv ${UV_VERSION} "* ]]
 "${UV_BIN}" python install "${UV_PYTHON_VERSION}"
@@ -798,7 +806,7 @@ for label, (expected_repo_id, expected_repo_type) in expected_artifacts.items():
     if label == "dataset":
         assert repository["split"] == "train_1M"
         assert isinstance(repository["num_rows"], int)
-        assert repository["num_rows"] > 0
+        assert repository["num_rows"] == 1_000_000
         artifact_revisions[label].update(
             {"split": repository["split"], "num_rows": repository["num_rows"]}
         )
