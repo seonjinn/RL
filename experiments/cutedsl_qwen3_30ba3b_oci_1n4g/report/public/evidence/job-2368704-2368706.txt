@@ -1,0 +1,27 @@
+Jobs: 2368704, 2368705, 2368706
+Incident ID: 2368704-2368706
+Cluster: pre_tyche
+Source: c1e43c38678f5b1427e648de208549f8e07489af
+Topology: official 4 nodes x 4 GB200, TP1 PP1 CP1 EP16 ETP1
+Feature cell: CuTeDSL OFF/ON paired timing; full-iteration CUDA Graph OFF; EP A2A overlap OFF
+Original remote log: Pre-Tyche jobs 2368704-2368706 timing summaries and post-run collector output
+Completed workload boundary:
+- Every job completed both CuTeDSL timing arms in alternating order.
+- Every arm completed 25 of 25 updates: five warmup and twenty measured.
+- All six arms retained complete required component metrics; no measured step was missing.
+- The per-step mean_prompt_length series, num_valid_samples, and total_turns were exact across all six arms.
+- Prompt IDs and individual prompt-length vectors were not fingerprinted.
+Rejected validator boundary:
+- The post-run exact processed-token equality gate rejected each paired job.
+- Live on-policy trajectories diverged after the first optimizer update, so exact output-token equality is not a valid paired-input invariant.
+- Absolute aggregate total-token and valid-token deltas were at most 0.14%.
+- The maximum paired-step token delta was at most 0.87%.
+Root cause and bounded fix under development:
+- The validator conflated stochastic on-policy output equality with fixed benchmark-input equivalence.
+- Require a matched feature/path-normalized resolved base-config hash and exact observed per-step aggregate invariants.
+- Record explicitly that prompt-sequence identity is not verified, then require symmetric token equivalence within 1% aggregate and 2% maximum paired-step bounds.
+- Normalize throughput by each arm's actual processed-token count instead of assuming equal output tokens.
+Verification boundary:
+- The jobs prove full official-workload completion and complete metric capture.
+- A clean three-replica rerun must validate the repaired gate and actual-token normalization.
+- Existing OFF/ON speedups are preliminary and non-claim-ready.

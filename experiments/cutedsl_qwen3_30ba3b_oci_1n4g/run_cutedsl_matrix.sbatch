@@ -931,6 +931,9 @@ POLICY_TIME_METRIC = "timing/train/policy_training"
 REFIT_METRIC = "timing/train/prepare_for_generation/transfer_and_update_weights"
 TOKEN_COUNT_METRIC = "train/total_num_tokens"
 VALID_TOKEN_COUNT_METRIC = "train/global_valid_toks"
+MEAN_PROMPT_LENGTH_METRIC = "train/mean_prompt_length"
+NUM_VALID_SAMPLES_METRIC = "train/num_valid_samples"
+TOTAL_TURNS_METRIC = "train/total_turns"
 NORMALIZED_THROUGHPUT_METRIC = "performance/policy_training_tokens_per_sec_per_gpu"
 E2E_THROUGHPUT_METRIC = "performance/tokens_per_sec_per_gpu"
 GENERATION_THROUGHPUT_METRIC = "performance/generation_tokens_per_sec_per_gpu"
@@ -954,6 +957,9 @@ METRIC_ALIASES = {
     NORMALIZED_THROUGHPUT_METRIC: (NORMALIZED_THROUGHPUT_METRIC,),
     TOKEN_COUNT_METRIC: (TOKEN_COUNT_METRIC,),
     VALID_TOKEN_COUNT_METRIC: (VALID_TOKEN_COUNT_METRIC,),
+    MEAN_PROMPT_LENGTH_METRIC: (MEAN_PROMPT_LENGTH_METRIC,),
+    NUM_VALID_SAMPLES_METRIC: (NUM_VALID_SAMPLES_METRIC,),
+    TOTAL_TURNS_METRIC: (TOTAL_TURNS_METRIC,),
 }
 
 
@@ -1018,6 +1024,9 @@ policy_points = measured_components[POLICY_TIME_METRIC]
 refit_points = measured_components[REFIT_METRIC]
 token_points = measured_components[TOKEN_COUNT_METRIC]
 valid_token_points = measured_components[VALID_TOKEN_COUNT_METRIC]
+mean_prompt_length_points = measured_components[MEAN_PROMPT_LENGTH_METRIC]
+num_valid_samples_points = measured_components[NUM_VALID_SAMPLES_METRIC]
+total_turns_points = measured_components[TOTAL_TURNS_METRIC]
 e2e_throughput_points = measured_components[E2E_THROUGHPUT_METRIC]
 generation_throughput_points = measured_components[GENERATION_THROUGHPUT_METRIC]
 logprob_throughput_points = measured_components[LOGPROB_THROUGHPUT_METRIC]
@@ -1044,6 +1053,9 @@ measured_step_workload = [
         "refit_transfer_update_seconds": refit_points[index][1],
         "total_num_tokens": token_points[index][1],
         "global_valid_toks": valid_token_points[index][1],
+        "mean_prompt_length": mean_prompt_length_points[index][1],
+        "num_valid_samples": num_valid_samples_points[index][1],
+        "total_turns": total_turns_points[index][1],
         "e2e_tokens_per_sec_per_gpu": e2e_throughput_points[index][1],
         "generation_tokens_per_sec_per_gpu": generation_throughput_points[index][1],
         "policy_and_reference_logprobs_tokens_per_sec_per_gpu": (
@@ -1107,6 +1119,9 @@ with (arm_dir / "raw_timing.csv").open("w", newline="") as csv_file:
             "refit_transfer_update_seconds",
             "total_num_tokens",
             "global_valid_toks",
+            "mean_prompt_length",
+            "num_valid_samples",
+            "total_turns",
             "e2e_tokens_per_sec_per_gpu",
             "generation_tokens_per_sec_per_gpu",
             "policy_and_reference_logprobs_tokens_per_sec_per_gpu",
@@ -1129,6 +1144,9 @@ with (arm_dir / "raw_timing.csv").open("w", newline="") as csv_file:
                 item["refit_transfer_update_seconds"],
                 item["total_num_tokens"],
                 item["global_valid_toks"],
+                item["mean_prompt_length"],
+                item["num_valid_samples"],
+                item["total_turns"],
                 item["e2e_tokens_per_sec_per_gpu"],
                 item["generation_tokens_per_sec_per_gpu"],
                 item["policy_and_reference_logprobs_tokens_per_sec_per_gpu"],
@@ -1450,6 +1468,14 @@ result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
 POLICY_TIME_METRIC = "timing/train/policy_training"
 TOKEN_COUNT_METRIC = "train/total_num_tokens"
 NORMALIZED_THROUGHPUT_METRIC = "performance/policy_training_tokens_per_sec_per_gpu"
+WORKLOAD_TOKEN_FIELDS = ("total_num_tokens", "global_valid_toks")
+WORKLOAD_EXACT_OBSERVED_FIELDS = (
+    "mean_prompt_length",
+    "num_valid_samples",
+    "total_turns",
+)
+WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT = 0.01
+WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT = 0.02
 arm_results = [
     json.loads(path.read_text())
     for path in sorted((result_dir / "timing").glob("*-*/raw_timing.json"))
@@ -1474,8 +1500,62 @@ throughput = {
     ]
     for arm in expected_arms
 }
-workload_equality_required = len(expected_arms) > 1
-workload_equality_observed = len({tuple(values) for values in workload.values()}) == 1
+workload_equivalence_required = len(expected_arms) > 1
+exact_invariants_observed = None
+workload_equivalence_metrics = {}
+workload_equivalence_observed = None
+if workload_equivalence_required:
+    exact_invariants_observed = all(
+        [item[field] for item in by_arm["on"]["measured_step_workload"]]
+        == [item[field] for item in by_arm["off"]["measured_step_workload"]]
+        for field in WORKLOAD_EXACT_OBSERVED_FIELDS
+    )
+    workload_equivalence_observed = exact_invariants_observed
+    for field in WORKLOAD_TOKEN_FIELDS:
+        values = {
+            arm: [item[field] for item in by_arm[arm]["measured_step_workload"]]
+            for arm in ("on", "off")
+        }
+        on_total = sum(values["on"])
+        off_total = sum(values["off"])
+        arm_total_relative_delta = abs(on_total - off_total) / (
+            (on_total + off_total) / 2.0
+        )
+        max_paired_step_relative_delta = max(
+            abs(on_value - off_value) / ((on_value + off_value) / 2.0)
+            for on_value, off_value in zip(values["on"], values["off"], strict=True)
+        )
+        workload_equivalence_metrics[field] = {
+            "on_total": on_total,
+            "off_total": off_total,
+            "arm_total_relative_delta": arm_total_relative_delta,
+            "max_paired_step_relative_delta": max_paired_step_relative_delta,
+        }
+        workload_equivalence_observed = workload_equivalence_observed and (
+            arm_total_relative_delta <= WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT
+            and max_paired_step_relative_delta
+            <= WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT
+        )
+workload_equivalence = {
+    "schema_version": 2,
+    "relative_delta_formula": "abs(on-off)/mean(on,off)",
+    "required": workload_equivalence_required,
+    "observed": workload_equivalence_observed,
+    "actual_token_normalization_required": True,
+    "normalization_metric": TOKEN_COUNT_METRIC,
+    "exact_observed_invariants": {
+        "fields": list(WORKLOAD_EXACT_OBSERVED_FIELDS),
+        "observed": exact_invariants_observed,
+    },
+    "prompt_sequence_identity_verified": False,
+    "limits": {
+        "arm_total_relative_delta": WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT,
+        "paired_step_relative_delta": WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT,
+    },
+    "metrics": workload_equivalence_metrics,
+}
+if not workload_equivalence_required:
+    workload_equivalence["not_applicable_reason"] = "single timing arm"
 summary = {
     "run_id": arm_results[0]["run_id"],
     "timing_order": [
@@ -1490,8 +1570,7 @@ summary = {
         arm: statistics.median(policy_seconds[arm]) for arm in expected_arms
     },
     "workload_metric": TOKEN_COUNT_METRIC,
-    "workload_equality_required": workload_equality_required,
-    "workload_equality_observed": workload_equality_observed,
+    "workload_equivalence": workload_equivalence,
     "measured_total_num_tokens": workload,
     "primary_metric": NORMALIZED_THROUGHPUT_METRIC,
     "primary_metric_normalized_by": "train/total_num_tokens and training GPU count",
@@ -1510,10 +1589,10 @@ else:
         "cutedsl_on_over_off": "full-iteration CUDA Graph requires device-initiated CuTeDSL"
     }
 (result_dir / "timing_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-if workload_equality_required and not workload_equality_observed:
+if workload_equivalence_required and not workload_equivalence_observed:
     raise ValueError(
-        "measured workload equality failed: "
-        f"per-arm train/total_num_tokens={workload!r}"
+        "measured workload equivalence failed: "
+        f"contract={workload_equivalence!r}"
     )
 manifest_path = result_dir / "benchmark_manifest.json"
 manifest = json.loads(manifest_path.read_text())

@@ -373,5 +373,20 @@
     "timestamp_utc": "2026-07-13T07:36:08Z",
     "verification_evidence": "Local config, manifest, collector, and workload-identity regressions pass. Remote fixed-config verification is pending; this failed first arm provides no performance or ON/OFF memory-effect result.",
     "verification_job": "pending"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Jobs 2368704-2368706 each completed both official 4n4g EP16 CuTeDSL timing arms, all 25 updates per arm, and all required metrics. Exact processed-token equality then rejected the paired live on-policy trajectories even though absolute aggregate total/valid-token deltas were at most 0.14% and the maximum paired-step delta was at most 0.87%.",
+    "fix_commit": "pending token-equivalence and actual-token normalization fix",
+    "hypothesis": "A matched feature/path-normalized resolved base-config hash, exact observed aggregate workload invariants, and symmetric 1% aggregate and 2% maximum paired-step token-equivalence bounds will distinguish workload drift from expected live on-policy trajectory divergence.",
+    "report_path": "evidence/job-2368704-2368706.txt",
+    "reproduction": "Run the three-replica official 4n4g EP16 matrix with alternating OFF/ON order, then apply exact processed-token equality after both 25-update arms complete.",
+    "root_cause": "The validator treated stochastic on-policy output tokens as an exact paired-input invariant. The trajectories can diverge after the first optimizer update while the observed per-step mean_prompt_length, valid-sample count, and turn count remain exact, so the gate produced a false negative after successful workload completion. Prompt IDs and individual prompt-length vectors were not fingerprinted.",
+    "run_id": "2368704-2368706",
+    "symptom": "Three complete official paired runs were classified as failed only by the post-run exact-token equality gate.",
+    "tested_change": "Under development: require a matched feature/path-normalized resolved base-config hash and exact observed per-step aggregate invariants, explicitly record that prompt-sequence identity is not verified, replace exact output-token equality with symmetric 1% aggregate and 2% maximum paired-step equivalence, and compute throughput from each arm's actual processed tokens.",
+    "timestamp_utc": "2026-07-13T11:18:25Z",
+    "verification_evidence": "The per-step mean_prompt_length series, num_valid_samples, and total_turns were exact across all six arms; required metric series had no missing measured steps. Prompt IDs and individual prompt-length vectors were not fingerprinted. A clean three-replica rerun is required, and the observed speedups remain preliminary and non-claim-ready.",
+    "verification_job": "pending clean three-replica rerun"
   }
 ]

@@ -755,6 +755,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2367079",
         "2368475",
         "2368477",
+        "2368704-2368706",
         "local-refresh-20260712",
         "preflight-segment-20260712",
     }
@@ -879,6 +880,33 @@ def test_official_validation_oom_incidents_do_not_claim_cutedsl_effect() -> None
         assert "CuTeDSL contribution is unproven" in incident["root_cause"]
         assert incident["verification_job"] == "pending"
         assert job_id in index
+
+
+def test_official_token_equality_false_negative_is_not_performance_evidence() -> None:
+    report_dir = EXPERIMENT_DIR / "report"
+    incidents = json.loads((report_dir / "incidents.json").read_text())
+    incident = next(item for item in incidents if item["run_id"] == "2368704-2368706")
+    evidence = (report_dir / incident["report_path"]).read_text()
+    public_evidence = (report_dir / "public" / incident["report_path"]).read_text()
+    index = (report_dir / "public/index.html").read_text()
+
+    for fragment in (
+        "25 of 25 updates",
+        "no measured step was missing",
+        "The per-step mean_prompt_length series, num_valid_samples, and total_turns were exact",
+        "Prompt IDs and individual prompt-length vectors were not fingerprinted",
+        "after the first optimizer update",
+        "at most 0.14%",
+        "at most 0.87%",
+        "within 1% aggregate and 2% maximum paired-step bounds",
+        "actual processed-token count",
+        "preliminary and non-claim-ready",
+    ):
+        assert fragment in evidence, fragment
+        assert fragment in public_evidence, fragment
+    assert "false negative" in incident["root_cause"]
+    assert incident["verification_job"] == "pending clean three-replica rerun"
+    assert "preliminary and non-claim-ready" in index
 
 
 @pytest.mark.parametrize(

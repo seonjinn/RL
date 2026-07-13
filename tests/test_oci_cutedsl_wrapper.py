@@ -1154,14 +1154,22 @@ def test_benchmark_records_workload_and_normalized_throughput_as_primary() -> No
     required_fragments = (
         'TOKEN_COUNT_METRIC = "train/total_num_tokens"',
         'VALID_TOKEN_COUNT_METRIC = "train/global_valid_toks"',
+        'MEAN_PROMPT_LENGTH_METRIC = "train/mean_prompt_length"',
+        'NUM_VALID_SAMPLES_METRIC = "train/num_valid_samples"',
+        'TOTAL_TURNS_METRIC = "train/total_turns"',
         'NORMALIZED_THROUGHPUT_METRIC = "performance/policy_training_tokens_per_sec_per_gpu"',
         '"measured_step_workload"',
         '"total_num_tokens"',
         '"global_valid_toks"',
+        '"mean_prompt_length"',
+        '"num_valid_samples"',
+        '"total_turns"',
         '"policy_training_tokens_per_sec_per_gpu"',
-        "workload_equality_required = len(expected_arms) > 1",
-        '"workload_equality_required": workload_equality_required',
-        '"workload_equality_observed"',
+        "WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT = 0.01",
+        "WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT = 0.02",
+        '"relative_delta_formula": "abs(on-off)/mean(on,off)"',
+        '"actual_token_normalization_required": True',
+        '"workload_equivalence": workload_equivalence',
         '"primary_metric": NORMALIZED_THROUGHPUT_METRIC',
         '"secondary_metric": POLICY_TIME_METRIC',
         '"secondary_metric_confounded_by_live_workload": True',
@@ -1192,6 +1200,9 @@ def _required_fake_metrics(*, omit: str | None = None) -> dict[str, dict[str, fl
         "performance/policy_training_tokens_per_sec_per_gpu",
         "train/total_num_tokens",
         "train/global_valid_toks",
+        "train/mean_prompt_length",
+        "train/num_valid_samples",
+        "train/total_turns",
     )
     metrics = {
         name: {str(step): float(step) for step in range(1, 26)}
@@ -1249,6 +1260,9 @@ def test_benchmark_extracts_all_required_measured_component_series(
         "performance/policy_training_tokens_per_sec_per_gpu",
         "train/total_num_tokens",
         "train/global_valid_toks",
+        "train/mean_prompt_length",
+        "train/num_valid_samples",
+        "train/total_turns",
     }
     assert set(raw["resolved_metric_names"]) == canonical_names
     assert (
@@ -1270,6 +1284,9 @@ def test_benchmark_extracts_all_required_measured_component_series(
         "policy_and_reference_logprobs_tokens_per_sec_per_gpu",
         "policy_training_tokens_per_sec_per_gpu",
         "refit_effective_tokens_per_sec_per_gpu",
+        "mean_prompt_length",
+        "num_valid_samples",
+        "total_turns",
     ):
         assert column in csv_header
 
@@ -1339,10 +1356,15 @@ def _run_timing_summarizer(
             "resolved_metric_names": {},
             "measured_step_workload": [
                 {
+                    "step": index + 6,
                     "total_num_tokens": tokens,
+                    "global_valid_toks": tokens - 10.0,
+                    "mean_prompt_length": 128.0 + index,
+                    "num_valid_samples": 2048.0,
+                    "total_turns": 2048.0,
                     "policy_training_tokens_per_sec_per_gpu": 10.0,
                 }
-                for tokens in workload
+                for index, tokens in enumerate(workload)
             ],
         }
         (arm_dir / "raw_timing.json").write_text(json.dumps(raw))
@@ -1360,7 +1382,7 @@ def _run_timing_summarizer(
     )
 
 
-def test_benchmark_timing_summary_enforces_identical_measured_workloads(
+def test_benchmark_timing_summary_enforces_bounded_live_workload_equivalence(
     tmp_path: Path,
 ) -> None:
     passing = _run_timing_summarizer(
@@ -1372,21 +1394,31 @@ def test_benchmark_timing_summary_enforces_identical_measured_workloads(
     passing_summary = json.loads(
         (tmp_path / "matching/summary-result/timing_summary.json").read_text()
     )
-    assert passing_summary["workload_equality_required"] is True
-    assert passing_summary["workload_equality_observed"] is True
+    assert passing_summary["workload_equivalence"]["required"] is True
+    assert passing_summary["workload_equivalence"]["observed"] is True
+    assert passing_summary["workload_equivalence"]["exact_observed_invariants"] == {
+        "fields": ["mean_prompt_length", "num_valid_samples", "total_turns"],
+        "observed": True,
+    }
+    assert (
+        passing_summary["workload_equivalence"][
+            "prompt_sequence_identity_verified"
+        ]
+        is False
+    )
 
     failing = _run_timing_summarizer(
         tmp_path / "mismatched",
         on_workload=[100.0, 200.0],
-        off_workload=[100.0, 201.0],
+        off_workload=[100.0, 210.0],
     )
     assert failing.returncode != 0
-    assert "measured workload equality failed" in failing.stderr
+    assert "measured workload equivalence failed" in failing.stderr
     failing_summary = json.loads(
         (tmp_path / "mismatched/summary-result/timing_summary.json").read_text()
     )
-    assert failing_summary["workload_equality_required"] is True
-    assert failing_summary["workload_equality_observed"] is False
+    assert failing_summary["workload_equivalence"]["required"] is True
+    assert failing_summary["workload_equivalence"]["observed"] is False
 
 
 def _kernel_attribution_source() -> str:

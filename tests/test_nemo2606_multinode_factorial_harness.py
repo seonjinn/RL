@@ -41,6 +41,62 @@ OFFICIAL_BASE_RECIPE = (
 register_omegaconf_resolvers()
 
 
+def _run_timing_summarizer(
+    tmp_path: Path,
+    *,
+    on_token_scale: float,
+    timing_order: tuple[str, ...] = ("on", "off"),
+) -> subprocess.CompletedProcess[str]:
+    source = MATRIX_PAYLOAD.read_text()
+    summarizer = source.split("# CUTEDSL_TIMING_SUMMARIZER_START\n", 1)[1].split(
+        "# CUTEDSL_TIMING_SUMMARIZER_END", 1
+    )[0]
+    result_dir = tmp_path / "results"
+    resolved_metric_names = {"train/total_num_tokens": "train/total_num_tokens"}
+    for order_index, arm in enumerate(timing_order):
+        arm_dir = result_dir / "timing" / f"{order_index}-{arm}"
+        arm_dir.mkdir(parents=True)
+        scale = on_token_scale if arm == "on" else 1.0
+        rows = []
+        for offset, step in enumerate((6, 7, 8)):
+            total_tokens = float(round((1_000_000 + offset * 10_000) * scale))
+            valid_tokens = float(round((900_000 + offset * 10_000) * scale))
+            rows.append(
+                {
+                    "step": step,
+                    "total_num_tokens": total_tokens,
+                    "global_valid_toks": valid_tokens,
+                    "mean_prompt_length": 128.0 + offset,
+                    "num_valid_samples": 2048.0,
+                    "total_turns": 2048.0,
+                    "policy_training_tokens_per_sec_per_gpu": 5000.0,
+                }
+            )
+        raw = {
+            "run_id": "job-a",
+            "arm": arm,
+            "order_index": order_index,
+            "policy_training_seconds": [80.0, 81.0, 82.0],
+            "resolved_metric_names": resolved_metric_names,
+            "measured_step_workload": rows,
+        }
+        (arm_dir / "raw_timing.json").write_text(json.dumps(raw))
+    (result_dir / "benchmark_manifest.json").write_text(json.dumps({}))
+    env = os.environ.copy()
+    env.update(
+        {
+            "CONTAINER_RESULT_DIR": str(result_dir),
+            "TIMING_ORDER": ",".join(timing_order),
+        }
+    )
+    return subprocess.run(
+        [sys.executable, "-c", summarizer],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 def _run_functional_summarizer(
     tmp_path: Path,
     offload_sequence: int,
@@ -945,6 +1001,51 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
         'if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then'
         in source
     )
+
+
+def test_timing_summarizer_accepts_bounded_live_workload_equivalence(
+    tmp_path: Path,
+) -> None:
+    result = _run_timing_summarizer(tmp_path, on_token_scale=1.005)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads((tmp_path / "results/timing_summary.json").read_text())
+    equivalence = summary["workload_equivalence"]
+    assert equivalence["observed"] is True
+    assert equivalence["exact_observed_invariants"]["observed"] is True
+    assert equivalence["prompt_sequence_identity_verified"] is False
+    assert equivalence["limits"] == {
+        "arm_total_relative_delta": 0.01,
+        "paired_step_relative_delta": 0.02,
+    }
+
+
+def test_timing_summarizer_rejects_out_of_bounds_live_workload(
+    tmp_path: Path,
+) -> None:
+    result = _run_timing_summarizer(tmp_path, on_token_scale=1.03)
+
+    assert result.returncode != 0
+    assert "measured workload equivalence failed" in result.stderr
+    summary = json.loads((tmp_path / "results/timing_summary.json").read_text())
+    assert summary["workload_equivalence"]["observed"] is False
+
+
+def test_timing_summarizer_marks_single_arm_workload_equivalence_not_applicable(
+    tmp_path: Path,
+) -> None:
+    result = _run_timing_summarizer(
+        tmp_path,
+        on_token_scale=1.0,
+        timing_order=("on",),
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads((tmp_path / "results/timing_summary.json").read_text())
+    equivalence = summary["workload_equivalence"]
+    assert equivalence["required"] is False
+    assert equivalence["observed"] is None
+    assert equivalence["not_applicable_reason"] == "single timing arm"
 
 
 def test_functional_summarizer_rejects_offload_sequence_prefix(

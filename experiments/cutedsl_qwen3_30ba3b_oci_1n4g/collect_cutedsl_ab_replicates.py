@@ -86,8 +86,51 @@ REQUIRED_CANONICAL_METRICS = frozenset(
         "performance/policy_training_tokens_per_sec_per_gpu",
         "train/total_num_tokens",
         "train/global_valid_toks",
+        "train/mean_prompt_length",
+        "train/num_valid_samples",
+        "train/total_turns",
     }
 )
+WORKLOAD_TOKEN_FIELDS = ("total_num_tokens", "global_valid_toks")
+WORKLOAD_EXACT_OBSERVED_FIELDS = (
+    "mean_prompt_length",
+    "num_valid_samples",
+    "total_turns",
+)
+WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT = 0.01
+WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT = 0.02
+THROUGHPUT_DURATION_FIELDS = {
+    "e2e_tokens_per_sec_per_gpu": "total_step_seconds",
+    "generation_tokens_per_sec_per_gpu": "generation_seconds",
+    "policy_and_reference_logprobs_tokens_per_sec_per_gpu": "logprob_seconds",
+    "policy_training_tokens_per_sec_per_gpu": "policy_training_seconds",
+    "refit_effective_tokens_per_sec_per_gpu": "refit_transfer_update_seconds",
+}
+RAW_FIELD_BY_CANONICAL_METRIC = {
+    "timing/train/total_step_time": "total_step_seconds",
+    "timing/train/generation": "generation_seconds",
+    "timing/train/generation_finalize": "generation_finalize_seconds",
+    "timing/train/get_logprobs": "logprob_seconds",
+    "timing/train/policy_training": "policy_training_seconds",
+    "timing/train/prepare_for_generation/transfer_and_update_weights": (
+        "refit_transfer_update_seconds"
+    ),
+    "performance/tokens_per_sec_per_gpu": "e2e_tokens_per_sec_per_gpu",
+    "performance/generation_tokens_per_sec_per_gpu": (
+        "generation_tokens_per_sec_per_gpu"
+    ),
+    "performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu": (
+        "policy_and_reference_logprobs_tokens_per_sec_per_gpu"
+    ),
+    "performance/policy_training_tokens_per_sec_per_gpu": (
+        "policy_training_tokens_per_sec_per_gpu"
+    ),
+    "train/total_num_tokens": "total_num_tokens",
+    "train/global_valid_toks": "global_valid_toks",
+    "train/mean_prompt_length": "mean_prompt_length",
+    "train/num_valid_samples": "num_valid_samples",
+    "train/total_turns": "total_turns",
+}
 VALID_ORDERS = frozenset({"on,off", "off,on"})
 ORDERED_TIMING_ORDERS = ("on,off", "off,on")
 RATIO_DEFINITION = "median(on measured steps) / median(off measured steps)"
@@ -124,11 +167,13 @@ class Replicate:
     result_dir: Path
     timing_order: str
     profile_enabled: bool
+    submission_group: str
     source_identity: str
     image_identity: str
     workload_identity: str
     metric_identity: str
     measured_workload_identity: str
+    workload_equivalence: dict[str, Any]
     ratios: dict[str, float]
 
 
@@ -230,6 +275,11 @@ def _validate_manifest_identity(manifest: dict[str, Any], job_id: str) -> None:
     _require_sha(manifest.get("upstream_sha"), length=40, label="upstream_sha")
     _require_string(manifest.get("image"), "image")
     _require_sha(manifest.get("image_sha256"), length=64, label="image_sha256")
+    _require_sha(
+        manifest.get("base_config_sha256"),
+        length=64,
+        label="base_config_sha256",
+    )
     _require_string(manifest.get("recipe"), "recipe")
     warmup_updates = _require_nonnegative_integer(
         manifest.get("warmup_updates"), f"job {job_id} warmup_updates"
@@ -315,6 +365,66 @@ def _validate_metric_names(
         raise CollectorError(f"{label} resolved metric names differ from manifest")
 
 
+def _validate_component_series(
+    raw: dict[str, Any],
+    workload: list[dict[str, Any]],
+    expected_steps: list[int],
+    job_id: str,
+    arm: str,
+) -> None:
+    series_by_metric = raw.get("measured_component_series")
+    if not isinstance(series_by_metric, dict) or set(series_by_metric) != set(
+        RAW_FIELD_BY_CANONICAL_METRIC
+    ):
+        raise CollectorError(
+            f"job {job_id} {arm.upper()} measured_component_series must contain "
+            "the exact canonical metric set"
+        )
+    for canonical_name, row_field in RAW_FIELD_BY_CANONICAL_METRIC.items():
+        series = series_by_metric[canonical_name]
+        if not isinstance(series, list) or len(series) != len(workload):
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} {canonical_name} series length differs"
+            )
+        series_steps = []
+        for row_index, (point, row) in enumerate(zip(series, workload, strict=True)):
+            if not isinstance(point, dict):
+                raise CollectorError(
+                    f"job {job_id} {arm.upper()} {canonical_name} point must be an object"
+                )
+            step = _require_nonnegative_integer(
+                point.get("step"),
+                f"job {job_id} {arm.upper()} {canonical_name} series step",
+            )
+            series_steps.append(step)
+            series_value = _numeric(
+                point.get("value"),
+                f"job {job_id} {arm.upper()} {canonical_name} series value",
+            )
+            row_value = _numeric(
+                row.get(row_field),
+                f"job {job_id} {arm.upper()} {row_field} row {row_index}",
+            )
+            if series_value != row_value:
+                raise CollectorError(
+                    f"job {job_id} {arm.upper()} {canonical_name} measured row "
+                    "differs from component series"
+                )
+        if series_steps != expected_steps:
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} {canonical_name} series step window "
+                "differs from manifest"
+            )
+    policy_seconds = raw.get("policy_training_seconds")
+    expected_policy_seconds = [
+        row["policy_training_seconds"] for row in workload
+    ]
+    if policy_seconds != expected_policy_seconds:
+        raise CollectorError(
+            f"job {job_id} {arm.upper()} policy_training_seconds differs from measured rows"
+        )
+
+
 def _load_raw_timing(
     root: Path,
     job_dir: Path,
@@ -329,6 +439,28 @@ def _load_raw_timing(
             f"job {job_id} must reference exactly two raw timing files"
         )
     manifest_metrics = _validate_manifest_metrics(manifest, job_id)
+    measured_updates = _require_nonnegative_integer(
+        manifest.get("measured_updates"), f"job {job_id} manifest measured_updates"
+    )
+    warmup_updates = _require_nonnegative_integer(
+        manifest.get("warmup_updates"), f"job {job_id} manifest warmup_updates"
+    )
+    total_updates = _require_nonnegative_integer(
+        manifest.get("total_updates"), f"job {job_id} manifest total_updates"
+    )
+    if total_updates != warmup_updates + measured_updates:
+        raise CollectorError(
+            f"job {job_id} total_updates must equal warmup_updates plus measured_updates"
+        )
+    expected_steps = list(range(warmup_updates + 1, total_updates + 1))
+    topology = manifest.get("topology")
+    if not isinstance(topology, dict):
+        raise CollectorError(f"job {job_id} manifest topology must be an object")
+    expected_training_gpu_count = _require_nonnegative_integer(
+        topology.get("num_nodes"), f"job {job_id} topology num_nodes"
+    ) * _require_nonnegative_integer(
+        topology.get("gpus_per_node"), f"job {job_id} topology gpus_per_node"
+    )
 
     by_arm = {}
     order_indices = set()
@@ -361,10 +493,30 @@ def _load_raw_timing(
             f"job {job_id} {arm.upper()} raw timing",
         )
         workload = raw.get("measured_step_workload")
-        if not isinstance(workload, list) or not workload:
+        if not isinstance(workload, list) or len(workload) != measured_updates:
             raise CollectorError(
-                f"job {job_id} {arm.upper()} measured_step_workload must be nonempty"
+                f"job {job_id} {arm.upper()} measured_step_workload must contain "
+                f"exactly {measured_updates} rows"
             )
+        if raw.get("measured_updates") != measured_updates:
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} raw measured_updates differs from manifest"
+            )
+        if raw.get("warmup_updates") != warmup_updates:
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} raw warmup_updates differs from manifest"
+            )
+        if raw.get("training_gpu_count") != expected_training_gpu_count:
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} training_gpu_count differs from topology"
+            )
+        raw_steps = [row.get("step") for row in workload if isinstance(row, dict)]
+        if raw_steps != expected_steps:
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} measured step sequence differs from "
+                "manifest window"
+            )
+        _validate_component_series(raw, workload, expected_steps, job_id, arm)
         by_arm[arm] = raw
     if set(by_arm) != {"on", "off"}:
         raise CollectorError(f"job {job_id} raw timing arms must be exactly ON and OFF")
@@ -375,11 +527,15 @@ def _load_raw_timing(
     return by_arm
 
 
-def _measured_workload_identity(by_arm: dict[str, dict[str, Any]], job_id: str) -> str:
-    identities = {}
+def _workload_equivalence(
+    by_arm: dict[str, dict[str, Any]], job_id: str
+) -> tuple[dict[str, Any], str]:
+    steps_by_arm = {}
+    exact_values_by_arm = {}
     for arm in ("on", "off"):
         rows = by_arm[arm]["measured_step_workload"]
-        identity_rows = []
+        steps = []
+        exact_rows = []
         for row_index, row in enumerate(rows):
             if not isinstance(row, dict):
                 raise CollectorError(
@@ -388,21 +544,121 @@ def _measured_workload_identity(by_arm: dict[str, dict[str, Any]], job_id: str) 
             step = _require_nonnegative_integer(
                 row.get("step"), f"job {job_id} {arm.upper()} workload step"
             )
+            steps.append(step)
+            exact_rows.append(
+                tuple(
+                    _numeric(
+                        row.get(field),
+                        f"job {job_id} {arm.upper()} {field} step {step}",
+                    )
+                    for field in WORKLOAD_EXACT_OBSERVED_FIELDS
+                )
+            )
+            for field, value in zip(
+                WORKLOAD_EXACT_OBSERVED_FIELDS, exact_rows[-1], strict=True
+            ):
+                if field in ("num_valid_samples", "total_turns") and not value.is_integer():
+                    raise CollectorError(
+                        f"job {job_id} {arm.upper()} {field} step {step} "
+                        "must be an integral count"
+                    )
+        if steps != sorted(set(steps)):
+            raise CollectorError(
+                f"job {job_id} {arm.upper()} measured step sequence must be ordered and unique"
+            )
+        steps_by_arm[arm] = steps
+        exact_values_by_arm[arm] = exact_rows
+    if steps_by_arm["on"] != steps_by_arm["off"]:
+        raise CollectorError(
+            f"job {job_id} measured step sequence differs across ON/OFF arms"
+        )
+    exact_invariants_observed = exact_values_by_arm["on"] == exact_values_by_arm["off"]
+    metrics = {}
+    observed = exact_invariants_observed
+    for field in WORKLOAD_TOKEN_FIELDS:
+        values = {}
+        for arm in ("on", "off"):
+            values[arm] = [
+                _numeric(
+                    row.get(field),
+                    f"job {job_id} {arm.upper()} {field} row {row_index}",
+                )
+                for row_index, row in enumerate(by_arm[arm]["measured_step_workload"])
+            ]
+            if any(value <= 0.0 for value in values[arm]):
+                raise CollectorError(
+                    f"job {job_id} {arm.upper()} {field} must be positive"
+                )
+            if any(not value.is_integer() for value in values[arm]):
+                raise CollectorError(
+                    f"job {job_id} {arm.upper()} {field} must contain integral counts"
+                )
+        on_total = sum(values["on"])
+        off_total = sum(values["off"])
+        arm_total_relative_delta = abs(on_total - off_total) / (
+            (on_total + off_total) / 2.0
+        )
+        max_paired_step_relative_delta = max(
+            abs(on_value - off_value) / ((on_value + off_value) / 2.0)
+            for on_value, off_value in zip(values["on"], values["off"], strict=True)
+        )
+        metrics[field] = {
+            "on_total": on_total,
+            "off_total": off_total,
+            "arm_total_relative_delta": arm_total_relative_delta,
+            "max_paired_step_relative_delta": max_paired_step_relative_delta,
+        }
+        observed = observed and (
+            arm_total_relative_delta <= WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT
+            and max_paired_step_relative_delta
+            <= WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT
+        )
+    for arm in ("on", "off"):
+        for row_index, row in enumerate(by_arm[arm]["measured_step_workload"]):
             total_tokens = _numeric(
                 row.get("total_num_tokens"),
-                f"job {job_id} {arm.upper()} total_num_tokens step {step}",
+                f"job {job_id} {arm.upper()} total_num_tokens row {row_index}",
             )
             valid_tokens = _numeric(
                 row.get("global_valid_toks"),
-                f"job {job_id} {arm.upper()} global_valid_toks step {step}",
+                f"job {job_id} {arm.upper()} global_valid_toks row {row_index}",
             )
-            identity_rows.append((step, total_tokens, valid_tokens))
-        identities[arm] = identity_rows
-    if identities["on"] != identities["off"]:
-        raise CollectorError(
-            f"job {job_id} measured workload differs across replicates or ON/OFF arms"
-        )
-    return _canonical_json(identities["on"])
+            if valid_tokens > total_tokens:
+                raise CollectorError(
+                    f"job {job_id} {arm.upper()} global_valid_toks exceeds "
+                    f"total_num_tokens at row {row_index}"
+                )
+    equivalence = {
+        "schema_version": 2,
+        "relative_delta_formula": "abs(on-off)/mean(on,off)",
+        "required": True,
+        "observed": observed,
+        "actual_token_normalization_required": True,
+        "normalization_metric": "train/total_num_tokens",
+        "exact_observed_invariants": {
+            "fields": list(WORKLOAD_EXACT_OBSERVED_FIELDS),
+            "observed": exact_invariants_observed,
+        },
+        "prompt_sequence_identity_verified": False,
+        "limits": {
+            "arm_total_relative_delta": WORKLOAD_ARM_TOTAL_RELATIVE_DELTA_LIMIT,
+            "paired_step_relative_delta": WORKLOAD_PAIRED_STEP_RELATIVE_DELTA_LIMIT,
+        },
+        "metrics": metrics,
+    }
+    identity = _canonical_json(
+        {
+            "steps": steps_by_arm["on"],
+            "exact_observed_fields": list(WORKLOAD_EXACT_OBSERVED_FIELDS),
+            "exact_observed_values": exact_values_by_arm["on"],
+            "prompt_sequence_identity_verified": False,
+            "limits": equivalence["limits"],
+            "actual_token_normalization_required": True,
+            "normalization_metric": "train/total_num_tokens",
+            "relative_delta_formula": "abs(on-off)/mean(on,off)",
+        }
+    )
+    return equivalence, identity
 
 
 def _paired_ratios(by_arm: dict[str, dict[str, Any]], job_id: str) -> dict[str, float]:
@@ -421,6 +677,73 @@ def _paired_ratios(by_arm: dict[str, dict[str, Any]], job_id: str) -> dict[str, 
             medians[arm] = statistics.median(values)
         ratios[spec.name] = medians["on"] / medians["off"]
     return ratios
+
+
+def _validate_actual_token_normalization(
+    by_arm: dict[str, dict[str, Any]], job_id: str
+) -> None:
+    for arm in ("on", "off"):
+        training_gpu_count = _numeric(
+            by_arm[arm].get("training_gpu_count"),
+            f"job {job_id} {arm.upper()} training_gpu_count",
+        )
+        for row_index, row in enumerate(by_arm[arm]["measured_step_workload"]):
+            total_tokens = _numeric(
+                row.get("total_num_tokens"),
+                f"job {job_id} {arm.upper()} total_num_tokens row {row_index}",
+            )
+            for throughput_field, duration_field in THROUGHPUT_DURATION_FIELDS.items():
+                duration = _numeric(
+                    row.get(duration_field),
+                    f"job {job_id} {arm.upper()} {duration_field} row {row_index}",
+                )
+                observed = _numeric(
+                    row.get(throughput_field),
+                    f"job {job_id} {arm.upper()} {throughput_field} row {row_index}",
+                )
+                expected = total_tokens / duration / training_gpu_count
+                if not math.isclose(observed, expected, rel_tol=1e-6, abs_tol=1e-6):
+                    raise CollectorError(
+                        f"job {job_id} {arm.upper()} {throughput_field} row "
+                        f"{row_index} is not normalized by actual total_num_tokens"
+                    )
+
+
+def _validate_summary_projections(
+    summary: dict[str, Any],
+    by_arm: dict[str, dict[str, Any]],
+    job_id: str,
+) -> None:
+    expected_tokens = {
+        arm: [
+            row["total_num_tokens"]
+            for row in by_arm[arm]["measured_step_workload"]
+        ]
+        for arm in ("on", "off")
+    }
+    if summary.get("measured_total_num_tokens") != expected_tokens:
+        raise CollectorError(
+            f"job {job_id} measured_total_num_tokens differs from raw timing"
+        )
+    expected_policy_medians = {
+        arm: statistics.median(by_arm[arm]["policy_training_seconds"])
+        for arm in ("on", "off")
+    }
+    if summary.get("median_policy_training_seconds") != expected_policy_medians:
+        raise CollectorError(
+            f"job {job_id} median_policy_training_seconds differs from raw timing"
+        )
+    expected_throughput_medians = {
+        arm: statistics.median(
+            row["policy_training_tokens_per_sec_per_gpu"]
+            for row in by_arm[arm]["measured_step_workload"]
+        )
+        for arm in ("on", "off")
+    }
+    if summary.get("median_normalized_throughput") != expected_throughput_medians:
+        raise CollectorError(
+            f"job {job_id} median_normalized_throughput differs from raw timing"
+        )
 
 
 def _validate_profile_attribution(root: Path, job_dir: Path, job_id: str) -> None:
@@ -598,6 +921,10 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
     profile_enabled = _require_profile_flag(
         record.get("profile_enabled"), f"submission profile_enabled for job {job_id}"
     )
+    submission_group = _require_string(
+        record.get("submission_group"),
+        f"submission group for job {job_id}",
+    )
     job_dir, run_id = _find_completed_run(root, job_id)
 
     manifest_path = job_dir / "benchmark_manifest.json"
@@ -610,7 +937,7 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
         "replicate_index": replicate_index,
         "timing_order": timing_order.split(","),
         "profile_enabled": profile_enabled,
-        "submission_group": record.get("submission_group"),
+        "submission_group": submission_group,
     }
     for field, expected in manifest_contracts.items():
         if manifest.get(field) != expected:
@@ -636,17 +963,25 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
         raise CollectorError(
             f"job {job_id} timing summary order differs from submission"
         )
-    if summary.get("workload_equality_observed") is not True:
-        raise CollectorError(f"job {job_id} requires workload_equality_observed=true")
-    if summary.get("workload_equality_required") is not True:
-        raise CollectorError(f"job {job_id} requires workload_equality_required=true")
     if summary.get("workload_metric") != "train/total_num_tokens":
         raise CollectorError(
             f"job {job_id} workload metric must be train/total_num_tokens"
         )
 
     by_arm = _load_raw_timing(root, job_dir, summary, manifest, job_id, run_id)
-    measured_workload_identity = _measured_workload_identity(by_arm, job_id)
+    workload_equivalence, measured_workload_identity = _workload_equivalence(
+        by_arm, job_id
+    )
+    if _canonical_json(summary.get("workload_equivalence")) != _canonical_json(
+        workload_equivalence
+    ):
+        raise CollectorError(
+            f"job {job_id} workload equivalence summary does not match raw timing"
+        )
+    if not workload_equivalence["observed"]:
+        raise CollectorError(f"job {job_id} workload equivalence limits exceeded")
+    _validate_actual_token_normalization(by_arm, job_id)
+    _validate_summary_projections(summary, by_arm, job_id)
     ratios = _paired_ratios(by_arm, job_id)
     source_identity = _canonical_json(
         {
@@ -662,6 +997,7 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
             field: manifest.get(field)
             for field in (
                 "recipe",
+                "base_config_sha256",
                 "warmup_updates",
                 "measured_updates",
                 "total_updates",
@@ -678,11 +1014,13 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
         result_dir=job_dir,
         timing_order=timing_order,
         profile_enabled=profile_enabled,
+        submission_group=submission_group,
         source_identity=source_identity,
         image_identity=image_identity,
         workload_identity=workload_identity,
         metric_identity=metric_identity,
         measured_workload_identity=measured_workload_identity,
+        workload_equivalence=workload_equivalence,
         ratios=ratios,
     )
 
@@ -765,6 +1103,7 @@ def _validate_replicates(replicates: list[Replicate]) -> Replicate:
             f"exactly one designated profile replicate is required; found {len(profiles)}"
         )
     identity_contracts = (
+        ("submission group differs", "submission_group"),
         ("source identity differs", "source_identity"),
         ("image identity differs", "image_identity"),
         ("workload identity differs", "workload_identity"),
@@ -874,7 +1213,7 @@ def collect(
 
     first = replicates[0]
     aggregate = {
-        "schema_version": 1,
+        "schema_version": 2,
         "submission_jsonl": str(submission_path),
         "benchmark_result_root": str(result_root),
         "ratio_definition": RATIO_DEFINITION,
@@ -890,9 +1229,18 @@ def collect(
             "job_id": profile_replicate.job_id,
             "run_id": profile_replicate.run_id,
         },
+        "submission_group": first.submission_group,
         "source": json.loads(first.source_identity),
         "image": json.loads(first.image_identity),
         "workload": json.loads(first.workload_identity),
+        "workload_equivalence": [
+            {
+                "replicate_index": replicate.replicate_index,
+                "job_id": replicate.job_id,
+                **replicate.workload_equivalence,
+            }
+            for replicate in replicates
+        ],
         "resolved_metric_names": json.loads(first.metric_identity),
         "bootstrap": {
             "method": "paired replicate resampling of median ratios",
