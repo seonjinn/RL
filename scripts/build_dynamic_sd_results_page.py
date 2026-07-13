@@ -134,6 +134,14 @@ def build() -> None:
         ("qwen3-30b-a3b", "Qwen3-30B-A3B (TP1)"),
         ("qwen3-32b", "Qwen3-32B (TP2)"),
         ("qwen3-235b-a22b", "Qwen3-235B-A22B (TP4)"),
+        (
+            "nemotron3-super-120b_fp8",
+            "Nemotron3-Super-120B FP8 &mdash; in-checkpoint MTP (TP4)",
+        ),
+        (
+            "nemotron3-ultra-550b_nvfp4",
+            "Nemotron3-Ultra-550B NVFP4 &mdash; in-checkpoint MTP (TP4)",
+        ),
     ]
 
     def model_of(name: str) -> str:

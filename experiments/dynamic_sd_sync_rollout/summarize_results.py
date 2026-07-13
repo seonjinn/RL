@@ -26,6 +26,8 @@ MODEL_LABELS = {
     "Qwen/Qwen3-30B-A3B": "Qwen3-30B-A3B",
     "Qwen/Qwen3-32B": "Qwen3-32B",
     "Qwen/Qwen3-235B-A22B": "Qwen3-235B-A22B",
+    "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8": "Nemotron3-Super-120B (FP8)",
+    "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4": "Nemotron3-Ultra-550B (NVFP4)",
 }
 
 
