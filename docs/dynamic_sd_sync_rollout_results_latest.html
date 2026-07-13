@@ -33,6 +33,14 @@ capture size): exactly the regime cost DynamicSD avoids.</p>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_openmath.png" alt="profile_tok_s_qwen3-30b-a3b_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_swe_verified.png" alt="profile_tok_s_qwen3-30b-a3b_swe_verified.png"></div>
 
+<h2>Tokens/s/GPU speedup vs no-SD baseline</h2>
+<p class="note">Same grid normalized per GPU (TP={1,2,4} across models) and
+divided by the K=0 baseline at the same batch size; the dashed line at 1.0 is
+break-even. Bars below 1.0 mark regimes where fixed-K speculation actively
+hurts - the DynamicSD schedule assigns K=0 or a smaller K there.</p>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png"></div>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png"></div>
+
 <h2>Acceptance length (temperature 1.0)</h2>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length.png" alt="profile_acceptance_length.png"></div>
 

@@ -94,7 +94,8 @@ def rollout_table() -> str:
     }
     out = [
         "<table><tr><th>Model</th><th>Bench</th><th>Variant</th>"
-        "<th>Mean step wall (s)</th><th>Mean gen tok/s</th><th>Speedup vs baseline</th></tr>"
+        "<th>Mean step wall (s)</th><th>Mean gen tok/s</th>"
+        "<th>Tokens/s/GPU</th><th>Speedup vs baseline</th></tr>"
     ]
     for r in sorted(rows, key=lambda x: (x["model"], x["bench"], x["variant"])):
         base = baselines.get((r["model"], r["bench"]))
@@ -102,7 +103,8 @@ def rollout_table() -> str:
         out.append(
             f"<tr><td>{html.escape(r['model'])}</td><td>{html.escape(r['bench'])}</td>"
             f"<td>{html.escape(r['variant'])}</td><td>{fmt(r['mean_step_wall_s'])}</td>"
-            f"<td>{fmt(r['mean_output_tok_s'])}</td><td>{speedup}</td></tr>"
+            f"<td>{fmt(r['mean_output_tok_s'])}</td>"
+            f"<td>{fmt(r.get('mean_output_tok_s_per_gpu', ''))}</td><td>{speedup}</td></tr>"
         )
     out.append("</table>")
     return "".join(out)
@@ -119,6 +121,7 @@ def build() -> None:
         shutil.copy2(csv_file, DATA_OUT / csv_file.name)
 
     profile_imgs = [n for n in plot_names if n.startswith("profile_tok_s_")]
+    speedup_imgs = [n for n in plot_names if n.startswith("profile_speedup_per_gpu_")]
     accept_imgs = [n for n in plot_names if n.startswith("profile_acceptance")]
     rollout_imgs = [n for n in plot_names if n.startswith("rollout_")]
     drain_imgs = [n for n in plot_names if n.startswith("drain_")]
@@ -147,6 +150,13 @@ engine; K=0 disables speculation. The K=5 collapse at BS=128 is the
 cudagraph-capture cliff (128&times;6 = 768 tokens/step &gt; default 512 max
 capture size): exactly the regime cost DynamicSD avoids.</p>
 {img_cards(profile_imgs)}
+
+<h2>Tokens/s/GPU speedup vs no-SD baseline</h2>
+<p class="note">Same grid normalized per GPU (TP={{1,2,4}} across models) and
+divided by the K=0 baseline at the same batch size; the dashed line at 1.0 is
+break-even. Bars below 1.0 mark regimes where fixed-K speculation actively
+hurts - the DynamicSD schedule assigns K=0 or a smaller K there.</p>
+{img_cards(speedup_imgs)}
 
 <h2>Acceptance length (temperature 1.0)</h2>
 {img_cards(accept_imgs)}

@@ -97,6 +97,66 @@ def plot_profile_grids(profile_csv: Path, out_dir: Path) -> None:
         finish(fig, ax, out_dir / f"profile_tok_s_{slug(model)}_{bench}")
 
 
+def plot_profile_speedup(profile_csv: Path, out_dir: Path) -> None:
+    """Per-GPU throughput speedup vs the K=0 baseline at every batch size."""
+    df = pd.read_csv(profile_csv)
+    df = df[df["sample_method"].isin(["-", "greedy"])]
+    base = df[df["k"] == 0][["model", "bench", "batch_size", "output_tok_s_per_gpu"]]
+    base = base.rename(columns={"output_tok_s_per_gpu": "baseline_tok_s_per_gpu"})
+    merged = df[df["k"] > 0].merge(base, on=["model", "bench", "batch_size"])
+    if merged.empty:
+        return
+    merged["speedup"] = (
+        merged["output_tok_s_per_gpu"] / merged["baseline_tok_s_per_gpu"]
+    )
+    merged["K"] = "K=" + merged["k"].astype(str)
+    for (model, bench), group in merged.groupby(["model", "bench"]):
+        hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
+        order = sorted(group["batch_size"].unique())
+        fig, ax = plt.subplots(figsize=(max(7, 0.9 * len(order)), 4.2))
+        sns.barplot(
+            data=group,
+            x="batch_size",
+            y="speedup",
+            hue="K",
+            order=order,
+            hue_order=hue_order,
+            palette=sns.color_palette("Paired", n_colors=len(hue_order)),
+            edgecolor=EDGE,
+            linewidth=2.0,
+            zorder=10,
+            ax=ax,
+        )
+        ax.axhline(y=1, linestyle="--", linewidth=1.1, color="black")
+        style_axes(ax, "Concurrent batch size", "Tokens/s/GPU speedup vs no-SD")
+        finish(fig, ax, out_dir / f"profile_speedup_per_gpu_{slug(model)}_{bench}")
+
+
+def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
+    df = pd.read_csv(summary_csv)
+    if df.empty or "mean_output_tok_s_per_gpu" not in df.columns:
+        return
+    df["setting"] = df["model"] + "\n" + df["bench"]
+    hue_order = [v for v in VARIANT_ORDER if v in set(df["variant"])]
+    order = sorted(df["setting"].unique())
+    fig, ax = plt.subplots(figsize=(max(7, 1.6 * len(order)), 4.2))
+    sns.barplot(
+        data=df,
+        x="setting",
+        y="mean_output_tok_s_per_gpu",
+        hue="variant",
+        order=order,
+        hue_order=hue_order,
+        palette=sns.color_palette("Paired", n_colors=len(hue_order)),
+        edgecolor=EDGE,
+        linewidth=2.0,
+        zorder=10,
+        ax=ax,
+    )
+    style_axes(ax, "", "Rollout tokens/s/GPU")
+    finish(fig, ax, out_dir / "rollout_tok_s_per_gpu")
+
+
 def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
     df = pd.read_csv(profile_csv)
     df = df[(df["k"] > 0) & df["mean_acceptance_length"].notna()]
@@ -196,10 +256,12 @@ def main() -> None:
     args = parser.parse_args()
 
     plot_profile_grids(args.data_dir / "profile_grid.csv", args.out_dir)
+    plot_profile_speedup(args.data_dir / "profile_grid.csv", args.out_dir)
     plot_acceptance(args.data_dir / "profile_grid.csv", args.out_dir)
     summary = args.data_dir / "rollout_summary.csv"
     if summary.exists():
         plot_rollout_speedup(summary, args.out_dir)
+        plot_rollout_tok_s_per_gpu(summary, args.out_dir)
     plot_drain_curves(args.data_dir / "drain_curves.csv", args.out_dir)
 
 

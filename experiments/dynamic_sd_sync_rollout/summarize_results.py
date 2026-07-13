@@ -55,6 +55,7 @@ def classify(config: dict[str, Any]) -> dict[str, Any]:
         "variant": variant,
         "k": int(spec.get("num_speculative_tokens", 0)) if spec else 0,
         "sample_method": sample_method,
+        "tp": int(config.get("tp") or 1),
         "tag": config.get("tag", ""),
     }
 
@@ -103,6 +104,7 @@ def main() -> None:
                         **ident,
                         "batch_size": row["batch_size"],
                         "output_tok_s": row["output_tok_s"],
+                        "output_tok_s_per_gpu": row["output_tok_s"] / ident["tp"],
                         "wall_ms_per_output_token": row.get("wall_ms_per_output_token"),
                         "mean_acceptance_length": row.get("mean_acceptance_length"),
                         "acceptance_rate": row.get("acceptance_rate"),
@@ -148,6 +150,7 @@ def main() -> None:
                     "num_steps": len(walls),
                     "mean_step_wall_s": statistics.fmean(walls),
                     "mean_output_tok_s": statistics.fmean(toks),
+                    "mean_output_tok_s_per_gpu": statistics.fmean(toks) / ident["tp"],
                     "partial": payload.get("partial", False),
                 }
             )
