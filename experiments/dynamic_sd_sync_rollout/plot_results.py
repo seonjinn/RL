@@ -143,7 +143,7 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
     for model, group in df.groupby("model"):
         hue_order = [v for v in hue_order_all if v in set(group["variant"])]
         order = sorted(group["bench"].unique())
-        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 1.8))
+        fig, ax = plt.subplots(figsize=(5.0, 1.8))
         sns.barplot(
             data=group,
             x="bench",
@@ -179,7 +179,7 @@ def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
     for model, group in agg.groupby("model"):
         hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
         order = sorted(group["bench"].unique())
-        fig, ax = plt.subplots(figsize=(max(3.6, 1.1 * len(order)), 1.8))
+        fig, ax = plt.subplots(figsize=(5.0, 1.8))
         sns.barplot(
             data=group,
             x="bench",
@@ -212,7 +212,7 @@ def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:
     for model, group in merged.groupby("model"):
         hue_order = [v for v in hue_order_all if v in set(group["variant"])]
         order = sorted(group["bench"].unique())
-        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 1.8))
+        fig, ax = plt.subplots(figsize=(5.0, 1.8))
         sns.barplot(
             data=group,
             x="bench",
