@@ -1650,6 +1650,7 @@ required = {
     "CUTEDSL_PROFILE_NAME",
     "CUTEDSL_IMAGE",
     "CUTEDSL_IMAGE_SHA256",
+    "CUTEDSL_SHARED_HF_HOME",
     "CUTEDSL_SUBMISSION_GIT_BRANCH",
     "CUTEDSL_SUBMISSION_GIT_SHA",
 }
@@ -1669,6 +1670,7 @@ record = {
     "submission_group": exported["CUTEDSL_BENCHMARK_SUBMISSION_GROUP"],
     "submission_branch": exported["CUTEDSL_SUBMISSION_GIT_BRANCH"],
     "submission_sha": exported["CUTEDSL_SUBMISSION_GIT_SHA"],
+    "shared_hf_home": exported["CUTEDSL_SHARED_HF_HOME"],
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -1738,6 +1740,9 @@ print(f"mock-{record['replicate']}")
         text=True,
     ).stdout.strip()
     assert [call["submission_sha"] for call in calls] == [expected_sha] * 3
+    assert [call["shared_hf_home"] for call in calls] == [
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
+    ] * 3
 
     calls_path.write_text("")
     env["CUTEDSL_BENCHMARK_PROFILE"] = "0"

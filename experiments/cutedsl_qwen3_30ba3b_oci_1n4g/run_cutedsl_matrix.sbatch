@@ -438,12 +438,30 @@ export UV_NO_MODIFY_PATH=1
 export UV_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-bin"
 export UV_PYTHON_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-python"
 export UV_BIN="${UV_INSTALL_DIR}/uv"
-SHARED_HF_HOME="${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/results/hf_home"
+# CUTEDSL_SHARED_HF_PREFLIGHT_START
+if [[ "${CUTEDSL_SHARED_HF_HOME-}" != /* ]]; then
+    echo "[ERROR] shared Hugging Face cache root must be an absolute path." >&2
+    exit 1
+fi
+SHARED_HF_HOME="${CUTEDSL_SHARED_HF_HOME}"
 SHARED_HF_MANIFEST="${SHARED_HF_HOME}/nemo2606_qwen3_30ba3b_manifest.json"
+if [[ ! -d "${SHARED_HF_HOME}" || ! -r "${SHARED_HF_HOME}" || \
+    ! -x "${SHARED_HF_HOME}" ]]; then
+    echo "[ERROR] shared Hugging Face cache root must already exist and be readable." >&2
+    exit 1
+fi
+if [[ ! -f "${SHARED_HF_MANIFEST}" || ! -r "${SHARED_HF_MANIFEST}" || \
+    ! -s "${SHARED_HF_MANIFEST}" ]]; then
+    echo "[ERROR] shared Hugging Face cache requires a completed manifest." >&2
+    exit 1
+fi
 readonly SHARED_HF_HOME SHARED_HF_MANIFEST
 export HF_HOME="${SHARED_HF_HOME}"
 export SHARED_HF_MANIFEST
-unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+# CUTEDSL_SHARED_HF_PREFLIGHT_END
 
 SRUN=()
 if [[ "${EXISTING_RAY}" == "0" ]]; then
@@ -455,7 +473,7 @@ if [[ "${EXISTING_RAY}" == "0" ]]; then
         --mpi=pmix
         --container-image="${IMAGE}"
         --container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS
-        --container-mounts="${REPO_ROOT}:${CONTAINER_REPO_ROOT},${RESULT_DIR}:${CONTAINER_RESULT_DIR},${HOST_RUNTIME_DIR}:${CONTAINER_RUNTIME_DIR}"
+        --container-mounts="${REPO_ROOT}:${CONTAINER_REPO_ROOT},${RESULT_DIR}:${CONTAINER_RESULT_DIR},${HOST_RUNTIME_DIR}:${CONTAINER_RUNTIME_DIR},${SHARED_HF_HOME}:${SHARED_HF_HOME}"
         --container-workdir="${CONTAINER_REPO_ROOT}"
     )
     if [[ -n "${CUTEDSL_GRES}" ]]; then

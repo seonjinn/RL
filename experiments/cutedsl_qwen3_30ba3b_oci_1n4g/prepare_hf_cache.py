@@ -297,19 +297,27 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    args.hf_home.mkdir(parents=True, exist_ok=True)
-    lock_path = args.hf_home / ".nemo2606-cache.lock"
-    with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        from datasets import load_dataset
-        from huggingface_hub import snapshot_download
+    from datasets import load_dataset
+    from huggingface_hub import snapshot_download
 
+    if _offline_mode_enabled():
         manifest = prepare_cache(
             args.hf_home,
             args.shared_manifest,
             snapshot_download,
             load_dataset,
         )
+    else:
+        args.hf_home.mkdir(parents=True, exist_ok=True)
+        lock_path = args.hf_home / ".nemo2606-cache.lock"
+        with lock_path.open("w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            manifest = prepare_cache(
+                args.hf_home,
+                args.shared_manifest,
+                snapshot_download,
+                load_dataset,
+            )
     args.job_manifest.parent.mkdir(parents=True, exist_ok=True)
     args.job_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(json.dumps(manifest, sort_keys=True))

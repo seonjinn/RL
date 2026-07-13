@@ -67,6 +67,7 @@ load_cutedsl_cluster_profile() {
 
     unset CUTEDSL_PROFILE_NAME CUTEDSL_ACCOUNT CUTEDSL_PARTITION CUTEDSL_GRES
     unset CUTEDSL_SEGMENT CUTEDSL_COMMENT CUTEDSL_IMAGE CUTEDSL_IMAGE_SHA256
+    unset CUTEDSL_SHARED_HF_HOME
     unset CUTEDSL_FUNCTIONAL_TIME CUTEDSL_BENCHMARK_TIME CUTEDSL_SBATCH_ARGS
     source "${profile_path}"
 
@@ -84,6 +85,10 @@ load_cutedsl_cluster_profile() {
     fi
     if [[ ! "${CUTEDSL_IMAGE_SHA256-}" =~ ^[[:xdigit:]]{64}$ ]]; then
         echo "[ERROR] CUTEDSL_IMAGE_SHA256 must be a 64-character SHA256 value." >&2
+        return 1
+    fi
+    if [[ "${CUTEDSL_SHARED_HF_HOME-}" != /* ]]; then
+        echo "[ERROR] CUTEDSL_SHARED_HF_HOME must be an absolute path." >&2
         return 1
     fi
     if [[ ! "${CUTEDSL_FUNCTIONAL_TIME-}" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] || \
@@ -122,5 +127,5 @@ load_cutedsl_cluster_profile() {
     export CUTEDSL_CLUSTER_PROFILE CUTEDSL_PROFILE_NAME CUTEDSL_ACCOUNT
     export CUTEDSL_PARTITION CUTEDSL_GRES CUTEDSL_SEGMENT CUTEDSL_COMMENT
     export CUTEDSL_IMAGE CUTEDSL_IMAGE_SHA256 CUTEDSL_FUNCTIONAL_TIME
-    export CUTEDSL_BENCHMARK_TIME CUTEDSL_SBATCH_ARGS
+    export CUTEDSL_SHARED_HF_HOME CUTEDSL_BENCHMARK_TIME CUTEDSL_SBATCH_ARGS
 }

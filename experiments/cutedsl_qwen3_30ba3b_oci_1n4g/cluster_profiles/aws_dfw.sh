@@ -21,5 +21,6 @@ export CUTEDSL_SEGMENT=
 export CUTEDSL_COMMENT=metrics
 export CUTEDSL_IMAGE=/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna/containers/nemo_rl_nightly_20260711_1873004.sqsh
 export CUTEDSL_IMAGE_SHA256=a393e1b8f12e5edafa49a84c0b78b172aa163ad29be04fca6e42855a5f16304a
+export CUTEDSL_SHARED_HF_HOME=/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna/hf_home
 export CUTEDSL_FUNCTIONAL_TIME=02:00:00
 export CUTEDSL_BENCHMARK_TIME=08:00:00

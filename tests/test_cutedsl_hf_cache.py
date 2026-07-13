@@ -14,8 +14,11 @@
 
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,6 +27,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 PREPARER = EXPERIMENT_DIR / "prepare_hf_cache.py"
 MATRIX_PAYLOAD = EXPERIMENT_DIR / "run_cutedsl_matrix.sbatch"
+PROFILE_LOADER = EXPERIMENT_DIR / "lib/cluster_profile.sh"
+
+
+def _shared_hf_preflight_source() -> str:
+    source = MATRIX_PAYLOAD.read_text()
+    return source.split("# CUTEDSL_SHARED_HF_PREFLIGHT_START\n", 1)[1].split(
+        "# CUTEDSL_SHARED_HF_PREFLIGHT_END\n", 1
+    )[0]
 
 
 def _load_preparer() -> ModuleType:
@@ -167,6 +178,47 @@ def test_prepare_cache_offline_verifies_processed_dataset(
     ]
 
 
+def test_offline_main_does_not_require_writing_shared_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_preparer()
+    hf_home = tmp_path / "hf_home"
+    hf_home.mkdir()
+    shared_manifest = hf_home / "nemo2606_qwen3_30ba3b_manifest.json"
+    shared_manifest.write_text('{"schema_version": 1, "repositories": {}}\n')
+    job_manifest = tmp_path / "result/hf_cache_manifest.json"
+    manifest = {"schema_version": 1, "repositories": {}}
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(
+        module,
+        "_parse_args",
+        lambda: SimpleNamespace(
+            hf_home=hf_home,
+            shared_manifest=shared_manifest,
+            job_manifest=job_manifest,
+        ),
+    )
+    monkeypatch.setattr(module, "prepare_cache", lambda *_: manifest)
+    fake_datasets = ModuleType("datasets")
+    fake_datasets.load_dataset = object()  # type: ignore[attr-defined]
+    fake_hub = ModuleType("huggingface_hub")
+    fake_hub.snapshot_download = object()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+    real_open = Path.open
+
+    def reject_shared_lock(path: Path, *args: Any, **kwargs: Any):
+        if path.name == ".nemo2606-cache.lock":
+            raise AssertionError("offline verification must not write a shared lock")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", reject_shared_lock)
+
+    assert module.main() == 0
+    assert json.loads(job_manifest.read_text()) == manifest
+
+
 def test_prepare_cache_rejects_unpinned_snapshot_directory(tmp_path: Path) -> None:
     module = _load_preparer()
 
@@ -215,10 +267,109 @@ def test_snapshot_download_honors_rate_limit_retry_after() -> None:
     assert sleeps == [7.0]
 
 
-def test_matrix_warms_shared_hf_cache_before_forcing_offline_mode() -> None:
+@pytest.mark.parametrize(
+    ("profile_name", "expected_hf_home"),
+    (
+        (
+            "pre_tyche",
+            "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
+        ),
+        (
+            "lyris",
+            "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
+        ),
+        (
+            "aws_dfw",
+            "/lustre/fsw/portfolios/nemotron/projects/"
+            "nemotron_sw_post/users/sna/hf_home",
+        ),
+    ),
+)
+def test_cluster_profile_exports_absolute_shared_hf_home(
+    profile_name: str,
+    expected_hf_home: str,
+) -> None:
+    command = f"""
+set -euo pipefail
+source {PROFILE_LOADER!s}
+export CUTEDSL_CLUSTER_PROFILE={profile_name}
+load_cutedsl_cluster_profile
+env | grep '^CUTEDSL_SHARED_HF_HOME='
+"""
+    result = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"CUTEDSL_SHARED_HF_HOME={expected_hf_home}"
+    loader = PROFILE_LOADER.read_text()
+    assert '[[ "${CUTEDSL_SHARED_HF_HOME-}" != /* ]]' in loader
+
+
+@pytest.mark.parametrize("case", ("relative", "missing_root", "missing_manifest"))
+def test_matrix_shared_hf_preflight_fails_closed(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    hf_home = tmp_path / "hf_home"
+    hf_home.mkdir()
+    manifest = hf_home / "nemo2606_qwen3_30ba3b_manifest.json"
+    manifest.write_text('{"schema_version": 1, "repositories": {}}\n')
+    configured_home = str(hf_home)
+    if case == "relative":
+        configured_home = "relative/hf_home"
+    elif case == "missing_root":
+        configured_home = str(tmp_path / "absent")
+    elif case == "missing_manifest":
+        manifest.unlink()
+
+    env = os.environ.copy()
+    env["CUTEDSL_SHARED_HF_HOME"] = configured_home
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + _shared_hf_preflight_source()],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "shared Hugging Face cache" in result.stderr
+    assert configured_home not in result.stderr
+
+
+def test_matrix_shared_hf_preflight_accepts_completed_manifest(
+    tmp_path: Path,
+) -> None:
+    hf_home = tmp_path / "hf_home"
+    hf_home.mkdir()
+    manifest = hf_home / "nemo2606_qwen3_30ba3b_manifest.json"
+    manifest.write_text('{"schema_version": 1, "repositories": {}}\n')
+    env = os.environ.copy()
+    env["CUTEDSL_SHARED_HF_HOME"] = str(hf_home)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail\n"
+            + _shared_hf_preflight_source()
+            + '\nprintf "%s\\n" "$HF_HOME" "$SHARED_HF_MANIFEST"\n',
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [str(hf_home), str(manifest)]
+
+
+def test_matrix_verifies_profile_cache_offline_before_grpo() -> None:
     source = MATRIX_PAYLOAD.read_text()
     required = (
-        'SHARED_HF_HOME="${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/results/hf_home"',
+        'SHARED_HF_HOME="${CUTEDSL_SHARED_HF_HOME}"',
         'export HF_HOME="${SHARED_HF_HOME}"',
         "export SHARED_HF_MANIFEST",
         "prepare_hf_cache.py",
@@ -230,7 +381,12 @@ def test_matrix_warms_shared_hf_cache_before_forcing_offline_mode() -> None:
     for fragment in required:
         assert fragment in source, fragment
 
-    warm = source.index("prepare_hf_cache.py")
+    assert "results/hf_home" not in source
+    verify = source.index("prepare_hf_cache.py")
     offline = source.index("export HF_HUB_OFFLINE=1")
-    grpo = source.index("examples/run_grpo.py", offline)
-    assert warm < offline < grpo
+    grpo = source.index("examples/run_grpo.py", verify)
+    assert offline < verify < grpo
+
+    manifest_block = source.split("manifest = {", 1)[1].split("}\n(", 1)[0]
+    assert "SHARED_HF_HOME" not in manifest_block
+    assert "HF_HOME" not in manifest_block

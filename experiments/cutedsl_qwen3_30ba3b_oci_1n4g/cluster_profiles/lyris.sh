@@ -21,5 +21,6 @@ export CUTEDSL_SEGMENT=1
 export CUTEDSL_COMMENT=metrics
 export CUTEDSL_IMAGE=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_2346595.sqsh
 export CUTEDSL_IMAGE_SHA256=bb5beff9ade16a1eeb6badde7601731bb003a95b4cccf85b3bd9b11c84803a2a
+export CUTEDSL_SHARED_HF_HOME=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
 export CUTEDSL_FUNCTIONAL_TIME=02:00:00
 export CUTEDSL_BENCHMARK_TIME=05:00:00

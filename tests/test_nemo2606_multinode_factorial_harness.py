@@ -964,6 +964,14 @@ def test_submitter_wires_sanitized_triton_failure_command() -> None:
         == 2
     )
     assert source.count('"CUTEDSL_BENCHMARK_RESULT_ROOT=${RESULT_ROOT}"') == 2
+    assert source.count("-u CUTEDSL_SHARED_HF_HOME") == 2
+    assert (
+        source.count('"CUTEDSL_SHARED_HF_HOME=${CUTEDSL_SHARED_HF_HOME}"') == 2
+    )
+    assert (
+        'RAY_MOUNTS+=",${CUTEDSL_SHARED_HF_HOME}:${CUTEDSL_SHARED_HF_HOME}"'
+        in source
+    )
 
 
 def test_matrix_result_root_matches_failure_diagnostic_root() -> None:
@@ -1058,6 +1066,7 @@ record = {
     "failure_command": payload["FAILURE_COMMAND"],
     "failure_diagnostic_timeout_seconds": payload["FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS"],
     "result_root": payload["CUTEDSL_BENCHMARK_RESULT_ROOT"],
+    "shared_hf_home": payload["CUTEDSL_SHARED_HF_HOME"],
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -1071,6 +1080,7 @@ print(f"mock-{record['context']}-{record['replicate']}")
             "PATH": f"{mock_bin}:{env['PATH']}",
             "MOCK_SBATCH_CALLS": str(calls_path),
             "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "CUTEDSL_SHARED_HF_HOME": "/stale/hf_home",
             "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS": "600",
         }
     )
@@ -1113,6 +1123,9 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert ".shared_fs_canary" in call["setup_command"]
         assert "git -C" in call["setup_command"]
         assert call["result_root"] == str(EXPERIMENT_DIR / "results")
+        assert call["shared_hf_home"] == (
+            "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
+        )
         assert "exec python3" in call["failure_command"]
         assert "collect_triton_cache_diagnostics.py" in call["failure_command"]
         assert "--from-slurm-env" in call["failure_command"]
@@ -1190,6 +1203,7 @@ record = {
     "full_cg": payload["NEMO2606_FULL_CG_ENABLED"],
     "a2a": payload["NEMO2606_A2A_ENABLED"],
     "existing_ray": payload["CUTEDSL_BENCHMARK_EXISTING_RAY"],
+    "shared_hf_home": payload["CUTEDSL_SHARED_HF_HOME"],
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -1233,6 +1247,9 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert call["full_cg"] == "0"
         assert call["a2a"] == "0"
         assert call["existing_ray"] == "1"
+        assert call["shared_hf_home"] == (
+            "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
+        )
         assert "--nodes=4" in call["argv"]
         assert "--segment=4" in call["argv"]
         assert "--segment=1" not in call["argv"]
@@ -1298,6 +1315,7 @@ record = {
     "full_cg": payload.get("NEMO2606_FULL_CG_ENABLED"),
     "a2a": payload.get("NEMO2606_A2A_ENABLED"),
     "failure_diagnostic_timeout_seconds": payload.get("FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS"),
+    "shared_hf_home": payload.get("CUTEDSL_SHARED_HF_HOME"),
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -1340,6 +1358,9 @@ print("mock-functional")
     assert call["full_cg"] == "0"
     assert call["a2a"] == "0"
     assert call["failure_diagnostic_timeout_seconds"] == "60"
+    assert call["shared_hf_home"] == (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
+    )
     assert f"--nodes={expected_nodes}" in call["argv"]
     assert f"--segment={expected_segment_size}" in call["argv"]
     assert "--test-only" in call["argv"]
